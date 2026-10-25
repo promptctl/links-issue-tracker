@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2287,126 +2288,11 @@ func TestSyncRoundTripIncludingEpic(t *testing.T) {
 	}
 }
 
-func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "life", IssueType: "epic", Priority: 1})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Close me", Topic: "life", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Close{Outcome: model.Wontfix{}}, Actor: "tester"}); err != nil {
-		t.Fatalf("Apply(first close) error = %v", err)
-	}
-	// Plan a second close against the STALE pre-close snapshot: the guarded
-	// UPDATE must see the row has moved and surface the conflict instead of
-	// silently re-closing. (Apply itself re-reads, which would turn this into a
-	// same-state no-op — the contention window under test is plan-vs-write.)
-	w, err := st.planStatusTransition(issue, currentHistory(t, ctx, st, issue.ID), st.clock.Now(), "tester", "", model.Close{Outcome: model.Wontfix{}})
-	if err != nil {
-		t.Fatalf("planStatusTransition(stale) error = %v", err)
-	}
-	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
-		return st.applyTransitionTx(ctx, tx, w)
-	})
-	if err == nil || err.Error() != `close conflict: issue status is "closed"` {
-		t.Fatalf("applyTransitionTx(stale close) error = %v, want close conflict", err)
-	}
-}
-
-// TestRetentionUsesOptimisticConcurrency pins the retention axis to the same
-// contention discipline as the status axis: a retention write planned against
-// a snapshot another writer has since moved must surface a conflict, not
-// silently last-write-win.
-func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "life", IssueType: "epic", Priority: 1})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Archive me", Topic: "life", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	// Plan an archive against the LIVE snapshot, then let a competing archive
-	// win the race. (Apply itself re-reads, which would turn the loser into the
-	// already-archived rejection — the contention window under test is
-	// plan-vs-write.)
-	w, err := planRetentionTransition(issue, "tester", "", model.Archive{}, st.clock.Now())
-	if err != nil {
-		t.Fatalf("planRetentionTransition(live) error = %v", err)
-	}
-	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Archive{}, Actor: "tester"}); err != nil {
-		t.Fatalf("Apply(competing archive) error = %v", err)
-	}
-	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
-		return w.applyTx(ctx, st, tx)
-	})
-	if err == nil || err.Error() != `archive conflict: issue retention is "archived"` {
-		t.Fatalf("retentionWrite.applyTx(stale archive) error = %v, want archive conflict", err)
-	}
-}
-
-// TestConflictNamesTheVerbTheCallerTyped is the sibling of the test above, run
-// with the one action whose two names differ. That test uses `close`, whose
-// persisted event encoding and invocation verb are the same word, so it passes
-// whichever of the two the message interpolates and cannot see the difference.
-// `lit open` dispatches model.Reopen, persisted as "reopen", so this conflict is
-// the only one that can tell a right answer from a wrong one.
-func TestConflictNamesTheVerbTheCallerTyped(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "life", IssueType: "epic", Priority: 1})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Reopen me", Topic: "life", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	closed, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Close{Outcome: model.Wontfix{}}, Actor: "tester"})
-	if err != nil {
-		t.Fatalf("Apply(close) error = %v", err)
-	}
-	// Plan the reopen against the CLOSED snapshot, then move the row out from
-	// under it, so the guarded UPDATE matches nothing and reports the conflict.
-	w, err := st.planStatusTransition(closed.Issue, currentHistory(t, ctx, st, issue.ID), st.clock.Now(), "tester", "", model.Reopen{})
-	if err != nil {
-		t.Fatalf("planStatusTransition(stale reopen) error = %v", err)
-	}
-	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Reopen{}, Actor: "tester"}); err != nil {
-		t.Fatalf("Apply(reopen) error = %v", err)
-	}
-	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
-		return st.applyTransitionTx(ctx, tx, w)
-	})
-	if err == nil {
-		t.Fatal("applyTransitionTx(stale reopen) error = nil, want a conflict")
-	}
-	if strings.Contains(err.Error(), string(model.ActionReopen)) {
-		t.Errorf("conflict names %q, the events-table encoding; the caller typed `lit %s`: %v",
-			string(model.ActionReopen), model.ActionReopen.Verb(), err)
-	}
-	want := `open conflict: issue status is "open"`
-	if err.Error() != want {
-		t.Errorf("applyTransitionTx(stale reopen) error = %q, want %q", err.Error(), want)
-	}
-}
-
 // TestFieldWriteDoesNotClobberConcurrentLifecycle pins the field write to the
 // columns the field axis owns: a field plan taken against a snapshot whose
 // lifecycle competing writers have since moved (open→closed, live→archived)
 // must land its field change and leave both lifecycle axes untouched — the
-// stale restatement is unwritable, not raced. (Same plan-vs-write window as
-// TestRetentionUsesOptimisticConcurrency: Apply itself re-reads, so the
-// contention under test is between planning and writing.)
+// field UPDATE names no lifecycle column, so it has nothing to restate.
 func TestFieldWriteDoesNotClobberConcurrentLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -2751,60 +2637,131 @@ func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
 	}
 }
 
-// TestCloseRedirectRaceWithDeleteRejected is the concurrency regression for the
-// family-wide TOCTOU: the redirect canonical is validated inside the mutation
-// tx, so a delete of the canonical that lands AFTER the close is planned but
-// BEFORE it commits is still observed, and the close is rejected with nothing
-// persisted. applyPreMutationHookForTest injects the delete in exactly that
-// window. Validated in the pre-lock plan phase instead, this close would see a
-// live canonical, succeed, and persist a redirect to a deleted canonical, the
-// exact state the validation exists to reject.
-// [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
-func TestCloseRedirectRaceWithDeleteRejected(t *testing.T) {
+// TestNoWriteLandsBetweenAPlanAndItsWrite is the regression for a write
+// planned against a superseded holder: Apply reads, plans and writes under one
+// commit-lock hold, so a foreign start attempted amid tester's plan reads
+// waits on that hold rather than landing. Each start's assignee
+// change and handover therefore name the holder that held when it landed —
+// alice for tester, tester for racer — and racer's event is stamped past
+// tester's. The clock is frozen, so only the stamp's own read of history can
+// order the two events. The deadline bounds the test, not the outcome: the
+// hold cannot be taken while tester has it.
+// [LAW:no-ambient-temporal-coupling] [LAW:one-source-of-truth]
+func TestNoWriteLandsBetweenAPlanAndItsWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "dup", IssueType: "epic", Priority: 1})
+	frozen := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	st.clock = func() time.Time { return frozen }
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "claim", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	canonical, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	ticket, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Contested", Topic: "claim", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
-		t.Fatalf("CreateIssue(canonical) error = %v", err)
+		t.Fatalf("CreateIssue(ticket) error = %v", err)
 	}
-	dup, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Duplicate", Topic: "dup", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue(dup) error = %v", err)
+	if _, err := st.Apply(ctx, ticket.ID, storage.Change{Action: model.Start{Assignee: "alice"}, Actor: "alice"}); err != nil {
+		t.Fatalf("Apply(start alice) error = %v", err)
 	}
-	// The hook fires once, in the window between planning dup's close and
-	// committing it. It clears itself first so the nested delete Apply does not
-	// re-enter it, then deletes the canonical — the concurrent mutation. A
-	// failed prerequisite delete is fatal, not merely logged: it must fail at its
-	// cause, not let the close proceed and masquerade as a "want rejection" miss.
-	st.applyPreMutationHookForTest = func() {
-		st.applyPreMutationHookForTest = nil
-		if _, delErr := st.Apply(ctx, canonical.ID, storage.Change{Action: model.Delete{}, Reason: "trash", Actor: "racer"}); delErr != nil {
-			t.Fatalf("hook: Apply(delete canonical) error = %v", delErr)
+	racer := storage.Change{Action: model.Start{Assignee: "racer"}, Actor: "racer"}
+	// The hook clears itself so racer's own Apply does not re-enter it.
+	st.planReadsHookForTest = func() {
+		st.planReadsHookForTest = nil
+		waitCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		if _, err := st.Apply(waitCtx, ticket.ID, racer); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("hook: Apply(start racer) amid tester's plan reads: error = %v, want it to wait out its deadline on tester's hold", err)
 		}
 	}
 
-	_, err = st.Apply(ctx, dup.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
-	if err == nil {
-		t.Fatal("Apply(close duplicate-of canonical deleted mid-flight) error = nil, want rejection")
-	}
-	if !strings.Contains(err.Error(), canonical.ID) || !strings.Contains(err.Error(), "deleted") {
-		t.Fatalf("error = %v, want the target and its retention state named", err)
-	}
-	loaded, err := st.GetIssue(ctx, dup.ID)
+	tester, err := st.Apply(ctx, ticket.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("GetIssue(dup) error = %v", err)
+		t.Fatalf("Apply(start tester) error = %v", err)
 	}
-	if loaded.StatusValue() != string(model.StateOpen) {
-		t.Fatalf("status = %q, want open — the rejected close must not persist", loaded.StatusValue())
+	raced, err := st.Apply(ctx, ticket.ID, racer)
+	if err != nil {
+		t.Fatalf("Apply(start racer) error = %v", err)
 	}
-	if loaded.ResolutionValue() != nil || loaded.RedirectTargetValue() != nil || loaded.ClosedAtValue() != nil {
-		t.Fatalf("resolution/redirect/closed_at = %v/%v/%v, want all nil — the rejected close must not persist",
-			loaded.ResolutionValue(), loaded.RedirectTargetValue(), loaded.ClosedAtValue())
+	for _, landed := range []struct {
+		applied  storage.Applied
+		from, to string
+	}{{tester, "alice", "tester"}, {raced, "tester", "racer"}} {
+		if landed.applied.Handover == nil || landed.applied.Handover.From.Assignee != landed.from {
+			t.Errorf("%s's start: Handover = %+v, want it from %s", landed.to, landed.applied.Handover, landed.from)
+		}
+	}
+	events, err := st.ListEvents(ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("ListEvents() error = %v", err)
+	}
+	startBy := map[string]model.IssueEvent{}
+	for _, event := range events {
+		startBy[event.Actor] = event
+	}
+	for _, want := range []model.FieldChange{{Field: "assignee", From: "alice", To: "tester"}, {Field: "assignee", From: "tester", To: "racer"}} {
+		if got := startBy[want.To].Changes; !slices.Contains(got, want) {
+			t.Errorf("%s's start changes = %+v, want %+v", want.To, got, want)
+		}
+	}
+	if !startBy["racer"].CreatedAt.After(startBy["tester"].CreatedAt) {
+		t.Errorf("racer's start at %v, tester's at %v: want racer's stamped past tester's", startBy["racer"].CreatedAt, startBy["tester"].CreatedAt)
+	}
+}
+
+// TestNoWriteLandsWhileACreateIsPlanned is the create's half of the same
+// regression: CreateIssue reads the history it is stamped past under the hold
+// its write commits in, so a start on a sibling attempted amid that read waits
+// on the hold rather than landing, and lands after the create, stamped past
+// it. The clock is frozen, so only the stamp's own read of history can order
+// the two events.
+// [LAW:no-ambient-temporal-coupling]
+func TestNoWriteLandsWhileACreateIsPlanned(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	frozen := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
+	st.clock = func() time.Time { return frozen }
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "claim", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sibling", Topic: "claim", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(sibling) error = %v", err)
+	}
+	start := storage.Change{Action: model.Start{Assignee: "racer"}, Actor: "racer"}
+	// The hook clears itself so the start's own Apply does not re-enter it.
+	st.planReadsHookForTest = func() {
+		st.planReadsHookForTest = nil
+		waitCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		if _, err := st.Apply(waitCtx, sibling.ID, start); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("hook: Apply(start sibling) amid the create's plan read: error = %v, want it to wait out its deadline on the create's hold", err)
+		}
+	}
+
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Created", Topic: "claim", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(created) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, sibling.ID, start); err != nil {
+		t.Fatalf("Apply(start sibling) error = %v", err)
+	}
+	createdEvents, err := st.ListEvents(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("ListEvents(created) error = %v", err)
+	}
+	siblingEvents, err := st.ListEvents(ctx, sibling.ID)
+	if err != nil {
+		t.Fatalf("ListEvents(sibling) error = %v", err)
+	}
+	born, started := createdEvents[0], siblingEvents[len(siblingEvents)-1]
+	if born.Action != model.ActionCreated || started.Actor != "racer" {
+		t.Fatalf("events = %+v / %+v, want the create's event and the sibling's start", born, started)
+	}
+	if !started.CreatedAt.After(born.CreatedAt) {
+		t.Errorf("sibling's start at %v, the create at %v: want the start stamped past the create", started.CreatedAt, born.CreatedAt)
 	}
 }
 

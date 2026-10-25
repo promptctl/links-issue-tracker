@@ -130,15 +130,18 @@ type Store struct {
 	// None is the zero value, and Apply calls each one there is.
 	observers []func(storage.Change, model.Issue)
 
-	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
-	// change is fully planned and before withMutation acquires the commit lock.
-	// Production callers leave it nil; the concurrency regression test sets it to
-	// commit a foreign-row delete in exactly that window, proving the in-tx
-	// validation observes it.
+	// planReadsHookForTest, if non-nil, fires amid a write's plan reads — in
+	// Apply after its GetIssue, in CreateIssue after historyFiledUnder — with
+	// the commit lock held and no tx open. Production callers leave it nil; the
+	// concurrency regression tests set it to attempt a foreign write there and
+	// prove it cannot land until the planned write has. It sits after the
+	// first read and before the rest, so a hold that leaves out the reads after
+	// it — one shrunk to the write, say — leaves it outside too, and the attempt
+	// lands; a hold that leaves out only the first read is beyond its reach.
 	// [LAW:no-shared-mutable-globals] The seam is per-Store instance state with
 	// an explicit owner, not an ambient package global — so tests holding their
 	// own Store can never race on it (and t.Parallel() stays safe).
-	applyPreMutationHookForTest func()
+	planReadsHookForTest func()
 
 	// commitWorkingSetHookForTest, if non-nil, fires at the top of every
 	// commitWorkingSetOnce — the versioning (DOLT_COMMIT) step — and its error,
@@ -633,120 +636,129 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if err := storage.RejectLeafWithoutParent(issueType, parentID); err != nil {
 		return model.Issue{}, err
 	}
-	// A new issue has no history of its own; the lane family it joins does,
-	// and the create is stamped past it, as every write is. Read once the pure
-	// checks pass. The parent itself is checked under the commit lock, so a
-	// create refused there has already taken its reading, and the tally counts
-	// it as it counts any refused write.
-	filed, err := s.historyFiledUnder(ctx, parentID)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	now := s.stamps.Stamp(s.clock, filed)
 	createdBy := storage.Actor(in.Actor)
-	issue := model.Issue{
-		Title:       strings.TrimSpace(in.Title),
-		Description: strings.TrimSpace(in.Description),
-		Prompt:      strings.TrimSpace(in.Prompt),
-		Plan:        strings.TrimSpace(in.Plan),
-		Priority:    in.Priority,
-		IssueType:   issueType,
-		Topic:       topic,
-		Lane:        strings.TrimSpace(in.Lane),
-		Labels:      labels,
-		Assignee:    assignee,
-		FollowsUp:   strings.TrimSpace(in.FollowsUp),
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-	issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	if err := s.withMutation(ctx, "create issue", func(ctx context.Context, tx *sql.Tx) error {
-		frame, parentType, err := filingParentTx(ctx, tx, parentID)
+	var issue model.Issue
+	// [LAW:no-ambient-temporal-coupling] The history the create is stamped past
+	// is read under the hold its write commits in, as Apply's is, so no write
+	// lands between the reading and the row stamped past it.
+	if err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		// A new issue has no history of its own; the lane family it joins does,
+		// and the create is stamped past it, as every write is. Read once the pure
+		// checks pass. The parent itself is checked in the mutation, so a create
+		// refused there has already taken its reading, and the tally counts it as
+		// it counts any refused write.
+		filed, err := s.historyFiledUnder(ctx, parentID)
 		if err != nil {
 			return err
 		}
-		// Containment, second half: the named parent is an epic. Read on the
-		// tx with the frame, so the type and the row's presence are one
-		// snapshot. [LAW:single-enforcer]
-		if parentID != "" {
-			if err := storage.RejectParentThatIsNotAContainer(parentID, parentType); err != nil {
+		if hook := s.planReadsHookForTest; hook != nil {
+			hook()
+		}
+		now := s.stamps.Stamp(s.clock, filed)
+		issue = model.Issue{
+			Title:       strings.TrimSpace(in.Title),
+			Description: strings.TrimSpace(in.Description),
+			Prompt:      strings.TrimSpace(in.Prompt),
+			Plan:        strings.TrimSpace(in.Plan),
+			Priority:    in.Priority,
+			IssueType:   issueType,
+			Topic:       topic,
+			Lane:        strings.TrimSpace(in.Lane),
+			Labels:      labels,
+			Assignee:    assignee,
+			FollowsUp:   strings.TrimSpace(in.FollowsUp),
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)
+		if err != nil {
+			return err
+		}
+		return s.withMutation(ctx, "create issue", func(ctx context.Context, tx *sql.Tx) error {
+			frame, parentType, err := filingParentTx(ctx, tx, parentID)
+			if err != nil {
 				return err
 			}
-		}
-		// The followed-up ticket must exist when the link is written, as the
-		// parent must: the column has no foreign key, so this is the one place
-		// a dangling follows_up is refused rather than stored and never shown.
-		// Retained rows pass — a follow-up of an archived ticket is still its
-		// follow-up. [LAW:single-enforcer] [LAW:no-silent-failure]
-		if issue.FollowsUp != "" {
-			if err := requireIssueExistsTx(ctx, tx, issue.FollowsUp); err != nil {
+			// Containment, second half: the named parent is an epic. Read on the
+			// tx with the frame, so the type and the row's presence are one
+			// snapshot. [LAW:single-enforcer]
+			if parentID != "" {
+				if err := storage.RejectParentThatIsNotAContainer(parentID, parentType); err != nil {
+					return err
+				}
+			}
+			// The followed-up ticket must exist when the link is written, as the
+			// parent must: the column has no foreign key, so this is the one place
+			// a dangling follows_up is refused rather than stored and never shown.
+			// Retained rows pass — a follow-up of an archived ticket is still its
+			// follow-up. [LAW:single-enforcer] [LAW:no-silent-failure]
+			if issue.FollowsUp != "" {
+				if err := requireIssueExistsTx(ctx, tx, issue.FollowsUp); err != nil {
+					return err
+				}
+			}
+			prefix, err := issueid.NormalizeConfiguredPrefix(in.Prefix)
+			if err != nil {
+				return fmt.Errorf("normalize issue prefix: %w", err)
+			}
+			issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)
+			if err != nil {
 				return err
 			}
-		}
-		prefix, err := issueid.NormalizeConfiguredPrefix(in.Prefix)
-		if err != nil {
-			return fmt.Errorf("normalize issue prefix: %w", err)
-		}
-		issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)
-		if err != nil {
-			return err
-		}
-		issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement, frame)
-		if err != nil {
-			return err
-		}
-		archivedCol, deletedCol := retentionColumns(issue)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
+			issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement, frame)
+			if err != nil {
+				return err
+			}
+			archivedCol, deletedCol := retentionColumns(issue)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
 			id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
-			issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
-			return fmt.Errorf("insert issue: %w", err)
-		}
-		if parentID != "" {
-			// [LAW:one-source-of-truth] Build the edge as a value and route through
-			// insertRelationTx; the relations INSERT statement lives only there.
-			//
-			// This is the one parent edge that needs no cycle check, and the
-			// reason is structural rather than a judgment call: the id was
-			// minted a few lines above, so nothing in the workspace can be below
-			// it yet and no parent can be its own descendant. addRelationTx
-			// carries that check for the edges written against issues that
-			// already have a hierarchy under them.
-
-			parentEdge := model.Relation{
-				SrcID:     issue.ID,
-				DstID:     parentID,
-				Type:      model.RelParentChild,
-				CreatedAt: issue.CreatedAt,
-				CreatedBy: createdBy,
+				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
+				issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
+				return fmt.Errorf("insert issue: %w", err)
 			}
-			if err := insertRelationTx(ctx, tx, parentEdge); err != nil {
+			if parentID != "" {
+				// [LAW:one-source-of-truth] Build the edge as a value and route through
+				// insertRelationTx; the relations INSERT statement lives only there.
+				//
+				// This is the one parent edge that needs no cycle check, and the
+				// reason is structural rather than a judgment call: the id was
+				// minted a few lines above, so nothing in the workspace can be below
+				// it yet and no parent can be its own descendant. addRelationTx
+				// carries that check for the edges written against issues that
+				// already have a hierarchy under them.
+
+				parentEdge := model.Relation{
+					SrcID:     issue.ID,
+					DstID:     parentID,
+					Type:      model.RelParentChild,
+					CreatedAt: issue.CreatedAt,
+					CreatedBy: createdBy,
+				}
+				if err := insertRelationTx(ctx, tx, parentEdge); err != nil {
+					return err
+				}
+			}
+			if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy, now); err != nil {
 				return err
 			}
-		}
-		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy, now); err != nil {
-			return err
-		}
-		// CreateIssue's "created" event records the initial status as a single
-		// field-change row. Containers don't carry status so no row for them.
-		createChanges := []model.FieldChange{}
-		if !issue.IssueType.IsContainer() {
-			createChanges = append(createChanges, model.FieldChange{Field: "status", From: "", To: "open"})
-		}
-		// A follow-up's origin is a birth fact no later event can record, so
-		// the create event carries it: `lit history` shows which ticket this
-		// one was filed on. [LAW:nothing-unseen]
-		if issue.FollowsUp != "" {
-			createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp})
-		}
-		if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, now, createChanges); err != nil {
-			return err
-		}
-		return smoothRanksIfNeededTx(ctx, tx, issue.Rank)
+			// CreateIssue's "created" event records the initial status as a single
+			// field-change row. Containers don't carry status so no row for them.
+			createChanges := []model.FieldChange{}
+			if !issue.IssueType.IsContainer() {
+				createChanges = append(createChanges, model.FieldChange{Field: "status", From: "", To: "open"})
+			}
+			// A follow-up's origin is a birth fact no later event can record, so
+			// the create event carries it: `lit history` shows which ticket this
+			// one was filed on. [LAW:nothing-unseen]
+			if issue.FollowsUp != "" {
+				createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp})
+			}
+			if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, now, createChanges); err != nil {
+				return err
+			}
+			return smoothRanksIfNeededTx(ctx, tx, issue.Rank)
+		})
 	}); err != nil {
 		return model.Issue{}, err
 	}
@@ -1388,9 +1400,8 @@ func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor st
 // it composes into any transaction a caller already holds. [LAW:single-enforcer]
 // The UPDATE sets only the columns the field axis owns: the lifecycle columns
 // (status, closed_at, archived_at, deleted_at) belong to the transition and
-// retention writes, so a stale field plan cannot clobber a concurrent
-// lifecycle change — the cross-axis write is unwritable, not guarded.
-// [LAW:dataflow-not-control-flow]
+// retention writes, so each column has one writer and a field write restates
+// no lifecycle column. [LAW:one-source-of-truth]
 func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at time.Time) error {
 	// [LAW:effects-at-boundaries] The instant arrives with the write, not in
 	// planFieldUpdate — so the plan stays a pure function of its inputs.
@@ -1420,82 +1431,97 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 // checkouts of one identity taking a lane from each other move nothing on the row and everything on
 // the record.
 func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
-	current, err := s.GetIssue(ctx, id)
-	if err != nil {
-		return storage.Applied{}, err
-	}
-	// [LAW:one-source-of-truth] One read of history plans the change and
-	// stamps it: the issue's own events decide its holder and its phase, and
-	// the lane family's decide the instant, so the write is stamped past
-	// exactly the history it was planned against.
-	family, err := s.laneFamilyHistory(ctx, current.ID)
-	if err != nil {
-		return storage.Applied{}, err
-	}
-	at := s.stamps.Stamp(s.clock, family)
-	history := eventsOf(current.ID, family)
-	// [LAW:no-ambient-temporal-coupling] The combined transition+field update has
-	// exactly one atomicity owner: this method plans both writes (pure: reads,
-	// validation, in-memory mutation) and then performs them inside a SINGLE
-	// withMutation, so they share one SQL transaction and one Dolt commit. A
-	// validation error or crash between the two writes cannot leave a
-	// status-moved-but-fields-unwritten row — the torn state is unrepresentable.
-	// [LAW:one-source-of-truth] One change has one author: the actor is
-	// normalized once here and recorded on every event the change produces.
-	actor := storage.Actor(c.Actor)
-	baseline := current
-	var lw lifecycleWrite
-	var handover *claims.Handover
-	if c.Action != nil {
-		lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)
+	// [LAW:no-ambient-temporal-coupling] The read, the stamp, the plan and the
+	// write share one commit-lock hold, so no write lands between what the plan
+	// read and what it writes: the holder a start takes the ticket from, the
+	// instant it is stamped at, and whether any write is owed at all are all
+	// answers about the state the write lands on. Every writer of the store
+	// takes this lock, so under the hold the reads see exactly what the tx
+	// will. They run on s.db before the tx opens because the pool has one
+	// connection, which an open tx would hold.
+	var applied storage.Applied
+	if err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		current, err := s.GetIssue(ctx, id)
 		if err != nil {
-			return storage.Applied{}, err
+			return err
 		}
-		// The field write starts from the post-action issue so a start's new
-		// assignee is restated, not overwritten, and the diff sees it as prior.
-		baseline = lw.postIssue()
-		handover = lw.handover()
-	}
-	// Every patch is planned, an empty one included, and the field axis is
-	// written when the plan moved a field: a patch restating what the issue
-	// holds writes no row, stamps no updated_at, and makes no commit, which is
-	// what lets a bulk file read out of `lit ls --format yaml` go back in
-	// unedited as a no-op. [LAW:dataflow-not-control-flow]
-	fw, err := planFieldUpdate(baseline, c.Fields, actor)
-	if err != nil {
-		return storage.Applied{}, err
-	}
-	hasFields := len(fw.changes) > 0
-	needsActionWrite := lw != nil && !lw.isNoop()
-	// Test-only injection point for the plan→apply window; nil in production.
-	if hook := s.applyPreMutationHookForTest; hook != nil {
-		hook()
-	}
-	if needsActionWrite || hasFields {
-		if err := s.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
-			if needsActionWrite {
-				if err := lw.applyTx(ctx, s, tx); err != nil {
-					return err
-				}
-			}
-			if hasFields {
-				if err := s.applyFieldsTx(ctx, tx, fw, at); err != nil {
-					return err
-				}
-			}
-			return nil
-		}); err != nil {
-			return storage.Applied{}, err
+		if hook := s.planReadsHookForTest; hook != nil {
+			hook()
 		}
-	}
-	issue, err := s.GetIssue(ctx, id)
-	if err != nil {
+		// [LAW:one-source-of-truth] One read of history plans the change and
+		// stamps it: the issue's own events decide its holder and its phase, and
+		// the lane family's decide the instant, so the write is stamped past
+		// exactly the history it was planned against.
+		family, err := s.laneFamilyHistory(ctx, current.ID)
+		if err != nil {
+			return err
+		}
+		at := s.stamps.Stamp(s.clock, family)
+		history := eventsOf(current.ID, family)
+		// [LAW:no-ambient-temporal-coupling] The combined transition+field update
+		// has exactly one atomicity owner: this method plans both writes (pure:
+		// validation, in-memory mutation) and then performs them inside a SINGLE
+		// withMutation, so they share one SQL transaction and one Dolt commit. A
+		// validation error or crash between the two writes cannot leave a
+		// status-moved-but-fields-unwritten row — the torn state is
+		// unrepresentable.
+		// [LAW:one-source-of-truth] One change has one author: the actor is
+		// normalized once here and recorded on every event the change produces.
+		actor := storage.Actor(c.Actor)
+		baseline := current
+		var lw lifecycleWrite
+		var handover *claims.Handover
+		if c.Action != nil {
+			lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)
+			if err != nil {
+				return err
+			}
+			// The field write starts from the post-action issue so a start's new
+			// assignee is restated, not overwritten, and the diff sees it as prior.
+			baseline = lw.postIssue()
+			handover = lw.handover()
+		}
+		// Every patch is planned, an empty one included, and the field axis is
+		// written when the plan moved a field: a patch restating what the issue
+		// holds writes no row, stamps no updated_at, and makes no commit, which is
+		// what lets a bulk file read out of `lit ls --format yaml` go back in
+		// unedited as a no-op. [LAW:dataflow-not-control-flow]
+		fw, err := planFieldUpdate(baseline, c.Fields, actor)
+		if err != nil {
+			return err
+		}
+		hasFields := len(fw.changes) > 0
+		needsActionWrite := lw != nil && !lw.isNoop()
+		if needsActionWrite || hasFields {
+			if err := s.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
+				if needsActionWrite {
+					if err := lw.applyTx(ctx, s, tx); err != nil {
+						return err
+					}
+				}
+				if hasFields {
+					if err := s.applyFieldsTx(ctx, tx, fw, at); err != nil {
+						return err
+					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		issue, err := s.GetIssue(ctx, id)
+		if err != nil {
+			return err
+		}
+		applied = storage.Applied{Issue: issue, Handover: handover, Fields: fw.changes}
+		return nil
+	}); err != nil {
 		return storage.Applied{}, err
 	}
 	for _, observe := range s.observers {
-		observe(c, issue)
+		observe(c, applied.Issue)
 	}
-	return storage.Applied{Issue: issue, Handover: handover, Fields: fw.changes}, nil
+	return applied, nil
 }
 
 // AddComment returns the commented-on issue alongside the comment: it already
@@ -1613,10 +1639,9 @@ func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEven
 
 // phaseWrite is a planned phase move. The phase is derived from the issue's
 // history (model.PhaseOf), so the move's whole record is its event; the row
-// moves only updated_at, at the event's instant, under a guard that the issue
-// is still in progress — a done landing between the plan and the write fails
-// the move loudly instead of recording a phase on a closed ticket.
-// [LAW:no-silent-failure]
+// moves only updated_at, at the event's instant. Issue.PlanPhase refuses a
+// ticket that is not in progress, and the plan reads the ticket under the hold
+// its write lands in, so the status it planned against is the status written on.
 type phaseWrite struct {
 	move  model.PhaseChange
 	event model.IssueEvent
@@ -1628,27 +1653,9 @@ func (w phaseWrite) isNoop() bool               { return !w.move.Changed() }
 func (w phaseWrite) handover() *claims.Handover { return nil }
 
 func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
-	result, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ? WHERE id = ? AND status = ?`,
-		w.event.CreatedAt.Format(time.RFC3339Nano), w.event.IssueID, string(model.StateInProgress))
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ? WHERE id = ?`,
+		w.event.CreatedAt.Format(time.RFC3339Nano), w.event.IssueID); err != nil {
 		return fmt.Errorf("update issue for phase move: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read phase move result: %w", err)
-	}
-	// The engine counts rows it changed, not rows it matched, so a move stamped
-	// at the instant the row already holds changes none while still matching.
-	// The status is the guard's question, so no row changed is answered by
-	// reading it rather than by the count.
-	if affected == 0 {
-		currentStatus, lookupErr := currentStatusTx(ctx, tx, w.event.IssueID)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		if currentStatus != string(model.StateInProgress) {
-			return fmt.Errorf("phase conflict: issue status is %q", currentStatus)
-		}
 	}
 	return insertEventTx(ctx, tx, w.event)
 }
@@ -1676,14 +1683,13 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 // Issue.Apply's guards, the assignee rule, and the change-row diff over the
 // issue, the history and the instant Apply read for it, and reads and writes
 // nothing itself. applyTransitionTx is the write half: the redirect-target
-// validation, which reads a row a concurrent write can move and so runs under
-// the commit lock, then the single guarded UPDATE plus the event. The plan also carries `post` — the
+// validation, which reads a foreign row on the write's tx, then the single
+// UPDATE plus the event. The plan also carries `post` — the
 // post-transition issue — which Apply uses as the baseline for a following
 // field write. A noop plan records that the target state and assignee already
 // hold, so no write is owed. [LAW:decomposition]
 type transitionWrite struct {
 	issueID           string
-	fromStatus        string
 	toStatus          string
 	postAssignee      string
 	now               time.Time
@@ -1718,18 +1724,6 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// s.attribution is the taker for the same reason it is the right one to
 	// compare against: it is exactly what recordEvent will stamp on the event
 	// this plan is deciding whether to write.
-	//
-	// The pair spans two reads at two instants — issue came from Apply's own
-	// GetIssue, history from the separate read Apply stamps the write from —
-	// so a concurrent writer can land between them. That window cannot drop a takeover, which is the direction
-	// that would matter: a no-op needs prior.Checkout to equal s.attribution,
-	// and a foreign write in the window can only make the freshly-read latest
-	// establisher somebody else, forcing the write. It can only stale the
-	// assignee half, which likewise pushes the pair toward inequality. What
-	// survives is a spurious write whose assignee FieldChange names a stale
-	// From — audit precision, not a lost claim — and the handover Apply reports
-	// carries the same From. Closing it means computing the pair in-tx
-	// (links-scale-dy46.w61).
 	prior := claims.ClaimantOf(issue, history)
 	post := prior.After(action, s.attribution)
 	updated.Assignee = post.Assignee
@@ -1764,11 +1758,9 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// leaf exactly like the resolution — only the redirecting outcomes carry
 	// one, structurally — so the plan reads it back off the post-transition
 	// issue. Its integrity (target exists, is not the issue itself, is not a
-	// deleted canonical) is validated at APPLY time inside the mutation tx, not
-	// here: validateRedirectTarget reads a FOREIGN row whose retention a
-	// concurrent delete can flip, so the check must run under the same commit
-	// lock as the write it guards, never in this pre-lock plan phase.
-	// [LAW:no-ambient-temporal-coupling] [LAW:one-source-of-truth] The leaf is
+	// deleted canonical) is validated by applyTransitionTx on the write's tx,
+	// not here: the plan reads nothing itself, and validateRedirectTarget reads
+	// a FOREIGN row. [LAW:effects-at-boundaries] [LAW:one-source-of-truth] The leaf is
 	// the single carrier; there is no separate outcome re-extraction to drift
 	// from it.
 	postRedirect := updated.RedirectTargetValue()
@@ -1805,7 +1797,6 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// re-attach a resolution. [LAW:one-source-of-truth]
 	return transitionWrite{
 		issueID:           issue.ID,
-		fromStatus:        fromStatus,
 		toStatus:          toStatus,
 		postAssignee:      post.Assignee,
 		now:               now,
@@ -1822,13 +1813,10 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 }
 
 // applyTransitionTx writes a planned status transition against tx: it validates
-// the redirect target, then performs the guarded status UPDATE and the change
-// event. The redirect validation lives here rather than in planStatusTransition
-// so the FOREIGN row it reads (the redirect canonical) is read on the same tx,
-// under the same held commit lock, as the write it guards — a pre-lock
-// plan-phase read would leave a window open between the two.
-// [LAW:no-ambient-temporal-coupling]
-// Everything else it does is a write, so it still composes into any transaction
+// the redirect target, then performs the status UPDATE and the change event.
+// The redirect validation lives here rather than in planStatusTransition so the
+// plan stays pure: the FOREIGN row it reads (the redirect canonical) is read on
+// the tx of the write it guards. Everything else it does is a write, so it still composes into any transaction
 // a caller already holds — which is how Apply folds a transition and a field
 // write into one commit. [LAW:single-enforcer]
 // The redirect target rides the same UPDATE as status/closed_at/resolution, so
@@ -1836,33 +1824,15 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 // live issue is unwritable, not guarded against. [LAW:one-source-of-truth]
 func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionWrite) error {
 	// [LAW:single-enforcer] The redirect target is validated through the one
-	// validation site, reading existence+retention of the canonical on this tx
-	// so a delete of it cannot slip between the check and the write. A
-	// non-redirecting transition carries no target, so this is a no-op there.
+	// validation site, reading existence+retention of the canonical on this tx.
+	// A non-redirecting transition carries no target, so this is a no-op there.
 	if err := validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue()); err != nil {
 		return err
 	}
-	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
-	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ? AND status = ?`,
-		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID, w.fromStatus)
-	if err != nil {
+	// [LAW:dataflow-not-control-flow] Status transitions always execute one write.
+	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ?`,
+		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID); err != nil {
 		return fmt.Errorf("update issue status: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read status transition result: %w", err)
-	}
-	if affected == 0 {
-		currentStatus, lookupErr := currentStatusTx(ctx, tx, w.issueID)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		// Verb, not the persisted encoding: this is a refusal an agent reads and
-		// may act on, so it names the command it typed. The recordEvent call on
-		// the next line is the opposite case and keeps Name -- that string is
-		// written to the events table. One value, two destinations, two names.
-		// [LAW:one-source-of-truth]
-		return fmt.Errorf("%s conflict: issue status is %q", w.action.Verb(), currentStatus)
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
 }
@@ -1872,24 +1842,19 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 // Retain transition table derives the post-state (or the rejection), and the
 // change-row diff is taken on the wire projection of the Retention value so
 // the history format is the same encoding the columns store. applyTx is the
-// write half: one guarded UPDATE plus the event. The prior column pair rides
-// along as the compare-and-swap guard, so a plan computed against a stale
-// snapshot fails loudly instead of last-write-wins. [LAW:no-silent-failure]
+// write half: one UPDATE plus the event.
 type retentionWrite struct {
 	issueID string
 	now     time.Time
-	// priorArchived/priorDeleted are the CAS guard: the column pair the plan
-	// read; the UPDATE matches them or affects no row. nextArchived/nextDeleted
-	// are the pair Retain produced. All four are retentionColumns projections.
-	priorArchived any
-	priorDeleted  any
-	nextArchived  any
-	nextDeleted   any
-	action        model.ActionName
-	reason        string
-	actor         string
-	changes       []model.FieldChange
-	post          model.Issue
+	// nextArchived/nextDeleted are the pair Retain produced, as the
+	// retentionColumns projection the columns store.
+	nextArchived any
+	nextDeleted  any
+	action       model.ActionName
+	reason       string
+	actor        string
+	changes      []model.FieldChange
+	post         model.Issue
 }
 
 func (w retentionWrite) postIssue() model.Issue     { return w.post }
@@ -1911,7 +1876,6 @@ func (w retentionWrite) isNoop() bool { return false }
 // stays testable with no store at all.
 func planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction, now time.Time) (retentionWrite, error) {
 	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
-	priorArchived, priorDeleted := retentionColumns(issue)
 	next, err := model.Retain(issue.Retention(), action, now)
 	if err != nil {
 		return retentionWrite{}, err
@@ -1929,43 +1893,25 @@ func planRetentionTransition(issue model.Issue, actor string, reason string, act
 		changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(nextDeletedAt)})
 	}
 	return retentionWrite{
-		issueID:       issue.ID,
-		now:           now,
-		priorArchived: priorArchived,
-		priorDeleted:  priorDeleted,
-		nextArchived:  nextArchived,
-		nextDeleted:   nextDeleted,
-		action:        action.Name(),
-		reason:        reason,
-		actor:         actor,
-		changes:       changes,
-		post:          post,
+		issueID:      issue.ID,
+		now:          now,
+		nextArchived: nextArchived,
+		nextDeleted:  nextDeleted,
+		action:       action.Name(),
+		reason:       reason,
+		actor:        actor,
+		changes:      changes,
+		post:         post,
 	}, nil
 }
 
 // applyTx writes a planned retention transition against tx. The UPDATE sets
 // only the columns the retention axis owns — updated_at plus the pair — so a
-// concurrent status change can never be clobbered by a stale restatement, and
-// it is guarded on the pair it planned from with null-safe equality (the
-// columns are the exact RFC3339Nano strings retentionColumns writes), the same
-// affected-rows contention discipline the status write uses.
-// [LAW:single-enforcer] [LAW:one-source-of-truth]
+// retention write restates no status column. [LAW:one-source-of-truth]
 func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
-	result, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ? AND archived_at <=> ? AND deleted_at <=> ?`,
-		w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID, w.priorArchived, w.priorDeleted)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
+		w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID); err != nil {
 		return fmt.Errorf("update issue retention: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("read retention transition result: %w", err)
-	}
-	if affected == 0 {
-		current, lookupErr := currentRetentionTx(ctx, tx, w.issueID)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		return fmt.Errorf("%s conflict: issue retention is %q", w.action.Verb(), model.RetentionName(current))
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
 }
@@ -1985,10 +1931,9 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 //
 // [LAW:single-enforcer] The one validation site for every close path.
 // [LAW:no-ambient-temporal-coupling] The canonical's existence and retention
-// are read on the SAME tx that persists the redirect — under the held commit
-// lock — so a concurrent delete of the canonical is either fully before this
-// read (rejected here) or fully after the commit, never in a torn window
-// between an earlier read and the write. currentRetentionTx returns
+// are read on the SAME tx that persists the redirect, under the held commit
+// lock, so a delete of the canonical is either before this read (rejected
+// here) or after the commit. currentRetentionTx returns
 // NotFoundError when the row is absent (the existence half) and its retention
 // otherwise (the Deleted half), both decoded through the one
 // RetentionFromTimestamps boundary.
@@ -2016,22 +1961,9 @@ func validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID string, r
 	return nil
 }
 
-func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, error) {
-	// status column is nullable (containers store NULL); the scan target
-	// must match the column shape, not the subset of rows this caller expects.
-	var status sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT status FROM issues WHERE id = ?`, issueID).Scan(&status); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", storage.NotFoundError{Entity: "issue", ID: issueID}
-		}
-		return "", fmt.Errorf("read issue status: %w", err)
-	}
-	return status.String, nil
-}
-
 // currentRetentionTx reads the live retention state of issueID inside tx, for
-// naming the winner when a retention CAS fails. The pair decodes through the
-// single RetentionFromTimestamps boundary like every other read.
+// validateRedirectTarget's existence and Deleted checks. The pair decodes
+// through the single RetentionFromTimestamps boundary like every other read.
 func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID string) (model.Retention, error) {
 	var archivedAt, deletedAt sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT archived_at, deleted_at FROM issues WHERE id = ?`, issueID).Scan(&archivedAt, &deletedAt); err != nil {
