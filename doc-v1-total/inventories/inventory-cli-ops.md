@@ -814,10 +814,10 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 5. `landing := importer.ReplaceFromExport(ctx, targetExport)` — the parent edges the restore cut because they closed a loop, the tickets it moved into an epic and the tickets it gave a rank key of their own (`04-store-operations.md`).
 6. Re-exports and writes `last-sync-base.json` atomically (`backup.go`).
 7. `syncer.RecordSyncState(ctx, {Path: restorePath, ContentHash: HashFile(restorePath)})` (`backup.go`).
-8. stdout: `restored <path>`, then `writeLanding(stdout, "the backup", landing)` (`backup.go`).
-9. Whatever the outcome, one sync trace record on the way out: command `lit backup restore`, decision `restored` (`error` on failure), metadata `{path, unlooped, unlooped_cuts, rehomed, rehomed_moves, rekeyed, rekeyed_moves}` (`backup.go`).
+8. stdout: `restored <path>`, then `writeDropped(stdout, dropped, snapshotPath)` (`restore_dropped.go`), then `writeLanding(stdout, "the backup", landing)` (`backup.go`).
+9. Whatever the outcome, one sync trace record on the way out: command `lit backup restore`, decision `restored` (`error` on failure), metadata `{path, absent_from_file, absent_from_file_ids, unlooped, unlooped_cuts, rehomed, rehomed_moves, rekeyed, rekeyed_moves}` (`backup.go`).
 
-`bulk import` is retired in favor of this path: guidance string ``use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated`` (`register.go`).
+`bulk import` is retired: guidance string ``to edit tickets in bulk, read them out with `lit ls --format yaml` and write them back with `lit import --path <f.yaml>`; `lit backup restore --path <export.json>` replaces the whole workspace from an export, the restore `bulk import` duplicated`` (`register.go`).
 
 ---
 

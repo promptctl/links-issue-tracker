@@ -830,7 +830,7 @@ const (
 	assignRetirementGuidance     = "reassigning is a field write: use `lit update <id> --assignee <name>` (with an optional `--reason`)"
 	lsAtRetirementGuidance       = "use `lit ls --at <store-dir>` — listing a discovered store read-only is now a flag on `ls`, not a separate command"
 	overviewRetirementGuidance   = "use `lit stores --counts` — the cross-project ready / in-flight / blocked rollup is now a flag on `stores`"
-	bulkImportRetirementGuidance = "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated"
+	bulkImportRetirementGuidance = "to edit tickets in bulk, read them out with `lit ls --format yaml` and write them back with `lit import --path <f.yaml>`; `lit backup restore --path <export.json>` replaces the whole workspace from an export, the restore `bulk import` duplicated"
 )
 
 // retiredSpec builds the whole registry row for a retired command. Retirement

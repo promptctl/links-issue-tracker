@@ -2242,7 +2242,7 @@ completion (`register.go`, `completion.go`).
 | `assign` | operations | "reassigning is a field write: use `lit update <id> --assignee <name>` (with an optional `--reason`)" | `register.go` |
 | `ls-at` | maintenance | "use `lit ls --at <store-dir>` — listing a discovered store read-only is now a flag on `ls`, not a separate command" | `register.go` |
 | `overview` | maintenance | "use `lit stores --counts` — the cross-project ready / in-flight / blocked rollup is now a flag on `stores`" | `register.go` |
-| `bulk import` | (bulk family) | "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated" | `bulk.go`, `register.go` |
+| `bulk import` | (bulk family) | "to edit tickets in bulk, read them out with `lit ls --format yaml` and write them back with `lit import --path <f.yaml>`; `lit backup restore --path <export.json>` replaces the whole workspace from an export, the restore `bulk import` duplicated" | `bulk.go`, `register.go` |
 
 Full error message form: `the "<command>" command has been retired; <replacement>`
 (`cli.go`). Reason `retired_command`, remediation empty
