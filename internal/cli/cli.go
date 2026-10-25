@@ -195,6 +195,9 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// before the error check, because a fact recorded before a failure is still
 	// true: `lit next` reports finding nothing as an error, and that is the fact.
 	recordStatusline(ctx, ws, ap.Statusline)
+	// Beside the statusline for the same two reasons: it needs no engine, and a
+	// clock reading a failed command took was still taken.
+	reportStampCorrections(ctx, ap.Store)
 	if runErr != nil {
 		return runErr
 	}

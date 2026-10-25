@@ -110,6 +110,9 @@ type Store struct {
 	// conformance suite state a time-ordering rule at all.
 	// [LAW:effects-at-boundaries]
 	clock storage.Clock
+	// stamps turns a clock reading into the instant a write stamps, held past
+	// the history the write was planned against, and counts each hold.
+	stamps storage.StampTally
 
 	// attribution stamps every event this store records with the checkout that
 	// produced it. It is deliberately NOT an Open() parameter: identity is
@@ -612,7 +615,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if issueType == "" {
 		issueType = model.TypeTask
 	}
-	now := s.clock.Now()
+	parentID := strings.TrimSpace(in.ParentID)
 	labels, err := canonicalizeLabels(in.Labels)
 	if err != nil {
 		return model.Issue{}, err
@@ -625,6 +628,21 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if err != nil {
 		return model.Issue{}, err
 	}
+	// Containment, first half: a leaf is never created outside an epic. Pure,
+	// so it is answered before the mutation opens. [LAW:single-enforcer]
+	if err := storage.RejectLeafWithoutParent(issueType, parentID); err != nil {
+		return model.Issue{}, err
+	}
+	// A new issue has no history of its own; the lane family it joins does,
+	// and the create is stamped past it, as every write is. Read once the pure
+	// checks pass. The parent itself is checked under the commit lock, so a
+	// create refused there has already taken its reading, and the tally counts
+	// it as it counts any refused write.
+	filed, err := s.historyFiledUnder(ctx, parentID)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	now := s.stamps.Stamp(s.clock, filed)
 	createdBy := storage.Actor(in.Actor)
 	issue := model.Issue{
 		Title:       strings.TrimSpace(in.Title),
@@ -643,12 +661,6 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	}
 	issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)
 	if err != nil {
-		return model.Issue{}, err
-	}
-	parentID := strings.TrimSpace(in.ParentID)
-	// Containment, first half: a leaf is never created outside an epic. Pure,
-	// so it is answered before the mutation opens. [LAW:single-enforcer]
-	if err := storage.RejectLeafWithoutParent(issueType, parentID); err != nil {
 		return model.Issue{}, err
 	}
 	if err := s.withMutation(ctx, "create issue", func(ctx context.Context, tx *sql.Tx) error {
@@ -716,7 +728,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 				return err
 			}
 		}
-		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy); err != nil {
+		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy, now); err != nil {
 			return err
 		}
 		// CreateIssue's "created" event records the initial status as a single
@@ -731,7 +743,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		if issue.FollowsUp != "" {
 			createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp})
 		}
-		if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, createChanges); err != nil {
+		if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, now, createChanges); err != nil {
 			return err
 		}
 		return smoothRanksIfNeededTx(ctx, tx, issue.Rank)
@@ -1379,17 +1391,17 @@ func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor st
 // retention writes, so a stale field plan cannot clobber a concurrent
 // lifecycle change — the cross-axis write is unwritable, not guarded.
 // [LAW:dataflow-not-control-flow]
-func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) error {
-	// [LAW:effects-at-boundaries] The clock is read here, at the write boundary,
-	// not in planFieldUpdate — so the plan stays a pure function of its inputs.
-	issue, event := s.stampEdit(w.issue, w.reason, w.actor, w.changes)
+func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at time.Time) error {
+	// [LAW:effects-at-boundaries] The instant arrives with the write, not in
+	// planFieldUpdate — so the plan stays a pure function of its inputs.
+	issue, event := s.stampEdit(w.issue, at, w.reason, w.actor, w.changes)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
 		title = ?, description = ?, agent_prompt = ?, work_plan = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
 		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	if w.replaceLabels {
-		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor); err != nil {
+		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor, at); err != nil {
 			return err
 		}
 	}
@@ -1412,6 +1424,16 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 	if err != nil {
 		return storage.Applied{}, err
 	}
+	// [LAW:one-source-of-truth] One read of history plans the change and
+	// stamps it: the issue's own events decide its holder and its phase, and
+	// the lane family's decide the instant, so the write is stamped past
+	// exactly the history it was planned against.
+	family, err := s.laneFamilyHistory(ctx, current.ID)
+	if err != nil {
+		return storage.Applied{}, err
+	}
+	at := s.stamps.Stamp(s.clock, family)
+	history := eventsOf(current.ID, family)
 	// [LAW:no-ambient-temporal-coupling] The combined transition+field update has
 	// exactly one atomicity owner: this method plans both writes (pure: reads,
 	// validation, in-memory mutation) and then performs them inside a SINGLE
@@ -1425,7 +1447,7 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 	var lw lifecycleWrite
 	var handover *claims.Handover
 	if c.Action != nil {
-		lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)
+		lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)
 		if err != nil {
 			return storage.Applied{}, err
 		}
@@ -1457,7 +1479,7 @@ func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage
 				}
 			}
 			if hasFields {
-				if err := s.applyFieldsTx(ctx, tx, fw); err != nil {
+				if err := s.applyFieldsTx(ctx, tx, fw, at); err != nil {
 					return err
 				}
 			}
@@ -1562,22 +1584,22 @@ type lifecycleWrite interface {
 // three partition the sealed sum, so the dispatch is the sum's own structure —
 // a retention action reaching the status machine, or vice versa, is
 // unrepresentable. [LAW:types-are-the-program]
-func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, actor string, reason string, action model.Action) (lifecycleWrite, error) {
+func (s *Store) planLifecycleAction(issue model.Issue, history []model.IssueEvent, at time.Time, actor string, reason string, action model.Action) (lifecycleWrite, error) {
 	switch a := action.(type) {
 	case model.StatusAction:
-		w, err := s.planStatusTransition(ctx, issue, actor, reason, a)
+		w, err := s.planStatusTransition(issue, history, at, actor, reason, a)
 		if err != nil {
 			return nil, err
 		}
 		return w, nil
 	case model.RetentionAction:
-		w, err := planRetentionTransition(issue, actor, reason, a, s.clock.Now())
+		w, err := planRetentionTransition(issue, actor, reason, a, at)
 		if err != nil {
 			return nil, err
 		}
 		return w, nil
 	case model.SetPhase:
-		w, err := s.planPhaseMove(ctx, issue, actor, reason, a)
+		w, err := s.planPhaseMove(issue, history, at, actor, reason, a)
 		if err != nil {
 			return nil, err
 		}
@@ -1631,36 +1653,31 @@ func (w phaseWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
 	return insertEventTx(ctx, tx, w.event)
 }
 
-// planPhaseMove reads the issue's history and plans the move through
+// planPhaseMove plans the move against the issue's history through
 // Issue.PlanPhase, the rule both engines share. [LAW:single-enforcer] A move
 // mints its event here, so the post-move issue a following field write
 // baselines on carries the event's instant, as the memory engine's does.
-func (s *Store) planPhaseMove(ctx context.Context, issue model.Issue, actor, reason string, action model.SetPhase) (phaseWrite, error) {
-	events, err := s.ListEvents(ctx, issue.ID)
-	if err != nil {
-		return phaseWrite{}, err
-	}
-	move, err := issue.PlanPhase(events, action.Phase)
+func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at time.Time, actor, reason string, action model.SetPhase) (phaseWrite, error) {
+	move, err := issue.PlanPhase(history, action.Phase)
 	if err != nil {
 		return phaseWrite{}, err
 	}
 	if !move.Changed() {
 		return phaseWrite{move: move, post: issue}, nil
 	}
-	event := s.newEvent(issue.ID, string(model.ActionPhase), reason, actor, move.FieldChanges())
+	event := s.newEvent(issue.ID, string(model.ActionPhase), reason, actor, at, move.FieldChanges())
 	post := issue
 	post.UpdatedAt = event.CreatedAt
 	return phaseWrite{move: move, event: event, post: post}, nil
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute
-// against a tx. planStatusTransition is the read+validate+compute half — it runs
-// Issue.Apply's guards, the assignee rule, the redirect-target validation
-// (which reads the DB to confirm the target exists), and the change-row diff,
-// but performs no writes. applyTransitionTx is the write half: the single
-// guarded UPDATE plus the event. The split is read/compute vs
-// write, not pure vs impure — planStatusTransition does read the clock and the
-// store; what it defers is every mutation. The plan also carries `post` — the
+// against a tx. planStatusTransition is the validate+compute half — it runs
+// Issue.Apply's guards, the assignee rule, and the change-row diff over the
+// issue, the history and the instant Apply read for it, and reads and writes
+// nothing itself. applyTransitionTx is the write half: the redirect-target
+// validation, which reads a row a concurrent write can move and so runs under
+// the commit lock, then the single guarded UPDATE plus the event. The plan also carries `post` — the
 // post-transition issue — which Apply uses as the baseline for a following
 // field write. A noop plan records that the target state and assignee already
 // hold, so no write is owed. [LAW:decomposition]
@@ -1689,7 +1706,7 @@ func (w transitionWrite) postIssue() model.Issue     { return w.post }
 func (w transitionWrite) isNoop() bool               { return w.noop }
 func (w transitionWrite) handover() *claims.Handover { return w.claimHandover }
 
-func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
+func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEvent, at time.Time, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
 	updated, err := issue.Apply(action)
 	if err != nil {
 		return transitionWrite{}, err
@@ -1703,8 +1720,8 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	// this plan is deciding whether to write.
 	//
 	// The pair spans two reads at two instants — issue came from Apply's own
-	// GetIssue, this is a separate query — so a concurrent writer can land
-	// between them. That window cannot drop a takeover, which is the direction
+	// GetIssue, history from the separate read Apply stamps the write from —
+	// so a concurrent writer can land between them. That window cannot drop a takeover, which is the direction
 	// that would matter: a no-op needs prior.Checkout to equal s.attribution,
 	// and a foreign write in the window can only make the freshly-read latest
 	// establisher somebody else, forcing the write. It can only stale the
@@ -1713,11 +1730,7 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	// From — audit precision, not a lost claim — and the handover Apply reports
 	// carries the same From. Closing it means computing the pair in-tx
 	// (links-scale-dy46.w61).
-	events, err := s.ListEvents(ctx, issue.ID)
-	if err != nil {
-		return transitionWrite{}, err
-	}
-	prior := claims.ClaimantOf(issue, events)
+	prior := claims.ClaimantOf(issue, history)
 	post := prior.After(action, s.attribution)
 	updated.Assignee = post.Assignee
 	fromStatus := issue.StatusValue()
@@ -1733,7 +1746,7 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	if toStatus == fromStatus && post == prior {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
-	now := s.clock.Now()
+	now := at
 	var closedAtArg any
 	if value := updated.ClosedAtValue(); value != nil {
 		closedAtArg = value.Format(time.RFC3339Nano)
@@ -1851,7 +1864,7 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 		// [LAW:one-source-of-truth]
 		return fmt.Errorf("%s conflict: issue status is %q", w.action.Verb(), currentStatus)
 	}
-	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
+	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
 }
 
 // retentionWrite is a fully-planned retention transition, the retention-axis
@@ -1954,7 +1967,7 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 		}
 		return fmt.Errorf("%s conflict: issue retention is %q", w.action.Verb(), model.RetentionName(current))
 	}
-	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
+	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.now, w.changes)
 }
 
 // validateRedirectTarget is the close-validation floor for the redirect
@@ -2215,19 +2228,20 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 	return out, rows.Err()
 }
 
-// newEvent stamps one history event for issueID: its id, its time and its
-// attribution, read off the store. Every event the store writes is minted
+// newEvent stamps one history event for issueID: its id and its attribution,
+// read off the store, at the instant its mutation was stamped from the
+// history it was planned against (storage.StampTally). Every event the store writes is minted
 // here — the row-at-a-time recordEvent, and a reconcile's settled export,
 // whose events reach the same tables through applyExportDelta — so two
 // writers of history cannot stamp an event two ways. [LAW:single-enforcer]
-func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.FieldChange) model.IssueEvent {
+func (s *Store) newEvent(issueID, action, reason, actor string, at time.Time, changes []model.FieldChange) model.IssueEvent {
 	event := model.IssueEvent{
 		ID:        "evt-" + uuid.NewString(),
 		IssueID:   issueID,
 		Action:    strings.TrimSpace(action),
 		Reason:    strings.TrimSpace(reason),
 		Actor:     storage.Actor(actor),
-		CreatedAt: s.clock.Now(),
+		CreatedAt: at,
 		// The stamp is read off the store rather than passed in, so it is the
 		// same for every event this command writes and cannot be forgotten at a
 		// call site. Unattributed stores stamp nothing, which is how a store
@@ -2241,16 +2255,16 @@ func (s *Store) newEvent(issueID, action, reason, actor string, changes []model.
 // recordEvent writes a mutation's history: the event newEvent mints for it,
 // through insertEventTx, the one writer of issue_events rows. [LAW:single-enforcer]
 // Every mutation site computes its field-change diff and routes through here.
-func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, changes []model.FieldChange) error {
-	return insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, changes))
+func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, at time.Time, changes []model.FieldChange) error {
+	return insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, at, changes))
 }
 
 // stampEdit is how an edit lands: the event recording the fields it moved, and
 // the issue's updated_at at that event's instant. A field edit and a resolved
 // reconcile's merged text are both edits, so both take their stamp here and
 // cannot disagree about when one happened. [LAW:single-enforcer]
-func (s *Store) stampEdit(issue model.Issue, reason, actor string, changes []model.FieldChange) (model.Issue, model.IssueEvent) {
-	event := s.newEvent(issue.ID, "", reason, actor, changes)
+func (s *Store) stampEdit(issue model.Issue, at time.Time, reason, actor string, changes []model.FieldChange) (model.Issue, model.IssueEvent) {
+	event := s.newEvent(issue.ID, "", reason, actor, at, changes)
 	issue.UpdatedAt = event.CreatedAt
 	return issue, event
 }
@@ -2278,8 +2292,65 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 	return out, rows.Err()
 }
 
+// laneFamilyHistory reads issueID's history and its lane family's in one
+// statement, so the plan and the stamp come from one snapshot: issueID's own
+// events whole, for the plan to decide its holder and phase on, and the rest
+// of the family — every issue filed under a parent issueID is filed under,
+// the SQL statement of model.LaneFamily — as bare events, since the stamp
+// reads only their instants and a sibling's description history is no input
+// to it. Every write reads it, so it costs the family's size and not the
+// store's: the two halves are a UNION rather than one condition ORed across
+// them, and each walks from the issue id it is given to the events filed
+// under it by lookup joins. The hints name that walk because Dolt plans every
+// unhinted spelling of this read as a scan of issue_events — at 3,000 issues
+// outside a 30-issue family, 7ms for the OR and 17ms for the UNION, where
+// the hinted read takes 1.2ms, as it does with nothing outside the family. queryEvents parses each stamp into its instant, so the stamp
+// never trusts the varchar's spelling.
+func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+	events, err := s.queryEvents(ctx, issueEventsQuery+` UNION ALL `+bareEvents(`JOIN_ORDER(own, sibling, e) LOOKUP_JOIN(own, sibling) LOOKUP_JOIN(sibling, e)`, `relations own
+		JOIN relations sibling ON sibling.dst_id = own.dst_id AND sibling.type = own.type
+		JOIN issue_events e ON e.issue_id = sibling.src_id
+		WHERE own.src_id = ? AND own.type = ? AND sibling.src_id <> ?`),
+		issueID, issueID, string(model.RelParentChild), issueID)
+	if err != nil {
+		return nil, fmt.Errorf("read lane family history of %s: %w", issueID, err)
+	}
+	return events, nil
+}
+
+// historyFiledUnder reads the events of every issue filed under parentID as
+// bare events, the SQL statement of model.FiledUnder: the history a create
+// filed there is stamped past, read only for its instants. No issue is filed
+// under the empty parent. Hinted for the reason laneFamilyHistory is.
+func (s *Store) historyFiledUnder(ctx context.Context, parentID string) ([]model.IssueEvent, error) {
+	events, err := s.queryEvents(ctx, bareEvents(`JOIN_ORDER(r, e) LOOKUP_JOIN(r, e)`, `relations r
+		JOIN issue_events e ON e.issue_id = r.src_id
+		WHERE r.dst_id = ? AND r.type = ?`), parentID, string(model.RelParentChild))
+	if err != nil {
+		return nil, fmt.Errorf("read the history filed under %q: %w", parentID, err)
+	}
+	return events, nil
+}
+
+// eventsOf is issueID's own events among a family's history.
+func eventsOf(issueID string, family []model.IssueEvent) []model.IssueEvent {
+	own := []model.IssueEvent{}
+	for _, event := range family {
+		if event.IssueID == issueID {
+			own = append(own, event)
+		}
+	}
+	return own
+}
+
+// StampCorrections is the account of every stamp this store handed out that
+// history held back from its clock.
+func (s *Store) StampCorrections() storage.StampCorrections {
+	return s.stamps.StampCorrections()
+}
+
 func (s *Store) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, "e.issue_id = ?", issueID)
+	events, err := s.queryEvents(ctx, issueEventsQuery, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue events: %w", err)
 	}
@@ -2338,24 +2409,45 @@ func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
 // establishing event that decides a lane's holder can be arbitrarily old, so a
 // recency cutoff would silently drop exactly the claims it was meant to speed up.
 func (s *Store) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, "")
+	events, err := s.queryEvents(ctx, allEventsQuery)
 	if err != nil {
 		return nil, fmt.Errorf("list all issue events: %w", err)
 	}
 	return events, nil
 }
 
-// queryEvents fetches issue_events joined with issue_event_changes in a single
-// LEFT JOIN query, collapsing the per-change rows back into IssueEvent.Changes
-// slices. whereClause is an optional SQL fragment applied after the JOIN (e.g.
-// "e.issue_id = ?"); pass "" for an unfiltered scan. [LAW:dataflow-not-control-flow]
-func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any) ([]model.IssueEvent, error) {
-	q := `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value
-		FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id`
-	if whereClause != "" {
-		q += " WHERE " + whereClause
-	}
-	// c.field is in the sort because this is the one place event reads are made
+// eventColumns is an event as queryEvents reads it, before the change row
+// that follows it on each row.
+const eventColumns = `e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id`
+
+// allEventsQuery selects every event, one row per change row each, and one
+// row of NULL change columns for an event that changed no field.
+const allEventsQuery = `SELECT ` + eventColumns + `, c.field, c.from_value, c.to_value
+	FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id`
+
+// issueEventsQuery selects one issue's events as allEventsQuery does, its id
+// the one placeholder. The lookup hint is what makes it read the issue's
+// rows: unhinted, Dolt merge-joins the whole of both tables and filters
+// after, so one issue's history cost the store's size (4.6ms at 3,000 issues;
+// 0.2ms hinted).
+const issueEventsQuery = `SELECT /*+ LOOKUP_JOIN(e, c) */ ` + eventColumns + `, c.field, c.from_value, c.to_value
+	FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id
+	WHERE e.issue_id = ?`
+
+// bareEvents selects the events from names, a FROM clause that binds
+// issue_events as e, with no change rows: an instant and an attribution, no
+// Changes, for a reader that orders by them and decides nothing from what
+// they changed. hints is the optimizer hint that walks from to e by lookup.
+func bareEvents(hints, from string) string {
+	return `SELECT /*+ ` + hints + ` */ ` + eventColumns + `, NULL AS field, NULL AS from_value, NULL AS to_value FROM ` + from
+}
+
+// queryEvents runs selection, one of the event statements above or a UNION
+// ALL of them, and collapses the per-change rows back
+// into IssueEvent.Changes slices. [LAW:dataflow-not-control-flow]
+func (s *Store) queryEvents(ctx context.Context, selection string, args ...any) ([]model.IssueEvent, error) {
+	q := selection
+	// field is in the sort because this is the one place event reads are made
 	// deterministic. The export delta compares whole model.IssueEvent values,
 	// Changes slice included, so two reads of an event nothing touched have to
 	// come back identical or the delta deletes and reinserts it to express no
@@ -2365,11 +2457,13 @@ func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any
 	// rather than in the comparison is deliberate: every consumer of this read
 	// gets the guarantee, and none of them grows its own. [LAW:single-enforcer]
 	//
-	// e.id groups an event's change rows together for the collapse below. It is
+	// id groups an event's change rows together for the collapse below. It is
 	// NOT the event order the contract asks for — created_at is a varchar here,
 	// so ordering events in SQL would sort each stamp by its spelling. The
 	// events are ordered after hydration instead, where they are instants.
-	q += " ORDER BY e.id ASC, c.field ASC"
+	// The sort names the result's columns, not e's and c's, so it orders a
+	// UNION as a whole rather than binding to its last branch.
+	q += " ORDER BY id ASC, field ASC"
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err

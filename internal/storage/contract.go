@@ -306,6 +306,7 @@ type Store interface {
 	Exporter
 	Attributor
 	ChangeObserver
+	StampReporter
 
 	// Close releases whatever the engine holds. It is in the contract because
 	// callers must always be able to hand the resource back without knowing

@@ -1439,7 +1439,7 @@ func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
 	}{
 		{c, ranked, "it was named and moved to the top"},
 		{a, ranked, "it was named and moved below C"},
-		{b, created, "it was not named; the stack only displaced it"},
+		{b, b.UpdatedAt, "it was not named; the stack only displaced it"},
 	} {
 		got, err := st.GetIssue(ctx, want.issue.ID)
 		if err != nil {

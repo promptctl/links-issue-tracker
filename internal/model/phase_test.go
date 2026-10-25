@@ -144,3 +144,34 @@ func TestPlanPhase(t *testing.T) {
 		})
 	}
 }
+
+// TestNextEventInstant states the stamp a write takes against the history it
+// saw: the clock's reading when it is past all of it, and otherwise the
+// instant just past the newest event, whichever order the history arrives in.
+func TestNextEventInstant(t *testing.T) {
+	history := []IssueEvent{startEvent("e3", 3), startEvent("e1", 1), startEvent("e2", 2)}
+	for _, c := range []struct {
+		name string
+		now  time.Time
+		seen []IssueEvent
+		want time.Time
+	}{
+		{"no history takes the clock", at(0), nil, at(0)},
+		{"a clock past the history takes the clock", at(4), history, at(4)},
+		{"a clock behind the history steps past its newest event", at(2), history, at(3).Add(time.Nanosecond)},
+		{"a clock at the newest event steps past it", at(3), history, at(3).Add(time.Nanosecond)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := NextEventInstant(c.now, c.seen)
+			if !got.Equal(c.want) {
+				t.Fatalf("NextEventInstant = %s, want %s", got, c.want)
+			}
+			for _, event := range c.seen {
+				written := IssueEvent{ID: "e0", CreatedAt: got}
+				if CompareEventRecency(written, event) <= 0 {
+					t.Errorf("the written event sorts at or before %s, which it was written against", event.ID)
+				}
+			}
+		})
+	}
+}

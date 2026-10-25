@@ -219,7 +219,16 @@ func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts
 			// is nothing to record, exactly as for an edit that restates a value.
 			continue
 		}
-		issue, event := s.stampEdit(issue, proseResolvedReason, actor, changes)
+		// The merged history is in hand, so the edit is stamped past its lane
+		// family's events in it, the ones this reconcile just appended included.
+		family := model.LaneFamily(issue.ID, export.Relations)
+		var seen []model.IssueEvent
+		for _, event := range events {
+			if family[event.IssueID] {
+				seen = append(seen, event)
+			}
+		}
+		issue, event := s.stampEdit(issue, s.stamps.Stamp(s.clock, seen), proseResolvedReason, actor, changes)
 		issues[i] = issue
 		events = append(events, event)
 		recorded += len(changes)

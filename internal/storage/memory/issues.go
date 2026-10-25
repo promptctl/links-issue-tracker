@@ -78,7 +78,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("normalize issue prefix: %w", err)
 	}
-	now := e.clock.Now()
+	now := e.stamp(model.FiledUnder([]string{parentID}, e.relations))
 	actor := storage.Actor(in.Actor)
 	id, err := e.mintID(prefix, topic, title, strings.TrimSpace(in.Description), actor, now, parentID)
 	if err != nil {

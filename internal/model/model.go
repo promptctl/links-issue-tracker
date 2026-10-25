@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -230,6 +231,42 @@ func LaneOf(issue Issue, parent *Issue) LaneID {
 		return LaneID{key: issue.ID, solo: true}
 	}
 	return LaneID{epic: parent.ID, key: issue.Lane}
+}
+
+// LaneFamily is every issue whose history a write on issueID is stamped
+// after: issueID itself, and every issue filed under a parent it is filed
+// under. A lane is an epic's children under one lane key, and the key is an
+// editable field, so the family is the widest set any lane of issueID's could
+// hold, which is the scope the lane readers compare events at. The Dolt engine
+// states the same family as SQL over its relations table.
+func LaneFamily(issueID string, relations []Relation) map[string]bool {
+	family := FiledUnder(parentsOf(issueID, relations), relations)
+	family[issueID] = true
+	return family
+}
+
+// FiledUnder is every issue filed under one of parents: the family a create
+// filed there is stamped after, named before any relation records it.
+func FiledUnder(parents []string, relations []Relation) map[string]bool {
+	filed := map[string]bool{}
+	for _, rel := range relations {
+		if rel.Type == RelParentChild && slices.Contains(parents, rel.DstID) {
+			filed[rel.SrcID] = true
+		}
+	}
+	return filed
+}
+
+// parentsOf is every issue relations file issueID under. Containment leaves
+// one; restored data can leave more, and the family takes them all.
+func parentsOf(issueID string, relations []Relation) []string {
+	var parents []string
+	for _, rel := range relations {
+		if rel.Type == RelParentChild && rel.SrcID == issueID {
+			parents = append(parents, rel.DstID)
+		}
+	}
+	return parents
 }
 
 // Epic is the id of the epic that scopes this lane, empty for a lane of one.
