@@ -82,7 +82,7 @@ func TestListFormatRejectsUnknownName(t *testing.T) {
 func TestListFormatAcceptsEveryAdvertisedName(t *testing.T) {
 	// firstLine is what each format puts on its first line: lines starts
 	// straight in on the issue row, table leads with a header, and yaml
-	// opens each update document with the id it updates.
+	// opens each update document with its own `---`.
 	cases := []struct {
 		expr      string
 		firstLine func(string) bool
@@ -90,7 +90,7 @@ func TestListFormatAcceptsEveryAdvertisedName(t *testing.T) {
 		{expr: "lines", firstLine: func(l string) bool { return strings.HasPrefix(l, "fmt-") && strings.Contains(l, " | ") }},
 		{expr: "table", firstLine: func(l string) bool { return strings.HasPrefix(l, "ID ") }},
 		{expr: " TABLE ", firstLine: func(l string) bool { return strings.HasPrefix(l, "ID ") }},
-		{expr: "yaml", firstLine: func(l string) bool { return strings.HasPrefix(l, "id: fmt-") }},
+		{expr: "yaml", firstLine: func(l string) bool { return l == "---" }},
 	}
 	covered := map[string]bool{}
 	for _, tc := range cases {

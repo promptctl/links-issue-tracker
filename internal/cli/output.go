@@ -165,14 +165,23 @@ func updateDocuments(columnsExpr string) (issueListRenderer, error) {
 		if err != nil {
 			return err
 		}
-		enc := yaml.NewEncoder(w)
-		enc.SetIndent(2)
+		// Each document opens with its own `---` and closes its own encoder, so
+		// a selection of none prints the empty stream rather than failing to
+		// close a stream that never started.
 		for _, issue := range issues {
+			if _, err := io.WriteString(w, "---\n"); err != nil {
+				return err
+			}
+			enc := yaml.NewEncoder(w)
+			enc.SetIndent(2)
 			if err := enc.Encode(storage.BulkUpdateDocument(relations[issue.ID])); err != nil {
 				return fmt.Errorf("encode the update document of %s: %w", issue.ID, err)
 			}
+			if err := enc.Close(); err != nil {
+				return err
+			}
 		}
-		return enc.Close()
+		return nil
 	}, nil
 }
 

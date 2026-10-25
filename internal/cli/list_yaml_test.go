@@ -63,3 +63,14 @@ func TestListYAMLRefusesColumns(t *testing.T) {
 		t.Errorf("ls printed documents before refusing:\n%s", out)
 	}
 }
+
+// TestListYAMLOfNoIssuesPrintsNothing: a selection that matches nothing is an
+// empty stream of update documents, printed as success, not a failure to
+// close a stream that never started.
+func TestListYAMLOfNoIssuesPrintsNothing(t *testing.T) {
+	dir := newInitTestRepo(t)
+	newEpicInDir(t, dir, "epic")
+	if out := runCLIInDir(t, dir, "ls", "--query", "label:matches-nothing", "--format", "yaml"); out != "" {
+		t.Errorf("ls --format yaml over no issues printed:\n%s", out)
+	}
+}

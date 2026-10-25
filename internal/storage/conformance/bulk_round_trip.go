@@ -13,7 +13,11 @@ import (
 // documents stating a selection's editable state, applied unedited, write
 // nothing — no event, no updated_at, no edge — and are reported as held, not
 // updated; the same documents with one title edited move exactly that title on
-// exactly that issue.
+// exactly that issue. The selection holds two shapes the store keeps and no
+// file may write: an epic waiting on a leaf of another epic that waits on a
+// leaf of the first, a loop only through the hierarchy, and two leaves of one
+// epic, one blocked by the other, which a reparent left behind. Restating them
+// writes nothing, so neither is refused.
 func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
@@ -25,10 +29,16 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 		Description: "first line\n\nsecond paragraph", Prompt: "a prompt", Plan: "a plan",
 		Assignee: "ada", Lane: "a-lane", Labels: []string{"alpha", "beta"},
 	})
-	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: full.ID, DstID: blocker.ID, Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
-		t.Fatalf("AddRelation(%s blocked by %s) error = %v", full.ID, blocker.ID, err)
+	drifted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "drifted", Topic: "core", ParentID: elsewhere.ID})
+	for _, edge := range [][2]string{{full.ID, blocker.ID}, {elsewhere.ID, full.ID}, {full.ID, drifted.ID}} {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge[0], DstID: edge[1], Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
+			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge[0], edge[1], err)
+		}
 	}
-	ids := []string{epic.ID, blocker.ID, full.ID}
+	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: drifted.ID, ParentID: epic.ID, CreatedBy: "ada"}); err != nil {
+		t.Fatalf("SetParent(%s under %s) error = %v", drifted.ID, epic.ID, err)
+	}
+	ids := []string{epic.ID, elsewhere.ID, blocker.ID, drifted.ID, full.ID}
 	// A write the round trip makes would stamp this instant, so an updated_at
 	// it bumped reads as different from the one the setup left.
 	clk.Pin(laterInstant)
@@ -53,13 +63,13 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 	}
 
 	edited := "full, retitled"
-	docs[2].Title = &edited
+	docs[len(docs)-1].Title = &edited
 	result, err = st.BulkApply(ctx, prefix, "ada", docs)
 	if err != nil {
 		t.Fatalf("BulkApply(one title edited) error = %v", err)
 	}
 	assertStrings(t, "updated", result.Updated, []string{full.ID})
-	assertStrings(t, "fields held", result.FieldsHeld, []string{epic.ID, blocker.ID})
+	assertStrings(t, "fields held", result.FieldsHeld, ids[:len(ids)-1])
 	events, err := st.ListEvents(ctx, full.ID)
 	if err != nil {
 		t.Fatalf("ListEvents(%s) error = %v", full.ID, err)
@@ -70,7 +80,7 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 	if got, want := events[len(events)-1].Changes, []model.FieldChange{{Field: "title", From: "full", To: edited}}; len(got) != 1 || got[0] != want[0] {
 		t.Errorf("the edit's event records %+v, want %+v", got, want)
 	}
-	for _, id := range []string{epic.ID, blocker.ID} {
+	for _, id := range ids[:len(ids)-1] {
 		if now := stateOf(t, ctx, st, []string{id})[id]; now != before[id] {
 			t.Errorf("%s moved when only %s's title was edited: %+v, before %+v", id, full.ID, now, before[id])
 		}

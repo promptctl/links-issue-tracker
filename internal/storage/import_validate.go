@@ -131,6 +131,17 @@ type fileDocument struct {
 	blockedBy                 []string
 }
 
+// parentOf and blockersOf are the documents i names in the file, one
+// relation's graph each.
+func (r fileReferences) parentOf(i int) []int {
+	if p, inFile := r.parent[i]; inFile {
+		return []int{p}
+	}
+	return nil
+}
+
+func (r fileReferences) blockersOf(i int) []int { return r.blockedBy[i] }
+
 // ref is the name a refusal quotes the document by: the one references in
 // the file call it by.
 func (d fileDocument) ref() string {
@@ -193,57 +204,104 @@ func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocumen
 
 // judgeReferences refuses a file whose references break a rule over the
 // graph they draw, and otherwise returns the order its documents are written
-// in. The hierarchy rule is judged first: an epic blocked by something under
-// it is also a cycle in write order, and the rule's own refusal is the one
-// that names the fix.
+// in. The hierarchy rule is judged first, so a blocked_by that breaks it and
+// also closes a loop is refused by the rule that names the fix.
+//
+// Each relation is acyclic on its own graph, as each engine's edge write
+// judges it (the memory engine's rejectCycle, Dolt's rejectCycleTx). A loop
+// that runs through both a parent and a blocked_by edge breaks neither rule —
+// the store holds one wherever an epic waits on a leaf of another epic that
+// waits on a leaf of the first — so it is no refusal here either, and a
+// selection read out of the store goes back in. [LAW:single-enforcer]
 func judgeReferences(format string, refs fileReferences, existingTypes map[string]model.IssueType) ([]int, error) {
 	if err := rejectBlocksWithinFileEpics(format, refs, existingTypes); err != nil {
 		return nil, err
 	}
-	return writeOrder(format, refs)
+	for _, next := range []func(int) []int{refs.parentOf, refs.blockersOf} {
+		if err := rejectCycle(format, refs.docs, next); err != nil {
+			return nil, err
+		}
+	}
+	return writeOrder(refs), nil
 }
 
-// writeOrder is a depth-first topological sort of a file's documents over
-// their parent and blocked_by references, so each document is written after
-// every document it names. A cycle among the file's own references is
-// refused.
-func writeOrder(format string, refs fileReferences) ([]int, error) {
-	const (
-		unvisited = iota
-		visiting
-		done
-	)
-	state := make([]int, len(refs.docs))
-	order := make([]int, 0, len(refs.docs))
+type visitState int
+
+const (
+	unvisited visitState = iota
+	visiting
+	visited
+)
+
+// rejectCycle refuses a loop among a file's documents in one relation's graph,
+// next(i) being the documents i names in it.
+func rejectCycle(format string, docs []fileDocument, next func(int) []int) error {
+	state := make([]visitState, len(docs))
 	var visit func(int) error
 	visit = func(i int) error {
 		switch state[i] {
-		case done:
+		case visited:
 			return nil
 		case visiting:
-			return model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, refs.docs[i].ref())}
+			return model.ValidationError{Message: fmt.Sprintf("%s: cycle detected involving %q", format, docs[i].ref())}
 		}
 		state[i] = visiting
-		if p, inFile := refs.parent[i]; inFile {
-			if err := visit(p); err != nil {
-				return err
-			}
-		}
-		for _, j := range refs.blockedBy[i] {
+		for _, j := range next(i) {
 			if err := visit(j); err != nil {
 				return err
 			}
 		}
-		state[i] = done
-		order = append(order, i)
+		state[i] = visited
 		return nil
 	}
-	for i := range refs.docs {
+	for i := range docs {
 		if err := visit(i); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return order, nil
+	return nil
+}
+
+// writeOrder lists a file's documents so each comes after its parent in the
+// file, whose id a create is minted under, and, where the hierarchy allows,
+// after the documents it is blocked by, so a create lands below what it waits
+// on. That second order is a preference, not a precondition — every blocked_by
+// is wired after the last create — so a blocked_by into a document that is
+// itself, or sits under, one still waiting on its own blockers is not followed:
+// that loop runs through the hierarchy, and no order writes every blocker
+// first. Neither relation loops alone by now, so every walk ends.
+func writeOrder(refs fileReferences) []int {
+	state := make([]visitState, len(refs.docs))
+	order := make([]int, 0, len(refs.docs))
+	waiting := func(i int) bool {
+		for at, inFile := i, true; inFile; at, inFile = refs.parent[at] {
+			if state[at] == visiting {
+				return true
+			}
+		}
+		return false
+	}
+	var visit func(int)
+	visit = func(i int) {
+		if state[i] != unvisited {
+			return
+		}
+		state[i] = visiting
+		for _, p := range refs.parentOf(i) {
+			visit(p)
+		}
+		for _, j := range refs.blockedBy[i] {
+			if !waiting(j) {
+				visit(j)
+			}
+		}
+		state[i] = visited
+		order = append(order, i)
+	}
+	for i := range refs.docs {
+		visit(i)
+	}
+	return order
 }
 
 // rejectBlocksWithinFileEpics holds the file's own blocked_by edges to the
@@ -272,6 +330,14 @@ func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingTyp
 	}
 	for i, deps := range refs.blockedBy {
 		for _, j := range deps {
+			// Two update documents' issues may already hold the edge between
+			// them, and a held edge is no write: a reparent can leave one inside
+			// an epic, and restating it changes nothing. Only the write reads
+			// which edges are held, so it judges the ones it adds. An edge with a
+			// create at either end is new.
+			if refs.docs[i].id != "" && refs.docs[j].id != "" {
+				continue
+			}
 			if err := RejectBlocksWithinEpic(tree, node(i), node(j)); err != nil {
 				return fmt.Errorf("%s: %s blocked_by %q: %w", format, refs.docs[i].name, refs.docs[j].ref(), err)
 			}

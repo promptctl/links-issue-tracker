@@ -183,7 +183,7 @@ Results
   number created and one "name -> real id" line each, where the name is
   the local_id (or the new real ID when the document gave none), followed
   for a YAML file by the number updated and their IDs, then the issues
-  whose update document stated only values they already held; when the file
+  whose fields already held what their update document states; when the file
   states a parent on an update, the issues reparented and the issues that
   already had the parent stated; when it states blocked_by on an update,
   the issues whose set changed and the issues that already had the set
