@@ -662,11 +662,11 @@ The `c.field ASC` sort is deliberate so two reads of an unchanged event compare 
 2. `actor := storage.Actor(c.Actor)` — trimmed; empty → `"unknown"` (`store.go`).
 3. `baseline := current` (`store.go`).
 4. If `c.Action != nil`: `lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
-5. `fw, err := planFieldUpdate(baseline, c.Fields, actor)` — every patch, an empty one included; a validation error returns before any write. `hasFields := len(fw.changes) > 0`, so a patch restating what the issue holds writes no row, stamps no `updated_at`, and makes no commit (`store.go`).
+5. `hasFields := !c.Fields.IsEmpty()`; if true, `fw, err = planFieldUpdate(baseline, c.Fields, actor)` — a validation error returns before any write (`store.go`).
 6. `needsActionWrite := lw != nil && !lw.isNoop()` (`store.go`).
 7. `applyPreMutationHookForTest` fires here if set (`store.go`).
 8. If `needsActionWrite || hasFields`: one `withMutation(ctx, "apply update"...)` running `lw.applyTx` then `s.applyFieldsTx`, both in the **same** tx and therefore one Dolt commit (`store.go`).
-9. Returns `storage.Applied{Issue: s.GetIssue(ctx, id), Handover: handover, Fields: fw.changes}` — the issue a fresh re-read, always (`store.go`).
+9. Returns `storage.Applied{Issue: s.GetIssue(ctx, id), Handover: handover}` — the issue a fresh re-read, always (`store.go`).
 
 Evidence: transition + field lands as exactly one Dolt commit with both halves visible (`update_atomicity_test.go`); an invalid field (empty title) paired with a valid transition leaves state, title, and event count **wholly** unchanged (`update_atomicity_test.go`); the full IssueType × flag-combination matrix shows container transitions rejected with `model.ContainerActionError` and nothing written, field writes succeeding on every type, and zero transition events for field-only cells (`update_matrix_test.go`).
 
@@ -785,9 +785,9 @@ Evidence: a hard-deleted endpoint makes both `AddRelation` and `SetParent` fail 
 
 Change rows, emitted only for fields that actually moved, in this order (`store.go`; `storage.ApplyIssueFields`, `internal/storage/fields.go`): `title`, `description`, `prompt`, `plan`, `issue_type` (string cast), `priority` (`strconv.Itoa(int(...))` — the numeric wire encoding, not the display name), `assignee` (compared via `AssigneeValue()`), `lane`, `labels` (compared as `strings.Join(labels, ",")` on both sides).
 
-Return: `fieldWrite{issue, replaceLabels: !slices.Equal(baseline.Labels, issue.Labels), actor, reason: in.Reason, changes}` — labels are replaced when the set moved, so a restated set keeps its rows, authorship and timestamps included (`store.go`).
+Return: `fieldWrite{issue, replaceLabels: in.Labels != nil, actor, reason: in.Reason, changes}` (`store.go`).
 
-`applyFieldsTx(ctx, tx, w fieldWrite)` (`store.go`) — called only for a plan that moved at least one field:
+`applyFieldsTx(ctx, tx, w fieldWrite)` (`store.go`):
 1. `issue, event := s.stampEdit(w.issue, w.reason, w.actor, w.changes)` — the clock is read here, at the write boundary: `stampEdit` mints the event (`newEvent`, empty action) and sets `issue.UpdatedAt = event.CreatedAt` (`store.go`).
 2. The UPDATE (`store.go`):
 ```sql
@@ -797,7 +797,7 @@ UPDATE issues SET
 ```
 bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID`. Failure → `fmt.Errorf("update issue: %w", err)`. It is **unguarded** (no CAS) but touches no lifecycle column — `status`, `closed_at`, `resolution`, `redirect_target`, `archived_at`, `deleted_at` are all absent from the SET list (`store.go`).
 3. `if w.replaceLabels` → `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor)` (`store.go`).
-4. `insertEventTx(ctx, tx, event)` (`store.go`). A field-only update writes an event with a **NULL** `action` column (see §7).
+4. `if len(w.changes) > 0` → `insertEventTx(ctx, tx, event)` (`store.go`). A field-only update writes an event with a **NULL** `action` column (see §7).
 
 Evidence: a field plan taken against a stale snapshot lands its title change while a concurrently-applied close and archive both survive untouched (`store_test.go`); container↔leaf type changes are refused in both directions while a same-kind change (`task`→`bug`) succeeds (`store_test.go`); label replacement through `Apply` replaces the whole set (`store_test.go`).
 
