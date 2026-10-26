@@ -92,7 +92,7 @@ func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot string) {
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
-	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", newLockHold(context.Background(), doltRoot, engineWrite))
+	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", newLockHold(context.Background(), doltRoot, engineWrite, &longPhase{}))
 	if err != nil {
 		t.Fatalf("openDoltPool() bootstrap error = %v", err)
 	}

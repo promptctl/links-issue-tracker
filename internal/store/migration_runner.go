@@ -627,7 +627,7 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	// routine hold, so the hold sends no heartbeat until it is done and its
 	// waiters judge it by stand-still, naming it, as they judge every long
 	// hold. The check above runs on every open and keeps the heartbeat.
-	defer s.hold.suspend()()
+	defer s.phase.enter()()
 	// A detected content mismatch is not a terminal refusal: it is the signal
 	// to self-heal. Unlike ensureQuarantineTable's detect-then-recreate
 	// precedent (which only ever touches lit's own bookkeeping table, bounded

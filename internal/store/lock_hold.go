@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dolthub/dolt/go/store/nbs"
@@ -102,8 +103,13 @@ type LockObserver struct {
 
 type lockObserverKey struct{}
 
-// WithLockObserver returns ctx carrying observer. Both funcs must be set.
+// WithLockObserver returns ctx carrying observer. Both funcs must be set: a
+// nil one panics here, where it was installed, rather than later inside a
+// lock acquisition or Dolt's close.
 func WithLockObserver(ctx context.Context, observer LockObserver) context.Context {
+	if observer.Waited == nil || observer.Held == nil {
+		panic("store.WithLockObserver: both Waited and Held must be set")
+	}
 	return context.WithValue(ctx, lockObserverKey{}, observer)
 }
 
@@ -147,17 +153,17 @@ const (
 //
 // [LAW:no-shared-mutable-globals] Every field below mu is written only under
 // it, by Dolt's callbacks, the executing decorator, and the heartbeat ticker.
-// The arrival file is written outside mu and only by the ticker's goroutine,
-// the first time as it starts, since a write under a storm of readers can
-// take a second and neither Dolt's open nor the engine's next statement must
-// wait on it. end stops the ticker and waits out any write it had begun, so
-// nothing is written once end returns.
+// The arrival file is written outside mu, since a write under a storm of
+// readers can take a second and the engine's next statement must not wait on
+// it. end stops the ticker and waits out any write it had begun, so nothing
+// is written once end returns.
 type lockHold struct {
 	storageDir  string
 	lockPath    string
 	privatePath string
 	recordPath  string
 	access      engineAccess
+	phase       *longPhase
 	wait        *holdWait
 	now         func() time.Time
 	held        func(LockHold)
@@ -172,7 +178,6 @@ type lockHold struct {
 	// that samples only "is it executing now" lands between two statements
 	// and drops a heartbeat the hold had earned; the latch cannot.
 	worked     bool
-	suspended  int
 	takenAt    time.Time
 	execFrom   time.Time
 	execTotal  time.Duration
@@ -184,10 +189,11 @@ type lockHold struct {
 	stopped    chan struct{}
 }
 
-// newLockHold builds the hold for one engine open of the store at doltRootDir.
-// The observer it reports to is read from the opener's context now, since the
-// hold ends in a close that carries none.
-func newLockHold(ctx context.Context, doltRootDir string, access engineAccess) *lockHold {
+// newLockHold builds the hold for one engine open of the store at doltRootDir,
+// inside the store's long phase (phase). The observer it reports to is read
+// from the opener's context now, since the hold ends in a close that carries
+// none.
+func newLockHold(ctx context.Context, doltRootDir string, access engineAccess, phase *longPhase) *lockHold {
 	observer := lockObserverFrom(ctx)
 	storageDir, lockPath := workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir)
 	privatePath, recordPath := lockHolderRecordNames(lockHolderDir(storageDir, lockPath))
@@ -197,6 +203,7 @@ func newLockHold(ctx context.Context, doltRootDir string, access engineAccess) *
 		privatePath: privatePath,
 		recordPath:  recordPath,
 		access:      access,
+		phase:       phase,
 		// The same holdWait every store lock waits with, keyed by Dolt's LOCK,
 		// so an engine open and a LockDoltJournalExclusive contender give the
 		// same holder the same wait and read the same progress. One per open:
@@ -226,16 +233,19 @@ func (h *lockHold) record(ctx context.Context) func() error {
 }
 
 // under is ctx carrying this hold as Dolt's journal lock observer: the
-// context an engine open must run under for the hold to learn when LOCK is
-// taken.
+// context Dolt must take LOCK under for the hold to learn of it. Every
+// engine open runs under it (executingConnector.Connect); a statement that
+// creates a database, and so takes that database's LOCK, is run under it by
+// its caller.
 func (h *lockHold) under(ctx context.Context) context.Context {
 	return nbs.WithJournalLockObserver(ctx, nbs.JournalLockObserver{Taken: h.taken, Released: h.end})
 }
 
-// taken is Dolt's word that LOCK is held. The hold starts its heartbeat,
-// which announces the arrival as it starts: at this instant, not after the
-// open returns (under load, seconds later), and not inside Dolt's open, which
-// this callback runs in.
+// taken is Dolt's word that LOCK is held. The hold announces its arrival at
+// this instant (not after the open returns, which under load is seconds
+// later) and starts its heartbeat. The announce runs inside Dolt's open, so
+// it lands before Dolt can let LOCK go: an arrival written after the release
+// could overwrite the next holder's. [LAW:no-ambient-temporal-coupling]
 //
 // A hold has one life: every context it is installed on opens exactly one
 // journaled store, which takes LOCK once and lets it go at the engine's
@@ -258,19 +268,19 @@ func (h *lockHold) taken() {
 	h.stop, h.stopped = make(chan struct{}), make(chan struct{})
 	stop, stopped := h.stop, h.stopped
 	h.mu.Unlock()
-	go h.beat(stop, stopped)
-}
-
-// beat announces the hold's arrival, then runs the heartbeat ticker for it
-// until stop closes. The tick's decision is tick's, on the instant it is
-// handed; this loop only supplies instants. [LAW:effects-at-boundaries]
-func (h *lockHold) beat(stop <-chan struct{}, stopped chan<- struct{}) {
-	defer close(stopped)
 	// The holder directory may not exist yet on a store's first open: the
 	// holder record makes it, but only after the open returns. A failure
 	// here surfaces as the announce's own failure just below.
 	_ = os.MkdirAll(lockHolderDir(h.storageDir, h.lockPath), 0o755)
 	h.announce(h.name())
+	go h.beat(stop, stopped)
+}
+
+// beat runs the heartbeat ticker for one hold until stop closes. The tick's
+// decision is tick's, on the instant it is handed; this loop only supplies
+// instants. [LAW:effects-at-boundaries]
+func (h *lockHold) beat(stop <-chan struct{}, stopped chan<- struct{}) {
+	defer close(stopped)
 	ticker := time.NewTicker(holdHeartbeatInterval())
 	defer ticker.Stop()
 	for {
@@ -284,7 +294,7 @@ func (h *lockHold) beat(stop <-chan struct{}, stopped chan<- struct{}) {
 }
 
 // tick writes one heartbeat when the hold is routine, holds LOCK, is not
-// inside a suspended phase, and its engine worked since the last tick. So the
+// inside its store's long phase, and its engine worked since the last tick. So the
 // first tick after engine work ends still writes one, for that work: a holder
 // that turns to a wait outside its engine sends at most one heartbeat into
 // it, and its waiters' clocks start at most one holdHeartbeatInterval late.
@@ -292,7 +302,7 @@ func (h *lockHold) tick() {
 	h.mu.Lock()
 	worked := h.worked || h.executing > 0
 	h.worked = false
-	if h.state != holdHeld || !h.access.routine() || h.suspended > 0 || !worked {
+	if h.state != holdHeld || !h.access.routine() || h.phase.active() || !worked {
 		h.mu.Unlock()
 		return
 	}
@@ -346,19 +356,22 @@ func (h *lockHold) exit() {
 	}
 }
 
-// suspend marks a long phase inside a routine hold (a migration that changes
-// the schema): its engine works, but not as routine work, so no heartbeat is
-// written until the returned resume runs.
-func (h *lockHold) suspend() (resume func()) {
-	h.mu.Lock()
-	h.suspended++
-	h.mu.Unlock()
-	return func() {
-		h.mu.Lock()
-		h.suspended--
-		h.mu.Unlock()
-	}
+// longPhase is a store's long phase inside a routine hold (a migration that
+// changes the schema): its engine works, but not as routine work, so no hold
+// of the store heartbeats while the phase lasts. The Store owns it and hands
+// it to every hold it opens, so an engine rotated mid-phase (a GC-contention
+// reconnect inside a migration's commit) opens into the phase rather than out
+// of it. [LAW:one-source-of-truth] one fact about the store, not one copy per
+// engine.
+type longPhase struct{ depth atomic.Int32 }
+
+// enter begins the phase; the returned leave ends it.
+func (p *longPhase) enter() (leave func()) {
+	p.depth.Add(1)
+	return func() { p.depth.Add(-1) }
 }
+
+func (p *longPhase) active() bool { return p.depth.Load() > 0 }
 
 // end is the hold's last act: Dolt's word that LOCK was let go, the opener's
 // after a failed open, or the close's after the engine closed, whichever
@@ -439,8 +452,11 @@ func withinErr(h *lockHold, work func() error) error {
 	return work()
 }
 
+// Connect is where the engine opens, eagerly at a ping or lazily at a
+// statement, so it runs under the hold: no open of this pool can take LOCK
+// without the hold learning of it. [LAW:single-enforcer]
 func (c executingConnector) Connect(ctx context.Context) (driver.Conn, error) {
-	conn, err := within(c.hold, func() (driver.Conn, error) { return c.inner.Connect(ctx) })
+	conn, err := within(c.hold, func() (driver.Conn, error) { return c.inner.Connect(c.hold.under(ctx)) })
 	if err != nil {
 		return nil, err
 	}

@@ -43,13 +43,11 @@ func liftWaitOutOfPlay(t *testing.T) {
 }
 
 // takenHold is a hold of kind access on a fresh store root, told by hand that
-// Dolt took LOCK, with what it reports going to reports. It returns once the
-// hold's heartbeat goroutine has announced the arrival, so a tick the test
-// drives by hand comes after it.
+// Dolt took LOCK, with what it reports going to reports.
 func takenHold(t *testing.T, access engineAccess, reports *heldReports) (*lockHold, func() string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "dolt")
-	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), root, access)
+	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), root, access, &longPhase{})
 	hold.taken()
 	t.Cleanup(hold.end)
 	arrival := func() string {
@@ -60,10 +58,8 @@ func takenHold(t *testing.T, access engineAccess, reports *heldReports) (*lockHo
 		}
 		return latest.name
 	}
-	for deadline := time.Now().Add(5 * time.Second); arrival() != hold.name(); time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatalf("arrival after LOCK taken = %q, want the hold's own name %q", arrival(), hold.name())
-		}
+	if got := arrival(); got != hold.name() {
+		t.Fatalf("arrival at LOCK taken = %q, want the hold's own name %q", got, hold.name())
 	}
 	return hold, arrival
 }
@@ -132,6 +128,48 @@ func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
 	}
 	if want := arrival(); len(records) != 1 || records[0] != want {
 		t.Fatalf("holder records = %q, want the one record the arrival %q names", records, want)
+	}
+}
+
+// The long phase is the store's, not one engine's: an engine rotated inside
+// it (a GC-contention reconnect in a migration's commit) opens into the phase
+// and sends no heartbeat until the phase ends.
+func TestALongPhaseOutlivesAConnectionRotation(t *testing.T) {
+	liftWaitOutOfPlay(t)
+	s, err := OpenRoutine(context.Background(), testEnv(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenRoutine() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	leave := s.phase.enter()
+	if err := s.reconnect(context.Background()); err != nil {
+		t.Fatalf("reconnect() error = %v", err)
+	}
+	arrival := func() string {
+		t.Helper()
+		latest, err := latestArrival(s.hold.storageDir, s.hold.lockPath)
+		if err != nil {
+			t.Fatalf("latestArrival() error = %v", err)
+		}
+		return latest.name
+	}
+	before := arrival()
+	s.hold.enter()
+	s.hold.exit()
+	s.hold.tick()
+	if got := arrival(); got != before {
+		t.Fatalf("an engine rotated inside the long phase wrote heartbeat %q", got)
+	}
+	leave()
+	s.hold.enter()
+	s.hold.exit()
+	s.hold.tick()
+	if got := arrival(); got == before {
+		t.Fatal("no heartbeat after the long phase ended")
 	}
 }
 
@@ -206,7 +244,7 @@ func TestALongHoldNeverHeartbeats(t *testing.T) {
 func TestASuspendedRoutineHoldSendsNoHeartbeat(t *testing.T) {
 	liftWaitOutOfPlay(t)
 	hold, arrival := takenHold(t, engineWriteRoutine, &heldReports{})
-	resume := hold.suspend()
+	resume := hold.phase.enter()
 	before := arrival()
 	hold.enter()
 	hold.exit()
@@ -254,7 +292,7 @@ func TestAnEndedHoldReportsOnceAndWritesNothingMore(t *testing.T) {
 // engine's, or an open that lost the race.
 func TestAHoldThatNeverTookTheLockReportsNothing(t *testing.T) {
 	reports := &heldReports{}
-	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), filepath.Join(t.TempDir(), "dolt"), engineWriteRoutine)
+	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), filepath.Join(t.TempDir(), "dolt"), engineWriteRoutine, &longPhase{})
 	hold.enter()
 	hold.exit()
 	hold.end()

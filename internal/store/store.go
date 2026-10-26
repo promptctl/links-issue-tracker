@@ -85,6 +85,9 @@ type Store struct {
 	// engine's hold never takes LOCK, so it says and reports nothing. Never
 	// nil; closeEngine ends it after the engine closes.
 	hold *lockHold
+	// phase is the store's long phase (longPhase): every hold the store opens,
+	// at open and at each rotation, is built inside it.
+	phase *longPhase
 
 	// followed is every re-root moveOntoRemoteReRoot applied since the store
 	// opened; FollowedReRoots is its one reader.
@@ -537,12 +540,14 @@ func (s *Store) Close() error {
 // an operator after the wrong pid. The one branch is the open contract's own
 // discriminator. [LAW:dataflow-not-control-flow]
 func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
-	db, hold, releaseEngineRecord, err := openEngine(ctx, doltRootDir, workspaceID, access)
+	phase := &longPhase{}
+	db, hold, releaseEngineRecord, err := openEngine(ctx, doltRootDir, workspaceID, access, phase)
 	if err != nil {
 		return nil, err
 	}
 	return &Store{
 		db:                  db,
+		phase:               phase,
 		env:                 env,
 		workspaceID:         workspaceID,
 		doltRootDir:         doltRootDir,
@@ -563,8 +568,8 @@ func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir strin
 // openEngine opens the engine openStoreConnection describes (openHeldPool)
 // and returns it with its hold of LOCK (lockHold) and the release of its LOCK
 // holder record: a no-op for a read engine, which records nothing.
-func openEngine(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*sql.DB, *lockHold, func() error, error) {
-	db, hold, err := openHeldPool(ctx, doltRootDir, workspaceID, doltDatabaseName, access)
+func openEngine(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess, phase *longPhase) (*sql.DB, *lockHold, func() error, error) {
+	db, hold, err := openHeldPool(ctx, doltRootDir, workspaceID, doltDatabaseName, access, phase)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -573,22 +578,22 @@ func openEngine(ctx context.Context, doltRootDir string, workspaceID string, acc
 	return db, hold, hold.record(ctx), nil
 }
 
-// openHeldPool opens a pool on database at doltRootDir and pings it under
-// its hold, so the engine is open rather than lazy, the hold learns when Dolt
-// takes LOCK and reports the hold when Dolt lets it go, and the open's wait
-// for LOCK is reported. [LAW:single-enforcer] the one engine open every pool
+// openHeldPool opens a pool on database at doltRootDir, inside phase, and
+// pings it, so the engine is open rather than lazy, its hold learns when Dolt
+// takes LOCK (executingConnector.Connect) and reports the hold when Dolt lets
+// it go, and the open's wait for LOCK is reported. [LAW:single-enforcer] the one engine open every pool
 // lit opens on a store goes through, the store's own and the bootstrap's and
 // a clone's alike. A pool opened with no database ("") takes LOCK only in the
 // statement that creates one, which its caller runs under the same hold
 // (lockHold.under). A contended open fails naming the holder
 // (wrapEngineOpenContention).
-func openHeldPool(ctx context.Context, doltRootDir, workspaceID, database string, access engineAccess) (*sql.DB, *lockHold, error) {
-	hold := newLockHold(ctx, doltRootDir, access)
+func openHeldPool(ctx context.Context, doltRootDir, workspaceID, database string, access engineAccess, phase *longPhase) (*sql.DB, *lockHold, error) {
+	hold := newLockHold(ctx, doltRootDir, access, phase)
 	db, err := openDoltPool(doltRootDir, workspaceID, database, hold)
 	if err != nil {
 		return nil, nil, err
 	}
-	pingErr := db.PingContext(hold.under(ctx))
+	pingErr := db.PingContext(ctx)
 	hold.reportWait(ctx, pingErr)
 	if err := wrapEngineOpenContention(pingErr, doltRootDir); err != nil {
 		closeErr := db.Close()
@@ -641,25 +646,21 @@ func openHeldPool(ctx context.Context, doltRootDir, workspaceID, database string
 // and the heartbeats a waiter reads carry one hold's name.
 func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
-	hold := newLockHold(ctx, s.doltRootDir, s.access)
+	hold := newLockHold(ctx, s.doltRootDir, s.access, s.phase)
 	next, err := openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, hold)
 	if err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
-	prev, prevHold, releasePrevRecord := s.db, s.hold, s.releaseEngineRecord
-	s.db, s.hold, s.releaseEngineRecord = next, hold, func() error { return nil }
-	// The previous engine's hold ends with its close, before the next engine
-	// can take LOCK, so no heartbeat stands for the gap in which LOCK is free.
-	recordErr := releasePrevRecord()
-	closeErr := prev.Close()
-	prevHold.end()
-	if closeErr != nil && !errors.Is(closeErr, context.Canceled) {
-		return errors.Join(recordErr, fmt.Errorf("close prior dolt connection after reconnect: %w", closeErr))
+	// The previous engine closes under the one close contract (closeEngine):
+	// its record retires, then its hold ends with its close, before the next
+	// engine can take LOCK, so no heartbeat stands for the gap in which LOCK
+	// is free.
+	closeErr := s.closeEngine()
+	s.db, s.hold = next, hold
+	if closeErr != nil {
+		return fmt.Errorf("close prior dolt connection after reconnect: %w", closeErr)
 	}
-	if recordErr != nil {
-		return fmt.Errorf("retire the prior engine's holder record: %w", recordErr)
-	}
-	pingErr := next.PingContext(hold.under(ctx))
+	pingErr := next.PingContext(ctx)
 	hold.reportWait(ctx, pingErr)
 	if err := wrapEngineOpenContention(pingErr, s.doltRootDir); err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
@@ -3134,7 +3135,7 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) erro
 	// still live. [LAW:no-ambient-temporal-coupling] The explicit Close IS the
 	// ordering owner — a deferred close would hold both engines at once.
 	if err := func() error {
-		db, hold, err := openHeldPool(ctx, staging, workspaceID, "", engineWrite)
+		db, hold, err := openHeldPool(ctx, staging, workspaceID, "", engineWrite, &longPhase{})
 		if err != nil {
 			return err
 		}
@@ -3152,7 +3153,7 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) erro
 	}(); err != nil {
 		return err
 	}
-	db, hold, err := openHeldPool(ctx, staging, workspaceID, doltDatabaseName, engineWrite)
+	db, hold, err := openHeldPool(ctx, staging, workspaceID, doltDatabaseName, engineWrite, &longPhase{})
 	if err != nil {
 		return err
 	}

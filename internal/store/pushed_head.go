@@ -275,7 +275,7 @@ func holdForRefWrite(ctx context.Context, root string, access engineAccess, budg
 	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
 		return err
 	}
-	hold := newLockHold(ctx, root, access)
+	hold := newLockHold(ctx, root, access, &longPhase{})
 	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root, hold)
 	if err != nil {
 		return err

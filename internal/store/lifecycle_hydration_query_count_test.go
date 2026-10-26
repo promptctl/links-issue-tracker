@@ -88,7 +88,7 @@ func listingQueryCount(t *testing.T, ctx context.Context, epicCount int) int64 {
 func swapInCountingDB(t *testing.T, st *Store) *int64 {
 	t.Helper()
 	var n int64
-	inner, err := newDoltConnector(st.doltRootDir, st.workspaceID, doltDatabaseName, newLockHold(context.Background(), st.doltRootDir, st.access))
+	inner, err := newDoltConnector(st.doltRootDir, st.workspaceID, doltDatabaseName, newLockHold(context.Background(), st.doltRootDir, st.access, &longPhase{}))
 	if err != nil {
 		t.Fatalf("newDoltConnector error = %v", err)
 	}
