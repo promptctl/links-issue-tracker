@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -280,19 +281,76 @@ type failingWriter struct{ err error }
 
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
-// An item whose change landed is never reported failed: a stdout that cannot
-// take its report ends the run with the write's error, not with the item as a
-// failure to re-run.
-func TestBulkEndsAtAStdoutItCannotWriteWithoutFailingTheItem(t *testing.T) {
-	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+// A stdout that refuses a landed item's report stops the run there, and the
+// run still reports what it collected before it: the item refused ahead of
+// the stop, the landed item whose report was lost (never as a failure to
+// re-run), and the ids it never reached. It is a partial failure, whose
+// remediation forbids re-running what landed, never command_failed's retry.
+func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
 	closed := errors.New("stdout closed")
-	err := runBulkOver(ctx, failingWriter{err: closed}, []string{"a"}, func(context.Context, string) (string, error) {
+	refused := model.ValidationError{Message: "refused"}
+	err := runBulkOver(ctx, failingWriter{err: closed}, []string{"a", "b", "c"}, func(_ context.Context, issueID string) (string, error) {
+		if issueID == "a" {
+			return "", refused
+		}
 		return "claim transferred: x -> y\n", nil
 	})
 	var bulk BulkError
-	if !errors.Is(err, closed) || errors.As(err, &bulk) {
-		t.Errorf("runBulkOver error = %v (%T), want the write's %v and no item failure", err, err, closed)
+	if !errors.As(err, &bulk) {
+		t.Fatalf("runBulkOver error = %v (%T), want a BulkError", err, err)
 	}
+	if len(bulk.Unlanded) != 1 || bulk.Unlanded[0].IssueID != "a" {
+		t.Errorf("Unlanded = %+v, want only a", bulk.Unlanded)
+	}
+	if bulk.Stopped == nil || bulk.Stopped.IssueID != "b" || !errors.Is(bulk.Stopped.Err, closed) || !slices.Equal(bulk.Stopped.NotRun, []string{"c"}) {
+		t.Fatalf("Stopped = %+v, want b's report refused with %v and c not run", bulk.Stopped, closed)
+	}
+	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
+		t.Errorf("reason = %s, want %s", reason, reasonBulkPartialFailure)
+	}
+	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused", "b landed and stdout refused its report, which stopped the run before c: stdout closed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message = %q, want it to contain %q", err.Error(), want)
+		}
+	}
+	ev := recorder.Finish(telemetry.End{})
+	if ev.Counts["bulk.not_run"] != 1 {
+		t.Errorf("bulk.not_run = %v, want 1", ev.Counts["bulk.not_run"])
+	}
+	var reportErrors []any
+	for _, raw := range ev.Occurrences["bulk.items"] {
+		entry := raw.(map[string]any)
+		reportErrors = append(reportErrors, entry["bulk.item.id"], derefText(entry["bulk.item.report_error"]))
+	}
+	if want := []any{"a", "", "b", "stdout closed"}; !slices.Equal(reportErrors, want) {
+		t.Errorf("bulk.items (id, report_error) = %v, want %v", reportErrors, want)
+	}
+}
+
+// A run whose last report is refused landed every item, and still fails as a
+// partial failure: re-running it would apply every item again.
+func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
+	err := runBulkOver(ctx, failingWriter{err: errors.New("stdout closed")}, []string{"a"}, func(context.Context, string) (string, error) {
+		return "", nil
+	})
+	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
+		t.Errorf("runBulkOver error = %v, reason %s, want %s", err, reason, reasonBulkPartialFailure)
+	}
+	if got := recorder.Finish(telemetry.End{}).Counts["bulk.not_run"]; got != 0 {
+		t.Errorf("bulk.not_run = %d, want 0", got)
+	}
+}
+
+// derefText reads a telemetry.ErrorText value, "" for a nil one.
+func derefText(v any) string {
+	if text, ok := v.(*string); ok && text != nil {
+		return *text
+	}
+	return ""
 }
 
 // Start's usage line names --take, singly and in bulk: it is the flag a

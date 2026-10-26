@@ -292,7 +292,7 @@ empty string means no `remediation:` line is printed:
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the schema it was asked to operate on, this workspace's or the remote's it syncs with, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `migration_quarantined`: "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. \<agent-instructions>Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
-- `bulk_partial_failure`: "Do not re-run the command unchanged — any item it does not list landed, and running it again applies that item again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears."
+- `bulk_partial_failure`: "Do not re-run the command unchanged — any item it does not list landed, and running it again applies that item again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears. A run that stopped because stdout refused a landed item's report names the ids it never reached; re-run with those once stdout can take the output."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 
 ### 1.10 Progress channel
@@ -1988,22 +1988,29 @@ before any id is acted on.
 **Shared failure semantics** — `runBulkOver(ctx, stdout, ids, op)` (`bulk.go`):
 - Applies `op` to each id **in order**, each under its own
   `telemetry.Occurrence` scope (`telemetry.go`): the facts and counts `op`
-  records land in the scope, and one `bulk.items` entry per id is appended to
-  the event — `bulk.item.id`, `bulk.item.error` (`telemetry.ErrorText`),
-  `bulk.item.reason` (the item error's reason token, null for a landed item),
-  `bulk.item.facts`, `bulk.item.counts` (`bulk.go`), with what the item's error
-  declares about itself (`model.ErrorRecord`) recorded into the scope.
+  records land in the scope, and one `bulk.items` entry per id the run reaches
+  is appended to the event — `bulk.item.id`, `bulk.item.error`
+  (`telemetry.ErrorText`), `bulk.item.reason` (the item error's reason token,
+  null for a landed item), `bulk.item.report_error` (the error writing a landed
+  item's report, else null), `bulk.item.facts`, `bulk.item.counts` (`bulk.go`),
+  with what the item's error declares about itself (`model.ErrorRecord`)
+  recorded into the scope. The event's count `bulk.not_run` is the number of
+  ids the run never reached, 0 when it reached them all.
 - `op` returns the item's notice and error. Each success writes the notice and
-  then `"<id> ok\n"` to stdout; a write error ends the run with that error
-  (`bulk.go`).
+  then `"<id> ok\n"` to stdout; a write error stops the run at that item, as
+  `bulkStop{IssueID, Err, NotRun}` (`bulk.go`).
 - Each item that did not land is collected; **unlanded items never reach
   stdout** (`bulk.go`).
-- If any did not land, returns `BulkError{Ran, Unlanded}` (`bulk.go`), whose
-  reason and exit code are those every item shares when none landed, else
-  `bulk_partial_failure` / exit 1 (`error_output.go`), and whose message is
-  `"bulk operation: <n> of <ran> item(s) did not land: <id> (<reason>): <err>; …"`
-  (`bulk.go`), printed by `WriteCommandError` to stderr with that reason's
-  remediation (§1.9).
+- If any did not land, or the run stopped, returns
+  `BulkError{Ran, Unlanded, Stopped}` (`bulk.go`), whose reason and exit code
+  are those every item shares when none landed, else `bulk_partial_failure` /
+  exit 1 (`error_output.go`) — always the latter for a stopped run, whose
+  stopping item landed — and whose message is
+  `"bulk operation: <n> of <ran> item(s) did not land: <id> (<reason>): <err>; …"`,
+  `<n>` counting the ids not reached, ending with
+  `"<id> landed and stdout refused its report, which stopped the run before <ids>: <err>"`
+  for a stopped run (`bulk.go`), printed by `WriteCommandError` to stderr with
+  that reason's remediation (§1.9).
 
 **`lit bulk label <add|rm> --ids <csv> --label <name>`** (`bulkLabelLeaf`,
 `bulk.go`):

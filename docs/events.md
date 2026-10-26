@@ -352,9 +352,11 @@ none of them.
 
 ## What `lit bulk` records
 
-A bulk command puts one entry on `bulk.items` for each issue in `--ids`, in the
-order given, whether the issue's change landed or failed. Each entry holds the
-facts and counts that issue's change recorded, so a `lit bulk start` entry
+A bulk command puts one entry on `bulk.items` for each issue in `--ids` it ran,
+in the order given, whether the issue's change landed or failed. A run stops at
+a landed issue whose `<id> ok` line stdout refuses, so the issues after it have
+no entry, and the event's count `bulk.not_run` says how many there were: `0` for
+a run that reached the last issue. Each entry holds the facts and counts that issue's change recorded, so a `lit bulk start` entry
 carries the keys a `lit start` sets, a `lit bulk done` entry the keys a
 `lit done` sets, a `lit bulk comment` entry the `comment.id` a
 `lit comment add` sets, and a `lit bulk label` entry the `label.changed` a
@@ -365,6 +367,7 @@ carries the keys a `lit start` sets, a `lit bulk done` entry the keys a
 | `bulk.item.id` | The issue id as given in `--ids`. |
 | `bulk.item.error` | The issue's error, or null when its change landed. |
 | `bulk.item.reason` | The reason token that error classifies as, the one its single command would print beside its exit code (`state_already_holds`, `validation_refused`, …), or null when its change landed. The event's own `reason` is the one every item shares when none landed, or `bulk_partial_failure` otherwise. |
+| `bulk.item.report_error` | The error writing the issue's `<id> ok` line to stdout, the one that stopped the run, or null when the line was written or the issue's change did not land. |
 | `bulk.item.facts` | The facts that issue's change set, and those its error records about itself, as a failed `lit` command's event carries them; `{}` when there are none. |
 | `bulk.item.counts` | The counts that issue's change recorded, and those its error records; `{}` when there are none. |
 
