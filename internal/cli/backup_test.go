@@ -22,7 +22,7 @@ import (
 func TestResolveRestorePathCap(t *testing.T) {
 	t.Parallel()
 	t.Run("no source is a usage error", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}}
 		_, err := resolveRestorePath(ap, "  ", false)
 		if _, ok := err.(UsageError); !ok {
 			t.Fatalf("resolveRestorePath(no source) error = %v, want UsageError", err)
@@ -30,7 +30,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 	})
 
 	t.Run("both sources is a mutual-exclusion error, not silent precedence", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}}
 		_, err := resolveRestorePath(ap, "/some/export.json", true)
 		ue, ok := err.(UsageError)
 		if !ok || !strings.Contains(ue.Message, "mutually exclusive") {
@@ -39,7 +39,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 	})
 
 	t.Run("explicit path passes through trimmed", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}}
 		got, err := resolveRestorePath(ap, "  /some/export.json  ", false)
 		if err != nil || got != "/some/export.json" {
 			t.Fatalf("resolveRestorePath(path) = %q, %v; want trimmed path", got, err)
@@ -47,7 +47,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 	})
 
 	t.Run("latest with no backups fails loudly", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}}
 		_, err := resolveRestorePath(ap, "", true)
 		if err == nil || !strings.Contains(err.Error(), "no backups available") {
 			t.Fatalf("resolveRestorePath(latest, empty) error = %v, want no backups available", err)
@@ -56,7 +56,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 
 	t.Run("latest resolves to the newest snapshot path", func(t *testing.T) {
 		dir := t.TempDir()
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: dir}, Remotes: workspace.NewRemotes(testEnv(), "")}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: dir}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}}
 		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
 		snapshot, err := backup.Create(dir, export)
 		if err != nil {

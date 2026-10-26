@@ -85,7 +85,7 @@ func scheduleReceive(ctx context.Context, env environ.Env, ws workspace.Info) {
 	if err := markReceiveAttempt(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
 	}
-	hasRemote, err := workspaceHasGitRemote(ws)
+	hasRemote, err := workspaceHasGitRemote(ctx, ws)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
@@ -258,7 +258,7 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	// Every receive says whether it owes a push; one that settles nothing
 	// owes none. [LAW:nothing-unseen]
 	telemetry.Set(ctx, "receive.push_owed", false)
-	gitRemotes, err := ws.Remotes.List()
+	gitRemotes, err := ws.Remotes.List(ctx)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
@@ -287,7 +287,7 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	// the clone's own sync would refuse it the same way, so the receive fails
 	// here, before the lock and the clone, rather than trace "could not tell"
 	// and fetch. [LAW:no-silent-failure]
-	if refused := (storage.RefusedRemoteNameError{}); errors.As(askErr, &refused) {
+	if refused := (storage.RefusedRemoteError{}); errors.As(askErr, &refused) {
 		recordReceiveError(ctx, env, ws, observed.remote, askErr)
 		return
 	}

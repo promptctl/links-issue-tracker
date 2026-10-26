@@ -163,7 +163,7 @@ func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks")
-	ws = workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links")), Remotes: workspace.NewRemotes(testEnv(), "")}
+	ws = workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links")), Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 	return remote, producer, consumer, ws, epicID
 }
 
@@ -234,7 +234,7 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(testEnv(), "")}
+			ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 			if err := store.WriteReceivedRefs(ws.DatabasePath, previous); err != nil {
 				t.Fatalf("seed record error = %v", err)
 			}
@@ -297,7 +297,7 @@ func TestAPushToARemoteTheReceiveDoesNotAskIsUnproven(t *testing.T) {
 	runGit(t, dir, "init", "-q")
 	runGit(t, dir, "remote", "add", "origin", "https://example.com/a.git")
 	runGit(t, dir, "remote", "add", "fork", "https://example.com/b.git")
-	proven, unproven := provePushedAdvertisement(t.Context(), testEnv(), nil, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), dir)}, remoteName(t, "origin"))
+	proven, unproven := provePushedAdvertisement(underInvocation(t.Context()), testEnv(), nil, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), checkoutRoot(t, dir))}, remoteName(t, "origin"))
 	if proven != (remoteAdvertisement{}) || unproven != "the automatic receive asks no remote" {
 		t.Fatalf("provePushedAdvertisement() = %+v, %q; want nothing proven because the receive asks no remote", proven, unproven)
 	}

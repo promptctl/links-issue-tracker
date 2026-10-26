@@ -20,18 +20,18 @@ import (
 func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	isolateEvents(t)
 	dir, remoteURL := soloCheckoutSyncingWithA(t)
-	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, []any{}) {
-		t.Fatalf("remotes.refused with a alone = %#v, want []", refused)
+	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, map[string]any{}) {
+		t.Fatalf("remotes.refused with a alone = %#v, want {}", refused)
 	}
 
 	runGit(t, dir, "remote", "add", "team/fork", remoteURL)
 	if out := runCLIInDir(t, dir, "sync", "fetch", "--verbose"); strings.TrimSpace(out) != "fetched a" {
 		t.Fatalf("`lit sync fetch --verbose` beside team/fork = %q, want %q", out, "fetched a")
 	}
-	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, []any{"team/fork"}) {
-		t.Fatalf("remotes.refused = %#v, want [team/fork]", refused)
+	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, map[string]any{"team/fork": "name_character"}) {
+		t.Fatalf("remotes.refused = %#v, want team/fork for its name", refused)
 	}
-	if out := runCLIInDir(t, dir, "sync", "remote", "ls"); strings.TrimSpace(out) != "git=2 dolt=1 added=0 updated=0 removed=0 refused=1\nrefused team/fork: Dolt cannot hold this name; rename it (git remote rename) to sync with it" {
+	if out := runCLIInDir(t, dir, "sync", "remote", "ls"); strings.TrimSpace(out) != "git=2 dolt=1 added=0 updated=0 removed=0 refused=1\nrefused: remote \"team/fork\" has \"/\" in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it" {
 		t.Fatalf("`lit sync remote ls` = %q, want team/fork refused and a mirrored", out)
 	}
 
@@ -62,6 +62,72 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 	records := readSyncTraceRecords(t, ws)[before:]
 	if len(records) != 1 || records[0].Decision != "error" || !strings.Contains(records[0].Reason, `remote "team/fork" has "/" in its name`) {
 		t.Fatalf("receive tracking team/fork traced %+v; want one error naming the refusal", records)
+	}
+}
+
+// TestARemoteWhoseURLNamesNoOneRepositoryIsRefusedLikeAName gives the sync
+// remote a URL whose ".." follows a directory name: git resolves it through
+// the filesystem, where a symlink can send it anywhere, and no value lit hands
+// Dolt means the same. The remote is refused as a name Dolt cannot hold is:
+// named with the reason on the event and in `sync remote ls`, its Dolt remote
+// removed, the fetch and the receive failing on the refusal — and a URL put
+// right syncs again.
+func TestARemoteWhoseURLNamesNoOneRepositoryIsRefusedLikeAName(t *testing.T) {
+	isolateEvents(t)
+	dir, remoteURL := soloCheckoutSyncingWithA(t)
+	runGit(t, dir, "remote", "set-url", "a", "link/../remote.git")
+	refusal := `remote "a" has URL "link/../remote.git", whose ".." after a directory name only the filesystem can resolve`
+
+	if out, err := runCLIInDirAllowError(t, dir, "sync", "fetch", "--verbose"); err == nil || !strings.Contains(err.Error(), refusal) {
+		t.Fatalf("`lit sync fetch` with a at link/../remote.git = %q, %v; want the refusal naming a", out, err)
+	}
+	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, map[string]any{"a": "path_through_filesystem"}) {
+		t.Fatalf("remotes.refused = %#v, want a for its URL", refused)
+	}
+	if out := runCLIInDir(t, dir, "sync", "remote", "ls"); strings.TrimSpace(out) != "git=1 dolt=0 added=0 updated=0 removed=0 refused=1\nrefused: "+refusal+`; write the URL without that ".." (git remote set-url) to sync with it` {
+		t.Fatalf("`lit sync remote ls` = %q, want a refused and its Dolt remote gone", out)
+	}
+
+	ws, err := workspace.Resolve(testEnv(), dir)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	before := len(readSyncTraceRecords(t, ws))
+	receiveNow(t, dir)
+	records := readSyncTraceRecords(t, ws)[before:]
+	if len(records) != 1 || records[0].Decision != "error" || !strings.Contains(records[0].Reason, refusal) {
+		t.Fatalf("receive with a refused traced %+v; want one error naming the refusal", records)
+	}
+
+	runGit(t, dir, "remote", "set-url", "a", remoteURL)
+	if out := runCLIInDir(t, dir, "sync", "fetch", "--verbose"); strings.TrimSpace(out) != "fetched a" {
+		t.Fatalf("`lit sync fetch` with a put right = %q, want %q", out, "fetched a")
+	}
+}
+
+// TestInitBesideARemoteWhoseURLNamesNoOneRepositoryStartsFresh: init treats a
+// refused URL as it treats a refused name. The remote, which git can still
+// ask through the symlink, carries no lit data, so init starts fresh and
+// says where the reason is.
+func TestInitBesideARemoteWhoseURLNamesNoOneRepositoryStartsFresh(t *testing.T) {
+	t.Setenv(DisableAutoSyncEnvVar, "1")
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, "elsewhere", "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, filepath.Join(base, "elsewhere"), "init", "--bare", "remote.git")
+	dir := filepath.Join(base, "fresh")
+	runGit(t, base, "init", "fresh")
+	if err := os.Symlink(filepath.Join(base, "elsewhere", "dir"), filepath.Join(dir, "link")); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	runGit(t, dir, "remote", "add", "origin", "link/../remote.git")
+	runGit(t, dir, "ls-remote", "origin")
+
+	progress := captureProgress(t)
+	runCLIInDir(t, dir, "init", "--skip-hooks")
+	if !strings.Contains(progress.String(), "lit cannot sync with the git remote (`lit sync remote ls` says why); starting with an empty backlog") {
+		t.Fatalf("init beside origin at link/../remote.git: progress missing the fresh start:\n%s", progress.String())
 	}
 }
 

@@ -4,10 +4,12 @@ import (
 	"context"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // dirInvocation is the invocation a test runs lit with in dir. stdin is empty,
@@ -44,3 +46,20 @@ func cwdInvocation(stdout, stderr io.Writer, args []string) Invocation {
 	inv.Dir = WorkingDirOf(os.Getwd())
 	return inv
 }
+
+// checkoutRoot is dir as a workspace.CheckoutRoot, its symlinks resolved as
+// git resolves --show-toplevel (t.TempDir sits under /var -> /private/var on
+// darwin).
+func checkoutRoot(t testing.TB, dir string) workspace.CheckoutRoot {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	}
+	root, err := workspace.ParseCheckoutRoot(resolved)
+	if err != nil {
+		t.Fatalf("ParseCheckoutRoot(%q): %v", resolved, err)
+	}
+	return root
+}
+

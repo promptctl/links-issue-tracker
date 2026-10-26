@@ -187,16 +187,20 @@ func pushedRepoWithoutRemoteHead(t *testing.T) workspace.Info {
 
 func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	t.Helper()
-	return workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), root)}
+	return workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), checkoutRoot(t, root))}
 }
 
 func remoteURL(t *testing.T, ws workspace.Info) string {
 	t.Helper()
-	url, err := workspace.NewRemotes(testEnv(), ws.RootDir).List()
-	if err != nil || len(url) != 1 {
-		t.Fatalf("GitRemotes() = %v, %v; want one remote", url, err)
+	remotes, err := workspace.NewRemotes(testEnv(), checkoutRoot(t, ws.RootDir)).List(underInvocation(context.Background()))
+	if err != nil || len(remotes) != 1 {
+		t.Fatalf("Remotes.List() = %v, %v; want one remote", remotes, err)
 	}
-	return url[0].URL
+	remote, err := remotes[0].SyncableRemote()
+	if err != nil {
+		t.Fatalf("SyncableRemote() error = %v", err)
+	}
+	return remote.URL()
 }
 
 // A git that cannot say which remote the branch tracks fails the selection
@@ -219,10 +223,10 @@ func TestAnUnreadableUpstreamFailsOnlyTheSelectionThatReadsIt(t *testing.T) {
 	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ws := branchTestWorkspace(t, repo.RootDir)
 
-	if remote, ok, err := workspaceSyncRemote(ws, "origin"); err != nil || !ok || remote.String() != "origin" {
-		t.Fatalf("workspaceSyncRemote(origin) = %q, %v, %v; want origin, needing no upstream", remote, ok, err)
+	if remote, ok, err := workspaceSyncRemote(underInvocation(context.Background()), ws, "origin"); err != nil || !ok || remote.Name().String() != "origin" {
+		t.Fatalf("workspaceSyncRemote(origin) = %q, %v, %v; want origin, needing no upstream", remote.Name(), ok, err)
 	}
-	if remote, ok, err := workspaceSyncRemote(ws, ""); err == nil || !strings.Contains(err.Error(), "ref lock") {
-		t.Fatalf("workspaceSyncRemote(\"\") = %q, %v, %v; want the upstream read's failure, not a fallback to none", remote, ok, err)
+	if remote, ok, err := workspaceSyncRemote(underInvocation(context.Background()), ws, ""); err == nil || !strings.Contains(err.Error(), "ref lock") {
+		t.Fatalf("workspaceSyncRemote(\"\") = %q, %v, %v; want the upstream read's failure, not a fallback to none", remote.Name(), ok, err)
 	}
 }

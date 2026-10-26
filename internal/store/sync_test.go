@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
@@ -1320,6 +1321,33 @@ func TestGitBackedRemoteURL(t *testing.T) {
 				t.Fatalf("GitBackedRemoteURL(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// A bare relative remote path is a local repository to git, while Dolt's own
+// normalizer reads it as an https host. workspace joins it to the checkout
+// root before it gets here, so Dolt is handed an absolute path and pushes
+// over git+file.
+func TestABareRelativeRemoteReachesDoltAsALocalPath(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := workspace.ParseCheckoutRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote, err := workspace.NewGitRemote("origin", "remote.git", root).SyncableRemote()
+	if err != nil {
+		t.Fatalf("SyncableRemote() error = %v", err)
+	}
+	got := GitBackedRemoteURL(remote.URL())
+	if want := GitBackedRemoteURL(filepath.Join(dir, "remote.git")); got != want || !strings.HasPrefix(got, "git+file://") {
+		t.Fatalf("GitBackedRemoteURL(%q) = %q, want the git+file URL of the joined path, %q", remote.URL(), got, want)
+	}
+	if got := GitBackedRemoteURL("remote.git"); got != "git+https://remote.git" {
+		t.Fatalf("GitBackedRemoteURL(remote.git) unjoined = %q, want Dolt's host reading, which the join exists to avoid", got)
 	}
 }
 

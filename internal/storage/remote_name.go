@@ -35,17 +35,81 @@ func ParseRemoteName(raw string) (RemoteName, error) {
 		return RemoteName{}, errors.New("remote is required")
 	}
 	if at := strings.IndexAny(name, InvalidRemoteNameCharacters); at >= 0 {
-		return RemoteName{}, RefusedRemoteNameError{Name: name, Character: name[at : at+1]}
+		return RemoteName{}, RefusedRemoteError{Name: name, Reason: NameCharacter{Character: name[at : at+1]}}
 	}
 	return RemoteName{name: name}, nil
 }
 
-// RefusedRemoteNameError is ParseRemoteName's refusal of a name Dolt cannot
-// hold: lit neither adds such a remote to Dolt nor syncs with it.
-type RefusedRemoteNameError struct {
-	Name, Character string
+// RefusedRemoteError is a git remote lit neither adds to Dolt nor syncs with,
+// and why. ParseRemoteName refuses names and workspace's reading of git's
+// remote list refuses URLs, both as this one type, so every caller that tells
+// a refused remote from a failure asks one question. [LAW:one-source-of-truth]
+type RefusedRemoteError struct {
+	Name   string
+	Reason RemoteRefusal
 }
 
-func (e RefusedRemoteNameError) Error() string {
-	return fmt.Sprintf("remote %q has %q in its name, which Dolt does not allow in a remote's name; rename it (git remote rename) to sync with it", e.Name, e.Character)
+func (e RefusedRemoteError) Error() string {
+	return fmt.Sprintf("remote %q %s; %s to sync with it", e.Name, e.Reason.why(), e.Reason.remedy())
 }
+
+// RemoteRefusal is why a remote is refused. The set is closed: its methods are
+// unexported, so only this package defines a reason. [LAW:types-are-the-program]
+type RemoteRefusal interface {
+	// Kind names the reason on the command's event.
+	Kind() string
+	why() string
+	remedy() string
+}
+
+// NameCharacter: the name holds a character Dolt refuses in a remote's name.
+type NameCharacter struct{ Character string }
+
+func (r NameCharacter) Kind() string { return "name_character" }
+func (r NameCharacter) why() string {
+	return fmt.Sprintf("has %q in its name, which Dolt does not allow in a remote's name", r.Character)
+}
+func (NameCharacter) remedy() string { return "rename it (git remote rename)" }
+
+// PathThroughFilesystem: a local path with a ".." after a directory name. The
+// OS resolves a symlink before the "..", while every lexical step on the way
+// to Dolt cleans it first, so the two can name different repositories.
+type PathThroughFilesystem struct{ URL string }
+
+func (r PathThroughFilesystem) Kind() string { return "path_through_filesystem" }
+func (r PathThroughFilesystem) why() string {
+	return fmt.Sprintf("has URL %q, whose \"..\" after a directory name only the filesystem can resolve", r.URL)
+}
+func (PathThroughFilesystem) remedy() string {
+	return `write the URL without that ".." (git remote set-url)`
+}
+
+// DriveRelativePath: a Windows path with a drive and no root (C:x.git), which
+// names a different repository from each directory it is read in.
+type DriveRelativePath struct{ URL string }
+
+func (r DriveRelativePath) Kind() string { return "drive_relative_path" }
+func (r DriveRelativePath) why() string {
+	return fmt.Sprintf("has URL %q, a drive-relative path that names a different repository from each directory", r.URL)
+}
+func (DriveRelativePath) remedy() string { return "write it as an absolute path (git remote set-url)" }
+
+// HomeRelativePath: a local path git reads against a home directory (~/x.git).
+type HomeRelativePath struct{ URL string }
+
+func (r HomeRelativePath) Kind() string { return "home_relative_path" }
+func (r HomeRelativePath) why() string {
+	return fmt.Sprintf("has URL %q, which git reads against a home directory", r.URL)
+}
+func (HomeRelativePath) remedy() string { return "write it as an absolute path (git remote set-url)" }
+
+// SurroundingWhitespace: an empty URL, or one with whitespace at an end. git
+// keeps the whitespace and Dolt trims it, so the two name different
+// repositories.
+type SurroundingWhitespace struct{ URL string }
+
+func (r SurroundingWhitespace) Kind() string { return "surrounding_whitespace" }
+func (r SurroundingWhitespace) why() string {
+	return fmt.Sprintf("has URL %q, which is empty or has whitespace at an end, which git keeps and Dolt trims", r.URL)
+}
+func (SurroundingWhitespace) remedy() string { return "write the URL without it (git remote set-url)" }

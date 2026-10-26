@@ -34,7 +34,7 @@ var storeTemplate = dirtemplate.New("dolt", func(dir string) error {
 // migration always commits, so the same head after it proves none ran.
 func TestAStoreTemplateCopyOpensWithoutBuildingOrMigrating(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{DatabasePath: storeTemplate.Copy(t)}, WorkspaceID: "test-workspace-id", Remotes: workspace.NewRemotes(testEnv(), "")}
+	ws := workspace.Info{Location: workspace.Location{DatabasePath: storeTemplate.Copy(t)}, WorkspaceID: "test-workspace-id", Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 	before := doltHead(t, ws)
 
 	st, err := engine.Open(context.Background(), testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)

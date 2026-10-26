@@ -33,8 +33,8 @@ func TestParseRemoteName(t *testing.T) {
 			t.Errorf("ParseRemoteName(%q) error = %v, want one containing %q", tc.raw, err, tc.refusal)
 		}
 		// Only a name Dolt cannot hold is a refusal; an empty one names no remote.
-		if refused := (RefusedRemoteNameError{}); errors.As(err, &refused) != (strings.TrimSpace(tc.raw) != "") {
-			t.Errorf("ParseRemoteName(%q) error = %#v; want a RefusedRemoteNameError exactly when the name is not empty", tc.raw, err)
+		if refused := (RefusedRemoteError{}); errors.As(err, &refused) != (strings.TrimSpace(tc.raw) != "") {
+			t.Errorf("ParseRemoteName(%q) error = %#v; want a RefusedRemoteError exactly when the name is not empty", tc.raw, err)
 		}
 	}
 }

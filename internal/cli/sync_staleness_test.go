@@ -157,7 +157,7 @@ func TestSyncStalenessLines(t *testing.T) {
 // observable and monotonically increasing from that write.
 func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 	origin, fork := remoteName(t, "origin"), remoteName(t, "fork")
 	now := time.Now()
 
@@ -192,7 +192,7 @@ func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
 // not. A regular file where a directory belongs is not either: Windows
 // reports that path not found.
 func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) {
-	ws := workspace.Info{Location: workspace.Location{StorageDir: filepath.Join(t.TempDir(), "storage\x00")}, Remotes: workspace.NewRemotes(testEnv(), "")}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: filepath.Join(t.TempDir(), "storage\x00")}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 
 	stderr := captureStderr(t, func() {
 		if _, ok := lastFetchSuccessAge(ws, remoteName(t, "origin"), time.Now()); ok {
@@ -210,7 +210,7 @@ func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) 
 // exactly the input that triggers the "stale fetch" warning line above.
 func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 	origin := remoteName(t, "origin")
 	if err := markFetchSuccess(ws, origin); err != nil {
 		t.Fatalf("markFetchSuccess() error = %v", err)
@@ -236,7 +236,7 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 // own right, matching resolveDoctorSyncFreshness's own no-remote handling.
 func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 	_, ws := initBootstrapTestRepo(t)
-	ctx := context.Background()
+	ctx := underInvocation(context.Background())
 	st, err := engine.Open(ctx, testEnv(), engine.Sync, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
@@ -270,7 +270,7 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 // across workspaces).
 func TestFetchSuccessMarkerPathLivesUnderStorageDir(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: "/tmp/some-workspace/.lit"}, Remotes: workspace.NewRemotes(testEnv(), "")}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: "/tmp/some-workspace/.lit"}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 	got := fetchSuccessMarkerPath(ws, remoteName(t, "origin"))
 	want := filepath.Join("/tmp/some-workspace/.lit", "fetched.origin")
 	if got != want {

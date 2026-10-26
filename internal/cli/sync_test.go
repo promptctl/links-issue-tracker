@@ -33,22 +33,6 @@ func TestMapRemotesByName(t *testing.T) {
 	}
 }
 
-func TestMapGitRemotesByName(t *testing.T) {
-	t.Parallel()
-	remotes := []workspace.GitRemote{
-		{Name: "origin", URL: "https://github.com/a/repo.git"},
-		{Name: "upstream", URL: "https://github.com/b/repo.git"},
-	}
-	got := mapGitRemotesByName(remotes)
-	want := map[string]string{
-		"origin":   "https://github.com/a/repo.git",
-		"upstream": "https://github.com/b/repo.git",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("mapGitRemotesByName() = %#v, want %#v", got, want)
-	}
-}
-
 func TestPrintSyncPullOutcomeNeverSyncedDirectsUpstreamSetup(t *testing.T) {
 	t.Parallel()
 	// A branch the remote has never seen is the typed never_synced state, not a
@@ -293,26 +277,49 @@ func TestPrintSyncPushOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 func TestPlanRemoteSync(t *testing.T) {
 	t.Parallel()
 	gitRemotes := []workspace.GitRemote{
-		{Name: "origin", URL: "https://example.com/new-origin.git"},
-		{Name: "upstream", URL: "https://example.com/upstream.git"},
-		{Name: "a/b", URL: "https://example.com/a-b.git"},
-		{Name: "old.fork", URL: "https://example.com/old-fork.git"},
+		gitRemoteAt("origin", "https://example.com/new-origin.git"),
+		gitRemoteAt("upstream", "https://example.com/upstream.git"),
+		gitRemoteAt("a/b", "https://example.com/a-b.git"),
+		gitRemoteAt("old.fork", "https://example.com/old-fork.git"),
+		gitRemoteAt("linked", "link/../remote.git"),
 	}
 	doltRemotes := []storage.SyncRemote{
 		{Name: "origin", URL: "https://example.com/old-origin.git"},
 		{Name: "fork", URL: "https://example.com/fork.git"},
+		{Name: "linked", URL: "git+file:///elsewhere/remote.git"},
 	}
 
-	got := planRemoteSync(gitRemotes, doltRemotes)
+	got, err := planRemoteSync(gitRemotes, doltRemotes)
+	if err != nil {
+		t.Fatalf("planRemoteSync() error = %v", err)
+	}
+	// A remote whose URL is refused is not wanted, so the Dolt remote of its
+	// name goes, as for a name Dolt cannot hold.
 	want := remoteSyncPlan{
-		add:     []plannedRemote{{name: remoteName(t, "upstream"), url: "git+https://example.com/upstream.git"}},
-		update:  []plannedRemote{{name: remoteName(t, "origin"), url: "git+https://example.com/new-origin.git"}},
-		remove:  []string{"fork"},
-		refused: []string{"a/b", "old.fork"},
+		add:    []plannedRemote{{name: remoteName(t, "upstream"), url: "git+https://example.com/upstream.git"}},
+		update: []plannedRemote{{name: remoteName(t, "origin"), url: "git+https://example.com/new-origin.git"}},
+		remove: []string{"fork", "linked"},
+		refused: []storage.RefusedRemoteError{
+			{Name: "a/b", Reason: storage.NameCharacter{Character: "/"}},
+			{Name: "linked", Reason: storage.PathThroughFilesystem{URL: "link/../remote.git"}},
+			{Name: "old.fork", Reason: storage.NameCharacter{Character: "."}},
+		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("planRemoteSync() = %#v, want %#v", got, want)
 	}
+}
+
+// gitRemote is a git remote named name, with a URL nothing refuses.
+func gitRemote(name string) workspace.GitRemote {
+	return gitRemoteAt(name, "https://example.com/"+name+".git")
+}
+
+// gitRemoteAt is a git remote named name with the fetch URL written. Its root
+// is the zero CheckoutRoot, so a URL that would be joined panics: a fixture
+// that needs a join builds its remote from a real checkout.
+func gitRemoteAt(name, written string) workspace.GitRemote {
+	return workspace.NewGitRemote(name, written, workspace.CheckoutRoot{})
 }
 
 // A chosen remote Dolt cannot hold is refused however it was chosen, never
@@ -330,11 +337,11 @@ func TestResolveSyncRemoteRefusesARemoteDoltCannotHold(t *testing.T) {
 	} {
 		remotes := make([]workspace.GitRemote, 0, len(tc.remotes))
 		for _, name := range tc.remotes {
-			remotes = append(remotes, workspace.GitRemote{Name: name})
+			remotes = append(remotes, gitRemote(name))
 		}
 		got, ok, err := resolveSyncRemote(tc.requested, upstreamIs(tc.upstream), remotes)
 		if err == nil || !strings.Contains(err.Error(), `remote "a/b" has "/" in its name`) {
-			t.Errorf("%s: resolveSyncRemote() = %q, %t, %v; want the refusal naming a/b", tc.name, got, ok, err)
+			t.Errorf("%s: resolveSyncRemote() = %q, %t, %v; want the refusal naming a/b", tc.name, got.Name(), ok, err)
 		}
 	}
 }
@@ -350,7 +357,7 @@ func upstreamIs(name string) func() (string, error) {
 func TestResolveSyncRemoteAsksUpstreamOnlyWhenItDecides(t *testing.T) {
 	t.Parallel()
 	unanswerable := func() (string, error) { return "", errors.New("for-each-ref failed") }
-	two := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
+	two := []workspace.GitRemote{gitRemote("origin"), gitRemote("upstream")}
 	for _, tc := range []struct {
 		name      string
 		requested string
@@ -359,11 +366,11 @@ func TestResolveSyncRemoteAsksUpstreamOnlyWhenItDecides(t *testing.T) {
 	}{
 		{name: "a request", requested: "upstream", remotes: two, want: "upstream"},
 		{name: "no remote", remotes: nil},
-		{name: "one remote", remotes: []workspace.GitRemote{{Name: "origin"}}, want: "origin"},
+		{name: "one remote", remotes: []workspace.GitRemote{gitRemote("origin")}, want: "origin"},
 	} {
 		got, ok, err := resolveSyncRemote(tc.requested, unanswerable, tc.remotes)
-		if err != nil || ok != (tc.want != "") || (ok && got != remoteName(t, tc.want)) {
-			t.Errorf("%s: resolveSyncRemote() = %q, %t, %v; want %q without asking the upstream", tc.name, got, ok, err, tc.want)
+		if err != nil || ok != (tc.want != "") || (ok && got.Name() != remoteName(t, tc.want)) {
+			t.Errorf("%s: resolveSyncRemote() = %q, %t, %v; want %q without asking the upstream", tc.name, got.Name(), ok, err, tc.want)
 		}
 	}
 	if _, _, err := resolveSyncRemote("", unanswerable, two); err == nil {
@@ -373,19 +380,19 @@ func TestResolveSyncRemoteAsksUpstreamOnlyWhenItDecides(t *testing.T) {
 
 func TestResolveSyncRemoteUsesRequestedRemoteFirst(t *testing.T) {
 	t.Parallel()
-	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
+	remotes := []workspace.GitRemote{gitRemote("origin"), gitRemote("upstream")}
 	got, ok, err := resolveSyncRemote("origin", upstreamIs("upstream"), remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if !ok || got != remoteName(t, "origin") {
-		t.Fatalf("resolveSyncRemote() = %q, %t, want origin", got, ok)
+	if !ok || got.Name() != remoteName(t, "origin") {
+		t.Fatalf("resolveSyncRemote() = %q, %t, want origin", got.Name(), ok)
 	}
 }
 
 func TestResolveSyncRemoteErrorsWhenRequestedRemoteIsUnknown(t *testing.T) {
 	t.Parallel()
-	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
+	remotes := []workspace.GitRemote{gitRemote("origin"), gitRemote("upstream")}
 	_, _, err := resolveSyncRemote("fork", upstreamIs("upstream"), remotes)
 	if err == nil {
 		t.Fatal("resolveSyncRemote() error = nil, want error for unknown requested remote")
@@ -394,37 +401,37 @@ func TestResolveSyncRemoteErrorsWhenRequestedRemoteIsUnknown(t *testing.T) {
 
 func TestResolveSyncRemoteUsesUpstreamRemoteWhenPresent(t *testing.T) {
 	t.Parallel()
-	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
+	remotes := []workspace.GitRemote{gitRemote("origin"), gitRemote("upstream")}
 	got, ok, err := resolveSyncRemote("", upstreamIs("upstream"), remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if !ok || got != remoteName(t, "upstream") {
-		t.Fatalf("resolveSyncRemote() = %q, %t, want upstream", got, ok)
+	if !ok || got.Name() != remoteName(t, "upstream") {
+		t.Fatalf("resolveSyncRemote() = %q, %t, want upstream", got.Name(), ok)
 	}
 }
 
 func TestResolveSyncRemoteUsesSingleRemoteFallback(t *testing.T) {
 	t.Parallel()
-	remotes := []workspace.GitRemote{{Name: "origin"}}
+	remotes := []workspace.GitRemote{gitRemote("origin")}
 	got, ok, err := resolveSyncRemote("", upstreamIs(""), remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
-	if !ok || got != remoteName(t, "origin") {
-		t.Fatalf("resolveSyncRemote() = %q, %t, want origin", got, ok)
+	if !ok || got.Name() != remoteName(t, "origin") {
+		t.Fatalf("resolveSyncRemote() = %q, %t, want origin", got.Name(), ok)
 	}
 }
 
 func TestResolveSyncRemoteIgnoresUnknownUpstreamRemote(t *testing.T) {
 	t.Parallel()
-	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
+	remotes := []workspace.GitRemote{gitRemote("origin"), gitRemote("upstream")}
 	got, ok, err := resolveSyncRemote("", upstreamIs("missing"), remotes)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
 	if ok {
-		t.Fatalf("resolveSyncRemote() = %q, want none", got)
+		t.Fatalf("resolveSyncRemote() = %q, want none", got.Name())
 	}
 }
 
@@ -435,7 +442,7 @@ func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
 		t.Fatalf("resolveSyncRemote() error = %v", err)
 	}
 	if ok {
-		t.Fatalf("resolveSyncRemote() = %q, want none", got)
+		t.Fatalf("resolveSyncRemote() = %q, want none", got.Name())
 	}
 }
 
@@ -597,7 +604,7 @@ func TestTheReconcileRemovesBeforeItAdds(t *testing.T) {
 		{Name: "fork", URL: "git+https://example.com/fork-old.git"},
 	}}
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
-	if err := syncDoltRemotesFromGit(ctx, syncSession{syncer: syncer}, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), dir)}); err != nil {
+	if err := syncDoltRemotesFromGit(ctx, syncSession{syncer: syncer}, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), checkoutRoot(t, dir))}); err != nil {
 		t.Fatalf("syncDoltRemotesFromGit() error = %v", err)
 	}
 	if want := []string{"remove team/origin", "update fork", "add team"}; !slices.Equal(syncer.calls, want) {

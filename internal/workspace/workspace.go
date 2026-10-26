@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -233,11 +232,6 @@ func (p PrefixState) Stored() StoredPrefix {
 // name. A refused prefix was read from config, so it never is.
 func (p PrefixState) Derived() bool { return p.spec.Derived() }
 
-type GitRemote struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
-
 // Remotes is a checkout's git remote configuration as one invocation reads it:
 // the remotes git has, and the one the current branch tracks. Each is asked of
 // git at most once, on first use, and every later read in the invocation is
@@ -247,33 +241,66 @@ type GitRemote struct {
 // [LAW:no-shared-mutable-globals] Resolve mints one for the Info it returns and
 // that Info is its owner: it lives as long as the unit of work that resolved
 // it — one command — and detached workers resolve their own; a worker that
-// runs several cycles gives each cycle its own. Holding git's answer for that
-// long is sound because lit never writes git's remote or branch configuration;
-// a remote added by hand mid-command is seen by the next one. NewRemotes is the
-// only way to build one.
+// runs several cycles gives each cycle its own (Reread). Holding git's answer
+// for that long is sound because lit never writes git's remote or branch
+// configuration; a remote added by hand mid-command is seen by the next one.
+// NewRemotes is the only way to build one.
 type Remotes struct {
-	list     func() ([]GitRemote, error)
+	env      environ.Env
+	root     CheckoutRoot
+	listing  func() (remoteListing, error)
 	upstream func() (string, error)
+	recorded sync.Once
 }
 
 // NewRemotes reads the remote configuration of the checkout at root, lazily.
 //
 // [LAW:dataflow-not-control-flow] Both queries read local config and cannot
 // hang on a network, so context.Background() — "never cancels" — is the honest
-// value, as for every geometry query in this file.
-func NewRemotes(env environ.Env, root string) *Remotes {
+// value, as for every geometry query in this file. A reader's ctx names the
+// event the listing's facts land on; it never cancels the read, which every
+// later reader in the command shares.
+func NewRemotes(env environ.Env, root CheckoutRoot) *Remotes {
 	return &Remotes{
-		list: sync.OnceValues(func() ([]GitRemote, error) {
+		env:  env,
+		root: root,
+		listing: sync.OnceValues(func() (remoteListing, error) {
 			return gitRemotes(context.Background(), env, root)
 		}),
 		upstream: sync.OnceValues(func() (string, error) {
-			return upstreamRemote(context.Background(), env, root)
+			return upstreamRemote(context.Background(), env, root.path)
 		}),
 	}
 }
 
-// List is the checkout's remotes with their fetch URLs, sorted by name.
-func (r *Remotes) List() ([]GitRemote, error) { return r.list() }
+// Reread is a reader of the same checkout's remotes that asks git afresh.
+func (r *Remotes) Reread() *Remotes { return NewRemotes(r.env, r.root) }
+
+// List is the checkout's remotes that have a fetch URL, sorted by name.
+func (r *Remotes) List(ctx context.Context) ([]GitRemote, error) {
+	listing, err := r.read(ctx)
+	return listing.remotes, err
+}
+
+// WithoutURL is the names of the remotes git lists with no fetch URL (a
+// pushurl-only remote, say), sorted: git cannot fetch them, so List leaves
+// them out.
+func (r *Remotes) WithoutURL(ctx context.Context) ([]string, error) {
+	listing, err := r.read(ctx)
+	return listing.withoutURL, err
+}
+
+// read is the listing, whose facts land on the event of the first reader that
+// receives it. [LAW:nothing-unseen] the read every remote consumer passes
+// through records them, so no consumer has to remember to.
+func (r *Remotes) read(ctx context.Context) (remoteListing, error) {
+	listing, err := r.listing()
+	if err != nil {
+		return remoteListing{}, err
+	}
+	r.recorded.Do(func() { listing.record(ctx) })
+	return listing, nil
+}
 
 // Upstream is the name of the remote the current branch tracks, whole as git
 // records it ("." for a local branch, "" for none or a detached HEAD). It is
@@ -401,7 +428,9 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 		WorkspaceID:   cfg.WorkspaceID,
 		IssuePrefix:   prefix,
 		PrivateGitDir: privateGitDir,
-		Remotes:       NewRemotes(env, geo.root),
+		// git prints --show-toplevel absolute with every symlink resolved, so its
+		// answer is a CheckoutRoot as it stands.
+		Remotes: NewRemotes(env, CheckoutRoot{path: geo.root}),
 	}, nil
 }
 
@@ -730,38 +759,6 @@ func defaultRemoteBranchFromLSRemote(output string) string {
 		return strings.TrimSpace(branch)
 	}
 	return ""
-}
-
-func gitRemotes(ctx context.Context, env environ.Env, cwd string) ([]GitRemote, error) {
-	output, err := gitOutput(ctx, env, cwd, "remote", "-v")
-	if err != nil {
-		return nil, fmt.Errorf("git remote -v in %q: %w", cwd, err)
-	}
-	entries := strings.Split(strings.TrimSpace(output), "\n")
-	byName := map[string]string{}
-	for _, entry := range entries {
-		line := strings.TrimSpace(entry)
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 3 {
-			continue
-		}
-		name := fields[0]
-		url := fields[1]
-		scope := strings.Trim(fields[2], "()")
-		if scope != "fetch" {
-			continue
-		}
-		byName[name] = url
-	}
-	remotes := make([]GitRemote, 0, len(byName))
-	for name, url := range byName {
-		remotes = append(remotes, GitRemote{Name: name, URL: url})
-	}
-	sort.Slice(remotes, func(i, j int) bool { return remotes[i].Name < remotes[j].Name })
-	return remotes, nil
 }
 
 // resolveIssuePrefix is the single enforcer of the prefix rule. A workspace's

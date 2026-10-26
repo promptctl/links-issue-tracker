@@ -47,7 +47,7 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 // errs toward allow.
 func TestShouldReceiveNowDebounce(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), "")}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
 	now := time.Now()
 	interval := 10 * time.Second
 
@@ -87,8 +87,8 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(testEnv(), root)}
-	ctx := context.Background()
+	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(testEnv(), checkoutRoot(t, root))}
+	ctx := underInvocation(context.Background())
 
 	ensureMirrorCoverage(ctx, testEnv(), ws)
 	info, err := os.Stat(remoteAbsentMarkerPath(ws))

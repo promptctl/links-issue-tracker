@@ -326,7 +326,7 @@ func backgroundMirrorLeaf() wsLeaf {
 			// cycling is pushed to by the next cycle, not the worker's next life.
 			// Replaced on the worker's one Info, so the cycle and everything after
 			// it read the same remotes. [LAW:one-source-of-truth]
-			ws.Remotes = workspace.NewRemotes(inv.Env, ws.RootDir)
+			ws.Remotes = ws.Remotes.Reread()
 			attempted := mirrorCycle(ctx, inv.Env, inv.Stdout, ws, stopAnswering)
 			// Released only after the cycle's engine has closed (mirrorCycle's
 			// deferred Close), so the lock brackets the whole session. The kernel
