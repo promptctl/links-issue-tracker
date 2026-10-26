@@ -655,6 +655,7 @@ func (s *Store) commitStrandedWrites(ctx context.Context) error {
 	if tables > 0 {
 		s.strandedWritesCommits = append(s.strandedWritesCommits, storage.StrandedWritesCommit{Tables: tables})
 	}
+	s.strandedWritesLooked = true
 	return nil
 }
 

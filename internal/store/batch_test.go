@@ -79,6 +79,22 @@ func TestARefusedImportRecordsTheCommitItResetTo(t *testing.T) {
 	}
 }
 
+// A store has looked for a staged write only once a batch ran, so its event
+// tells "found none" from "never looked".
+func TestABatchLooksForStrandedWrites(t *testing.T) {
+	ctx := context.Background()
+	st, epic := openBatchStore(t, ctx)
+	if commits, looked := st.StrandedWritesCommits(); looked {
+		t.Fatalf("StrandedWritesCommits() = %v, looked; want no look before any batch", commits)
+	}
+	if _, err := st.BulkApply(ctx, "test", "ada", refusedFile(epic)); err == nil {
+		t.Fatal("BulkApply() succeeded; want the missing parent refused")
+	}
+	if commits, looked := st.StrandedWritesCommits(); !looked || len(commits) != 0 {
+		t.Fatalf("StrandedWritesCommits() = %v, looked %v; want a look that found none", commits, looked)
+	}
+}
+
 // A batch refused because its caller gave up still resets: the cancellation
 // that refused it cannot also stop its reset.
 func TestABatchRefusedByCancellationStillResets(t *testing.T) {

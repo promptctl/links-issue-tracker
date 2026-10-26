@@ -200,7 +200,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// process left staged that this command committed is reported the same way,
 	// as a sync session reports it. [LAW:nothing-unseen]
 	reportStampCorrections(ctx, ap.Store)
-	reportEventValues(ctx, "stranded_writes.commits", storage.StrandedWrites(ap.Store))
+	reportStrandedWrites(ctx, ap.Store)
 	if runErr != nil {
 		return runErr
 	}

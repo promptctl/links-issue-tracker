@@ -585,6 +585,11 @@ func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
 	if facts := writtenFacts(t, lastEvent(t)); facts["import.reset_to"] == nil || facts["import.reset_to"] == "" || facts["import.reset_error"] != "" {
 		t.Errorf("event import.reset_to = %v, import.reset_error = %v; want the commit the file reset to and no reset error", facts["import.reset_to"], facts["import.reset_error"])
 	}
+	// The batch looked for a write another process left staged before it
+	// wrote: none here, and the list is present rather than absent.
+	if stranded, present := lastEvent(t).Occurrences["stranded_writes.commits"]; !present || len(stranded) != 0 {
+		t.Errorf("event stranded_writes.commits = %v (present %v); want present and empty", stranded, present)
+	}
 
 	tree := writeImportFile(t, "refused.json", `[
 		{"local_id":"a","title":"one","type":"epic","topic":"demo","priority":0},
@@ -594,14 +599,14 @@ func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
 		t.Fatalf("import succeeded; want the duplicate local_id refused:\n%s", out)
 	}
 	assertFacts(t, map[string]string{"import.created": "0"})
-	// The gate refused the tree before any write, so nothing was reset.
-	if resetTo, present := writtenFacts(t, lastEvent(t))["import.reset_to"]; present {
+	// The gate refused the tree before any write, so nothing was reset, and
+	// nothing looked for a staged write either.
+	ev := lastEvent(t)
+	if resetTo, present := writtenFacts(t, ev)["import.reset_to"]; present {
 		t.Errorf("event import.reset_to = %v; want none: the gate refused the tree before it wrote", resetTo)
 	}
-	// The event says whether the import committed a write another process left
-	// staged: none here, and the list is present rather than absent.
-	if stranded, present := lastEvent(t).Occurrences["stranded_writes.commits"]; !present || len(stranded) != 0 {
-		t.Errorf("event stranded_writes.commits = %v (present %v); want present and empty", stranded, present)
+	if stranded, present := ev.Occurrences["stranded_writes.commits"]; present {
+		t.Errorf("event stranded_writes.commits = %v; want none: the gate refused the tree before the batch looked", stranded)
 	}
 }
 

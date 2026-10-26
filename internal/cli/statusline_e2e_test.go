@@ -237,8 +237,8 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 }
 
 // A retitle reaches the file by whichever command makes it, lit import as
-// surely as lit update — and a retitle an import makes before its batch fails
-// stays made, so the file shows it too.
+// surely as lit update — and a retitle in an import whose batch is refused is
+// never made, so the file never shows it.
 func TestAnImportRetitleReachesTheStatuslineFile(t *testing.T) {
 	isolateEvents(t)
 	dir, first, _ := statuslineCheckout(t)
@@ -269,10 +269,10 @@ func TestAnImportRetitleReachesTheStatuslineFile(t *testing.T) {
 	if _, err := runCLIInDirAllowError(t, dir, "import", "--path", importFile(fmt.Sprintf("id: %s\ntitle: Renamed again\n---\nid: %s-nope\ntitle: Never\n", first, first))); err == nil {
 		t.Fatalf("an import naming %s-nope succeeded; the test needs its batch to fail", first)
 	}
-	if title := strings.TrimSpace(runCLIInDir(t, dir, "show", first, "--field", "title")); title != "Renamed again" {
-		t.Fatalf("the failed batch left %s titled %q; the test needs its first update to land", first, title)
+	if title := strings.TrimSpace(runCLIInDir(t, dir, "show", first, "--field", "title")); title != "Renamed" {
+		t.Fatalf("the refused batch left %s titled %q; want %q, the title before it", first, title, "Renamed")
 	}
-	titles("Renamed again")
+	titles("Renamed")
 }
 
 // A backup restore replaces the store the file's records describe, so it

@@ -694,7 +694,7 @@ func assertStrandedWritesVersioned(t *testing.T, ctx context.Context, st *Store)
 		t.Fatalf("count the stranded commit's tables: %v", err)
 	}
 	want := []storage.StrandedWritesCommit{{Tables: tables}}
-	if got := st.StrandedWritesCommits(); tables == 0 || !reflect.DeepEqual(got, want) {
+	if got, looked := st.StrandedWritesCommits(); tables == 0 || !looked || !reflect.DeepEqual(got, want) {
 		t.Fatalf("StrandedWritesCommits() = %+v; want %+v, the tables the stranded commit's diff touched", got, want)
 	}
 }
