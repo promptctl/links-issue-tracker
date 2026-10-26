@@ -608,21 +608,13 @@ failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.I
 
 #### 5.9 Relation, comment, and label reads
 
-`listRelations(ctx, issueID)` (`store.go`):
-```sql
-SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? OR dst_id = ? ORDER BY created_at ASC
-```
-error → `fmt.Errorf("list relations: %w", err)`; `created_at` parsed via `scanTime`.
+`queryRelations(ctx, q, from, args...)` (`relations.go`) is every read that returns relation rows: it writes `SELECT src_id, dst_id, type, created_at, created_by FROM ` and appends the caller's `from` (the FROM clause onward), scans by position, parses `created_at` via `scanTime`, and sorts in Go by `storage.RelationOrdering` (the instant, then `src_id`, `dst_id`, `type`) — never in SQL, `created_at` being a varchar. Error → `fmt.Errorf("list relations: %w", err)`. `q` is a `rowQueryer`, so the bulk transaction's `edgeWriterTx.Edges` reads through it too (`relations WHERE src_id = ? AND type = ?`, wrapped `"%s relations of %s: %w"`, `import_bulk.go`).
 
-`listAllRelations(ctx)` (`store.go`): same projection, no WHERE, `ORDER BY created_at ASC`; error → `"list all relations: %w"`.
+`listRelations(ctx, issueID)` (`store.go`): `queryRelations(ctx, s.db, "relations WHERE src_id = ? OR dst_id = ?", issueID, issueID)`.
 
-`listComments(ctx, issueID)` (`store.go`):
-```sql
-SELECT id, issue_id, body, created_at, created_by FROM comments WHERE issue_id = ? ORDER BY created_at ASC
-```
-error → `"list comments: %w"`.
+`queryComments(ctx, q, from, args...)` (`store.go`) is the same for comments: `SELECT id, issue_id, body, created_at, created_by FROM ` + `from`, sorted by `storage.CommentOrdering` (the instant, then `id`); error → `"list comments: %w"`.
 
-`listAllComments(ctx)` (`store.go`): same without the WHERE; error → `"list all comments: %w"`.
+`listComments(ctx, issueID)` (`store.go`): `queryComments(ctx, s.db, "comments WHERE issue_id = ?", issueID)`.
 
 `listAllLabels(ctx)` (`store.go`):
 ```sql
@@ -859,9 +851,8 @@ with `created_at` as RFC3339Nano; failure → `fmt.Errorf("insert comment: %w", 
 `store.go`:
 1. `id := strings.TrimSpace(commentID)`; empty → `model.ValidationError` `"comment id is required"` (`store.go`).
 2. Inside `withMutation(ctx, "delete comment", ...)`:
-   - `SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?` (`store.go`);
-   - `sql.ErrNoRows` → `storage.NotFoundError{Entity: "comment", ID: id}` (`store.go`); other → `fmt.Errorf("read comment: %w", err)`;
-   - `scanTime(createdAt)` into `deleted.CreatedAt` (`store.go`);
+   - `queryComments(ctx, tx, "comments WHERE id = ?", id)` (`store.go`); an error → `fmt.Errorf("read comment: %w", err)`;
+   - no row → `storage.NotFoundError{Entity: "comment", ID: id}` (`store.go`);
    - `deleteCommentTx(ctx, tx, id)` (`store.go`; `internal/store/row_deletes.go`).
    Existence and deletion share the tx — no TOCTOU gap (`store.go`).
 3. Returns the fully-populated deleted comment.
@@ -2781,13 +2772,9 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 `Store.ListRelationsForIssue(ctx, issueID, types...)` — `internal/store/relations.go`:
 - `GetIssue` precheck.
 - `s.listRelations(ctx, issueID)`; with no `types` the full incident set is returned.
-- Otherwise filters in Go against a set of wanted types; order is preserved from the SQL.
+- Otherwise filters in Go against a set of wanted types; order is preserved from `listRelations`.
 
-`Store.listRelations` — `internal/store/store.go`:
-```sql
-SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? OR dst_id = ? ORDER BY created_at ASC
-```
-Query error → `fmt.Errorf("list relations: %w", err)`; created_at parsed with `scanTime`; returns an empty non-nil slice.
+`Store.listRelations` — `internal/store/store.go`: `queryRelations` over `relations WHERE src_id = ? OR dst_id = ?` (`relations.go`); in `storage.RelationOrdering`; returns an empty non-nil slice.
 
 ### 4.10 Batch relations
 
@@ -2797,13 +2784,13 @@ Query error → `fmt.Errorf("list relations: %w", err)`; created_at parsed with 
 
 `relationsByEndpoint(ctx, column, ids)` — `internal/store/relations.go`: builds
 ```sql
-SELECT r.src_id, r.dst_id, r.type, r.created_at, r.created_by FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS ends JOIN relations r ON r.<column> = ends.id WHERE r.type IN (?,?)
+SELECT src_id, dst_id, type, created_at, created_by FROM JSON_TABLE(?, '$[*]' COLUMNS (id VARCHAR(191) PATH '$')) AS ends JOIN relations r ON r.<column> = ends.id WHERE r.type IN (?,?)
 ```
-via `fmt.Sprintf`, the type list from `placeholders` (`internal/store/idset.go`); args are the JSON id array then the two type strings. No ORDER BY (ordering is `mergeRelations`' job). Reading the rows is `scanRelationRows`' job: query error → `fmt.Errorf("list relations for ids: %w", err)`, and the scan of `created_at` goes through `scanTime`.
+via `fmt.Sprintf` for the FROM clause onward, read through `queryRelations` (`relations.go`), which writes the unprefixed SELECT list (unambiguous: the id set has only an `id` column, relations none) and sorts each half by `storage.RelationOrdering`; the type list from `placeholders` (`internal/store/idset.go`); args are the JSON id array then the two type strings.
 
 `listRelationsForIDs(ctx, ids)` — `internal/store/relations.go`: empty ids → `(nil, nil)`; otherwise one query per endpoint column and `mergeRelations(bySrc, byDst)`. The documented reason for two conjunctive queries rather than one `src_id IN (…) OR dst_id IN (…)` is engine index-analysis blowup.
 
-`mergeRelations(bySrc, byDst)` — `internal/store/relations.go`: dedupes on `relationKey{srcID,dstID,kind}` keeping first occurrence, then `slices.SortFunc` by `CreatedAt` ascending, then `SrcID`, then `DstID`, then `string(Type)`. `TestMergeRelationsDedupesAndOrders` pins both legs, including a created_at tie broken by key — `internal/store/relations_batch_test.go`.
+`mergeRelations(bySrc, byDst)` — `internal/store/relations.go`: dedupes on `relationKey{srcID,dstID,kind}` keeping first occurrence, then `slices.SortFunc` by `storage.RelationOrdering` — again, since two ordered halves do not make an ordered union. `TestMergeRelationsDedupesAndOrders` pins both legs, including a created_at tie broken by key — `internal/store/relations_batch_test.go`.
 
 `Store.GetRelationsByIDs(ctx, ids)` — `internal/store/relations.go`:
 - `dedupeStrings(ids)` preserving first-seen order (helper); empty → empty map, nil error.
@@ -3136,8 +3123,8 @@ Slice: `internal/store/import_export.go`, `import_bulk.go`, `import_tree.go`, `e
 It performs seven reads and assembles one value (`import_export.go`):
 
 1. `s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})` (`import_export.go`). Limit 0 disables the cap (`capLimit` returns the slice unchanged when `limit <= 0`, `internal/store/store.go`). `IncludeArchived`/`IncludeDeleted` true means neither `i.archived_at IS NULL` nor `i.deleted_at IS NULL` is added to the WHERE clause (`store.go`), so **archived and soft-deleted issues are exported**. No other filter is set, so the SQL has no WHERE clause at all. Ordering: the SQL carries no ORDER BY; `ListIssues` sorts the hydrated issues with `slices.SortStableFunc` and the comparator `storage.IssueOrdering(filter.SortBy, ancestry)` returns, which with no `SortBy` specs compares the `rank` key and then the id (`store.go`; `internal/storage/ordering.go`), so **issues are ordered by rank ascending, ties broken by id ascending**.
-2. `s.listAllRelations(ctx)` (`import_export.go`) — `SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC` (`store.go`). Ordered by created_at ascending only (no tiebreak).
-3. `s.listAllComments(ctx)` (`import_export.go`) — `SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC` (`store.go`).
+2. `queryRelations(ctx, s.db, "relations")` (`import_export.go`) — every relation, sorted in Go by `storage.RelationOrdering`: the `created_at` instant, then `src_id`, `dst_id`, `type`.
+3. `queryComments(ctx, s.db, "comments")` (`import_export.go`) — every comment, sorted in Go by `storage.CommentOrdering`: the `created_at` instant, then `id`.
 4. `s.listAllLabels(ctx)` (`import_export.go`) — `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC` (`store.go`).
 5. `s.ListAllEvents(ctx)` (`import_export.go`) — `queryEvents(ctx, "")`, i.e. `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id ORDER BY e.id ASC, c.field ASC` (`store.go`). The per-change rows are collapsed back into `IssueEvent.Changes`, so **an event's changes are ordered by field name ascending**; the collapsed events are then sorted by `storage.EventOrdering` — the `created_at` instant, then id (`internal/storage/ordering.go`).
 6. `listPurges(ctx, s.db)` (`import_export.go`) — `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges`, both timestamps parsed through `scanTime`, returned through `model.UnionPurges`, so **purge records are ordered by issue id, then birth ascending**; the result is never nil (`internal/store/purge.go`).

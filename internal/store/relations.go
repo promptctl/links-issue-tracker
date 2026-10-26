@@ -212,9 +212,11 @@ func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.
 var relationEndpointColumns = map[string]struct{}{"src_id": {}, "dst_id": {}}
 
 // relationsByEndpoint returns the structural relations whose given endpoint
-// column matches any of ids, in no particular order — mergeRelations is the
-// sole owner of the final ordering, so an ORDER BY here would be dead work.
-// [LAW:one-source-of-truth]
+// column matches any of ids. Each half comes back in storage.RelationOrdering,
+// as every read that returns relation rows does, and mergeRelations sorts
+// their union again, because two ordered halves do not make an ordered union.
+// The halves' own sorts are the price of one read path: queryRelations sorts
+// whatever it returns. [LAW:single-enforcer]
 func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []string) ([]model.Relation, error) {
 	if _, ok := relationEndpointColumns[column]; !ok {
 		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)
@@ -227,15 +229,21 @@ func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []st
 	for _, relType := range structuralRelationTypes {
 		args = append(args, string(relType))
 	}
-	query := fmt.Sprintf(`SELECT r.src_id, r.dst_id, r.type, r.created_at, r.created_by FROM %s JOIN relations r ON r.%s = ends.id WHERE r.type IN (%s)`, ends, column, placeholders(len(structuralRelationTypes)))
-	return s.scanRelationRows(ctx, query, args)
+	// The SELECT list is unprefixed, and unambiguous: the id set has only an
+	// id column, and relations has none.
+	from := fmt.Sprintf(`%s JOIN relations r ON r.%s = ends.id WHERE r.type IN (%s)`, ends, column, placeholders(len(structuralRelationTypes)))
+	return queryRelations(ctx, s.db, from, args...)
 }
 
-// scanRelationRows runs an endpoint query and reads its rows.
-func (s *Store) scanRelationRows(ctx context.Context, query string, args []any) ([]model.Relation, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
+// queryRelations reads the relations that from — the FROM clause onward —
+// selects, in storage.RelationOrdering. The order is taken in Go, not in SQL: created_at
+// is a varchar, and ORDER BY on it sorts a stamp by its spelling. The column
+// list lives here beside the Scan that reads it by position, so no caller can
+// name src and dst the other way round and read every edge reversed.
+func queryRelations(ctx context.Context, q rowQueryer, from string, args ...any) ([]model.Relation, error) {
+	rows, err := q.QueryContext(ctx, `SELECT src_id, dst_id, type, created_at, created_by FROM `+from, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list relations for ids: %w", err)
+		return nil, fmt.Errorf("list relations: %w", err)
 	}
 	defer rows.Close()
 	rels := []model.Relation{}
@@ -245,20 +253,21 @@ func (s *Store) scanRelationRows(ctx context.Context, query string, args []any) 
 		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := scanTime(createdAt)
-		if err != nil {
+		if rel.CreatedAt, err = scanTime(createdAt); err != nil {
 			return nil, err
 		}
-		rel.CreatedAt = t
 		rels = append(rels, rel)
 	}
-	return rels, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(rels, storage.RelationOrdering)
+	return rels, nil
 }
 
-// mergeRelations combines the two endpoint result sets into one order:
-// created_at ascending, deduplicated by primary key. A row whose src and dst
-// are both subjects arrives from both queries and must count once. Ties on
-// created_at break by primary key, so the merged order is deterministic.
+// mergeRelations combines the two endpoint result sets into one, deduplicated
+// by primary key and in storage.RelationOrdering. A row whose src and dst are
+// both subjects arrives from both queries and must count once.
 func mergeRelations(bySrc, byDst []model.Relation) []model.Relation {
 	seen := make(map[relationKey]struct{}, len(bySrc)+len(byDst))
 	merged := make([]model.Relation, 0, len(bySrc)+len(byDst))
@@ -270,18 +279,7 @@ func mergeRelations(bySrc, byDst []model.Relation) []model.Relation {
 		seen[key] = struct{}{}
 		merged = append(merged, rel)
 	}
-	slices.SortFunc(merged, func(a, b model.Relation) int {
-		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
-			return c
-		}
-		if c := strings.Compare(a.SrcID, b.SrcID); c != 0 {
-			return c
-		}
-		if c := strings.Compare(a.DstID, b.DstID); c != 0 {
-			return c
-		}
-		return strings.Compare(string(a.Type), string(b.Type))
-	})
+	slices.SortFunc(merged, storage.RelationOrdering)
 	return merged
 }
 

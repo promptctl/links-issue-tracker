@@ -73,9 +73,10 @@ type state struct {
 	// engine offers as a capability. [LAW:one-source-of-truth]
 	order []string
 
-	// The three edge tables, each in the order it was written. Insertion
-	// order is oldest-first by construction, so no read re-derives "when did
-	// this happen" from a timestamp.
+	// The edge tables, each in the order it was written; a read orders them
+	// by storage.RelationOrdering and storage.CommentOrdering. Write order is
+	// not instant order: a row merged in from another store can carry an
+	// instant earlier than rows already held.
 	relations []model.Relation
 	comments  []model.Comment
 

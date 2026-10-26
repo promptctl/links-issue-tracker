@@ -156,13 +156,7 @@ func (w edgeWriter) Edges(id string, relType model.RelationType) ([]model.Relati
 	if _, err := w.e.mustRecord(id); err != nil {
 		return nil, err
 	}
-	var edges []model.Relation
-	for _, rel := range w.e.relations {
-		if rel.SrcID == id && rel.Type == relType {
-			edges = append(edges, rel)
-		}
-	}
-	return edges, nil
+	return w.e.relationsWhere(func(rel model.Relation) bool { return rel.SrcID == id && rel.Type == relType }), nil
 }
 
 func (w edgeWriter) Add(id, target string, relType model.RelationType) error {

@@ -37,8 +37,8 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 		WorkspaceID: e.workspaceID,
 		ExportedAt:  e.clock.Now(),
 		Issues:      issues,
-		Relations:   slices.Clone(e.relations),
-		Comments:    slices.Clone(e.comments),
+		Relations:   e.relationsWhere(func(model.Relation) bool { return true }),
+		Comments:    e.commentsWhere(func(model.Comment) bool { return true }),
 		Labels:      labels,
 		// allEvents, not ListAllEvents: that method is allEvents wrapped in
 		// the lock Export is already holding, and calling it here deadlocks on

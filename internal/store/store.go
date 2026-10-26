@@ -1585,21 +1585,16 @@ func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comm
 	// [LAW:single-enforcer] Existence is verified by the SELECT inside the same mutation that deletes,
 	// so the row proven present is the row removed — no TOCTOU gap, no separate guard.
 	if err := s.withMutation(ctx, "delete comment", func(ctx context.Context, tx *sql.Tx) error {
-		var createdAt string
-		row := tx.QueryRowContext(ctx, `SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?`, id)
-		if err := row.Scan(&deleted.ID, &deleted.IssueID, &deleted.Body, &createdAt, &deleted.CreatedBy); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				// [LAW:one-type-per-behavior] Typed not-found error matches GetIssue / relation removals,
-				// so callers detect not-found via errors.As instead of string-matching the message.
-				return storage.NotFoundError{Entity: "comment", ID: id}
-			}
+		found, err := queryComments(ctx, tx, `comments WHERE id = ?`, id)
+		if err != nil {
 			return fmt.Errorf("read comment: %w", err)
 		}
-		t, err := scanTime(createdAt)
-		if err != nil {
-			return err
+		if len(found) == 0 {
+			// [LAW:one-type-per-behavior] Typed not-found error matches GetIssue / relation removals,
+			// so callers detect not-found via errors.As instead of string-matching the message.
+			return storage.NotFoundError{Entity: "comment", ID: id}
 		}
-		deleted.CreatedAt = t
+		deleted = found[0]
 		// [LAW:single-enforcer] one comments DELETE, shared with the replay's delta.
 		if _, err := deleteCommentTx(ctx, tx, id); err != nil {
 			return err
@@ -2073,26 +2068,7 @@ func (s *Store) ListIssueIdentities(ctx context.Context) ([]storage.IssueIdentit
 // elimination quadratic. Take this as precedent for a second endpoint column,
 // never for a second endpoint LIST. [LAW:carrying-cost]
 func (s *Store) listRelations(ctx context.Context, issueID string) ([]model.Relation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? OR dst_id = ? ORDER BY created_at ASC`, issueID, issueID)
-	if err != nil {
-		return nil, fmt.Errorf("list relations: %w", err)
-	}
-	defer rows.Close()
-	rels := []model.Relation{}
-	for rows.Next() {
-		var rel model.Relation
-		var createdAt string
-		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
-			return nil, err
-		}
-		t, err := scanTime(createdAt)
-		if err != nil {
-			return nil, err
-		}
-		rel.CreatedAt = t
-		rels = append(rels, rel)
-	}
-	return rels, rows.Err()
+	return queryRelations(ctx, s.db, `relations WHERE src_id = ? OR dst_id = ?`, issueID, issueID)
 }
 func (s *Store) getMeta(ctx context.Context, tx *sql.Tx, key string) (string, error) {
 	var row *sql.Row
@@ -2227,7 +2203,16 @@ func (s *Store) stampEdit(issue model.Issue, at time.Time, reason, actor string,
 }
 
 func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comment, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, issue_id, body, created_at, created_by FROM comments WHERE issue_id = ? ORDER BY created_at ASC`, issueID)
+	return queryComments(ctx, s.db, `comments WHERE issue_id = ?`, issueID)
+}
+
+// queryComments reads the comments that from — the FROM clause onward —
+// selects, in storage.CommentOrdering. The order is taken in Go, not in SQL: created_at is
+// a varchar, and ORDER BY on it sorts a stamp by its spelling. The column list
+// lives here beside the Scan that reads it by position, so no caller can name
+// the columns in an order the Scan does not expect.
+func queryComments(ctx context.Context, q rowQueryer, from string, args ...any) ([]model.Comment, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, issue_id, body, created_at, created_by FROM `+from, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list comments: %w", err)
 	}
@@ -2239,14 +2224,16 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 		if err := rows.Scan(&c.ID, &c.IssueID, &c.Body, &createdAt, &c.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := scanTime(createdAt)
-		if err != nil {
+		if c.CreatedAt, err = scanTime(createdAt); err != nil {
 			return nil, err
 		}
-		c.CreatedAt = t
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, storage.CommentOrdering)
+	return out, nil
 }
 
 // laneFamilyHistory reads issueID's history and its lane family's in one
@@ -2312,52 +2299,6 @@ func (s *Store) ListEvents(ctx context.Context, issueID string) ([]model.IssueEv
 		return nil, fmt.Errorf("list issue events: %w", err)
 	}
 	return events, nil
-}
-
-func (s *Store) listAllRelations(ctx context.Context) ([]model.Relation, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT src_id, dst_id, type, created_at, created_by FROM relations ORDER BY created_at ASC`)
-	if err != nil {
-		return nil, fmt.Errorf("list all relations: %w", err)
-	}
-	defer rows.Close()
-	rels := []model.Relation{}
-	for rows.Next() {
-		var rel model.Relation
-		var createdAt string
-		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
-			return nil, err
-		}
-		t, err := scanTime(createdAt)
-		if err != nil {
-			return nil, err
-		}
-		rel.CreatedAt = t
-		rels = append(rels, rel)
-	}
-	return rels, rows.Err()
-}
-
-func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, issue_id, body, created_at, created_by FROM comments ORDER BY created_at ASC`)
-	if err != nil {
-		return nil, fmt.Errorf("list all comments: %w", err)
-	}
-	defer rows.Close()
-	out := []model.Comment{}
-	for rows.Next() {
-		var c model.Comment
-		var createdAt string
-		if err := rows.Scan(&c.ID, &c.IssueID, &c.Body, &createdAt, &c.CreatedBy); err != nil {
-			return nil, err
-		}
-		t, err := scanTime(createdAt)
-		if err != nil {
-			return nil, err
-		}
-		c.CreatedAt = t
-		out = append(out, c)
-	}
-	return out, rows.Err()
 }
 
 // ListAllEvents reads the whole issue history, oldest first. Export uses it to

@@ -9,8 +9,8 @@ Day-to-day reads and writes are only half of what the store does; the other half
 | # | Data | Query semantics | Order |
 |---|---|---|---|
 | 1 | issues | `ListIssues` with `Limit: 0` (uncapped), `IncludeArchived` and `IncludeDeleted` both true — no WHERE clause at all, so **archived and soft-deleted issues are exported** | tree order, then `id` — `ListIssues`'s default (`storage.IssueOrdering`) |
-| 2 | relations | `SELECT ... FROM relations` | `created_at ASC` (no tiebreak) |
-| 3 | comments | `SELECT ... FROM comments` | `created_at ASC` |
+| 2 | relations | `queryRelations(ctx, s.db, "relations")` | none in SQL; `storage.RelationOrdering` in Go: the `created_at` instant, then `src_id`, `dst_id`, `type` |
+| 3 | comments | `queryComments(ctx, s.db, "comments")` | none in SQL; `storage.CommentOrdering` in Go: the `created_at` instant, then `id` |
 | 4 | labels | `SELECT ... FROM labels` | `issue_id ASC, label ASC` |
 | 5 | events | `issue_events LEFT JOIN issue_event_changes` | events by `(created_at, id)`, each event's changes by `field ASC` (`store.go`) |
 | 6 | purges | `SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges` (`listPurges`, `purge.go`) | none in SQL; `model.UnionPurges` orders by issue id, then `issue_created_at` |

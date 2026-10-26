@@ -62,12 +62,19 @@ func (e *Engine) DeleteComment(ctx context.Context, commentID string) (model.Com
 }
 
 func (e *Engine) commentsFor(issueID string) []model.Comment {
+	return e.commentsWhere(func(c model.Comment) bool { return c.IssueID == issueID })
+}
+
+// commentsWhere is every read of the comment table that returns comments: the
+// comments keep keeps, in storage.CommentOrdering.
+func (e *Engine) commentsWhere(keep func(model.Comment) bool) []model.Comment {
 	out := []model.Comment{}
 	for _, comment := range e.comments {
-		if comment.IssueID == issueID {
+		if keep(comment) {
 			out = append(out, comment)
 		}
 	}
+	slices.SortFunc(out, storage.CommentOrdering)
 	return out
 }
 
@@ -291,7 +298,7 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 }
 
 // ListRelationsForIssue returns every edge incident to the issue in either
-// direction, oldest first. The variadic types argument narrows rather than
+// direction, in storage.RelationOrdering. The variadic types argument narrows rather than
 // switching behavior: naming no type means every type, never no types.
 // [LAW:dataflow-not-control-flow]
 func (e *Engine) ListRelationsForIssue(ctx context.Context, issueID string, types ...model.RelationType) ([]model.Relation, error) {
@@ -443,14 +450,21 @@ func (e *Engine) DependencyOrder(ctx context.Context) (storage.DependencyOrder, 
 }
 
 // incidentRelations returns every edge touching issueID in either direction,
-// in the order the edges were written.
+// in storage.RelationOrdering.
 func (e *Engine) incidentRelations(issueID string) []model.Relation {
+	return e.relationsWhere(func(rel model.Relation) bool { return rel.SrcID == issueID || rel.DstID == issueID })
+}
+
+// relationsWhere is every read of the edge table that returns edges: the
+// edges keep keeps, in storage.RelationOrdering.
+func (e *Engine) relationsWhere(keep func(model.Relation) bool) []model.Relation {
 	out := []model.Relation{}
 	for _, rel := range e.relations {
-		if rel.SrcID == issueID || rel.DstID == issueID {
+		if keep(rel) {
 			out = append(out, rel)
 		}
 	}
+	slices.SortFunc(out, storage.RelationOrdering)
 	return out
 }
 

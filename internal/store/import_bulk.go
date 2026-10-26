@@ -122,24 +122,11 @@ func (w edgeWriterTx) Edges(id string, relType model.RelationType) ([]model.Rela
 	if err := requireIssueExistsTx(w.ctx, w.tx, id); err != nil {
 		return nil, err
 	}
-	rows, err := w.tx.QueryContext(w.ctx, `SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id = ? AND type = ?`, id, string(relType))
+	edges, err := queryRelations(w.ctx, w.tx, `relations WHERE src_id = ? AND type = ?`, id, string(relType))
 	if err != nil {
-		return nil, fmt.Errorf("list %s relations of %s: %w", relType, id, err)
+		return nil, fmt.Errorf("%s relations of %s: %w", relType, id, err)
 	}
-	defer rows.Close()
-	var edges []model.Relation
-	for rows.Next() {
-		var rel model.Relation
-		var createdAt string
-		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
-			return nil, err
-		}
-		if rel.CreatedAt, err = scanTime(createdAt); err != nil {
-			return nil, err
-		}
-		edges = append(edges, rel)
-	}
-	return edges, rows.Err()
+	return edges, nil
 }
 
 func (w edgeWriterTx) Add(id, target string, relType model.RelationType) error {

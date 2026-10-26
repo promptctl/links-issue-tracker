@@ -20,7 +20,9 @@ type IssueReader interface {
 
 	// GetIssueDetail returns the issue together with its comments, history, and
 	// structural edges — the single-issue view, paid for in full. Callers that
-	// need only the edges for many issues use GetRelationsByIDs instead.
+	// need only the edges for many issues use GetRelationsByIDs instead. Its
+	// relations come in [RelationOrdering] and its comments in
+	// [CommentOrdering].
 	GetIssueDetail(ctx context.Context, id string) (model.IssueDetail, error)
 
 	// ListIssues returns the issues the filter selects, ordered by SortBy and
@@ -146,7 +148,7 @@ type RelationStore interface {
 	RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error
 
 	// ListRelationsForIssue returns every edge incident to the issue in either
-	// direction, oldest first, optionally narrowed to the named types.
+	// direction, in [RelationOrdering], optionally narrowed to the named types.
 	ListRelationsForIssue(ctx context.Context, issueID string, types ...model.RelationType) ([]model.Relation, error)
 
 	// GetRelationsByIDs is the batch neighborhood read: one call for many

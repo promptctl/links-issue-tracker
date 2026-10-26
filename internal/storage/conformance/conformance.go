@@ -185,6 +185,7 @@ var cases = []engineCase{
 	{"stamps_come_from_the_clock_the_engine_was_given", stampsComeFromTheClock},
 	{"list_orders_timestamps_by_instant_not_spelling", listOrdersTimestampsByInstant},
 	{"events_are_totally_ordered", eventsAreTotallyOrdered},
+	{"relations_and_comments_are_totally_ordered", relationsAndCommentsAreTotallyOrdered},
 	{"rank_intents_reorder", rankIntentsReorder},
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
 	{"rank_to_edge_stays_inside_its_frame", rankToEdgeStaysInsideItsFrame},
