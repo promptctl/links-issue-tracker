@@ -92,9 +92,13 @@ func (e *Engine) currentState(ids []string) (storage.CurrentState, error) {
 		}
 		now.Issues[id] = issue
 	}
+	named := map[string]bool{}
+	for _, id := range ids {
+		named[id] = true
+	}
 	targets := map[model.RelationType]map[string][]string{model.RelParentChild: now.Parents, model.RelBlockedBy: now.BlockedBy}
 	for _, rel := range e.relations {
-		if out, ok := targets[rel.Type]; ok && slices.Contains(ids, rel.SrcID) {
+		if out, ok := targets[rel.Type]; ok && named[rel.SrcID] {
 			out[rel.SrcID] = append(out[rel.SrcID], rel.DstID)
 		}
 	}

@@ -203,18 +203,52 @@ func TestAReadOutKeyTheFileDeletesIsLeftAlone(t *testing.T) {
 	}
 }
 
-// A slot no document can state now is a conflict whatever the file says: an
-// issue the store no longer holds, or a child holding two parents, whose
-// refusal names the repair.
-func TestAReadOutSlotNoDocumentCanStateIsAConflict(t *testing.T) {
-	read := readIssue()
-	removed := mergeConflicts(t, readOut(read, "lit-e"), storage.CurrentState{})
+// An issue the store no longer holds is a conflict whatever the file says, and
+// the refusal names the issues to read out again.
+func TestAReadOutOfARemovedIssueIsAConflict(t *testing.T) {
+	removed := mergeConflicts(t, readOut(readIssue(), "lit-e"), storage.CurrentState{})
 	if len(removed) == 0 || !strings.Contains(removed[0].String(), "is removed now") {
 		t.Errorf("conflicts = %v, want each slot of the removed issue", removed)
 	}
-	twoParents := mergeConflicts(t, readOut(read, "lit-e"), standing(read, []string{"lit-e", "lit-f"}))
-	if len(twoParents) != 1 || !strings.Contains(twoParents[0].String(), "lit doctor") {
-		t.Errorf("conflicts = %v, want the parent, naming lit doctor", twoParents)
+	if way := (storage.ConflictError{Conflicts: removed}).Error(); !strings.Contains(way, "`lit ls --ids lit-x-1 --format yaml`") {
+		t.Errorf("refusal = %q, want the read-out command for lit-x-1", way)
+	}
+}
+
+// A child holding two parents now, which no document can state: a file that
+// left its parent alone states none, so the two stand and the rest of the file
+// lands; a file that edited it conflicts, and the refusal names the repair.
+func TestAReadOutOfAChildWithTwoParentsNow(t *testing.T) {
+	read := readIssue()
+	twoParents := standing(read, []string{"lit-e", "lit-f"})
+	left := readOut(read, "lit-e")
+	title := "a new title"
+	left.Title = &title
+	got, kept := mergeOK(t, left, twoParents)
+	if got.Parent != nil || got.Title == nil || *got.Title != title || !slices.Equal(kept, []string{"lit-x-1 parent"}) {
+		t.Errorf("parent %v, title %v, kept %v; want no parent stated, the title, and the parent kept", got.Parent, got.Title, kept)
+	}
+	edited := readOut(read, "lit-e")
+	none := ""
+	edited.Parent = &none
+	conflicts := mergeConflicts(t, edited, twoParents)
+	if len(conflicts) != 1 || !strings.Contains(conflicts[0].String(), "lit doctor") {
+		t.Errorf("conflicts = %v, want the parent, naming lit doctor", conflicts)
+	}
+}
+
+// A read-out document meets the gate's document rules as stated, as one with
+// no basis does: the merge does not make a blocked_by naming an edge twice
+// into a set, and a file the gate refuses is refused before any conflict.
+func TestAReadOutDocumentIsGatedAsStated(t *testing.T) {
+	read := readIssue()
+	doc := readOut(read, "", "lit-b")
+	twice := []string{"lit-b", "lit-b"}
+	doc.BlockedBy = &twice
+	_, err := storage.MergeReadOut([]storage.BulkIssueSpec{doc}, storage.CurrentState{})
+	var invalid model.ValidationError
+	if !errors.As(err, &invalid) || !strings.Contains(err.Error(), "twice") {
+		t.Errorf("error = %v, want the gate's refusal of an edge named twice, before the removed issue's conflict", err)
 	}
 }
 

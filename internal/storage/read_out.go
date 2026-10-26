@@ -51,13 +51,20 @@ func ReadOutIDs(specs []BulkIssueSpec) []string {
 //   - file is base: the file left it alone, so the document states now, and a
 //     now that moved from base is Kept;
 //   - file is not base, and now is base or file: the file's edit, stated;
-//   - otherwise, or when now is a value no document can state (an issue the
-//     store no longer holds, a child holding two parents): a conflict.
+//   - otherwise, or when the store no longer holds the issue: a conflict.
 //
 // Every conflict in the file is gathered into one ConflictError, which writes
 // nothing. A merged document still states every key the file stated, so one
 // the file left alone lands as held, as an unedited read-out always has.
+//
+// The documents as stated pass the gate's document rules first, so the merge
+// never makes a document the gate would refuse as written into one it admits,
+// and a file the gate refuses is refused before any conflict is weighed: the
+// same rules a document with no basis meets. [LAW:single-enforcer]
 func MergeReadOut(specs []BulkIssueSpec, now CurrentState) (MergedFile, error) {
+	if _, _, err := parseBulkSpecs(specs); err != nil {
+		return MergedFile{}, err
+	}
 	merged := MergedFile{specs: slices.Clone(specs)}
 	var conflicts []Conflict
 	for i := range merged.specs {
@@ -144,8 +151,10 @@ func (m *documentMerge) fields(i int, doc *BulkIssueSpec, basis map[string]strin
 }
 
 // parent merges a stated parent and states the result as a move from now: a
-// parent as itself, and none as a clear only when now holds a parent to clear,
-// so the gate judges a clear exactly when one is written.
+// parent as itself, none as a clear only when now holds a parent to clear, so
+// the gate judges a clear exactly when one is written, and nothing when what
+// results is what stands, as the two parents of a child the file left alone
+// do: no document can state them, and `lit doctor` repairs them.
 func (m *documentMerge) parent(doc *BulkIssueSpec, base string) {
 	slot := Slot{Kind: ParentSlot, Issue: doc.ID}
 	merged, ok := m.slot(slot, ParentsValue(parentSet(base)).digest(), ParentsValue(parentSet(*doc.Parent)))
@@ -155,7 +164,7 @@ func (m *documentMerge) parent(doc *BulkIssueSpec, base string) {
 	switch parents := merged.parents(); {
 	case len(parents) == 1:
 		doc.Parent = &parents[0]
-	case len(m.now.value(slot).parents()) > 0:
+	case len(parents) == 0 && len(m.now.value(slot).parents()) > 0:
 		clear := ""
 		doc.Parent = &clear
 	default:
@@ -184,9 +193,8 @@ func (m *documentMerge) blockedBy(doc *BulkIssueSpec, base []string) {
 // false when it conflicts.
 func (m *documentMerge) slot(slot Slot, base string, file SlotValue) (SlotValue, bool) {
 	now := m.now.value(slot)
-	statable := !now.removed && (slot.Kind != ParentSlot || len(now.parents()) <= 1)
 	switch {
-	case !statable:
+	case now.removed:
 	case file.digest() == base:
 		if now.digest() != base {
 			m.kept = append(m.kept, slot)

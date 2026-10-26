@@ -298,10 +298,10 @@ func (c Conflict) String() string {
 // ConflictSince is what a refused change was planned against, a closed set:
 // the value a write being undone left a slot at, or the read a read-out file
 // was made from. Each says what it expected of the slot and how to get past
-// the refusal. [LAW:types-are-the-program]
+// the refusal, given the issues the refusal names. [LAW:types-are-the-program]
 type ConflictSince interface {
 	expected(Slot) string
-	wayOn() string
+	wayOn(issues []string) string
 }
 
 // LeftByWrite is an undo's expectation: Write left the slot at Left.
@@ -314,7 +314,7 @@ func (l LeftByWrite) expected(slot Slot) string {
 	return fmt.Sprintf("%s left it %s", l.Write, l.Left.Display(slot))
 }
 
-func (LeftByWrite) wayOn() string {
+func (LeftByWrite) wayOn([]string) string {
 	return "Run `lit undo list` to find the later write that moved it again; revert that write as well by naming it in --writes, or leave the undo."
 }
 
@@ -324,8 +324,8 @@ type ReadOut struct{}
 
 func (ReadOut) expected(Slot) string { return "it moved since the file was read" }
 
-func (ReadOut) wayOn() string {
-	return "Read these issues out again with `lit ls --ids <ids> --format yaml`, make the edits on that file, and import it."
+func (ReadOut) wayOn(issues []string) string {
+	return fmt.Sprintf("Read these issues out again with `lit ls --ids %s --format yaml`, make the edits on that file, and import it.", strings.Join(issues, ","))
 }
 
 // Reverted is what reverting writes onto the store as it stands comes to: the
@@ -517,11 +517,17 @@ type ConflictError struct {
 }
 
 func (e ConflictError) Error() string {
+	issues := make([]string, len(e.Conflicts))
+	for i, c := range e.Conflicts {
+		issues[i] = c.Slot.Issue
+	}
+	slices.Sort(issues)
+	issues = slices.Compact(issues)
 	lines := make([]string, 0, len(e.Conflicts)+1)
 	var ways []string
 	for _, c := range e.Conflicts {
 		lines = append(lines, "  "+c.String())
-		if way := c.Since.wayOn(); !slices.Contains(ways, way) {
+		if way := c.Since.wayOn(issues); !slices.Contains(ways, way) {
 			ways = append(ways, way)
 		}
 	}

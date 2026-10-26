@@ -112,7 +112,7 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 	// The gate's own refusal of a document stating nothing, so that verdict is
 	// recognised by what the gate says rather than by its wording.
 	empty := storage.BulkIssueSpec{ID: "links-x-1"}
-	_, emptyRefusal := storage.ParseBulkFile(handWritten(t, empty), nil)
+	_, emptyRefusal := gated(nil, empty)
 	if emptyRefusal == nil {
 		t.Fatal("the gate admitted an update document stating nothing")
 	}
@@ -133,7 +133,7 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 		value := reflect.New(field.Type.Elem())
 		value.Elem().Set(reflect.ValueOf(sample))
 		reflect.ValueOf(&doc).Elem().Field(i).Set(value)
-		file, err := storage.ParseBulkFile(handWritten(t, doc), nil)
+		file, err := gated(nil, doc)
 		switch {
 		case err == nil:
 			admitted++
@@ -328,9 +328,9 @@ func TestEveryFieldRestoresTheValueHistoryRecorded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseBulkSpecs = %v; the document:\n%s", err, text)
 			}
-			file, err := storage.ParseBulkFile(handWritten(t, specs...), map[string]model.IssueType{recorded.ID: base.IssueType})
+			file, err := gated(map[string]model.IssueType{recorded.ID: base.IssueType}, specs...)
 			if err != nil {
-				t.Fatalf("ParseBulkFile = %v; the document:\n%s", err, text)
+				t.Fatalf("the engine's verdict = %v; the document:\n%s", err, text)
 			}
 			after, changes, err := storage.ApplyIssueFields(base, file.Updates[0].Patch)
 			if err != nil {
@@ -373,14 +373,12 @@ func TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse(t *testing.T) {
 	}
 }
 
-// handWritten is a file of documents that carry no basis, gated as an engine
-// gates every file: merged first, which for these reads nothing and moves
-// nothing.
-func handWritten(t *testing.T, specs ...storage.BulkIssueSpec) storage.MergedFile {
-	t.Helper()
+// gated is an engine's verdict on a file of documents that carry no basis:
+// merged first, which for these reads nothing and moves nothing, then gated.
+func gated(existingTypes map[string]model.IssueType, specs ...storage.BulkIssueSpec) (storage.BulkFile, error) {
 	merged, err := storage.MergeReadOut(specs, storage.CurrentState{})
 	if err != nil {
-		t.Fatalf("MergeReadOut(a hand-written file) = %v", err)
+		return storage.BulkFile{}, err
 	}
-	return merged
+	return storage.ParseBulkFile(merged, existingTypes)
 }

@@ -2,7 +2,6 @@ package storage
 
 import (
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -365,13 +364,9 @@ func TestBulkExistingRefsNamesEveryIssueTheFilePlaces(t *testing.T) {
 	}
 }
 
-// handWritten is a file of documents that carry no basis, gated as an engine
-// gates every file: merged first, which for these reads nothing and moves
-// nothing.
+// handWritten is a file of documents that carry no basis, which the merge
+// passes through as stated, so the gate is judged here on what it alone
+// refuses.
 func handWritten(specs []BulkIssueSpec) MergedFile {
-	merged, err := MergeReadOut(specs, CurrentState{})
-	if err != nil {
-		panic(fmt.Sprintf("merge a hand-written file: %v", err))
-	}
-	return merged
+	return MergedFile{specs: specs}
 }
