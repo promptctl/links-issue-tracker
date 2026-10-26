@@ -26,6 +26,7 @@ var backupFamily = commandFamily[appSubcommand]{
 	subcommands: []subcommandRow[appSubcommand]{
 		// create only reads the store: it exports issue data and writes the
 		// snapshot file outside the database, so a write lock is unnecessary.
+		// The backups set itself is serialized by takeBackup.
 		{name: "create", payload: appSubcommand{access: app.AccessRead, declare: backupCreateLeaf}},
 		{name: "list", payload: appSubcommand{access: app.AccessRead, declare: backupListLeaf}},
 		{name: "restore", payload: appSubcommand{access: app.AccessWrite, declare: backupRestoreLeaf}},
@@ -53,15 +54,28 @@ func backupCreateLeaf() appLeaf {
 // keep. The snapshot it took and whether the set already held that content go
 // on the invocation's event, for `backup create` and a restore's pre-restore
 // backup alike. The snapshot comes back even when the prune fails, since it
-// was written. [LAW:nothing-unseen]
-func takeBackup(ctx context.Context, ws workspace.Info, export model.Export, keep int) (backup.Snapshot, error) {
-	taken, err := backup.Create(ws.StorageDir, export)
-	if err != nil {
-		return backup.Snapshot{}, err
-	}
-	telemetry.Set(ctx, "backup.snapshot", taken.Name)
-	telemetry.Set(ctx, "backup.refreshed", taken.Refreshed)
-	return taken.Snapshot, backup.Prune(ws.StorageDir, keep)
+// was written, and the prune's error names it. [LAW:nothing-unseen]
+//
+// [LAW:no-shared-mutable-globals] The backups set is written by every
+// `backup create` and every restore, and a take of content the set holds
+// rewrites a name a concurrent prune may already have listed as past keep. The
+// commit lock is the set's one owner, as it is for `lit snapshots`: the write
+// and the prune run under it, so no prune removes a take it did not see.
+func takeBackup(ctx context.Context, ws workspace.Info, export model.Export, keep int) (snapshot backup.Snapshot, err error) {
+	err = withCommitLock(ctx, ws, func() error {
+		taken, err := backup.Create(ws.StorageDir, export)
+		if err != nil {
+			return err
+		}
+		snapshot = taken.Snapshot
+		telemetry.Set(ctx, "backup.snapshot", taken.Name)
+		telemetry.Set(ctx, "backup.refreshed", taken.Refreshed)
+		if err := backup.Prune(ws.StorageDir, keep); err != nil {
+			return fmt.Errorf("prune backups after writing %s: %w", taken.Path, err)
+		}
+		return nil
+	})
+	return snapshot, err
 }
 
 func backupListLeaf() appLeaf {

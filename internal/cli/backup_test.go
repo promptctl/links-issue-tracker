@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -266,5 +269,37 @@ func TestBackupEventNamesTheSnapshotItTook(t *testing.T) {
 	facts := writtenFacts(t, lastEvent(t))
 	if facts["backup.snapshot"] == name || facts["backup.refreshed"] != false {
 		t.Errorf("restore over a moved workspace event facts = %v, want a new snapshot, not refreshed", facts)
+	}
+}
+
+// A take and its prune are serialized against every other writer of the
+// backups set through the commit lock, so `backup create` waits out a holder
+// rather than pruning beside it.
+func TestBackupCreateWaitsForTheCommitLock(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	release, err := store.LockCommitPath(context.Background(), ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("acquire commit lock: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(200 * time.Millisecond)
+		if err := release(); err != nil {
+			t.Errorf("release commit lock: %v", err)
+		}
+	}()
+
+	start := time.Now()
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"backup", "create"})); err != nil {
+		t.Fatalf("backup create: %v\nstderr=%s", err, stderr.String())
+	}
+	elapsed := time.Since(start)
+	<-done
+	if elapsed < 200*time.Millisecond {
+		t.Fatalf("backup create completed in %v; expected to wait for the commit lock's release at 200ms", elapsed)
 	}
 }
