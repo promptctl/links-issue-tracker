@@ -210,28 +210,31 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	}
 }
 
-// fileStamp is one file's bytes and modification time: two equal stamps mean
-// nothing wrote the file in between, including a write of the bytes it held.
+// fileStamp is one entry's bytes and modification time (a directory's bytes
+// are empty): two equal stamps mean nothing wrote the entry in between,
+// including a write of the bytes it held.
 type fileStamp struct {
 	data  []byte
 	mtime time.Time
 }
 
-// stampTree records every regular file under root.
+// stampTree records every regular file and directory under root.
 func stampTree(t *testing.T, root string) map[string]fileStamp {
 	t.Helper()
 	stamps := map[string]fileStamp{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || !d.Type().IsRegular() {
+		if err != nil || !(d.Type().IsRegular() || d.IsDir()) {
 			return err
 		}
 		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
+		var data []byte
+		if !d.IsDir() {
+			if data, err = os.ReadFile(path); err != nil {
+				return err
+			}
 		}
 		stamps[path] = fileStamp{data: data, mtime: info.ModTime()}
 		return nil
@@ -243,7 +246,8 @@ func stampTree(t *testing.T, root string) map[string]fileStamp {
 }
 
 // TestAReadOpenWritesNothing pins links-scale-dy46.boy: a read open, a read
-// and a close leave every file under the Dolt root as they found it — the
+// and a close leave every file and directory under the Dolt root as they
+// found it — the
 // store's manifest, its journal and the journal's index included, by mtime as
 // well as by bytes. A read engine opens Dolt read-only without trying the
 // journal lock, so it neither repairs the journal at open nor flushes at
@@ -268,10 +272,18 @@ func TestAReadOpenWritesNothing(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
+	// Every entry is dated an hour back, so a write of unchanged bytes moves
+	// its mtime off that date on any filesystem, whatever its granularity.
+	past := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := filepath.WalkDir(doltRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		return os.Chtimes(path, past, past)
+	}); err != nil {
+		t.Fatalf("backdate %s: %v", doltRoot, err)
+	}
 	before := stampTree(t, doltRoot)
-	// Past the filesystem's mtime granularity, so a write of unchanged bytes
-	// cannot leave an equal mtime behind.
-	time.Sleep(20 * time.Millisecond)
 	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
@@ -432,5 +444,58 @@ func TestStoreOutlivesTheContextItWasOpenedUnder(t *testing.T) {
 	}
 	if _, err := st.GetIssue(ctx, created.ID); err != nil {
 		t.Fatalf("GetIssue(%s) error = %v; the committed issue is not readable", created.ID, err)
+	}
+}
+
+// TestAReaderOutlivesAFullCompactionBesideIt pins what a read engine that
+// keeps no writer out has to survive: a full DOLT_GC from a write engine while
+// the reader is open, which drops the journal the reader bootstrapped from
+// and the table files its root was read from. The reader keeps answering from
+// the root it opened on, through the files it already holds open.
+func TestAReaderOutlivesAFullCompactionBesideIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc epic", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	for i := 0; i < 20; i++ {
+		if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc payload " + strconv.Itoa(i), Topic: "sync", ParentID: epic.ID}); err != nil {
+			t.Fatalf("CreateIssue() error = %v", err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() error = %v", err)
+	}
+	defer reader.Close()
+
+	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() beside the reader error = %v", err)
+	}
+	if _, err := writer.SyncCompact(ctx, GCFull); err != nil {
+		_ = writer.Close()
+		t.Fatalf("SyncCompact(full) beside an open reader error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer Close() error = %v", err)
+	}
+
+	issues, err := reader.ListIssues(ctx, storage.ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("reader ListIssues() after a full compaction beside it error = %v", err)
+	}
+	if len(issues) != 21 {
+		t.Fatalf("reader ListIssues() after a full compaction = %d issues, want 21", len(issues))
 	}
 }

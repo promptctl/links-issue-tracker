@@ -5438,9 +5438,9 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 
 #### 8.3 `Config`
 
-`config.go`. Fields: `DSN`, `Directory` (required), `CommitName`/`CommitEmail` (required — used as Dolt commit metadata), `Database`, `MultiStatements`, `ClientFoundRows`, `Params`, `BackOff backoff.BackOff`, `DisableSingletonCache`, `FailOnJournalLockTimeout`, `Version`.
+`config.go`. Fields: `DSN`, `Directory` (required), `CommitName`/`CommitEmail` (required — used as Dolt commit metadata), `Database`, `MultiStatements`, `ClientFoundRows`, `Params`, `BackOff backoff.BackOff`, `DisableSingletonCache`, `JournalReadOnly`, `Version`.
 
-`BackOff` semantics (`config.go`): nil → engine open attempted **once**; non-nil → retries on retryable errors, and **implies both** `DisableSingletonCache` and `FailOnJournalLockTimeout`. Implementations are stateful; the connector calls `Reset()` before use.
+`BackOff` semantics (`config.go`): nil → engine open attempted **once**; non-nil → retries on retryable errors, and **implies both** `DisableSingletonCache` and failing fast on a held journal lock (unless `JournalReadOnly`, whose open never contends for the lock). Implementations are stateful; the connector calls `Reset()` before use.
 
 #### 8.4 Connector
 
@@ -5455,7 +5455,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 `openEngineWithRetry` (`connector.go`):
 - Dolt user config is a map with `config.UserNameKey → cfg.CommitName` and `config.UserEmailKey → cfg.CommitEmail` (`connector.go`) — **this is the commit author identity the embedded engine stamps**.
 - `engine.SqlEngineConfig{IsReadOnly: false, ServerUser: "root", Autocommit: true}` (`connector.go`).
-- `disableCache := cfg.BackOff != nil || cfg.DisableSingletonCache`; `failOnLockTimeout := cfg.BackOff != nil || cfg.FailOnJournalLockTimeout` (`connector.go`); each sets the corresponding `dbfactory` key in `seCfg.DBLoadParams` as a presence flag `struct{}{}` (`connector.go`).
+- `disableCache := cfg.BackOff != nil || cfg.DisableSingletonCache`, and exactly one journal-lock key: `dbfactory.JournalReadOnlyParam` when `cfg.JournalReadOnly`, else `dbfactory.FailOnJournalLockTimeoutParam` when `cfg.BackOff != nil`, else none (`connector.go`); each sets its `dbfactory` key in `seCfg.DBLoadParams` as a presence flag `struct{}{}` (`connector.go`).
 - `fs.WithWorkingDir(cfg.Directory)` (`connector.go`).
 - If `BackOff == nil`, one call to `open(ctx)` (`connector.go`).
 - Else `BackOff.Reset()`, wrap with `backoff.WithContext(bo, ctx)`, and `backoff.Retry`: a retryable error is returned for retry, anything else is wrapped `backoff.Permanent` (`connector.go`). On failure the **last underlying error** is returned in preference to backoff's own (`connector.go`).
@@ -5478,7 +5478,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 
 3. **`MySQLError` replaces `github.com/go-sql-driver/mysql`'s** ("Patch 4") — `mysql_error.go` is original promptctl work, MIT (`mysql_error.go`), removing an MPL-2.0 SBOM coordinate. Exported fields: `Number uint16` (the protocol's own width) and `Message string`; **no SQL state field**. The unexported `cause` holds the engine error it was translated from, and `Unwrap()` returns it, so `errors.Is` and `errors.As` reach Dolt's own sentinels (`mysql_error.go`). `Error()` renders `"Error " + strconv.FormatUint(uint64(Number),10) + ": " + Message` (`mysql_error.go`), MySQL's conventional form. `translateError` (`errors.go`) is its only producer: `sql.CastSQLError(err)` → `&MySQLError{Number: uint16(vitessErr.Num), Message: vitessErr.Message, cause: err}`; `nil` in, `nil` out. Tests: `errors_test.go`.
 
-4. **Retryable-open plumbing** — `retryable_open_err.go`, the `BackOff`/`DisableSingletonCache`/`FailOnJournalLockTimeout` `Config` knobs (`config.go`), and the `DBLoadParams` mapping (`connector.go`). Pinned by `config_load_params_test.go` (`TestConfigDBLoadParamMapping`), a table with exactly four cases: `{"neither by default", …, false, false}`, `{"backoff implies both", …, true, true}`, `{"cache disable alone", …, true, false}`, `{"fail-fast alone", …, false, true}` (`config_load_params_test.go`). `openconnector_retry_test.go` pins that with `backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 10)` an open failing 3× with `nbs.ErrDatabaseLocked` eventually succeeds and calls ≥ 4 pins that with no BackOff the open is attempted **exactly once** and the error satisfies `errors.Is(err, nbs.ErrDatabaseLocked)` pins that a 150ms `Connect` context bounds the retry (elapsed < 2s).
+4. **Retryable-open plumbing** — `retryable_open_err.go`, the `BackOff`/`DisableSingletonCache`/`JournalReadOnly` `Config` knobs (`config.go`), and the `DBLoadParams` mapping (`connector.go`). Pinned by `config_load_params_test.go` (`TestConfigDBLoadParamMapping`), a table of six cases over (cache disabled, fail-fast, read-only): `{"neither by default", …, false, false, false}`, `{"backoff implies both", …, true, true, false}`, `{"cache disable alone", …, true, false, false}`, `{"read-only alone", …, false, false, true}`, `{"read-only with the cache disabled", …, true, false, true}`, `{"read-only under a backoff", …, true, false, true}` (`config_load_params_test.go`). `openconnector_retry_test.go` pins that with `backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 10)` an open failing 3× with `nbs.ErrDatabaseLocked` eventually succeeds and calls ≥ 4 pins that with no BackOff the open is attempted **exactly once** and the error satisfies `errors.Is(err, nbs.ErrDatabaseLocked)` pins that a 150ms `Connect` context bounds the retry (elapsed < 2s).
 
 5. **Forced eager DB load in `openSqlEngine`** — `driver.go` (see §8.4); without it the retryable lock error would surface as a nil-pointer panic.
 

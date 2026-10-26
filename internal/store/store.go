@@ -3442,6 +3442,8 @@ func newDoltConnector(doltRootDir, workspaceID, database string, access engineAc
 		cfg.JournalReadOnly = true
 	case engineWrite:
 		cfg.BackOff = newEngineOpenBackOff(doltRootDir)
+	default:
+		return nil, fmt.Errorf("open dolt: unknown engine access %d", access)
 	}
 	connector, err := embedded.NewConnector(cfg)
 	if err != nil {
