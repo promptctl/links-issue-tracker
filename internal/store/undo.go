@@ -385,6 +385,7 @@ func (s *Store) readFieldMoves(ctx context.Context, before, after revision, ids 
 	if err != nil {
 		return err
 	}
+	var ranked int
 	for _, id := range ids {
 		from, to := storage.IssueFieldValues(was[id]), storage.IssueFieldValues(is[id])
 		for _, name := range storage.IssueFieldNames() {
@@ -406,10 +407,15 @@ func (s *Store) readFieldMoves(ctx context.Context, before, after revision, ids 
 		case !reflect.DeepEqual(wasStatus[id], isStatus[id]):
 			outside(fmt.Sprintf("%s: its lifecycle moved", id), "lifecycle moves only through its verbs")
 		case carried.Rank != is[id].Rank:
-			outside(fmt.Sprintf("%s: its rank moved", id), "`lit rank` places it")
+			ranked++
 		case !reflect.DeepEqual(carried, is[id]):
 			outside(fmt.Sprintf("%s: its row moved outside its editable fields", id), "")
 		}
+	}
+	// One rank write re-keys every ticket it spaces around the one it places,
+	// so its moves are one fact, counted, not a line per re-keyed ticket.
+	if ranked > 0 {
+		outside(fmt.Sprintf("ranks moved, tickets re-keyed: %d", ranked), "`lit rank` places a ticket")
 	}
 	return nil
 }

@@ -87,13 +87,14 @@ func (v SlotValue) parents() []string {
 	return strings.Split(v.text, ",")
 }
 
-// Display is the value as a reader sees it beside its slot.
-func (v SlotValue) Display(kind SlotKind) string {
-	if kind == ParentSlot && v.text == "" {
+// Display is the value as a reader sees it beside its slot: a field's value in
+// the shape its row declares, so a long text reads as its head, not whole.
+func (v SlotValue) Display(slot Slot) string {
+	switch {
+	case slot.Kind == FieldSlot:
+		return issueFieldText(slot.Name).Show(v.text)
+	case slot.Kind == ParentSlot && v.text == "":
 		return "none"
-	}
-	if kind == FieldSlot {
-		return fmt.Sprintf("%q", v.text)
 	}
 	return v.text
 }
@@ -105,7 +106,7 @@ type Move struct {
 }
 
 func (m Move) String() string {
-	return fmt.Sprintf("%s: %s → %s", m.Slot, m.From.Display(m.Slot.Kind), m.To.Display(m.Slot.Kind))
+	return fmt.Sprintf("%s: %s → %s", m.Slot, m.From.Display(m.Slot), m.To.Display(m.Slot))
 }
 
 // Unrevertable is something a write changed that no update document can put
@@ -174,7 +175,7 @@ func Classify(rows WriteRows) (WriteDelta, []Unrevertable) {
 			// Lifecycle and claims are their verbs', and claims are derived
 			// from these events, so a revert of the row alone would leave the
 			// lane held by an event it never undid.
-			refuse(fmt.Sprintf("%s: %s", event.IssueID, actionWrite(event.Action)), "lifecycle moves only through its verbs")
+			refuse(actionWrite(event), "lifecycle moves only through its verbs")
 			continue
 		}
 		for _, change := range event.Changes {
@@ -192,13 +193,13 @@ func Classify(rows WriteRows) (WriteDelta, []Unrevertable) {
 		case !ok:
 			refuse(fmt.Sprintf("%s moved with no field-change record of this write", slot), "")
 		case FieldValue(change.From) != move.From || FieldValue(change.To) != move.To:
-			refuse(fmt.Sprintf("%s: the write recorded %q → %q but the store moved %s → %s; a sync replay re-landed it over a merged value", slot, change.From, change.To, move.From.Display(FieldSlot), move.To.Display(FieldSlot)), "")
+			refuse(fmt.Sprintf("%s: the write recorded %s → %s but the store moved %s → %s; a sync replay re-landed it over a merged value", slot, FieldValue(change.From).Display(slot), FieldValue(change.To).Display(slot), move.From.Display(slot), move.To.Display(slot)), "")
 		}
 	}
 	for _, slot := range sortedSlots(slices.Collect(maps.Keys(recorded))) {
 		if _, ok := moved[slot]; !ok {
 			change := recorded[slot]
-			refuse(fmt.Sprintf("%s: the write recorded %q → %q but the store did not move it; a sync replay re-landed it over a merged value", slot, change.From, change.To), "")
+			refuse(fmt.Sprintf("%s: the write recorded %s → %s but the store did not move it; a sync replay re-landed it over a merged value", slot, FieldValue(change.From).Display(slot), FieldValue(change.To).Display(slot)), "")
 		}
 	}
 	for _, move := range rows.Parents {
@@ -217,11 +218,11 @@ func Classify(rows WriteRows) (WriteDelta, []Unrevertable) {
 // actionWrite names the write an event with an action records: a lifecycle
 // action by the verb a caller types (lifecycle.ParseAction is the one gate to
 // that set), and any other action, a creation among them, as recorded.
-func actionWrite(action string) string {
-	if parsed, err := lifecycle.ParseAction(action); err == nil {
-		return fmt.Sprintf("a `lit %s` write", parsed.Verb())
+func actionWrite(event model.IssueEvent) string {
+	if parsed, err := lifecycle.ParseAction(event.Action); err == nil {
+		return fmt.Sprintf("%s: a `lit %s` write", event.IssueID, parsed.Verb())
 	}
-	return fmt.Sprintf("a %q event", action)
+	return fmt.Sprintf("%s: a %q event", event.IssueID, string(event.Action))
 }
 
 // CurrentState is the store as it stands, for exactly the slots the writes
@@ -255,7 +256,7 @@ type Conflict struct {
 }
 
 func (c Conflict) String() string {
-	return fmt.Sprintf("%s: %s was left %s by this write and is %s now", c.Write, c.Slot, c.Left.Display(c.Slot.Kind), c.Now.Display(c.Slot.Kind))
+	return fmt.Sprintf("%s: %s was left %s by this write and is %s now", c.Write, c.Slot, c.Left.Display(c.Slot), c.Now.Display(c.Slot))
 }
 
 // Reverted is what reverting writes onto the store as it stands comes to: the

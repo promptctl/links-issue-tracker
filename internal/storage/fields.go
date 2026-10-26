@@ -59,6 +59,32 @@ const (
 	LongText
 )
 
+// longTextHead is how many characters of a long text Show quotes.
+const longTextHead = 40
+
+// Show is a field's recorded value as a reader sees it in this shape: a short
+// text quoted whole, a long text as its quoted head and its length, so a line
+// naming a change to a plan is not two plans long.
+func (t FieldText) Show(value string) string {
+	if t == ShortText {
+		return strconv.Quote(value)
+	}
+	runes := []rune(value)
+	return fmt.Sprintf("%q (%d characters)", string(runes[:min(len(runes), longTextHead)]), len(runes))
+}
+
+// issueFieldText is the shape the row named name declares. A name no row
+// carries is one history recorded for a field the table no longer has; its
+// shape was never declared, so it shows whole, as ShortText, the zero shape.
+func issueFieldText(name string) FieldText {
+	for _, row := range issueFields {
+		if row.name == name {
+			return row.text
+		}
+	}
+	return ShortText
+}
+
 // LongTextField is one editable field whose value is long text: its name in
 // history's vocabulary, and how to read its current text off an issue.
 type LongTextField struct {

@@ -198,6 +198,29 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 	}
 }
 
+// One rank write that re-keys several tickets is one thing no document can put
+// back, counted, not a line per re-keyed ticket.
+func TestListWritesNamesARankWriteOnce(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newUndoStore(t)
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	var tasks []string
+	for _, title := range []string{"one", "two", "three"} {
+		tasks = append(tasks, mustCreate(t, st, storage.CreateIssueInput{Title: title, ParentID: epic.ID}).ID)
+	}
+	// Reversed, the first and last swap keys and the middle keeps its own.
+	if _, err := st.RankSet(ctx, []string{tasks[2], tasks[1], tasks[0]}); err != nil {
+		t.Fatalf("RankSet() error = %v", err)
+	}
+	listed, err := st.ListWrites(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListWrites() error = %v", err)
+	}
+	if len(listed) != 1 || len(listed[0].Unrevertable) != 1 || listed[0].Unrevertable[0].What != "ranks moved, tickets re-keyed: 2" {
+		t.Fatalf("listed = %+v, want one write naming its two re-keyed ranks once", listed)
+	}
+}
+
 // A slot a later write moved again is a conflict: reverting the first reparent
 // alone would erase the second. Nothing is written.
 func TestRevertWritesRefusesWhatALaterWriteMovedAgain(t *testing.T) {

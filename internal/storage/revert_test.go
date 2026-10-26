@@ -49,6 +49,33 @@ func TestRevertPutsAFieldBack(t *testing.T) {
 	}
 }
 
+// A long text field reads as its head and length wherever a move, a conflict,
+// or a refusal names it, so a line about a plan is not two plans long; a short
+// one reads whole.
+func TestALongTextReadsAsItsHead(t *testing.T) {
+	plan := storage.Slot{Kind: storage.FieldSlot, Issue: "a", Name: "plan"}
+	was, is := strings.Repeat("old plan ", 50), strings.Repeat("new plan ", 60)
+	move := storage.Move{Slot: plan, From: storage.FieldValue(was), To: storage.FieldValue(is)}
+	if got, want := move.String(), `a plan: "old plan old plan old plan old plan old " (450 characters) → "new plan new plan new plan new plan new " (540 characters)`; got != want {
+		t.Errorf("move = %s, want %s", got, want)
+	}
+	conflict := storage.Conflict{Write: "w1", Slot: plan, Left: storage.FieldValue(is), Now: storage.FieldValue("later")}
+	if got := conflict.String(); strings.Contains(got, is) || !strings.Contains(got, `"later" (5 characters)`) {
+		t.Errorf("conflict = %s, want each plan as its head and length", got)
+	}
+	_, refused := storage.Classify(storage.WriteRows{
+		Write:   "w1",
+		Fields:  []storage.Move{move},
+		Records: []model.IssueEvent{{IssueID: "a", Changes: []model.FieldChange{{Field: "plan", From: was, To: "merged"}}}},
+	})
+	if len(refused) != 1 || strings.Contains(refused[0].String(), was) || !strings.Contains(refused[0].String(), "(450 characters)") {
+		t.Errorf("refused = %v, want the replay named with each plan as its head and length", refused)
+	}
+	if got := (storage.Move{Slot: titleSlot("a"), From: storage.FieldValue("old"), To: storage.FieldValue("new")}).String(); got != `a title: "old" → "new"` {
+		t.Errorf("title move = %s, want it whole", got)
+	}
+}
+
 // A slot a later write moved again is a conflict: putting the old value back
 // would erase that write. Nothing is stated.
 func TestRevertRefusesASlotALaterWriteMoved(t *testing.T) {
