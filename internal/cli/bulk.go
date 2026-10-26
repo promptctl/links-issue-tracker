@@ -67,18 +67,22 @@ type BulkError struct {
 	Stopped  *bulkStop
 }
 
-// bulkStop is a run that stopped short of its last id: stdout refused the
-// report of IssueID, an item whose change landed, and the run stopped there,
-// as a writer stops at a closed pipe, without reaching NotRun. Nil on a run
-// that reached its last id. [LAW:types-are-the-program]
+// bulkStop is a run that stopped short of its last id: stdout refused Report,
+// the report of IssueID, an item whose change landed, and the run stopped
+// there without reaching NotRun. Report is carried whole, so what stdout
+// never printed, such as the id of the comment `bulk comment` added, still
+// reaches stderr. Nil on a run that reached its last id. A closed pipe does
+// not reach here: lit dies of SIGPIPE at the write (links-observability-gvpn.4j3).
+// [LAW:types-are-the-program] [LAW:no-silent-failure]
 type bulkStop struct {
 	IssueID string
+	Report  string
 	Err     error
 	NotRun  []string
 }
 
 func (s bulkStop) String() string {
-	stop := fmt.Sprintf("%s landed and stdout refused its report, which stopped the run", s.IssueID)
+	stop := fmt.Sprintf("%s landed and stdout refused its report %q, which stopped the run", s.IssueID, s.Report)
 	if len(s.NotRun) > 0 {
 		stop += " before " + strings.Join(s.NotRun, ", ")
 	}
@@ -131,9 +135,10 @@ func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op fu
 		errFacts, errCounts := model.ErrorRecord(err)
 		telemetry.Record(itemCtx, errFacts, errCounts)
 		facts, counts := closeScope()
+		report := notice + issueID + " ok\n"
 		var reportErr error
 		if err == nil {
-			_, reportErr = io.WriteString(stdout, notice+issueID+" ok\n")
+			_, reportErr = io.WriteString(stdout, report)
 		}
 		telemetry.Append(ctx, "bulk.items", map[string]any{
 			"bulk.item.id":           issueID,
@@ -147,10 +152,10 @@ func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op fu
 		case err != nil:
 			unlanded = append(unlanded, unlandedItem{IssueID: issueID, Err: err})
 		case reportErr != nil:
-			stopped = &bulkStop{IssueID: issueID, Err: reportErr, NotRun: issueIDs[reached+1:]}
+			stopped = &bulkStop{IssueID: issueID, Report: report, Err: reportErr, NotRun: issueIDs[reached+1:]}
 		}
 	}
-	telemetry.Record(ctx, nil, map[string]int{"bulk.not_run": len(issueIDs) - reached})
+	telemetry.Count(ctx, "bulk.not_run", len(issueIDs)-reached)
 	if len(unlanded) > 0 || stopped != nil {
 		return BulkError{Ran: len(issueIDs), Unlanded: unlanded, Stopped: stopped}
 	}

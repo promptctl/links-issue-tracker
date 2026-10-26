@@ -310,7 +310,7 @@ func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
 	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
 		t.Errorf("reason = %s, want %s", reason, reasonBulkPartialFailure)
 	}
-	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused", "b landed and stdout refused its report, which stopped the run before c: stdout closed"} {
+	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused", `b landed and stdout refused its report "claim transferred: x -> y\nb ok\n", which stopped the run before c: stdout closed`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message = %q, want it to contain %q", err.Error(), want)
 		}
@@ -340,8 +340,8 @@ func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
 	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
 		t.Errorf("runBulkOver error = %v, reason %s, want %s", err, reason, reasonBulkPartialFailure)
 	}
-	if got := recorder.Finish(telemetry.End{}).Counts["bulk.not_run"]; got != 0 {
-		t.Errorf("bulk.not_run = %d, want 0", got)
+	if got, ok := recorder.Finish(telemetry.End{}).Counts["bulk.not_run"]; !ok || got != 0 {
+		t.Errorf("bulk.not_run = %d (recorded %t), want a recorded 0", got, ok)
 	}
 }
 

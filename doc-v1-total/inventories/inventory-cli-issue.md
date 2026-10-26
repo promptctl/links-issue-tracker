@@ -1998,7 +1998,7 @@ before any id is acted on.
   ids the run never reached, 0 when it reached them all.
 - `op` returns the item's notice and error. Each success writes the notice and
   then `"<id> ok\n"` to stdout; a write error stops the run at that item, as
-  `bulkStop{IssueID, Err, NotRun}` (`bulk.go`).
+  `bulkStop{IssueID, Report, Err, NotRun}` (`bulk.go`).
 - Each item that did not land is collected; **unlanded items never reach
   stdout** (`bulk.go`).
 - If any did not land, or the run stopped, returns
@@ -2008,7 +2008,7 @@ before any id is acted on.
   stopping item landed — and whose message is
   `"bulk operation: <n> of <ran> item(s) did not land: <id> (<reason>): <err>; …"`,
   `<n>` counting the ids not reached, ending with
-  `"<id> landed and stdout refused its report, which stopped the run before <ids>: <err>"`
+  `"<id> landed and stdout refused its report <quoted report>, which stopped the run before <ids>: <err>"`
   for a stopped run (`bulk.go`), printed by `WriteCommandError` to stderr with
   that reason's remediation (§1.9).
 
