@@ -13,7 +13,8 @@ import (
 )
 
 // A genuine RowsAffected() error must surface to the caller as the failure it
-// is, not be swallowed and misread as a real zero-rows "not found" result.
+// is, not be swallowed and misread as a real zero-rows result, which ClearParent
+// answers with storage.RelationAbsentError.
 // This drives ClearParent's DELETE through a driver that executes the
 // statement for real but forces the result's RowsAffected() to fail,
 // proving the two outcomes are distinguishable. The child is a nested epic:
@@ -36,16 +37,8 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	causeErr := errors.New("synthetic driver failure reading affected rows")
 	swapInExecErrDB(t, st, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, causeErr)
 
-	err = st.ClearParent(ctx, child.ID)
-	if err == nil {
-		t.Fatalf("ClearParent() error = nil, want the injected RowsAffected failure")
-	}
-	var notFound storage.NotFoundError
-	if errors.As(err, &notFound) {
-		t.Fatalf("ClearParent() masked a genuine RowsAffected error as NotFoundError: %v", err)
-	}
-	if !strings.Contains(err.Error(), causeErr.Error()) {
-		t.Fatalf("ClearParent() error = %v, want it to wrap %q", err, causeErr)
+	if err := st.ClearParent(ctx, child.ID); !errors.Is(err, causeErr) {
+		t.Fatalf("ClearParent() error = %v, want it to wrap the injected RowsAffected failure %q", err, causeErr)
 	}
 }
 
@@ -183,7 +176,7 @@ func namedValuesToValues(named []driver.NamedValue) []driver.Value {
 // execErrResult reports the query as having genuinely executed — the DELETE
 // really ran, and a real zero-rows case still returns 0 with no error from
 // the inner result — while RowsAffected() unconditionally fails. That is the
-// exact fault ClearParent surfaces instead of masking as NotFound.
+// exact fault ClearParent surfaces instead of masking as RelationAbsentError.
 type execErrResult struct {
 	inner    driver.Result
 	causeErr error

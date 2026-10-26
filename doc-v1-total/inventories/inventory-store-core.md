@@ -2763,7 +2763,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
   (type literal inlined, not a placeholder) —. Error → `fmt.Errorf("delete parent relation: %w", err)`.
 - `res.RowsAffected()` error → `fmt.Errorf("rows affected: %w", err)`.
 - `affected == 0` → `storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}` (`Satisfied()` true). The body is `clearParentTx` — the type read, `storage.RejectDetachingALeaf`, then `detachParentsTx`, the DELETE and its rows-affected — which the bulk reparent step runs too.
-- `TestClearParentSurfacesGenuineRowsAffectedError` proves a failing `RowsAffected()` is not masked as NotFound and wraps the cause — `internal/store/relations_rows_affected_test.go`.
+- `TestClearParentSurfacesGenuineRowsAffectedError` proves a failing `RowsAffected()` is not masked as `RelationAbsentError` and wraps the cause — `internal/store/relations_rows_affected_test.go`.
 
 ### 4.8 SetParent
 

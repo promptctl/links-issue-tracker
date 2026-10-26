@@ -176,7 +176,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 - Wires a child under a parent, replacing any existing parent in one act, returning the edge written. Both endpoints must exist and an issue may not be its own parent (`internal/storage/contract.go`).
 
 **`ClearParent(ctx, childID string) error`** — `internal/storage/contract.go`
-- Clearing a child that has no parent is `RelationAbsentError`, a `model.StateRequestError` whose `Satisfied()` is true, so the CLI answers it with exit 6, not a silent success (`internal/storage/errors.go`).
+- Clearing a container that has no parent is `RelationAbsentError`, a `model.StateRequestError` whose `Satisfied()` is true, not a silent success (`internal/storage/errors.go`).
 - Only a container can be detached: clearing a leaf is refused with `storage.RejectDetachingALeaf` (`internal/storage/containment.go`), the same rule `RemoveRelation` applies through `storage.RejectDetachingParentEdge` to a leaf's last parent-child edge; `AddRelation`/`SetParent` refuse a parent that is not a container with `storage.RejectParentThatIsNotAContainer`, and `CreateIssue` refuses a leaf with no parent with `storage.RejectLeafWithoutParent` (`internal/storage/containment.go`).
 
 ---
