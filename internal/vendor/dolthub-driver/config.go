@@ -56,9 +56,11 @@ type Config struct {
 	//
 	// If nil, engine open is attempted once.
 	// If non-nil, NewConnector will retry opens for retryable errors using this BackOff,
-	// and both DisableSingletonCache and FailOnJournalLockTimeout are implied (retrying
-	// an open is only meaningful when each attempt constructs a fresh store and lock
-	// contention surfaces as a retryable error instead of a silent read-only fallback).
+	// and both DisableSingletonCache and failing fast on a held journal lock are implied
+	// (retrying an open is only meaningful when each attempt constructs a fresh store and
+	// lock contention surfaces as a retryable error instead of a silent read-only
+	// fallback). A JournalReadOnly open never contends for the lock, so a BackOff has
+	// nothing to retry on it.
 	//
 	// Note: BackOff implementations are stateful; callers should generally provide a
 	// fresh instance per connector, and the connector will call Reset() before use.
@@ -72,12 +74,12 @@ type Config struct {
 	// want deterministic open/close lifecycles without open retries.
 	DisableSingletonCache bool
 
-	// FailOnJournalLockTimeout makes an engine open whose exclusive journal
-	// manifest lock is held elsewhere fail fast with nbs.ErrDatabaseLocked instead
-	// of silently opening the database in read-only mode. Implied by a non-nil
-	// BackOff; settable on its own for embedders that supply their own retry policy
-	// above the connector.
-	FailOnJournalLockTimeout bool
+	// JournalReadOnly opens the database read-only without trying its exclusive
+	// journal manifest lock: the open neither waits on a writer nor keeps one
+	// out, and writes nothing to the database's files. Without it, an open takes
+	// the lock when it is free — failing fast on a held lock under a BackOff,
+	// opening read-only past it otherwise.
+	JournalReadOnly bool
 
 	// Version is the Dolt environment version string used when loading repos (optional).
 	// If empty, the connector will use a reasonable default.

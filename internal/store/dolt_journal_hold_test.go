@@ -50,8 +50,8 @@ func chunkJournalPath(doltRoot string) string {
 // does when it must bring the schema forward while the copy's journal hold
 // is live: it hands off to the write open, whose engine refuses Dolt's
 // read-only fallback and waits out the holder for the bounded
-// coResidentHolderWait — never applying DDL through a read engine that
-// resolved read-only under the hold. A holder that outlasts the budget
+// coResidentHolderWait — never applying DDL through a read engine, which is
+// read-only. A holder that outlasts the budget
 // surfaces as the write open's contention refusal, and the same open
 // succeeds — applying the migration — once the holder releases. The budget
 // is shrunk because exhaustion is this premise's certain outcome; the
@@ -101,18 +101,17 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 
 // TestJournalLockHoldExcludesJournalRecovery pins the contract: while
 // LockDoltJournalExclusive is held (as the `lit snapshots new` copy holds it
-// for its whole walk), NO concurrent open runs journal crash-recovery I/O — not
-// even a "read" command, because lit never requests a read-only dolt open;
-// read-only is purely the journal lock's contention fallback, and a plain `lit
-// backlog` on an idle store otherwise opens write-capable and truncates a dirty
-// journal (measured 2026-08-20: 98473 -> 98457 bytes, rewritten by a read
-// command).
+// for its whole walk), NO concurrent open runs journal crash-recovery I/O. A
+// read open never does — it opens Dolt read-only without trying the lock, so
+// it reads a dirty journal and leaves it as it found it, held or not — and a
+// write open, the one open that recovers a journal, cannot get past the hold.
 //
-// Two arms, and the second is the first's detector: the same dirty journal
-// that stays byte-identical under the hold must actually be truncated by the
-// same open once the hold is released — otherwise the first arm passes
-// vacuously against a journal nothing would have recovered anyway.
-// [LAW:verifiable-goals]
+// Three arms. Under the hold, a read is served and the dirty journal is
+// byte-identical. With the lock free, a read still leaves it byte-identical:
+// recovery is a write open's job alone. The third arm is the first two's
+// detector: a write open with the lock free truncates the same dirty tail —
+// otherwise the read arms pass vacuously against a journal nothing would
+// have recovered anyway. [LAW:verifiable-goals]
 func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -160,7 +159,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		_ = release()
-		t.Fatalf("OpenForRead() under the journal hold error = %v; the read-only fallback must serve it", err)
+		t.Fatalf("OpenForRead() under the journal hold error = %v; the read-only engine must serve it", err)
 	}
 	if count, err := reader.LocalIssueCount(ctx); err != nil || count != 2 {
 		_ = reader.Close()
@@ -184,9 +183,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 		t.Fatalf("release journal lock: %v", err)
 	}
 
-	// Detector arm: lock free, the same open runs recovery and truncates the
-	// dirty tail — proving the first arm's byte-equality was exclusion, not a
-	// journal that needed no recovery.
+	// Lock free: a read still recovers nothing.
 	reader2, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() after release error = %v", err)
@@ -194,11 +191,29 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	if err := reader2.Close(); err != nil {
 		t.Fatalf("second reader Close() error = %v", err)
 	}
+	afterFreeRead, err := os.ReadFile(journal)
+	if err != nil {
+		t.Fatalf("read journal after free-lock read: %v", err)
+	}
+	if !bytes.Equal(dirty, afterFreeRead) {
+		t.Fatalf("journal changed under a read with the lock free (%d -> %d bytes): a read open must never recover the journal", len(dirty), len(afterFreeRead))
+	}
+
+	// Detector arm: lock free, a write open runs recovery and truncates the
+	// dirty tail — proving the read arms' byte-equality was a read that writes
+	// nothing, not a journal that needed no recovery.
+	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() after release error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("writer Close() error = %v", err)
+	}
 	recovered, err := os.ReadFile(journal)
 	if err != nil {
-		t.Fatalf("read journal after free-lock open: %v", err)
+		t.Fatalf("read journal after free-lock write open: %v", err)
 	}
 	if bytes.Equal(dirty, recovered) {
-		t.Fatalf("journal unchanged after an open with the lock free; recovery did not run, so this test lost its detector")
+		t.Fatalf("journal unchanged after a write open with the lock free; recovery did not run, so this test lost its detector")
 	}
 }

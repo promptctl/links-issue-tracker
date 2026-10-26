@@ -661,11 +661,12 @@ type omission []string
 
 // cloneOmits is what every copy of a Dolt storage directory leaves out:
 // Dolt's journal LOCK file. It is contentless (the lock lives on holders'
-// open file descriptions, never in bytes) and Dolt recreates it at every
-// engine open, so a copy neither needs nor misses it. On Windows the copier's
-// own journal hold is a MANDATORY LockFileEx, and reading the file through a
-// second handle would either fail the copy outright or release the hold
-// mid-walk, reopening the tear window the hold exists to close.
+// open file descriptions, never in bytes); a write engine recreates it at
+// open and a read engine never touches it, so a copy neither needs nor misses
+// it. On Windows the copier's own journal hold is a MANDATORY LockFileEx,
+// and reading the file through a second handle would either fail the copy
+// outright or release the hold mid-walk, reopening the tear window the hold
+// exists to close.
 var cloneOmits = omission{".dolt/noms/LOCK"}
 
 // snapshotOmits is what a recovery snapshot also leaves out: the bytes

@@ -43,8 +43,8 @@
 // holder takes. Two entries need spelling out, because no lit call site
 // shows them:
 //
-// Dolt's LOCK is ordinarily acquired by the embedded driver, not by lit: an
-// engine takes it when it opens and holds it until it closes. A write
+// Dolt's LOCK is ordinarily acquired by the embedded driver, not by lit: a
+// write engine takes it when it opens and holds it until it closes. A write
 // engine opens eagerly inside openStoreConnection — before any commit lock
 // — and refuses Dolt's read-only fallback, retrying its open boundedly, so
 // a live write Store stands at "holds LOCK, takes commit per mutation" for
@@ -56,13 +56,12 @@
 // can take LOCK inside that gap; the rewrite and the reopen then wait for it
 // exactly as any open does, and a reopen that cannot get LOCK fails loudly,
 // its closed engine failing every later query.
-// A read engine opens eagerly too and never waits on
-// LOCK (a 100ms attempt, then the read-only fallback), so it contributes no
-// wait edge anywhere — and a read Store takes no commit lock at all: its
-// schema check is answered with reads, and a workspace whose schema trails
-// the binary is handed to Open, so a reader never applies DDL and the
-// permanent read-only fallback costs it nothing. lit acquires it
-// without an engine in exactly two ways: LockDoltJournalExclusive, taken by
+// A read engine opens eagerly too, read-only, and never tries
+// LOCK, so it contributes no wait edge anywhere and keeps no writer out — and
+// a read Store takes no commit lock at all: its schema check is answered with
+// reads, and a workspace whose schema trails the binary is handed to Open, so
+// a reader never applies DDL and being read-only costs it nothing. lit
+// acquires it without an engine in exactly two ways: LockDoltJournalExclusive, taken by
 // a file-by-file copy of the Dolt directory (the snapshot copy and the
 // on-change mirror's clone) that must exclude engine-lifecycle I/O without
 // opening an engine; and RecordPushedHead's chunk-store open
@@ -91,9 +90,8 @@
 // never reloads it: Dolt rebases a session's root at transaction start only
 // for a read replica (dsess StartTransaction), which lit never configures. A
 // write engine holds LOCK, so no other writer moves the root under it; a read
-// engine beside a live writer is on the read-only fallback and never sees
-// that writer's commits. So an engine answers from the moment it opened plus
-// its Store's own writes. A Store changes engines at two places: at
+// engine is read-only and never sees the commits of a writer beside it. So
+// an engine answers from the moment it opened plus its Store's own writes. A Store changes engines at two places: at
 // Store.reconnect, inside a mutation under the commit lock, and at
 // withEngineClosed, between commit-lock holds, for a follow of a re-rooted
 // remote or the history bound's re-root — each must reopen, since its engine

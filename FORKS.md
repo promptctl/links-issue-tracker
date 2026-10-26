@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261020200859-593561a4c1e4` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026015638-e5cd59aa5690` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -475,6 +475,51 @@ the patch.
 causes wrapped, and the `require` line moves past that change. Dropping it
 without that turns every refused push into a plain failure that is never
 followed, and every stale lease into an unsettled one.
+
+#### Patch 15 — a read-only journaling store takes no lock and writes nothing
+
+`go/store/nbs/journal.go`, `go/store/nbs/journal_writer.go`,
+`go/store/nbs/store.go`, `go/libraries/doltcore/dbfactory/file.go`, plus
+`go/store/nbs/journal_read_only_test.go` and
+`go/libraries/doltcore/dbfactory/journal_lock_test.go` (new files, not
+upstream's).
+
+A journaling store took its directory's LOCK whenever it was free, and a store
+holding it repaired the journal at every open and flushed at every close, so a
+read open on an idle store wrote: it truncated and synced the journal, rewound
+`journal.idx` and rewrote its tail, and rewrote the manifest at open and again
+at close (`links-scale-dy46.boy`). It also kept every writer out for its
+lifetime. A store that fell back to read-only because another held LOCK still
+opened `journal.idx` read-write, creating it when missing, truncated it, and
+flushed lookups into it at close: a store without the lock writing a file the
+lock holder appends to.
+
+- `nbs.JournalLock` is how a store treats LOCK: `JournalLockOrReadOnly` (the
+  zero value, upstream's behavior), `JournalLockOrFail`, or `JournalReadOnly`,
+  which never tries it. It replaces upstream's
+  `JournalingStoreOptions.FailOnLockTimeout`. dbfactory reads it from the
+  params map once: upstream's `FailOnJournalLockTimeoutParam`, or the new
+  `JournalReadOnlyParam`. Both in one map is refused.
+- The journal's bootstrap is a read pass and a repair pass. `readJournal`
+  reads the index and the journal and returns what it found, writing nothing.
+  `repairJournal` makes the files match it, with the writes upstream's
+  bootstrap made, and only a store holding LOCK runs it. A read-only store
+  reads through `O_RDONLY` handles, never creates `journal.idx`, and keeps no
+  index handle once the read pass returns. If it cannot read the index, it
+  reports that through `warningsCb` and reads the whole journal. On a corrupt
+  index, a writable bootstrap still empties the index and fails the open, as
+  upstream did.
+- A journal syncs at close only when it holds unsynced chunk records
+  (`unsyncd > 0`), so a store that wrote nothing closes without an fsync.
+
+lit opens every read engine `JournalReadOnly` (driver `Config.JournalReadOnly`,
+`internal/vendor/dolthub-driver`). `TestAReadOpenWritesNothing` and
+`TestAWriteOpensBesideAnOpenReader` in `internal/store` fail without the patch.
+
+**Retire it when** upstream offers a journaling store that opens read-only
+without trying the lock and writes no file while read-only, and the `require`
+line moves past that change. Dropping it without that puts the writes back on
+every read command and lets a read command keep writers out.
 
 ### promptctl/go-mysql-server
 

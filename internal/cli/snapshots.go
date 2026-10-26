@@ -139,11 +139,10 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 // hold every Store open takes, then Dolt's own journal lock, then the commit
 // lock: the workspace→LOCK→commit order package store's doc declares. The
 // three holds own, in turn: rotator exclusion (an adopt/restore's exclusive
-// hold never meets the commit lock), engine-lifecycle exclusion (a concurrent
-// open's journal crash-recovery after an unclean kill runs truncate/fsync
-// under the walk — even `lit backlog` opens write-capable; under the hold a
-// concurrent read open demotes to Dolt's write-nothing read-only fallback
-// and a write open fails fast after its bounded retry), and writer
+// hold never meets the commit lock), engine-lifecycle exclusion (a write
+// open's journal crash-recovery after an unclean kill runs truncate/fsync;
+// under the hold a write open fails fast after its bounded retry, and a read
+// open, read-only by contract, writes nothing held or not), and writer
 // serialization. One home for that sequence, so the second copier cannot
 // take two of the three and call it held.
 func withDoltDirectoryHeld(ctx context.Context, ws workspace.Info, fn func() error) (err error) {

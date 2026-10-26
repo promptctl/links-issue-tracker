@@ -63,7 +63,7 @@ const (
 ```
 (`store.go`). Two values only. Semantics:
 - `engineWrite`: connector is given a `BackOff` (`store.go`), and `openStoreConnection` pings eagerly (`store.go`).
-- `engineRead`: no `BackOff`; `openStoreConnection` pings eagerly for both values (`store.go`), and a read engine's ping takes Dolt's read-only fallback past a held journal lock rather than waiting (doc at `store.go`).
+- `engineRead`: no `BackOff`, `JournalReadOnly` set; `openStoreConnection` pings eagerly for both values (`store.go`), and a read engine opens Dolt read-only without trying the journal lock (doc at `store.go`).
 
 #### 1.3 `Store` struct — every field
 
@@ -181,7 +181,8 @@ Behavioral evidence:
 
 Behavioral evidence:
 - On a missing directory, `OpenForRead` errors and creates nothing — `<doltRoot>/links` still does not exist (`store_test.go`).
-- A read open beside a foreign journal-lock holder succeeds and serves reads (count = 1) via Dolt's read-only fallback (`engine_open_contract_test.go`; `dolt_journal_hold_test.go`).
+- A read open beside a foreign journal-lock holder succeeds and serves reads (count = 1) (`engine_open_contract_test.go`; `dolt_journal_hold_test.go`).
+- A read open, a read and a close leave every file under the Dolt root unchanged, by bytes and mtime (`TestAReadOpenWritesNothing`), and a write open beside an open reader opens without waiting, while the reader keeps answering from its own root (`TestAWriteOpensBesideAnOpenReader`).
 - A read open does not wait on a live write engine — it completes inside a 1-second context (`engine_serialization_test.go`).
 - A read open under a held commit lock serves reads (count = 1) inside a 30-second context (`read_open_lock_free_test.go`).
 - A read open on a workspace one migration behind brings it to registry max through `Open` (`read_open_lock_free_test.go`); one whose applied-version content drifted (`lane`/`resolution` dropped) is repaired the same way (`read_open_lock_free_test.go`).
@@ -213,7 +214,7 @@ The two pools run strictly sequentially — the explicit close of the first is t
 - `wrapEngineOpenContention(db.PingContext(ctx), doltRootDir)` for both access values; on failure returns `errors.Join(err, db.Close())` (`store.go`); a write engine then publishes its LOCK holder record via `recordLockHolder` with a no-op release, returned as the holder release (`store.go`);
 - builds the `Store` with the field assignments listed in §1.3 (`store.go`). `doltRootDir` is stored **unmodified**; only `commitLockPath` and `telemetryDir` clean it.
 
-A read engine's ping falls back to Dolt's read-only mode past a held journal lock rather than waiting; the fallback being permanent costs a reader nothing because a read open never applies DDL (`store.go`).
+A read engine opens Dolt read-only without trying the journal lock, so its ping never waits; being read-only costs a reader nothing because a read open never applies DDL (`store.go`).
 
 #### 2.7 `newDoltConnector` / `openDoltPool`
 
@@ -5275,8 +5276,7 @@ Classification predicates:
   3. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   4. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open; retry after it completes: %w` (`workspace_lock.go`).
-- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`coResidentHolderWait`, 2.3s of unchanged holders). A live write Store holds the journal lock for its entire lifetime.
-- `workspace_lock.go` records the one lifecycle write this hold does not stop: `journal.idx` is opened `O_RDWR` and truncated on every engine bootstrap with no can-write gate, so a snapshot copy can capture a torn index; Dolt's `corruptIndexRecovery` truncates it to zero and rebuilds from the journal on next open.
+- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, read-only, without trying the journal lock; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`coResidentHolderWait`, 2.3s of unchanged holders). A live write Store holds the journal lock for its entire lifetime.
 
 ---
 
@@ -5440,9 +5440,9 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 
 #### 8.3 `Config`
 
-`config.go`. Fields: `DSN`, `Directory` (required), `CommitName`/`CommitEmail` (required — used as Dolt commit metadata), `Database`, `MultiStatements`, `ClientFoundRows`, `Params`, `BackOff backoff.BackOff`, `DisableSingletonCache`, `FailOnJournalLockTimeout`, `Version`.
+`config.go`. Fields: `DSN`, `Directory` (required), `CommitName`/`CommitEmail` (required — used as Dolt commit metadata), `Database`, `MultiStatements`, `ClientFoundRows`, `Params`, `BackOff backoff.BackOff`, `DisableSingletonCache`, `JournalReadOnly`, `Version`.
 
-`BackOff` semantics (`config.go`): nil → engine open attempted **once**; non-nil → retries on retryable errors, and **implies both** `DisableSingletonCache` and `FailOnJournalLockTimeout`. Implementations are stateful; the connector calls `Reset()` before use.
+`BackOff` semantics (`config.go`): nil → engine open attempted **once**; non-nil → retries on retryable errors, and **implies both** `DisableSingletonCache` and failing fast on a held journal lock (unless `JournalReadOnly`, whose open never contends for the lock). Implementations are stateful; the connector calls `Reset()` before use.
 
 #### 8.4 Connector
 
@@ -5457,7 +5457,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 `openEngineWithRetry` (`connector.go`):
 - Dolt user config is a map with `config.UserNameKey → cfg.CommitName` and `config.UserEmailKey → cfg.CommitEmail` (`connector.go`) — **this is the commit author identity the embedded engine stamps**.
 - `engine.SqlEngineConfig{IsReadOnly: false, ServerUser: "root", Autocommit: true}` (`connector.go`).
-- `disableCache := cfg.BackOff != nil || cfg.DisableSingletonCache`; `failOnLockTimeout := cfg.BackOff != nil || cfg.FailOnJournalLockTimeout` (`connector.go`); each sets the corresponding `dbfactory` key in `seCfg.DBLoadParams` as a presence flag `struct{}{}` (`connector.go`).
+- `disableCache := cfg.BackOff != nil || cfg.DisableSingletonCache`, and exactly one journal-lock key: `dbfactory.JournalReadOnlyParam` when `cfg.JournalReadOnly`, else `dbfactory.FailOnJournalLockTimeoutParam` when `cfg.BackOff != nil`, else none (`connector.go`); each sets its `dbfactory` key in `seCfg.DBLoadParams` as a presence flag `struct{}{}` (`connector.go`).
 - `fs.WithWorkingDir(cfg.Directory)` (`connector.go`).
 - If `BackOff == nil`, one call to `open(ctx)` (`connector.go`).
 - Else `BackOff.Reset()`, wrap with `backoff.WithContext(bo, ctx)`, and `backoff.Retry`: a retryable error is returned for retry, anything else is wrapped `backoff.Permanent` (`connector.go`). On failure the **last underlying error** is returned in preference to backoff's own (`connector.go`).
@@ -5480,7 +5480,7 @@ Tests: `parse_dsn_test.go` basics param names are case-insensitive requires comm
 
 3. **`MySQLError` replaces `github.com/go-sql-driver/mysql`'s** ("Patch 4") — `mysql_error.go` is original promptctl work, MIT (`mysql_error.go`), removing an MPL-2.0 SBOM coordinate. Exported fields: `Number uint16` (the protocol's own width) and `Message string`; **no SQL state field**. The unexported `cause` holds the engine error it was translated from, and `Unwrap()` returns it, so `errors.Is` and `errors.As` reach Dolt's own sentinels (`mysql_error.go`). `Error()` renders `"Error " + strconv.FormatUint(uint64(Number),10) + ": " + Message` (`mysql_error.go`), MySQL's conventional form. `translateError` (`errors.go`) is its only producer: `sql.CastSQLError(err)` → `&MySQLError{Number: uint16(vitessErr.Num), Message: vitessErr.Message, cause: err}`; `nil` in, `nil` out. Tests: `errors_test.go`.
 
-4. **Retryable-open plumbing** — `retryable_open_err.go`, the `BackOff`/`DisableSingletonCache`/`FailOnJournalLockTimeout` `Config` knobs (`config.go`), and the `DBLoadParams` mapping (`connector.go`). Pinned by `config_load_params_test.go` (`TestConfigDBLoadParamMapping`), a table with exactly four cases: `{"neither by default", …, false, false}`, `{"backoff implies both", …, true, true}`, `{"cache disable alone", …, true, false}`, `{"fail-fast alone", …, false, true}` (`config_load_params_test.go`). `openconnector_retry_test.go` pins that with `backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 10)` an open failing 3× with `nbs.ErrDatabaseLocked` eventually succeeds and calls ≥ 4 pins that with no BackOff the open is attempted **exactly once** and the error satisfies `errors.Is(err, nbs.ErrDatabaseLocked)` pins that a 150ms `Connect` context bounds the retry (elapsed < 2s).
+4. **Retryable-open plumbing** — `retryable_open_err.go`, the `BackOff`/`DisableSingletonCache`/`JournalReadOnly` `Config` knobs (`config.go`), and the `DBLoadParams` mapping (`connector.go`). Pinned by `config_load_params_test.go` (`TestConfigDBLoadParamMapping`), a table of six cases over (cache disabled, fail-fast, read-only): `{"neither by default", …, false, false, false}`, `{"backoff implies both", …, true, true, false}`, `{"cache disable alone", …, true, false, false}`, `{"read-only alone", …, false, false, true}`, `{"read-only with the cache disabled", …, true, false, true}`, `{"read-only under a backoff", …, true, false, true}` (`config_load_params_test.go`). `openconnector_retry_test.go` pins that with `backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 10)` an open failing 3× with `nbs.ErrDatabaseLocked` eventually succeeds and calls ≥ 4 pins that with no BackOff the open is attempted **exactly once** and the error satisfies `errors.Is(err, nbs.ErrDatabaseLocked)` pins that a 150ms `Connect` context bounds the retry (elapsed < 2s).
 
 5. **Forced eager DB load in `openSqlEngine`** — `driver.go` (see §8.4); without it the retryable lock error would surface as a nil-pointer panic.
 

@@ -63,12 +63,17 @@ close) and `FailOnJournalLockTimeoutParam` (fail fast with
 condition: `Config.BackOff != nil`. lit needs them decoupled: every lit open
 must bypass the singleton cache (so a Store's close actually releases the
 journal manifest lock instead of pinning it until process exit), but only
-*write-capable* opens want fail-fast + retry — read opens keep the read-only
-fallback, which is their contract. The patch adds two explicit `Config`
-fields, `DisableSingletonCache` and `FailOnJournalLockTimeout`, each mapped
-to its load param independently; a non-nil `BackOff` still implies both, so
-upstream behavior is unchanged. `config_load_params_test.go` pins the
-mapping.
+*write-capable* opens want fail-fast + retry — a read open must never take the
+lock at all, which is its contract. The patch adds two explicit `Config`
+fields: `DisableSingletonCache`, mapped to its load param on its own, and
+`JournalReadOnly`, mapped to the fork's `dbfactory.JournalReadOnlyParam`
+(promptctl/dolt FORKS.md Patch 15: open read-only without trying the lock,
+write nothing). The journal lock param is exactly one of dbfactory's:
+`JournalReadOnlyParam` when `JournalReadOnly` is set, otherwise
+`FailOnJournalLockTimeoutParam` under a `BackOff`, otherwise none. A non-nil
+`BackOff` still implies the cache bypass and fail-fast, so upstream behavior
+is unchanged; on a `JournalReadOnly` open it has no contention to retry.
+`config_load_params_test.go` pins the mapping (`links-scale-dy46.boy`).
 
 The patch also makes the params actually reach the databases (`driver.go`,
 `openSqlEngine`), which upstream's plumbing never did: the params were
@@ -212,9 +217,10 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      (capture `Peek()`'s error into `doltRows.err`, mapping `io.EOF` to nil)
      and the `rows.err` guard at the top of `doltRows.Next()` in `rows.go`.
      Run `peek_error_test.go` to confirm it holds.
-   - Patch 3: re-add the `DisableSingletonCache` / `FailOnJournalLockTimeout`
-     fields to `Config` and their independent mapping to `DBLoadParams` in
-     `connector.go` (`BackOff != nil` still implies both), and re-apply
+   - Patch 3: re-add the `DisableSingletonCache` / `JournalReadOnly`
+     fields to `Config` and their mapping to `DBLoadParams` in
+     `connector.go` (`BackOff != nil` still implies the cache bypass and,
+     unless `JournalReadOnly`, fail-fast), and re-apply
      `driver.go`'s `openSqlEngine` changes: the params-carrier `DoltEnv`
      passed into the env load, and the forced lazy-load check that surfaces
      `DBLoadError` instead of letting `CollectDBs` panic on a nil `DoltDB`.

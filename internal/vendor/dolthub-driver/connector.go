@@ -229,20 +229,28 @@ func (c *Connector) openEngineWithRetry(ctx context.Context) (*engine.SqlEngine,
 	}
 
 	// For deterministic retries on lock contention. A non-nil BackOff implies both
-	// underlying load params (upstream behavior); each is also independently
-	// addressable via Config so an embedder can choose deterministic open/close
-	// lifecycles without fail-fast, or fail-fast under its own retry policy.
+	// underlying load params (upstream behavior); the singleton cache is also
+	// independently addressable via Config, so an embedder can choose
+	// deterministic open/close lifecycles without fail-fast. The journal lock
+	// policy is exactly one of dbfactory's: read-only without trying the lock,
+	// fail-fast under a BackOff, or upstream's try-then-fall-back.
 	disableCache := c.cfg.BackOff != nil || c.cfg.DisableSingletonCache
-	failOnLockTimeout := c.cfg.BackOff != nil || c.cfg.FailOnJournalLockTimeout
-	if disableCache || failOnLockTimeout {
+	var lockParam string
+	switch {
+	case c.cfg.JournalReadOnly:
+		lockParam = dbfactory.JournalReadOnlyParam
+	case c.cfg.BackOff != nil:
+		lockParam = dbfactory.FailOnJournalLockTimeoutParam
+	}
+	if disableCache || lockParam != "" {
 		if seCfg.DBLoadParams == nil {
 			seCfg.DBLoadParams = make(map[string]interface{})
 		}
 		if disableCache {
 			seCfg.DBLoadParams[dbfactory.DisableSingletonCacheParam] = struct{}{}
 		}
-		if failOnLockTimeout {
-			seCfg.DBLoadParams[dbfactory.FailOnJournalLockTimeoutParam] = struct{}{}
+		if lockParam != "" {
+			seCfg.DBLoadParams[lockParam] = struct{}{}
 		}
 	}
 
