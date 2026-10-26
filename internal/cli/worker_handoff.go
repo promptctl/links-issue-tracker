@@ -72,14 +72,20 @@ type workerWorkspace struct {
 // project layer of its own, so a failure's completion reads the global
 // config alone.
 func buildWorkerWorkspace(ctx context.Context, env environ.Env, loc workspace.Location, stdin io.Reader) workerWorkspace {
+	built := handedWorkerWorkspace(env, loc, stdin)
+	// Every worker's event says which project layer it ran with, a failed
+	// build's included. [LAW:nothing-unseen]
+	reportConfigLayers(ctx, env, built.ws.Project)
+	return built
+}
+
+func handedWorkerWorkspace(env environ.Env, loc workspace.Location, stdin io.Reader) workerWorkspace {
 	ws, err := handedWorkspace(env, loc, stdin)
 	if err != nil {
 		failedWS := infoForLocation(loc)
-		failedWS.Remotes = workspace.HandedRemotes(env, loc.Repository(), workspace.CheckoutRoot{}, "")
 		failedWS.Project = config.HandedProject(nil)
 		return workerWorkspace{ws: failedWS, failed: fmt.Errorf("build the worker's workspace: %w", err)}
 	}
-	reportConfigLayers(ctx, env, ws.Project)
 	return workerWorkspace{ws: ws}
 }
 

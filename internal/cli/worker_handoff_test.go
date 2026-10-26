@@ -176,18 +176,30 @@ func TestAMirrorWithAnUnreadableHandoffRecordsAFailedPush(t *testing.T) {
 	if owed, err := mirrorOwed(ws); err != nil || owed {
 		t.Fatalf("mirrorOwed = %t, %v; want the claim cleared", owed, err)
 	}
+	if got := lastEvent(t).Facts["config.project"]; got != "handed" {
+		t.Fatalf("config.project = %v, want handed", got)
+	}
 }
 
 // A receive whose workspace cannot be built records the failure as its
-// decision, on its event.
+// decision, on its event, inside the lifetime its log accounts for. Its event
+// still names the project layer it ran with: the empty handed one.
 func TestAReceiveWithAnUnreadableHandoffRecordsAReceiveError(t *testing.T) {
 	root := twoRemoteCheckout(t)
-	if out, err := runCLIInDirWithStdin(t, root, "not a handoff", workerArgv(t, root, backgroundReceiveSubcommand)...); err != nil {
+	out, err := runCLIInDirWithStdin(t, root, "not a handoff", workerArgv(t, root, backgroundReceiveSubcommand)...)
+	if err != nil {
 		t.Fatalf("receive: %v\n%s", err, out)
 	}
-	outcomes := lastEvent(t).Occurrences["receive.outcomes"]
+	if !strings.Contains(out, " receive start pid=") || !strings.Contains(out, " receive end pid=") {
+		t.Fatalf("receive log lines missing from the worker's output:\n%s", out)
+	}
+	event := lastEvent(t)
+	outcomes := event.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 || !strings.Contains(fmt.Sprint(outcomes[0]), "read the launcher's handoff") {
 		t.Fatalf("receive.outcomes = %v; want one error naming the handoff", outcomes)
+	}
+	if got := event.Facts["config.project"]; got != "handed" {
+		t.Fatalf("config.project = %v, want handed", got)
 	}
 }
 

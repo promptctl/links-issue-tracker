@@ -677,3 +677,29 @@ func TestAHandedProjectLayerIsReadFromItsContent(t *testing.T) {
 		t.Fatalf("Content() of a checkout with no config file = %q, %v; want none", content, err)
 	}
 }
+
+// A project file and the same bytes handed to a worker are one layer: both
+// read as TOML, whatever the file is named, so a launcher and its worker
+// cannot read one config two ways.
+func TestAFileLayerAndItsHandedBytesReadAlike(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	path := filepath.Join(t.TempDir(), "lit.yaml")
+	if err := os.WriteFile(path, []byte("[quickstart]\nsoil_mode = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(projectConfigPathEnv, path)
+	file := CheckoutProject(testEnv(), pathspec.PathSpec{})
+	content, err := file.Content()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, layer := range []ProjectLayer{file, HandedProject(content)} {
+		cfg, err := Load(testEnv(), layer)
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", layer, err)
+		}
+		if !cfg.Quickstart.SoilMode {
+			t.Fatalf("Load(%s) did not read soil_mode", layer)
+		}
+	}
+}

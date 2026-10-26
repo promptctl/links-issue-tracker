@@ -197,7 +197,9 @@ func spawnDetachedWorker(ctx context.Context, ws workspace.Info, subcommand, log
 	if err != nil {
 		return fmt.Errorf("open the worker's handoff pipe: %w", err)
 	}
-	defer func() { _ = handoffWrite.Close() }()
+	// Each end is also closed here, so no path leaks one; the read end is
+	// closed early, right after Start, and closing it again is a no-op.
+	defer func() { _ = handoffRead.Close(); _ = handoffWrite.Close() }()
 	// The worker is joinable from before it exists: the shared hold is taken
 	// here and inherited, so there is no instant at which the worker is alive
 	// and unheld. A worker nobody can join is the race the hold exists to
@@ -227,7 +229,9 @@ func spawnDetachedWorker(ctx context.Context, ws workspace.Info, subcommand, log
 	}
 	cmd.SysProcAttr = detachSysProcAttr()
 	startErr := cmd.Start()
-	// The child holds its own copy of the read end from exec on.
+	// The child holds its own copy of the read end from exec on. Closing ours
+	// is what makes a write to a worker that already died fail instead of
+	// waiting on a pipe nobody reads.
 	_ = handoffRead.Close()
 	if logFile != nil {
 		// The child inherited its own dup of the fd at exec; the parent's copy is
@@ -246,6 +250,10 @@ func spawnDetachedWorker(ctx context.Context, ws workspace.Info, subcommand, log
 	// Written after Start, then closed by the defer, so the worker reads the
 	// whole handoff and then EOF. A write the pipe's buffer cannot take waits
 	// for the worker, which reads its handoff first.
+	//
+	// A failed write is a failed spawn: the worker holds the only read end, so
+	// the write fails only once the worker has exited, before it could finish
+	// reading and so before it recorded anything. Its hold went with it.
 	if _, err := handoffWrite.Write(payload); err != nil {
 		return fmt.Errorf("write the worker's handoff: %w", err)
 	}

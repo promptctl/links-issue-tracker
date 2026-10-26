@@ -126,15 +126,10 @@ func receiveEnv(parent environ.Env) environ.Env {
 // sleep.
 func backgroundReceiveLeaf() bareLeaf {
 	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, parentPID int) error {
-		ws := built.ws
-		if built.failed != nil {
-			recordReceiveError(ctx, inv.Env, ws, storage.RemoteName{}, built.failed)
-			return nil
-		}
 		start := time.Now()
 		pid := os.Getpid()
 		fmt.Fprintf(inv.Stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
-		mirrorWait := receiveWhenQuiet(ctx, inv.Env, ws, parentPID)
+		mirrorWait := receiveWhenQuiet(ctx, inv.Env, built, parentPID)
 		// The decision is in the receive's sync trace; this line is the worker's
 		// own lifetime, which the trace does not carry.
 		fmt.Fprintf(inv.Stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
@@ -147,8 +142,13 @@ func backgroundReceiveLeaf() bareLeaf {
 // no mirror is live, and returns how long it waited on the mirror. A wait that
 // cannot finish says why in the receive's trace: a worker torn down by its own
 // context records that, and a parent that outlived the wait records that — two
-// causes, never one joined sentence. [LAW:no-silent-failure]
-func receiveWhenQuiet(ctx context.Context, env environ.Env, ws workspace.Info, parentPID int) time.Duration {
+// causes, never one joined sentence. A workspace that could not be built is
+// recorded once the parent has exited, like the receive's other
+// could-not-attempt failures, so no receive state is written while the
+// spawning command may still be writing its own. [LAW:no-silent-failure]
+// [LAW:no-ambient-temporal-coupling]
+func receiveWhenQuiet(ctx context.Context, env environ.Env, built workerWorkspace, parentPID int) time.Duration {
+	ws := built.ws
 	if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 		if ctx.Err() != nil {
 			recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the spawning command to exit: %w", ctx.Err()))
@@ -157,6 +157,10 @@ func receiveWhenQuiet(ctx context.Context, env environ.Env, ws workspace.Info, p
 		recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine",
 			parentPID, workerParentWaitTimeout))
+		return 0
+	}
+	if built.failed != nil {
+		recordReceiveError(ctx, env, ws, storage.RemoteName{}, built.failed)
 		return 0
 	}
 	waited, err := awaitNoLiveMirror(ctx, ws, receiveMirrorWait())

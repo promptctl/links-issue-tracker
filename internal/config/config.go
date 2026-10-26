@@ -270,7 +270,7 @@ func UnknownKeys(env environ.Env, project ProjectLayer) ([]UnknownKey, error) {
 	unknown := []UnknownKey{}
 	var errs []error
 	for _, layer := range configLayers(env, project) {
-		file, err := layer.read()
+		file, err := readLayer(layer)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -286,9 +286,11 @@ func UnknownKeys(env environ.Env, project ProjectLayer) ([]UnknownKey, error) {
 	return unknown, errors.Join(errs...)
 }
 
-// layer is one config file of the precedence chain, as Load reads it.
+// layer is one config file of the precedence chain: its content, which
+// readLayer parses, and its name for messages.
 type layer interface {
-	read() (*viper.Viper, error)
+	// Content is the layer's bytes: a layer with no file has none.
+	Content() ([]byte, error)
 	String() string
 }
 
@@ -309,10 +311,8 @@ func configLayers(env environ.Env, project ProjectLayer) layers {
 // worker's layer is a value it holds, so no config read on its path can reach
 // for a checkout that no longer exists.
 type ProjectLayer interface {
+	// Content is what a launcher hands its worker.
 	layer
-	// Content is the layer's bytes, what a launcher hands its worker: a
-	// checkout with no file has none.
-	Content() ([]byte, error)
 	// Source names where the layer came from — checkout:<path> or handed —
 	// for the command's event: which file won is a fact of every command.
 	// [LAW:nothing-unseen]
@@ -334,14 +334,12 @@ func HandedProject(content []byte) ProjectLayer {
 // fileLayer is a layer read from the file at path when Load runs.
 type fileLayer struct{ path pathspec.PathSpec }
 
-func (l fileLayer) read() (*viper.Viper, error) { return readLayer(l.path) }
-
 func (l fileLayer) String() string { return l.path.String() }
 
 func (l fileLayer) Source() string { return "checkout:" + l.path.String() }
 
-// Content reads the file as readLayer does: no path, or no file at it, is a
-// layer that sets nothing.
+// Content is the file's bytes: no path, or no file at it, is a layer that
+// sets nothing.
 func (l fileLayer) Content() ([]byte, error) {
 	if l.path.IsEmpty() {
 		return nil, nil
@@ -358,15 +356,6 @@ func (l fileLayer) Content() ([]byte, error) {
 
 // handedLayer is a project layer that arrived as content.
 type handedLayer struct{ content []byte }
-
-func (l handedLayer) read() (*viper.Viper, error) {
-	file := viper.New()
-	file.SetConfigType("toml")
-	if err := file.ReadConfig(bytes.NewReader(l.content)); err != nil {
-		return nil, fmt.Errorf("parse handed project config: %w", err)
-	}
-	return file, nil
-}
 
 func (l handedLayer) String() string { return "handed project config" }
 
@@ -458,7 +447,7 @@ func projectConfigPath(env environ.Env, workspaceRoot pathspec.PathSpec) pathspe
 }
 
 func mergeConfigFile(v *viper.Viper, layer layer) ([]string, error) {
-	fileConfig, err := layer.read()
+	fileConfig, err := readLayer(layer)
 	if err != nil {
 		return nil, err
 	}
@@ -470,21 +459,19 @@ func mergeConfigFile(v *viper.Viper, layer layer) ([]string, error) {
 	return required, nil
 }
 
-// readLayer parses one config layer. A layer with no path, or no file at its
-// path, reads as a file that sets nothing, so its callers have no absent case
-// of their own. [LAW:dataflow-not-control-flow]
-func readLayer(path pathspec.PathSpec) (*viper.Viper, error) {
-	if path.IsEmpty() {
-		return viper.New(), nil
+// readLayer parses one config layer's content as TOML, the format every
+// layer is documented in. A file and the same bytes handed to a worker are
+// one parse, so a launcher and its worker cannot read one layer two ways; a
+// layer with no content sets nothing. [LAW:one-source-of-truth]
+func readLayer(l layer) (*viper.Viper, error) {
+	content, err := l.Content()
+	if err != nil {
+		return nil, err
 	}
 	file := viper.New()
-	file.SetConfigFile(path.String())
-	if err := file.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if errors.As(err, &notFound) || os.IsNotExist(err) {
-			return viper.New(), nil
-		}
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	file.SetConfigType("toml")
+	if err := file.ReadConfig(bytes.NewReader(content)); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", l, err)
 	}
 	return file, nil
 }

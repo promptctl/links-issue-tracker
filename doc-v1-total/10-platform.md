@@ -74,7 +74,7 @@ Two layers merged in order, later overriding earlier (`internal/config/config.go
 1. **Global**: `$LIT_CONFIG_GLOBAL_PATH`, else `<config-dir>/config.toml` (config dir per `XDG_CONFIG_HOME` above).
 2. **Project**: `$LIT_CONFIG_PROJECT_PATH`, else `<workspaceRoot>/.lit/config.toml`.
 
-Format is whatever viper infers from the extension; the default filename is TOML. A missing file is fine; a parse or merge error is fatal (`config.go`). Each layer also contributes `ready.required_fields` and the legacy top-level `required_fields`, concatenated across layers; a non-empty concatenation replaces `Ready.RequiredFields` (`config.go`).
+Every layer is TOML, whatever the file is named, and a project layer handed to a detached sync worker is parsed by the same function; the default filename is `config.toml`. A missing file is fine; a parse or merge error is fatal (`config.go`). Each layer also contributes `ready.required_fields` and the legacy top-level `required_fields`, concatenated across layers; a non-empty concatenation replaces `Ready.RequiredFields` (`config.go`).
 
 ### Key schema
 

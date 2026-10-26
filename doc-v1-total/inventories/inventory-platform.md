@@ -252,8 +252,9 @@ finds a child's program on, and Dolt's own (`internal/environ/environ.go`).
 
 ### 4.1 Location, format, precedence
 
-- Format: whatever viper infers from the file extension via `SetConfigFile`
-  (`internal/config/config.go`); the shipped/default filename is `config.toml`
+- Format: TOML for every layer, whatever the file is named; a project layer handed to a
+  detached sync worker is parsed by the same function (`readLayer`,
+  `internal/config/config.go`). The shipped/default filename is `config.toml`
   (`internal/config/config.go`).
 - Layers, merged in slice order so **later overrides earlier**
   (`internal/config/config.go`):

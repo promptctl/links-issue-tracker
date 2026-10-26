@@ -123,10 +123,9 @@ func (s taughtSurface) refusedPath(words []string) (string, bool) {
 // hidden-but-live command or subcommand stays teachable while a
 // retired-but-dispatchable one (`lit ready`, `lit bulk import`) is out. A pure
 // function over the specs, so the Retired-vs-Hidden distinction is testable
-// with synthetic rows: the real registry's hidden-but-live subcommands
-// (`sync __mirror-bg`) are not words litToken can match, and every Hidden
-// top-level row is also Retired, so only a synthetic row can catch a filter
-// that conflates the two fields.
+// with synthetic rows: the real registry's hidden-but-live rows (the detached
+// workers `__mirror-bg` and `__receive-bg`) are not words litToken can match,
+// so only a synthetic row can catch a filter that conflates the two fields.
 func taughtSurfaceOf(specs []CommandSpec) taughtSurface {
 	surface := taughtSurface{live: map[string]bool{}, retired: map[string]bool{}}
 	var walk func(prefix string, subs []SubcommandSpec)
