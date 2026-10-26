@@ -3709,13 +3709,13 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 `ImportTree(ctx, prefix, actor, specs)` (`import_tree.go`):
 
 1. `storage.ParseImportTreeFile(specs)` (`internal/storage/import_validate.go`, shared with the memory engine) — full pre-flight, no store writes; returns each spec parsed, as a `storage.FileCreate`, in the topological write order (§4.4). The engine parses nothing itself.
-2. Create loop in topo order (`import_tree.go`):
+2. Every write below runs inside `s.withBatch` (`batch.go`, §4.5), so a tree refused at any write writes nothing. Create loop in topo order (`import_tree.go`):
    - the parent is `idMap[create.Parent]` — resolved **only** from this batch's map, so an external/real parent id resolves to `""` (see §4.5).
    - `s.CreateIssue(ctx, create.Input(parentID, prefix, actor))`: the `CreateIssueInput{Title, Description, Prompt, Plan, IssueType, Topic, Priority, Assignee, Labels}` the gate parsed, with `ParentID`, `Prefix` and `Actor` filled in. **`Lane` is never set** on this path (contrast bulk). `Placement` is left at its zero value = `RankBottom` (`internal/storage/issues.go`), so creates append in file order.
-   - On error: `leaked := s.rollbackCreatedIssues(ctx, actor, createdIDs)` then `"import: create %q: %w (rollback leaked %d: %s)"` with the leaked ids comma-joined.
-   - `idMap[create.LocalID] = issue.ID`; append to `createdIDs`.
-3. Second pass over the creates **in write order** wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: actor})` — **src is the dependent, dst is the dependency**. On error: rollback, then `"import: blocked_by %q -> %q: %w (rollback leaked %d: %s)"`.
-4. Returns `storage.ImportTreeResult{IDMap: idMap}` (`import_tree.go`), whose field tag is `json:"id_map"` (`storage/bulk.go`).
+   - On error: `"import: create %q: %w"`.
+   - `idMap[create.LocalID] = issue.ID`; append to `createdIDs` and `result.Created`.
+3. Second pass over the creates **in write order** wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: actor})` — **src is the dependent, dst is the dependency**. On error: `"import: blocked_by %q -> %q: %w"`.
+4. Returns `storage.ImportTreeResult{Created: …}` (`import_tree.go`); a refused tree returns `refusedBatch(result, err)` — the zero result, unless the reset failed too.
 
 ### 4.3 Validation and every rejection text
 
@@ -3758,11 +3758,14 @@ Consequence: on the tree path **every parent/blocked_by reference must be intern
 
 Test `TestImportTreeRejectsCycle` (`import_tree_test.go`) uses `a blocked_by b`, `b blocked_by a` and asserts the error contains `"cycle"`.
 
-### 4.5 Rollback
+### 4.5 Atomicity
 
-`rollbackCreatedIssues` (`import_tree.go`), shared by ImportTree and BulkApply: for each created real id, `s.Apply(ctx, realID, storage.Change{Action: model.Delete{}, Actor: "links", Reason: "import rollback"})`. Ids whose Apply fails are collected and returned as `leaked`. **It is a soft delete (`model.Delete{}` stamping `deleted_at`), not a row removal.** `leaked` is initialized to `[]string{}`, so the `%d`/`%s` in error messages read `0`/an empty string on a clean rollback. The caller returns the original error, decorated (`import_tree.go`).
-
-Atomicity: best-effort only. Doc comment `import_tree.go` states partial state may remain and the error names every dangling step; the surviving surface is `lit doctor`.
+`withBatch(ctx, fn)` (`batch.go`), shared by ImportTree and BulkApply, is the one owner of a batch's atomicity:
+1. It runs under **one** commit-lock hold (`withCommitLock`); the lock is context-reentrant, so every `CreateIssue`/`Apply`/`RankSet`/edge mutation inside short-circuits its own acquisition, and no other writer — nor the mirror's clone, copied under the same lock — lands between the batch's commits or sees them half-made.
+2. `commitStrandedWrites(ctx)` (`sync.go`) first versions any write a failed `DOLT_COMMIT` left staged, under `strandedWritesCommitMessage`, recording a `storage.StrandedWritesCommit`, so the reset below never discards a write that is not the batch's. The CLI reports these on every command's event as `stranded_writes.commits` (`storage.StrandedWrites`).
+3. `readDoltHead` is the revert point: the head the batch starts from, reachable as an ancestor of the branch for as long as the batch runs, so nothing is created or cleaned up.
+4. On `fn`'s error the branch is hard-reset to that head through `resetHardToRef` on `context.WithoutCancel(ctx)`, so a Ctrl-C that refused the batch cannot also stop its reset, and the error is a `*RefusedBatchError{Head, Cause, ResetErr, Written}`: its text is the refusal's and `Unwrap` reaches it, so callers classify it as the refusal; its `EventRecord` puts `import.reset_to` (the head) and `import.reset_error` (empty when the reset landed) on the event.
+5. When the reset fails too, `refusedBatch` (`batch.go`) returns the partial result beside the error, whose text adds `"resetting to commit %s, the head before the file, failed too: %v\nthe documents written before the refusal are still committed: %s"`, the last `%s` the result's `Written()` (`internal/storage/bulk.go`). A process killed outright runs no reset and leaves the documents it had committed.
 
 ### 4.6 CLI surface
 
@@ -3876,19 +3879,20 @@ A second pass over the create documents, in file order (`import_validate.go`), j
 | type is not a container and `Parent == ""` (`storage.RejectLeafWithoutParent`) | `bulk: doc %d: cannot create a %s outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic` (wraps a `model.ValidationError`) |
 | `Parent` names a create document in the file (by `local_id`) whose type is not a container (`storage.RejectParentThatIsNotAContainer`) | `bulk: doc %d: cannot file a ticket under %s: it is a %s, and only an epic contains tickets` (wraps a `model.ValidationError`) |
 
-Note the create branch does **not** require `LocalID` (unlike ImportTree), and does not reject an unresolvable `Parent`/`blocked_by` — those pass through as presumed real ids; a real-id parent that is not an epic is refused by `CreateIssue` (`storage.RejectParentThatIsNotAContainer`), after any earlier documents have been created, and is compensated as any mid-batch refusal is.
+Note the create branch does **not** require `LocalID` (unlike ImportTree), and does not reject an unresolvable `Parent`/`blocked_by` — those pass through as presumed real ids; a real-id parent that is not an epic is refused by `CreateIssue` (`storage.RejectParentThatIsNotAContainer`), after any earlier documents have been created, and the batch is reset as any mid-batch refusal is (§4.5).
 
 ### 5.3 Execution
 
 `BulkApply(ctx, prefix, actor string, specs)` (`import_bulk.go`):
 
 1. `s.issueTypesByIDs(ctx, storage.BulkExistingRefs(specs))` (`store.go`) reads the `issue_type` column of every parent the file names and every update document that states a parent into `existingTypes`, keyed by id, found ids only. It hydrates nothing, so it answers on a hierarchy holding a parent loop, which a `parent: ""` document repairs (error → `bulk: read the issues the file places: %w`); `file, err := storage.ParseBulkFile(specs, existingTypes)` — whole file validated before anything is written, and returned parsed: `file.Creates` in the topological write order (§4.4), `file.Reparents`, `file.BlockedBy` and `file.Updates` in file order. An update document is a node of the gate's reference graph, named by its id, so a parent or blocked_by cycle the file states through update documents, across any number of them, is refused here; a cycle reads `bulk: cycle detected involving "x"`, `x` the document's local_id or id (`internal/storage/import_validate.go`). The engine parses nothing itself.
-2. `createdIDs` (ordered, parallel to `file.Creates`), `localRealID` map, and `refuse(err)`, every failure from here on: the edge step's undo, then `leaked := s.rollbackCreatedIssues(…)`, then `result.AfterRollback(leaked)` (`internal/storage/bulk.go`: only the creates the rollback leaked, and only the ordered issues that outlive the rollback) returned beside `"%w; %s (rollback leaked %d: %s)"`, the `%s` being `result.Kept(leaked)` — the reparents, the blocked_by sets, the updates applied so far, and the order written (`import_bulk.go`).
-3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(storage.ResolveRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Plan`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → `refuse` with `"bulk: create doc %d: %w"`.
+2. Every write below runs inside `s.withBatch` (§4.5), with `createdIDs` (ordered, parallel to `file.Creates`) and the `localRealID` map; a refusal at any of them returns `refusedBatch(result, err)` — the zero result, unless the reset failed too (`import_bulk.go`).
+3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(storage.ResolveRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Plan`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → `"bulk: create doc %d: %w"`.
    - Append `createdIDs`. If `create.LocalID != ""` → `localRealID[LocalID] = issue.ID`; `result.Created` gets `storage.NewIDMapping(create.LocalID, issue.ID)`, **self-keyed when there is no local id** (`import_bulk.go`).
-4. **The edges** (`import_bulk.go`): one `s.withMutation(ctx, "bulk edges", …)` running `file.WriteEdges(createdIDs, edgeWriterTx{…})` (`internal/storage/bulk.go`) into the `storage.EdgeStep` `edges`, recorded by `result.RecordEdges(edges)`. `WriteEdges` takes every edge set the file states, in this order: each update document's parent (a set of zero or one), each create's `blocked_by`, each update document's `blocked_by`. For each set it reads `Edges` — `requireIssueExistsTx` first, so a set on an id naming no issue is a not-found error, then the set's `relations` rows of that type — resolves its targets with `storage.ResolveRef` against the ids its creates were minted under, and removes, raw (`deleteRelationRowTx`), every edge the set drops; a set with nothing to drop or add is held. Only then does it `Add` (`addRelationTx`) every edge any set introduces, in set order, so the cycle, same-epic and containment rules judge the graph the file ends with, with the hierarchy written before any `blocked-by` edge. The transaction lands whole or not at all; an error → `"bulk: %s of %s -> %q: %w"` (`parent` or `blocked_by`; the document as its quoted id or `doc %d`; the target as the file states it). Failure → `refuse`.
-5. **The ordering**, when `file.RankedIDs(createdIDs)` is non-empty (`import_bulk.go`): one `s.RankSet(ctx, ranked)` into `result.Ranked`. Failure → `refuse` with `"bulk: rank: %w"`.
-6. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → `refuse` with `"bulk: update %q: %w"`. On success append `issue.ID` to `result.Updated`. A failing create, edge, or ordering therefore leaves no update applied.
+4. **The edges** (`import_bulk.go`): one `s.withMutation(ctx, "bulk edges", …)` running `file.WriteEdges(createdIDs, edgeWriterTx{…})` (`internal/storage/bulk.go`) into the `storage.EdgeStep` `edges`, recorded by `result.RecordEdges(edges)`. `WriteEdges` takes every edge set the file states, in this order: each update document's parent (a set of zero or one), each create's `blocked_by`, each update document's `blocked_by`. For each set it reads `Edges` — `requireIssueExistsTx` first, so a set on an id naming no issue is a not-found error, then the set's `relations` rows of that type — resolves its targets with `storage.ResolveRef` against the ids its creates were minted under, and removes, raw (`deleteRelationRowTx`), every edge the set drops; a set with nothing to drop or add is held. Only then does it `Add` (`addRelationTx`) every edge any set introduces, in set order, so the cycle, same-epic and containment rules judge the graph the file ends with, with the hierarchy written before any `blocked-by` edge. The transaction lands whole or not at all; an error → `"bulk: %s of %s -> %q: %w"` (`parent` or `blocked_by`; the document as its quoted id or `doc %d`; the target as the file states it).
+5. **The ordering**, when `file.RankedIDs(createdIDs)` is non-empty (`import_bulk.go`): one `s.RankSet(ctx, ranked)` into `result.Ranked`. Failure → `"bulk: rank: %w"`.
+6. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → `"bulk: update %q: %w"`. On success append `issue.ID` to `result.Updated`.
+7. Inside a batch `notify` queues each change on the context (`batchHearingKey`); `withBatch` delivers the queue when the batch lands or its reset failed (the writes stand), and drops it when the reset landed, so a refused file is heard by nobody.
 
 `storage.ResolveRef(ref, minted)` (`internal/storage/bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
@@ -3908,7 +3912,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 | topic | required, parsed by the validator with `CreateIssue`'s `issueid.NormalizeTopicForCreate` | required (`missing topic`) and parsed the same way on create; forbidden on update |
 | actor | always `"links"` (CLI rejects `--by`) | `--by` actor threaded into update Changes only |
 | ordering | none | every `rank: top` document, in file order, written as one `RankSet` after every create and update |
-| result | `ImportTreeResult{Created []IDMapping}` | `BulkApplyResult{Created []IDMapping, Updated []string, Ranked RankSetResult}` and the edge step's account: parents and blocked_by sets changed, held and undone, edges added and removed |
+| result | `ImportTreeResult{Created []IDMapping}` | `BulkApplyResult{Created []IDMapping, Updated []string, Ranked RankSetResult}` and the edge step's account: parents and blocked_by sets changed and held, edges added and removed |
 
 ### 5.5 Batching, progress, partial failure
 
@@ -3916,7 +3920,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 **No progress reporting** exists at the store layer; the CLI prints only after the whole call returns (`cli.go`).
 
-**Partial failure**: not transactional. On a mid-batch error after the edges, one `s.withMutation(ctx, "bulk edges undo", …)` runs `EdgeStep.Undo` (`internal/storage/bulk.go`), which writes each changed set's edges back as `Edges` read them (the set's rows deleted, then `insertRelationTx` per edge); an undo error is joined to the refusal and the sets stay changed in the result, otherwise `result.EdgesUndone()` reports them undone and zeroes the edge counts. Then `rollbackCreatedIssues` best-effort soft-deletes only the issues **created in this call** — never updated ones, which have "no prior create to unwind" (`import_bulk.go`). Ids that fail to roll back are named in the error as `(rollback leaked %d: %s)`. Updates that already landed **stay applied**. The doc comment directs the operator to `lit doctor` after a failed batch (`import_bulk.go`).
+**Partial failure** does not exist: the whole call is one `withBatch` (§4.5), so a refusal at any create, edge, ordering or update resets the branch to the head the file started from, and the per-document commits made before it are gone with it.
 
 ### 5.6 CLI surface for bulk
 
@@ -3949,7 +3953,6 @@ When the file states a parent on an update, `reparented %d issues` and `%d issue
 - `TestBulkApplyRejectsDuplicateID`: contains `"duplicate id"`.
 - `TestBulkApplyRejectsIDAndLocalIDTogether`: contains `"local_id"`.
 - `TestBulkApplyCreateChildOfExistingIssue`: `parent: <real epic id>` (matching no local_id) resolves as an external reference and the created child's `Parent.ID` is that epic.
-- `TestBulkApplyRollsBackCreatesOnLaterFailure`: doc `a` creates, doc `b` has `parent:"ghost-does-not-exist"` which passes validation and fails inside `CreateIssue`; afterwards a default `ListIssues` (which excludes deleted) must not contain doc `a`'s title — pinning that the rollback's soft delete removes it from the default listing.
 - `TestBulkApplyRejectsEmptyInput`: `nil` specs → contains `"no issues in input"`.
 
 ### 5.8 Tree-import test assertions
@@ -3971,7 +3974,6 @@ When the file states a parent on an update, `reparented %d issues` and `%d issue
 | `insertIssueStmt` topic default | `COALESCE(NULLIF(?, ''), 'misc')` → `misc` | `import_export.go` |
 | relation type written by both importers | `model.RelBlockedBy` (`"blocked-by"`) | `import_bulk.go`, `import_tree.go` |
 | relation `CreatedBy` written by both importers | `"links"` | `import_bulk.go`, `import_tree.go` |
-| rollback Change actor / reason | `"links"` / `"import rollback"` | `import_tree.go` |
 | `CreateIssue` createdBy | `"links"` | `internal/store/store.go` |
 | `stateUnvisited / stateVisiting / stateDone` | `0 / 1 / 2` | `import_tree.go` |
 | create `Placement` default | `RankBottom` (iota 0) | `internal/storage/issues.go` |
@@ -3990,9 +3992,9 @@ When the file states a parent on an update, `reparented %d issues` and `%d issue
 
 `import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
 
-`import_tree.go`: `import: create %q: %w (rollback leaked %d: %s)`, `import: blocked_by %q -> %q: %w (rollback leaked %d: %s)`.
+`import_tree.go`: `import: create %q: %w`, `import: blocked_by %q -> %q: %w`.
 
-`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by has an empty entry`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (%q) cannot depend on itself`, `blocked_by names %q twice`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update, no parent, no blocked_by and no rank`, `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent, blocked_by and rank write none`, `bulk: doc %d: %w` (among them `rank %q is not a placement; …`), `bulk: rank: %w`, `bulk: %s of %s -> %q: %w`, `bulk: %s of %s: %w`, `bulk: update %q: %w`, `bulk: create doc %d: %w`, each wrapped as `%w; %s (rollback leaked %d: %s)`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
+`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by has an empty entry`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (%q) cannot depend on itself`, `blocked_by names %q twice`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update, no parent, no blocked_by and no rank`, `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent, blocked_by and rank write none`, `bulk: doc %d: %w` (among them `rank %q is not a placement; …`), `bulk: rank: %w`, `bulk: %s of %s -> %q: %w`, `bulk: %s of %s: %w`, `bulk: update %q: %w`, `bulk: create doc %d: %w`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 
@@ -4366,8 +4368,8 @@ No pre-existence check, no retry on duplicate name; two creations within the sam
 
 ### 5.4 `ResetToCheckpoint(ctx, name)` (`checkpoint.go`)
 
-- SQL: `CALL DOLT_RESET('--hard', ?)` with the branch name bound (`checkpoint.go`).
-- Error → `checkpoint: reset to %q: %w` (`checkpoint.go`).
+- SQL: `resetHardToRef(ctx, s.db, name)` (`sync.go`), a `DOLT_RESET --hard` with the branch name bound (`checkpoint.go`).
+- Error → `checkpoint: %w` around `resetHardToRef`'s `reset to %q: %w` (`checkpoint.go`, `sync.go`).
 - Semantics per doc: hard-resets the **current branch** to the commit the named checkpoint branch points to, discarding all working-set changes and any Dolt commits made after the checkpoint (`checkpoint.go`). No checkout, no stash, no branch switching. Deleting the checkpoint branch is not part of reset.
 - Pinned by `TestCheckpointResetReverts`: a row committed before the checkpoint survives; a row committed after it is gone (`checkpoint_test.go`).
 

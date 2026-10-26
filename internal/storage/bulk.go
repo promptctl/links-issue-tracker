@@ -77,34 +77,30 @@ func NewIDMapping(localID, realID string) IDMapping {
 	return IDMapping{Ref: localID, ID: realID}
 }
 
-// BulkApplyResult reports what a BulkApply left written. Created lists
+// BulkApplyResult reports what a BulkApply wrote. Created lists
 // every created issue in the order it was created; Reparented lists the issues
 // whose parent the file changed, and ParentHeld those whose parent already
-// was what the file states, each in file order; ReparentsUndone lists the
-// issues a refusal put back under the parents they held before the file,
-// which a landed file leaves empty; BlockedBySet, BlockedByHeld and
-// BlockedByUndone say the same of the update documents' blocked_by sets;
+// was what the file states, each in file order; BlockedBySet and
+// BlockedByHeld say the same of the update documents' blocked_by sets;
 // EdgesAdded and EdgesRemoved count every edge the file wrote, a create's
 // blocked_by included; Updated lists the real IDs of the issues whose fields an
 // update document moved, and FieldsHeld those whose fields already were what
 // the document states, each in the order they were applied; Ranked is the RankSet
 // the file's `rank: top` documents made, with no resolutions when the file
-// states no rank. A refused BulkApply returns its AfterRollback beside the
-// error, so the caller reads one account of the batch whether it landed or
-// not. [LAW:nothing-unseen]
+// states no rank. A refused file writes nothing, so a refused BulkApply returns
+// the zero result beside the error, and the caller's counts read zero because
+// nothing landed. [LAW:nothing-unseen]
 type BulkApplyResult struct {
-	Created         []IDMapping
-	Reparented      []string
-	ParentHeld      []string
-	ReparentsUndone []string
-	BlockedBySet    []string
-	BlockedByHeld   []string
-	BlockedByUndone []string
-	EdgesAdded      int
-	EdgesRemoved    int
-	Updated         []string
-	FieldsHeld      []string
-	Ranked          RankSetResult
+	Created       []IDMapping
+	Reparented    []string
+	ParentHeld    []string
+	BlockedBySet  []string
+	BlockedByHeld []string
+	EdgesAdded    int
+	EdgesRemoved  int
+	Updated       []string
+	FieldsHeld    []string
+	Ranked        RankSetResult
 }
 
 // RecordUpdate is the account of one applied update document: updated when its
@@ -127,52 +123,30 @@ func (r *BulkApplyResult) RecordEdges(step EdgeStep) {
 	r.EdgesAdded, r.EdgesRemoved = step.Added, step.Removed
 }
 
-// EdgesUndone is the account once a refusal's Undo put the step's sets back:
-// none stays changed, each is reported undone, and no edge it wrote stays
-// written.
-func (r *BulkApplyResult) EdgesUndone() {
-	r.ReparentsUndone, r.Reparented = r.Reparented, nil
-	r.BlockedByUndone, r.BlockedBySet = r.BlockedBySet, nil
-	r.EdgesAdded, r.EdgesRemoved = 0, 0
-}
-
-// AfterRollback is what stays written once a refused batch's creates are
-// rolled back, given leaked, the creates the rollback could not delete: those
-// creates, the reparents and blocked_by sets its undo could not put back, the
-// updates applied
-// before the refusal, and the order the file's `rank: top` documents wrote,
-// among the issues that outlive the rollback. [LAW:one-source-of-truth]
-func (r BulkApplyResult) AfterRollback(leaked []string) BulkApplyResult {
-	rolledBack := make(map[string]bool, len(r.Created))
-	for _, m := range r.Created {
-		rolledBack[m.ID] = !slices.Contains(leaked, m.ID)
-	}
-	kept := r
-	kept.Created = nil
-	for _, m := range r.Created {
-		if !rolledBack[m.ID] {
-			kept.Created = append(kept.Created, m)
-		}
-	}
-	kept.Ranked.Resolutions = nil
-	for _, res := range r.Ranked.Resolutions {
-		if !rolledBack[res.RankedID] {
-			kept.Ranked.Resolutions = append(kept.Ranked.Resolutions, res)
-		}
-	}
-	return kept
-}
-
-// Kept is AfterRollback in words, the account a refused batch's error owes its
-// caller beside the creates the rollback leaked, which the error names. Zero
-// of any is said, not omitted. [LAW:no-silent-failure]
-func (r BulkApplyResult) Kept(leaked []string) string {
-	kept := r.AfterRollback(leaked)
-	ranked := make([]string, len(kept.Ranked.Resolutions))
-	for i, res := range kept.Ranked.Resolutions {
+// Written is the result in words: every write it holds, each with its ids,
+// and zero of any said rather than omitted. A refused batch whose reset failed
+// names what stays written with it. [LAW:no-silent-failure]
+func (r BulkApplyResult) Written() string {
+	ranked := make([]string, len(r.Ranked.Resolutions))
+	for i, res := range r.Ranked.Resolutions {
 		ranked[i] = res.RankedID
 	}
-	return fmt.Sprintf("kept %d reparents [%s], %d blocked_by sets [%s], %d updates [%s] and the order of %d issues [%s]", len(kept.Reparented), strings.Join(kept.Reparented, ","), len(kept.BlockedBySet), strings.Join(kept.BlockedBySet, ","), len(kept.Updated), strings.Join(kept.Updated, ","), len(ranked), strings.Join(ranked, ","))
+	return fmt.Sprintf("%s, %d reparents [%s], %d blocked_by sets [%s], %d edges added and %d removed, %d updates [%s] and the order of %d issues [%s]",
+		writtenCreates(r.Created), len(r.Reparented), strings.Join(r.Reparented, ","), len(r.BlockedBySet), strings.Join(r.BlockedBySet, ","), r.EdgesAdded, r.EdgesRemoved, len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
+}
+
+// Written is the result in words, as BulkApplyResult.Written says it.
+func (r ImportTreeResult) Written() string {
+	return fmt.Sprintf("%s and %d blocked_by edges among them", writtenCreates(r.Created), r.EdgesAdded)
+}
+
+// writtenCreates names a result's creates by the ids they were created under.
+func writtenCreates(created []IDMapping) string {
+	ids := make([]string, len(created))
+	for i, m := range created {
+		ids[i] = m.ID
+	}
+	return fmt.Sprintf("%d creates [%s]", len(ids), strings.Join(ids, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,
@@ -267,42 +241,24 @@ func ResolveRef(ref string, minted map[string]string) string {
 // EdgeWriter is the relation write an engine runs a file's edge sets through,
 // inside the one step that makes them whole or not at all. Add is the write
 // every edge of its type goes through, `lit dep add` and `lit parent set`
-// alike, with the rules it carries. Edges, Remove and Restore read and write
-// edges as stored, judging nothing: a move removes a leaf's parent before it
-// attaches the new one, so a rule judged at the removal would refuse a file
-// whose final hierarchy obeys it. A refused batch restores what a step
-// replaced through Restore. [LAW:single-enforcer]
+// alike, with the rules it carries. Edges and Remove read and write edges as
+// stored, judging nothing: a move removes a leaf's parent before it attaches
+// the new one, so a rule judged at the removal would refuse a file whose final
+// hierarchy obeys it. [LAW:single-enforcer]
 type EdgeWriter interface {
 	// Edges lists the edges of relType id holds, and refuses an id that names
 	// no issue, so a set stated on a missing issue is never read as held.
 	Edges(id string, relType model.RelationType) ([]model.Relation, error)
 	Add(id, target string, relType model.RelationType) error
 	Remove(edge model.Relation) error
-	// Restore makes id's edges of relType exactly edges.
-	Restore(id string, relType model.RelationType, edges []model.Relation) error
 }
 
 // EdgeStep is a file's written edge sets, sorted by what each found: Changed,
 // the sets the file changed, and Held, those already exactly as stated, each in
-// write order. Added and Removed count the edges it wrote. It keeps the edges
-// each changed set held before, which Undo writes back.
+// write order. Added and Removed count the edges it wrote.
 type EdgeStep struct {
 	Changed, Held  []EdgeSet
 	Added, Removed int
-	prior          [][]model.Relation
-}
-
-// Undo gives every changed set back the edges it held before the step, as
-// stored. A batch refused after the step runs it before it rolls back its
-// creates, so no issue is left under or behind a create the rollback deletes,
-// and none loses an edge it had. [LAW:no-silent-failure]
-func (s EdgeStep) Undo(w EdgeWriter) error {
-	for i, set := range s.Changed {
-		if err := w.Restore(set.ID, set.Type, s.prior[i]); err != nil {
-			return fmt.Errorf("bulk: restore the %s of %s: %w", fileKey(set.Type), set.Doc, err)
-		}
-	}
-	return nil
 }
 
 // WriteEdges writes every edge set the file states through w and returns the
@@ -352,7 +308,6 @@ func (f BulkFile) WriteEdges(created []string, w EdgeWriter) (EdgeStep, error) {
 			continue
 		}
 		step.Changed = append(step.Changed, set)
-		step.prior = append(step.prior, prior)
 		step.Removed += removed
 	}
 	for i, set := range sets {
@@ -491,8 +446,10 @@ type ImportTreeSpec struct {
 	BlockedBy   []string `json:"blocked_by,omitempty"`
 }
 
-// ImportTreeResult reports the local-ID → real-issue-ID mapping produced by a
-// successful import, in the order the issues were created.
+// ImportTreeResult reports what a tree import wrote: the local-ID →
+// real-issue-ID mapping, in the order the issues were created, and EdgesAdded,
+// the blocked_by edges it wrote among them.
 type ImportTreeResult struct {
-	Created []IDMapping
+	Created    []IDMapping
+	EdgesAdded int
 }

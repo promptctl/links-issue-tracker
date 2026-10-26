@@ -201,10 +201,6 @@ type Syncer interface {
 	// decided on, and where it came from, oldest first.
 	ReconcileBases() []ReconcileBase
 
-	// StrandedWritesCommits is every commit the engine landed since it opened
-	// over writes a failed commit left in the working set, oldest first.
-	StrandedWritesCommits() []StrandedWritesCommit
-
 	// SettledLastWrites is every settle's write of its settled.last record
 	// since the engine opened, oldest first.
 	SettledLastWrites() []SettledLastWrite

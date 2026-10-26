@@ -538,13 +538,15 @@ func (s *Store) SyncResetToRemoteHead(ctx context.Context, remote storage.Remote
 
 // resetHardToRef hard-resets the active branch to a ref, adopting its history
 // wholesale — the embedded equivalent of `git reset --hard <ref>`. It is the one
-// reset primitive shared by SyncResetToRemoteHead (the `lit init` adopt) and the
-// unrelated-histories take-remote resolution, so the two cannot drift on how the
-// wholesale adopt is spelled. [LAW:single-enforcer] The ref is bound by the caller
-// to a real tracking ref; this owns only the reset.
+// reset primitive shared by SyncResetToRemoteHead (the `lit init` adopt), the
+// unrelated-histories take-remote resolution, a checkpoint's reset, and a
+// refused batch's return to the commit it started from, so none can drift on
+// how a hard reset is spelled. [LAW:single-enforcer] The caller binds the ref
+// to a real one — a tracking ref, a checkpoint branch, a commit; this owns only
+// the reset.
 func resetHardToRef(ctx context.Context, db *sql.DB, ref string) error {
 	if _, err := callIntProcedure(ctx, db, "DOLT_RESET", "--hard", ref); err != nil {
-		return fmt.Errorf("reset to remote head %q: %w", ref, err)
+		return fmt.Errorf("reset to %q: %w", ref, err)
 	}
 	return nil
 }
@@ -625,22 +627,36 @@ const strandedWritesCommitMessage = "commit writes a failed commit left staged"
 // freshnessOverEveryWrite is the freshness that decides whether the branch
 // moves. Freshness counts commits, and landing on the remote head or on a
 // reconcile's replay resets the working set, so writes a failed DOLT_COMMIT
-// left staged are versioned first, as the next mutation would version them.
-// Then the freshness counts every local write: a stranded write is a local
-// commit, and the branch is diverged, not behind. [LAW:single-enforcer] The
-// settle and the reconcile plan both read it. [LAW:no-silent-failure]
+// left staged are versioned first (commitStrandedWrites). Then the freshness
+// counts every local write: a stranded write is a local commit, and the branch
+// is diverged, not behind. [LAW:single-enforcer] The settle and the reconcile
+// plan both read it.
 func (s *Store) freshnessOverEveryWrite(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncFreshness, error) {
+	if err := s.commitStrandedWrites(ctx); err != nil {
+		return storage.SyncFreshness{}, err
+	}
+	return s.SyncFreshness(ctx, remote, branch)
+}
+
+// commitStrandedWrites versions the writes a failed DOLT_COMMIT left staged,
+// as the next mutation would version them, and records the commit it landed.
+// Anything about to hard-reset the branch runs it first, so the reset never
+// discards a write that is not its own. [LAW:single-enforcer] the one place a
+// stranded write is committed. [LAW:no-silent-failure] [LAW:nothing-unseen]
+// The caller holds the commit lock.
+func (s *Store) commitStrandedWrites(ctx context.Context) error {
 	var tables int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT table_name) FROM dolt_status`).Scan(&tables); err != nil {
-		return storage.SyncFreshness{}, fmt.Errorf("read the working set: %w", err)
+		return fmt.Errorf("read the working set: %w", err)
 	}
 	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
-		return storage.SyncFreshness{}, err
+		return err
 	}
 	if tables > 0 {
 		s.strandedWritesCommits = append(s.strandedWritesCommits, storage.StrandedWritesCommit{Tables: tables})
 	}
-	return s.SyncFreshness(ctx, remote, branch)
+	s.strandedWritesLooked = true
+	return nil
 }
 
 // settleReceivedWithinLock is the half of a receive that follows the fetch:

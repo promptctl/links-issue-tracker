@@ -19,9 +19,35 @@ import (
 func (e *Engine) Apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.apply(id, c)
+	applied, err := e.apply(id, c)
+	if err != nil {
+		return storage.Applied{}, err
+	}
+	e.notify(c, applied.Issue)
+	return applied, nil
 }
 
+// notify is the one place a change reaches the observers. Inside a batch it is
+// queued, and withBatch delivers the queue only once the batch lands, so a
+// refused batch is heard by nobody. [LAW:single-enforcer]
+func (e *Engine) notify(c storage.Change, issue model.Issue) {
+	if e.hearing != nil {
+		*e.hearing = append(*e.hearing, heardChange{c, issue})
+		return
+	}
+	for _, observe := range e.observers {
+		observe(c, issue)
+	}
+}
+
+// heardChange is one change an observer is owed.
+type heardChange struct {
+	change storage.Change
+	issue  model.Issue
+}
+
+// apply writes one change and tells no observer; its caller notifies once the
+// change is sure to stand.
 func (e *Engine) apply(id string, c storage.Change) (storage.Applied, error) {
 	rec, err := e.mustRecord(id)
 	if err != nil {
@@ -56,9 +82,6 @@ func (e *Engine) apply(id string, c storage.Change) (storage.Applied, error) {
 	issue, err := e.hydrate(rec, e.positions())
 	if err != nil {
 		return storage.Applied{}, err
-	}
-	for _, observe := range e.observers {
-		observe(c, issue)
 	}
 	return storage.Applied{Issue: issue, Handover: handover, Fields: patch.changes}, nil
 }

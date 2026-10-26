@@ -41,10 +41,10 @@ func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (storage.Ch
 // Dolt commits made after the checkpoint was taken.
 //
 // [LAW:single-enforcer] All Dolt hard-resets for migration recovery route
-// through this method.
+// through this method, and it through resetHardToRef.
 func (s *Store) ResetToCheckpoint(ctx context.Context, name string) error {
-	if _, err := s.db.ExecContext(ctx, "CALL DOLT_RESET('--hard', ?)", name); err != nil {
-		return fmt.Errorf("checkpoint: reset to %q: %w", name, err)
+	if err := resetHardToRef(ctx, s.db, name); err != nil {
+		return fmt.Errorf("checkpoint: %w", err)
 	}
 	return nil
 }

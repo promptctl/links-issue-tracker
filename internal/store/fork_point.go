@@ -369,10 +369,10 @@ func (s *Store) ReconcileBases() []storage.ReconcileBase {
 	return slices.Clone(s.reconcileBases)
 }
 
-// StrandedWritesCommits is every commit freshnessOverEveryWrite landed since
-// the store opened, oldest first.
-func (s *Store) StrandedWritesCommits() []storage.StrandedWritesCommit {
-	return slices.Clone(s.strandedWritesCommits)
+// StrandedWritesCommits is every commit commitStrandedWrites landed since
+// the store opened, oldest first, and whether it ran.
+func (s *Store) StrandedWritesCommits() ([]storage.StrandedWritesCommit, bool) {
+	return slices.Clone(s.strandedWritesCommits), s.strandedWritesLooked
 }
 
 // SettledLastWrites is every settle's write of its settled.last record since

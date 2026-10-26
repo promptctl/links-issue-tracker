@@ -183,30 +183,9 @@ func aBulkFileStatingBlockedByOnAMissingIssueIsRefused(t *testing.T, ctx context
 	}
 }
 
-// aBulkFileRefusedAfterItsEdgesPutsBackTheBlockedBy: a refusal after the edge
-// step — here an update naming no issue — gives every issue back the
-// blocked-by edges it held, and the result says the set was undone.
-func aBulkFileRefusedAfterItsEdgesPutsBackTheBlockedBy(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	ids := tasksInEpicsOfTheirOwn(t, ctx, st, 3)
-	mustBlock(t, ctx, st, ids[0], ids[1])
-	before := blockedByGraph(t, ctx, st, ids)
-	title := "renamed"
-
-	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{ID: ids[0], BlockedBy: blockedBy(ids[2])},
-		{ID: "conf-core-none", Title: &title},
-	})
-	if err == nil {
-		t.Fatal("BulkApply error = nil, want the update of a missing issue refused")
-	}
-	assertStrings(t, "blocked-by edges after the refusal", blockedByGraph(t, ctx, st, ids), before)
-	assertStrings(t, "blocked_by undone", result.BlockedByUndone, ids[:1])
-	assertStrings(t, "blocked_by set", result.BlockedBySet, nil)
-}
-
 // aBulkFileRefusalNamesTheTargetAsTheFileStatesIt: an edge the write refuses
 // is named by the reference the file wrote, so an edge onto a create names
-// its local_id, not the id the rollback deletes. Here the gate cannot judge
+// its local_id, not an id the refused file never kept. Here the gate cannot judge
 // the edge, since the update document states no parent, and the write refuses
 // it: the create and x are leaves of one epic.
 func aBulkFileRefusalNamesTheTargetAsTheFileStatesIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -224,7 +203,7 @@ func aBulkFileRefusalNamesTheTargetAsTheFileStatesIt(t *testing.T, ctx context.C
 	}
 	assertStrings(t, "x's blockers after the refusal", blockersOf(t, ctx, st, x.ID), nil)
 	if len(result.Created) != 0 {
-		t.Errorf("created after the refusal = %v, want the create rolled back", result.Created)
+		t.Errorf("created after the refusal = %v, want none: the refused file wrote nothing", result.Created)
 	}
 }
 

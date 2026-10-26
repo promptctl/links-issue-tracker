@@ -227,13 +227,14 @@ type Ranker interface {
 // BulkWriter applies a batch of authored issue documents in one call,
 // resolving the batch's internal references before anything is written.
 //
-// Failure is compensated, not transactional, and the contract is about what
-// the caller is told rather than about atomicity: a batch that fails partway
-// undoes the issues it created, and an error names every one it could not undo
-// — so a partial application is always reported, never inferred.
-// [LAW:no-silent-failure] Updates a mixed batch already applied are not
-// reverted, which is why the error text is the caller's only complete account
-// of what happened.
+// A refused batch writes nothing: a refusal at any write — whichever rule
+// refused it, judged before the first write or by the write itself — leaves
+// the store as it found it, with no create left behind as a deleted
+// issue and no update, edge or rank key kept. A refused batch returns the zero
+// result beside its error, and observers hear a batch's changes only once it
+// has landed. An engine that cannot put the store back says so in its error
+// and returns what stays written beside it, never the zero result.
+// [LAW:no-silent-failure]
 type BulkWriter interface {
 	// BulkApply applies a mixed create/update batch, resolving intra-batch
 	// references by LocalID.
@@ -271,11 +272,11 @@ type Attributor interface {
 //
 // Like attribution, this is the store's and not each caller's: an engine calls
 // its observers from its single change path, so a Change made inside a bulk
-// batch is heard exactly as a lone Apply is, including a Change that landed
-// before its batch failed. Hearing every Change is then a property of the write
-// path rather than an obligation on every command that writes. An observer is
-// called from inside that path, which may still hold the engine's lock, so it
-// must not call back into the store.
+// batch is heard exactly as a lone Apply is, once the batch has landed. A
+// refused batch made no change, so nothing of it is heard. Hearing every Change
+// is then a property of the write path rather than an obligation on every
+// command that writes. An observer is called from inside that path, which may
+// still hold the engine's lock, so it must not call back into the store.
 // [LAW:single-enforcer]
 type ChangeObserver interface {
 	// ObserveChanges adds observe to the observers called after each change
@@ -307,6 +308,7 @@ type Store interface {
 	Attributor
 	ChangeObserver
 	StampReporter
+	StrandedWritesReporter
 
 	// Close releases whatever the engine holds. It is in the contract because
 	// callers must always be able to hand the resource back without knowing

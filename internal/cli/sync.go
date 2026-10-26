@@ -76,7 +76,7 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, databasePath, works
 		reportEventValues(ctx, "fetch.pruned", syncer.PrunedRefs())
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
 		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
-		reportEventValues(ctx, "stranded_writes.commits", syncer.StrandedWritesCommits())
+		reportStrandedWrites(ctx, st)
 		reportEventValues(ctx, "settled_last.writes", syncer.SettledLastWrites())
 		reportEventValues(ctx, "history_bound.records", syncer.HistoryBounds())
 		reportStampCorrections(ctx, st)
@@ -109,6 +109,17 @@ func openSyncEngineAt(ctx context.Context, env environ.Env, databasePath, worksp
 // where a slow clock is most likely corrected. [LAW:nothing-unseen]
 func reportStampCorrections(ctx context.Context, st storage.StampReporter) {
 	telemetry.Append(ctx, "store.stamp_corrections", st.StampCorrections().EventValue())
+}
+
+// reportStrandedWrites puts st's stranded-writes commits on the event when it
+// looked for any: [] is a look that found none, and no key is no look, unlike
+// a sync session's other lists, since a sync session that never reaches a
+// freshness check never looks. [LAW:single-enforcer] the one place the key is
+// written, for a sync session and any other command alike. [LAW:nothing-unseen]
+func reportStrandedWrites(ctx context.Context, st storage.StrandedWritesReporter) {
+	if commits, looked := st.StrandedWritesCommits(); looked {
+		reportEventValues(ctx, "stranded_writes.commits", commits)
+	}
 }
 
 // reportEventValues appends one value per item to the event's occurrences
