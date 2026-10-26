@@ -429,11 +429,11 @@ func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, l
 // Dolt root directory: <databasePath>/<database>/.dolt/noms/LOCK. This is not
 // a lit-minted lock — the embedded driver takes it (a kernel flock through
 // the same promptctl/primitives/filelock package lit's own locks use)
-// whenever an engine opens, holds it for the engine's lifetime, and demotes
-// the open to Dolt's read-only fallback when a 100ms attempt on it times out.
-// Losing it is therefore the one condition under which an engine performs no
-// lifecycle writes — no journal crash-recovery truncate, no close-time
-// manifest flush.
+// whenever a write engine opens and holds it for the engine's lifetime. A
+// read engine never tries it: it opens Dolt read-only, the state in which an
+// engine performs no lifecycle writes — no journal crash-recovery truncate,
+// no journal-index rewrite, no close-time manifest flush (promptctl/dolt
+// FORKS.md Patch 15).
 //
 // ONE HOME exception, stated here where the path is minted: the file lives
 // INSIDE the dolt directory because it is Dolt's file, and that placement is
@@ -446,10 +446,10 @@ func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, l
 // is outside lit's exclusion, as every lit-vs-non-lit interaction is.
 //
 // [LAW:one-source-of-truth] A lit-minted lock for the fact "one write-capable
-// engine on this path", taken by write opens but not by OpenForRead, would be
-// a partial second representation of it — the disagreement that lets a read
-// command's engine run journal recovery underneath a snapshot walk. Code that
-// needs the fact contends on Dolt's own lock; it does not mint a shadow.
+// engine on this path", taken by write opens, would be a partial second
+// representation of it — the disagreement that lets an engine that holds
+// Dolt's lock run journal recovery underneath a snapshot walk. Code that needs
+// the fact contends on Dolt's own lock; it does not mint a shadow.
 func DoltJournalLockPath(databasePath string) string {
 	return filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")
 }
@@ -458,22 +458,13 @@ func DoltJournalLockPath(databasePath string) string {
 // for a caller that must exclude engine-lifecycle I/O without opening an
 // engine — i.e. the `lit snapshots new` copy. While held, no concurrent
 // engine open in any process performs journal crash-recovery or close-time
-// flush, by one of two arms: a read open demotes to Dolt's read-only
-// fallback after its 100ms attempt (read-only is purely this lock's
-// contention fallback — lit never requests it), while a write-capable open
-// refuses the fallback, waits coResidentHolderWait, and fails naming this
-// holder. Fallback or refusal, nothing writes, so a
-// file walk under this hold cannot capture a torn journal. Take it AFTER
+// flush: a read open is read-only and writes nothing whether or not the lock
+// is held, and a write-capable open refuses Dolt's read-only fallback, waits
+// coResidentHolderWait, and fails naming this holder. So a file walk under
+// this hold captures neither a torn journal nor a torn index. Take it AFTER
 // the workspace lock and BEFORE the commit lock, per the acquisition order
 // in this package's doc (doc.go) — taking it inside the commit lock inverts the
 // order against every live write Store.
-//
-// The one lifecycle write this hold does not stop: journal.idx is opened
-// O_RDWR and truncated on every engine bootstrap with no can-write gate, so
-// a copy can still capture a torn index. Severity downgrade, not a hole —
-// Dolt's corruptIndexRecovery truncates a torn index to zero and rebuilds it
-// from the journal on the restored store's first open, where a torn journal
-// would be data loss.
 func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() error, error) {
 	lockPath := DoltJournalLockPath(databasePath)
 	// This helper CONTENDS on Dolt's lock; it never mints Dolt's tree. The

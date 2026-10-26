@@ -63,7 +63,7 @@ const (
 ```
 (`store.go`). Two values only. Semantics:
 - `engineWrite`: connector is given a `BackOff` (`store.go`), and `openStoreConnection` pings eagerly (`store.go`).
-- `engineRead`: no `BackOff`; `openStoreConnection` pings eagerly for both values (`store.go`), and a read engine's ping takes Dolt's read-only fallback past a held journal lock rather than waiting (doc at `store.go`).
+- `engineRead`: no `BackOff`, `JournalReadOnly` set; `openStoreConnection` pings eagerly for both values (`store.go`), and a read engine opens Dolt read-only without trying the journal lock (doc at `store.go`).
 
 #### 1.3 `Store` struct — every field
 
@@ -181,7 +181,8 @@ Behavioral evidence:
 
 Behavioral evidence:
 - On a missing directory, `OpenForRead` errors and creates nothing — `<doltRoot>/links` still does not exist (`store_test.go`).
-- A read open beside a foreign journal-lock holder succeeds and serves reads (count = 1) via Dolt's read-only fallback (`engine_open_contract_test.go`; `dolt_journal_hold_test.go`).
+- A read open beside a foreign journal-lock holder succeeds and serves reads (count = 1) (`engine_open_contract_test.go`; `dolt_journal_hold_test.go`).
+- A read open, a read and a close leave every file under the Dolt root unchanged, by bytes and mtime (`TestAReadOpenWritesNothing`), and a write open beside an open reader opens without waiting, while the reader keeps answering from its own root (`TestAWriteOpensBesideAnOpenReader`).
 - A read open does not wait on a live write engine — it completes inside a 1-second context (`engine_serialization_test.go`).
 - A read open under a held commit lock serves reads (count = 1) inside a 30-second context (`read_open_lock_free_test.go`).
 - A read open on a workspace one migration behind brings it to registry max through `Open` (`read_open_lock_free_test.go`); one whose applied-version content drifted (`lane`/`resolution` dropped) is repaired the same way (`read_open_lock_free_test.go`).
@@ -213,7 +214,7 @@ The two pools run strictly sequentially — the explicit close of the first is t
 - `wrapEngineOpenContention(db.PingContext(ctx), doltRootDir)` for both access values; on failure returns `errors.Join(err, db.Close())` (`store.go`); a write engine then publishes its LOCK holder record via `recordLockHolder` with a no-op release, returned as the holder release (`store.go`);
 - builds the `Store` with the field assignments listed in §1.3 (`store.go`). `doltRootDir` is stored **unmodified**; only `commitLockPath` and `telemetryDir` clean it.
 
-A read engine's ping falls back to Dolt's read-only mode past a held journal lock rather than waiting; the fallback being permanent costs a reader nothing because a read open never applies DDL (`store.go`).
+A read engine opens Dolt read-only without trying the journal lock, so its ping never waits; being read-only costs a reader nothing because a read open never applies DDL (`store.go`).
 
 #### 2.7 `newDoltConnector` / `openDoltPool`
 
@@ -5273,8 +5274,7 @@ Classification predicates:
   3. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   4. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):
      `another process is holding this workspace's Dolt store open; retry after it completes: %w` (`workspace_lock.go`).
-- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, attempts the journal lock for **100ms**, and falls back to Dolt's read-only mode; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`coResidentHolderWait`, 2.3s of unchanged holders). A live write Store holds the journal lock for its entire lifetime.
-- `workspace_lock.go` records the one lifecycle write this hold does not stop: `journal.idx` is opened `O_RDWR` and truncated on every engine bootstrap with no can-write gate, so a snapshot copy can capture a torn index; Dolt's `corruptIndexRecovery` truncates it to zero and rebuilds from the journal on next open.
+- Engine-open interaction stated at `workspace_lock.go` and `internal/store/doc.go`: a **read** engine opens eagerly inside `openStoreConnection`, read-only, without trying the journal lock; a **write** engine opens eagerly inside `openStoreConnection`, **refuses** the read-only fallback, and retries boundedly (`coResidentHolderWait`, 2.3s of unchanged holders). A live write Store holds the journal lock for its entire lifetime.
 
 ---
 

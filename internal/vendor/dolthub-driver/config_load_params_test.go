@@ -28,21 +28,31 @@ import (
 )
 
 // TestConfigDBLoadParamMapping pins how the Config knobs translate into the
-// engine's DBLoadParams: BackOff implies both params (upstream behavior), and
-// each is independently addressable without a BackOff.
+// engine's DBLoadParams: BackOff implies the cache bypass and fail-fast
+// (upstream behavior), the cache bypass is addressable without a BackOff, and
+// JournalReadOnly is the one lock param whatever else is set.
 func TestConfigDBLoadParamMapping(t *testing.T) {
 	cases := []struct {
 		name              string
 		mutate            func(*Config)
 		wantCacheDisabled bool
 		wantFailOnLock    bool
+		wantReadOnly      bool
 	}{
-		{"neither by default", func(*Config) {}, false, false},
+		{"neither by default", func(*Config) {}, false, false, false},
 		{"backoff implies both", func(c *Config) {
 			c.BackOff = backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 1)
-		}, true, true},
-		{"cache disable alone", func(c *Config) { c.DisableSingletonCache = true }, true, false},
-		{"fail-fast alone", func(c *Config) { c.FailOnJournalLockTimeout = true }, false, true},
+		}, true, true, false},
+		{"cache disable alone", func(c *Config) { c.DisableSingletonCache = true }, true, false, false},
+		{"read-only alone", func(c *Config) { c.JournalReadOnly = true }, false, false, true},
+		{"read-only with the cache disabled", func(c *Config) {
+			c.DisableSingletonCache = true
+			c.JournalReadOnly = true
+		}, true, false, true},
+		{"read-only under a backoff", func(c *Config) {
+			c.BackOff = backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 1)
+			c.JournalReadOnly = true
+		}, true, false, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,7 +85,9 @@ func TestConfigDBLoadParamMapping(t *testing.T) {
 			_, cacheDisabled := captured.DBLoadParams[dbfactory.DisableSingletonCacheParam]
 			_, failOnLock := captured.DBLoadParams[dbfactory.FailOnJournalLockTimeoutParam]
 			require.Equal(t, tc.wantCacheDisabled, cacheDisabled, "DisableSingletonCacheParam")
+			_, readOnly := captured.DBLoadParams[dbfactory.JournalReadOnlyParam]
 			require.Equal(t, tc.wantFailOnLock, failOnLock, "FailOnJournalLockTimeoutParam")
+			require.Equal(t, tc.wantReadOnly, readOnly, "JournalReadOnlyParam")
 		})
 	}
 }

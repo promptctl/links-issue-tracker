@@ -29,8 +29,9 @@ const doltDatabaseName = "links"
 // engineAccess is the engine-open contract discriminator. A write-capable open
 // must end with a store that can update the journal manifest, so it fails fast
 // on cross-process lock contention and retries the open (bounded) until the
-// holder releases; a read open tolerates dolt's read-only fallback — reading a
-// store someone else is writing is exactly its job. [LAW:types-are-the-program]
+// holder releases; a read open is read-only by Dolt's own contract, never
+// trying the lock — reading a store someone else is writing is exactly its
+// job. [LAW:types-are-the-program]
 // The contract is a typed input to the one connection assembly point, not a
 // per-callsite improvisation.
 type engineAccess int
@@ -263,7 +264,7 @@ func OpenForRead(ctx context.Context, env environ.Env, doltRootDir string, works
 		return s, nil
 	}
 	// The schema trails this binary. A read never applies a migration — its
-	// engine may be Dolt's read-only fallback, which cannot run DDL — so the
+	// engine is read-only, and cannot run DDL — so the
 	// workspace is brought forward by the write open, the one migration
 	// boundary, and the read is served from the store that did it. The read
 	// engine closes first: a process never holds two engines on the path.
@@ -458,8 +459,8 @@ func (s *Store) Close() error {
 }
 
 // openStoreConnection builds a Store whose engine is open, not lazy: the
-// ping forces the embedded engine — and with it the acquisition of Dolt's
-// own journal lock, or a read engine's fallback past it — to happen here, at
+// ping forces the embedded engine — and with it a write engine's acquisition
+// of Dolt's own journal lock — to happen here, at
 // store construction, before any commit lock the store's user takes. Left
 // lazy, a write store's first SQL would run inside withCommitLock and acquire
 // the journal lock in the inverted commit→LOCK order the discipline in this
@@ -467,17 +468,18 @@ func (s *Store) Close() error {
 // an engine's (and journal lock's) lifetime is the Store's lifetime by
 // construction, not by whichever query happens to run first.
 //
-// A read engine's ping cannot wait on the journal lock (a 100ms attempt, then
-// Dolt's read-only fallback), so it contributes no wait edge to the ordering;
-// and the fallback being permanent for the engine's lifetime costs a reader
-// nothing, because a read open never applies DDL — one that finds the schema
-// trailing hands off to Open (see OpenForRead).
+// A read engine opens Dolt read-only without trying the journal lock, so it
+// contributes no wait edge to the ordering, keeps no writer out, and writes
+// none of the store's files at open or close (TestAReadOpenWritesNothing).
+// Being read-only for the engine's lifetime costs a reader nothing, because a
+// read open never applies DDL — one that finds the schema trailing hands off
+// to Open (see OpenForRead).
 //
 // A write engine that opened holds LOCK, so it records itself as its holder
-// (recordLockHolder, retired by closeEngine before the engine lets go). A read engine does not: it cannot tell whether it
-// took LOCK or fell back past it, and a record naming a reader that holds
-// nothing would send an operator after the wrong pid. The one branch is the
-// open contract's own discriminator. [LAW:dataflow-not-control-flow]
+// (recordLockHolder, retired by closeEngine before the engine lets go). A read
+// engine does not: it never holds LOCK, and a record naming a reader would send
+// an operator after the wrong pid. The one branch is the open contract's own
+// discriminator. [LAW:dataflow-not-control-flow]
 func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	db, releaseEngineRecord, err := openEngine(ctx, doltRootDir, workspaceID, access)
 	if err != nil {
@@ -3415,9 +3417,11 @@ func coResidentHolderWaitNow() time.Duration { return coResidentHolderWait }
 // bootstrap opens that create it). access is the open contract: engineWrite
 // opens fail fast on a foreign journal-lock holder and retry (bounded) instead
 // of accepting dolt's silent read-only fallback — a "successfully opened" write
-// store IS the proof it can write ([LAW:parse-dont-validate]); engineRead keeps
-// the fallback, because reading beside a live writer is a read open's whole
-// contract. Both bypass dolt's in-process singleton cache, so a Store's
+// store IS the proof it can write ([LAW:parse-dont-validate]); engineRead opens
+// read-only without trying the lock, because reading beside a live writer is a
+// read open's whole contract and a read has no business taking the lock that
+// keeps writers out, or the repairs and flushes that come with holding it.
+// Both bypass dolt's in-process singleton cache, so a Store's
 // lifetime and its engine's (and journal lock's) lifetime are the same fact
 // rather than a cached shadow that outlives Close. [LAW:one-source-of-truth]
 func newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error) {
@@ -3433,7 +3437,10 @@ func newDoltConnector(doltRootDir, workspaceID, database string, access engineAc
 		Database:              database,
 		DisableSingletonCache: true,
 	}
-	if access == engineWrite {
+	switch access {
+	case engineRead:
+		cfg.JournalReadOnly = true
+	case engineWrite:
 		cfg.BackOff = newEngineOpenBackOff(doltRootDir)
 	}
 	connector, err := embedded.NewConnector(cfg)

@@ -203,11 +203,8 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 // open applies (operability). The empty workspace the fresh-open snapshot
 // captured holds no data, so it is never a rollback.
 //
-// The snapshot is read in place by a read engine. Dolt rewrites its journal
-// bookkeeping when an engine opens a store, here as on the first open after
-// the snapshot is restored; the data the snapshot holds is unchanged. A clone
-// would avoid that rewrite at the price of a full copy on a filesystem with no
-// copy-on-write, and of a store-sized tree stranded by a hard exit.
+// The snapshot is read in place by a read engine, which opens Dolt read-only
+// and writes none of the snapshot's files, so reading it costs no copy.
 func snapshotWritable(ctx context.Context, env environ.Env, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
 	snap, err := openStoreConnection(ctx, env, snapshotPath, workspaceID, engineRead)
 	if err != nil {
