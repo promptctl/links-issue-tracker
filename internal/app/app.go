@@ -40,7 +40,23 @@ type AccessMode string
 const (
 	AccessRead  AccessMode = "read"
 	AccessWrite AccessMode = "write"
+	// AccessWriteRoutine is AccessWrite for a command that makes a fixed
+	// number of issue changes, whatever its input: one issue's transition,
+	// edit, comment, label or relation. Its store hold tells the writers
+	// waiting behind it that it is still working (engine.ReadWriteRoutine), so
+	// a hold slowed by a loaded machine is waited out. Every other write stays
+	// AccessWrite, the long hold, whose waiters fail after the store's wait;
+	// a row nobody classified is long, which is the behaviour it always had.
+	AccessWriteRoutine AccessMode = "write-routine"
 )
+
+// Writes is whether a command of this mode may change the store: what the
+// staleness banner, the on-change mirror and the compaction backstop ask.
+// [LAW:one-source-of-truth] read off the contract table, so no site compares
+// a mode against one write value and misses the other.
+func (m AccessMode) Writes() bool {
+	return accessContracts[m].writes
+}
 
 // accessContract is everything an access mode decides, gathered into one value
 // so the decisions cannot be made in different places and disagree. Store access
@@ -53,6 +69,8 @@ const (
 type accessContract struct {
 	mode          engine.Mode
 	resolveStream func(privateGitDir string) (workspace.StreamID, error)
+	// writes is whether the mode may change the store (AccessMode.Writes).
+	writes bool
 }
 
 // accessContracts is the whole meaning of AccessMode. Read commands open the
@@ -63,8 +81,9 @@ type accessContract struct {
 // sites. [LAW:dataflow-not-control-flow] The variance is data in this map, not
 // branches in Open.
 var accessContracts = map[AccessMode]accessContract{
-	AccessRead:  {mode: engine.ReadOnly, resolveStream: workspace.ReadStream},
-	AccessWrite: {mode: engine.ReadWrite, resolveStream: workspace.EnsureStream},
+	AccessRead:         {mode: engine.ReadOnly, resolveStream: workspace.ReadStream, writes: false},
+	AccessWrite:        {mode: engine.ReadWrite, resolveStream: workspace.EnsureStream, writes: true},
+	AccessWriteRoutine: {mode: engine.ReadWriteRoutine, resolveStream: workspace.EnsureStream, writes: true},
 }
 
 // Open is the single app construction path for a resolved workspace,

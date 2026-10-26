@@ -143,7 +143,7 @@ func cloneHeldRemote(t *testing.T, ctx context.Context, name, url string) (*Stor
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("create the clone's root: %v", err)
 	}
-	db, err := openDoltPool(root, "ws", "", engineWrite)
+	db, err := openDoltPool(root, "ws", "", newLockHold(context.Background(), root, engineWrite, &longPhase{}))
 	if err != nil {
 		t.Fatalf("open dolt for the clone: %v", err)
 	}

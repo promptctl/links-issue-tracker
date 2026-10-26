@@ -38,8 +38,15 @@ type Mode string
 
 const (
 	// ReadWrite bootstraps the database when it is absent and takes the
-	// exclusive workspace lock. It is what a mutating command opens.
+	// exclusive workspace lock. It is what a mutating command opens: a long
+	// hold, whose waiters fail after the store's wait, naming it.
 	ReadWrite Mode = "read-write"
+
+	// ReadWriteRoutine is ReadWrite for a command that makes a fixed number
+	// of issue changes. Its hold tells the writers waiting behind it that it
+	// is still working, so a hold slowed by a loaded machine is waited out
+	// rather than failing them (store.OpenRoutine).
+	ReadWriteRoutine Mode = "read-write-routine"
 
 	// ReadOnly requires an already-initialized database and takes a shared
 	// lock, so concurrent readers do not contend and a reader never creates a
@@ -58,9 +65,10 @@ const (
 // flips reads to the event store, a row changes and no caller does; when S4
 // deletes Dolt, this table is where the deletion lands.
 var openers = map[Mode]func(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (*store.Store, error){
-	ReadWrite: store.Open,
-	ReadOnly:  store.OpenForRead,
-	Sync:      store.OpenSync,
+	ReadWrite:        store.Open,
+	ReadWriteRoutine: store.OpenRoutine,
+	ReadOnly:         store.OpenForRead,
+	Sync:             store.OpenSync,
 }
 
 // Open constructs the engine backing the workspace at doltRootDir.

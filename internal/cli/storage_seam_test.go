@@ -80,11 +80,15 @@ var doltWorkspaceMachinery = map[string][]string{
 	// run in the holder record each of these flocks publishes. The journal
 	// warning tests reach DoltJournalLockPath for the noms directory it sits
 	// in, to damage the journal there with no engine open, and because each
-	// warning names that directory.
+	// warning names that directory. WithLockObserver hands the command's event
+	// each wait on these locks and each hold of Dolt's LOCK (LockObserver,
+	// LockWait, LockHold); it rides the invocation's context, installed before
+	// any engine exists, as nbs.WithJournalWarningObserver does.
 	"workspace and commit locks": {
 		"CommitLockPath", "LockCommitPath", "SettleCommitLockRelease",
 		"LockWorkspaceExclusive", "LockWorkspaceShared", "LockDoltJournalExclusive", "DoltJournalLockPath",
 		"TryAcquireSyncPushLock", "TryAcquireReceiveLock", "WithHolderCommand",
+		"WithLockObserver", "LockObserver", "LockWait", "LockHold",
 	},
 	// The detached mirror's cross-process handshake. Named in design.md §migration
 	// as mirror-flock machinery, deleted at S4.

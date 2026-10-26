@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026040056-0bdb2f7bb33a` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026151207-013ddc8d50c0` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -557,6 +557,37 @@ without the patch.
 callback from its caller instead of hard-wiring the logging one, and the
 `require` line moves past that change. Dropping it without that sends every
 journal warning back to stderr and leaves the command's event without it.
+
+#### Patch 17 — a journaling store tells an observer when it takes its lock and lets it go
+
+`go/store/nbs/journal.go`, plus `go/store/nbs/journal_lock_observer_test.go` (a
+new file, not upstream's).
+
+A journaling store takes its directory's LOCK inside the open and releases it
+inside the close, and nothing outside the store learned either instant. lit
+could announce a write engine's hold only after the open returned, and retire
+it only before the close began, so under load a writer saw a held LOCK with no
+holder announced for seconds and failed `workspace_busy` behind a healthy
+holder (`links-scale-dy46.833`).
+
+- `nbs.WithJournalLockObserver(ctx, nbs.JournalLockObserver{Taken, Released})`
+  puts an observer on a context, the way `nbs.WithJournalWarningObserver`
+  (Patch 16) does. The open calls `Taken` once the lock is held, and the store
+  calls `Released` once it has let the lock go, on close or on an open that
+  failed after taking it. A context without an observer gets a no-op.
+- `journalManifest.unlock` is the one release path; `Close` and every failed
+  open go through it, and it reports `Released` at most once.
+
+lit installs the observer for each write engine's open (`lockHold.under`,
+`internal/store/lock_hold.go`), which records the hold as a `lock.holds`
+occurrence (`docs/events.md`) and heartbeats a routine hold to the writers
+waiting behind it. `TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking` in
+`internal/store` fails without the patch.
+
+**Retire it when** upstream lets a journaling store's caller learn when it
+takes and releases LOCK, and the `require` line moves past that change.
+Dropping it without that leaves lit announcing a hold only after the open
+returns, so writers behind a slow open fail on contention again.
 
 ### promptctl/go-mysql-server
 

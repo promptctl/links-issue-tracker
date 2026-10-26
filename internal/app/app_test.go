@@ -243,3 +243,18 @@ func resolvedWorkspace(t *testing.T, dir string) workspace.Info {
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the run starts.
 func testEnv() environ.Env { return environ.Of(os.Environ()) }
+
+// Writes is the mutation marker the staleness banner, the on-change mirror
+// and the compaction backstop read, and every write mode carries it: a
+// routine write's hold kind must not make it look like a read to any of them.
+func TestEveryWriteModeWrites(t *testing.T) {
+	t.Parallel()
+	for mode, want := range map[AccessMode]bool{AccessRead: false, AccessWrite: true, AccessWriteRoutine: true} {
+		if got := mode.Writes(); got != want {
+			t.Errorf("%q.Writes() = %t, want %t", mode, got, want)
+		}
+	}
+	if len(accessContracts) != 3 {
+		t.Errorf("accessContracts has %d modes, this test pins 3; a new mode must state whether it writes", len(accessContracts))
+	}
+}

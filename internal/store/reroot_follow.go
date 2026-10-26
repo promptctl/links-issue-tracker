@@ -267,7 +267,7 @@ func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context
 	if err := s.closeEngine(); err != nil {
 		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(reopenCtx))
 	}
-	holdErr := holdForRefWrite(ctx, s.doltRootDir, ReRootHoldBudget, write)
+	holdErr := holdForRefWrite(ctx, s.doltRootDir, engineWrite, ReRootHoldBudget, write)
 	return errors.Join(holdErr, s.reopenEngine(reopenCtx))
 }
 
@@ -275,11 +275,11 @@ func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context
 // open contract. A failure leaves the closed engine in place, so every query
 // after it fails loudly.
 func (s *Store) reopenEngine(ctx context.Context) error {
-	db, releaseEngineRecord, err := openEngine(ctx, s.doltRootDir, s.workspaceID, s.access)
+	db, hold, releaseEngineRecord, err := openEngine(ctx, s.doltRootDir, s.workspaceID, s.access, s.phase)
 	if err != nil {
 		return fmt.Errorf("reopen the engine: %w", err)
 	}
-	s.db, s.releaseEngineRecord = db, releaseEngineRecord
+	s.db, s.hold, s.releaseEngineRecord = db, hold, releaseEngineRecord
 	return nil
 }
 

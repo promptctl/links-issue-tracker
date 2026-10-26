@@ -16,6 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
@@ -62,19 +63,50 @@ func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 // its context ended, Dolt's git included. The other puts there every
 // recoverable journal problem a store opened under it reported, such as an
 // index a read open passed over to read the whole journal, in place of the
-// logrus line on stderr Dolt writes by default. Each key starts as [] so an
-// invocation that met none says so, not nothing. [LAW:nothing-unseen]
-// [LAW:single-enforcer]
+// logrus line on stderr Dolt writes by default. A third puts there the store's
+// lock waits and LOCK holds: every acquisition that found its lock held, and
+// every write engine's hold of Dolt's LOCK with what it told the writers
+// behind it. Each key starts as [] so an invocation that met none says so,
+// not nothing. [LAW:nothing-unseen] [LAW:single-enforcer]
 func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
 	event := telemetry.With(ctx, recorder)
 	telemetry.Append(event, "git.cancels")
 	telemetry.Append(event, "dolt.journal_warnings")
-	ctx = nbs.WithJournalWarningObserver(event, func(warning nbs.JournalWarning) {
+	telemetry.Append(event, "lock.waits")
+	telemetry.Append(event, "lock.holds")
+	ctx = store.WithLockObserver(event, store.LockObserver{
+		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
+		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
+	})
+	ctx = nbs.WithJournalWarningObserver(ctx, func(warning nbs.JournalWarning) {
 		telemetry.Append(event, "dolt.journal_warnings", journalWarningValue(warning))
 	})
 	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
 		telemetry.Append(event, "git.cancels", gitCancelValue(cancelled))
 	})
+}
+
+// lockWaitValue is one lock.waits occurrence.
+func lockWaitValue(w store.LockWait) map[string]any {
+	return map[string]any{
+		"lock.wait.lock":          w.Lock,
+		"lock.wait.waited_ms":     w.Waited.Milliseconds(),
+		"lock.wait.progress_seen": w.ProgressSeen,
+		"lock.wait.outcome":       string(w.Outcome),
+	}
+}
+
+// lockHoldValue is one lock.holds occurrence.
+func lockHoldValue(h store.LockHold) map[string]any {
+	return map[string]any{
+		"lock.hold.lock":               h.Lock,
+		"lock.hold.routine":            h.Routine,
+		"lock.hold.held_ms":            h.Held.Milliseconds(),
+		"lock.hold.executing_ms":       h.Executing.Milliseconds(),
+		"lock.hold.longest_idle_ms":    h.LongestIdle.Milliseconds(),
+		"lock.hold.heartbeats":         h.Heartbeats,
+		"lock.hold.heartbeat_failures": h.HeartbeatFailures,
+	}
 }
 
 // journalWarningValue is one dolt.journal_warnings occurrence: the store whose

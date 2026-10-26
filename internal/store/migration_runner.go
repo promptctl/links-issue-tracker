@@ -620,6 +620,14 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (op oper
 // up to and including the recovery snapshot; applySnapshotted does the rest.
 func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment) (pruneErr error, fail *SchemaConvergenceError) {
 	state := assessment.state
+	if !assessment.needsWrite() {
+		return nil, nil
+	}
+	// From here the open changes the schema: a long phase even inside a
+	// routine hold, so the hold sends no heartbeat until it is done and its
+	// waiters judge it by stand-still, naming it, as they judge every long
+	// hold. The check above runs on every open and keeps the heartbeat.
+	defer s.phase.enter()()
 	// A detected content mismatch is not a terminal refusal: it is the signal
 	// to self-heal. Unlike ensureQuarantineTable's detect-then-recreate
 	// precedent (which only ever touches lit's own bookkeeping table, bounded

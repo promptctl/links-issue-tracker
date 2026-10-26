@@ -646,7 +646,7 @@ func (r *commandRegistrar) wsCmdAcquiring(declare func() (wsLeaf, wsAcquire)) Co
 }
 
 func (r *commandRegistrar) transitionCmd(spec transitionSpec) CommandRunner {
-	return r.appCmd(app.AccessWrite, func() appLeaf { return transitionLeaf(spec) })
+	return r.appCmd(app.AccessWriteRoutine, func() appLeaf { return transitionLeaf(spec) })
 }
 
 // commandSpecs returns the full registry. New commands are added here as a
@@ -694,7 +694,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 		{Name: backgroundReceiveSubcommand, Summary: "Detached automatic-receive worker", GroupID: "data", Hidden: true,
 			Run: r.bareCmd(backgroundReceiveLeaf)},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, newLeaf)},
+			Run: r.appCmd(app.AccessWriteRoutine, newLeaf)},
 		{Name: "followup", Summary: "File a follow-up beside a just-closed ticket, in its epic", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, followupLeaf)},
 		// ready and queue are retired: next (one leaf) and backlog (the ranked
@@ -720,7 +720,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 		{Name: "history", Summary: "Show an issue's state-transition history", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, historyLeaf)},
 		{Name: "update", Summary: "Update issue fields", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, updateLeaf)},
+			Run: r.appCmd(app.AccessWriteRoutine, updateLeaf)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
 			Run: r.appCmdDispatch(app.AccessWrite, rankDispatch), Subcommands: []SubcommandSpec{{Name: rankSetSubcommand}}},
 		{Name: startSpec.name, Summary: "Claim issue work", GroupID: "operations",
@@ -749,9 +749,9 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 		{Name: restoreSpec.name, Summary: "Restore deleted issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(restoreSpec)},
 		{Name: "purge", Summary: "Permanently remove an issue and everything it owns", GroupID: "retention",
-			Run: r.appCmd(app.AccessWrite, purgeLeaf)},
+			Run: r.appCmd(app.AccessWriteRoutine, purgeLeaf)},
 		{Name: "verdict", Summary: "Record a law review of one version of an issue's plan: pass or fail, citing laws", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, verdictLeaf)},
+			Run: r.appCmd(app.AccessWriteRoutine, verdictLeaf)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
 			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.subcommandSpecs()},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",

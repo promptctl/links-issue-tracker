@@ -782,7 +782,8 @@ func TestARecordThatWillNotRetireIsReportedAndTheReleaseStillLands(t *testing.T)
 	storageDir := storageDirOf(lockPath)
 	dir := lockHolderDir(storageDir, lockPath)
 	lockErr := errors.New("lock release result")
-	release := recordLockHolder(context.Background(), storageDir, lockPath, func() error { return lockErr })
+	privatePath, recordPath := lockHolderRecordNames(dir)
+	release := recordLockHolder(context.Background(), storageDir, lockPath, privatePath, recordPath, func() error { return lockErr })
 
 	// The swept name becomes a non-empty directory the release cannot remove,
 	// as on Windows it cannot remove a name a concurrent sweep's probe holds

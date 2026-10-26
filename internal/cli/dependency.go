@@ -13,8 +13,8 @@ import (
 var depFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit dep <add|rm|ls> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "add", payload: appSubcommand{access: app.AccessWrite, declare: depAddLeaf}},
-		{name: "rm", payload: appSubcommand{access: app.AccessWrite, declare: depRmLeaf}},
+		{name: "add", payload: appSubcommand{access: app.AccessWriteRoutine, declare: depAddLeaf}},
+		{name: "rm", payload: appSubcommand{access: app.AccessWriteRoutine, declare: depRmLeaf}},
 		{name: "ls", payload: appSubcommand{access: app.AccessRead, declare: depLsLeaf}},
 	},
 }

@@ -46,13 +46,13 @@ func TestOpenRejectsUnknownMode(t *testing.T) {
 // a green suite would say so. [LAW:one-source-of-truth]
 func TestEveryModeHasAnOpener(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []Mode{ReadWrite, ReadOnly, Sync} {
+	for _, mode := range []Mode{ReadWrite, ReadWriteRoutine, ReadOnly, Sync} {
 		if _, ok := openers[mode]; !ok {
 			t.Errorf("mode %q is declared but openers has no row for it", mode)
 		}
 	}
-	if len(openers) != 3 {
-		t.Errorf("openers has %d rows, but only 3 modes are declared; an unreachable row is a mode nobody can ask for", len(openers))
+	if len(openers) != 4 {
+		t.Errorf("openers has %d rows, but only 4 modes are declared; an unreachable row is a mode nobody can ask for", len(openers))
 	}
 }
 

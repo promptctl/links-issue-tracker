@@ -212,7 +212,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// markers and git's remote config, needing no engine, and precedes the
 	// auto-sync below so the banner reports the last COMPLETED attempt rather
 	// than racing the one about to spawn.
-	if accessMode == app.AccessWrite {
+	if accessMode.Writes() {
 		printMutationSyncStalenessWarning(ctx, inv.Env, inv.Stdout, ws, time.Now())
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
@@ -2140,8 +2140,8 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 var commentFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit comment <add|rm> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "add", payload: appSubcommand{access: app.AccessWrite, declare: commentAddLeaf}},
-		{name: "rm", payload: appSubcommand{access: app.AccessWrite, declare: commentRmLeaf}},
+		{name: "add", payload: appSubcommand{access: app.AccessWriteRoutine, declare: commentAddLeaf}},
+		{name: "rm", payload: appSubcommand{access: app.AccessWriteRoutine, declare: commentRmLeaf}},
 	},
 }
 
