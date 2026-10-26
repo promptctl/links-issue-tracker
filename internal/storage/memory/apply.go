@@ -3,7 +3,6 @@ package memory
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -16,10 +15,10 @@ import (
 // value carries all the variability — a nil Action is no transition, an empty
 // patch is no field write — so the body below is one straight pipe with no
 // verb-shaped branches in it. [LAW:dataflow-not-control-flow]
-func (e *Engine) Apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
+func (e *Engine) Apply(ctx context.Context, id string, plan storage.ChangePlan) (storage.Applied, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	applied, err := e.apply(id, c)
+	c, applied, err := e.apply(id, plan)
 	if err != nil {
 		return storage.Applied{}, err
 	}
@@ -46,17 +45,21 @@ type heardChange struct {
 	issue  model.Issue
 }
 
-// apply writes one change and tells no observer; its caller notifies once the
-// change is sure to stand.
-func (e *Engine) apply(id string, c storage.Change) (storage.Applied, error) {
+// apply writes the change plan decides and tells no observer; its caller
+// notifies, with the change it returns, once the change is sure to stand.
+func (e *Engine) apply(id string, plan storage.ChangePlan) (storage.Change, storage.Applied, error) {
 	rec, err := e.mustRecord(id)
 	if err != nil {
-		return storage.Applied{}, err
+		return storage.Change{}, storage.Applied{}, err
 	}
 	pos := e.positions()
 	current, err := e.hydrate(rec, pos)
 	if err != nil {
-		return storage.Applied{}, err
+		return storage.Change{}, storage.Applied{}, err
+	}
+	c, err := plan.PlanChange(current)
+	if err != nil {
+		return storage.Change{}, storage.Applied{}, err
 	}
 	// [LAW:one-source-of-truth] One change has one author, normalized once and
 	// recorded on every event the change produces.
@@ -68,22 +71,22 @@ func (e *Engine) apply(id string, c storage.Change) (storage.Applied, error) {
 	// change row restating what the transition already recorded.
 	afterAction, actionEvents, handover, err := e.planLifecycle(current, actor, strings.TrimSpace(c.Reason), c.Action, now)
 	if err != nil {
-		return storage.Applied{}, err
+		return storage.Change{}, storage.Applied{}, err
 	}
 	patch, err := planFields(afterAction, c.Fields, actor, now)
 	if err != nil {
-		return storage.Applied{}, err
+		return storage.Change{}, storage.Applied{}, err
 	}
 
 	e.writeIssue(rec, patch.issue)
-	e.writeLabels(rec.id, patch, now)
+	e.setLabels(rec.id, patch.issue.Labels, now, patch.actor)
 	e.recordEvents(rec.id, actionEvents, now)
 	e.recordEvents(rec.id, patch.events, now)
 	issue, err := e.hydrate(rec, e.positions())
 	if err != nil {
-		return storage.Applied{}, err
+		return storage.Change{}, storage.Applied{}, err
 	}
-	return storage.Applied{Issue: issue, Handover: handover, Fields: patch.changes}, nil
+	return c, storage.Applied{Issue: issue, Handover: handover, Fields: patch.changes}, nil
 }
 
 // planLifecycle plans whichever axis the action drives. The three subsets
@@ -224,18 +227,11 @@ func (e *Engine) validateRedirectTarget(closing model.Issue) error {
 	return nil
 }
 
-// fieldPatch is a planned field write: the post-patch issue, whether the patch
-// moved the label set, the change rows it made, and the event it owes.
-//
-// movesLabels is "did the label set change", not "did the patch state one": a
-// patch restating the set the issue already has leaves the rows exactly as
-// their writers left them, authorship and timestamps included, as a patch that
-// never mentions labels does. Rewriting them would change who added a label
-// with no change row to say so.
+// fieldPatch is a planned field write: the post-patch issue, the change rows
+// it made, and the event it owes.
 type fieldPatch struct {
-	issue       model.Issue
-	movesLabels bool
-	// actor authors the label rows a moved set writes, so the patch's one
+	issue model.Issue
+	// actor authors the label rows a moved set adds, so the patch's one
 	// author is the one this write records.
 	actor   string
 	changes []model.FieldChange
@@ -254,7 +250,7 @@ func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string,
 	if err != nil {
 		return fieldPatch{}, err
 	}
-	patch := fieldPatch{issue: issue, movesLabels: !slices.Equal(baseline.Labels, issue.Labels), actor: actor, changes: changes}
+	patch := fieldPatch{issue: issue, actor: actor, changes: changes}
 	// An empty patch plans no change without anyone testing for one: no field
 	// moved, so there are no rows, so there is no event to owe.
 	if len(changes) == 0 {
@@ -325,16 +321,6 @@ func (e *Engine) writeIssue(rec *record, issue model.Issue) {
 	rec.updatedAt = issue.UpdatedAt
 	rec.retention = issue.Retention()
 	rec.status = statusViewOf(issue)
-}
-
-// writeLabels replaces the label set when — and only when — the patch moved
-// it. A set it left as it was keeps its rows, so neither a title edit nor a
-// restated set silently reassigns authorship of every label on the issue.
-func (e *Engine) writeLabels(issueID string, patch fieldPatch, now time.Time) {
-	if !patch.movesLabels {
-		return
-	}
-	e.setLabels(issueID, patch.issue.Labels, now, patch.actor)
 }
 
 // statusViewOf projects an issue's leaf status back to the stored view. A

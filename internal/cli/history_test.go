@@ -307,3 +307,52 @@ func TestRunHistoryVersionRejectsAMalformedReference(t *testing.T) {
 		}
 	}
 }
+
+// `lit label add`, `lit label rm` and `lit bulk label` are edits of the labels
+// field, so `lit history` lists each one, by the actor that made it.
+func TestRunHistoryListsLabelVerbs(t *testing.T) {
+	// --by names the actor only when no session identity outranks it.
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Labeled", Topic: "history", IssueType: "task", Priority: 0,
+		ParentID: seedEpicRaw(t, ctx, ap, "History", "history"),
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	for _, step := range []struct {
+		verb appLeaf
+		args []string
+	}{
+		{labelAddLeaf(), []string{issue.ID, "perf", "--by", "adder"}},
+		{labelRmLeaf(), []string{issue.ID, "perf", "--by", "remover"}},
+		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-adder"}},
+		{bulkLabelLeaf(), []string{"rm", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-remover"}},
+	} {
+		if err := runLeaf(step.verb, ctx, &bytes.Buffer{}, ap, step.args); err != nil {
+			t.Fatalf("%v error = %v", step.args, err)
+		}
+	}
+
+	var stdout bytes.Buffer
+	if err := runHistory(ctx, &stdout, ap, []string{issue.ID}); err != nil {
+		t.Fatalf("runHistory() error = %v", err)
+	}
+	out := stdout.String()
+	rest := out
+	for _, want := range []string{
+		"- [adder @ ", "labels: - → perf",
+		"- [remover @ ", "labels: perf → -",
+		"- [bulk-adder @ ", "labels: - → gpu",
+		"- [bulk-remover @ ", "labels: gpu → -",
+	} {
+		index := strings.Index(rest, want)
+		if index < 0 {
+			t.Fatalf("lit history does not list %q after the edits before it:\n%s", want, out)
+		}
+		rest = rest[index+len(want):]
+	}
+}

@@ -2614,55 +2614,77 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 	}
 }
 
-func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tagged", Topic: "core", ParentID: epic.ID})
-
-	// Every mutating verb returns the resulting set, so "what does it have now"
-	// is never a follow-up read a concurrent writer could answer differently.
-	labels, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: issue.ID, Name: "zeta", CreatedBy: "ada"})
-	if err != nil {
-		t.Fatalf("AddLabel error = %v", err)
+	labelRows := func() []model.Label {
+		var rows []model.Label
+		for _, label := range mustExport(t, ctx, st).Labels {
+			if label.IssueID == issue.ID {
+				rows = append(rows, label)
+			}
+		}
+		return rows
 	}
-	assertStrings(t, "after adding zeta", labels, []string{"zeta"})
 
-	labels, err = st.AddLabel(ctx, storage.AddLabelInput{IssueID: issue.ID, Name: "alpha", CreatedBy: "ada"})
-	if err != nil {
-		t.Fatalf("AddLabel error = %v", err)
+	// A label verb is an edit of the labels field: the change it returns holds
+	// the resulting set, and history holds one labels row by its actor, so
+	// `lit history` and undo see it as they see any edit.
+	step := func(what string, plan storage.ChangePlan, wantLabels []string, want []model.FieldChange) {
+		t.Helper()
+		before, err := st.ListEvents(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("ListEvents before %s error = %v", what, err)
+		}
+		applied, err := st.Apply(ctx, issue.ID, plan)
+		if err != nil {
+			t.Fatalf("%s error = %v", what, err)
+		}
+		assertStrings(t, what+" labels", applied.Issue.Labels, wantLabels)
+		events, err := st.ListEvents(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("ListEvents after %s error = %v", what, err)
+		}
+		var got []model.FieldChange
+		var actors []string
+		for _, event := range events[len(before):] {
+			got = append(got, event.Changes...)
+			actors = append(actors, event.Actor)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s recorded %v, want %v", what, got, want)
+		}
+		if len(want) > 0 && !slices.Equal(actors, []string{"ada"}) {
+			t.Errorf("%s recorded by %v, want ada", what, actors)
+		}
 	}
+	step("adding zeta", storage.AddLabel{Name: "zeta", Actor: "ada"}, []string{"zeta"},
+		[]model.FieldChange{{Field: "labels", From: "", To: "zeta"}})
+	zeta := labelRows()
 	// The set is ordered by name, not by when each label arrived.
-	assertStrings(t, "after adding alpha", labels, []string{"alpha", "zeta"})
-
+	step("adding alpha", storage.AddLabel{Name: "alpha", Actor: "ada"}, []string{"alpha", "zeta"},
+		[]model.FieldChange{{Field: "labels", From: "zeta", To: "alpha,zeta"}})
 	// Adding a label twice is the same end state, not an error: the caller
-	// asked for the label to be present, and it is.
-	labels, err = st.AddLabel(ctx, storage.AddLabelInput{IssueID: issue.ID, Name: "alpha", CreatedBy: "ada"})
-	if err != nil {
-		t.Fatalf("AddLabel duplicate error = %v", err)
-	}
-	assertStrings(t, "after a duplicate add", labels, []string{"alpha", "zeta"})
+	// asked for the label to be present, and it is. Nothing moved, so nothing
+	// is recorded.
+	step("a duplicate add", storage.AddLabel{Name: "alpha", Actor: "ada"}, []string{"alpha", "zeta"}, nil)
+	step("removing alpha", storage.RemoveLabel{Name: "alpha", Actor: "ada"}, []string{"zeta"},
+		[]model.FieldChange{{Field: "labels", From: "alpha,zeta", To: "zeta"}})
 
-	labels, err = st.RemoveLabel(ctx, issue.ID, "alpha")
-	if err != nil {
-		t.Fatalf("RemoveLabel error = %v", err)
+	// A label the edits did not add or remove keeps its row: zeta is still
+	// the row its own add wrote, author and instant included.
+	if rows := labelRows(); !reflect.DeepEqual(rows, zeta) {
+		t.Errorf("label rows after the edits = %+v, want zeta's row as its add wrote it, %+v", rows, zeta)
 	}
-	assertStrings(t, "after removing alpha", labels, []string{"zeta"})
 
 	// Removing what was never there is not a silent success — nothing was
 	// removed, and saying otherwise would be an answer-shaped void.
-	_, err = st.RemoveLabel(ctx, issue.ID, "alpha")
+	before := mustExport(t, ctx, st)
+	_, err := st.Apply(ctx, issue.ID, storage.RemoveLabel{Name: "alpha", Actor: "ada"})
 	assertNotFound(t, err, "label", "RemoveLabel of an absent label")
+	assertWroteNothing(t, ctx, st, before, "RemoveLabel of an absent label")
 
-	if err := st.ReplaceLabels(ctx, issue.ID, []string{"gamma", "beta"}, "ada"); err != nil {
-		t.Fatalf("ReplaceLabels error = %v", err)
-	}
-	listed, err := st.ListLabels(ctx, issue.ID)
-	if err != nil {
-		t.Fatalf("ListLabels error = %v", err)
-	}
-	// Replace states the whole set: what was there and is not named is gone.
-	assertStrings(t, "after replace", listed, []string{"beta", "gamma"})
-
-	_, err = st.AddLabel(ctx, storage.AddLabelInput{IssueID: "no-such-issue", Name: "x", CreatedBy: "ada"})
+	_, err = st.Apply(ctx, "no-such-issue", storage.AddLabel{Name: "x", Actor: "ada"})
 	assertNotFound(t, err, "issue", "AddLabel on a missing issue")
 }
 

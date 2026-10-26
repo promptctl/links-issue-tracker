@@ -95,12 +95,6 @@ type AddCommentInput struct {
 	CreatedBy string
 }
 
-type AddLabelInput struct {
-	IssueID   string
-	Name      string
-	CreatedBy string
-}
-
 type AddRelationInput struct {
 	SrcID     string
 	DstID     string

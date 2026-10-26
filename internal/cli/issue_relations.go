@@ -32,11 +32,11 @@ func labelAddLeaf() appLeaf {
 		if len(positional) != 2 {
 			return UsageError{Message: usageLine0}
 		}
-		labels, err := ap.Store.AddLabel(ctx, storage.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: resolveActor(inv.Env)})
+		applied, err := ap.Store.Apply(ctx, positional[0], storage.AddLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
-		if err := printLabels(inv.Stdout, labels); err != nil {
+		if err := printLabels(inv.Stdout, applied.Issue.Labels); err != nil {
 			return err
 		}
 		return emitBreadcrumb(inv.Stdout, "update")
@@ -45,16 +45,17 @@ func labelAddLeaf() appLeaf {
 
 func labelRmLeaf() appLeaf {
 	fs := newCobraFlagSet("label rm")
+	resolveActor := registerActor(fs)
 	const usageLine1 = "usage: lit label rm <issue-id> <label>"
 	return appLeaf{fs: fs, usage: usageLine1, positionals: 2, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		if len(positional) != 2 {
 			return UsageError{Message: usageLine1}
 		}
-		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
+		applied, err := ap.Store.Apply(ctx, positional[0], storage.RemoveLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
-		if err := printLabels(inv.Stdout, labels); err != nil {
+		if err := printLabels(inv.Stdout, applied.Issue.Labels); err != nil {
 			return err
 		}
 		return emitBreadcrumb(inv.Stdout, "update")

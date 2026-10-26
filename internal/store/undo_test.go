@@ -157,9 +157,39 @@ func TestRevertWritesPutsAFieldEditBack(t *testing.T) {
 	}
 }
 
+// A label verb is an edit of the labels field, so its write reverts like any
+// edit: `lit label add` and `lit label rm` are each put back.
+func TestRevertWritesPutsALabelVerbBack(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newUndoStore(t)
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: "task", ParentID: epic.ID, Labels: []string{"keep"}})
+	for _, tc := range []struct {
+		verb storage.ChangePlan
+		want []string
+	}{
+		{storage.AddLabel{Name: "new", Actor: "editor"}, []string{"keep"}},
+		{storage.RemoveLabel{Name: "keep", Actor: "editor"}, []string{"keep"}},
+	} {
+		if _, err := st.Apply(ctx, task.ID, tc.verb); err != nil {
+			t.Fatalf("Apply(%+v) error = %v", tc.verb, err)
+		}
+		if _, err := st.RevertWrites(ctx, []string{headWrite(t, st)}, "undoer"); err != nil {
+			t.Fatalf("RevertWrites(%+v) error = %v", tc.verb, err)
+		}
+		got, err := st.GetIssue(ctx, task.ID)
+		if err != nil {
+			t.Fatalf("GetIssue() error = %v", err)
+		}
+		if !slices.Equal(got.Labels, tc.want) {
+			t.Errorf("after undoing %+v, labels = %v, want %v", tc.verb, got.Labels, tc.want)
+		}
+	}
+}
+
 // What no document can put back refuses the undo by name, and nothing is
-// written: a lifecycle write, whose claim is derived from its event; a label
-// verb, which records no field change; a ticket's creation.
+// written: a lifecycle write, whose claim is derived from its event; a
+// ticket's creation; a purge.
 func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
@@ -170,10 +200,6 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 		t.Fatalf("Apply(start) error = %v", err)
 	}
 	started := headWrite(t, st)
-	if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: task.ID, Name: "x"}); err != nil {
-		t.Fatalf("AddLabel() error = %v", err)
-	}
-	labeled := headWrite(t, st)
 	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: "doomed", ParentID: epic.ID})
 	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: doomed.ID, Actor: "ada"}); err != nil {
 		t.Fatalf("Purge() error = %v", err)
@@ -183,7 +209,6 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 		write, want string
 	}{
 		{started, "`lit start`"},
-		{labeled, "no field-change record"},
 		{created, "created"},
 		{purged, "removed"},
 	} {

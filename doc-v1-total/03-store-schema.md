@@ -35,7 +35,7 @@ Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`
 
 **Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go`).
 
-Store-level commit messages used verbatim: `create issue`, `apply update`, `add comment`, `delete comment` (`store.go`), `purge issue` (`purge.go`), `add plan review` (`plan_review.go`), plus `add label`, `remove label`, `replace labels`, `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`labels.go`, `relations.go`, `ranking.go`).
+Store-level commit messages used verbatim: `create issue`, `apply update`, `add comment`, `delete comment` (`store.go`), `purge issue` (`purge.go`), `add plan review` (`plan_review.go`), plus `add relation`, `remove relation`, `set parent`, `clear parent`, `rank to top`, `rank set`, `rank to bottom`, `rank above`, `rank below`, `fix rank inversions` from their subsystems (`relations.go`, `ranking.go`). A label verb is an `apply update`.
 
 ### The three locks
 
@@ -185,7 +185,7 @@ One LEFT JOIN query collapses `issue_events` × `issue_event_changes` into event
 
 ## Labels
 
-Normalization is the model rule (lowercase, trimmed, non-empty, no commas — `01-data-model.md`); `canonicalizeLabels` additionally dedupes (first occurrence) and sorts ascending. `AddLabel` upserts (`ON DUPLICATE KEY UPDATE issue_id = issue_id`), so a re-add is a no-op preserving the original `created_at`/`created_by`, and returns the full post-add label set. `RemoveLabel` deletes by key; zero rows → `NotFoundError` (a genuine driver error is not masked as not-found). `ReplaceLabels`/`replaceLabelsTx` clears the whole set and re-inserts with one shared timestamp — **surviving labels get their `created_at`/`created_by` rewritten**. There is no label-rename operation anywhere. List reads sort by label ascending.
+Normalization is the model rule (lowercase, trimmed, non-empty, no commas — `01-data-model.md`); `canonicalizeLabels` additionally dedupes (first occurrence) and sorts ascending. The label verbs are plans for `Apply` — `storage.AddLabel` states the set with the name added, `storage.RemoveLabel` the set without it (a name the issue does not hold → `NotFoundError`) — decided on the issue read under the commit lock, and recorded as a `labels` field change. A re-add restates the set and records nothing. `writeLabelsTx` moves the rows from the prior set to the new one: it inserts the added names, deletes the dropped ones, and leaves every other row — and its `created_at`/`created_by` — untouched. There is no label-rename operation anywhere. List reads sort by label ascending.
 
 ## Relations
 

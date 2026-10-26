@@ -328,7 +328,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: storagetest.CommentBody(t, "a note"), CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add comment: %v", err)
 		}
-		if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: child.ID, Name: "backend", CreatedBy: "claude"}); err != nil {
+		if _, err := st.Apply(ctx, child.ID, storage.AddLabel{Name: "backend", Actor: "claude"}); err != nil {
 			t.Fatalf("add label: %v", err)
 		}
 		if _, err := st.Apply(ctx, solo.ID, storage.Change{Action: model.Start{Assignee: "claude"}, Actor: "claude", Reason: "begin"}); err != nil {

@@ -376,7 +376,7 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 	}
 	snapshot("comment added")
 
-	if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: second.ID, Name: "urgent", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, second.ID, storage.AddLabel{Name: "urgent", Actor: "tester"}); err != nil {
 		t.Fatalf("AddLabel: %v", err)
 	}
 	snapshot("label added")

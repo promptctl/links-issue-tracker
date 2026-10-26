@@ -1269,11 +1269,11 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 		t.Fatalf("issue.Labels = %#v", issue.Labels)
 	}
 
-	labels, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: issue.ID, Name: "contracts", CreatedBy: "tester"})
+	added, err := st.Apply(ctx, issue.ID, storage.AddLabel{Name: "contracts", Actor: "tester"})
 	if err != nil {
 		t.Fatalf("AddLabel() error = %v", err)
 	}
-	if len(labels) != 3 {
+	if labels := added.Issue.Labels; len(labels) != 3 {
 		t.Fatalf("labels after add = %#v", labels)
 	}
 
@@ -1285,11 +1285,11 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 		t.Fatalf("updated.Labels = %#v", updated.Issue.Labels)
 	}
 
-	labels, err = st.RemoveLabel(ctx, issue.ID, "critical")
+	removed, err := st.Apply(ctx, issue.ID, storage.RemoveLabel{Name: "critical"})
 	if err != nil {
 		t.Fatalf("RemoveLabel() error = %v", err)
 	}
-	if len(labels) != 1 || labels[0] != "renderer" {
+	if labels := removed.Issue.Labels; len(labels) != 1 || labels[0] != "renderer" {
 		t.Fatalf("labels after remove = %#v", labels)
 	}
 

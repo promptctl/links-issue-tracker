@@ -4,71 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
-
-func (s *Store) AddLabel(ctx context.Context, in storage.AddLabelInput) ([]string, error) {
-	if _, err := s.GetIssue(ctx, in.IssueID); err != nil {
-		return nil, err
-	}
-	label, err := normalizeLabel(in.Name)
-	if err != nil {
-		return nil, err
-	}
-	createdBy := storage.Actor(in.CreatedBy)
-	if err := s.withMutation(ctx, "add label", func(ctx context.Context, tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
-			VALUES (?, ?, ?, ?)
-			ON DUPLICATE KEY UPDATE issue_id = issue_id`, in.IssueID, label, s.clock.Now().Format(time.RFC3339Nano), createdBy)
-		if err != nil {
-			return fmt.Errorf("insert label: %w", err)
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return s.ListLabels(ctx, in.IssueID)
-}
-
-func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]string, error) {
-	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return nil, err
-	}
-	label, err := normalizeLabel(labelName)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.withMutation(ctx, "remove label", func(ctx context.Context, tx *sql.Tx) error {
-		// [LAW:single-enforcer] one labels DELETE, shared with the replay's delta.
-		affected, err := deleteLabelTx(ctx, tx, labelKey{issueID: issueID, name: label})
-		if err != nil {
-			return err
-		}
-		if affected == 0 {
-			return storage.NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, label)}
-		}
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return s.ListLabels(ctx, issueID)
-}
-
-func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []string, createdBy string) error {
-	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return err
-	}
-	normalized, err := canonicalizeLabels(labels)
-	if err != nil {
-		return err
-	}
-	return s.withMutation(ctx, "replace labels", func(ctx context.Context, tx *sql.Tx) error {
-		return s.replaceLabelsTx(ctx, tx, issueID, normalized, createdBy, s.clock.Now())
-	})
-}
 
 func (s *Store) ListLabels(ctx context.Context, issueID string) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC`, issueID)
@@ -87,15 +28,28 @@ func (s *Store) ListLabels(ctx context.Context, issueID string) ([]string, error
 	return labels, rows.Err()
 }
 
-func (s *Store) replaceLabelsTx(ctx context.Context, tx *sql.Tx, issueID string, labels []string, createdBy string, at time.Time) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ?`, issueID); err != nil {
-		return fmt.Errorf("clear labels: %w", err)
+// writeLabelsTx moves an issue's label rows from the set before to the set
+// after: a name only after holds is inserted, authored by author at at; a name
+// only before holds is deleted; a name both hold keeps its row, and with it who
+// added the label and when. A write rewrites only the rows of the names it
+// adds or removes, so it never re-authors a label it did not touch, and two
+// writers adding different labels write disjoint rows.
+func writeLabelsTx(ctx context.Context, tx *sql.Tx, issueID string, before, after []string, author string, at time.Time) error {
+	for _, name := range before {
+		if slices.Contains(after, name) {
+			continue
+		}
+		// [LAW:single-enforcer] one labels DELETE, shared with the replay's delta.
+		if _, err := deleteLabelTx(ctx, tx, labelKey{issueID: issueID, name: name}); err != nil {
+			return err
+		}
 	}
-	author := storage.Actor(createdBy)
-	timestamp := at.Format(time.RFC3339Nano)
-	for _, label := range labels {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`, issueID, label, timestamp, author); err != nil {
-			return fmt.Errorf("insert label %q: %w", label, err)
+	for _, name := range after {
+		if slices.Contains(before, name) {
+			continue
+		}
+		if err := insertLabelTx(ctx, tx, model.Label{IssueID: issueID, Name: name, CreatedAt: at, CreatedBy: storage.Actor(author)}); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -106,11 +60,4 @@ func (s *Store) replaceLabelsTx(ctx context.Context, tx *sql.Tx, issueID string,
 // wrapper only keeps the store's callsites short.
 func canonicalizeLabels(labels []string) ([]string, error) {
 	return model.CanonicalizeLabels(labels)
-}
-
-// normalizeLabel delegates to the domain's canonical label form.
-// [LAW:single-enforcer] The definition lives in model.NormalizeLabel; this
-// wrapper only keeps the store's callsites short.
-func normalizeLabel(label string) (string, error) {
-	return model.NormalizeLabel(label)
 }
