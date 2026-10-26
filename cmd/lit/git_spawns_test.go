@@ -21,7 +21,8 @@ import (
 // asks, however many worktrees the repository has and however many parts of the
 // command want the same answer. The repository has a linked worktree and a
 // remote its branch tracks, so the per-worktree and per-remote questions are all
-// live. Only the git the command's own process starts is counted — a detached
+// live — save the upstream, which no command asks with a single remote, the one
+// remote being the only answer it could give. Only the git the command's own process starts is counted — a detached
 // receive or mirror worker is its own invocation, with its own event.
 //
 // Each command's event carries the same count, as git.lit_spawns, so a
@@ -83,8 +84,7 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 	measured["XDG_STATE_HOME"] = stateHome
 
 	geometry := "rev-parse --show-toplevel --git-common-dir --git-dir"
-	upstream := "for-each-ref --format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end) refs/heads/"
-	freshness := []string{geometry, "remote -v", upstream, "symbolic-ref --quiet --short refs/remotes/origin/HEAD", "worktree list --porcelain -z"}
+	freshness := []string{geometry, "remote -v", "symbolic-ref --quiet --short refs/remotes/origin/HEAD", "worktree list --porcelain -z"}
 	// Order matters only for the receive: the first command that wants one
 	// asks whether there is a remote to receive from, and the debounce keeps
 	// the commands after it from scheduling another.
@@ -97,7 +97,7 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 		{[]string{"ls"}, []string{geometry, "remote -v"}},
 		{[]string{"backlog"}, freshness},
 		{[]string{"next"}, freshness},
-		{[]string{"new", "--type", "epic", "--title", "spawns-write", "--topic", "demo"}, []string{geometry, "remote -v", upstream}},
+		{[]string{"new", "--type", "epic", "--title", "spawns-write", "--topic", "demo"}, []string{geometry, "remote -v"}},
 	} {
 		if err := os.WriteFile(log, nil, 0o644); err != nil {
 			t.Fatal(err)
