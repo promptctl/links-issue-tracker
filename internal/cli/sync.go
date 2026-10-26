@@ -227,8 +227,8 @@ func syncRemoteLsLeaf() syncLeaf {
 		if err != nil {
 			return err
 		}
-		// A refused remote is named, since nothing syncs with it until it is
-		// renamed. [LAW:no-silent-failure]
+		// A refused remote is named with its remedy, since nothing syncs with
+		// it until its name or URL is put right. [LAW:no-silent-failure]
 		for _, refusal := range syncState.plan.refused {
 			if _, err := fmt.Fprintf(inv.Stdout, "refused: %s\n", refusal); err != nil {
 				return err
@@ -882,8 +882,11 @@ func chooseSyncRemote(requestedRemote string, upstream func() (string, error), g
 
 func findGitRemote(name string, gitRemotes []workspace.GitRemote) (workspace.GitRemote, bool) {
 	normalizedName := strings.TrimSpace(name)
+	if normalizedName == "" {
+		return workspace.GitRemote{}, false
+	}
 	for _, remote := range gitRemotes {
-		if normalizedName != "" && strings.TrimSpace(remote.Name()) == normalizedName {
+		if strings.TrimSpace(remote.Name()) == normalizedName {
 			return remote, true
 		}
 	}
