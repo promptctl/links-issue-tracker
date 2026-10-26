@@ -230,7 +230,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 
 ### 1.9 `BulkWriter` (`internal/storage/contract.go`)
 
-Interface-wide failure contract: **atomic**. A batch lands whole, or a refusal at any write leaves the store as it found it — no create left behind as a deleted issue, no update, edge or rank key kept — and returns the zero result beside its error; observers hear a batch's changes only once it has landed. An engine that cannot put the store back says so in its error and returns what stays written beside it (`internal/storage/contract.go`).
+Interface-wide failure contract: **a refused batch writes nothing**. A refusal at any write leaves the store as it found it — no create left behind as a deleted issue, no update, edge or rank key kept — and returns the zero result beside its error; observers hear a batch's changes only once it has landed. An engine that cannot put the store back says so in its error and returns what stays written beside it (`internal/storage/contract.go`).
 
 - `BulkApply(ctx, prefix, actor string, specs []BulkIssueSpec) (BulkApplyResult, error)` — mixed create/update batch, resolving intra-batch references by `LocalID` (`internal/storage/contract.go`)
 - `ImportTree(ctx, prefix string, specs []ImportTreeSpec) (ImportTreeResult, error)` — creates a whole issue tree, returning local-ID → real-ID mapping (`internal/storage/contract.go`)

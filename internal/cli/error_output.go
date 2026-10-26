@@ -62,6 +62,10 @@ var (
 	reasonTransientGcContention = commandReason{"transient_gc_contention", ExitGeneric}
 	reasonWorkspaceBusy         = commandReason{"workspace_busy", ExitGeneric}
 	reasonWorkspaceWriteBlocked = commandReason{"workspace_write_blocked", ExitGeneric}
+	// An import refused partway whose reset failed too: the writes ahead of
+	// the refusal are still committed, so neither the refusal's reason nor a
+	// retry is true of the store.
+	reasonImportResetFailed = commandReason{"import_reset_failed", ExitGeneric}
 
 	reasonUsageError = commandReason{"usage_error", ExitUsage}
 
@@ -153,6 +157,13 @@ func commandErrorReason(err error) commandReason {
 
 // typedErrorReason is the reason err's types name, or unnamed when none does.
 func typedErrorReason(err error, unnamed commandReason) commandReason {
+	// Ahead of every arm its cause could reach: a refusal's reason would say
+	// "change the input and re-run", and a re-run creates the file's creates a
+	// second time over the ones the failed reset left. [LAW:types-are-the-program]
+	var resetFailed *storage.BatchResetFailedError
+	if errors.As(err, &resetFailed) {
+		return reasonImportResetFailed
+	}
 	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		return reasonEntityNotFound
@@ -571,6 +582,8 @@ func commandErrorRemediation(reason commandReason) string {
 		// the failure was transient. So both are gated the way
 		// workspace_schema_ahead gates its paths.
 		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
+	case reasonImportResetFailed:
+		return "Do not re-run the file unchanged — the writes the message names are still committed, and running the file again creates its created issues a second time. Delete the issues it names as created with `lit delete`, or drop their documents from the file, then fix what refused the file and import it again."
 	case reasonBulkPartialFailure:
 		// No re-run of the whole command is advised: it applies every landed
 		// item again, an item a rule refused repeats its refusal, and one whose

@@ -201,12 +201,6 @@ type Syncer interface {
 	// decided on, and where it came from, oldest first.
 	ReconcileBases() []ReconcileBase
 
-	// StrandedWritesCommits is every commit the engine landed since it opened
-	// over writes a failed commit left in the working set, oldest first, and
-	// whether it looked for any: no commits is "found none" only when it
-	// looked. [LAW:nothing-unseen]
-	StrandedWritesCommits() (commits []StrandedWritesCommit, looked bool)
-
 	// SettledLastWrites is every settle's write of its settled.last record
 	// since the engine opened, oldest first.
 	SettledLastWrites() []SettledLastWrite
@@ -470,17 +464,6 @@ func OpenMigration(st Store) Migrated {
 		return Migrated{}
 	}
 	return migrator.Migrated()
-}
-
-// StrandedWrites is every commit st landed over writes a failed commit left
-// in its working set, and whether it looked for any. An engine with no
-// working set strands nothing, so it never looks.
-func StrandedWrites(st Store) ([]StrandedWritesCommit, bool) {
-	syncer, err := Sync.Of(st)
-	if err != nil {
-		return nil, false
-	}
-	return syncer.StrandedWritesCommits()
 }
 
 // EventRecord is the open's migration as event facts.

@@ -200,12 +200,21 @@ type SyncReceiveResult struct {
 	Base               ReconcileBaseSource
 }
 
-// StrandedWritesCommit is one commit a sync landed over writes a failed
-// DOLT_COMMIT left in the working set, before it read the freshness that
-// decides whether the branch moves. Tables counts the tables those writes
-// touched.
+// StrandedWritesCommit is one commit an engine landed over writes a failed
+// DOLT_COMMIT left in the working set, before anything that would discard
+// them: a sync's read of the freshness that decides whether the branch moves,
+// or a batch's taking of the commit a refusal resets to. Tables counts the
+// tables those writes touched.
 type StrandedWritesCommit struct {
 	Tables int
+}
+
+// StrandedWritesReporter is the account an engine gives of the commits it
+// landed over stranded writes since it opened, oldest first, and whether it
+// looked for any: no commits is "found none" only when it looked. An engine
+// with no working set strands nothing, so it never looks. [LAW:nothing-unseen]
+type StrandedWritesReporter interface {
+	StrandedWritesCommits() (commits []StrandedWritesCommit, looked bool)
 }
 
 // EventValue is the commit as one value of the event's stranded_writes.commits

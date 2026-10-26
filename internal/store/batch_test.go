@@ -63,9 +63,9 @@ func TestARefusedImportRecordsTheCommitItResetTo(t *testing.T) {
 	if len(result.Created) != 0 {
 		t.Errorf("result = %+v; want the zero result: the create before the refusal was reset away", result)
 	}
-	var refused *RefusedBatchError
+	var refused *storage.RefusedBatchError
 	if !errors.As(err, &refused) {
-		t.Fatalf("BulkApply() error = %v; want a *RefusedBatchError", err)
+		t.Fatalf("BulkApply() error = %v; want a *storage.RefusedBatchError", err)
 	}
 	if notFound := (storage.NotFoundError{}); !errors.As(err, &notFound) {
 		t.Errorf("BulkApply() error = %v; want it still classified as the missing parent's not-found", err)
@@ -170,9 +170,9 @@ func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
 	if len(heard) != 1 || heard[0] != epic {
 		t.Errorf("observers heard %v; want the change whose write stands after the failed reset, %s", heard, epic)
 	}
-	var resetFailed *BatchResetFailedError
+	var resetFailed *storage.BatchResetFailedError
 	if !errors.As(err, &resetFailed) {
-		t.Fatalf("error = %v; want a *BatchResetFailedError", err)
+		t.Fatalf("error = %v; want a *storage.BatchResetFailedError", err)
 	}
 	if resetFailed.Head != head {
 		t.Errorf("Head = %s; want %s, the head before the batch", resetFailed.Head, head)
@@ -188,5 +188,30 @@ func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
 	facts, _ := resetFailed.EventRecord()
 	if facts["import.reset_to"] != head || facts["import.reset_error"] == "" {
 		t.Errorf("EventRecord() = %v; want import.reset_to %s and the reset's error", facts, head)
+	}
+}
+
+// A batch's start is retried past transient GC contention, as every write is:
+// nothing is written yet, so a contended commit of the stranded writes does
+// not refuse the file.
+func TestABatchStartRetriesPastGCContention(t *testing.T) {
+	ctx := context.Background()
+	st, epic := openBatchStore(t, ctx)
+	fires := 0
+	st.commitWorkingSetHookForTest = func() error {
+		fires++
+		if fires == 1 {
+			return transientGCContentionError{err: errors.New("simulated: this connection was established when this server performed an online garbage collection. please reconnect.")}
+		}
+		return nil
+	}
+	title, topic, taskType := "lands", "topic", "task"
+	result, err := st.BulkApply(ctx, "test", "ada", []storage.BulkIssueSpec{{Title: &title, Topic: &topic, IssueType: &taskType, Parent: &epic}})
+	st.commitWorkingSetHookForTest = nil
+	if err != nil {
+		t.Fatalf("BulkApply() error = %v; want the contended start retried", err)
+	}
+	if len(result.Created) != 1 {
+		t.Fatalf("result = %+v; want the one create", result)
 	}
 }

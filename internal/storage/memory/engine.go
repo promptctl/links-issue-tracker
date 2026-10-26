@@ -230,6 +230,12 @@ func (e *Engine) StampCorrections() storage.StampCorrections {
 	return e.stamps.StampCorrections()
 }
 
+// StrandedWritesCommits is the account StrandedWritesReporter asks for: this
+// engine holds no working set, so it strands nothing and never looks.
+func (e *Engine) StrandedWritesCommits() ([]storage.StrandedWritesCommit, bool) {
+	return nil, false
+}
+
 // stamp is the instant a write planned against family's history takes.
 func (e *Engine) stamp(family map[string]bool) time.Time {
 	var seen []model.IssueEvent

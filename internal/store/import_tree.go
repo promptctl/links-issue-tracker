@@ -14,7 +14,7 @@ import (
 // wired by CreateIssue itself (via ParentID); blocked-by edges are added in a
 // second pass. A tree refused at any write writes nothing.
 //
-// [LAW:single-enforcer] Atomic tree import is the one shared boundary that
+// [LAW:single-enforcer] Tree import is the one shared boundary that
 // owns ID resolution; what it creates, and in what order, is the file
 // storage.ParseImportTreeFile parsed once it judged it.
 func (s *Store) ImportTree(ctx context.Context, prefix, actor string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
@@ -39,6 +39,7 @@ func (s *Store) ImportTree(ctx context.Context, prefix, actor string, specs []st
 				if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: actor}); err != nil {
 					return fmt.Errorf("import: blocked_by %q -> %q: %w", create.LocalID, dep, err)
 				}
+				result.EdgesAdded++
 			}
 		}
 		return nil

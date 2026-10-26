@@ -31,6 +31,7 @@ var reasonCodes = map[string]int{
 	"corruption_detected":         7,
 	"entity_not_found":            4,
 	"merge_conflict":              5,
+	"import_reset_failed":         1,
 	"migration_failed":            1,
 	"migration_partially_applied": 3,
 	"migration_quarantined":       3,
@@ -149,6 +150,11 @@ func TestCommandErrorReason(t *testing.T) {
 		{"cli validation refusal", model.ValidationError{Message: "Do not set blocked-by relationships between two issues in the same epic."}, "validation_refused"},
 		{"storage validation refusal", model.ValidationError{Message: "priority out of range"}, "validation_refused"},
 		{"frozen issue refusal", model.FrozenIssueError{ID: "lit-1", Retention: model.Archived{}, Thaw: model.Unarchive{}}, "validation_refused"},
+		// A refused import whose reset failed is classified by what it left,
+		// not by the refusal or the missing id it wraps: a re-run would create
+		// its creates again.
+		{"import refusal whose reset failed", &storage.BatchResetFailedError{Head: "abc", Cause: model.ValidationError{Message: "priority out of range"}, ResetErr: errors.New("connection closed"), Written: "1 creates [lit-1]"}, "import_reset_failed"},
+		{"import miss whose reset failed", &storage.BatchResetFailedError{Head: "abc", Cause: storage.NotFoundError{Entity: "issue", ID: "lit-9"}, ResetErr: errors.New("connection closed"), Written: "1 creates [lit-1]"}, "import_reset_failed"},
 		// Both takeover-gate arms, and one wrapped.
 		{"takeover without --take", takeoverUnconfirmedError{Message: "claimed here: … — this lane is claimed and active; pass --take to confirm the takeover"}, "takeover_unconfirmed"},
 		{"takeover declined", takeoverUnconfirmedError{Message: "takeover declined"}, "takeover_unconfirmed"},

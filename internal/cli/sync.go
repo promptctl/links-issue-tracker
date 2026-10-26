@@ -116,8 +116,8 @@ func reportStampCorrections(ctx context.Context, st storage.StampReporter) {
 // a sync session's other lists, since a sync session that never reaches a
 // freshness check never looks. [LAW:single-enforcer] the one place the key is
 // written, for a sync session and any other command alike. [LAW:nothing-unseen]
-func reportStrandedWrites(ctx context.Context, st storage.Store) {
-	if commits, looked := storage.StrandedWrites(st); looked {
+func reportStrandedWrites(ctx context.Context, st storage.StrandedWritesReporter) {
+	if commits, looked := st.StrandedWritesCommits(); looked {
 		reportEventValues(ctx, "stranded_writes.commits", commits)
 	}
 }

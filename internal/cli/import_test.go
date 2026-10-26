@@ -529,7 +529,7 @@ func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 }
 
 // The invocation's event counts what each import format wrote — a JSON tree
-// that creates two, then a YAML file that creates, updates and ranks one issue
+// that creates three and the blocked_by edge between two of them, then a YAML file that creates, updates and ranks one issue
 // each, moves one under another epic and restates the parent another already
 // has, and sets one issue's blocked_by and restates another's — and a file
 // whose order names one issue reports it in the singular.
@@ -539,10 +539,11 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 	epic := newEpicInDir(t, dir, "home")
 	tree := writeImportFile(t, "tree.json", `[
 		{"local_id":"e1","title":"Epic","type":"epic","topic":"demo","priority":0},
-		{"local_id":"t1","title":"Child","type":"task","topic":"demo","priority":0,"parent":"e1"}
+		{"local_id":"t1","title":"Child","type":"task","topic":"demo","priority":0,"parent":"e1"},
+		{"local_id":"e2","title":"After","type":"epic","topic":"demo","priority":0,"blocked_by":["e1"]}
 	]`)
 	created := runCLIInDir(t, dir, "import", "--path", tree)
-	assertFacts(t, map[string]string{"import.created": "2"})
+	assertFacts(t, map[string]string{"import.created": "3", "import.edges_added": "1"})
 	child, e1 := importedID(t, created, "t1"), importedID(t, created, "e1")
 
 	yaml := writeImportFile(t, "mixed.yaml", fmt.Sprintf("title: fresh\ntype: task\ntopic: demo\nparent: %s\nrank: top\n---\nid: %s\ntitle: home, renamed\nparent: \"\"\nblocked_by: [%s]\n---\nid: %s\nparent: %s\n---\nid: %s\nblocked_by: []\n", epic, epic, e1, child, epic, e1))
@@ -598,7 +599,7 @@ func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
 	if out, err := runCLIInDirAllowError(t, dir, "import", "--path", tree); err == nil {
 		t.Fatalf("import succeeded; want the duplicate local_id refused:\n%s", out)
 	}
-	assertFacts(t, map[string]string{"import.created": "0"})
+	assertFacts(t, map[string]string{"import.created": "0", "import.edges_added": "0"})
 	// The gate refused the tree before any write, so nothing was reset, and
 	// nothing looked for a staged write either.
 	ev := lastEvent(t)

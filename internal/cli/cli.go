@@ -2277,6 +2277,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	// counts what landed either way. [LAW:nothing-unseen]
 	result, err := ap.Store.ImportTree(ctx, prefix.Value(), actor, specs)
 	telemetry.Set(ctx, "import.created", len(result.Created))
+	telemetry.Set(ctx, "import.edges_added", result.EdgesAdded)
 	if err != nil {
 		return err
 	}

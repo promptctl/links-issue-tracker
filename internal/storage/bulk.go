@@ -136,7 +136,9 @@ func (r BulkApplyResult) Written() string {
 }
 
 // Written is the result in words, as BulkApplyResult.Written says it.
-func (r ImportTreeResult) Written() string { return writtenCreates(r.Created) }
+func (r ImportTreeResult) Written() string {
+	return fmt.Sprintf("%s and %d blocked_by edges among them", writtenCreates(r.Created), r.EdgesAdded)
+}
 
 // writtenCreates names a result's creates by the ids they were created under.
 func writtenCreates(created []IDMapping) string {
@@ -444,8 +446,10 @@ type ImportTreeSpec struct {
 	BlockedBy   []string `json:"blocked_by,omitempty"`
 }
 
-// ImportTreeResult reports the local-ID → real-issue-ID mapping produced by a
-// successful import, in the order the issues were created.
+// ImportTreeResult reports what a tree import wrote: the local-ID →
+// real-issue-ID mapping, in the order the issues were created, and EdgesAdded,
+// the blocked_by edges it wrote among them.
 type ImportTreeResult struct {
-	Created []IDMapping
+	Created    []IDMapping
+	EdgesAdded int
 }

@@ -91,6 +91,7 @@ func (e *Engine) ImportTree(ctx context.Context, prefix, actor string, specs []s
 				if err := e.wireDependency(batch.realID(create.Index), batch.resolveLocal(dep), actor); err != nil {
 					return fmt.Errorf("import: blocked_by %q -> %q: %w", create.LocalID, dep, err)
 				}
+				result.EdgesAdded++
 			}
 		}
 		result.Created = batch.createdMappings()
