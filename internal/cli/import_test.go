@@ -566,7 +566,7 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 // A refused file writes nothing, so the invocation's event counts nothing in
 // either format: no update, reparent or blocked_by set from a YAML file refused
 // at its last document, and no create from a JSON tree that is refused. The
-// event tells a refusal at a write, which reset the workspace, from one the
+// event tells a refusal at a write, which the batch's branch held, from one the
 // gate made before writing.
 func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
 	isolateEvents(t)
@@ -581,10 +581,14 @@ func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
 	}
 	assertFacts(t, map[string]string{"import.created": "0", "import.updated": "0", "import.ranked": "0", "import.reparented": "0", "import.parent_held": "0",
 		"import.blocked_by_set": "0", "import.blocked_by_held": "0", "import.edges_added": "0", "import.edges_removed": "0"})
-	// Refused at a write, the file was reset to the commit it started from, and
-	// the event names that commit with no reset error.
-	if facts := writtenFacts(t, lastEvent(t)); facts["import.reset_to"] == nil || facts["import.reset_to"] == "" || facts["import.reset_error"] != "" {
-		t.Errorf("event import.reset_to = %v, import.reset_error = %v; want the commit the file reset to and no reset error", facts["import.reset_to"], facts["import.reset_error"])
+	// Refused at a write, the file never landed, and the event names the
+	// commit it started from, which the workspace still holds.
+	if facts := writtenFacts(t, lastEvent(t)); facts["import.head"] == nil || facts["import.head"] == "" {
+		t.Errorf("event import.head = %v; want the commit the file started from", facts["import.head"])
+	}
+	// The batch wrote on a branch of its own and deleted it, finished.
+	if deletes := lastEvent(t).Occurrences["scratch.deletes"]; len(deletes) != 1 || deletes[0].(map[string]any)["scratch.cause"] != "finished" {
+		t.Errorf("event scratch.deletes = %v; want the batch's own branch, finished", deletes)
 	}
 	// The batch looked for a write another process left staged before it
 	// wrote: none here, and the list is present rather than absent.
@@ -600,11 +604,14 @@ func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
 		t.Fatalf("import succeeded; want the duplicate local_id refused:\n%s", out)
 	}
 	assertFacts(t, map[string]string{"import.created": "0", "import.edges_added": "0"})
-	// The gate refused the tree before any write, so nothing was reset, and
-	// nothing looked for a staged write either.
+	// The gate refused the tree before any write, so no batch began, and
+	// nothing looked for a staged write or a batch's branch either.
 	ev := lastEvent(t)
-	if resetTo, present := writtenFacts(t, ev)["import.reset_to"]; present {
-		t.Errorf("event import.reset_to = %v; want none: the gate refused the tree before it wrote", resetTo)
+	if head, present := writtenFacts(t, ev)["import.head"]; present {
+		t.Errorf("event import.head = %v; want none: the gate refused the tree before it wrote", head)
+	}
+	if deletes, present := ev.Occurrences["scratch.deletes"]; present {
+		t.Errorf("event scratch.deletes = %v; want none: the gate refused the tree before the batch looked", deletes)
 	}
 	if stranded, present := ev.Occurrences["stranded_writes.commits"]; present {
 		t.Errorf("event stranded_writes.commits = %v; want none: the gate refused the tree before the batch looked", stranded)

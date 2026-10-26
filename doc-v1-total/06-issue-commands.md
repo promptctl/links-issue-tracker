@@ -170,7 +170,7 @@ Every long free-text flag — `--body`, `--description`, `--prompt`, `--plan` �
 
 **`lit import --path <file>`** (write; `cli.go`). Format chosen by extension: `.yaml`/`.yml` → bulk create-or-update, anything else → JSON tree spec.
 
-- *JSON tree*: an array of records with `local_id`, optional `parent` (a local_id), optional `blocked_by` (local_ids), `title`, `type`, `topic`, `priority`. `--by` is refused here — tree imports always attribute creates to `links`. Output: `imported N issues` then `  <local> -> <real>` mappings (map order unspecified). A file refused for any reason, in either format, writes nothing.
+- *JSON tree*: an array of records with `local_id`, optional `parent` (a local_id), optional `blocked_by` (local_ids), `title`, `type`, `topic`, `priority`. `--by` is refused here — tree imports always attribute creates to `links`. Output: `imported N issues` then `  <local> -> <real>` mappings (map order unspecified). A file is written whole or not at all, in either format: a file refused for any reason writes nothing, an import killed partway writes nothing, and a command reading the workspace while an import runs sees none of the file until all of it has landed.
 - *YAML bulk*: one document per issue, `---`-separated; optional `local_id` for intra-file references; a document with `id` set **updates** that issue instead of creating; `parent` may name a local_id or a real ID. `--by` requires at least one update document. Output: `created N issues` with mappings, then `updated N issues` with IDs.
 
 ## Workspace metadata and shell support

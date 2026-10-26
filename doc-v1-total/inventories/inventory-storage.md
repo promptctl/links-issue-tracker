@@ -230,7 +230,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 
 ### 1.9 `BulkWriter` (`internal/storage/contract.go`)
 
-Interface-wide failure contract: **a refused batch writes nothing**. A refusal at any write leaves the store as it found it — no create left behind as a deleted issue, no update, edge or rank key kept — and returns the zero result beside its error; observers hear a batch's changes only once it has landed. An engine that cannot put the store back says so in its error and returns what stays written beside it (`internal/storage/contract.go`).
+Interface-wide failure contract: **a batch lands whole or not at all**. A refusal at any write leaves the store as it found it — no create left behind as a deleted issue, no update, edge or rank key kept — and so does a process killed partway; a reader beside a batch sees none of it until all of it lands. A batch that did not land returns the zero result beside its error, and observers hear a batch's changes only once it has landed (`internal/storage/contract.go`).
 
 - `BulkApply(ctx, prefix, actor string, specs []BulkIssueSpec) (BulkApplyResult, error)` — mixed create/update batch, resolving intra-batch references by `LocalID` (`internal/storage/contract.go`)
 - `ImportTree(ctx, prefix string, specs []ImportTreeSpec) (ImportTreeResult, error)` — creates a whole issue tree, returning local-ID → real-ID mapping (`internal/storage/contract.go`)
@@ -421,7 +421,6 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 - `RecordEdges(step EdgeStep)` fills the four edge-set fields and the two counts from the step, the update documents' sets only, by relation type (`internal/storage/bulk.go`).
 - `Updated []string` — real IDs of every updated issue, in the order applied (`internal/storage/bulk.go`).
 - `Ranked RankSetResult` — the `RankSet` the file's `rank: top` documents made, in file order; no resolutions when the file states no rank (`internal/storage/bulk.go`).
-- `Written() string` — the result in words: `"%d creates [%s], %d reparents [%s], %d blocked_by sets [%s], %d updates [%s] and the order of %d issues [%s]"`, comma-joined, zero counts included. A refused batch whose reset failed puts it in its error, naming what stays written (`internal/storage/bulk.go`); `ImportTreeResult.Written()` names its creates the same way.
 
 #### `ImportTreeSpec` (`internal/storage/bulk.go`)
 JSON tags: `local_id`, `title`, `description,omitempty`, `prompt,omitempty`, `plan,omitempty`, `type`, `topic`, `priority`, `assignee,omitempty`, `labels,omitempty`, `parent,omitempty`, `blocked_by,omitempty`. `LocalID` is opaque — used inside the spec to wire `Parent` and `BlockedBy`, replaced with the generated lit issue ID at import time (`internal/storage/bulk.go`).
@@ -603,6 +602,9 @@ These types live in the contract, not in an engine, because a capability interfa
 - **`UnrelatedInventory`** (`internal/storage/sync.go`) — `OnlyLocal`, `OnlyRemote`, `OnBoth`, `Purged []string` (json `only_local,omitempty`, `only_remote,omitempty`, `on_both,omitempty`, `purged,omitempty`). `Purged` is the ids a purge record on either side names, which every resolution drops; the other three partition the rest. The four slices are sorted and mutually disjoint by construction; every id present on either side lands in exactly one (`internal/storage/sync.go`).
 - **`UnrelatedResolution`** string (`internal/storage/sync.go`): `TakeLocal = "local"` (keeps local backlog, discards remote-only issues), `TakeRemote = "remote"` (keeps remote backlog, discards local-only issues).
   - `Valid()` returns true only for those two; the door guard every `Reconciler` runs before touching the store (`internal/storage/sync.go`).
+- **`ScratchCause`** string (`internal/storage/sync.go`): `orphan` (`ScratchOrphan`; a sweep found the branch, so the run that made it was killed before deleting it, since the sweep holds the commit lock no live run can hold), `finished` (`ScratchFinished`; the run that made it deleted it).
+- **`ScratchDelete{Branch string; Cause ScratchCause; Err error}`** — one delete of a throwaway branch a batch, a reconcile or a history bound wrote on; `Err` is why the branch is still there, nil when it went. `EventValue()` is one value of the event's `scratch.deletes` list: `scratch.branch`, `scratch.cause`, `scratch.error` (`internal/storage/sync.go`).
+- **`ScratchDeleteReporter`** — `ScratchDeletes() (deletes []ScratchDelete, looked bool)`: the scratch branches the engine deleted since it opened, oldest first, and whether anything looked for one; no deletes is "found none" only when it looked. `Store` embeds it; the memory engine has no branches, so it returns `(nil, false)` (`internal/storage/sync.go`, `internal/storage/contract.go`, `memory/engine.go`).
 
 - Re-root vocabulary (`internal/storage/reroot.go`):
   - **`ReRooted`** — what a re-root did to a branch: `Cut`, `Root` (the parentless commit carrying the cut's root value and metadata), `Head`, `Height uint64` (`Head`'s height), `Rewritten map[string]string` (every kept commit, old hash to new), `Dropped int` (the cut's ancestors), `Elapsed time.Duration`. `Kept()` is `len(Rewritten)`. `EventRecord()` gives facts `reroot.cut`, `reroot.root`, `reroot.head`, `reroot.height`, `reroot.elapsed_ms` and counts `reroot.kept`, `reroot.dropped`.

@@ -280,7 +280,7 @@ func (s *Store) reopenEngine(ctx context.Context) error {
 		return fmt.Errorf("reopen the engine: %w", err)
 	}
 	s.db, s.hold, s.releaseEngineRecord = db, hold, releaseEngineRecord
-	return nil
+	return s.resumeCheckedOut(ctx)
 }
 
 // followReRoot is the follow inside the hold: recognize the cut, then re-root

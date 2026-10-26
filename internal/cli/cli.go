@@ -196,10 +196,12 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	recordStatusline(ctx, ws, ap.Statusline)
 	// Beside the statusline for the same two reasons: it needs no engine, and a
 	// clock reading a failed command took was still taken. A write another
-	// process left staged that this command committed is reported the same way,
-	// as a sync session reports it. [LAW:nothing-unseen]
+	// process left staged that this command committed, and a scratch branch it
+	// deleted, are reported the same way, as a sync session reports them.
+	// [LAW:nothing-unseen]
 	reportStampCorrections(ctx, ap.Store)
 	reportStrandedWrites(ctx, ap.Store)
+	reportScratchDeletes(ctx, ap.Store)
 	if runErr != nil {
 		return runErr
 	}
@@ -2326,9 +2328,8 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err != nil {
 		return err
 	}
-	// A refused file returns what it left written — nothing, unless its reset
-	// failed too — so the event counts what landed either way.
-	// [LAW:nothing-unseen]
+	// A file lands whole or not at all, and a refused one returns the zero
+	// result, so the event counts what landed either way. [LAW:nothing-unseen]
 	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
 	recordBulkApplied(ctx, "import", result)
 	// A refusal of another kind, or none, leaves it zero: a count of none.

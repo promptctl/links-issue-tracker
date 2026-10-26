@@ -76,6 +76,7 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, databasePath, works
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
 		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
 		reportStrandedWrites(ctx, st)
+		reportScratchDeletes(ctx, st)
 		reportEventValues(ctx, "settled_last.writes", syncer.SettledLastWrites())
 		reportEventValues(ctx, "history_bound.records", syncer.HistoryBounds())
 		reportStampCorrections(ctx, st)
@@ -118,6 +119,18 @@ func reportStampCorrections(ctx context.Context, st storage.StampReporter) {
 func reportStrandedWrites(ctx context.Context, st storage.StrandedWritesReporter) {
 	if commits, looked := st.StrandedWritesCommits(); looked {
 		reportEventValues(ctx, "stranded_writes.commits", commits)
+	}
+}
+
+// reportScratchDeletes puts st's deletes of scratch branches on the event when
+// anything looked for one, as reportStrandedWrites does: [] is a look that
+// found none, and no key is no look. A batch's sweep at its start is what
+// finds the branch an import killed partway left, so a killed import shows on
+// the next import's event as an orphan. [LAW:single-enforcer] the one place
+// the key is written. [LAW:nothing-unseen]
+func reportScratchDeletes(ctx context.Context, st storage.ScratchDeleteReporter) {
+	if deletes, looked := st.ScratchDeletes(); looked {
+		reportEventValues(ctx, "scratch.deletes", deletes)
 	}
 }
 

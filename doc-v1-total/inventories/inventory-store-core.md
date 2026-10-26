@@ -236,6 +236,7 @@ A read engine opens Dolt read-only without trying the journal lock, so its ping 
 2. `prev := s.db; s.db = next` (`store.go`) — swap **before** closing.
 3. `prev.Close()`; a `context.Canceled` is tolerated, anything else → `fmt.Errorf("close prior dolt connection after reconnect: %w", err)` (`store.go`).
 4. `wrapEngineOpenContention(next.PingContext(ctx), s.doltRootDir)`; failure → `fmt.Errorf("reopen dolt: %w", err)` (`store.go`).
+5. `s.resumeCheckedOut(ctx)` (`session_branch.go`): a fresh connection opens on the database's default branch, so when `checkout` or `checkoutNewAt` has recorded a branch (`s.checkedOut`), the new connection is switched to it with `DOLT_CHECKOUT`; failure → `"resume branch %q on the fresh connection: %w"`. Before any switch it does nothing.
 
 Doc: must be called under the commit lock; it is the one site where the journal lock is taken while the commit lock is held, bounded by `coResidentHolderWait` (2.3s) against the commit-lock waiter budget of `coResidentHolderWait` + `rotationReserve()` (`store.go`). `reconnect` is the `connectionRotator` passed to every call of the transient-GC retry (`commit_lock.go`).
 
@@ -3469,7 +3470,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 `replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): under `withCommitLock`, `BeginTx` → `applyExportDelta` → `tx.Commit()` → `commitWorkingSetOnce(ctx, stamp)`. Deliberately a **single attempt** with no self-rotating transient retry (`sync_reconcile.go`); errors bubble to the outer scratch-rebuilding retry. Error texts: `"begin %s tx: %w"` and `"commit %s tx: %w"` with `stamp.Message` interpolated (`sync_reconcile.go`).
 
-`spineWriter.land` does `DOLT_CHECKOUT <spine branch>` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `landed, landing, err := landExport(next)` (an error returned as is), then `replayDeltaOnScratch(ctx, diffExports(w.landed, landed), stamp)`, then advances `w.landed = landed` only on success and returns `landing` (`sync_reconcile.go`).
+`spineWriter.land` does `s.checkout(<spine branch>)` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `landed, landing, err := landExport(next)` (an error returned as is), then `replayDeltaOnScratch(ctx, diffExports(w.landed, landed), stamp)`, then advances `w.landed = landed` only on success and returns `landing` (`sync_reconcile.go`).
 
 `commitStamp` (`internal/store/commit_lock.go`): `Message string`, `Date time.Time` (non-zero → `--date`, second-granular), `Author string` (non-empty → `--author "Name <email>"`), `AllowEmpty bool`.
 
@@ -3681,7 +3682,7 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
    - On error: `"import: create %q: %w"`.
    - `idMap[create.LocalID] = issue.ID`; append to `createdIDs` and `result.Created`.
 3. Second pass over the creates **in write order** wiring `blocked_by` (`import_tree.go`): for each dep, `AddRelation(storage.AddRelationInput{SrcID: createdIDs[i], DstID: idMap[dep], Type: model.RelBlockedBy, CreatedBy: actor})` — **src is the dependent, dst is the dependency**. On error: `"import: blocked_by %q -> %q: %w"`.
-4. Returns `storage.ImportTreeResult{Created: …}` (`import_tree.go`); a refused tree returns `refusedBatch(result, err)` — the zero result, unless the reset failed too.
+4. Returns `storage.ImportTreeResult{Created: …}` (`import_tree.go`); a tree that did not land returns the zero result beside its error (§4.5).
 
 ### 4.3 Validation and every rejection text
 
@@ -3726,12 +3727,15 @@ Test `TestImportTreeRejectsCycle` (`import_tree_test.go`) uses `a blocked_by b`,
 
 ### 4.5 Atomicity
 
-`withBatch(ctx, fn)` (`batch.go`), shared by ImportTree and BulkApply, is the one owner of a batch's atomicity:
+`withBatch(ctx, s, fn)` (`batch.go`), generic over the result `R`, shared by ImportTree and BulkApply, is the one owner of a batch's atomicity: the branch the session is on (`from`) moves once, by the whole batch, or not at all.
 1. It runs under **one** commit-lock hold (`withCommitLock`); the lock is context-reentrant, so every `CreateIssue`/`Apply`/`RankSet`/edge mutation inside short-circuits its own acquisition, and no other writer — nor the mirror's clone, copied under the same lock — lands between the batch's commits or sees them half-made.
-2. `commitStrandedWrites(ctx)` (`sync.go`) first versions any write a failed `DOLT_COMMIT` left staged, under `strandedWritesCommitMessage`, recording a `storage.StrandedWritesCommit`, so the reset below never discards a write that is not the batch's. The CLI reports these on every command's event as `stranded_writes.commits` (`storage.StrandedWrites`).
-3. `readDoltHead` is the revert point: the head the batch starts from, reachable as an ancestor of the branch for as long as the batch runs, so nothing is created or cleaned up.
-4. On `fn`'s error the branch is hard-reset to that head through `resetHardToRef` on `context.WithoutCancel(ctx)`, so a Ctrl-C that refused the batch cannot also stop its reset, and the error is a `*RefusedBatchError{Head, Cause, ResetErr, Written}`: its text is the refusal's and `Unwrap` reaches it, so callers classify it as the refusal; its `EventRecord` puts `import.reset_to` (the head) and `import.reset_error` (empty when the reset landed) on the event.
-5. When the reset fails too, `refusedBatch` (`batch.go`) returns the partial result beside the error, whose text adds `"resetting to commit %s, the head before the file, failed too: %v\nthe documents written before the refusal are still committed: %s"`, the last `%s` the result's `Written()` (`internal/storage/bulk.go`). A process killed outright runs no reset and leaves the documents it had committed.
+2. Inside one `retryTransientGCContention`: `commitStrandedWrites(ctx)` (`sync.go`) first versions any write a failed `DOLT_COMMIT` left staged, under `strandedWritesCommitMessage`, recording a `storage.StrandedWritesCommit`, so a stranded write stays `from`'s and is never carried onto the batch's branch; then `activeBranch` reads `from` and `readDoltHead` the head the batch starts from. The CLI reports these on every command's event as `stranded_writes.commits` (`storage.StrandedWrites`). Failure → `"batch: %w"`.
+3. A `from` under `batchScratchPrefix` (`"lit-batch/"`) is refused: `"batch: refusing to start a batch on %q, another batch's branch"`.
+4. `deleteBranchesUnder(ctx, "lit-batch/", "")` (`scratch_branch.go`) sweeps every branch a batch killed mid-run left, each recorded as an `orphan` `storage.ScratchDelete`; a failure prints `"lit: a batch could not sweep the branches killed batches left: %v"` to stderr and the batch goes on.
+5. `runOnScratch(ctx, from, ["lit-batch/<pid>-<unixnano>"], head, body)` (`scratch_branch.go`): `fn` runs on that scratch branch, made at the head, and every write it makes is its own Dolt commit there. On `fn`'s error the body returns `*storage.RefusedBatchError{Head, Cause}`: its text is the refusal's and `Unwrap` reaches it, so callers classify it as the refusal; its `EventRecord` puts `import.head` (the commit the file started from, which `from` still holds) on the event. `from` never moved, so there is nothing to put back.
+6. When `fn` returns nil, the batch lands, inside one `retryTransientGCContention`: `commitHashOfRef(scratch)` reads the scratch head, `s.checkout(from)` (error `"switch to %q: %w"`), then `resetHardToRef` to the scratch head — a fast-forward, since the lock held throughout means nothing else moved `from`, and one root update, so a read engine (`OpenForRead`, no lock) sees the head before the batch or the head after it, never part of it. The commits above the head are exactly what the batch wrote. A failed landing → `"batch: land %s on %s: %w"`.
+7. `runOnScratch`'s deferred `leaveScratch` returns the session to `from` and deletes the scratch branch (`finished`), whatever the body returned (`inventory-store-sync.md` §5.11).
+8. It returns the head beside what of `fn`'s result stands: all of it when the landing landed, whatever cleanup returned after it; the zero result on a refusal or a failed landing. A process killed mid-batch never lands, so it writes nothing, and the next batch's sweep deletes its branch.
 
 ### 4.6 CLI surface
 
@@ -3852,13 +3856,13 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 `BulkApply(ctx, prefix, actor string, specs)` (`import_bulk.go`):
 
 1. `s.issueTypesByIDs(ctx, storage.BulkExistingRefs(specs))` (`store.go`) reads the `issue_type` column of every parent the file names and every update document that states a parent into `existingTypes`, keyed by id, found ids only. It hydrates nothing, so it answers on a hierarchy holding a parent loop, which a `parent: ""` document repairs (error → `bulk: read the issues the file places: %w`); `file, err := storage.ParseBulkFile(specs, existingTypes)` — whole file validated before anything is written, and returned parsed: `file.Creates` in the topological write order (§4.4), `file.Reparents`, `file.BlockedBy` and `file.Updates` in file order. An update document is a node of the gate's reference graph, named by its id, so a parent or blocked_by cycle the file states through update documents, across any number of them, is refused here; a cycle reads `bulk: cycle detected involving "x"`, `x` the document's local_id or id (`internal/storage/import_validate.go`). The engine parses nothing itself.
-2. Every write below runs inside `s.withBatch` (§4.5), with `createdIDs` (ordered, parallel to `file.Creates`) and the `localRealID` map; a refusal at any of them returns `refusedBatch(result, err)` — the zero result, unless the reset failed too (`import_bulk.go`).
+2. Every write below runs inside `s.withBatch` (§4.5), with `createdIDs` (ordered, parallel to `file.Creates`) and the `localRealID` map; a batch that did not land returns the zero result beside its error (`import_bulk.go`).
 3. Create loop over `file.Creates` (`import_bulk.go`): `CreateIssue(ctx, create.Input(storage.ResolveRef(create.Parent, localRealID), prefix))`. The gate built that input: `Title` and `Topic` trimmed, `Description`/`Prompt`/`Plan`/`Assignee`/`Lane`/`Labels` the document's value or the zero value, `IssueType` and `Priority` parsed (priority `model.PriorityNormal` when unset), `Placement` left at its zero value `RankBottom` so file order is preserved, matching ImportTree. Failure → `"bulk: create doc %d: %w"`.
    - Append `createdIDs`. If `create.LocalID != ""` → `localRealID[LocalID] = issue.ID`; `result.Created` gets `storage.NewIDMapping(create.LocalID, issue.ID)`, **self-keyed when there is no local id** (`import_bulk.go`).
 4. **The edges** (`import_bulk.go`): one `s.withMutation(ctx, "bulk edges", …)` running `file.WriteEdges(createdIDs, edgeWriterTx{…})` (`internal/storage/bulk.go`) into the `storage.EdgeStep` `edges`, recorded by `result.RecordEdges(edges)`. `WriteEdges` takes every edge set the file states, in this order: each update document's parent (a set of zero or one), each create's `blocked_by`, each update document's `blocked_by`. For each set it reads `Edges` — `requireIssueExistsTx` first, so a set on an id naming no issue is a not-found error, then the set's `relations` rows of that type — resolves its targets with `storage.ResolveRef` against the ids its creates were minted under, and removes, raw (`deleteRelationRowTx`), every edge the set drops; a set with nothing to drop or add is held. Only then does it `Add` (`addRelationTx`) every edge any set introduces, in set order, so the cycle, same-epic and containment rules judge the graph the file ends with, with the hierarchy written before any `blocked-by` edge. The transaction lands whole or not at all; an error → `"bulk: %s of %s -> %q: %w"` (`parent` or `blocked_by`; the document as its quoted id or `doc %d`; the target as the file states it).
 5. **The ordering**, when `file.RankedIDs(createdIDs)` is non-empty (`import_bulk.go`): one `s.RankSet(ctx, ranked)` into `result.Ranked`. Failure → `"bulk: rank: %w"`.
 6. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → `"bulk: update %q: %w"`. On success append `issue.ID` to `result.Updated`.
-7. Inside a batch `notify` queues each change on the context (`batchHearingKey`); `withBatch` delivers the queue when the batch lands or its reset failed (the writes stand), and drops it when the reset landed, so a refused file is heard by nobody.
+7. Inside a batch `notify` queues each change on the context (`batchHearingKey`); `withBatch` delivers the queue once the lock is released only when the batch landed, and drops it otherwise, so a refused file is heard by nobody.
 
 `storage.ResolveRef(ref, minted)` (`internal/storage/bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
@@ -3886,7 +3890,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 
 **No progress reporting** exists at the store layer; the CLI prints only after the whole call returns (`cli.go`).
 
-**Partial failure** does not exist: the whole call is one `withBatch` (§4.5), so a refusal at any create, edge, ordering or update resets the branch to the head the file started from, and the per-document commits made before it are gone with it.
+**Partial failure** does not exist: the whole call is one `withBatch` (§4.5), so a refusal at any create, edge, ordering or update never lands: the per-document commits made before it are on the batch's scratch branch, which is deleted, and the branch the file started from never moved.
 
 ### 5.6 CLI surface for bulk
 

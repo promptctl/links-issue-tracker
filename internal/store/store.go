@@ -88,6 +88,14 @@ type Store struct {
 	// phase is the store's long phase (longPhase): every hold the store opens,
 	// at open and at each rotation, is built inside it.
 	phase *longPhase
+	// checkedOut is the branch checkout or checkoutNewAt last put the session
+	// on, "" before either ran; resumeCheckedOut is its one reader.
+	checkedOut string
+	// scratchDeletes is every scratch branch deleteBranch deleted or failed to
+	// delete since the store opened, and scratchLooked whether anything
+	// looked for one; ScratchDeletes is their one reader.
+	scratchDeletes []storage.ScratchDelete
+	scratchLooked  bool
 
 	// followed is every re-root moveOntoRemoteReRoot applied since the store
 	// opened; FollowedReRoots is its one reader.
@@ -183,6 +191,13 @@ type Store struct {
 	// exactly once, proving a retry resumes at versioning instead of re-running
 	// the staged mutation body. Same per-Store seam rationale as above.
 	commitWorkingSetHookForTest func() error
+
+	// landHookForTest, if non-nil, fires at the top of every attempt of a
+	// batch's landing (withBatch), and its error, if any, stands in for that
+	// attempt failing. Production callers leave it nil; the batch tests use it
+	// to fail a landing transiently, proving its retry rotates and resumes on
+	// the branch it lands on. Same per-Store seam rationale as above.
+	landHookForTest func() error
 
 	// moveForkPointsHookForTest, if non-nil, fires at the top of every
 	// moveForkPointsAcrossTheCut, and its error, if any, stands in for that
@@ -666,7 +681,7 @@ func (s *Store) reconnect(ctx context.Context) error {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
 	s.releaseEngineRecord = hold.record(ctx)
-	return nil
+	return s.resumeCheckedOut(ctx)
 }
 
 func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (model.Issue, error) {
@@ -1515,8 +1530,8 @@ func (s *Store) notify(ctx context.Context, c storage.Change, issue model.Issue)
 
 // hear owes the observers heard. Inside a batch it is queued, and the batch
 // delivers the queue only for writes that stand, once its lock is released, so
-// a refused batch whose reset landed is heard by nobody and a batch inside
-// another hands its queue to the outer one. [LAW:single-enforcer]
+// a batch that did not land is heard by nobody and an undo around a batch
+// hands its queue to the undo. [LAW:single-enforcer]
 func (s *Store) hear(ctx context.Context, heard ...heardChange) {
 	if queue, ok := ctx.Value(batchHearingKey{}).(*[]heardChange); ok {
 		*queue = append(*queue, heard...)

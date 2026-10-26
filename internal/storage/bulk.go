@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -141,32 +140,6 @@ func (r *BulkApplyResult) RecordEdges(step EdgeStep) {
 	r.Reparented, r.ParentHeld = updatedIDs(step.Changed, model.RelParentChild), updatedIDs(step.Held, model.RelParentChild)
 	r.BlockedBySet, r.BlockedByHeld = updatedIDs(step.Changed, model.RelBlockedBy), updatedIDs(step.Held, model.RelBlockedBy)
 	r.EdgesAdded, r.EdgesRemoved = step.Added, step.Removed
-}
-
-// Written is the result in words: every write it holds, each with its ids,
-// and zero of any said rather than omitted. A refused batch whose reset failed
-// names what stays written with it. [LAW:no-silent-failure]
-func (r BulkApplyResult) Written() string {
-	ranked := make([]string, len(r.Ranked.Resolutions))
-	for i, res := range r.Ranked.Resolutions {
-		ranked[i] = res.RankedID
-	}
-	return fmt.Sprintf("%s, %d reparents [%s], %d blocked_by sets [%s], %d edges added and %d removed, %d updates [%s] and the order of %d issues [%s]",
-		writtenCreates(r.Created), len(r.Reparented), strings.Join(r.Reparented, ","), len(r.BlockedBySet), strings.Join(r.BlockedBySet, ","), r.EdgesAdded, r.EdgesRemoved, len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
-}
-
-// Written is the result in words, as BulkApplyResult.Written says it.
-func (r ImportTreeResult) Written() string {
-	return fmt.Sprintf("%s and %d blocked_by edges among them", writtenCreates(r.Created), r.EdgesAdded)
-}
-
-// writtenCreates names a result's creates by the ids they were created under.
-func writtenCreates(created []IDMapping) string {
-	ids := make([]string, len(created))
-	for i, m := range created {
-		ids[i] = m.ID
-	}
-	return fmt.Sprintf("%d creates [%s]", len(ids), strings.Join(ids, ","))
 }
 
 // BulkFile is a bulk file the gate admitted, parsed: the issues it creates,

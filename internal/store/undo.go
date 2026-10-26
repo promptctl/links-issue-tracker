@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -580,18 +579,15 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 		if len(reverted.Documents) == 0 {
 			return storage.RevertHeldError{Writes: reverting}
 		}
-		// What the bulk edit left written stands beside any error it returns
-		// (withBatch), so the undo reports it on every outcome. A refusal
-		// before its batch began names no revert point and wrote nothing.
-		// [LAW:nothing-unseen]
-		applied, from, applyErr := s.bulkApply(ctx, "", actor, reverted.Documents)
-		if from == "" {
-			return applyErr
+		// A batch lands whole or not at all (withBatch), so a bulk edit that
+		// returned an error wrote nothing, and what it landed is read only
+		// when it landed. [LAW:nothing-unseen]
+		applied, from, err := s.bulkApply(ctx, "", actor, reverted.Documents)
+		if err != nil {
+			return err
 		}
 		result.Applied = applied
-		landed, landedErr := s.commitsAbove(ctx, from)
-		result.Landed = landed
-		if err := errors.Join(applyErr, landedErr); err != nil {
+		if result.Landed, err = s.commitsAbove(ctx, from); err != nil {
 			return err
 		}
 		result.Writes, result.Moves = reverting, reverted.Moves
