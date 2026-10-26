@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026033051-bf8d96d9f51f` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026034331-872b9f5647d4` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -535,16 +535,21 @@ so lit could see the warning only as a line on stderr, never on the command's
 event (`links-observability-gvpn.4q4`).
 
 - `nbs.WithJournalWarningObserver(ctx, observe)` puts an observer on a context,
-  the way `gitcmd.WithObserver` (Patch 13) does for git. `nbs.JournalWarningsCb(ctx)`
-  is that observer, or the logging callback when the context carries none.
+  the way `gitcmd.WithObserver` (Patch 13) does for git. The observer receives
+  an `nbs.JournalWarning`: the warning and the store it came from, as
+  dbfactory knows it (`urlObj.Path`, the key of its singleton cache), since one
+  process opens several stores. `nbs.JournalWarningsCb(ctx, store)` is the
+  callback that hands warnings to it, or the logging callback when the context
+  carries none.
 - dbfactory's `CreateDB` resolves the callback from the open's context, and a
   `ChunkJournal` keeps the callback it was constructed with for every
   bootstrap, eager or lazy.
 
 lit installs the observer in `invocationContext` (`internal/cli/invocation_event.go`),
 which records each warning as a `dolt.journal_warnings` occurrence
-(`docs/events.md`). `TestAReadThatPassedOverTheJournalIndexSaysSoOnItsEvent` in
-`internal/cli` fails without the patch.
+(`docs/events.md`). `TestAReadThatPassedOverTheJournalIndexSaysSoOnItsEvent` and
+`TestAWriteThatRecoveredAJournalTailSaysSoOnItsEvent` in `internal/cli` fail
+without the patch.
 
 **Retire it when** upstream's dbfactory takes a journaling store's warnings
 callback from its caller instead of hard-wiring the logging one, and the

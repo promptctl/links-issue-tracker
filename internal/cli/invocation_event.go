@@ -69,12 +69,22 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	event := telemetry.With(ctx, recorder)
 	telemetry.Append(event, "git.cancels")
 	telemetry.Append(event, "dolt.journal_warnings")
-	ctx = nbs.WithJournalWarningObserver(event, func(warning error) {
-		telemetry.Append(event, "dolt.journal_warnings", warning.Error())
+	ctx = nbs.WithJournalWarningObserver(event, func(warning nbs.JournalWarning) {
+		telemetry.Append(event, "dolt.journal_warnings", journalWarningValue(warning))
 	})
 	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
 		telemetry.Append(event, "git.cancels", gitCancelValue(cancelled))
 	})
+}
+
+// journalWarningValue is one dolt.journal_warnings occurrence: the store whose
+// journal reported it, since one invocation can open several, and what it
+// reported.
+func journalWarningValue(w nbs.JournalWarning) map[string]any {
+	return map[string]any{
+		"dolt.journal_warning.store": w.Store,
+		"dolt.journal_warning.error": w.Err.Error(),
+	}
 }
 
 // gitCancelValue is one git.cancels occurrence. survivors is null when no
