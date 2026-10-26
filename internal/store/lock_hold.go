@@ -141,24 +141,30 @@ const (
 // let go rather than the instants lit's own calls return. It also owns the
 // wait the open makes for LOCK (wait), so one value reports both halves.
 //
+// Its record names are drawn once, when it is built: the arrival it
+// announces, every heartbeat after it, and the holder record a waiter's
+// account prints all carry the one name. [LAW:one-source-of-truth]
+//
 // [LAW:no-shared-mutable-globals] Every field below mu is written only under
 // it, by Dolt's callbacks, the executing decorator, and the heartbeat ticker.
-// The arrival file is written outside mu, since a write under a storm of
-// readers can take a second and the engine's next statement must not wait on
-// it. end stops the ticker and waits out any write it had begun, so nothing
-// is written once end returns.
+// The arrival file is written outside mu and only by the ticker's goroutine,
+// the first time as it starts, since a write under a storm of readers can
+// take a second and neither Dolt's open nor the engine's next statement must
+// wait on it. end stops the ticker and waits out any write it had begun, so
+// nothing is written once end returns.
 type lockHold struct {
-	storageDir string
-	lockPath   string
-	access     engineAccess
-	wait       *holdWait
-	now        func() time.Time
-	held       func(LockHold)
-	waited     func(LockWait)
+	storageDir  string
+	lockPath    string
+	privatePath string
+	recordPath  string
+	access      engineAccess
+	wait        *holdWait
+	now         func() time.Time
+	held        func(LockHold)
+	waited      func(LockWait)
 
 	mu        sync.Mutex
 	state     holdState
-	name      string
 	sequence  uint64
 	executing int
 	// worked latches "the engine ran since the last tick": set on every entry
@@ -184,10 +190,13 @@ type lockHold struct {
 func newLockHold(ctx context.Context, doltRootDir string, access engineAccess) *lockHold {
 	observer := lockObserverFrom(ctx)
 	storageDir, lockPath := workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir)
+	privatePath, recordPath := lockHolderRecordNames(lockHolderDir(storageDir, lockPath))
 	return &lockHold{
-		storageDir: storageDir,
-		lockPath:   lockPath,
-		access:     access,
+		storageDir:  storageDir,
+		lockPath:    lockPath,
+		privatePath: privatePath,
+		recordPath:  recordPath,
+		access:      access,
 		// The same holdWait every store lock waits with, keyed by Dolt's LOCK,
 		// so an engine open and a LockDoltJournalExclusive contender give the
 		// same holder the same wait and read the same progress. One per open:
@@ -200,6 +209,17 @@ func newLockHold(ctx context.Context, doltRootDir string, access engineAccess) *
 	}
 }
 
+// name is the hold's record name: its arrival, and the stem of its heartbeats.
+func (h *lockHold) name() string { return filepath.Base(h.recordPath) }
+
+// record publishes this process as LOCK's holder under the hold's own name,
+// once the open that took LOCK has returned, and returns the release that
+// retires the record. It wraps a no-op lock release: the hold itself ends
+// when the engine closes.
+func (h *lockHold) record(ctx context.Context) func() error {
+	return recordLockHolder(ctx, h.storageDir, h.lockPath, h.privatePath, h.recordPath, func() error { return nil })
+}
+
 // under is ctx carrying this hold as Dolt's journal lock observer: the
 // context an engine open must run under for the hold to learn when LOCK is
 // taken.
@@ -207,9 +227,10 @@ func (h *lockHold) under(ctx context.Context) context.Context {
 	return nbs.WithJournalLockObserver(ctx, nbs.JournalLockObserver{Taken: h.taken, Released: h.end})
 }
 
-// taken is Dolt's word that LOCK is held. The hold draws its name, announces
-// the arrival at this instant (not after the open returns, which under load
-// is seconds later), and starts its heartbeat.
+// taken is Dolt's word that LOCK is held. The hold starts its heartbeat,
+// which announces the arrival as it starts: at this instant, not after the
+// open returns (under load, seconds later), and not inside Dolt's open, which
+// this callback runs in.
 func (h *lockHold) taken() {
 	h.mu.Lock()
 	if h.state != holdUnheld {
@@ -218,29 +239,27 @@ func (h *lockHold) taken() {
 	}
 	now := h.now()
 	h.state, h.takenAt = holdHeld, now
-	_, recordPath := lockHolderRecordNames(lockHolderDir(h.storageDir, h.lockPath))
-	h.name = filepath.Base(recordPath)
 	if h.executing > 0 {
 		h.execFrom = now
 	} else {
 		h.idleFrom = now
 	}
 	h.stop, h.stopped = make(chan struct{}), make(chan struct{})
-	name, stop, stopped := h.name, h.stop, h.stopped
+	stop, stopped := h.stop, h.stopped
 	h.mu.Unlock()
-	// The holder directory may not exist yet on a store's first open:
-	// publishLockHolder makes it, but only after the open returns. A failure
-	// here surfaces as the announce's own failure just below.
-	_ = os.MkdirAll(lockHolderDir(h.storageDir, h.lockPath), 0o755)
-	h.announce(name)
 	go h.beat(stop, stopped)
 }
 
-// beat runs the heartbeat ticker for one hold until stop closes. The tick's
-// decision is tick's, on the instant it is handed; this loop only supplies
-// instants. [LAW:effects-at-boundaries]
+// beat announces the hold's arrival, then runs the heartbeat ticker for it
+// until stop closes. The tick's decision is tick's, on the instant it is
+// handed; this loop only supplies instants. [LAW:effects-at-boundaries]
 func (h *lockHold) beat(stop <-chan struct{}, stopped chan<- struct{}) {
 	defer close(stopped)
+	// The holder directory may not exist yet on a store's first open: the
+	// holder record makes it, but only after the open returns. A failure
+	// here surfaces as the announce's own failure just below.
+	_ = os.MkdirAll(lockHolderDir(h.storageDir, h.lockPath), 0o755)
+	h.announce(h.name())
 	ticker := time.NewTicker(holdHeartbeatInterval())
 	defer ticker.Stop()
 	for {
@@ -264,7 +283,7 @@ func (h *lockHold) tick() {
 		return
 	}
 	h.sequence++
-	name := fmt.Sprintf("%s.%d", h.name, h.sequence)
+	name := heartbeatName(h.name(), h.sequence)
 	h.mu.Unlock()
 	h.announce(name)
 }
@@ -392,8 +411,15 @@ var (
 	_ io.Closer        = executingConnector{}
 )
 
-// within runs one piece of engine work for the hold.
+// within runs one piece of engine work for the hold, and withinErr one that
+// returns only an error.
 func within[T any](h *lockHold, work func() (T, error)) (T, error) {
+	h.enter()
+	defer h.exit()
+	return work()
+}
+
+func withinErr(h *lockHold, work func() error) error {
 	h.enter()
 	defer h.exit()
 	return work()
@@ -412,8 +438,7 @@ func (c executingConnector) Driver() driver.Driver { return c.inner.Driver() }
 // Close closes the engine, which is the end of a write hold's work: under
 // load the engine close was the longest silent stretch of a hold.
 func (c executingConnector) Close() error {
-	_, err := within(c.hold, func() (struct{}, error) { return struct{}{}, c.inner.Close() })
-	return err
+	return withinErr(c.hold, c.inner.Close)
 }
 
 type executingConn struct {
@@ -435,8 +460,7 @@ func (c executingConn) Prepare(query string) (driver.Stmt, error) {
 }
 
 func (c executingConn) Close() error {
-	_, err := within(c.hold, func() (struct{}, error) { return struct{}{}, c.inner.Close() })
-	return err
+	return withinErr(c.hold, c.inner.Close)
 }
 
 func (c executingConn) Begin() (driver.Tx, error) {
@@ -466,8 +490,7 @@ var (
 )
 
 func (s executingStmt) Close() error {
-	_, err := within(s.hold, func() (struct{}, error) { return struct{}{}, s.inner.Close() })
-	return err
+	return withinErr(s.hold, s.inner.Close)
 }
 
 func (s executingStmt) NumInput() int { return s.inner.NumInput() }
@@ -513,13 +536,11 @@ var _ driver.Rows = executingRows{}
 func (r executingRows) Columns() []string { return r.inner.Columns() }
 
 func (r executingRows) Close() error {
-	_, err := within(r.hold, func() (struct{}, error) { return struct{}{}, r.inner.Close() })
-	return err
+	return withinErr(r.hold, r.inner.Close)
 }
 
 func (r executingRows) Next(dest []driver.Value) error {
-	_, err := within(r.hold, func() (struct{}, error) { return struct{}{}, r.inner.Next(dest) })
-	return err
+	return withinErr(r.hold, func() error { return r.inner.Next(dest) })
 }
 
 type executingMultiRows struct {
@@ -532,8 +553,7 @@ var _ driver.RowsNextResultSet = executingMultiRows{}
 func (r executingMultiRows) HasNextResultSet() bool { return r.inner.HasNextResultSet() }
 
 func (r executingMultiRows) NextResultSet() error {
-	_, err := within(r.hold, func() (struct{}, error) { return struct{}{}, r.inner.NextResultSet() })
-	return err
+	return withinErr(r.hold, r.inner.NextResultSet)
 }
 
 // executingTx is engine work from BeginTx to its Commit or Rollback, not
@@ -552,12 +572,10 @@ var _ driver.Tx = executingTx{}
 
 func (t executingTx) Commit() error {
 	defer t.hold.exit()
-	_, err := within(t.hold, func() (struct{}, error) { return struct{}{}, t.inner.Commit() })
-	return err
+	return withinErr(t.hold, t.inner.Commit)
 }
 
 func (t executingTx) Rollback() error {
 	defer t.hold.exit()
-	_, err := within(t.hold, func() (struct{}, error) { return struct{}{}, t.inner.Rollback() })
-	return err
+	return withinErr(t.hold, t.inner.Rollback)
 }

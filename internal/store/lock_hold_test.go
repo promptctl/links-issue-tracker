@@ -43,7 +43,9 @@ func liftWaitOutOfPlay(t *testing.T) {
 }
 
 // takenHold is a hold of kind access on a fresh store root, told by hand that
-// Dolt took LOCK, with what it reports going to reports.
+// Dolt took LOCK, with what it reports going to reports. It returns once the
+// hold's heartbeat goroutine has announced the arrival, so a tick the test
+// drives by hand comes after it.
 func takenHold(t *testing.T, access engineAccess, reports *heldReports) (*lockHold, func() string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "dolt")
@@ -58,6 +60,11 @@ func takenHold(t *testing.T, access engineAccess, reports *heldReports) (*lockHo
 		}
 		return latest.name
 	}
+	for deadline := time.Now().Add(5 * time.Second); arrival() != hold.name(); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("arrival after LOCK taken = %q, want the hold's own name %q", arrival(), hold.name())
+		}
+	}
 	return hold, arrival
 }
 
@@ -70,7 +77,7 @@ func TestARoutineHoldHeartbeatsOnEveryTickItsEngineWorked(t *testing.T) {
 	liftWaitOutOfPlay(t)
 	hold, arrival := takenHold(t, engineWriteRoutine, &heldReports{})
 	name := arrival()
-	if name == "" || strings.Contains(name, ".") {
+	if isHeartbeat(name) {
 		t.Fatalf("arrival at LOCK taken = %q, want the hold's record-shaped name", name)
 	}
 
@@ -94,10 +101,37 @@ func TestARoutineHoldHeartbeatsOnEveryTickItsEngineWorked(t *testing.T) {
 		if beat := got != last; beat != step.heartbeat {
 			t.Fatalf("%s: heartbeat written = %t (arrival %q -> %q), want %t", step.does, beat, last, got, step.heartbeat)
 		}
-		if step.heartbeat && !strings.HasPrefix(got, name+".") {
-			t.Fatalf("%s: heartbeat %q is not %q.<sequence>", step.does, got, name)
+		if step.heartbeat && (!isHeartbeat(got) || !strings.HasPrefix(got, name)) {
+			t.Fatalf("%s: heartbeat %q is not a heartbeat of %q", step.does, got, name)
 		}
 		last = got
+	}
+}
+
+// The holder record a waiter's account prints carries the name the hold
+// announced and heartbeats under, so one acquisition is one name wherever it
+// is read.
+func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
+	liftWaitOutOfPlay(t)
+	hold, arrival := takenHold(t, engineWriteRoutine, &heldReports{})
+	release := hold.record(context.Background())
+	t.Cleanup(func() {
+		if err := release(); err != nil {
+			t.Errorf("release record: %v", err)
+		}
+	})
+	entries, err := os.ReadDir(lockHolderDir(hold.storageDir, hold.lockPath))
+	if err != nil {
+		t.Fatalf("read holder dir: %v", err)
+	}
+	var records []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
+			records = append(records, entry.Name())
+		}
+	}
+	if want := arrival(); len(records) != 1 || records[0] != want {
+		t.Fatalf("holder records = %q, want the one record the arrival %q names", records, want)
 	}
 }
 
@@ -253,13 +287,7 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 	if routine == nil || routine.Heartbeats < 4 || routine.Executing < time.Second {
 		t.Fatalf("holds reported %+v, want the routine holder's, heartbeating through its 2s statement", holds)
 	}
-	var lockWait *LockWait
-	for i := range waits {
-		if waits[i].Lock == "LOCK" {
-			lockWait = &waits[i]
-		}
-	}
-	if lockWait == nil || lockWait.Outcome != LockWaitAcquired || lockWait.ProgressSeen < 2 {
+	if lockWait := lockWaitOn(reports, "LOCK"); lockWait == nil || lockWait.Outcome != LockWaitAcquired || lockWait.ProgressSeen < 2 {
 		t.Fatalf("waits reported %+v, want the writer's LOCK wait acquired after seeing the holder's heartbeats", waits)
 	}
 }
@@ -269,11 +297,12 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
 	// serial: rewrites the package-level coResidentHolderWait.
 	shrinkWait(t, 400*time.Millisecond)
+	reports := &heldReports{}
 	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
 		return Open(WithHolderCommand(ctx, "lit import"), testEnv(), root, "test-workspace-id")
 	}, func(s *Store) error {
 		return s.ExecRawForTest(context.Background(), "SELECT SLEEP(2)")
-	}, &heldReports{})
+	}, reports)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("a writer behind a long holder got %v after %s, want ErrWorkspaceBusy", err, elapsed)
 	}
@@ -283,6 +312,74 @@ func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
 	if elapsed > 1500*time.Millisecond {
 		t.Fatalf("the writer failed after %s; a long holder must fail it about one wait in", elapsed)
 	}
+	if wait := lockWaitOn(reports, "LOCK"); wait == nil || wait.Outcome != LockWaitStoodStill {
+		t.Fatalf("the writer's LOCK wait was reported as %+v, want stood_still", wait)
+	}
+}
+
+// lockWaitOn is the last wait reports recorded on the lock named lock.
+func lockWaitOn(reports *heldReports, lock string) *LockWait {
+	_, waits := reports.snapshot()
+	var found *LockWait
+	for i := range waits {
+		if waits[i].Lock == lock {
+			found = &waits[i]
+		}
+	}
+	return found
+}
+
+// A writer whose context ends while it waits on a holder was cancelled, not
+// refused: Dolt's open hands back its lock error either way, and the wait
+// still says which it was.
+func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
+	// serial: rewrites the package-level coResidentHolderWait.
+	shrinkWait(t, time.Minute)
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	holder, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("holder Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := holder.Close(); err != nil {
+			t.Errorf("holder Close() error = %v", err)
+		}
+	})
+	reports := &heldReports{}
+	ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 500*time.Millisecond)
+	defer cancel()
+	if contender, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id"); err == nil {
+		_ = contender.Close()
+		t.Fatal("a writer opened beside a live holder")
+	}
+	if wait := lockWaitOn(reports, "LOCK"); wait == nil || wait.Outcome != LockWaitCancelled {
+		t.Fatalf("the cancelled writer's LOCK wait was reported as %+v, want cancelled", wait)
+	}
+}
+
+// A wait the policy did not give up on, whose context is live, and whose
+// acquisition failed, failed: neither refused nor cancelled.
+func TestAWaitWhoseAttemptFailedReportsFailed(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	w := newHoldWait(storageDirOf(lockPath), lockPath, func() time.Duration { return time.Hour }, time.Now)
+	w.Reset()
+	w.NextBackOff()
+	if wait, waited := w.report(context.Background(), errors.New("disk on fire")); !waited || wait.Outcome != LockWaitFailed {
+		t.Fatalf("report() = %+v, %t; want a failed wait", wait, waited)
+	}
+}
+
+// A bootstrap's engine holds LOCK like any write engine, so its hold is
+// reported like any other.
+func TestABootstrapEnginesHoldIsReported(t *testing.T) {
+	reports := &heldReports{}
+	ctx := WithLockObserver(context.Background(), reports.observer())
+	if err := buildDoltRoot(ctx, filepath.Join(t.TempDir(), "staging"), "test-workspace-id"); err != nil {
+		t.Fatalf("buildDoltRoot() error = %v", err)
+	}
+	if holds, _ := reports.snapshot(); len(holds) != 2 {
+		t.Fatalf("bootstrap reported holds %+v, want one per engine it opened", holds)
+	}
 }
 
 // A routine holder outside its engine (at a prompt, on the network, waiting
@@ -291,17 +388,21 @@ func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
 func TestAWriterBehindARoutineHolderOutsideItsEngineFails(t *testing.T) {
 	// serial: rewrites the package-level coResidentHolderWait.
 	shrinkWait(t, 400*time.Millisecond)
+	reports := &heldReports{}
 	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
 		return OpenRoutine(WithHolderCommand(ctx, "lit purge"), testEnv(), root, "test-workspace-id")
 	}, func(*Store) error {
 		time.Sleep(2 * time.Second)
 		return nil
-	}, &heldReports{})
+	}, reports)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("a writer behind an idle routine holder got %v after %s, want ErrWorkspaceBusy", err, elapsed)
 	}
 	if !strings.Contains(err.Error(), "(lit purge)") {
 		t.Fatalf("refusal %q does not name the routine holder", err)
+	}
+	if wait := lockWaitOn(reports, "LOCK"); wait == nil || wait.Outcome != LockWaitStoodStill {
+		t.Fatalf("the writer's LOCK wait was reported as %+v, want stood_still", wait)
 	}
 }
 

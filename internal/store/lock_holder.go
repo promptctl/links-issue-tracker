@@ -18,7 +18,6 @@ import (
 	"unicode"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -158,6 +157,16 @@ func lockHolderRecordNamesFor(dir string, pid int, nonce string, seq uint64) (pr
 		filepath.Join(dir, lockHolderRecordPrefix+suffix)
 }
 
+// heartbeatName is the seq'th heartbeat of the hold whose record is named
+// recordName, and isHeartbeat tells one from a record name: a record name has
+// no '.', so the one character marks the shape both read.
+// [LAW:one-source-of-truth] the shape is written and read here only.
+func heartbeatName(recordName string, seq uint64) string {
+	return fmt.Sprintf("%s.%d", recordName, seq)
+}
+
+func isHeartbeat(name string) bool { return strings.Contains(name, ".") }
+
 // privateNameFor names the private sibling of the record at recordPath. The
 // two names are one inode, so proving the swept name unheld proves the private
 // one unheld by the same acquisition — and retiring only the swept name would
@@ -177,8 +186,10 @@ type lockHolderRecord struct {
 	Since   time.Time `json:"since"`
 }
 
-// recordLockHolder publishes this process's claim on lockPath and returns a
-// release that retires it. The returned release wraps lockRelease — the hold
+// recordLockHolder publishes this process's claim on lockPath under the
+// record names the acquisition drew (lockHolderRecordNames), and returns a
+// release that retires it. It announces nothing: the acquisition announced
+// its arrival when it took the lock, under the same name. The returned release wraps lockRelease — the hold
 // on the lock itself — so a caller has exactly one thing to defer and cannot
 // retire the record while keeping the lock, or the reverse.
 //
@@ -205,11 +216,11 @@ type lockHolderRecord struct {
 // its hold, so the next acquisition proves it unheld and retires it. On
 // Windows that failure needs nothing worse than a concurrent sweep's probe
 // holding the file open, since filelock's open denies the delete right.
-func recordLockHolder(ctx context.Context, storageDir, lockPath string, lockRelease func() error) func() error {
+func recordLockHolder(ctx context.Context, storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
 	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
 		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
 	}
-	releaseRecord, err := publishLockHolder(ctx, storageDir, lockPath)
+	releaseRecord, err := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
 	if err != nil {
 		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
 		return lockRelease
@@ -226,9 +237,8 @@ func recordLockHolder(ctx context.Context, storageDir, lockPath string, lockRele
 }
 
 // publishLockHolder publishes this process's claim on lockPath: what this
-// process would want said about it, handed to the protocol that says it, and
-// then announced as the lock's latest arrival.
-func publishLockHolder(ctx context.Context, storageDir, lockPath string) (func() error, error) {
+// process would want said about it, handed to the protocol that says it.
+func publishLockHolder(ctx context.Context, storageDir, lockPath, privatePath, recordPath string) (func() error, error) {
 	dir := lockHolderDir(storageDir, lockPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("ensure holder dir: %w", err)
@@ -241,15 +251,7 @@ func publishLockHolder(ctx context.Context, storageDir, lockPath string) (func()
 	if err != nil {
 		return nil, fmt.Errorf("encode holder record: %w", err)
 	}
-	// The arrival is announced whether or not the record could be minted: it
-	// is a fact about the acquisition, which has happened either way, and the
-	// drawn name is unique whether or not a record ever carries it.
-	privatePath, recordPath := lockHolderRecordNames(dir)
-	release, err := mintHeldRecord(privatePath, recordPath, payload)
-	if announceErr := announceArrival(dir, filepath.Base(recordPath)); announceErr != nil {
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not announce this process's arrival at %s (the lock is held; a contender waiting now may miss this arrival): %v\n", lockPath, announceErr)
-	}
-	return release, err
+	return mintHeldRecord(privatePath, recordPath, payload)
 }
 
 // lockHolderArrivalName is the file in a lock's holder directory that names
@@ -347,8 +349,8 @@ func latestArrival(storageDir, lockPath string) (lockArrival, error) {
 
 // describeArrival is the holder account's clause about the lock's latest
 // arrival: how long ago the last lit acquisition announced itself, or the
-// holder's last heartbeat was written, told apart by the name's shape (a
-// record name has no '.', a heartbeat is `<name>.<sequence>`). It says no
+// holder's last heartbeat was written, told apart by the name's shape
+// (isHeartbeat). It says no
 // more than that — a holder that announces nothing, or a shared holder
 // joining after it, can stand behind the age. Beside a refusal it tells apart
 // the two ways a wait ends — a queue that stopped moving a whole wait ago, or
@@ -363,7 +365,7 @@ func describeArrival(storageDir, lockPath string) string {
 		return fmt.Sprintf("arrivals unreadable, so a waiter sees only the holders standing at each poll: %v", err)
 	case latest.at.IsZero():
 		return "no lit acquisition has announced an arrival here"
-	case strings.Contains(latest.name, "."):
+	case isHeartbeat(latest.name):
 		return fmt.Sprintf("the holder's last heartbeat was %s ago", time.Since(latest.at).Round(time.Millisecond))
 	default:
 		return fmt.Sprintf("the last lit acquisition announced itself %s ago", time.Since(latest.at).Round(time.Millisecond))
@@ -737,6 +739,12 @@ type holdWait struct {
 	// rather than a reading of its own, and the first is what makes it one.
 	heldAt   time.Time
 	progress int
+	// stoodStill is whether this wait gave up because its holders stood still
+	// for the whole wait: the policy's own decision, kept so the report reads
+	// it rather than inferring it from an error every caller shapes its own
+	// way (an engine open hands back Dolt's lock error whether the wait gave up
+	// or its context ended).
+	stoodStill bool
 }
 
 // newHoldWait builds the policy for one lock. wait is read at each poll, not
@@ -755,7 +763,7 @@ func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now fun
 func (w *holdWait) Reset() {
 	w.started = w.now()
 	w.known, w.since, w.noticeDue = nil, w.started, w.started.Add(lockWaitNoticeGrace)
-	w.heldAt, w.progress = time.Time{}, 0
+	w.heldAt, w.progress, w.stoodStill = time.Time{}, 0, false
 	w.arrived()
 }
 
@@ -774,6 +782,7 @@ func (w *holdWait) NextBackOff() time.Duration {
 		w.since = now
 	}
 	if now.Sub(w.since) >= w.wait() {
+		w.stoodStill = true
 		return backoff.Stop
 	}
 	if !now.Before(w.noticeDue) {
@@ -811,9 +820,12 @@ func (w *holdWait) arrived() bool {
 
 // report is this wait as a LockWait, given what the acquisition it policed
 // returned, and whether there was a wait to report: an acquisition that never
-// found its lock held waited for nothing. The outcome is read off the
-// acquisition's error, the one place that knows how the wait ended, since a
-// policy is never told of a success. [LAW:parse-dont-validate]
+// found its lock held waited for nothing. A success is the acquisition's to
+// say, since a policy is never told of one; giving up on holders that stood
+// still is the policy's own decision; a context that ended cut the wait
+// (backoff stops on it before asking the policy); anything else failed the
+// attempt. [LAW:one-source-of-truth] each outcome is read from the one place
+// that decided it, never from the shape of an error.
 func (w *holdWait) report(ctx context.Context, acquireErr error) (LockWait, bool) {
 	if w.heldAt.IsZero() {
 		return LockWait{}, false
@@ -822,9 +834,9 @@ func (w *holdWait) report(ctx context.Context, acquireErr error) (LockWait, bool
 	switch {
 	case acquireErr == nil:
 		outcome = LockWaitAcquired
-	case errors.Is(acquireErr, ErrWorkspaceBusy), errors.Is(acquireErr, errLockHeld), errors.Is(acquireErr, nbs.ErrDatabaseLocked):
+	case w.stoodStill:
 		outcome = LockWaitStoodStill
-	case ctx.Err() != nil && errors.Is(acquireErr, ctx.Err()):
+	case ctx.Err() != nil:
 		outcome = LockWaitCancelled
 	}
 	return LockWait{

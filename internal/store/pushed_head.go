@@ -285,7 +285,7 @@ func holdForRefWrite(ctx context.Context, root string, access engineAccess, budg
 		// The hold ends after the close, which Dolt's Released has usually
 		// already ended. [LAW:no-silent-failure]
 		recordErr := releaseRecord()
-		_, closeErr := within(hold, func() (struct{}, error) { return struct{}{}, ddb.Close() })
+		closeErr := withinErr(hold, ddb.Close)
 		hold.end()
 		err = errors.Join(err, recordErr, closeErr)
 	}()
@@ -310,8 +310,7 @@ func holdForRefWrite(ctx context.Context, root string, access engineAccess, budg
 	defer func() {
 		err = SettleCommitLockRelease(err, releaseCommit())
 	}()
-	_, err = within(hold, func() (struct{}, error) { return struct{}{}, write(holdCtx, ddb) })
-	return err
+	return withinErr(hold, func() error { return write(holdCtx, ddb) })
 }
 
 // openChunkStoreForRefWrite opens the workspace's Dolt database without a SQL
@@ -360,5 +359,5 @@ func openChunkStoreForRefWrite(ctx context.Context, root string, hold *lockHold)
 		hold.end()
 		return nil, nil, fmt.Errorf("open dolt chunk store at %s: %w", nomsDir, err)
 	}
-	return ddb, recordLockHolder(ctx, workspaceStorageDir(root), DoltJournalLockPath(root), func() error { return nil }), nil
+	return ddb, hold.record(ctx), nil
 }

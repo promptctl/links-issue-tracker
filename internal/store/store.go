@@ -560,35 +560,46 @@ func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir strin
 	}, nil
 }
 
-// openEngine opens the engine openStoreConnection describes, pinged so it is
-// open rather than lazy, and returns it with its hold of LOCK (lockHold) and
-// the release of its LOCK holder record: a no-op for a read engine, which
-// records nothing.
-//
-// The ping runs under the hold (lockHold.under), so the hold learns the
-// instant Dolt takes LOCK inside the open and announces the arrival there,
-// rather than after the open returns.
+// openEngine opens the engine openStoreConnection describes (openHeldPool)
+// and returns it with its hold of LOCK (lockHold) and the release of its LOCK
+// holder record: a no-op for a read engine, which records nothing.
 func openEngine(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*sql.DB, *lockHold, func() error, error) {
-	hold := newLockHold(ctx, doltRootDir, access)
-	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, hold)
+	db, hold, err := openHeldPool(ctx, doltRootDir, workspaceID, doltDatabaseName, access)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	releaseEngineRecord := func() error { return nil }
+	if access.holdsLock() {
+		// The engine took LOCK through Dolt's own loader, so the record is
+		// published here rather than by acquireStoreLock.
+		releaseEngineRecord = hold.record(ctx)
+	}
+	return db, hold, releaseEngineRecord, nil
+}
+
+// openHeldPool opens a pool on database at doltRootDir and pings it under
+// its hold, so the engine is open rather than lazy, the hold learns when Dolt
+// takes LOCK and reports the hold when Dolt lets it go, and the open's wait
+// for LOCK is reported. [LAW:single-enforcer] the one engine open every pool
+// lit opens on a store goes through, the store's own and the bootstrap's and
+// a clone's alike. A pool opened with no database ("") takes LOCK only in the
+// statement that creates one, which its caller runs under the same hold
+// (lockHold.under). A contended open fails naming the holder
+// (wrapEngineOpenContention).
+func openHeldPool(ctx context.Context, doltRootDir, workspaceID, database string, access engineAccess) (*sql.DB, *lockHold, error) {
+	hold := newLockHold(ctx, doltRootDir, access)
+	db, err := openDoltPool(doltRootDir, workspaceID, database, hold)
+	if err != nil {
+		return nil, nil, err
 	}
 	pingErr := db.PingContext(hold.under(ctx))
 	hold.reportWait(ctx, pingErr)
 	if err := wrapEngineOpenContention(pingErr, doltRootDir); err != nil {
 		closeErr := db.Close()
 		hold.end()
-		return nil, nil, nil, errors.Join(err, closeErr)
+		return nil, nil, errors.Join(err, closeErr)
 	}
-	releaseEngineRecord := func() error { return nil }
-	if access.holdsLock() {
-		// The engine took LOCK through Dolt's own loader, so the record is
-		// published here rather than by acquireStoreLock, and the release it
-		// wraps is a no-op: the hold itself ends when the engine closes.
-		releaseEngineRecord = recordLockHolder(ctx, workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), func() error { return nil })
-	}
-	return db, hold, releaseEngineRecord, nil
+	return db, hold, nil
 }
 
 // reconnect swaps s.db for a fresh connection with the Store's own open
@@ -3121,30 +3132,28 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) erro
 	// still live. [LAW:no-ambient-temporal-coupling] The explicit Close IS the
 	// ordering owner — a deferred close would hold both engines at once.
 	if err := func() error {
-		db, err := openDoltPool(staging, workspaceID, "", newLockHold(ctx, staging, engineWrite))
+		db, hold, err := openHeldPool(ctx, staging, workspaceID, "", engineWrite)
 		if err != nil {
 			return err
 		}
+		defer hold.end()
 		defer db.Close()
-		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
+		// A pool with no database takes no LOCK at its ping: the database it
+		// creates takes LOCK here, so this runs under the hold as well.
+		if _, err := db.ExecContext(hold.under(ctx), fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
 			return fmt.Errorf("create dolt database: %w", err)
 		}
 		return nil
 	}(); err != nil {
-		// The bootstrap pools open their engines at first exec, so a foreign
-		// journal-lock holder surfaces here; the wrapper names the holder,
-		// every other failure passes through untouched.
-		return wrapEngineOpenContention(err, staging)
+		return err
 	}
-	db, err := openDoltPool(staging, workspaceID, doltDatabaseName, newLockHold(ctx, staging, engineWrite))
+	db, hold, err := openHeldPool(ctx, staging, workspaceID, doltDatabaseName, engineWrite)
 	if err != nil {
 		return err
 	}
+	defer hold.end()
 	defer db.Close()
-	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
-		return wrapEngineOpenContention(err, staging)
-	}
-	return nil
+	return ensureMasterDefaultBranch(ctx, db)
 }
 
 // installDoltRoot moves a built database into place with one rename, onto

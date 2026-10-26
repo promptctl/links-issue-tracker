@@ -425,7 +425,16 @@ func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, l
 	if err != nil {
 		return nil, err
 	}
-	return recordLockHolder(ctx, storageDir, lockPath, release), nil
+	dir := lockHolderDir(storageDir, lockPath)
+	privatePath, recordPath := lockHolderRecordNames(dir)
+	recorded := recordLockHolder(ctx, storageDir, lockPath, privatePath, recordPath, release)
+	// The arrival is announced whether or not the record could be minted: it
+	// is a fact about the acquisition, which has happened either way, and the
+	// drawn name is unique whether or not a record ever carries it.
+	if err := announceArrival(dir, filepath.Base(recordPath)); err != nil {
+		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not announce this process's arrival at %s (the lock is held; a contender waiting now may miss this arrival): %v\n", lockPath, err)
+	}
+	return recorded, nil
 }
 
 // DoltJournalLockPath returns Dolt's own journal-manifest lock path for a
