@@ -930,7 +930,9 @@ A revert writes nothing, and answers on its reason, when:
   (`validation_refused`, exit 3). This covers lifecycle moves (`lit start`, `done`,
   `close`, `open`, `phase`, archive and delete), which also decide who holds a lane;
   creating or purging a ticket; a rank move (`lit rank`); a related-to edge; a
-  comment; a write a sync replay re-landed over a merged value; and migrations. Each is named, with the
+  comment; a `lit label` or `lit bulk label` write from a lit that did not yet record
+  label edits as field changes; a write a sync replay re-landed over a merged value;
+  and migrations. Each is named, with the
   command that reverses it where there is one;
 - the writes' effects are already gone (`state_already_holds`, exit 6);
 - an id is not on this branch's history (`entity_not_found`, exit 4). History past

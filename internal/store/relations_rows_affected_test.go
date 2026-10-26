@@ -49,42 +49,6 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	}
 }
 
-// A label's removal runs the same DELETE FROM labels statement; this proves
-// its RowsAffected() error is likewise surfaced rather than misread as a
-// "label not found" result.
-func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "rows", IssueType: "epic", Priority: 1})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Labeled", Topic: "rows", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	if _, err := st.Apply(ctx, issue.ID, storage.AddLabel{Name: "critical", Actor: "test"}); err != nil {
-		t.Fatalf("AddLabel() error = %v", err)
-	}
-
-	causeErr := errors.New("synthetic driver failure reading affected rows")
-	swapInExecErrDB(t, st, `DELETE FROM labels WHERE issue_id = ? AND label = ?`, causeErr)
-
-	_, err = st.Apply(ctx, issue.ID, storage.RemoveLabel{Name: "critical"})
-	if err == nil {
-		t.Fatalf("RemoveLabel() error = nil, want the injected RowsAffected failure")
-	}
-	var notFound storage.NotFoundError
-	if errors.As(err, &notFound) {
-		t.Fatalf("RemoveLabel() masked a genuine RowsAffected error as NotFoundError: %v", err)
-	}
-	if !strings.Contains(err.Error(), causeErr.Error()) {
-		t.Fatalf("RemoveLabel() error = %v, want it to wrap %q", err, causeErr)
-	}
-}
-
 // swapInExecErrDB replaces the store's live Dolt connection with one that,
 // whenever it prepares a statement whose text contains match, executes it for
 // real (so the underlying row is genuinely deleted) but forces its
@@ -219,8 +183,7 @@ func namedValuesToValues(named []driver.NamedValue) []driver.Value {
 // execErrResult reports the query as having genuinely executed — the DELETE
 // really ran, and a real zero-rows case still returns 0 with no error from
 // the inner result — while RowsAffected() unconditionally fails. That is the
-// exact fault ClearParent and a label's removal surface instead of masking as
-// NotFound.
+// exact fault ClearParent surfaces instead of masking as NotFound.
 type execErrResult struct {
 	inner    driver.Result
 	causeErr error

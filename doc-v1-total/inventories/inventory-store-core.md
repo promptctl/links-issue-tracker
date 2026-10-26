@@ -2639,7 +2639,7 @@ The label set is an issue field, written only through `Apply`. `lit label add|rm
 
 Callers: `applyFieldsTx` on every field write, from the patch's baseline set (`fieldWrite.priorLabels`) to the planned one, so a write that leaves the set as it was moves no row; and `CreateIssue`, from the empty set to `canonicalizeLabels(in.Labels)` — `internal/store/store.go`.
 
-Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Errorf("delete %s: %w", subject, err)` and a `RowsAffected()` failure as `fmt.Errorf("delete %s: rows affected: %w", subject, err)`, where subject is `fmt.Sprintf("label %s:%s", key.issueID, key.name)` — `internal/store/row_deletes.go`. `TestRemoveLabelSurfacesGenuineRowsAffectedError` injects a driver whose `RowsAffected()` always fails and asserts the returned error is NOT a `storage.NotFoundError` and wraps the injected cause — `internal/store/relations_rows_affected_test.go`, fault harness.
+Errors: `execDelete` wraps a delete failure as `fmt.Errorf("delete %s: %w", subject, err)` and a `RowsAffected()` failure as `fmt.Errorf("delete %s: rows affected: %w", subject, err)`, where subject is `fmt.Sprintf("label %s:%s", key.issueID, key.name)` — `internal/store/row_deletes.go`. `writeLabelsTx` ignores the affected count: the plan decided from the set it read under the commit lock that the row is present, and `RemoveLabel`'s NotFound comes from that set, never from the count.
 
 ### 3.5 ListLabels and other read paths
 

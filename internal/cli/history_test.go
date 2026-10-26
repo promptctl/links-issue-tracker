@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // TestRunHistoryPrintsMultiEditTransitionTrail exercises `lit history` on a
@@ -309,7 +311,9 @@ func TestRunHistoryVersionRejectsAMalformedReference(t *testing.T) {
 }
 
 // `lit label add`, `lit label rm` and `lit bulk label` are edits of the labels
-// field, so `lit history` lists each one, by the actor that made it.
+// field, so `lit history` lists each one, by the actor that made it, and each
+// run's event says whether it moved the field: a re-add lands and records
+// nothing.
 func TestRunHistoryListsLabelVerbs(t *testing.T) {
 	// --by names the actor only when no session identity outranks it.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
@@ -323,17 +327,29 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
+	single := func(ev telemetry.Event) map[string]any { return ev.Facts }
+	bulkItem := func(ev telemetry.Event) map[string]any {
+		return ev.Occurrences["bulk.items"][0].(map[string]any)["bulk.item.facts"].(map[string]any)
+	}
 	for _, step := range []struct {
-		verb appLeaf
-		args []string
+		verb    appLeaf
+		args    []string
+		facts   func(telemetry.Event) map[string]any
+		changed bool
 	}{
-		{labelAddLeaf(), []string{issue.ID, "perf", "--by", "adder"}},
-		{labelRmLeaf(), []string{issue.ID, "perf", "--by", "remover"}},
-		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-adder"}},
-		{bulkLabelLeaf(), []string{"rm", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-remover"}},
+		{labelAddLeaf(), []string{issue.ID, "perf", "--by", "adder"}, single, true},
+		{labelAddLeaf(), []string{issue.ID, "perf", "--by", "re-adder"}, single, false},
+		{labelRmLeaf(), []string{issue.ID, "perf", "--by", "remover"}, single, true},
+		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-adder"}, bulkItem, true},
+		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-re-adder"}, bulkItem, false},
+		{bulkLabelLeaf(), []string{"rm", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-remover"}, bulkItem, true},
 	} {
-		if err := runLeaf(step.verb, ctx, &bytes.Buffer{}, ap, step.args); err != nil {
+		ev, err := recordLeaf(step.verb, ctx, cwdInvocation(&bytes.Buffer{}, io.Discard, nil), ap, step.args)
+		if err != nil {
 			t.Fatalf("%v error = %v", step.args, err)
+		}
+		if got := step.facts(ev)["label.changed"]; got != step.changed {
+			t.Errorf("%v label.changed = %v, want %v", step.args, got, step.changed)
 		}
 	}
 
@@ -342,6 +358,9 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
+	if strings.Contains(out, "re-adder") {
+		t.Errorf("lit history lists a re-add, which moved nothing:\n%s", out)
+	}
 	rest := out
 	for _, want := range []string{
 		"- [adder @ ", "labels: - → perf",

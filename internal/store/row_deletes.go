@@ -75,8 +75,9 @@ type labelKey struct {
 // not per table.
 //
 // They return the affected row count because the CRUD callers need it to tell
-// "removed" from "there was nothing there"; the delta ignores it, having
-// already decided from the diff that the row is present.
+// "removed" from "there was nothing there"; the delta and a label set's move
+// ignore it, each having already decided from what it read that the row is
+// present.
 
 // Deleting an issue takes its relations, comments, labels, events and event
 // changes with it — the schema's ON DELETE CASCADE — which is exactly what

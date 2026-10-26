@@ -5,7 +5,9 @@ import (
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 var labelFamily = commandFamily[appSubcommand]{
@@ -32,11 +34,11 @@ func labelAddLeaf() appLeaf {
 		if len(positional) != 2 {
 			return UsageError{Message: usageLine0}
 		}
-		applied, err := ap.Store.Apply(ctx, positional[0], storage.AddLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
+		issue, err := applyLabelEdit(ctx, ap, positional[0], storage.AddLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
-		if err := printLabels(inv.Stdout, applied.Issue.Labels); err != nil {
+		if err := printLabels(inv.Stdout, issue.Labels); err != nil {
 			return err
 		}
 		return emitBreadcrumb(inv.Stdout, "update")
@@ -51,15 +53,29 @@ func labelRmLeaf() appLeaf {
 		if len(positional) != 2 {
 			return UsageError{Message: usageLine1}
 		}
-		applied, err := ap.Store.Apply(ctx, positional[0], storage.RemoveLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
+		issue, err := applyLabelEdit(ctx, ap, positional[0], storage.RemoveLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
-		if err := printLabels(inv.Stdout, applied.Issue.Labels); err != nil {
+		if err := printLabels(inv.Stdout, issue.Labels); err != nil {
 			return err
 		}
 		return emitBreadcrumb(inv.Stdout, "update")
 	}}
+}
+
+// applyLabelEdit is every label verb's write, single and bulk alike: it
+// applies the verb's plan and records on the command's event whether the
+// labels field moved. A label added to an issue that already holds it lands
+// and records no history row, and label.changed is what tells that run from
+// an edit. [LAW:single-enforcer] [LAW:nothing-unseen]
+func applyLabelEdit(ctx context.Context, ap *app.App, issueID string, plan storage.ChangePlan) (model.Issue, error) {
+	applied, err := ap.Store.Apply(ctx, issueID, plan)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	telemetry.Set(ctx, "label.changed", len(applied.Fields) > 0)
+	return applied.Issue, nil
 }
 
 func parentSetLeaf() appLeaf {
