@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -109,8 +110,7 @@ func buildLayout(t *testing.T, l layout, url string) Repository {
 
 // environments are the ones a question must answer the same in: git config
 // that refuses discovered bare repositories, and that config plus the
-// repository-locating variables a git hook exports, each naming somewhere
-// else.
+// repository variables a git hook exports, each naming somewhere else.
 func environments(t *testing.T) map[string]environ.Env {
 	elsewhere := filepath.Join(canonicalTempDir(t), "elsewhere")
 	explicit := testEnv().With("GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.bareRepository", "GIT_CONFIG_VALUE_0=explicit")
@@ -218,11 +218,14 @@ func TestRemoteQuestionsReadALeadingDashAsAURL(t *testing.T) {
 }
 
 // A remote lit refuses is asked by its URL as written, read from the checkout
-// root it was listed in, as git reads it there.
+// root it was listed in, as git reads it there. The root is a linked
+// worktree's, at another depth than the git dir: the URL read from the git
+// dir would name another path.
 func TestRefusedRemoteHasDoltDataReadsTheWrittenURLFromTheRoot(t *testing.T) {
 	r := newRemotes(t)
 	repo := buildLayout(t, layouts[0], r.populated)
-	root := filepath.Dir(repo.gitDir)
+	root := filepath.Join(canonicalTempDir(t), "worktree")
+	run(t, filepath.Dir(repo.gitDir), "git", "worktree", "add", "--orphan", root)
 	relative, err := filepath.Rel(root, r.populated)
 	if err != nil {
 		t.Fatal(err)
@@ -238,6 +241,23 @@ func TestRefusedRemoteHasDoltDataReadsTheWrittenURLFromTheRoot(t *testing.T) {
 	}
 }
 
+// The variables a question is asked without are git's own list of a
+// repository's variables, less the config it carries.
+func TestLocalRepoEnvIsGits(t *testing.T) {
+	var want []string
+	for _, name := range strings.Fields(runOutput(t, canonicalTempDir(t), "git", "rev-parse", "--local-env-vars")) {
+		if !strings.HasPrefix(name, "GIT_CONFIG") {
+			want = append(want, name)
+		}
+	}
+	got := append([]string{}, localRepoEnv...)
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("localRepoEnv = %v; git's local_repo_env less GIT_CONFIG* is %v", got, want)
+	}
+}
+
 func remoteName(t *testing.T, name string) storage.RemoteName {
 	t.Helper()
 	parsed, err := storage.ParseRemoteName(name)
@@ -248,7 +268,7 @@ func remoteName(t *testing.T, name string) storage.RemoteName {
 }
 
 // A URL can carry a credential, and a failed question's error reaches events
-// and traces, so the error never quotes the URL.
+// and traces, so the error never carries the credential.
 func TestAFailedRemoteQuestionKeepsTheURLsCredentialOutOfItsError(t *testing.T) {
 	repo := buildLayout(t, layouts[0], "unused")
 	remote := syncable(t, "https://u:ghp_secret@127.0.0.1:1/x.git")

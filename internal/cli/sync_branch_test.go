@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -215,16 +214,20 @@ func originRemote(t *testing.T, ws workspace.Info) workspace.SyncableRemote {
 }
 
 // The event names which answer decided the branch: the override, git's
-// remote HEAD, the remote's advertised HEAD, or the record of it a read uses.
-// [LAW:nothing-unseen]
+// remote HEAD, or the remote's advertised HEAD for the branch a sync verb
+// syncs against; the override, git's remote HEAD, or the record of the
+// advertised one for the branch a read reports on. One command can make both
+// decisions, and each keeps its own fact. [LAW:nothing-unseen]
 func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
-	source := func(t *testing.T, resolve func(ctx context.Context) (string, error)) string {
+	facts := func(t *testing.T, resolves ...func(ctx context.Context) (string, error)) map[string]any {
 		t.Helper()
 		rec := telemetry.Begin(telemetry.Event{})
-		if _, err := resolve(telemetry.With(context.Background(), rec)); err != nil {
-			t.Fatalf("resolve: %v", err)
+		for _, resolve := range resolves {
+			if _, err := resolve(telemetry.With(context.Background(), rec)); err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
 		}
-		return fmt.Sprint(rec.Finish(telemetry.End{}).Facts["sync.branch_source"])
+		return rec.Finish(telemetry.End{}).Facts
 	}
 	ws := pushedRepoWithoutRemoteHead(t)
 	resolve := func(ctx context.Context) (string, error) {
@@ -233,22 +236,24 @@ func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
 	known := func(ctx context.Context) (string, error) {
 		return knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
 	}
+	check := func(t *testing.T, when string, got map[string]any, want map[string]any) {
+		t.Helper()
+		for _, key := range []string{"sync.branch_source", "freshness.branch_source"} {
+			if got[key] != want[key] {
+				t.Errorf("%s: %s = %v, want %v", when, key, got[key], want[key])
+			}
+		}
+	}
 
 	t.Setenv(debugSyncBranchEnvVar, "")
-	if got := source(t, resolve); got != "advertised" {
-		t.Errorf("unset remote HEAD: sync.branch_source = %q, want advertised", got)
-	}
-	if got := source(t, known); got != "recorded" {
-		t.Errorf("read after a sync: sync.branch_source = %q, want recorded", got)
-	}
+	check(t, "a receive then a banner, remote HEAD unset", facts(t, resolve, known),
+		map[string]any{"sync.branch_source": "advertised", "freshness.branch_source": "recorded"})
 	runGit(t, ws.RootDir, "remote", "set-head", "origin", "trunk")
-	if got := source(t, resolve); got != "remote_head" {
-		t.Errorf("set remote HEAD: sync.branch_source = %q, want remote_head", got)
-	}
+	check(t, "set remote HEAD", facts(t, resolve, known),
+		map[string]any{"sync.branch_source": "remote_head", "freshness.branch_source": "remote_head"})
 	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
-	if got := source(t, known); got != "override" {
-		t.Errorf("override: sync.branch_source = %q, want override", got)
-	}
+	check(t, "override, a read alone", facts(t, known),
+		map[string]any{"freshness.branch_source": "override"})
 }
 
 // A git that cannot say which remote the branch tracks fails the selection

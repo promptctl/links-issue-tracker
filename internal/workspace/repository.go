@@ -29,29 +29,35 @@ type Repository struct {
 // Repository is the repository whose store this is.
 func (l Location) Repository() Repository { return Repository{gitDir: l.GitCommonDir} }
 
-// repositoryLocatingVars are the variables that point git at a repository or
-// a part of one: git's local_repo_env (`git rev-parse --local-env-vars`)
-// without the GIT_CONFIG* entries, which carry settings rather than a place.
-// Inherited from a git hook they would override the explicit git dir — an
-// inherited GIT_COMMON_DIR does — so a question is asked without them.
-var repositoryLocatingVars = []string{
+// localRepoEnv is git's local_repo_env (`git rev-parse --local-env-vars`)
+// without the GIT_CONFIG* entries, which carry settings rather than a
+// repository: the variables git itself clears when it moves into another
+// repository. Inherited from a git hook they would override the explicit git
+// dir — an inherited GIT_COMMON_DIR does — so a question is asked without
+// them. TestLocalRepoEnvIsGits holds the list to git's.
+var localRepoEnv = []string{
 	"GIT_DIR", "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_COMMON_DIR",
 	"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_INDEX_FILE",
 	"GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_PREFIX",
+	"GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE",
 }
 
 // git runs one question of the repository in dir. Only a path URL read the way
 // a checkout reads it needs a dir other than the git dir itself.
 func (r Repository) git(ctx context.Context, env environ.Env, dir string, args ...string) (string, error) {
-	return gitOutput(ctx, env.Without(repositoryLocatingVars...), dir, append([]string{"--git-dir", r.gitDir, "--work-tree", r.gitDir}, args...)...)
+	return gitOutput(ctx, env.Without(localRepoEnv...), dir, append([]string{"--git-dir", r.gitDir, "--work-tree", r.gitDir}, args...)...)
 }
 
-// lsRemote is `git ls-remote` of url, by URL rather than by remote name, the
-// way Dolt's own transfer runs git: so no name-keyed config
-// (remote.<name>.uploadpack, .proxy, .vcs) makes a question answer otherwise
-// than the push or fetch it is about. The "--" keeps a URL that begins with
-// "-" from being read as an option. The error names no URL: one can carry a
-// credential, and the caller names the remote. [LAW:one-source-of-truth]
+// lsRemote is `git ls-remote` of url, by URL rather than by remote name, so
+// no name-keyed config (remote.<name>.uploadpack, .proxy, .vcs) makes a
+// question answer otherwise than the push or fetch it is about: Dolt's
+// transfer runs git in its own cache repository, whose remote carries the URL
+// and none of that config. The "--" keeps a URL that begins with "-" from being read as an
+// option. lit's wrapping adds no URL, which can carry a credential, and the
+// caller names the remote. git's stderr, kept as the cause, may name the
+// URL; git leaves an https URL's credential out of it
+// (TestAFailedRemoteQuestionKeepsTheURLsCredentialOutOfItsError).
+// [LAW:one-source-of-truth]
 func (r Repository) lsRemote(ctx context.Context, env environ.Env, dir, url string, options []string, patterns ...string) (string, error) {
 	args := append(append(append([]string{"ls-remote"}, options...), "--", url), patterns...)
 	out, err := r.git(ctx, env, dir, args...)
