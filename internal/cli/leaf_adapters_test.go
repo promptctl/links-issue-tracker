@@ -153,8 +153,11 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 	return runLeaf(lifeboatRecoverLeaf(), ctx, stdout, ws, args)
 }
 
+// runBackgroundMirror runs the mirror against ws's store with no handoff on
+// stdin, so its workspace build fails: what it reaches is whichever of the
+// mirror's endings precedes that failure's (the beacon's, a teardown's).
 func runBackgroundMirror(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	return runLeaf(backgroundMirrorLeaf(), ctx, stdout, ws, args)
+	return runLeaf(backgroundMirrorLeaf(), ctx, stdout, struct{}{}, append([]string{"--store", ws.StorageDir}, args...))
 }
 
 // runHooksInstall never took a context: installing hooks is filesystem work

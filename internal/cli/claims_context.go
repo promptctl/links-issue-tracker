@@ -11,7 +11,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -40,7 +39,7 @@ type claimContext struct {
 // evidence and local liveness — the store/filesystem boundary claim-aware
 // rendering and routing both sit behind. [LAW:effects-at-boundaries]
 func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, ap *app.App) (claimContext, error) {
-	cfg, err := config.Load(env, pathspec.New(ap.Workspace.RootDir))
+	cfg, err := config.Load(env, ap.Workspace.Project)
 	if err != nil {
 		return claimContext{}, err
 	}

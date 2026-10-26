@@ -255,6 +255,7 @@ on stderr for each key, naming the key and the file that sets it.
 
 | Key | Meaning |
 | --- | --- |
+| `config.project` | Where the command's project config layer came from: `checkout:<path>`, the file a command run in a checkout reads (the path is `LIT_CONFIG_PROJECT_PATH`'s when it is set), or `handed`, the layer a detached sync worker was handed by the command that spawned it. |
 | `config.unknown_keys` | Each key that is not a setting, as `{"key": …, "file": …}`, in layer order (global, then project) and alphabetically within a file; `[]` when there are none. Keys are lowercased. A file that could not be read adds none. |
 | `config.unknown_keys_error` | Why a config file's keys could not be checked, one reason for each file that does not parse, or `null`. The command prints `warning: config keys were not checked:` with the reason. |
 

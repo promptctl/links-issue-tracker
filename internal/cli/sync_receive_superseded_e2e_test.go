@@ -96,7 +96,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	}
 	assertLevelWithTheRemote(t, consumer, fetch.target)
 
-	runCLIInDir(t, consumer, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+	runWorkerInDir(t, consumer, backgroundReceiveSubcommand)
 	next := lastEvent(t).Occurrences["receive.outcomes"]
 	if len(next) != 1 {
 		t.Fatalf("the next receive's receive.outcomes = %v; want its one outcome", next)

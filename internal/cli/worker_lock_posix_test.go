@@ -12,8 +12,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // TestJoinDetachedWorkersWaitsForEveryHoldToBeReleased pins the join's meaning:
@@ -54,16 +52,16 @@ const workerOutlivedByChildEnv = "LIT_TEST_WORKER_OUTLIVED_BY_CHILD"
 // init runs this test binary as that worker when a test spawned it so, before
 // TestMain sets up a suite the worker never runs.
 func init() {
-	if os.Getenv(workerOutlivedByChildEnv) != "" {
-		runWorkerOutlivedByChild()
+	if storageDir := os.Getenv(workerOutlivedByChildEnv); storageDir != "" {
+		runWorkerOutlivedByChild(storageDir)
 	}
 }
 
 // runWorkerOutlivedByChild is a worker that starts a child it never waits for,
 // prints the child's pid and exits — the shape of a backgrounded owner-notify
 // hook.
-func runWorkerOutlivedByChild() {
-	leaf := detachedWorkerLeaf("worker-outlived-by-child", "", func(context.Context, Invocation, workspace.Info, int) error {
+func runWorkerOutlivedByChild(storageDir string) {
+	leaf := detachedWorkerLeaf("worker-outlived-by-child", "", func(context.Context, Invocation, workerWorkspace, int) error {
 		child := exec.Command("sleep", "60")
 		if err := child.Start(); err != nil {
 			return err
@@ -72,7 +70,7 @@ func runWorkerOutlivedByChild() {
 		return nil
 	})
 	// Under an invocation, as Run runs every leaf: the leaf records its event.
-	if err := leaf.work(underInvocation(context.Background()), cwdInvocation(os.Stdout, os.Stdout, nil), workspace.Info{}, nil); err != nil {
+	if err := runLeaf(leaf, underInvocation(context.Background()), os.Stdout, struct{}{}, []string{"--store", storageDir}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -89,7 +87,7 @@ func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 		t.Fatalf("holdWorkerLock() = %v", err)
 	}
 	worker := exec.Command(os.Args[0])
-	worker.Env = append(os.Environ(), workerOutlivedByChildEnv+"=1")
+	worker.Env = append(os.Environ(), workerOutlivedByChildEnv+"="+storageDir)
 	worker.ExtraFiles = holds
 	out, err := worker.Output()
 	_ = holds[0].Close()

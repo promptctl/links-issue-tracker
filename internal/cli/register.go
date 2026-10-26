@@ -303,9 +303,13 @@ func adaptLeaf[R, S any](from leaf[R], work func(ctx context.Context, inv Invoca
 // of these; the pipeline holds it only after declaring, and calls its work only
 // after acquiring. [LAW:types-are-the-program] that ordering is the only order
 // these types can be used in, not a convention each handler carries.
+//
+// A bareLeaf acquires nothing before its work: the detached workers, whose
+// workspace is built inside their own ordering (detachedWorkerLeaf).
 type (
 	appLeaf   = leaf[*app.App]
 	wsLeaf    = leaf[workspace.Info]
+	bareLeaf  = leaf[struct{}]
 	appLeafFn = func() appLeaf
 	wsLeafFn  = func() wsLeaf
 )
@@ -617,6 +621,18 @@ func (r *commandRegistrar) wsCmd(declare wsLeafFn) CommandRunner {
 	return r.wsCmdPipeline(withWDAcquire(func(args []string) (wsLeaf, []string, error) { return declare(), args, nil }))
 }
 
+// bareCmd runs a leaf that acquires nothing: parse, then work.
+func (r *commandRegistrar) bareCmd(declare func() bareLeaf) CommandRunner {
+	return func(args []string) error {
+		l := declare()
+		positional, err := parseLeaf(r.ctx, l, args, r.inv)
+		if err != nil {
+			return err
+		}
+		return l.work(r.ctx, r.inv, struct{}{}, positional)
+	}
+}
+
 // wsCmdAcquiring is wsCmd for a command whose own flags decide how the
 // workspace is acquired. The declaration hands back the leaf and the
 // acquisition together so both close over the same parsed flag storage — read
@@ -670,6 +686,13 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: r.wsFamilyCmd(hooksFamily), Subcommands: hooksFamily.subcommandSpecs()},
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
 			Run: r.wsFamilyCmd(syncFamily), Subcommands: syncSubcommands},
+		// The detached sync workers a command spawns (spawnDetachedWorker):
+		// hidden, because nobody runs them by hand, and top-level, because they
+		// read no checkout and so acquire no workspace from one.
+		{Name: backgroundMirrorSubcommand, Summary: "Detached on-change mirror worker", GroupID: "data", Hidden: true,
+			Run: r.bareCmd(backgroundMirrorLeaf)},
+		{Name: backgroundReceiveSubcommand, Summary: "Detached automatic-receive worker", GroupID: "data", Hidden: true,
+			Run: r.bareCmd(backgroundReceiveLeaf)},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, newLeaf)},
 		{Name: "followup", Summary: "File a follow-up beside a just-closed ticket, in its epic", GroupID: "operations",

@@ -42,7 +42,7 @@ const (
 	receiveDecisionLockHeld = "receive_lock_held"
 )
 
-// backgroundReceiveSubcommand is the hidden `lit sync` subcommand
+// backgroundReceiveSubcommand is the hidden top-level command
 // scheduleReceive spawns: the automatic receive's detached worker. Like the
 // mirror's, it never appears in help.
 const backgroundReceiveSubcommand = "__receive-bg"
@@ -95,7 +95,7 @@ func scheduleReceive(ctx context.Context, env environ.Env, ws workspace.Info) {
 	if !hasRemote {
 		return
 	}
-	if err := spawnDetachedWorker(ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(env), os.Getpid()); err != nil {
+	if err := spawnDetachedWorker(ctx, ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(env), os.Getpid()); err != nil {
 		cause := fmt.Errorf("start the background receive: %w", err)
 		fmt.Fprintf(os.Stderr, "lit: automatic receive not started: %v\n", err)
 		recordReceiveError(ctx, env, ws, storage.RemoteName{}, cause)
@@ -124,8 +124,13 @@ func receiveEnv(parent environ.Env) environ.Env {
 // it waited for a mirror. [LAW:no-ambient-temporal-coupling] the parent's exit,
 // the mirror-pending claim and the beacon are the ordering witnesses, not a
 // sleep.
-func backgroundReceiveLeaf() wsLeaf {
-	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, inv Invocation, ws workspace.Info, parentPID int) error {
+func backgroundReceiveLeaf() bareLeaf {
+	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, parentPID int) error {
+		ws := built.ws
+		if built.failed != nil {
+			recordReceiveError(ctx, inv.Env, ws, storage.RemoteName{}, built.failed)
+			return nil
+		}
 		start := time.Now()
 		pid := os.Getpid()
 		fmt.Fprintf(inv.Stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)

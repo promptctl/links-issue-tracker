@@ -48,6 +48,17 @@ func ParseCheckoutRoot(path string) (CheckoutRoot, error) {
 	return CheckoutRoot{path: path}, nil
 }
 
+// HandedCheckoutRoot is how a root a launcher handed its worker becomes one.
+// It was git's canonical answer when the launcher read it, and its checkout
+// may since be gone, so it is checked lexically and never resolved on disk.
+// [LAW:parse-dont-validate]
+func HandedCheckoutRoot(path string) (CheckoutRoot, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return CheckoutRoot{}, fmt.Errorf("handed checkout root %q is not an absolute, clean path", path)
+	}
+	return CheckoutRoot{path: path}, nil
+}
+
 // GitRemote is one remote of git's remote list: its name as git spells it,
 // its fetch URL as written, and the checkout root it was listed in, which
 // together say what git reads the URL as. NewGitRemote is the only way to
@@ -253,10 +264,10 @@ type remoteListing struct {
 // untrimmed: a URL can end in whitespace, and a remote with no fetch URL is a
 // line that ends in its tab, which a trim of the whole output would cut when
 // that line is the last.
-func gitRemotes(ctx context.Context, env environ.Env, root CheckoutRoot) (remoteListing, error) {
-	out, err := gitStdout(ctx, env, root.path, "remote", "-v")
+func gitRemotes(ctx context.Context, env environ.Env, repo Repository, root CheckoutRoot) (remoteListing, error) {
+	out, err := repo.stdout(ctx, env, repo.gitDir, "remote", "-v")
 	if err != nil {
-		return remoteListing{}, fmt.Errorf("git remote -v in %q: %w", root.path, err)
+		return remoteListing{}, fmt.Errorf("git remote -v of %q: %w", repo.gitDir, err)
 	}
 	return parseRemoteListing(out, root)
 }

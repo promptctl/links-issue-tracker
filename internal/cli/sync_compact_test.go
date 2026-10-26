@@ -21,7 +21,7 @@ import (
 // "nothing is due". A fresh marker must block; an aged one must allow.
 func TestCompactProbeIntervalGatesTheBackstop(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	now := time.Now()
 
 	if !shouldRunNow(compactMarkerPath(ws), now, compactProbeInterval) {
@@ -49,7 +49,7 @@ func TestCompactProbeIntervalGatesTheBackstop(t *testing.T) {
 // every mutation forever.
 func TestCompactMarkerIsDistinctFromTheReceiveMarker(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 
 	if compactMarkerPath(ws) == receiveMarkerPath(ws) {
 		t.Fatal("compaction and receive share a debounce marker; one would silently suppress the other")
@@ -140,7 +140,7 @@ func readSyncTraces(t *testing.T, ws workspace.Info) []syncTraceRecord {
 
 func compactWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
+	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 }
 
 // The depth is the whole point of this command, so the flag that selects it, the

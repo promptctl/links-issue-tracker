@@ -38,7 +38,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	}
 	before := dirBytes(t, alphaWS.DatabasePath)
 
-	runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)
 	ev := lastEvent(t)
 	assertLiveStoreSteps(t, ev, "receive")
 	bound := boundRecordOf(t, ev)
@@ -74,7 +74,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	}
 
 	runCLIInDir(t, r.alpha, "new", "--title", "four", "--topic", "demo", "--type", "task", "--parent", r.epic)
-	runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)
 	assertLiveStoreSteps(t, lastEvent(t), "record")
 	if next := boundRecordOf(t, lastEvent(t)); next["history_bound.fired"] != false || next["history_bound.height"] != float64(3) {
 		t.Fatalf("the next mirror's bound = %v; want the remote head one commit above the 2 kept, short of the bound", next)

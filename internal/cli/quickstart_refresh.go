@@ -6,7 +6,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -155,12 +154,12 @@ const soilSection = `
 ## Soil
 ` + agentInstructionsOpen + `When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as ` + "`" + `[SOIL:<judgement>]` + "`" + ` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.` + agentInstructionsClose
 
-func renderQuickstartGuidance(env environ.Env, workspaceRoot string) (string, error) {
+func renderQuickstartGuidance(env environ.Env, workspaceRoot string, project config.ProjectLayer) (string, error) {
 	tmpl, err := templates.Load(env, templates.QuickstartTemplateName, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("load quickstart guidance: %w", err)
 	}
-	cfg, err := config.Load(env, pathspec.New(workspaceRoot))
+	cfg, err := config.Load(env, project)
 	if err != nil {
 		return "", fmt.Errorf("load config for quickstart guidance: %w", err)
 	}

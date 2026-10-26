@@ -171,7 +171,7 @@ func (p mirrorPush) String() string {
 // bytes it collected.
 func (c *boundCheckout) mirror(t *testing.T, remote string) mirrorPush {
 	t.Helper()
-	runCLIInDir(t, c.dir, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	runWorkerInDir(t, c.dir, backgroundMirrorSubcommand)
 	ev := lastEvent(t)
 	outcomes := ev.Occurrences["push.outcomes"]
 	if len(outcomes) != 1 {
@@ -204,7 +204,7 @@ func (c *boundCheckout) mirror(t *testing.T, remote string) mirrorPush {
 // if it followed one.
 func (c *boundCheckout) receive(t *testing.T) {
 	t.Helper()
-	runCLIInDir(t, c.dir, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+	runWorkerInDir(t, c.dir, backgroundReceiveSubcommand)
 	follows := lastEvent(t).Occurrences["reroot.follows"]
 	for _, entry := range follows {
 		follow, _ := entry.(map[string]any)

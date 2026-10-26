@@ -8,7 +8,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -73,7 +72,7 @@ func snapshotsNewLeaf() wsLeaf {
 	// v1 specification quotes this exact message, and the docclaims gate holds
 	// the code to what the chapter says ships. [LAW:one-source-of-truth]
 	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit snapshots new [--label <text>]", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-		cfg, err := config.Load(inv.Env, pathspec.New(ws.RootDir))
+		cfg, err := config.Load(inv.Env, ws.Project)
 		if err != nil {
 			return err
 		}

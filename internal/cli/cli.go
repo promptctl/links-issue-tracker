@@ -20,7 +20,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -138,7 +137,7 @@ func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 			if wsErr != nil {
 				return wsErr
 			}
-			guidance, guidanceErr := renderQuickstartGuidance(inv.Env, ws.RootDir)
+			guidance, guidanceErr := renderQuickstartGuidance(inv.Env, ws.RootDir, ws.Project)
 			if guidanceErr != nil {
 				return guidanceErr
 			}
@@ -246,7 +245,7 @@ func resolveWorkspace(ctx context.Context, env environ.Env, dir WorkingDir, requ
 		}
 		return workspace.Info{}, err
 	}
-	reportUnknownConfigKeys(ctx, env, ws.RootDir)
+	reportConfigLayers(ctx, env, ws.Project)
 	return ws, nil
 }
 
@@ -991,7 +990,7 @@ func gatherWorkableQueue(ctx context.Context, env environ.Env, ap *app.App) (foc
 // a ticket must fill before it counts as startable.
 // [LAW:one-source-of-truth] One read of the policy, one place it is named.
 func readyRequiredFields(env environ.Env, ap *app.App) ([]string, error) {
-	cfg, err := config.Load(env, pathspec.New(ap.Workspace.RootDir))
+	cfg, err := config.Load(env, ap.Workspace.Project)
 	if err != nil {
 		return nil, err
 	}
@@ -2534,7 +2533,7 @@ func quickstartLeaf() wsLeaf {
 		}
 
 		// [LAW:one-source-of-truth] Quickstart guidance is loaded from the managed quickstart template instead of being re-encoded in CLI data structures.
-		guidance, err := renderQuickstartGuidance(inv.Env, ws.RootDir)
+		guidance, err := renderQuickstartGuidance(inv.Env, ws.RootDir, ws.Project)
 		if err != nil {
 			return err
 		}

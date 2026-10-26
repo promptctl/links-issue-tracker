@@ -45,7 +45,13 @@ var localRepoEnv = []string{
 // git runs one question of the repository in dir. Only a path URL read the way
 // a checkout reads it needs a dir other than the git dir itself.
 func (r Repository) git(ctx context.Context, env environ.Env, dir string, args ...string) (string, error) {
-	return gitOutput(ctx, env.Without(localRepoEnv...), dir, append([]string{"--git-dir", r.gitDir, "--work-tree", r.gitDir}, args...)...)
+	out, err := r.stdout(ctx, env, dir, args...)
+	return strings.TrimSpace(out), err
+}
+
+// stdout is git's answer byte for byte, for an answer whose edges are data.
+func (r Repository) stdout(ctx context.Context, env environ.Env, dir string, args ...string) (string, error) {
+	return gitStdout(ctx, env.Without(localRepoEnv...), dir, append([]string{"--git-dir", r.gitDir, "--work-tree", r.gitDir}, args...)...)
 }
 
 // lsRemote is `git ls-remote` of url, by URL rather than by remote name, so

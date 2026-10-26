@@ -8,21 +8,20 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
-// reportUnknownConfigKeys is what a command does with the keys its config
-// layers set that are no setting: it records them on the command's event and
-// writes a warning for each to stderr. The command runs either way, because a
-// key that changes nothing is a reason to look, not to stop.
+// reportConfigLayers is what a command records about its config layers:
+// where its project layer came from, and the keys its layers set that are no
+// setting, each with a warning on stderr. The command runs either way,
+// because a key that changes nothing is a reason to look, not to stop.
 //
-// It runs in resolveWorkspace, where every command acquires its
-// workspace once, not inside config.Load, which one command can call several
-// times and which commands that read no setting never call.
-// [LAW:single-enforcer]
-func reportUnknownConfigKeys(ctx context.Context, env environ.Env, workspaceRoot string) {
-	unknown, err := config.UnknownKeys(env, pathspec.New(workspaceRoot))
+// It runs where a command acquires its workspace, once, not inside
+// config.Load, which one command can call several times and which commands
+// that read no setting never call. [LAW:single-enforcer]
+func reportConfigLayers(ctx context.Context, env environ.Env, project config.ProjectLayer) {
+	telemetry.Set(ctx, "config.project", project.Source())
+	unknown, err := config.UnknownKeys(env, project)
 	telemetry.Set(ctx, "config.unknown_keys", unknown)
 	telemetry.Set(ctx, "config.unknown_keys_error", telemetry.ErrorText(err))
 	fmt.Fprint(os.Stderr, unknownConfigKeyWarnings(unknown, err))

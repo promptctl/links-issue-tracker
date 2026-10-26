@@ -345,7 +345,7 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", "https://github.com/acme/origin.git")
 	run(t, repo, "git", "remote", "set-url", "--push", "origin", "git@github.com:acme/origin.git")
 
-	remotes, err := NewRemotes(testEnv(), testRoot(t, repo)).List(eventContext())
+	remotes, err := NewRemotes(testEnv(), testRepository(t, repo), testRoot(t, repo)).List(eventContext())
 	if err != nil {
 		t.Fatalf("Remotes.List(eventContext()) error = %v", err)
 	}
@@ -457,7 +457,7 @@ func TestUpstreamIsTheWholeRemoteName(t *testing.T) {
 	// first asked in, and this test changes that state between reads.
 	upstream := func() string {
 		t.Helper()
-		got, err := NewRemotes(testEnv(), testRoot(t, repo)).Upstream()
+		got, err := NewRemotes(testEnv(), testRepository(t, repo), testRoot(t, repo)).Upstream()
 		if err != nil {
 			t.Fatalf("Upstream() error = %v", err)
 		}
@@ -513,6 +513,17 @@ func testRoot(t testing.TB, dir string) CheckoutRoot {
 		t.Fatalf("ParseCheckoutRoot(%q): %v", resolved, err)
 	}
 	return root
+}
+
+// testRepository is the repository of the checkout at dir, located the way
+// lit locates it.
+func testRepository(t testing.TB, dir string) Repository {
+	t.Helper()
+	loc, err := Locate(testEnv(), dir)
+	if err != nil {
+		t.Fatalf("Locate(%q): %v", dir, err)
+	}
+	return loc.Repository()
 }
 
 // eventContext is a context carrying an open event, as every invocation's

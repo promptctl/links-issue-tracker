@@ -14,7 +14,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -107,7 +106,7 @@ func maybeAutoSyncAfterCommand(ctx context.Context, env environ.Env, accessMode 
 // never the command. Saying so on stderr is what keeps it from being silent.
 // [LAW:no-silent-failure]
 func syncOnPolicy(ctx context.Context, env environ.Env, accessMode app.AccessMode, ws workspace.Info) {
-	cfg, err := config.Load(env, pathspec.New(ws.RootDir))
+	cfg, err := config.Load(env, ws.Project)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
 		return
@@ -127,7 +126,7 @@ func mirrorAfterReceive(ctx context.Context, env environ.Env, accessMode app.Acc
 	if autoSyncDisabled(env) {
 		return
 	}
-	cfg, err := config.Load(env, pathspec.New(ws.RootDir))
+	cfg, err := config.Load(env, ws.Project)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: the receive's push not scheduled, config unreadable: %v\n", err)
 		return
@@ -244,7 +243,7 @@ func ensureMirrorCoverage(ctx context.Context, env environ.Env, ws workspace.Inf
 	if err := os.Remove(remoteAbsentMarkerPath(ws)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "lit: remote-absent marker not cleared: %v\n", err)
 	}
-	if err := spawnBackgroundMirror(env, ws, os.Getpid()); err != nil {
+	if err := spawnBackgroundMirror(ctx, env, ws, os.Getpid()); err != nil {
 		releaseClaim()
 		fmt.Fprintf(os.Stderr, "lit: on-change background push not started: %v\n", err)
 		completePushAttempt(ctx, env, ws, syncPushOutcome{}, fmt.Errorf("spawn on-change mirror: %w", err))

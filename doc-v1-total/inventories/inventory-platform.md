@@ -494,8 +494,8 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
 - `Remotes` (`NewRemotes(env, root)`): one checkout's remote configuration for one invocation;
   each question is asked of git once, on first read, with `context.Background()`, and every later
   read returns that answer.
-  - `List()`: `git remote -v`, keeps only lines whose third field is `(fetch)`, deduped by name
-    and sorted by name; failure ⇒ `git remote -v in %q: %w`.
+  - `List()`: `git remote -v` of the repository (`Repository.stdout`, `--git-dir`/`--work-tree` the common dir), keeps only lines whose third field is `(fetch)`, deduped by name
+    and sorted by name; failure ⇒ `git remote -v of %q: %w`. A worker's `Remotes` (`HandedRemotes`) answers `Upstream` with its handed sync remote, and `Reread` keeps that source.
   - `Upstream()`: `git for-each-ref --format=%(if)%(HEAD)%(then)%(upstream:remotename)%(end) refs/heads/`,
     trimmed: the current branch's remote whole as git records it (`a/b` for a branch tracking
     `a/b/master`), `.` for a local upstream, empty for none or a detached HEAD; failure ⇒

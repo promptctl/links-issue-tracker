@@ -18,7 +18,7 @@ func TestLoadDefaults(t *testing.T) {
 	// Point XDG_CONFIG_HOME to a directory with no config file.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -79,7 +79,7 @@ func TestLoadBuildsTheHistoryWindowOnlyFromWholeCounts(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			cfg, err := Load(testEnv(), pathspec.PathSpec{})
+			cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 			if tc.refusal != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.refusal) {
 					t.Fatalf("Load() error = %v; want a refusal containing %q", err, tc.refusal)
@@ -126,7 +126,7 @@ func TestLoadRejectsUnusableFreshnessWindow(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			cfg, err := Load(testEnv(), pathspec.PathSpec{})
+			cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 			if err == nil {
 				t.Fatalf("Load() with %q accepted the value as %s, want a refusal", body, cfg.Claims.FreshnessWindow)
 			}
@@ -156,7 +156,7 @@ func TestLoadAcceptsDurationsWithUnits(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			cfg, err := Load(testEnv(), pathspec.PathSpec{})
+			cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 			if err != nil {
 				t.Fatalf("Load() with %q error = %v", body, err)
 			}
@@ -179,7 +179,7 @@ func TestLoadSyncOwnerNotifyCmdFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestLoadSyncReceiveFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -219,7 +219,7 @@ func TestLoadSyncCadenceFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestLoadSyncCadenceOnPushFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -263,7 +263,7 @@ func TestLoadRejectsUnknownSyncCadence(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	if _, err := Load(testEnv(), pathspec.PathSpec{}); err == nil {
+	if _, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{})); err == nil {
 		t.Fatal("Load(pathspec.PathSpec{}) with unknown sync.cadence expected error, got nil")
 	}
 }
@@ -283,7 +283,7 @@ func TestLoadRejectsNonPositiveRetentionBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("XDG_CONFIG_HOME", dir)
-		if _, err := Load(testEnv(), pathspec.PathSpec{}); err == nil {
+		if _, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{})); err == nil {
 			t.Fatalf("Load(pathspec.PathSpec{}) with body %q expected error, got nil", body)
 		}
 	}
@@ -307,7 +307,7 @@ soil_mode = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -348,7 +348,7 @@ soil_mode = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v, want a config with retired sections to load", err)
 	}
@@ -430,7 +430,7 @@ freshness_window = "2h"
 		t.Fatal(err)
 	}
 
-	got, err := UnknownKeys(testEnv(), pathspec.New(workspaceRoot))
+	got, err := UnknownKeys(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
 	if err != nil {
 		t.Fatalf("UnknownKeys error = %v", err)
 	}
@@ -449,7 +449,7 @@ freshness_window = "2h"
 func TestUnknownKeysIsEmptyWithNoConfigFiles(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	got, err := UnknownKeys(testEnv(), pathspec.New(t.TempDir()))
+	got, err := UnknownKeys(testEnv(), CheckoutProject(testEnv(), pathspec.New(t.TempDir())))
 	if err != nil || got == nil || len(got) != 0 {
 		t.Fatalf("UnknownKeys = %#v, %v; want an empty, non-nil list", got, err)
 	}
@@ -476,7 +476,7 @@ func TestUnknownKeysReportsAnUnparseableLayer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := UnknownKeys(testEnv(), pathspec.New(workspaceRoot))
+	got, err := UnknownKeys(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
 	if err == nil || !strings.Contains(err.Error(), projectFile) {
 		t.Fatalf("UnknownKeys error = %v, want one naming %s", err, projectFile)
 	}
@@ -501,7 +501,7 @@ soil_mode = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -523,7 +523,7 @@ soil_mode = true
 func TestLoadMissingDir(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/nonexistent/path/that/does/not/exist")
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -562,7 +562,7 @@ required_fields = ["title", "description"]
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(testEnv(), pathspec.New(workspaceRoot))
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
 	if err != nil {
 		t.Fatalf("Load(pathspec.New(workspaceRoot)) error = %v", err)
 	}
@@ -601,7 +601,7 @@ receive = false
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(testEnv(), pathspec.New(workspaceRoot))
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.New(workspaceRoot)))
 	if err != nil {
 		t.Fatalf("Load(pathspec.New(workspaceRoot)) error = %v", err)
 	}
@@ -625,7 +625,7 @@ func TestLoadHonorsProjectEnvOverrideWithoutWorkspaceRoot(t *testing.T) {
 	}
 	t.Setenv("LIT_CONFIG_PROJECT_PATH", projectFile)
 
-	cfg, err := Load(testEnv(), pathspec.PathSpec{})
+	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -645,7 +645,7 @@ func TestLoadInvalidTOMLReturnsError(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	if _, err := Load(testEnv(), pathspec.PathSpec{}); err == nil {
+	if _, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{})); err == nil {
 		t.Fatal("Load(pathspec.PathSpec{}) expected error for invalid TOML")
 	}
 }
@@ -653,3 +653,27 @@ func TestLoadInvalidTOMLReturnsError(t *testing.T) {
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the Load it runs.
 func testEnv() environ.Env { return environ.Of(os.Environ()) }
+
+// A handed project layer is read from its content, never from a file, and
+// each layer says where it came from.
+func TestAHandedProjectLayerIsReadFromItsContent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	handed := HandedProject([]byte("[quickstart]\nsoil_mode = true\n"))
+	cfg, err := Load(testEnv(), handed)
+	if err != nil {
+		t.Fatalf("Load(handed) error = %v", err)
+	}
+	if !cfg.Quickstart.SoilMode {
+		t.Fatal("Load(handed) did not read soil_mode from the handed content")
+	}
+	if got := handed.Source(); got != "handed" {
+		t.Fatalf("handed Source() = %q, want handed", got)
+	}
+	root := t.TempDir()
+	if got, want := CheckoutProject(testEnv(), pathspec.New(root)).Source(), "checkout:"+filepath.Join(root, ".lit", "config.toml"); got != want {
+		t.Fatalf("checkout Source() = %q, want %q", got, want)
+	}
+	if content, err := CheckoutProject(testEnv(), pathspec.New(root)).Content(); err != nil || content != nil {
+		t.Fatalf("Content() of a checkout with no config file = %q, %v; want none", content, err)
+	}
+}

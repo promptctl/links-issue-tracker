@@ -51,7 +51,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// (b) The on-change mirror: it pushes from a clone and records on the
 	// live store, with the same effect.
 	runCLIInDir(t, consumer, "new", "--title", "pushed-by-the-mirror", "--topic", "demo", "--type", "task", "--parent", epicID)
-	runCLIInDir(t, consumer, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	runWorkerInDir(t, consumer, backgroundMirrorSubcommand)
 	if got, want := string(readReceivedRefs(ws)), advertised(); got != want {
 		t.Fatalf("received-refs record after the mirror = %q, want the remote's advertisement %q", got, want)
 	}

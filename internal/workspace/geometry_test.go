@@ -277,7 +277,7 @@ func TestRemotesAskEachQuestionOnce(t *testing.T) {
 	repo := litRepoWithCommit(t)
 	run(t, repo, "git", "remote", "add", "origin", "https://example.com/origin.git")
 	env := testEnv()
-	remotes := NewRemotes(env, testRoot(t, repo))
+	remotes := NewRemotes(env, testRepository(t, repo), testRoot(t, repo))
 	for range 3 {
 		if list, err := remotes.List(eventContext()); err != nil || len(list) != 1 {
 			t.Fatalf("List() = %v, %v; want origin", list, err)
@@ -290,7 +290,7 @@ func TestRemotesAskEachQuestionOnce(t *testing.T) {
 		t.Fatalf("three reads of each question spawned %d git, want 2", got)
 	}
 
-	notARepo := NewRemotes(testEnv(), testRoot(t, t.TempDir()))
+	notARepo := NewRemotes(testEnv(), Repository{}, testRoot(t, t.TempDir()))
 	if upstream, err := notARepo.Upstream(); err == nil {
 		t.Fatalf("Upstream() where git cannot answer = %q, nil; want git's error", upstream)
 	}

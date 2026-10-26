@@ -12,7 +12,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -175,7 +174,7 @@ func maybeNotifyOwner(ctx context.Context, env environ.Env, ws workspace.Info, e
 	if !ownerNotifyDue(markerPath, ev.fingerprint(), time.Now()) {
 		return
 	}
-	cfg, err := config.Load(env, pathspec.New(ws.RootDir))
+	cfg, err := config.Load(env, ws.Project)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: owner notification skipped, config unreadable: %v\n", err)
 		return

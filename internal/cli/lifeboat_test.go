@@ -32,7 +32,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 		RootDir:     root,
 		WorkspaceID: "test-workspace-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(testEnv(), checkoutRoot(t, root)),
+		Remotes:     workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root)),
 	}
 }
 

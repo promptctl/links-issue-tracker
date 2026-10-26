@@ -175,7 +175,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
 ## 2. `lit sync` family
 
 Family usage: `usage: lit sync <status|remote|fetch|pull|push|compact|reconcile> ...` (`internal/cli/sync.go`).
-Rows (`sync.go`): `status`, `remote`, `fetch`, `pull`, `push`, `compact`, `reconcile`, plus hidden `__mirror-bg` (`sync.go`, name constant `sync_bg.go`).
+Rows (`sync.go`): `status`, `remote`, `fetch`, `pull`, `push`, `compact`, `reconcile`.
 
 Every visible row is wrapped in `withSyncStore` (`sync.go`) which opens one sync session and defers close.
 
@@ -411,10 +411,11 @@ Config defaults (`internal/config/config.go`): `sync.cadence = "on-change"`, `sy
 
 ### 3.4 Spawn and detach mechanics (`sync_bg.go`)
 
-- Hidden subcommand name `__mirror-bg` (`sync_bg.go`); registered hidden in `syncFamily` (`sync.go`), absent from usage and completion.
-- `spawnBackgroundMirror(ws, parentPID)` — `sync_bg.go`:
+- Hidden top-level command `__mirror-bg` (name constant `sync_bg.go`); registered in `commandSpecs` through `bareCmd` (`register.go`), absent from usage and completion.
+- `spawnBackgroundMirror(ctx, env, ws, parentPID)` — `sync_bg.go`, through `spawnDetachedWorker`:
   - `os.Executable()`; failure → `resolve lit binary: %w`.
-  - `env.Command(ws.RootDir, self, "sync", "__mirror-bg", "--parent-pid", <pid>)`, which runs the worker in `ws.RootDir` in `env`, `mirrorEnv(inv.Env)`; `cmd.Stdin = nil`.
+  - `handoffOf(ctx, ws)` (`worker_handoff.go`): `ws.Remotes.List`, failure → `list git remotes for the worker: %w`; `chooseSyncRemote("", ws.Remotes.Upstream, list)`, failure → `choose the worker's sync remote: %w`; `ws.Project.Content()`, failure → `read the project config for the worker: %w`. Any failure fails the spawn.
+  - `env.Command(ws.StorageDir, self, "__mirror-bg", "--store", ws.StorageDir, "--parent-pid", <pid>)` in `mirrorEnv(inv.Env)`; `cmd.Stdin` is a pipe's read end, and the JSON handoff `{"checkout_root","sync_remote","project"}` is written to it after `Start`, then the write end closed; a write failure → `write the worker's handoff: %w`.
   - Log sink `<StorageDir>/mirror.log` opened `O_CREATE|O_WRONLY|O_APPEND, 0o644` (`sync_bg.go`); on failure prints `lit: on-change mirror log unavailable (<err>); worker output will be discarded` and spawns anyway with discarded streams (`sync_bg.go`).
   - `cmd.SysProcAttr = detachSysProcAttr()` — POSIX `&syscall.SysProcAttr{Setsid: true}` (`detach_posix.go`); Windows returns an empty struct, and the file notes lit has no Windows build because embedded Dolt does not compile there (`detach_windows.go`).
   - Before building the command: `holdWorkerLock(ws.StorageDir)` opens `<StorageDir>/.links-detached-workers.lock` `O_CREATE|O_RDWR, 0o600` and takes `flock(LOCK_SH)`; an open failure returns `open the detached-worker lock: %w`, a lock failure `hold the detached-worker lock: %w`, and either fails the spawn. The hold is `cmd.ExtraFiles`, the worker's fd 3 (`worker_lock_posix.go`); on Windows `holdWorkerLock` returns no files (`worker_lock_windows.go`).
@@ -461,9 +462,9 @@ Flag parse output is `io.Discard` (`sync_bg.go`).
 1. Debounce on `<StorageDir>/receive.last` mtime (`sync_cadence.go`); not due → return.
 2. Mark the attempt BEFORE any work; failure → stderr `lit: automatic receive debounce marker not written: <err>` (`sync_receive.go`).
 3. `workspaceHasGitRemote` error → `recordReceiveError("check git remotes: %w")`; no remote → silent return.
-4. `spawnDetachedWorker(ws, "__receive-bg", "receive.log", receiveEnv(inv.Env), os.Getpid())`; failure → stderr `lit: automatic receive not started: <err>` and `recordReceiveError("start the background receive: %w")`. `receiveEnv(parent)` is the invocation's env with `LNKS_AUTOMATION_TRACE_REF_FILE` stripped.
+4. `spawnDetachedWorker(ctx, ws, "__receive-bg", "receive.log", receiveEnv(inv.Env), os.Getpid())`; failure → stderr `lit: automatic receive not started: <err>` and `recordReceiveError("start the background receive: %w")`. `receiveEnv(parent)` is the invocation's env with `LNKS_AUTOMATION_TRACE_REF_FILE` stripped.
 
-`backgroundReceiveLeaf` — `sync_receive.go`, the worker (`--parent-pid`, default `0`): writes `<RFC3339> receive start pid=<pid> deadline=15s`; runs `receiveWhenQuiet`; then writes `<RFC3339> receive end pid=<pid> mirror_wait=<d> elapsed=<d>`. Always returns nil.
+`backgroundReceiveLeaf` — `sync_receive.go`, the worker (`--store`, `--parent-pid`, default `0`): a workspace build that failed → `recordReceiveError(<the build's failure>)` and return nil; otherwise writes `<RFC3339> receive start pid=<pid> deadline=15s`; runs `receiveWhenQuiet`; then writes `<RFC3339> receive end pid=<pid> mirror_wait=<d> elapsed=<d>`. Always returns nil.
 
 `receiveWhenQuiet` — `sync_receive.go`: `waitForParentExit(ctx, parentPID, os.Getppid, 75s, 20ms)` — false with `ctx.Err()` set → `recordReceiveError("receive torn down while waiting for the spawning command to exit: %w")`; false otherwise → `recordReceiveError("spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine")`. Then `awaitNoLiveMirror(ctx, ws, receiveMirrorWait())`, which is `2 × (store.MirrorPushDeadline + store.HistoryBoundDeadline())`: polls `mirrorOwed` and `store.ProbeMirrorBeacon` every `mirrorQuietPoll` (100ms) until the marker is absent and the verdict is not `BeaconAnswered`; errors on an unreadable marker (`read mirror-pending marker: %w`), an unreadable beacon (`read the mirror liveness beacon: %w`), on the bound (`a mirror is still owed or live after %s`), or on `ctx` ending. A `ctx`-ended wait → `recordReceiveError("receive torn down while waiting for the mirror: %w")` and no receive; any other wait error → stderr `lit: receiving without waiting for the mirror: <err>` and the receive runs. Then `receiveOnce`.
 
