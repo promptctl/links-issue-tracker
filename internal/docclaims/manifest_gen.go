@@ -548,7 +548,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "reconcile the live store's remotes from git: %w", Src: "reconcile the live store's remotes from git: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "refresh reclaimed mirror-pending marker: %w", Src: "refresh reclaimed mirror-pending marker: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "remote %q %s; %s to sync with it", Src: "remote %q %s; %s to sync with it"},
-	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "requested remote %q not found in configured git remotes", Src: "requested remote %q not found in configured git remotes"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "requested remote %q is not a git remote with a fetch URL", Src: "requested remote %q is not a git remote with a fetch URL"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "resolve current binary: %w", Src: "resolve current binary: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "resolve lit binary: %w", Src: "resolve lit binary: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "resolve root %s: %w", Src: "resolve root %s: %w"},

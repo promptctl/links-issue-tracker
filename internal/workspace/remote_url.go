@@ -114,7 +114,7 @@ type remoteURL struct {
 func readRemoteURL(written string, root CheckoutRoot) remoteURL {
 	refused := func(r storage.RemoteRefusal) remoteURL { return remoteURL{refusal: r} }
 	if written == "" || strings.TrimSpace(written) != written {
-		return refused(storage.SurroundingWhitespace{URL: written})
+		return refused(storage.SurroundingWhitespace{})
 	}
 	if !isLocalPath(written) {
 		return remoteURL{location: written}

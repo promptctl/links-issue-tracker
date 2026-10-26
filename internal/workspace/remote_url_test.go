@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -108,6 +109,20 @@ func TestAJoinOverTheZeroCheckoutRootPanics(t *testing.T) {
 		}
 	}()
 	readRemoteURL("../x.git", CheckoutRoot{})
+}
+
+// A URL that is not a path can carry a credential, and a refusal's message
+// reaches events and traces, so a refused one is never quoted.
+func TestARefusedURLWithACredentialKeepsItOutOfTheRefusal(t *testing.T) {
+	remote := NewGitRemote("origin", "https://u:ghp_secret@h/x.git ", CheckoutRoot{})
+	_, err := remote.SyncableRemote()
+	var refusal storage.RefusedRemoteError
+	if !errors.As(err, &refusal) || refusal.Reason.Kind() != "surrounding_whitespace" {
+		t.Fatalf("SyncableRemote() error = %v, want a surrounding_whitespace refusal", err)
+	}
+	if strings.Contains(err.Error(), "ghp_secret") {
+		t.Fatalf("refusal %q quotes the credential", err)
+	}
 }
 
 func TestParseCheckoutRootRefusesARootAJoinCannotTrust(t *testing.T) {

@@ -352,7 +352,7 @@ Trace reasons for the explicit commands (`reconcileCommandReasonForState`, `sync
 ### 2.9 Remote and branch resolution (shared by every sync surface)
 
 `resolveSyncRemote` — `sync.go`:
-- Explicit remote that is not among the configured git remotes → error `requested remote %q not found in configured git remotes` (`sync.go`).
+- Explicit remote that is not a git remote with a fetch URL → error `requested remote %q is not a git remote with a fetch URL` (`sync.go`).
 - Otherwise (`chooseSyncRemote`): no remote → none, `ok` false; exactly one → that remote; more than one → the upstream remote if it is one of them, else none. The upstream is read (`ws.Remotes.Upstream`) only in the last case, the one where its answer can decide; its failure is returned rather than read as none (`sync.go`).
 - The chosen remote, however chosen, is parsed by `workspace.GitRemote.SyncableRemote` and returned as a `workspace.SyncableRemote`, carrying the `storage.RemoteName` every store call takes and the URL git reads; a remote lit refuses returns its refusal, a `storage.RefusedRemoteError` (`remote %q %s; %s to sync with it`) whose reason names it, e.g. a name Dolt cannot hold (`has %q in its name, which Dolt does not allow in a remote's name`), rather than falling through to another remote (`sync.go`, `workspace/remote_url.go`).
 

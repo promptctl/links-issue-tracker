@@ -862,7 +862,7 @@ func chooseSyncRemote(requestedRemote string, upstream func() (string, error), g
 		remote, found := findGitRemote(requested, gitRemotes)
 		if !found {
 			// [LAW:no-silent-failure] Explicit remote that doesn't exist is a configuration error, not a skip condition.
-			return workspace.GitRemote{}, false, fmt.Errorf("requested remote %q not found in configured git remotes", requested)
+			return workspace.GitRemote{}, false, fmt.Errorf("requested remote %q is not a git remote with a fetch URL", requested)
 		}
 		return remote, true, nil
 	}

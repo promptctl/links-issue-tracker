@@ -105,11 +105,12 @@ func (HomeRelativePath) remedy() string { return "write it as an absolute path (
 
 // SurroundingWhitespace: an empty URL, or one with whitespace at an end. git
 // keeps the whitespace and Dolt trims it, so the two name different
-// repositories.
-type SurroundingWhitespace struct{ URL string }
+// repositories. It alone of the URL refusals covers URLs that are not paths,
+// which can carry a credential, so it holds no URL and its message names none.
+type SurroundingWhitespace struct{}
 
-func (r SurroundingWhitespace) Kind() string { return "surrounding_whitespace" }
-func (r SurroundingWhitespace) why() string {
-	return fmt.Sprintf("has URL %q, which is empty or has whitespace at an end, which git keeps and Dolt trims", r.URL)
+func (SurroundingWhitespace) Kind() string { return "surrounding_whitespace" }
+func (SurroundingWhitespace) why() string {
+	return "has a URL that is empty or has whitespace at an end, which git keeps and Dolt trims"
 }
 func (SurroundingWhitespace) remedy() string { return "write the URL without it (git remote set-url)" }
