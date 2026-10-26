@@ -597,9 +597,9 @@ func commandErrorRemediation(reason commandReason) string {
 		// No re-run of the whole command is advised: it applies every landed
 		// item again, an item a rule refused repeats its refusal, and one whose
 		// state already holds has nothing to do. Each item's own reason says
-		// what it calls for, and the ids a stopped run never reached are named
-		// as such. [LAW:no-silent-failure]
-		return "Do not re-run the command unchanged — any item it does not list landed, and running it again applies that item again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears. A run that stopped because stdout refused a landed item's report names that item as landed, so it needs nothing, and names the ids it never reached; re-run with only those once stdout can take the output."
+		// what it calls for, a stopped run's stopping item is named as landed,
+		// and the ids it never reached are named as such. [LAW:no-silent-failure]
+		return "Do not re-run the command unchanged — any item it does not list landed, as did any it names as landed, and running it again applies those items again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears. A run that stopped because stdout refused a landed item's report names the ids it never reached; re-run with only those once stdout can take the output."
 	default:
 		return "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 	}

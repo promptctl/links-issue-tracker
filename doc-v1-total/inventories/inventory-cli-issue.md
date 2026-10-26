@@ -292,7 +292,7 @@ empty string means no `remediation:` line is printed:
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the schema it was asked to operate on, this workspace's or the remote's it syncs with, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `migration_quarantined`: "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. \<agent-instructions>Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
-- `bulk_partial_failure`: "Do not re-run the command unchanged — any item it does not list landed, and running it again applies that item again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears. A run that stopped because stdout refused a landed item's report names the ids it never reached; re-run with those once stdout can take the output."
+- `bulk_partial_failure`: "Do not re-run the command unchanged — any item it does not list landed, as did any it names as landed, and running it again applies those items again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears. A run that stopped because stdout refused a landed item's report names the ids it never reached; re-run with only those once stdout can take the output."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 
 ### 1.10 Progress channel
@@ -1998,7 +1998,7 @@ before any id is acted on.
   ids the run never reached, 0 when it reached them all.
 - `op` returns the item's notice and error. Each success writes the notice and
   then `"<id> ok\n"` to stdout; a write error stops the run at that item, as
-  `bulkStop{IssueID, Report, Err, NotRun}` (`bulk.go`).
+  `bulkStop{IssueID, Unprinted, Err, NotRun}` (`bulk.go`).
 - Each item that did not land is collected; **unlanded items never reach
   stdout** (`bulk.go`).
 - If any did not land, or the run stopped, returns
@@ -2008,7 +2008,7 @@ before any id is acted on.
   stopping item landed — and whose message is
   `"bulk operation: <n> of <ran> item(s) did not land: <id> (<reason>): <err>; …"`,
   `<n>` counting the ids not reached, ending with
-  `"<id> landed and stdout refused its report <quoted report>, which stopped the run before <ids>: <err>"`
+  `"<id> landed and stdout did not print <quoted part> of its report, which stopped the run before <ids>: <err>"`
   for a stopped run (`bulk.go`), printed by `WriteCommandError` to stderr with
   that reason's remediation (§1.9).
 

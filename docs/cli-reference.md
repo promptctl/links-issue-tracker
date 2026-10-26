@@ -865,9 +865,10 @@ issues already archived exits 6 (`state_already_holds`), and over issues the
 rules refuse exits 3 (`validation_refused`). A run in which some items landed,
 or whose unlanded items answer with different reasons, answers
 `bulk_partial_failure` (exit 1). If stdout refuses a landed item's `<id> ok`
-line, the run stops there: stderr names that item as landed, the report stdout
-refused, the write error, and the ids the run never reached, beside the
-unlanded items before it, and the run answers `bulk_partial_failure`.
+line, the run stops there: stderr names that item as landed, the part of its
+report stdout did not print, the write error, and the ids the run never
+reached, beside the unlanded items before it, and the run answers
+`bulk_partial_failure`.
 
 ### `lit import`
 

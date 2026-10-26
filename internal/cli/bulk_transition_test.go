@@ -276,10 +276,14 @@ func TestBulkItemEntryCarriesWhatItsErrorDeclared(t *testing.T) {
 	}
 }
 
-// failingWriter refuses every write with err.
-type failingWriter struct{ err error }
+// failingWriter takes the first took bytes of a write and refuses the rest
+// with err.
+type failingWriter struct {
+	took int
+	err  error
+}
 
-func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+func (w failingWriter) Write(p []byte) (int, error) { return min(w.took, len(p)), w.err }
 
 // A stdout that refuses a landed item's report stops the run there, and the
 // run still reports what it collected before it: the item refused ahead of
@@ -310,7 +314,7 @@ func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
 	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
 		t.Errorf("reason = %s, want %s", reason, reasonBulkPartialFailure)
 	}
-	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused", `b landed and stdout refused its report "claim transferred: x -> y\nb ok\n", which stopped the run before c: stdout closed`} {
+	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused", `b landed and stdout did not print "claim transferred: x -> y\nb ok\n" of its report, which stopped the run before c: stdout closed`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message = %q, want it to contain %q", err.Error(), want)
 		}
@@ -342,6 +346,20 @@ func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
 	}
 	if got, ok := recorder.Finish(telemetry.End{}).Counts["bulk.not_run"]; !ok || got != 0 {
 		t.Errorf("bulk.not_run = %d (recorded %t), want a recorded 0", got, ok)
+	}
+}
+
+// A stdout that takes part of a landed item's report before refusing the
+// rest leaves on stderr only the part it did not print: the two together are
+// the whole report, and nothing stdout printed is called refused.
+func TestBulkStoppedMidReportCarriesOnlyWhatStdoutDidNotPrint(t *testing.T) {
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	err := runBulkOver(ctx, failingWriter{took: 2, err: errors.New("no space")}, []string{"ab"}, func(context.Context, string) (string, error) {
+		return "", nil
+	})
+	var bulk BulkError
+	if !errors.As(err, &bulk) || bulk.Stopped == nil || bulk.Stopped.Unprinted != " ok\n" {
+		t.Fatalf("runBulkOver error = %+v, want a stop whose Unprinted is %q", err, " ok\n")
 	}
 }
 
