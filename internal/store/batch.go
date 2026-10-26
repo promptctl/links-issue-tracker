@@ -79,6 +79,6 @@ func withBatch[R batchResult](ctx context.Context, s *Store, fn func(ctx context
 		stands = built
 		return &storage.BatchResetFailedError{Head: head, Cause: cause, ResetErr: resetErr, Written: built.Written()}
 	})
-	s.deliver(heard)
+	s.hear(ctx, heard...)
 	return stands, head, err
 }

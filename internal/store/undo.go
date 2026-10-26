@@ -1,8 +1,10 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -163,7 +165,9 @@ func (s *Store) namedWrites(ctx context.Context, ids []string) ([]write, error) 
 		}
 	}
 	writes := slices.Collect(maps.Values(found))
-	slices.SortFunc(writes, func(a, b write) int { return int(b.order - a.order) })
+	// commit_order ties across the branches of a merged history; the id breaks
+	// the tie, so a fold of the same writes runs in the same order every time.
+	slices.SortFunc(writes, func(a, b write) int { return cmp.Or(cmp.Compare(b.order, a.order), strings.Compare(a.id, b.id)) })
 	return writes, nil
 }
 
@@ -416,21 +420,25 @@ func (s *Store) readFieldMoves(ctx context.Context, before, after revision, ids 
 				rows.Fields = append(rows.Fields, storage.Move{Slot: slot, From: storage.FieldValue(from[name]), To: storage.FieldValue(to[name])})
 			}
 		}
-		// What is left different once the newer side's fields are carried
-		// onto the older side is what moved outside the editable set.
+		// What is left different once both sides carry the newer side's
+		// fields is what moved outside the editable set. Both go through the
+		// same rows, so a value the rows normalize reads alike on both sides.
 		// [LAW:one-source-of-truth] the editable set is the field table's.
-		carried, err := storage.WithIssueFieldsOf(was[id], is[id])
-		if err != nil {
+		carried, wasErr := storage.WithIssueFieldsOf(was[id], is[id])
+		self, isErr := storage.WithIssueFieldsOf(is[id], is[id])
+		if err := cmp.Or(wasErr, isErr); err != nil {
 			outside(fmt.Sprintf("%s: %v", id, err), "")
 			continue
 		}
-		carried.UpdatedAt = is[id].UpdatedAt
-		switch {
-		case !reflect.DeepEqual(wasStatus[id], isStatus[id]):
+		carried.UpdatedAt = self.UpdatedAt
+		if !reflect.DeepEqual(wasStatus[id], isStatus[id]) {
 			outside(fmt.Sprintf("%s: its lifecycle moved", id), "lifecycle moves only through its verbs")
-		case carried.Rank != is[id].Rank:
+		}
+		if carried.Rank != self.Rank {
 			ranked++
-		case !reflect.DeepEqual(carried, is[id]):
+			carried.Rank = self.Rank
+		}
+		if !reflect.DeepEqual(carried, self) {
 			outside(fmt.Sprintf("%s: its row moved outside its editable fields", id), "")
 		}
 	}
@@ -528,7 +536,7 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 	if err != nil {
 		return storage.RevertResult{}, err
 	}
-	writes, err := s.namedWrites(ctx, uniqueSorted(ids))
+	writes, err := s.namedWrites(ctx, ids)
 	if err != nil {
 		return storage.RevertResult{}, err
 	}
@@ -546,11 +554,16 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 	if len(refused) > 0 {
 		return storage.RevertResult{}, storage.RevertRefusedError{Unrevertable: refused}
 	}
-	result := storage.RevertResult{}
-	for _, w := range writes {
-		result.Writes = append(result.Writes, w.id)
+	reverting := make([]string, len(writes))
+	for i, w := range writes {
+		reverting[i] = w.id
 	}
+	var result storage.RevertResult
+	// The undo is a batch around the bulk edit's batch: the observers hear
+	// what stands once this hold is released, not inside it.
+	var heard []heardChange
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
+		ctx = context.WithValue(ctx, batchHearingKey{}, &heard)
 		now, err := s.currentState(ctx, deltas)
 		if err != nil {
 			return err
@@ -559,22 +572,28 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 		if len(conflicts) > 0 {
 			return storage.RevertConflictError{Conflicts: conflicts}
 		}
-		result.Moves = reverted.Moves
 		if len(reverted.Documents) == 0 {
-			return storage.RevertHeldError{Writes: result.Writes}
+			return storage.RevertHeldError{Writes: reverting}
 		}
-		applied, from, err := s.bulkApply(ctx, "", actor, reverted.Documents)
-		if err != nil {
-			return err
+		// What the bulk edit left written stands beside any error it returns
+		// (withBatch), so the undo reports it on every outcome. A refusal
+		// before its batch began names no revert point and wrote nothing.
+		// [LAW:nothing-unseen]
+		applied, from, applyErr := s.bulkApply(ctx, "", actor, reverted.Documents)
+		if from == "" {
+			return applyErr
 		}
 		result.Applied = applied
-		result.Landed, err = s.commitsAbove(ctx, from)
-		return err
+		landed, landedErr := s.commitsAbove(ctx, from)
+		result.Landed = landed
+		if err := errors.Join(applyErr, landedErr); err != nil {
+			return err
+		}
+		result.Writes, result.Moves = reverting, reverted.Moves
+		return nil
 	})
-	if err != nil {
-		return storage.RevertResult{}, err
-	}
-	return result, nil
+	s.deliver(heard)
+	return result, err
 }
 
 // currentState reads the store as it stands for exactly the slots deltas
@@ -593,7 +612,7 @@ func (s *Store) currentState(ctx context.Context, deltas []storage.WriteDelta) (
 			}
 		}
 	}
-	issues, _, err := s.issueFieldsAt(ctx, liveRevision, uniqueSorted(named))
+	issues, _, err := s.issueFieldsAt(ctx, liveRevision, named)
 	if err != nil {
 		return storage.CurrentState{}, err
 	}
@@ -604,10 +623,10 @@ func (s *Store) currentState(ctx context.Context, deltas []storage.WriteDelta) (
 			now.Fields[storage.Slot{Kind: storage.FieldSlot, Issue: id, Name: name}] = storage.FieldValue(value)
 		}
 	}
-	if now.Parents, err = s.edgeTargetsAt(ctx, liveRevision, model.RelParentChild, uniqueSorted(children)); err != nil {
+	if now.Parents, err = s.edgeTargetsAt(ctx, liveRevision, model.RelParentChild, children); err != nil {
 		return storage.CurrentState{}, err
 	}
-	if now.BlockedBy, err = s.edgeTargetsAt(ctx, liveRevision, model.RelBlockedBy, uniqueSorted(blocked)); err != nil {
+	if now.BlockedBy, err = s.edgeTargetsAt(ctx, liveRevision, model.RelBlockedBy, blocked); err != nil {
 		return storage.CurrentState{}, err
 	}
 	return now, nil

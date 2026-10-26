@@ -389,3 +389,77 @@ func TestListWritesTakesNoCommitLock(t *testing.T) {
 		t.Errorf("a migration lists %+v, want it unrevertable as written across schema versions", writes[max(migration, 0)])
 	}
 }
+
+// A row stored before the field rows normalized it reads alike on both sides
+// of an edit of another field, so the edit stays revertable.
+func TestListWritesTakesAnEditBesideAnUnnormalizedRowAsRevertable(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newUndoStore(t)
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	if err := st.withMutation(ctx, "an older title", func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE issues SET title = 'epic  ' WHERE id = ?`, epic.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("store an unnormalized title: %v", err)
+	}
+	description := "now described"
+	if _, err := st.Apply(ctx, epic.ID, storage.Change{Actor: "editor", Fields: storage.UpdateIssueInput{Description: &description}}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	listed, err := st.ListWrites(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListWrites() error = %v", err)
+	}
+	if len(listed[0].Unrevertable) != 0 || len(listed[0].Moves) != 1 {
+		t.Errorf("listed = %+v, want the one description move and nothing unrevertable", listed[0])
+	}
+}
+
+// A rank move does not hide another column the same write moved.
+func TestListWritesNamesARowMoveBesideARankMove(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newUndoStore(t)
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	if err := st.withMutation(ctx, "rank and topic", func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE issues SET item_rank = CONCAT(item_rank, 'z'), topic = 'elsewhere' WHERE id = ?`, epic.ID)
+		return err
+	}); err != nil {
+		t.Fatalf("move rank and topic: %v", err)
+	}
+	listed, err := st.ListWrites(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListWrites() error = %v", err)
+	}
+	var what []string
+	for _, u := range listed[0].Unrevertable {
+		what = append(what, u.What)
+	}
+	if want := []string{epic.ID + ": its row moved outside its editable fields", "ranks moved, tickets re-keyed: 1"}; !slices.Equal(what, want) {
+		t.Errorf("unrevertable = %q, want %q", what, want)
+	}
+}
+
+// The observers hear an undo's changes once its commit-lock hold is released,
+// as a lone batch's observers do: an observer that takes the lock gets it.
+func TestRevertWritesIsHeardOnceItsLockIsReleased(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newUndoStore(t)
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "before", IssueType: "epic"})
+	title := "after"
+	if _, err := st.Apply(ctx, epic.ID, storage.Change{Actor: "editor", Fields: storage.UpdateIssueInput{Title: &title}}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	edit := headWrite(t, st)
+	var heard []error
+	st.ObserveChanges(func(storage.Change, model.Issue) {
+		locked, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		heard = append(heard, st.withCommitLock(locked, func(context.Context) error { return nil }))
+	})
+	if _, err := st.RevertWrites(ctx, []string{edit}, "undoer"); err != nil {
+		t.Fatalf("RevertWrites() error = %v", err)
+	}
+	if len(heard) != 1 || heard[0] != nil {
+		t.Errorf("observer took the lock with %v, want one change heard with the lock free", heard)
+	}
+}

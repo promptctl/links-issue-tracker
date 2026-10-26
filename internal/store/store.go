@@ -1429,15 +1429,21 @@ type heardChange struct {
 // queue of changes the batch's observers are owed.
 type batchHearingKey struct{}
 
-// notify is the one place a change reaches the observers. Inside a batch it is
-// queued, and withBatch delivers the queue only for writes that stand, so a
-// refused batch whose reset landed is heard by nobody. [LAW:single-enforcer]
+// notify is the one place a change reaches the observers.
 func (s *Store) notify(ctx context.Context, c storage.Change, issue model.Issue) {
+	s.hear(ctx, heardChange{c, issue})
+}
+
+// hear owes the observers heard. Inside a batch it is queued, and the batch
+// delivers the queue only for writes that stand, once its lock is released, so
+// a refused batch whose reset landed is heard by nobody and a batch inside
+// another hands its queue to the outer one. [LAW:single-enforcer]
+func (s *Store) hear(ctx context.Context, heard ...heardChange) {
 	if queue, ok := ctx.Value(batchHearingKey{}).(*[]heardChange); ok {
-		*queue = append(*queue, heardChange{c, issue})
+		*queue = append(*queue, heard...)
 		return
 	}
-	s.deliver([]heardChange{{c, issue}})
+	s.deliver(heard)
 }
 
 // deliver tells every observer of each change, in order.
