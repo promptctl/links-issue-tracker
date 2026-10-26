@@ -15,7 +15,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
-	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -827,31 +826,45 @@ func syncStatusLeaf() syncLeaf {
 // remote Dolt cannot hold is refused, never skipped for another, which would
 // sync somewhere unmeant. The remote it returns is parsed, so nothing it
 // reaches checks the name again. [LAW:parse-dont-validate]
-func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, ok bool, err error) {
-	chosen := strings.TrimSpace(requestedRemote)
-	// [LAW:no-silent-failure] Explicit remote that doesn't exist is a configuration error, not a skip condition.
-	if chosen != "" && !syncRemoteExists(chosen, gitRemotes) {
-		return storage.RemoteName{}, false, fmt.Errorf("requested remote %q not found in configured git remotes", chosen)
-	}
-	singleRemote := ""
-	if len(gitRemotes) == 1 {
-		singleRemote = strings.TrimSpace(gitRemotes[0].Name)
-	}
-	validatedUpstreamRemote := strings.TrimSpace(upstreamRemote)
-	if !syncRemoteExists(validatedUpstreamRemote, gitRemotes) {
-		validatedUpstreamRemote = ""
-	}
-	// [LAW:one-source-of-truth] Sync remote selection is derived once from ordered candidates and shared by pull/push.
-	// Candidates are trimmed where they are produced, so plain precedence suffices.
-	chosen = precedence.First(chosen, validatedUpstreamRemote, singleRemote)
-	if chosen == "" {
-		return storage.RemoteName{}, false, nil
+func resolveSyncRemote(requestedRemote string, upstream func() (string, error), gitRemotes []workspace.GitRemote) (remote storage.RemoteName, ok bool, err error) {
+	chosen, err := chooseSyncRemote(requestedRemote, upstream, gitRemotes)
+	if err != nil || chosen == "" {
+		return storage.RemoteName{}, false, err
 	}
 	remote, err = storage.ParseRemoteName(chosen)
 	if err != nil {
 		return storage.RemoteName{}, false, err
 	}
 	return remote, true, nil
+}
+
+// chooseSyncRemote is resolveSyncRemote's precedence, read as names, "" for
+// none. upstream is asked only when its answer can decide: a request outranks
+// it, no remote leaves it nothing to name, and with one remote the upstream it
+// could name is that remote. [LAW:single-enforcer] this is the one place the
+// precedence lives, so no caller decides for it whether the upstream is needed.
+func chooseSyncRemote(requestedRemote string, upstream func() (string, error), gitRemotes []workspace.GitRemote) (string, error) {
+	if requested := strings.TrimSpace(requestedRemote); requested != "" {
+		// [LAW:no-silent-failure] Explicit remote that doesn't exist is a configuration error, not a skip condition.
+		if !syncRemoteExists(requested, gitRemotes) {
+			return "", fmt.Errorf("requested remote %q not found in configured git remotes", requested)
+		}
+		return requested, nil
+	}
+	switch len(gitRemotes) {
+	case 0:
+		return "", nil
+	case 1:
+		return strings.TrimSpace(gitRemotes[0].Name), nil
+	}
+	upstreamRemote, err := upstream()
+	if err != nil {
+		return "", err
+	}
+	if !syncRemoteExists(upstreamRemote, gitRemotes) {
+		return "", nil
+	}
+	return strings.TrimSpace(upstreamRemote), nil
 }
 
 func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {

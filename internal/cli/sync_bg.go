@@ -324,9 +324,10 @@ func backgroundMirrorLeaf() wsLeaf {
 			// A cycle is a unit of work of its own, so it reads git's remote
 			// configuration afresh: a remote added while this worker kept
 			// cycling is pushed to by the next cycle, not the worker's next life.
-			cycle := ws
-			cycle.Remotes = workspace.NewRemotes(inv.Env, ws.RootDir)
-			attempted := mirrorCycle(ctx, inv.Env, inv.Stdout, cycle, stopAnswering)
+			// Replaced on the worker's one Info, so the cycle and everything after
+			// it read the same remotes. [LAW:one-source-of-truth]
+			ws.Remotes = workspace.NewRemotes(inv.Env, ws.RootDir)
+			attempted := mirrorCycle(ctx, inv.Env, inv.Stdout, ws, stopAnswering)
 			// Released only after the cycle's engine has closed (mirrorCycle's
 			// deferred Close), so the lock brackets the whole session. The kernel
 			// drops the flock on process exit, so an unlock error cannot strand

@@ -117,21 +117,7 @@ func workspaceSyncRemote(ws workspace.Info, requested string) (storage.RemoteNam
 	if err != nil {
 		return storage.RemoteName{}, false, err
 	}
-	upstream, err := upstreamCandidate(ws, requested)
-	if err != nil {
-		return storage.RemoteName{}, false, err
-	}
-	return resolveSyncRemote(requested, upstream, gitRemotes)
-}
-
-// upstreamCandidate is the upstream remote resolveSyncRemote ranks below
-// a requested remote: a request outranks it, so a command that names its
-// remote is never failed by a question whose answer it would not use.
-func upstreamCandidate(ws workspace.Info, requested string) (string, error) {
-	if strings.TrimSpace(requested) != "" {
-		return "", nil
-	}
-	return ws.Remotes.Upstream()
+	return resolveSyncRemote(requested, ws.Remotes.Upstream, gitRemotes)
 }
 
 // advertisedSyncBranchPath is where resolveSyncBranch records the branch a

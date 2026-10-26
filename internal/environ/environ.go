@@ -33,8 +33,9 @@ type Env struct {
 	goos string
 	// gitSpawns counts the git processes Git has started for this Env and
 	// every Env derived from it. [LAW:no-shared-mutable-globals] Its owner is
-	// the lineage one Of starts — one run's environment — so two runs in one
-	// process never share it; Git is its only writer and GitSpawns its reader.
+	// the lineage one Of starts, which cmd/lit starts once per run; a caller
+	// that hands one Env to several runs shares the count among them. Git is
+	// its only writer and GitSpawns its reader.
 	gitSpawns *atomic.Int64
 }
 
