@@ -85,7 +85,7 @@ the code it arrives on:
 | `merge_conflict` | 5 | A sync merge conflict |
 | `sync_divergence` | 5 | Local and remote diverged in a way the message tells you how to resolve |
 | `restore_would_overwrite` | 5 | `lit backup restore` would overwrite changes made since the last restore; `--force` restores anyway, after the backup it always takes |
-| `undo_conflict` | 5 | `lit undo revert` would put back something a later write moved again, which would erase that write; name the later write too, or leave the undo |
+| `write_conflict` | 5 | A change would erase a later write: `lit undo revert` would put back something a later write moved again, or `lit import` of a `lit ls --format yaml` file edits a value another writer changed since the read. The message names each value and the way on |
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
 | `no_ready_work` | 6 | `lit next` had no ticket for you |
 | `scope_exhausted` | 6 | `lit next` found open work in your claimed epic but none you can reach; the message names what stops it |
@@ -444,7 +444,15 @@ never `topic` or `rank`.
 That is the read half of editing tickets in place: `lit ls --query <sel> --format
 yaml > f.yaml`, edit f.yaml, `lit import --path f.yaml`. Imported unedited, the file
 changes nothing and the import reports every document as already holding its fields;
-edited, it changes only the values edited. A file that would leave a blocked_by inside
+edited, it changes only the values edited. Each document ends with a `basis`, a
+record of what the issue held at the read, which the import merges the file
+against. So what other writers changed between the read and the import stands. A
+value the file left as read takes the value the issue holds now, and the import
+lists each one another writer had changed under `kept`. Blocked-by edges merge one
+by one. An edit to a value another writer also changed to something else, or to an
+issue removed since the read, refuses the file whole (`write_conflict`, exit 5):
+read those issues out again and redo the edits, and drop the documents of a removed
+issue. A file that would leave a blocked_by inside
 one epic is refused whole, so a selection holding one that a reparent left behind goes
 back in once that blocker is dropped from the file. It prints every editable field, so
 `--columns` with it is a usage error.
@@ -927,7 +935,7 @@ the undo. A field it restores records an ordinary field change with reason
 
 A revert writes nothing, and answers on its reason, when:
 
-- a later write moved again something it would put back (`undo_conflict`, exit 5).
+- a later write moved again something it would put back (`write_conflict`, exit 5).
   Putting it back would erase that write, so name the later write in `--writes`
   too, or leave it;
 - a named write changed something no update document can put back

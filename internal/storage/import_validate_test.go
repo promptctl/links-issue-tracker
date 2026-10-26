@@ -66,91 +66,91 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			return err
 		}, ""},
 		{"bulk: a task with no local_id blocked by the epic it sits under", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "e", "e")}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "e", "e")}), nil)
 			return err
 		}, `bulk: doc 1 blocked_by "e"` + sameEpic},
 		{"bulk: an epic blocked by a task under it", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", "", "t"), create("t", "task", "e")}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", "", "t"), create("t", "task", "e")}), nil)
 			return err
 		}, `bulk: doc 0 blocked_by "t"` + sameEpic},
 		{"bulk: a task with no local_id blocked by a task beside it", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), create("a", "task", "e"), create("", "chore", "e", "a")}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), create("a", "task", "e"), create("", "chore", "e", "a")}), nil)
 			return err
 		}, `bulk: doc 2 blocked_by "a"` + sameEpic},
 		{"bulk: two tasks under one existing epic, one blocked by the other", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "bug", "lit-epic", "a")}, map[string]model.IssueType{"lit-epic": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "bug", "lit-epic", "a")}), map[string]model.IssueType{"lit-epic": model.TypeEpic})
 			return err
 		}, `bulk: doc 1 blocked_by "a"` + sameEpic},
 		{"bulk: two tasks under one existing task, which is no epic and the create refuses, are accepted", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-task"), create("", "task", "lit-task", "a")}, map[string]model.IssueType{"lit-task": model.TypeTask})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-task"), create("", "task", "lit-task", "a")}), map[string]model.IssueType{"lit-task": model.TypeTask})
 			return err
 		}, ""},
 		{"bulk: two tasks under one id naming no issue, which the create refuses, are accepted", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-gone"), create("", "task", "lit-gone", "a")}, map[string]model.IssueType{})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-gone"), create("", "task", "lit-gone", "a")}), map[string]model.IssueType{})
 			return err
 		}, ""},
 		{"bulk: a task under an existing epic blocked by a task under another", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "task", "lit-other", "a")}, map[string]model.IssueType{"lit-epic": model.TypeEpic, "lit-other": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "task", "lit-other", "a")}), map[string]model.IssueType{"lit-epic": model.TypeEpic, "lit-other": model.TypeEpic})
 			return err
 		}, ""},
 		{"bulk: a task blocked by a real id, which the write judges, is accepted", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), create("t", "task", "e", "lit-real-1")}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), create("t", "task", "e", "lit-real-1")}), nil)
 			return err
 		}, ""},
 		{"bulk: a create naming one real id twice in blocked_by", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", "", "lit-real-1", "lit-real-1")}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", "", "lit-real-1", "lit-real-1")}), nil)
 			return err
 		}, `bulk: doc 0: blocked_by names "lit-real-1" twice`},
 		{"bulk: two update documents each under the other", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-a", Parent: ptr("lit-b")}, {ID: "lit-b", Parent: ptr("lit-a")}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-a", Parent: ptr("lit-b")}, {ID: "lit-b", Parent: ptr("lit-a")}}), nil)
 			return err
 		}, `bulk: cycle detected involving "lit-a"`},
 		{"bulk: a create under an update document the file puts under it", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("c", "epic", "lit-x"), {ID: "lit-x", Parent: ptr("c")}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("c", "epic", "lit-x"), {ID: "lit-x", Parent: ptr("c")}}), nil)
 			return err
 		}, `bulk: cycle detected involving "c"`},
 		{"bulk: an update document under itself", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-x", Parent: ptr("lit-x")}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-x", Parent: ptr("lit-x")}}), nil)
 			return err
 		}, `bulk: cycle detected involving "lit-x"`},
 		{"bulk: an update document under a create that is no epic", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("t", "task", "lit-e"), {ID: "lit-x", Parent: ptr("t")}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("t", "task", "lit-e"), {ID: "lit-x", Parent: ptr("t")}}), nil)
 			return err
 		}, "bulk: doc 1: " + RejectParentThatIsNotAContainer("t", model.TypeTask).Error()},
 		{"bulk: a task blocked by an epic it sits under through an epic the file moves there", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), {ID: "lit-x", Parent: ptr("e")}, create("", "task", "lit-x", "e")}, map[string]model.IssueType{"lit-x": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), {ID: "lit-x", Parent: ptr("e")}, create("", "task", "lit-x", "e")}), map[string]model.IssueType{"lit-x": model.TypeEpic})
 			return err
 		}, `bulk: doc 2 blocked_by "e"` + sameEpic},
 		{"bulk: the same task under an epic the file leaves where it is, is accepted", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "lit-x", "e")}, map[string]model.IssueType{"lit-x": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "lit-x", "e")}), map[string]model.IssueType{"lit-x": model.TypeEpic})
 			return err
 		}, ""},
 		{"bulk: an update document that only reparents is accepted", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-x", Parent: ptr("lit-e")}, {ID: "lit-y", Parent: ptr("")}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-x", Parent: ptr("lit-e")}, {ID: "lit-y", Parent: ptr("")}}), nil)
 			return err
 		}, ""},
 		{"bulk: a reason on an update document that only reparents", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-x", Parent: ptr("lit-e"), Reason: "regroom"}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-x", Parent: ptr("lit-e"), Reason: "regroom"}}), nil)
 			return err
 		}, `bulk: doc 0 (id "lit-x") sets reason but changes no field; reason annotates a field change, and parent, blocked_by and rank write none`},
 		{"bulk: an update naming one blocker twice is refused, as a create is", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", Title: str("t"), BlockedBy: ptr([]string{"lit-real-2", "lit-real-2"})}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-real-1", Title: str("t"), BlockedBy: ptr([]string{"lit-real-2", "lit-real-2"})}}), nil)
 			return err
 		}, `bulk: doc 0: blocked_by names "lit-real-2" twice`},
 		{"bulk: an update naming its own id in blocked_by is refused", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2", "lit-real-1"})}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2", "lit-real-1"})}}), nil)
 			return err
 		}, `bulk: doc 0 ("lit-real-1") cannot depend on itself`},
 		{"bulk: a create naming its own local_id in blocked_by is refused", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{create("t", "task", "lit-e", "t")}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("t", "task", "lit-e", "t")}), nil)
 			return err
 		}, `bulk: doc 0 ("t") cannot depend on itself`},
 		{"bulk: an update naming an empty blocker is refused", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2", ""})}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2", ""})}}), nil)
 			return err
 		}, `bulk: doc 0 blocked_by has an empty entry`},
 		{"bulk: an update stating only blocked_by, naming another issue, is admitted", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2"})}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-real-1", BlockedBy: ptr([]string{"lit-real-2"})}}), nil)
 			return err
 		}, ""},
 		{"tree: an epic waiting on a leaf of another epic that waits on a leaf of the first is accepted", func() error {
@@ -158,20 +158,26 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			return err
 		}, ""},
 		{"bulk: the same loop stated by update documents is accepted", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{
 				{ID: "lit-e", Parent: ptr(""), BlockedBy: ptr([]string{"lit-x"})},
 				{ID: "lit-b", Parent: ptr("lit-e"), BlockedBy: ptr([]string{})},
 				{ID: "lit-x", Parent: ptr("lit-f"), BlockedBy: ptr([]string{"lit-b"})},
-			}, map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-f": model.TypeEpic, "lit-b": model.TypeTask, "lit-x": model.TypeTask})
+			}),
+
+				map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-f": model.TypeEpic, "lit-b": model.TypeTask, "lit-x": model.TypeTask})
+
 			return err
 		}, ""},
 		{"bulk: an update document moved under the epic its own blocked_by names", func() error {
 			// The edge may already be held, which the write would not add, so
 			// only the file's hierarchy stops the move from making the shape.
-			_, err := ParseBulkFile([]BulkIssueSpec{
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{
 				{ID: "lit-e", Parent: ptr("")},
 				{ID: "lit-x", Parent: ptr("lit-e"), BlockedBy: ptr([]string{"lit-e"})},
-			}, map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-x": model.TypeTask})
+			}),
+
+				map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-x": model.TypeTask})
+
 			return err
 		}, `bulk: doc 1 (id "lit-x") blocked_by "lit-e"` + sameEpic},
 	}
@@ -248,11 +254,11 @@ func TestABadValueIsRefusedAlikeInEveryDocumentShape(t *testing.T) {
 		{"bulk create type", func() error {
 			doc := create
 			doc.IssueType = str("ghost")
-			_, err := ParseBulkFile([]BulkIssueSpec{doc}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{doc}), nil)
 			return err
 		}, `bulk: doc 0: ` + badType},
 		{"bulk update type", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-x-1", IssueType: str("ghost")}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-x-1", IssueType: str("ghost")}}), nil)
 			return err
 		}, `bulk: doc 0 (id "lit-x-1"): ` + badType},
 		{"tree spec priority", func() error {
@@ -264,11 +270,11 @@ func TestABadValueIsRefusedAlikeInEveryDocumentShape(t *testing.T) {
 		{"bulk create priority", func() error {
 			doc := create
 			doc.Priority = num(9)
-			_, err := ParseBulkFile([]BulkIssueSpec{doc}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{doc}), nil)
 			return err
 		}, `bulk: doc 0: has invalid priority 9: priority must be `},
 		{"bulk update priority", func() error {
-			_, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-x-1", Priority: num(9)}}, nil)
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-x-1", Priority: num(9)}}), nil)
 			return err
 		}, `bulk: doc 0 (id "lit-x-1"): has invalid priority 9: priority must be `},
 	} {
@@ -295,13 +301,16 @@ func TestABadValueIsRefusedAlikeInEveryDocumentShape(t *testing.T) {
 func TestABulkFileOrderingIsItsRankTopDocumentsInFileOrder(t *testing.T) {
 	str := func(s string) *string { return &s }
 	top := str("top")
-	file, err := ParseBulkFile([]BulkIssueSpec{
+	file, err := ParseBulkFile(handWritten([]BulkIssueSpec{
 		{LocalID: "leaf", Title: str("leaf"), IssueType: str("task"), Topic: str("core"), Parent: ptr("root"), Rank: top},
 		{ID: "lit-a-1", Rank: top},
 		{ID: "lit-b-2", Title: str("retitled"), Rank: top},
 		{LocalID: "root", Title: str("root"), IssueType: str("epic"), Topic: str("core"), Rank: top},
 		{ID: "lit-c-3", Title: str("unranked")},
-	}, nil)
+	}),
+
+		nil)
+
 	if err != nil {
 		t.Fatalf("ParseBulkFile error = %v", err)
 	}
@@ -328,11 +337,11 @@ func TestABulkFileOrderingIsItsRankTopDocumentsInFileOrder(t *testing.T) {
 		{"an update stating neither a field nor rank", BulkIssueSpec{ID: "lit-a-1"}, `bulk: doc 0 (id "lit-a-1") has no fields to update, no parent, no blocked_by and no rank`},
 		{"a reason on an update stating only rank", BulkIssueSpec{ID: "lit-a-1", Rank: top, Reason: "reprioritized"}, `bulk: doc 0 (id "lit-a-1") sets reason but changes no field`},
 	} {
-		if _, err := ParseBulkFile([]BulkIssueSpec{refused.doc}, nil); err == nil || !strings.HasPrefix(err.Error(), refused.want) {
+		if _, err := ParseBulkFile(handWritten([]BulkIssueSpec{refused.doc}), nil); err == nil || !strings.HasPrefix(err.Error(), refused.want) {
 			t.Errorf("%s: err = %v, want it to start %q", refused.name, err, refused.want)
 		}
 	}
-	if file, err := ParseBulkFile([]BulkIssueSpec{{ID: "lit-a-1", Title: str("t")}}, nil); err != nil || len(file.RankedIDs(nil)) != 0 {
+	if file, err := ParseBulkFile(handWritten([]BulkIssueSpec{{ID: "lit-a-1", Title: str("t")}}), nil); err != nil || len(file.RankedIDs(nil)) != 0 {
 		t.Errorf("a file stating no rank: ordering %v, err %v; want an empty ordering", file.RankedIDs(nil), err)
 	}
 }
@@ -343,13 +352,21 @@ func ptr[T any](v T) *T { return &v }
 // file names and each update document that states a parent, cleared or not.
 // An update document stating none is placed nowhere, so its type is not read.
 func TestBulkExistingRefsNamesEveryIssueTheFilePlaces(t *testing.T) {
-	got := BulkExistingRefs([]BulkIssueSpec{
+	got := BulkExistingRefs(handWritten([]BulkIssueSpec{
 		{LocalID: "c", Title: ptr("c"), Parent: ptr("lit-e")},
 		{ID: "lit-x", Parent: ptr("c")},
 		{ID: "lit-y", Parent: ptr("")},
 		{ID: "lit-z", Title: ptr("t")},
-	})
+	}))
+
 	if want := []string{"lit-e", "c", "lit-x", "lit-y"}; !slices.Equal(got, want) {
 		t.Errorf("BulkExistingRefs = %v, want %v", got, want)
 	}
+}
+
+// handWritten is a file of documents that carry no basis, which the merge
+// passes through as stated, so the gate is judged here on what it alone
+// refuses.
+func handWritten(specs []BulkIssueSpec) MergedFile {
+	return MergedFile{specs: specs}
 }

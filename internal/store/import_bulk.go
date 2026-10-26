@@ -29,17 +29,45 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 // bulkApply is BulkApply, also returning the batch's revert point: the head
 // the file's writes sit on, which withBatch owns. An undo names the commits it
 // landed from it.
+//
+// [LAW:no-ambient-temporal-coupling] The read of the store as it stands, the
+// merge and gate judged on it, and the batch share one commit-lock hold, so no
+// write lands between what the merge read and what the batch writes. The
+// observers hear what stands once the hold is released.
 func (s *Store) bulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, string, error) {
-	existingTypes, err := s.issueTypesByIDs(ctx, storage.BulkExistingRefs(specs))
-	if err != nil {
-		return storage.BulkApplyResult{}, "", fmt.Errorf("bulk: read the issues the file places: %w", err)
-	}
-	file, err := storage.ParseBulkFile(specs, existingTypes)
-	if err != nil {
-		return storage.BulkApplyResult{}, "", err
-	}
+	var applied storage.BulkApplyResult
+	var head string
+	var heard []heardChange
+	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		ctx = context.WithValue(ctx, batchHearingKey{}, &heard)
+		now, err := s.currentState(ctx, storage.ReadOutIDs(specs))
+		if err != nil {
+			return fmt.Errorf("bulk: read the issues the file was read out of: %w", err)
+		}
+		merged, err := storage.MergeReadOut(specs, now)
+		if err != nil {
+			return err
+		}
+		existingTypes, err := s.issueTypesByIDs(ctx, storage.BulkExistingRefs(merged))
+		if err != nil {
+			return fmt.Errorf("bulk: read the issues the file places: %w", err)
+		}
+		file, err := storage.ParseBulkFile(merged, existingTypes)
+		if err != nil {
+			return err
+		}
+		applied, head, err = s.writeBulkFile(ctx, prefix, actor, file, merged.Kept)
+		return err
+	})
+	s.hear(ctx, heard...)
+	return applied, head, err
+}
 
+// writeBulkFile writes a gated file as one batch, reporting the slots its
+// merge kept beside what it wrote.
+func (s *Store) writeBulkFile(ctx context.Context, prefix, actor string, file storage.BulkFile, kept []storage.Slot) (storage.BulkApplyResult, string, error) {
 	return withBatch(ctx, s, func(ctx context.Context, result *storage.BulkApplyResult) error {
+		result.Kept = kept
 		createdIDs := make([]string, 0, len(file.Creates))
 		localRealID := make(map[string]string, len(file.Creates))
 		for _, create := range file.Creates {

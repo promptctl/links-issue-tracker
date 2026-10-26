@@ -107,6 +107,19 @@ YAML bulk file (creates and updates)
   inside one epic, so a selection holding one that a reparent left
   behind goes back in once that blocker is dropped from the file.
 
+  Each of those documents ends with a basis: what the issue held when it
+  was read out. Leave it as printed. The import merges the file against
+  it, so other writers' changes between the read and the import stand.
+  A value the file left as read takes whatever the issue holds now, and
+  the import names each one another writer had changed ("kept"). A value
+  the file edited lands. Blocked-by edges merge one by one, so an edge
+  the file adds and one another writer added both stand. A value the
+  file edited that another writer also changed to something else, or an
+  issue removed since the read, refuses the whole file with nothing
+  written (write_conflict, exit 5): read those issues out again and redo
+  the edits on the new file, and drop the documents of a removed issue.
+  A document with no basis states what to write, as written.
+
   parent on an update document reparents the issue, as lit parent set
   does, and parent: "" clears it, as lit parent clear does; the same rules
   apply. parent may name a local_id in this file or an existing issue,

@@ -563,13 +563,19 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 	var heard []heardChange
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
 		ctx = context.WithValue(ctx, batchHearingKey{}, &heard)
-		now, err := s.currentState(ctx, deltas)
+		var named []string
+		for _, delta := range deltas {
+			for _, move := range delta.Moves() {
+				named = append(named, move.Slot.Issue)
+			}
+		}
+		now, err := s.currentState(ctx, named)
 		if err != nil {
 			return err
 		}
 		reverted, conflicts := storage.Revert(deltas, now)
 		if len(conflicts) > 0 {
-			return storage.RevertConflictError{Conflicts: conflicts}
+			return storage.ConflictError{Conflicts: conflicts}
 		}
 		if len(reverted.Documents) == 0 {
 			return storage.RevertHeldError{Writes: reverting}
@@ -595,37 +601,20 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 	return result, err
 }
 
-// currentState reads the store as it stands for exactly the slots deltas
-// moved, through the same readers that read each side of a write. Every issue
-// a slot names is read, so an issue a later write removed is known removed.
-func (s *Store) currentState(ctx context.Context, deltas []storage.WriteDelta) (storage.CurrentState, error) {
-	var named, children, blocked []string
-	for _, delta := range deltas {
-		for _, move := range delta.Moves() {
-			named = append(named, move.Slot.Issue)
-			switch move.Slot.Kind {
-			case storage.ParentSlot:
-				children = append(children, move.Slot.Issue)
-			case storage.BlockedBySlot:
-				blocked = append(blocked, move.Slot.Issue)
-			}
-		}
-	}
-	issues, _, err := s.issueFieldsAt(ctx, liveRevision, named)
+// currentState reads the store as it stands for ids, through the same readers
+// that read each side of a write: each issue it still holds, whole, with its
+// parent set and its blocked-by set. An id it no longer holds is absent, so it
+// is known removed.
+func (s *Store) currentState(ctx context.Context, ids []string) (storage.CurrentState, error) {
+	issues, _, err := s.issueFieldsAt(ctx, liveRevision, ids)
 	if err != nil {
 		return storage.CurrentState{}, err
 	}
-	now := storage.CurrentState{Standing: map[string]bool{}, Fields: map[storage.Slot]storage.SlotValue{}}
-	for id, issue := range issues {
-		now.Standing[id] = true
-		for name, value := range storage.IssueFieldValues(issue) {
-			now.Fields[storage.Slot{Kind: storage.FieldSlot, Issue: id, Name: name}] = storage.FieldValue(value)
-		}
-	}
-	if now.Parents, err = s.edgeTargetsAt(ctx, liveRevision, model.RelParentChild, children); err != nil {
+	now := storage.CurrentState{Issues: issues}
+	if now.Parents, err = s.edgeTargetsAt(ctx, liveRevision, model.RelParentChild, ids); err != nil {
 		return storage.CurrentState{}, err
 	}
-	if now.BlockedBy, err = s.edgeTargetsAt(ctx, liveRevision, model.RelBlockedBy, blocked); err != nil {
+	if now.BlockedBy, err = s.edgeTargetsAt(ctx, liveRevision, model.RelBlockedBy, ids); err != nil {
 		return storage.CurrentState{}, err
 	}
 	return now, nil

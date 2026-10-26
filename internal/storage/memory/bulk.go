@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -21,18 +22,27 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	now, err := e.currentState(storage.ReadOutIDs(specs))
+	if err != nil {
+		return storage.BulkApplyResult{}, err
+	}
+	merged, err := storage.MergeReadOut(specs, now)
+	if err != nil {
+		return storage.BulkApplyResult{}, err
+	}
 	existingTypes := map[string]model.IssueType{}
-	for _, id := range storage.BulkExistingRefs(specs) {
+	for _, id := range storage.BulkExistingRefs(merged) {
 		if issue, ok := e.issues[id]; ok {
 			existingTypes[id] = issue.issueType
 		}
 	}
-	file, err := storage.ParseBulkFile(specs, existingTypes)
+	file, err := storage.ParseBulkFile(merged, existingTypes)
 	if err != nil {
 		return storage.BulkApplyResult{}, err
 	}
 
 	return withBatch(e, func(result *storage.BulkApplyResult) error {
+		result.Kept = merged.Kept
 		batch := newBatch(len(specs))
 		for _, create := range file.Creates {
 			issue, err := e.createIssue(create.Input(batch.resolve(create.Parent), prefix, actor))
@@ -63,6 +73,41 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 		}
 		return nil
 	})
+}
+
+// currentState is the store as it stands for ids: each issue it still holds,
+// whole, with its parent set and its blocked-by set, each in id order as the
+// Dolt engine reads them. An id it no longer holds is absent.
+func (e *Engine) currentState(ids []string) (storage.CurrentState, error) {
+	pos := e.positions()
+	now := storage.CurrentState{Issues: map[string]model.Issue{}, Parents: map[string][]string{}, BlockedBy: map[string][]string{}}
+	for _, id := range ids {
+		rec, ok := e.issues[id]
+		if !ok {
+			continue
+		}
+		issue, err := e.hydrate(rec, pos)
+		if err != nil {
+			return storage.CurrentState{}, err
+		}
+		now.Issues[id] = issue
+	}
+	named := map[string]bool{}
+	for _, id := range ids {
+		named[id] = true
+	}
+	targets := map[model.RelationType]map[string][]string{model.RelParentChild: now.Parents, model.RelBlockedBy: now.BlockedBy}
+	for _, rel := range e.relations {
+		if out, ok := targets[rel.Type]; ok && named[rel.SrcID] {
+			out[rel.SrcID] = append(out[rel.SrcID], rel.DstID)
+		}
+	}
+	for _, out := range targets {
+		for _, dsts := range out {
+			slices.Sort(dsts)
+		}
+	}
+	return now, nil
 }
 
 // ImportTree creates a whole issue tree as one batch, returning the local-ID →

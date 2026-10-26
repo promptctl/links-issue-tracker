@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -256,20 +257,26 @@ func bulkUpdatePatch(doc BulkIssueSpec) (UpdateIssueInput, error) {
 //
 // It states no topic, which an update refuses, no rank, since `rank: top`
 // moves an issue rather than saying where it stands, and no reason, which
-// annotates an edit and so belongs to whoever makes one.
+// annotates an edit and so belongs to whoever makes one. Its Basis records
+// what it states as read, so importing it after other writers moved the issue
+// writes only what the file was edited to say (MergeReadOut).
 func BulkUpdateDocument(rel IssueRelations) BulkIssueSpec {
 	doc := BulkIssueSpec{ID: rel.Issue.ID}
+	basis := Basis{Fields: map[string]string{}, BlockedBy: make([]string, len(rel.BlockedBy))}
 	for _, field := range issueFields {
 		field.toBulk(rel.Issue, &doc)
+		basis.Fields[field.name] = FieldValue(field.encode(rel.Issue)).digest()
 	}
 	if rel.Parent != nil {
 		doc.Parent = &rel.Parent.ID
+		basis.Parent = rel.Parent.ID
 	}
-	blockedBy := make([]string, len(rel.BlockedBy))
 	for i, blocker := range rel.BlockedBy {
-		blockedBy[i] = blocker.ID
+		basis.BlockedBy[i] = blocker.ID
 	}
+	blockedBy := slices.Clone(basis.BlockedBy)
 	doc.BlockedBy = &blockedBy
+	doc.Basis = &basis
 	return doc
 }
 

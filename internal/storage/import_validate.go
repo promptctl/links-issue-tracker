@@ -49,9 +49,10 @@ func ParseImportTreeFile(specs []ImportTreeSpec) ([]FileCreate, error) {
 	return inWriteOrder(order, creates), nil
 }
 
-// ParseBulkFile gates a bulk file and returns it parsed.
-// existingTypes holds the type of each existing issue among
-// BulkExistingRefs(specs); an id naming no issue is absent.
+// ParseBulkFile gates a bulk file, its read-out documents merged onto the
+// store as it stands, and returns it parsed. existingTypes holds the type of
+// each existing issue among BulkExistingRefs(merged); an id naming no issue is
+// absent.
 //
 // An update document is a document of the graph, named by its id, as a create
 // is by its local_id: a create may sit under it and its own parent is an edge,
@@ -59,7 +60,8 @@ func ParseImportTreeFile(specs []ImportTreeSpec) ([]FileCreate, error) {
 // cycle the file states is refused here whatever kinds of document close it.
 // Its type is the one it is stored with, which is the type the reparent write
 // judges it by. [LAW:one-source-of-truth]
-func ParseBulkFile(specs []BulkIssueSpec, existingTypes map[string]model.IssueType) (BulkFile, error) {
+func ParseBulkFile(merged MergedFile, existingTypes map[string]model.IssueType) (BulkFile, error) {
+	specs := merged.specs
 	file, creates, err := parseBulkSpecs(specs)
 	if err != nil {
 		return BulkFile{}, err
@@ -108,9 +110,9 @@ func inWriteOrder(order []int, creates map[int]FileCreate) []FileCreate {
 // and the id of every update document that states a parent, which the file
 // places. A local_id among them names no existing issue, or is resolved to its
 // document first.
-func BulkExistingRefs(specs []BulkIssueSpec) []string {
-	refs := make([]string, 0, len(specs))
-	for _, spec := range specs {
+func BulkExistingRefs(merged MergedFile) []string {
+	refs := make([]string, 0, len(merged.specs))
+	for _, spec := range merged.specs {
 		if spec.Parent != nil && *spec.Parent != "" {
 			refs = append(refs, *spec.Parent)
 		}

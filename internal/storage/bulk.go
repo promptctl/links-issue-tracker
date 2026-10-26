@@ -54,6 +54,23 @@ type BulkIssueSpec struct {
 	// event; it does not apply to a create (there is no prior state to
 	// annotate a change against).
 	Reason string `yaml:"reason,omitempty"`
+	// Basis is what the document's issue held when `lit ls --format yaml`
+	// read it out, which the import merges the file against (MergeReadOut).
+	// A document with none, hand-written, states what to write.
+	Basis *Basis `yaml:"basis,omitempty"`
+}
+
+// Basis is a read-out document's record of its issue as it stood at the read,
+// for every slot the document states: each editable field by its name in
+// history's vocabulary, as the digest of its recorded value, so a long text is
+// not carried twice; the parent the document states, empty for none; and the
+// whole blocked-by set. It is what tells an edit the file makes from a value it
+// was merely read with, so a slot another writer moved since the read keeps
+// that writer's value.
+type Basis struct {
+	Fields    map[string]string `yaml:"fields"`
+	Parent    string            `yaml:"parent,omitempty"`
+	BlockedBy []string          `yaml:"blocked_by"`
 }
 
 // IDMapping records one created issue: Ref is the name the input file used
@@ -87,7 +104,9 @@ func NewIDMapping(localID, realID string) IDMapping {
 // update document moved, and FieldsHeld those whose fields already were what
 // the document states, each in the order they were applied; Ranked is the RankSet
 // the file's `rank: top` documents made, with no resolutions when the file
-// states no rank. A refused file writes nothing, so a refused BulkApply returns
+// states no rank; Kept is every slot a read-out document left as it was read
+// whose value another writer had moved since, which the import kept
+// (MergedFile.Kept). A refused file writes nothing, so a refused BulkApply returns
 // the zero result beside the error, and the caller's counts read zero because
 // nothing landed. [LAW:nothing-unseen]
 type BulkApplyResult struct {
@@ -101,6 +120,7 @@ type BulkApplyResult struct {
 	Updated       []string
 	FieldsHeld    []string
 	Ranked        RankSetResult
+	Kept          []Slot
 }
 
 // RecordUpdate is the account of one applied update document: updated when its

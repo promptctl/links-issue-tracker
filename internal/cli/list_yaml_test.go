@@ -74,3 +74,46 @@ func TestListYAMLOfNoIssuesPrintsNothing(t *testing.T) {
 		t.Errorf("ls --format yaml over no issues printed:\n%s", out)
 	}
 }
+
+// TestListYAMLKeepsWhatAnotherWriterChanged is the concurrent read-edit-write
+// round trip: between `lit ls --format yaml` and `lit import`, another writer
+// raises the issue's priority and adds a blocker, and the file edits only the
+// title. The import lands the title, keeps the other writer's priority and
+// edge, and says so on stdout and on its event. A second file read before
+// another writer moves the lane, editing the lane too, is refused as a write
+// conflict that names the way on and writes nothing.
+func TestListYAMLKeepsWhatAnotherWriterChanged(t *testing.T) {
+	isolateEvents(t)
+	dir := newInitTestRepo(t)
+	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", "local_id: epic\ntitle: epic\ntype: epic\ntopic: demo\n---\nlocal_id: other\ntitle: other\ntype: epic\ntopic: demo\n---\nlocal_id: issue\ntitle: issue\ntype: task\ntopic: demo\nparent: epic\n---\nlocal_id: blocker\ntitle: blocker\ntype: task\ntopic: demo\nparent: other\n"))
+	issue, blocker := importedID(t, seeded, "issue"), importedID(t, seeded, "blocker")
+
+	listed := runCLIInDir(t, dir, "ls", "--ids", issue, "--format", "yaml")
+	runCLIInDir(t, dir, "update", issue, "--priority", "urgent")
+	runCLIInDir(t, dir, "dep", "add", issue, "--blocked-by", blocker)
+	file := writeImportFile(t, "f.yaml", strings.Replace(listed, "title: issue\n", "title: issue, retitled\n", 1))
+
+	out := runCLIInDir(t, dir, "import", "--path", file)
+	if want := fmt.Sprintf("kept 2 values other writers changed since the file was read\n  %s priority\n  %s blocked-by %s\n", issue, issue, blocker); !strings.Contains(out, want) {
+		t.Errorf("the import output lacks %q:\n%s", want, out)
+	}
+	assertFacts(t, map[string]string{"import.updated": "1", "import.kept": "2", "import.conflicts": "0"})
+	shown := runCLIInDir(t, dir, "show", issue)
+	for _, want := range []string{"issue, retitled", "priority: urgent", blocker} {
+		if !strings.Contains(shown, want) {
+			t.Errorf("lit show %s after the import lacks %q:\n%s", issue, want, shown)
+		}
+	}
+
+	listed = runCLIInDir(t, dir, "ls", "--ids", issue, "--format", "yaml")
+	runCLIInDir(t, dir, "update", issue, "--lane", "their-lane")
+	conflicting := writeImportFile(t, "g.yaml", strings.Replace(listed, "lane: \"\"\n", "lane: our-lane\n", 1))
+	_, err := runCLIInDirAllowError(t, dir, "import", "--path", conflicting)
+	if err == nil || ExitCode(err) != ExitConflict || !strings.Contains(err.Error(), issue+" lane: it moved since the file was read") || !strings.Contains(err.Error(), "lit ls --ids") {
+		t.Fatalf("import over another writer's lane: error = %v (exit %d), want the write conflict naming the lane and the way on", err, ExitCode(err))
+	}
+	assertFacts(t, map[string]string{"import.conflicts": "1", "import.updated": "0"})
+	if shown := runCLIInDir(t, dir, "show", issue); !strings.Contains(shown, "their-lane") {
+		t.Errorf("lit show %s after the refused import lacks the other writer's lane:\n%s", issue, shown)
+	}
+}
