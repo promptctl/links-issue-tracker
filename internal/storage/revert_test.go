@@ -27,6 +27,9 @@ func fieldWrite(t *testing.T, write string, slot storage.Slot, from, to string) 
 	return delta
 }
 
+// standingA is a store that still holds a, the issue every slot here names.
+var standingA = map[string]bool{"a": true}
+
 func revertOK(t *testing.T, deltas []storage.WriteDelta, now storage.CurrentState) storage.Reverted {
 	t.Helper()
 	reverted, conflicts := storage.Revert(deltas, now)
@@ -40,7 +43,7 @@ func revertOK(t *testing.T, deltas []storage.WriteDelta, now storage.CurrentStat
 // document carries the undo's reason beside it.
 func TestRevertPutsAFieldBack(t *testing.T) {
 	delta := fieldWrite(t, "w1", titleSlot("a"), "old", "new")
-	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("new")}})
+	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("new")}})
 	if len(reverted.Documents) != 1 || reverted.Documents[0].Title == nil || *reverted.Documents[0].Title != "old" {
 		t.Fatalf("documents = %+v, want a's title stated as old", reverted.Documents)
 	}
@@ -80,7 +83,7 @@ func TestALongTextReadsAsItsHead(t *testing.T) {
 // would erase that write. Nothing is stated.
 func TestRevertRefusesASlotALaterWriteMoved(t *testing.T) {
 	delta := fieldWrite(t, "w1", titleSlot("a"), "old", "new")
-	reverted, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("later")}})
+	reverted, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("later")}})
 	if len(conflicts) != 1 || conflicts[0].Now != storage.FieldValue("later") || conflicts[0].Left != storage.FieldValue("new") {
 		t.Fatalf("conflicts = %v, want one naming new (left) and later (now)", conflicts)
 	}
@@ -94,7 +97,7 @@ func TestRevertRefusesASlotALaterWriteMoved(t *testing.T) {
 func TestRevertFoldsWritesNewestFirst(t *testing.T) {
 	older := fieldWrite(t, "w1", titleSlot("a"), "one", "two")
 	newer := fieldWrite(t, "w2", titleSlot("a"), "two", "three")
-	now := storage.CurrentState{Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("three")}}
+	now := storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("three")}}
 	reverted := revertOK(t, []storage.WriteDelta{newer, older}, now)
 	if got := *reverted.Documents[0].Title; got != "one" {
 		t.Errorf("title = %q, want one", got)
@@ -109,9 +112,36 @@ func TestRevertFoldsWritesNewestFirst(t *testing.T) {
 func TestRevertOfAWriteAndItsUndoStatesNothing(t *testing.T) {
 	write := fieldWrite(t, "w1", titleSlot("a"), "old", "new")
 	undo := fieldWrite(t, "w2", titleSlot("a"), "new", "old")
-	reverted := revertOK(t, []storage.WriteDelta{undo, write}, storage.CurrentState{Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("old")}})
+	reverted := revertOK(t, []storage.WriteDelta{undo, write}, storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("old")}})
 	if len(reverted.Documents) != 0 || len(reverted.Moves) != 0 {
 		t.Errorf("documents = %+v, moves = %v; want nothing", reverted.Documents, reverted.Moves)
+	}
+}
+
+// A slot whose issue a later write removed is a conflict, not a document that
+// names an issue no longer there: a removed issue reads as no value a write
+// could have left, even a field the write cleared.
+func TestRevertRefusesASlotOfAnIssueALaterWriteRemoved(t *testing.T) {
+	delta := fieldWrite(t, "w1", storage.Slot{Kind: storage.FieldSlot, Issue: "a", Name: "lane"}, "x", "")
+	_, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{})
+	if len(conflicts) != 1 || !strings.Contains(conflicts[0].String(), "is removed now") {
+		t.Fatalf("conflicts = %v, want one naming a removed", conflicts)
+	}
+}
+
+// A commit that holds a run of edits of one field recorded the run's net
+// move, first value to last, which is the move the store shows.
+func TestClassifyTakesARunOfEditsAsItsNetMove(t *testing.T) {
+	delta, refused := storage.Classify(storage.WriteRows{
+		Write:  "w1",
+		Fields: []storage.Move{{Slot: titleSlot("a"), From: storage.FieldValue("a"), To: storage.FieldValue("c")}},
+		Records: []model.IssueEvent{
+			{IssueID: "a", Changes: []model.FieldChange{{Field: "title", From: "a", To: "b"}}},
+			{IssueID: "a", Changes: []model.FieldChange{{Field: "title", From: "b", To: "c"}}},
+		},
+	})
+	if len(refused) > 0 || len(delta.Moves()) != 1 {
+		t.Fatalf("Classify = %v, refused %v, want the one net move", delta.Moves(), refused)
 	}
 }
 
@@ -124,7 +154,7 @@ func TestRevertPutsAParentBack(t *testing.T) {
 		if len(refused) > 0 {
 			t.Fatalf("Classify refused %v", refused)
 		}
-		reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Parents: map[string][]string{"a": {"epic-2"}}})
+		reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Parents: map[string][]string{"a": {"epic-2"}}})
 		want := strings.Join(before, "")
 		if doc := reverted.Documents[0]; doc.Parent == nil || *doc.Parent != want || doc.Reason != "" {
 			t.Errorf("before %v: document = %+v, want parent %q and no reason", before, doc, want)
@@ -137,7 +167,7 @@ func TestRevertPutsAParentBack(t *testing.T) {
 func TestRevertRefusesAChildWithTwoParentsNow(t *testing.T) {
 	slot := storage.Slot{Kind: storage.ParentSlot, Issue: "a"}
 	delta, _ := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue([]string{"e1"}), To: storage.ParentsValue([]string{"e2"})}}})
-	if _, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Parents: map[string][]string{"a": {"e2", "e3"}}}); len(conflicts) != 1 {
+	if _, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Parents: map[string][]string{"a": {"e2", "e3"}}}); len(conflicts) != 1 {
 		t.Errorf("conflicts = %v, want one", conflicts)
 	}
 }
@@ -156,7 +186,7 @@ func TestClassifyRefusesAWriteThatStartedFromTwoParents(t *testing.T) {
 func TestRevertKeepsAnEdgeALaterWriteAdded(t *testing.T) {
 	slot := storage.Slot{Kind: storage.BlockedBySlot, Issue: "a", Name: "x"}
 	delta, _ := storage.Classify(storage.WriteRows{Write: "w1", BlockedBy: []storage.Move{{Slot: slot, From: storage.EdgeValue(false), To: storage.EdgeValue(true)}}})
-	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{BlockedBy: map[string][]string{"a": {"x", "y"}}})
+	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, BlockedBy: map[string][]string{"a": {"x", "y"}}})
 	if doc := reverted.Documents[0]; doc.BlockedBy == nil || !reflect.DeepEqual(*doc.BlockedBy, []string{"y"}) {
 		t.Errorf("document = %+v, want blocked_by [y]", doc)
 	}
@@ -172,7 +202,7 @@ func TestClassifyRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 		want string
 	}{
 		{"a lifecycle write", storage.WriteRows{Records: []model.IssueEvent{{IssueID: "a", Action: "reopen"}}}, "`lit open`"},
-		{"a creation", storage.WriteRows{Records: []model.IssueEvent{{IssueID: "a", Action: model.ActionCreated}}}, `"created"`},
+		{"a creation", storage.WriteRows{Records: []model.IssueEvent{{IssueID: "a", Action: model.ActionCreated}}}, `a: a "created" event`},
 		{"a field moved with no record", storage.WriteRows{Fields: []storage.Move{{Slot: titleSlot("a"), From: storage.FieldValue("x"), To: storage.FieldValue("y")}}}, "no field-change record"},
 		{"a record the store did not move", storage.WriteRows{Records: []model.IssueEvent{{IssueID: "a", Changes: []model.FieldChange{{Field: "lane", From: "", To: "x"}}}}}, "sync replay"},
 		{"a record the store moved otherwise", storage.WriteRows{
@@ -191,5 +221,14 @@ func TestClassifyRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 				t.Errorf("a refused write classified moves %v", delta.Moves())
 			}
 		})
+	}
+}
+
+// Only a lifecycle event is reversed through lifecycle verbs; an event of any
+// other action names no reverse rather than a wrong one.
+func TestClassifyNamesNoReverseForAnEventOutsideLifecycle(t *testing.T) {
+	_, refused := storage.Classify(storage.WriteRows{Write: "w1", Records: []model.IssueEvent{{IssueID: "a", Action: model.ActionCreated}}})
+	if len(refused) != 1 || refused[0].Reverse != "" {
+		t.Errorf("refused = %v, want one with no reverse", refused)
 	}
 }

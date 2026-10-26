@@ -89,7 +89,7 @@ func undoRevertLeaf() appLeaf {
 	resolveActor := registerActor(fs)
 	const usage = "usage: lit undo revert --writes <id,id,...>"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		ids, err := parseIDSet(*writesFlag)
+		ids, err := parseWriteSet(*writesFlag)
 		if err != nil {
 			return err
 		}

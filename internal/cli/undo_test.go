@@ -113,3 +113,13 @@ func TestUndoRevertAnswersOnItsReasons(t *testing.T) {
 		})
 	}
 }
+
+// A --writes slot with no write id is refused in the flag's own terms.
+func TestUndoRevertRefusesAnEmptyWriteSlotByItsFlag(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	_, err := runCLIInDirAllowError(t, repo, "undo", "revert", "--writes", "abc,,def")
+	if err == nil || !strings.Contains(err.Error(), "--writes needs a write id") {
+		t.Fatalf("lit undo revert --writes abc,,def error = %v, want the --writes refusal", err)
+	}
+}

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 )
 
 // Undo reverts writes after the fact, from the history the store already
@@ -59,8 +58,14 @@ func (s Slot) String() string {
 // are unexported so the constructors below are the only spellings.
 // [LAW:types-are-the-program]
 type SlotValue struct {
-	text string
+	text    string
+	removed bool
 }
+
+// removedValue is every slot of an issue the store no longer holds. It equals
+// no value a write could have left a slot at, so a slot whose issue a later
+// write removed is a conflict like any other slot a later write moved.
+var removedValue = SlotValue{removed: true}
 
 // FieldValue is a field's value as a change row records it.
 func FieldValue(recorded string) SlotValue { return SlotValue{text: recorded} }
@@ -91,6 +96,8 @@ func (v SlotValue) parents() []string {
 // the shape its row declares, so a long text reads as its head, not whole.
 func (v SlotValue) Display(slot Slot) string {
 	switch {
+	case v.removed:
+		return "removed"
 	case slot.Kind == FieldSlot:
 		return issueFieldText(slot.Name).Show(v.text)
 	case slot.Kind == ParentSlot && v.text == "":
@@ -169,17 +176,24 @@ func Classify(rows WriteRows) (WriteDelta, []Unrevertable) {
 	refuse := func(what, reverse string) {
 		refused = append(refused, Unrevertable{Write: rows.Write, What: what, Reverse: reverse})
 	}
+	// What the write recorded of a slot is the net of its edits of it, in
+	// event order: a commit that holds a run of edits of one field moved it
+	// from the first edit's value to the last's.
 	recorded := map[Slot]model.FieldChange{}
 	for _, event := range rows.Records {
 		if event.Action != "" {
 			// Lifecycle and claims are their verbs', and claims are derived
 			// from these events, so a revert of the row alone would leave the
 			// lane held by an event it never undid.
-			refuse(actionWrite(event), "lifecycle moves only through its verbs")
+			refuse(actionWrite(event))
 			continue
 		}
 		for _, change := range event.Changes {
-			recorded[Slot{Kind: FieldSlot, Issue: event.IssueID, Name: change.Field}] = change
+			slot := Slot{Kind: FieldSlot, Issue: event.IssueID, Name: change.Field}
+			if earlier, ok := recorded[slot]; ok {
+				change.From = earlier.From
+			}
+			recorded[slot] = change
 		}
 	}
 	moved := map[Slot]Move{}
@@ -215,27 +229,32 @@ func Classify(rows WriteRows) (WriteDelta, []Unrevertable) {
 	return WriteDelta{write: rows.Write, moves: moves}, nil
 }
 
-// actionWrite names the write an event with an action records: a lifecycle
-// action by the verb a caller types (lifecycle.ParseAction is the one gate to
-// that set), and any other action, a creation among them, as recorded.
-func actionWrite(event model.IssueEvent) string {
-	if parsed, err := lifecycle.ParseAction(event.Action); err == nil {
-		return fmt.Sprintf("%s: a `lit %s` write", event.IssueID, parsed.Verb())
+// actionWrite names the write an event with an action records, and how to
+// reverse it: a lifecycle action by the verb a caller types
+// (model.ParseAction is the one gate to that set), which only its verbs
+// reverse, and any other action as recorded, with no reverse to name.
+func actionWrite(event model.IssueEvent) (what, reverse string) {
+	if parsed, err := model.ParseAction(event.Action); err == nil {
+		return fmt.Sprintf("%s: a `lit %s` write", event.IssueID, parsed.Verb()), "lifecycle moves only through its verbs"
 	}
-	return fmt.Sprintf("%s: a %q event", event.IssueID, string(event.Action))
+	return fmt.Sprintf("%s: a %q event", event.IssueID, string(event.Action)), ""
 }
 
 // CurrentState is the store as it stands, for exactly the slots the writes
-// being reverted moved: each field's value, each child's parent set, and the
-// whole blocked-by set of each issue an edge slot names, since a document
-// states that set whole.
+// being reverted moved: which of their issues it still holds, each field's
+// value, each child's parent set, and the whole blocked-by set of each issue
+// an edge slot names, since a document states that set whole.
 type CurrentState struct {
+	Standing  map[string]bool
 	Fields    map[Slot]SlotValue
 	Parents   map[string][]string
 	BlockedBy map[string][]string
 }
 
 func (c CurrentState) value(slot Slot) SlotValue {
+	if !c.Standing[slot.Issue] {
+		return removedValue
+	}
 	switch slot.Kind {
 	case FieldSlot:
 		return c.Fields[slot]
@@ -373,7 +392,7 @@ func fieldOrder(s Slot) int {
 	if s.Kind != FieldSlot {
 		return 0
 	}
-	return slices.Index(IssueFieldNames(), s.Name)
+	return slices.IndexFunc(issueFields, func(field issueField) bool { return field.name == s.Name })
 }
 
 func sortedSlots(slots []Slot) []Slot {

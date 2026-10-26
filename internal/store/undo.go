@@ -51,19 +51,17 @@ func (r revision) table(name string) string {
 
 // issueFieldsAt reads each of ids at r as its row's issue with no lifecycle
 // (rowFields), beside its row's lifecycle columns. An id absent at r is absent
-// from both maps.
+// from both maps. A rank write re-keys thousands of ids, so they are an idSet.
 func (s *Store) issueFieldsAt(ctx context.Context, r revision, ids []string) (map[string]model.Issue, map[string]model.StatusView, error) {
 	issues := map[string]model.Issue{}
 	statuses := map[string]model.StatusView{}
-	if len(ids) == 0 {
-		return issues, statuses, nil
-	}
-	rows, err := s.scanIssueRows(ctx, fmt.Sprintf(`SELECT %s FROM %s WHERE id IN (%s)`, issueColumnsBare, r.table("issues"), placeholders(len(ids))), stringArgsToAny(ids))
+	named, arg := newIDSet(ids).rows("named")
+	rows, err := s.scanIssueRows(ctx, `SELECT `+issueColumnsQualified+` FROM `+named+` JOIN `+r.table("issues")+` i ON i.id = named.id`, []any{arg})
 	if err != nil {
 		return nil, nil, err
 	}
 	labels := map[string][]string{}
-	if err := s.queryRows(ctx, fmt.Sprintf(`SELECT issue_id, label FROM %s WHERE issue_id IN (%s) ORDER BY label`, r.table("labels"), placeholders(len(ids))), stringArgsToAny(ids), func(rows *sql.Rows) error {
+	if err := s.queryRows(ctx, `SELECT l.issue_id, l.label FROM `+named+` JOIN `+r.table("labels")+` l ON l.issue_id = named.id ORDER BY l.label`, []any{arg}, func(rows *sql.Rows) error {
 		var issue, label string
 		if err := rows.Scan(&issue, &label); err != nil {
 			return err
@@ -84,11 +82,8 @@ func (s *Store) issueFieldsAt(ctx context.Context, r revision, ids []string) (ma
 // at, at r.
 func (s *Store) edgeTargetsAt(ctx context.Context, r revision, relType model.RelationType, srcs []string) (map[string][]string, error) {
 	targets := map[string][]string{}
-	if len(srcs) == 0 {
-		return targets, nil
-	}
-	args := append([]any{string(relType)}, stringArgsToAny(srcs)...)
-	err := s.queryRows(ctx, fmt.Sprintf(`SELECT src_id, dst_id FROM %s WHERE type = ? AND src_id IN (%s) ORDER BY dst_id`, r.table("relations"), placeholders(len(srcs))), args, func(rows *sql.Rows) error {
+	named, arg := newIDSet(srcs).rows("named")
+	err := s.queryRows(ctx, `SELECT e.src_id, e.dst_id FROM `+named+` JOIN `+r.table("relations")+` e ON e.src_id = named.id WHERE e.type = ? ORDER BY e.dst_id`, []any{arg, string(relType)}, func(rows *sql.Rows) error {
 		var src, dst string
 		if err := rows.Scan(&src, &dst); err != nil {
 			return err
@@ -153,7 +148,8 @@ func (s *Store) recentWrites(ctx context.Context, last int) ([]write, error) {
 // the window has been cut away, and a sync replay gives local writes new ids.
 func (s *Store) namedWrites(ctx context.Context, ids []string) ([]write, error) {
 	found := map[string]write{}
-	err := s.queryRows(ctx, fmt.Sprintf(`SELECT %s FROM dolt_log WHERE commit_hash IN (%s)`, writeLogColumns, placeholders(len(ids))), stringArgsToAny(ids), func(rows *sql.Rows) error {
+	named, arg := newIDSet(ids).rows("named")
+	err := s.queryRows(ctx, `SELECT `+writeLogColumns+` FROM `+named+` JOIN dolt_log ON commit_hash = named.id`, []any{arg}, func(rows *sql.Rows) error {
 		w, err := scanWrite(rows)
 		found[w.id] = w
 		return err
@@ -293,7 +289,12 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 	if err != nil {
 		return rows, err
 	}
+	// made is every issue the write created or removed. Its labels, edges, and
+	// events are that making or removal, reported once where its row is read,
+	// not moves of their own.
+	made := map[string]bool{}
 	var fieldIDs, children []string
+	var events, changes []diffKey
 	for _, table := range tables {
 		switch table {
 		case "issues":
@@ -305,8 +306,10 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 				switch {
 				case key.added():
 					outside(fmt.Sprintf("%s created", key.to[0]), "`lit delete` removes a ticket")
+					made[key.to[0]] = true
 				case key.removed():
 					outside(fmt.Sprintf("%s removed", key.from[0]), "")
+					made[key.from[0]] = true
 				default:
 					fieldIDs = append(fieldIDs, key.to[0])
 				}
@@ -343,26 +346,45 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 				}
 			}
 		case "issue_events":
-			keys, err := s.changedKeys(ctx, before, after, table, "id")
-			if err != nil {
-				return rows, err
-			}
-			var added []string
-			for _, key := range keys {
-				if !key.added() {
-					outside(fmt.Sprintf("history event %s rewritten or removed", slices.Concat(key.from, key.to)[0]), "")
-					continue
-				}
-				added = append(added, key.to[0])
-			}
-			if rows.Records, err = s.eventsAt(ctx, after, added); err != nil {
+			if events, err = s.changedKeys(ctx, before, after, table, "id", "issue_id"); err != nil {
 				return rows, err
 			}
 		case "issue_event_changes":
-			// An event's change rows are read with the event they belong to.
+			if changes, err = s.changedKeys(ctx, before, after, table, "event_id", "field"); err != nil {
+				return rows, err
+			}
 		default:
 			outside(fmt.Sprintf("the %s table changed", table), "")
 		}
+	}
+	ofMade := func(issue string) bool { return made[issue] }
+	fieldIDs = slices.DeleteFunc(fieldIDs, ofMade)
+	children = slices.DeleteFunc(children, ofMade)
+	rows.BlockedBy = slices.DeleteFunc(rows.BlockedBy, func(move storage.Move) bool { return made[move.Slot.Issue] })
+	// A change row moves with its event's row: read with an event the write
+	// added, or gone with one it removed. One whose event row the write left
+	// alone rewrote that event's history.
+	moved := map[string]bool{}
+	var added []string
+	for _, key := range events {
+		event := slices.Concat(key.from, key.to)
+		moved[event[0]] = true
+		switch {
+		case made[event[1]]:
+			// Its issue's making or removal, already reported.
+		case key.added():
+			added = append(added, event[0])
+		default:
+			outside(fmt.Sprintf("history event %s rewritten or removed", event[0]), "")
+		}
+	}
+	for _, key := range changes {
+		if change := slices.Concat(key.from, key.to); !moved[change[0]] {
+			outside(fmt.Sprintf("history event %s: its %s change rewritten", change[0], change[1]), "")
+		}
+	}
+	if rows.Records, err = s.eventsAt(ctx, after, added); err != nil {
+		return rows, err
 	}
 	if err := s.readFieldMoves(ctx, before, after, uniqueSorted(fieldIDs), &rows, outside); err != nil {
 		return rows, err
@@ -442,11 +464,9 @@ func (s *Store) readParentMoves(ctx context.Context, before, after revision, chi
 // eventsAt reads the events ids at r with their change rows, through
 // queryEvents, the one reader of events.
 func (s *Store) eventsAt(ctx context.Context, r revision, ids []string) ([]model.IssueEvent, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	selection := `SELECT ` + eventColumns + `, c.field, c.from_value, c.to_value FROM ` + r.table("issue_events") + ` e LEFT JOIN ` + r.table("issue_event_changes") + ` c ON c.event_id = e.id WHERE e.id IN (` + placeholders(len(ids)) + `)`
-	events, err := s.queryEvents(ctx, selection, stringArgsToAny(ids)...)
+	named, arg := newIDSet(ids).rows("named")
+	selection := `SELECT ` + eventColumns + `, c.field, c.from_value, c.to_value FROM ` + named + ` JOIN ` + r.table("issue_events") + ` e ON e.id = named.id LEFT JOIN ` + r.table("issue_event_changes") + ` c ON c.event_id = e.id`
+	events, err := s.queryEvents(ctx, selection, arg)
 	if err != nil {
 		return nil, fmt.Errorf("read the events the write added: %w", err)
 	}
@@ -558,14 +578,14 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 }
 
 // currentState reads the store as it stands for exactly the slots deltas
-// moved, through the same readers that read each side of a write.
+// moved, through the same readers that read each side of a write. Every issue
+// a slot names is read, so an issue a later write removed is known removed.
 func (s *Store) currentState(ctx context.Context, deltas []storage.WriteDelta) (storage.CurrentState, error) {
-	var fieldIDs, children, blocked []string
+	var named, children, blocked []string
 	for _, delta := range deltas {
 		for _, move := range delta.Moves() {
+			named = append(named, move.Slot.Issue)
 			switch move.Slot.Kind {
-			case storage.FieldSlot:
-				fieldIDs = append(fieldIDs, move.Slot.Issue)
 			case storage.ParentSlot:
 				children = append(children, move.Slot.Issue)
 			case storage.BlockedBySlot:
@@ -573,12 +593,13 @@ func (s *Store) currentState(ctx context.Context, deltas []storage.WriteDelta) (
 			}
 		}
 	}
-	issues, _, err := s.issueFieldsAt(ctx, liveRevision, uniqueSorted(fieldIDs))
+	issues, _, err := s.issueFieldsAt(ctx, liveRevision, uniqueSorted(named))
 	if err != nil {
 		return storage.CurrentState{}, err
 	}
-	now := storage.CurrentState{Fields: map[storage.Slot]storage.SlotValue{}}
+	now := storage.CurrentState{Standing: map[string]bool{}, Fields: map[storage.Slot]storage.SlotValue{}}
 	for id, issue := range issues {
+		now.Standing[id] = true
 		for name, value := range storage.IssueFieldValues(issue) {
 			now.Fields[storage.Slot{Kind: storage.FieldSlot, Issue: id, Name: name}] = storage.FieldValue(value)
 		}
@@ -610,4 +631,3 @@ func (s *Store) commitsAbove(ctx context.Context, from string) ([]string, error)
 }
 
 var _ storage.Reverter = (*Store)(nil)
-

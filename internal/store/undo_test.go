@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"slices"
@@ -195,6 +196,63 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 		if headWrite(t, st) != head {
 			t.Errorf("a refused undo of %s wrote a commit", tc.want)
 		}
+	}
+}
+
+// A write that makes or removes a ticket lists that one fact: the ticket's
+// labels, edges, and events are its making or removal, not moves of their own
+// or refusals beside it.
+func TestListWritesNamesAMadeOrRemovedTicketOnce(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newUndoStore(t)
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: "doomed", ParentID: epic.ID, Labels: []string{"x"}})
+	created := headWrite(t, st)
+	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: doomed.ID, Actor: "ada"}); err != nil {
+		t.Fatalf("Purge() error = %v", err)
+	}
+	listed, err := st.ListWrites(ctx, 2)
+	if err != nil {
+		t.Fatalf("ListWrites() error = %v", err)
+	}
+	// A purge also writes its own record, which is a fact of its own.
+	for i, want := range [][]string{{doomed.ID + " removed", "the purges table changed"}, {doomed.ID + " created"}} {
+		w := listed[i]
+		var what []string
+		for _, u := range w.Unrevertable {
+			what = append(what, u.What)
+		}
+		if len(w.Moves) != 0 || !slices.Equal(what, want) {
+			t.Errorf("write %s lists moves %v and %q, want no moves and only %q", w.ID, w.Moves, what, want)
+		}
+	}
+	if listed[1].ID != created {
+		t.Errorf("listed %s second, want the creation %s", listed[1].ID, created)
+	}
+}
+
+// A write that rewrites the change rows of an event it did not add moved
+// history, and lists it, rather than reading as a write that moved nothing.
+func TestListWritesNamesAnEventChangeRewritten(t *testing.T) {
+	ctx := context.Background()
+	st, _ := newUndoStore(t)
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: "before", IssueType: "epic"})
+	title := "after"
+	if _, err := st.Apply(ctx, task.ID, storage.Change{Actor: "editor", Fields: storage.UpdateIssueInput{Title: &title}}); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if err := st.withMutation(ctx, "rewrite history", func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE issue_event_changes SET to_value = 'tampered' WHERE field = 'title' AND to_value = 'after'`)
+		return err
+	}); err != nil {
+		t.Fatalf("rewrite history: %v", err)
+	}
+	listed, err := st.ListWrites(ctx, 1)
+	if err != nil {
+		t.Fatalf("ListWrites() error = %v", err)
+	}
+	if len(listed[0].Unrevertable) != 1 || !strings.Contains(listed[0].Unrevertable[0].What, "its title change rewritten") {
+		t.Errorf("listed = %+v, want the rewritten change named", listed[0])
 	}
 }
 

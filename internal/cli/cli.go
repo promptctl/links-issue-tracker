@@ -777,6 +777,10 @@ func parseIDSet(raw []string) ([]string, error) {
 	return storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", raw...)
 }
 
+func parseWriteSet(raw []string) ([]string, error) {
+	return storage.ParseNames("--writes needs a write id in every slot, e.g. --writes <write-id>", raw...)
+}
+
 func parseAssigneeSet(raw []string) ([]string, error) {
 	return storage.ParseNames("--assignee needs a user in every slot, e.g. --assignee <user>", raw...)
 }
