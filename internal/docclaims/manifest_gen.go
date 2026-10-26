@@ -432,6 +432,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "an unknown duration", Src: "an unknown duration"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "another automatic receive holds the receive lock; it fetches what this one would have", Src: "another automatic receive holds the receive lock; it fetches what this one would have"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "automatic receive found the remote unmoved since the last receive; nothing fetched", Src: "automatic receive found the remote unmoved since the last receive; nothing fetched"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "backup create", Src: "backup create"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "backup restore", Src: "backup restore"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "build: dev build (build date unknown)", Src: "build: dev build (build date unknown)"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "cause (backend detail, for diagnosis only — the steps above are the fix):", Src: "cause (backend detail, for diagnosis only — the steps above are the fix):"},

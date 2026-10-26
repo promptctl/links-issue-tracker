@@ -3354,11 +3354,11 @@ Three write surfaces consume `Store.Export`:
 
 **(b) Backup snapshots** — `internal/backup/backup.go`. `Create(storageDir, export)`:
 - directory `filepath.Join(storageDir, "backups")`, created with mode `0o755`.
-- filename `time.Now().UTC().Format("20060102-150405.000000000") + ".json"` → e.g. `20260827-142530.123456789.json`.
+- filename `syncfile.ContentHash(export) + ".json"`: a snapshot is named by its content, `exported_at` left out, so a take of content the set already holds replaces the snapshot of that name, which becomes the newest, and the set holds each content once; `Taken.Refreshed` says whether the name already existed.
 - written via `syncfile.WriteAtomic`.
-- returns `Snapshot{Path, Name, Created (mtime UTC), Size}` with tags `json:"path"`, `"name"`, `"created"`, `"size"`.
+- returns `Taken{Snapshot, Refreshed}`, `Snapshot{Path, Name, Created (mtime UTC), Size}` with tags `json:"path"`, `"name"`, `"created"`, `"size"`.
 - `List` reads that dir, skips directories and any entry not ending in `.json`; a missing dir returns `[]Snapshot{}` and no error.
-- `Prune(storageDir, keep)` errors on `keep <= 0` (test `internal/backup/backup_test.go`); `backupCreateLeaf` defaults `--keep` to `20` (`internal/cli/backup.go`), and `restoreFromExportPath` hardcodes `backup.Prune(dir, 20)` (`cli/backup.go`).
+- `Prune(storageDir, keep)` errors on `keep <= 0` (test `internal/backup/backup_test.go`); `backupCreateLeaf` defaults `--keep` to `backup.Budget` (20), and the restore prunes to it (`internal/cli/backup.go`).
 
 **(c) Sync file** — `internal/syncfile/syncfile.go`. `WriteAtomic(path, export)`:
 - `marshalExport` = `json.MarshalIndent(export, "", "  ")` **plus a trailing `'\n'`** (`syncfile.go`).
@@ -3367,7 +3367,7 @@ Three write surfaces consume `Store.Export`:
 
 There is **no manifest or index file**: `backup.List` derives the listing by reading the directory (`backup.go`).
 
-`lit backup list` prints `"%s %d %s\n"` = name, size, path (`cli/backup.go`). `lit backup create` prints `"%s %s\n"` = name, path (`cli/backup.go`).
+`lit backup list` prints `"%s %s %d %s\n"` = name, created (mtime, RFC3339), size, path (`cli/backup.go`). `lit backup create` prints `"%s %s\n"` = name, path (`cli/backup.go`).
 
 ---
 
@@ -3594,7 +3594,7 @@ Plan reviews (`insertPlanReviewTx`, `plan_review.go`): `id, issue_id, plan_diges
 
 ### 3.5 The surrounding CLI restore flow
 
-`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire the `storage.Import.Of(ap.Store)` capability up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `guardRestore(ws, localExport, force)` gives the verdict the outcome carries — `forced` (the digest is not read), `unrecorded` (no `<StorageDir>/restore.digest`), `unchanged` (`syncfile.ContentHash(localExport)` equals the recorded digest), or `changed`, which returns `RestoreOverwriteError{}` (`errors.go`; reason `restore_would_overwrite`, exit 5) (`backup.go`); `backup.Create` a pre-restore snapshot, whose path the outcome carries; `backup.Prune(dir, 20)`; `replacement := importer.ReplaceFromExport` (its `Removed` read inside the replace's transaction, `removedBy` in `internal/store/import_export.go`) whose result the outcome carries as a non-nil `*storage.Replacement`; re-`Export`; `syncfile.ContentHash(restoredExport)` written to `<StorageDir>/restore.digest` through `writeMarkerAtomic`; return the outcome (the verdict, the replacement, and the pre-restore snapshot path). `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `restore_guard` when the verdict was reached, and, only when the replace committed, `removed`, `removed_ids`, `unlooped`, `unlooped_cuts`, `rehomed`, `rehomed_moves`, `rekeyed`, `rekeyed_moves` (`replacementMetadata`, `internal/cli/restore_removed.go`, which calls `landingMetadata`). The leaf prints `restored <path>` when every step finished, then, when the replacement is non-nil, `writeReplacement` (`writeRemoved`, then `writeLanding(stdout, "the backup", landing)`) whether or not the restore finished.
+`restoreFromExportPath` (`internal/cli/backup.go`), in order: acquire the `storage.Import.Of(ap.Store)` capability up front; `syncfile.Read(restorePath)`; `ap.Store.Export(ctx)` for the local state; `guardRestore(ws, localExport, force)` gives the verdict the outcome carries — `forced` (the digest is not read), `unrecorded` (no `<StorageDir>/restore.digest`), `unchanged` (`syncfile.ContentHash(localExport)` equals the recorded digest), or `changed`, which returns `RestoreOverwriteError{}` (`errors.go`; reason `restore_would_overwrite`, exit 5) (`backup.go`); `takeBackup` (`backup.Create` a pre-restore snapshot, whose path the outcome carries, then `backup.Prune(dir, backup.Budget)`); `replacement := importer.ReplaceFromExport` (its `Removed` read inside the replace's transaction, `removedBy` in `internal/store/import_export.go`) whose result the outcome carries as a non-nil `*storage.Replacement`; re-`Export`; `syncfile.ContentHash(restoredExport)` written to `<StorageDir>/restore.digest` through `writeMarkerAtomic`; return the outcome (the verdict, the replacement, and the pre-restore snapshot path). `restoreFromExportPath` wraps that sequence (`restoreFromExport`) and, on the way out whatever the outcome, records one sync trace record: `recordSyncCommandTrace(ws, "lit backup restore", "restored", err, metadata)` with metadata `path`, `restore_guard` when the verdict was reached, and, only when the replace committed, `removed`, `removed_ids`, `unlooped`, `unlooped_cuts`, `rehomed`, `rehomed_moves`, `rekeyed`, `rekeyed_moves` (`replacementMetadata`, `internal/cli/restore_removed.go`, which calls `landingMetadata`). The leaf prints `restored <path>` when every step finished, then, when the replacement is non-nil, `writeReplacement` (`writeRemoved`, then `writeLanding(stdout, "the backup", landing)`) whether or not the restore finished.
 
 
 Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <export.json>) [--force]"` (`backup.go`); passing both → that string + `" — --latest and --path are mutually exclusive"` (`backup.go`); `--latest` with no snapshots → `errors.New("no backups available")` (`backup.go`).
@@ -3946,11 +3946,11 @@ When the file states a parent on an update, `reparented %d issues` and `%d issue
 | bulk create priority default | `model.PriorityNormal` (0) | `import_bulk.go` |
 | backup dir | `<StorageDir>/backups` | `internal/backup/backup.go` |
 | restore digest | `<StorageDir>/restore.digest` | `internal/cli/backup.go` |
-| backup filename format | `20060102-150405.000000000` + `.json` | `internal/backup/backup.go` |
+| backup filename format | `syncfile.ContentHash` (64 hex) + `.json` | `internal/backup/backup.go` |
 | backup dir mode | `0o755` | `internal/backup/backup.go` |
 | syncfile temp pattern | `.links-sync-*.json` | `internal/syncfile/syncfile.go` |
 | JSON indent (export/stdout, syncfile) | `"", "  "` (two spaces) | `cli.go`, `syncfile.go` |
-| default `--keep` for backup create / restore prune | `20` / `20` | `cli/backup.go` |
+| default `--keep` for backup create / restore prune | `backup.Budget` (20) | `internal/backup/backup.go` |
 
 ## 7. Cross-cutting error-message index for this slice
 

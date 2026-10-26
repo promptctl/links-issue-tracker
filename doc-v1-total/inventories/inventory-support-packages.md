@@ -72,14 +72,15 @@ above `internal/store` that names the Dolt engine's construction surface (packag
   return type is `storage.Store`; callers reach optional capabilities via
   `storage.<Cap>.Of` on the returned value.
 
-## `internal/backup` (`backup.go`, 102 lines)
+## `internal/backup` (`backup.go`, 136 lines)
 
-Timestamped JSON export snapshots under `<storageDir>/backups/`.
+JSON export snapshots under `<storageDir>/backups/`, named by content digest.
 
 - `Snapshot{Path, Name, Created, Size}` with JSON tags `path/name/created/size`
   (`backup.go`).
-- `Create(storageDir, export)` (`backup.go`): ensures `<storageDir>/backups`
-  (`0o755`); filename is `time.Now().UTC().Format("20060102-150405.000000000") + ".json"`;
+- `Budget = 20`: the `lit backup create --keep` default and the restore's prune.
+- `Create(storageDir, export) (Taken, error)` (`backup.go`): ensures `<storageDir>/backups`
+  (`0o755`); filename is `syncfile.ContentHash(export) + ".json"`: a snapshot is named by its content, `exported_at` left out, so a take of content the set already holds replaces the snapshot of that name, which becomes the newest, and the set holds each content once; `Taken.Refreshed` says whether the name already existed;
   writes via `syncfile.WriteAtomic` (same indented-JSON format and atomicity as sync
   files); stats the result and returns `Created` = file mtime (UTC), `Size` in bytes.
 - `List(storageDir)` (`backup.go`): missing backups dir → empty list, no error;
@@ -91,4 +92,5 @@ Timestamped JSON export snapshots under `<storageDir>/backups/`.
 - `Latest(storageDir)` (`backup.go`): newest snapshot or `nil` when none exist;
   never an error for an empty/missing dir.
 - Selection is mtime-based throughout: `List`/`Prune`/`Latest` order by file
-  modification time, not by parsing the timestamp in the filename.
+  modification time; a name carries no time. A snapshot an older lit named by its
+  time (`20060102-150405.000000000.json`) is listed, restorable and pruned like any.
