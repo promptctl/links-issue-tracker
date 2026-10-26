@@ -117,7 +117,7 @@ func recordRevert(ctx context.Context, result storage.RevertResult, err error) {
 	// A refusal of the other kind, or none, leaves its value zero: a count
 	// of none, which is the fact.
 	var refused storage.RevertRefusedError
-	var conflicted storage.RevertConflictError
+	var conflicted storage.ConflictError
 	errors.As(err, &refused)
 	errors.As(err, &conflicted)
 	telemetry.Set(ctx, "undo.unrevertable", len(refused.Unrevertable))

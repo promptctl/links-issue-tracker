@@ -28,7 +28,12 @@ func fieldWrite(t *testing.T, write string, slot storage.Slot, from, to string) 
 }
 
 // standingA is a store that still holds a, the issue every slot here names.
-var standingA = map[string]bool{"a": true}
+var standingA = map[string]model.Issue{"a": {ID: "a"}}
+
+// titledA is a store that holds a, titled title.
+func titledA(title string) map[string]model.Issue {
+	return map[string]model.Issue{"a": {ID: "a", Title: title}}
+}
 
 func revertOK(t *testing.T, deltas []storage.WriteDelta, now storage.CurrentState) storage.Reverted {
 	t.Helper()
@@ -43,7 +48,7 @@ func revertOK(t *testing.T, deltas []storage.WriteDelta, now storage.CurrentStat
 // document carries the undo's reason beside it.
 func TestRevertPutsAFieldBack(t *testing.T) {
 	delta := fieldWrite(t, "w1", titleSlot("a"), "old", "new")
-	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("new")}})
+	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Issues: titledA("new")})
 	if len(reverted.Documents) != 1 || reverted.Documents[0].Title == nil || *reverted.Documents[0].Title != "old" {
 		t.Fatalf("documents = %+v, want a's title stated as old", reverted.Documents)
 	}
@@ -62,7 +67,7 @@ func TestALongTextReadsAsItsHead(t *testing.T) {
 	if got, want := move.String(), `a plan: "old plan old plan old plan old plan old " (450 characters) → "new plan new plan new plan new plan new " (540 characters)`; got != want {
 		t.Errorf("move = %s, want %s", got, want)
 	}
-	conflict := storage.Conflict{Write: "w1", Slot: plan, Left: storage.FieldValue(is), Now: storage.FieldValue("later")}
+	conflict := storage.Conflict{Slot: plan, Now: storage.FieldValue("later"), Since: storage.LeftByWrite{Write: "w1", Left: storage.FieldValue(is)}}
 	if got := conflict.String(); strings.Contains(got, is) || !strings.Contains(got, `"later" (5 characters)`) {
 		t.Errorf("conflict = %s, want each plan as its head and length", got)
 	}
@@ -83,8 +88,8 @@ func TestALongTextReadsAsItsHead(t *testing.T) {
 // would erase that write. Nothing is stated.
 func TestRevertRefusesASlotALaterWriteMoved(t *testing.T) {
 	delta := fieldWrite(t, "w1", titleSlot("a"), "old", "new")
-	reverted, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("later")}})
-	if len(conflicts) != 1 || conflicts[0].Now != storage.FieldValue("later") || conflicts[0].Left != storage.FieldValue("new") {
+	reverted, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Issues: titledA("later")})
+	if len(conflicts) != 1 || conflicts[0].Now != storage.FieldValue("later") || conflicts[0].Since != (storage.LeftByWrite{Write: "w1", Left: storage.FieldValue("new")}) {
 		t.Fatalf("conflicts = %v, want one naming new (left) and later (now)", conflicts)
 	}
 	if len(reverted.Documents) != 0 {
@@ -97,7 +102,7 @@ func TestRevertRefusesASlotALaterWriteMoved(t *testing.T) {
 func TestRevertFoldsWritesNewestFirst(t *testing.T) {
 	older := fieldWrite(t, "w1", titleSlot("a"), "one", "two")
 	newer := fieldWrite(t, "w2", titleSlot("a"), "two", "three")
-	now := storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("three")}}
+	now := storage.CurrentState{Issues: titledA("three")}
 	reverted := revertOK(t, []storage.WriteDelta{newer, older}, now)
 	if got := *reverted.Documents[0].Title; got != "one" {
 		t.Errorf("title = %q, want one", got)
@@ -112,7 +117,7 @@ func TestRevertFoldsWritesNewestFirst(t *testing.T) {
 func TestRevertOfAWriteAndItsUndoStatesNothing(t *testing.T) {
 	write := fieldWrite(t, "w1", titleSlot("a"), "old", "new")
 	undo := fieldWrite(t, "w2", titleSlot("a"), "new", "old")
-	reverted := revertOK(t, []storage.WriteDelta{undo, write}, storage.CurrentState{Standing: standingA, Fields: map[storage.Slot]storage.SlotValue{titleSlot("a"): storage.FieldValue("old")}})
+	reverted := revertOK(t, []storage.WriteDelta{undo, write}, storage.CurrentState{Issues: titledA("old")})
 	if len(reverted.Documents) != 0 || len(reverted.Moves) != 0 {
 		t.Errorf("documents = %+v, moves = %v; want nothing", reverted.Documents, reverted.Moves)
 	}
@@ -154,7 +159,7 @@ func TestRevertPutsAParentBack(t *testing.T) {
 		if len(refused) > 0 {
 			t.Fatalf("Classify refused %v", refused)
 		}
-		reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Parents: map[string][]string{"a": {"epic-2"}}})
+		reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, Parents: map[string][]string{"a": {"epic-2"}}})
 		want := strings.Join(before, "")
 		if doc := reverted.Documents[0]; doc.Parent == nil || *doc.Parent != want || doc.Reason != "" {
 			t.Errorf("before %v: document = %+v, want parent %q and no reason", before, doc, want)
@@ -167,7 +172,7 @@ func TestRevertPutsAParentBack(t *testing.T) {
 func TestRevertRefusesAChildWithTwoParentsNow(t *testing.T) {
 	slot := storage.Slot{Kind: storage.ParentSlot, Issue: "a"}
 	delta, _ := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue([]string{"e1"}), To: storage.ParentsValue([]string{"e2"})}}})
-	if _, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, Parents: map[string][]string{"a": {"e2", "e3"}}}); len(conflicts) != 1 {
+	if _, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, Parents: map[string][]string{"a": {"e2", "e3"}}}); len(conflicts) != 1 {
 		t.Errorf("conflicts = %v, want one", conflicts)
 	}
 }
@@ -186,7 +191,7 @@ func TestClassifyRefusesAWriteThatStartedFromTwoParents(t *testing.T) {
 func TestRevertKeepsAnEdgeALaterWriteAdded(t *testing.T) {
 	slot := storage.Slot{Kind: storage.BlockedBySlot, Issue: "a", Name: "x"}
 	delta, _ := storage.Classify(storage.WriteRows{Write: "w1", BlockedBy: []storage.Move{{Slot: slot, From: storage.EdgeValue(false), To: storage.EdgeValue(true)}}})
-	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Standing: standingA, BlockedBy: map[string][]string{"a": {"x", "y"}}})
+	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, BlockedBy: map[string][]string{"a": {"x", "y"}}})
 	if doc := reverted.Documents[0]; doc.BlockedBy == nil || !reflect.DeepEqual(*doc.BlockedBy, []string{"y"}) {
 		t.Errorf("document = %+v, want blocked_by [y]", doc)
 	}

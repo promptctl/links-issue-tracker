@@ -112,7 +112,7 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 	// The gate's own refusal of a document stating nothing, so that verdict is
 	// recognised by what the gate says rather than by its wording.
 	empty := storage.BulkIssueSpec{ID: "links-x-1"}
-	_, emptyRefusal := storage.ParseBulkFile([]storage.BulkIssueSpec{empty}, nil)
+	_, emptyRefusal := storage.ParseBulkFile(handWritten(t, empty), nil)
 	if emptyRefusal == nil {
 		t.Fatal("the gate admitted an update document stating nothing")
 	}
@@ -120,7 +120,9 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 	admitted := 0
 	for i := range docType.NumField() {
 		field := docType.Field(i)
-		if field.Type.Kind() != reflect.Pointer {
+		// The basis states no field: it records what the others were read
+		// with, which the merge judges (read_out_test.go).
+		if field.Type.Kind() != reflect.Pointer || field.Type == reflect.TypeFor[*storage.Basis]() {
 			continue
 		}
 		sample, ok := samples[field.Type.Elem()]
@@ -131,7 +133,7 @@ func TestABulkUpdateKeyStatesTheFieldItNames(t *testing.T) {
 		value := reflect.New(field.Type.Elem())
 		value.Elem().Set(reflect.ValueOf(sample))
 		reflect.ValueOf(&doc).Elem().Field(i).Set(value)
-		file, err := storage.ParseBulkFile([]storage.BulkIssueSpec{doc}, nil)
+		file, err := storage.ParseBulkFile(handWritten(t, doc), nil)
 		switch {
 		case err == nil:
 			admitted++
@@ -199,7 +201,19 @@ func TestABulkUpdateDocumentRoundTripsItsIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseBulkSpecs(the document) = %v; the document:\n%s", err, text)
 	}
-	file, err := storage.ParseBulkFile(specs, map[string]model.IssueType{issue.ID: issue.IssueType, epic.ID: epic.IssueType, blocker.ID: blocker.IssueType})
+	asRead := storage.CurrentState{
+		Issues:    map[string]model.Issue{issue.ID: issue},
+		Parents:   map[string][]string{issue.ID: {epic.ID}},
+		BlockedBy: map[string][]string{issue.ID: {blocker.ID}},
+	}
+	merged, err := storage.MergeReadOut(specs, asRead)
+	if err != nil {
+		t.Fatalf("MergeReadOut(the document, the issue as read) = %v; the document:\n%s", err, text)
+	}
+	if len(merged.Kept) != 0 {
+		t.Errorf("the issue as read kept %v, want nothing moved since the read", merged.Kept)
+	}
+	file, err := storage.ParseBulkFile(merged, map[string]model.IssueType{issue.ID: issue.IssueType, epic.ID: epic.IssueType, blocker.ID: blocker.IssueType})
 	if err != nil {
 		t.Fatalf("ParseBulkFile(the document) = %v; the document:\n%s", err, text)
 	}
@@ -272,7 +286,11 @@ func TestTheDocumentOfAnIssueWithNoParentStatesNone(t *testing.T) {
 	if doc.Parent != nil {
 		t.Fatalf("the document states parent %q, want none", *doc.Parent)
 	}
-	if _, err := storage.ParseBulkFile([]storage.BulkIssueSpec{doc}, map[string]model.IssueType{leaf.ID: model.TypeTask}); err != nil {
+	merged, err := storage.MergeReadOut([]storage.BulkIssueSpec{doc}, storage.CurrentState{Issues: map[string]model.Issue{leaf.ID: leaf}})
+	if err != nil {
+		t.Fatalf("MergeReadOut(the loose leaf's own document) error = %v", err)
+	}
+	if _, err := storage.ParseBulkFile(merged, map[string]model.IssueType{leaf.ID: model.TypeTask}); err != nil {
 		t.Errorf("ParseBulkFile(the loose leaf's own document) error = %v", err)
 	}
 }
@@ -310,7 +328,7 @@ func TestEveryFieldRestoresTheValueHistoryRecorded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseBulkSpecs = %v; the document:\n%s", err, text)
 			}
-			file, err := storage.ParseBulkFile(specs, map[string]model.IssueType{recorded.ID: base.IssueType})
+			file, err := storage.ParseBulkFile(handWritten(t, specs...), map[string]model.IssueType{recorded.ID: base.IssueType})
 			if err != nil {
 				t.Fatalf("ParseBulkFile = %v; the document:\n%s", err, text)
 			}
@@ -353,4 +371,16 @@ func TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse(t *testing.T) {
 	if got.Rank != dst.Rank {
 		t.Errorf("rank = %q, want dst's %q: rank is not an editable field", got.Rank, dst.Rank)
 	}
+}
+
+// handWritten is a file of documents that carry no basis, gated as an engine
+// gates every file: merged first, which for these reads nothing and moves
+// nothing.
+func handWritten(t *testing.T, specs ...storage.BulkIssueSpec) storage.MergedFile {
+	t.Helper()
+	merged, err := storage.MergeReadOut(specs, storage.CurrentState{})
+	if err != nil {
+		t.Fatalf("MergeReadOut(a hand-written file) = %v", err)
+	}
+	return merged
 }

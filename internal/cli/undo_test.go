@@ -89,7 +89,7 @@ func TestUndoRevertAnswersOnItsReasons(t *testing.T) {
 		name, reason string
 		writes       func() string
 	}{
-		{"a write a later write moved again", "undo_conflict", func() string { return reparent }},
+		{"a write a later write moved again", "write_conflict", func() string { return reparent }},
 		{"a write beside its own undo", "state_already_holds", func() string { return strings.Join(append([]string{reparent}, undo...), ",") }},
 		{"a lifecycle write", "validation_refused", func() string {
 			runCLIInDir(t, repo, "start", task, "--by", "ada")

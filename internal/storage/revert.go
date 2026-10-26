@@ -3,6 +3,8 @@ package storage
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"slices"
@@ -83,6 +85,14 @@ func EdgeValue(present bool) SlotValue {
 		return SlotValue{text: "present"}
 	}
 	return SlotValue{text: "absent"}
+}
+
+// digest is the value's fingerprint: what a read-out document's basis records
+// of a slot, so a long text is not carried twice and a value is compared by the
+// one spelling every comparison uses.
+func (v SlotValue) digest() string {
+	sum := sha256.Sum256([]byte(v.text))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (v SlotValue) parents() []string {
@@ -240,24 +250,26 @@ func actionWrite(event model.IssueEvent) (what, reverse string) {
 	return fmt.Sprintf("%s: a %q event", event.IssueID, string(event.Action)), ""
 }
 
-// CurrentState is the store as it stands, for exactly the slots the writes
-// being reverted moved: which of their issues it still holds, each field's
-// value, each child's parent set, and the whole blocked-by set of each issue
-// an edge slot names, since a document states that set whole.
+// CurrentState is the store as it stands for the issues a change was planned
+// against: each one it still holds, whole, with its parent set and its whole
+// blocked-by set, since a document states that set whole. An issue absent from
+// Issues is one the store no longer holds. A field's value is read off the
+// issue through the field's own row, so it is spelled as a change row records
+// it, the spelling every comparison uses. [LAW:one-source-of-truth]
 type CurrentState struct {
-	Standing  map[string]bool
-	Fields    map[Slot]SlotValue
+	Issues    map[string]model.Issue
 	Parents   map[string][]string
 	BlockedBy map[string][]string
 }
 
 func (c CurrentState) value(slot Slot) SlotValue {
-	if !c.Standing[slot.Issue] {
+	issue, standing := c.Issues[slot.Issue]
+	if !standing {
 		return removedValue
 	}
 	switch slot.Kind {
 	case FieldSlot:
-		return c.Fields[slot]
+		return FieldValue(IssueFieldValues(issue)[slot.Name])
 	case ParentSlot:
 		return ParentsValue(c.Parents[slot.Issue])
 	case BlockedBySlot:
@@ -266,16 +278,54 @@ func (c CurrentState) value(slot Slot) SlotValue {
 	panic(fmt.Sprintf("storage: slot kind %d", slot.Kind))
 }
 
-// Conflict is a slot a later write moved again: the write being reverted left
-// it at Left, and the store now holds Now.
+// Conflict is a slot a later write moved after a change was planned against
+// it, so landing the change would erase that write: the store now holds Now,
+// and Since is what the change expected it to hold.
 type Conflict struct {
-	Write     string
-	Slot      Slot
-	Left, Now SlotValue
+	Slot  Slot
+	Now   SlotValue
+	Since ConflictSince
 }
 
 func (c Conflict) String() string {
-	return fmt.Sprintf("%s: %s was left %s by this write and is %s now", c.Write, c.Slot, c.Left.Display(c.Slot), c.Now.Display(c.Slot))
+	line := fmt.Sprintf("%s: %s, and it is %s now", c.Slot, c.Since.expected(c.Slot), c.Now.Display(c.Slot))
+	if c.Slot.Kind == ParentSlot && len(c.Now.parents()) > 1 {
+		line += "; `lit doctor` repairs a child with two parents"
+	}
+	return line
+}
+
+// ConflictSince is what a refused change was planned against, a closed set:
+// the value a write being undone left a slot at, or the read a read-out file
+// was made from. Each says what it expected of the slot and how to get past
+// the refusal. [LAW:types-are-the-program]
+type ConflictSince interface {
+	expected(Slot) string
+	wayOn() string
+}
+
+// LeftByWrite is an undo's expectation: Write left the slot at Left.
+type LeftByWrite struct {
+	Write string
+	Left  SlotValue
+}
+
+func (l LeftByWrite) expected(slot Slot) string {
+	return fmt.Sprintf("%s left it %s", l.Write, l.Left.Display(slot))
+}
+
+func (LeftByWrite) wayOn() string {
+	return "Run `lit undo list` to find the later write that moved it again; revert that write as well by naming it in --writes, or leave the undo."
+}
+
+// ReadOut is a read-out file's expectation: the slot holds what it held when
+// `lit ls --format yaml` read it, which the document's basis records.
+type ReadOut struct{}
+
+func (ReadOut) expected(Slot) string { return "it moved since the file was read" }
+
+func (ReadOut) wayOn() string {
+	return "Read these issues out again with `lit ls --ids <ids> --format yaml`, make the edits on that file, and import it."
 }
 
 // Reverted is what reverting writes onto the store as it stands comes to: the
@@ -305,7 +355,7 @@ func Revert(deltas []WriteDelta, now CurrentState) (Reverted, []Conflict) {
 		ids[i] = delta.write
 		for _, move := range delta.moves {
 			if held := current(move.Slot); held != move.To {
-				conflicts = append(conflicts, Conflict{Write: delta.write, Slot: move.Slot, Left: move.To, Now: held})
+				conflicts = append(conflicts, Conflict{Slot: move.Slot, Now: held, Since: LeftByWrite{Write: delta.write, Left: move.To}})
 			}
 			state[move.Slot] = move.From
 		}
@@ -457,19 +507,25 @@ func (e RevertRefusedError) Error() string {
 // RefusesCommand marks the refusal as one of the command as issued.
 func (RevertRefusedError) RefusesCommand() {}
 
-// RevertConflictError refuses an undo because a later write moved again
-// something the undo would put back, so putting it back would erase that
-// write. Nothing is written.
-type RevertConflictError struct {
+// ConflictError refuses a change because a later write moved slots it was
+// planned against, so landing it would erase that write: an undo whose writes
+// were moved again, or a read-out file whose issues moved since the read. It
+// is one refusal whichever change met it. Nothing is written. Each way on the
+// conflicts name is said once, after them. [LAW:no-silent-failure]
+type ConflictError struct {
 	Conflicts []Conflict
 }
 
-func (e RevertConflictError) Error() string {
-	lines := make([]string, len(e.Conflicts))
-	for i, c := range e.Conflicts {
-		lines[i] = "  " + c.String()
+func (e ConflictError) Error() string {
+	lines := make([]string, 0, len(e.Conflicts)+1)
+	var ways []string
+	for _, c := range e.Conflicts {
+		lines = append(lines, "  "+c.String())
+		if way := c.Since.wayOn(); !slices.Contains(ways, way) {
+			ways = append(ways, way)
+		}
 	}
-	return "undo refused, nothing written; a later write moved these again:\n" + strings.Join(lines, "\n")
+	return "refused, nothing written; a later write moved these:\n" + strings.Join(append(lines, ways...), "\n")
 }
 
 // RevertHeldError answers an undo whose writes' effects are already gone:

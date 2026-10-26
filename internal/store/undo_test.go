@@ -347,7 +347,7 @@ func TestRevertWritesRefusesWhatALaterWriteMovedAgain(t *testing.T) {
 	}
 	head := headWrite(t, st)
 	_, err := st.RevertWrites(ctx, []string{first}, "undoer")
-	var conflict storage.RevertConflictError
+	var conflict storage.ConflictError
 	if !errors.As(err, &conflict) || len(conflict.Conflicts) != 1 {
 		t.Fatalf("RevertWrites(first) = %v, want one conflict", err)
 	}

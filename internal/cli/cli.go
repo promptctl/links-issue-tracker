@@ -2331,6 +2331,10 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	// [LAW:nothing-unseen]
 	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
 	recordBulkApplied(ctx, "import", result)
+	// A refusal of another kind, or none, leaves it zero: a count of none.
+	var conflicted storage.ConflictError
+	errors.As(err, &conflicted)
+	telemetry.Set(ctx, "import.conflicts", len(conflicted.Conflicts))
 	if err != nil {
 		return err
 	}
@@ -2351,6 +2355,7 @@ func recordBulkApplied(ctx context.Context, command string, result storage.BulkA
 	telemetry.Set(ctx, command+".edges_added", result.EdgesAdded)
 	telemetry.Set(ctx, command+".edges_removed", result.EdgesRemoved)
 	telemetry.Set(ctx, command+".ranked", len(result.Ranked.Resolutions))
+	telemetry.Set(ctx, command+".kept", len(result.Kept))
 }
 
 // printBulkApplied reports what a bulk edit wrote: every bulk edit, an import
@@ -2387,6 +2392,17 @@ func printBulkApplied(stdout io.Writer, result storage.BulkApplyResult) error {
 			return err
 		}
 		if err := printIDs(stdout, fmt.Sprintf("%d issues already had the blocked_by the file states", len(result.BlockedByHeld)), result.BlockedByHeld); err != nil {
+			return err
+		}
+	}
+	// A slot a read-out file left as read and another writer moved since kept
+	// that writer's value; a file with none has nothing to report.
+	if len(result.Kept) > 0 {
+		kept := make([]string, len(result.Kept))
+		for i, slot := range result.Kept {
+			kept[i] = slot.String()
+		}
+		if err := printIDs(stdout, fmt.Sprintf("kept %d values other writers changed since the file was read", len(kept)), kept); err != nil {
 			return err
 		}
 	}
