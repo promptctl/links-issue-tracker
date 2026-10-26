@@ -298,10 +298,10 @@ func (c Conflict) String() string {
 // ConflictSince is what a refused change was planned against, a closed set:
 // the value a write being undone left a slot at, or the read a read-out file
 // was made from. Each says what it expected of the slot and how to get past
-// the refusal, given the issues the refusal names. [LAW:types-are-the-program]
+// the refusal, given every conflict of the refusal. [LAW:types-are-the-program]
 type ConflictSince interface {
 	expected(Slot) string
-	wayOn(issues []string) string
+	wayOn(conflicts []Conflict) string
 }
 
 // LeftByWrite is an undo's expectation: Write left the slot at Left.
@@ -314,7 +314,7 @@ func (l LeftByWrite) expected(slot Slot) string {
 	return fmt.Sprintf("%s left it %s", l.Write, l.Left.Display(slot))
 }
 
-func (LeftByWrite) wayOn([]string) string {
+func (LeftByWrite) wayOn([]Conflict) string {
 	return "Run `lit undo list` to find the later write that moved it again; revert that write as well by naming it in --writes, or leave the undo."
 }
 
@@ -324,8 +324,30 @@ type ReadOut struct{}
 
 func (ReadOut) expected(Slot) string { return "it moved since the file was read" }
 
-func (ReadOut) wayOn(issues []string) string {
-	return fmt.Sprintf("Read these issues out again with `lit ls --ids %s --format yaml`, make the edits on that file, and import it.", strings.Join(issues, ","))
+// wayOn sends an issue that moved back to the read, and an issue the store no
+// longer holds out of the file, since there is nothing left to read out.
+func (ReadOut) wayOn(conflicts []Conflict) string {
+	var ways []string
+	if moved := conflictIssues(conflicts, false); len(moved) > 0 {
+		ways = append(ways, fmt.Sprintf("Read these issues out again with `lit ls --ids %s --format yaml`, make the edits on that file, and import it.", strings.Join(moved, ",")))
+	}
+	if removed := conflictIssues(conflicts, true); len(removed) > 0 {
+		ways = append(ways, fmt.Sprintf("Drop the documents of %s from the file: the store no longer holds them.", strings.Join(removed, ", ")))
+	}
+	return strings.Join(ways, "\n")
+}
+
+// conflictIssues is the issues, in id order, of the conflicts whose issue the
+// store holds now (removed false) or no longer holds (removed true).
+func conflictIssues(conflicts []Conflict, removed bool) []string {
+	var issues []string
+	for _, c := range conflicts {
+		if c.Now.removed == removed {
+			issues = append(issues, c.Slot.Issue)
+		}
+	}
+	slices.Sort(issues)
+	return slices.Compact(issues)
 }
 
 // Reverted is what reverting writes onto the store as it stands comes to: the
@@ -517,17 +539,11 @@ type ConflictError struct {
 }
 
 func (e ConflictError) Error() string {
-	issues := make([]string, len(e.Conflicts))
-	for i, c := range e.Conflicts {
-		issues[i] = c.Slot.Issue
-	}
-	slices.Sort(issues)
-	issues = slices.Compact(issues)
 	lines := make([]string, 0, len(e.Conflicts)+1)
 	var ways []string
 	for _, c := range e.Conflicts {
 		lines = append(lines, "  "+c.String())
-		if way := c.Since.wayOn(issues); !slices.Contains(ways, way) {
+		if way := c.Since.wayOn(e.Conflicts); !slices.Contains(ways, way) {
 			ways = append(ways, way)
 		}
 	}

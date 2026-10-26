@@ -451,7 +451,8 @@ value the file left as read takes the value the issue holds now, and the import
 lists each one another writer had changed under `kept`. Blocked-by edges merge one
 by one. An edit to a value another writer also changed to something else, or to an
 issue removed since the read, refuses the file whole (`write_conflict`, exit 5):
-read those issues out again and redo the edits. A file that would leave a blocked_by inside
+read those issues out again and redo the edits, and drop the documents of a removed
+issue. A file that would leave a blocked_by inside
 one epic is refused whole, so a selection holding one that a reparent left behind goes
 back in once that blocker is dropped from the file. It prints every editable field, so
 `--columns` with it is a usage error.

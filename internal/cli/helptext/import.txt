@@ -117,8 +117,8 @@ YAML bulk file (creates and updates)
   file edited that another writer also changed to something else, or an
   issue removed since the read, refuses the whole file with nothing
   written (write_conflict, exit 5): read those issues out again and redo
-  the edits on the new file. A document with no basis states what to
-  write, as written.
+  the edits on the new file, and drop the documents of a removed issue.
+  A document with no basis states what to write, as written.
 
   parent on an update document reparents the issue, as lit parent set
   does, and parent: "" clears it, as lit parent clear does; the same rules

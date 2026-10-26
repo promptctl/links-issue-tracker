@@ -204,14 +204,23 @@ func TestAReadOutKeyTheFileDeletesIsLeftAlone(t *testing.T) {
 }
 
 // An issue the store no longer holds is a conflict whatever the file says, and
-// the refusal names the issues to read out again.
+// the refusal sends its document out of the file and a moved issue back to
+// the read, each by id.
 func TestAReadOutOfARemovedIssueIsAConflict(t *testing.T) {
-	removed := mergeConflicts(t, readOut(readIssue(), "lit-e"), storage.CurrentState{})
+	read := readIssue()
+	removed := mergeConflicts(t, readOut(read, "lit-e"), storage.CurrentState{})
 	if len(removed) == 0 || !strings.Contains(removed[0].String(), "is removed now") {
 		t.Errorf("conflicts = %v, want each slot of the removed issue", removed)
 	}
-	if way := (storage.ConflictError{Conflicts: removed}).Error(); !strings.Contains(way, "`lit ls --ids lit-x-1 --format yaml`") {
-		t.Errorf("refusal = %q, want the read-out command for lit-x-1", way)
+	moved := readOut(model.Issue{ID: "lit-y-1", Title: "a title", IssueType: model.TypeTask}, "")
+	edit := "an edit"
+	moved.Title = &edit
+	now := standing(model.Issue{ID: "lit-y-1", Title: "another writer's title", IssueType: model.TypeTask}, nil)
+	_, err := storage.MergeReadOut([]storage.BulkIssueSpec{readOut(read, "lit-e"), moved}, now)
+	for _, want := range []string{"Drop the documents of lit-x-1 from the file", "`lit ls --ids lit-y-1 --format yaml`"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal = %v, want %q", err, want)
+		}
 	}
 }
 
