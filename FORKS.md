@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026034331-872b9f5647d4` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026040056-0bdb2f7bb33a` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -524,7 +524,8 @@ every read command and lets a read command keep writers out.
 #### Patch 16 — a journal warning goes to the observer its store was opened under
 
 `go/store/nbs/journal.go`, `go/libraries/doltcore/dbfactory/file.go`, plus
-`go/store/nbs/journal_warnings_test.go` (a new file, not upstream's).
+`go/store/nbs/journal_warnings_test.go` (a new file, not upstream's) and a test
+in `go/libraries/doltcore/dbfactory/file_cache_test.go`.
 
 Dolt reports a recoverable journal problem, such as a garbage journal tail or
 an index a read-only open passed over (Patch 15), through a journaling store's
@@ -536,9 +537,10 @@ event (`links-observability-gvpn.4q4`).
 
 - `nbs.WithJournalWarningObserver(ctx, observe)` puts an observer on a context,
   the way `gitcmd.WithObserver` (Patch 13) does for git. The observer receives
-  an `nbs.JournalWarning`: the warning and the store it came from, as
-  dbfactory knows it (`urlObj.Path`, the key of its singleton cache), since one
-  process opens several stores. `nbs.JournalWarningsCb(ctx, store)` is the
+  an `nbs.JournalWarning`: the warning and the store it came from, its
+  directory on this filesystem (dbfactory's `storeDir`, the URL's path
+  unescaped and in the OS's separators), since one process opens several
+  stores. `nbs.JournalWarningsCb(ctx, store)` is the
   callback that hands warnings to it, or the logging callback when the context
   carries none.
 - dbfactory's `CreateDB` resolves the callback from the open's context, and a

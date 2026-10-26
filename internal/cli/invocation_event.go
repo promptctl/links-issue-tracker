@@ -83,7 +83,7 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 func journalWarningValue(w nbs.JournalWarning) map[string]any {
 	return map[string]any{
 		"dolt.journal_warning.store": w.Store,
-		"dolt.journal_warning.error": w.Err.Error(),
+		"dolt.journal_warning.error": telemetry.ErrorText(w.Err),
 	}
 }
 

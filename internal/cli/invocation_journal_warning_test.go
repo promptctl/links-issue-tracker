@@ -31,17 +31,14 @@ type journalWarning struct {
 func TestAReadThatPassedOverTheJournalIndexSaysSoOnItsEvent(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
-	epic := newEpicInDir(t, repo, "Indexed epic")
-	for i := range 40 {
-		runCLIInDir(t, repo, "new", "--title", "ticket "+strings.Repeat("x", i), "--topic", "demo", "--type", "task", "--parent", epic)
-	}
+	newEpicInDir(t, repo, "Indexed epic")
 	noms := nomsDir(t, repo)
 	corruptMidFile(t, filepath.Join(noms, "journal.idx"))
 	logged := captureDoltLogger(t)
 
-	runCLIInDir(t, repo, "ls")
+	out := runCLIInDir(t, repo, "ls")
 
-	requireJournalWarning(t, "lit ls", noms, "passed over its index", logged)
+	requireJournalWarning(t, "lit ls", noms, "passed over its index", logged, out)
 }
 
 // A write whose store recovered a journal tail an interrupted write left, one
@@ -54,9 +51,9 @@ func TestAWriteThatRecoveredAJournalTailSaysSoOnItsEvent(t *testing.T) {
 	appendUnparseableTail(t, filepath.Join(noms, doltChunkJournalName))
 	logged := captureDoltLogger(t)
 
-	runCLIInDir(t, repo, "new", "--title", "after the tear", "--topic", "demo", "--type", "task", "--parent", epic)
+	out := runCLIInDir(t, repo, "new", "--title", "after the tear", "--topic", "demo", "--type", "task", "--parent", epic)
 
-	requireJournalWarning(t, "lit new", noms, "invalid journal record length", logged)
+	requireJournalWarning(t, "lit new", noms, "invalid journal record length", logged, out)
 }
 
 // doltChunkJournalName is the chunk journal's file name in a store's noms
@@ -87,8 +84,9 @@ func captureDoltLogger(t *testing.T) *bytes.Buffer {
 
 // requireJournalWarning fails unless the last event is command's, and carries
 // a dolt.journal_warnings occurrence from the store at noms whose error holds
-// want, which Dolt's logger never wrote.
-func requireJournalWarning(t *testing.T, command, noms, want string, logged *bytes.Buffer) {
+// want, which neither Dolt's logger nor the command's output, stdout and stderr
+// together, carried.
+func requireJournalWarning(t *testing.T, command, noms, want string, logged *bytes.Buffer, out string) {
 	t.Helper()
 	ev := lastEvent(t)
 	if ev.Event != command {
@@ -111,6 +109,9 @@ func requireJournalWarning(t *testing.T, command, noms, want string, logged *byt
 	}
 	if strings.Contains(logged.String(), want) {
 		t.Fatalf("Dolt's logger wrote %q; the warning belongs on the event alone", logged.String())
+	}
+	if strings.Contains(out, want) {
+		t.Fatalf("%s wrote %q; the warning belongs on the event alone", command, out)
 	}
 }
 
