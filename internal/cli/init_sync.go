@@ -36,8 +36,9 @@ const (
 	initSyncHasLocalTickets initSyncState = "has_local_tickets"
 	// initSyncNotConfigured: no eligible git remote to adopt from.
 	initSyncNotConfigured initSyncState = "not_configured"
-	// initSyncRemoteRefused: the chosen git remote's name is one Dolt cannot
-	// hold, and the remote carries no lit data.
+	// initSyncRemoteRefused: the chosen git remote is one lit cannot sync with
+	// (storage.RefusedRemoteError: its name or its URL), and it carries no lit
+	// data.
 	initSyncRemoteRefused initSyncState = "remote_refused"
 	// initSyncRemoteEmpty: the remote advertises no refs yet (brand-new repo).
 	initSyncRemoteEmpty initSyncState = "remote_empty"
@@ -216,11 +217,11 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 
 	// The whole adopt decision is made from git signals alone — no Dolt store is
 	// opened — so a fresh store's first on-disk state is the clone itself.
-	remote, ok, err := workspaceSyncRemote(ws, "")
-	// A remote Dolt cannot hold has nothing init can adopt, so init starts
-	// fresh, unless it carries lit data: a fresh store would fork from that backlog,
-	// which only the remote renamed can adopt. [LAW:no-silent-failure]
-	if refused := (storage.RefusedRemoteNameError{}); errors.As(err, &refused) {
+	syncable, ok, err := workspaceSyncRemote(ctx, ws, "")
+	// A remote lit cannot sync with has nothing init can adopt, so init starts
+	// fresh, unless it carries lit data: a fresh store would fork from that
+	// backlog, which only the remote, once fixed, can adopt. [LAW:no-silent-failure]
+	if refused := (storage.RefusedRemoteError{}); errors.As(err, &refused) {
 		hasData, dataErr := workspace.RemoteHasDoltData(ctx, env, ws.RootDir, refused.Name)
 		if dataErr != nil {
 			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: dataErr.Error()}
@@ -236,6 +237,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	if !ok {
 		return freshOutcome(initSyncOutcome{State: initSyncNotConfigured})
 	}
+	remote := syncable.Name()
 	// [LAW:single-enforcer] First-push detection is centralized so init, pull,
 	// and push share one definition of "remote is empty".
 	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, env, ws.RootDir, remote.String())
@@ -262,21 +264,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	if !hasData {
 		return freshOutcome(initSyncOutcome{State: initSyncNoRemoteData, Remote: remote.String(), Branch: branch})
 	}
-	// workspaceSyncRemote has already read the remotes, so this is that answer.
-	gitRemotes, err := ws.Remotes.List()
-	if err != nil {
-		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Branch: branch, Error: err.Error()}
-	}
-	url := gitBackedURLForRemote(gitRemotes, remote.String())
-	if url == "" {
-		return nil, initSyncOutcome{
-			State:  initSyncFailed,
-			Remote: remote.String(),
-			Branch: branch,
-			Error:  fmt.Sprintf("remote %q carries lit data but its git URL could not be resolved for clone", remote),
-		}
-	}
-	return &adoptClonePlan{remote: remote, branch: branch, url: url}, initSyncOutcome{}
+	return &adoptClonePlan{remote: remote, branch: branch, url: store.GitBackedRemoteURL(syncable.URL())}, initSyncOutcome{}
 }
 
 // remoteSituationLine renders the resolved remote-data situation for the
@@ -294,7 +282,7 @@ func remoteSituationLine(state initSyncState) string {
 	case initSyncNotConfigured:
 		return "no eligible git remote; starting with an empty backlog"
 	case initSyncRemoteRefused:
-		return "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog"
+		return "lit cannot sync with the git remote (`lit sync remote ls` says why); starting with an empty backlog"
 	case initSyncRemoteEmpty:
 		return "remote has no refs yet (brand-new repo); starting with an empty backlog"
 	case initSyncNoRemoteData:
@@ -302,18 +290,6 @@ func remoteSituationLine(state initSyncState) string {
 	default:
 		return ""
 	}
-}
-
-// gitBackedURLForRemote returns the Dolt git-backed transport URL for the named
-// git remote, or "" when no such remote is present. [LAW:one-source-of-truth]
-// the translation is store.GitBackedRemoteURL, the same one sync uses.
-func gitBackedURLForRemote(gitRemotes []workspace.GitRemote, remote string) string {
-	for _, r := range gitRemotes {
-		if r.Name == remote {
-			return store.GitBackedRemoteURL(r.URL)
-		}
-	}
-	return ""
 }
 
 // writeInitSyncLine renders the one human-facing line the adopt step

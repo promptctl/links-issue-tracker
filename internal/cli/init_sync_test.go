@@ -226,7 +226,7 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 	fresh, freshWS := consumerOf("bravo")
 	progress := captureProgress(t)
 	runCLIInDir(t, fresh, "init", "--skip-hooks")
-	if !strings.Contains(progress.String(), "the git remote's name is one Dolt cannot hold, so lit cannot sync with it until it is renamed (git remote rename); starting with an empty backlog") {
+	if !strings.Contains(progress.String(), "lit cannot sync with the git remote (`lit sync remote ls` says why); starting with an empty backlog") {
 		t.Fatalf("init beside my.fork with no lit data: progress missing the fresh start:\n%s", progress.String())
 	}
 	if _, err := os.Stat(freshWS.DatabasePath); err != nil {

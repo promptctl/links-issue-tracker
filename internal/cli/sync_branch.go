@@ -98,10 +98,11 @@ func (e syncBranchNotKnownError) Error() string {
 // workspaceSyncRemote's and the branch is knownSyncBranch's. ok false is a
 // workspace with no sync remote.
 func freshnessSyncTarget(ctx context.Context, env environ.Env, ws workspace.Info) (remote storage.RemoteName, branch string, ok bool, err error) {
-	remote, ok, err = workspaceSyncRemote(ws, "")
+	syncable, ok, err := workspaceSyncRemote(ctx, ws, "")
 	if err != nil || !ok {
-		return remote, "", ok, err
+		return storage.RemoteName{}, "", ok, err
 	}
+	remote = syncable.Name()
 	branch, err = knownSyncBranch(ctx, env, ws, remote)
 	return remote, branch, true, err
 }
@@ -112,10 +113,10 @@ func freshnessSyncTarget(ctx context.Context, env environ.Env, ws workspace.Info
 // [LAW:one-source-of-truth] every caller reads the remote here: the sync verbs
 // and the automatic receive fetch it and mark its fetch, the banners read that
 // mark, and init adopts from it, so no two of them can name different remotes.
-func workspaceSyncRemote(ws workspace.Info, requested string) (storage.RemoteName, bool, error) {
-	gitRemotes, err := ws.Remotes.List()
+func workspaceSyncRemote(ctx context.Context, ws workspace.Info, requested string) (workspace.SyncableRemote, bool, error) {
+	gitRemotes, err := ws.Remotes.List(ctx)
 	if err != nil {
-		return storage.RemoteName{}, false, err
+		return workspace.SyncableRemote{}, false, err
 	}
 	return resolveSyncRemote(requested, ws.Remotes.Upstream, gitRemotes)
 }

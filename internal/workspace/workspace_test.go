@@ -17,6 +17,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
@@ -344,17 +345,17 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", "https://github.com/acme/origin.git")
 	run(t, repo, "git", "remote", "set-url", "--push", "origin", "git@github.com:acme/origin.git")
 
-	remotes, err := NewRemotes(testEnv(), repo).List()
+	remotes, err := NewRemotes(testEnv(), testRoot(t, repo)).List(eventContext())
 	if err != nil {
-		t.Fatalf("Remotes.List() error = %v", err)
+		t.Fatalf("Remotes.List(eventContext()) error = %v", err)
 	}
 	if len(remotes) != 2 {
 		t.Fatalf("len(remotes) = %d, want 2", len(remotes))
 	}
-	if remotes[0].Name != "origin" || remotes[0].URL != "https://github.com/acme/origin.git" {
+	if remotes[0].Name() != "origin" || remotes[0].url.location != "https://github.com/acme/origin.git" {
 		t.Fatalf("origin remote mismatch: %+v", remotes[0])
 	}
-	if remotes[1].Name != "upstream" || remotes[1].URL != "https://github.com/acme/upstream.git" {
+	if remotes[1].Name() != "upstream" || remotes[1].url.location != "https://github.com/acme/upstream.git" {
 		t.Fatalf("upstream remote mismatch: %+v", remotes[1])
 	}
 }
@@ -618,7 +619,7 @@ func TestUpstreamIsTheWholeRemoteName(t *testing.T) {
 	// first asked in, and this test changes that state between reads.
 	upstream := func() string {
 		t.Helper()
-		got, err := NewRemotes(testEnv(), repo).Upstream()
+		got, err := NewRemotes(testEnv(), testRoot(t, repo)).Upstream()
 		if err != nil {
 			t.Fatalf("Upstream() error = %v", err)
 		}
@@ -660,3 +661,24 @@ func runOutput(t *testing.T, dir string, name string, args ...string) string {
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git it runs.
 func testEnv() environ.Env { return environ.Of(os.Environ()) }
+
+// testRoot is dir as a CheckoutRoot, its symlinks resolved as git resolves
+// --show-toplevel (t.TempDir sits under /var -> /private/var on darwin).
+func testRoot(t testing.TB, dir string) CheckoutRoot {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	}
+	root, err := ParseCheckoutRoot(resolved)
+	if err != nil {
+		t.Fatalf("ParseCheckoutRoot(%q): %v", resolved, err)
+	}
+	return root
+}
+
+// eventContext is a context carrying an open event, as every invocation's
+// does under cli.Run: reading a checkout's remotes records facts on it.
+func eventContext() context.Context {
+	return telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+}

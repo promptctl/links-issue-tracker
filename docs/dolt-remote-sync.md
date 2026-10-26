@@ -63,7 +63,7 @@ Sync remote selection for pull/push when `--remote` is omitted:
 - branch upstream remote (when configured)
 - otherwise, the single configured Git remote
 - if no eligible remote exists, sync pull/push return `status=skipped` and do not run Dolt sync side effects
-- a selected remote whose name Dolt cannot hold fails the command, naming the remote; it is never passed over for another
+- a selected remote lit refuses (its name, or its URL, below) fails the command, naming the remote and the reason; it is never passed over for another
 
 Text output behavior:
 
@@ -76,6 +76,9 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 - update changed remote URLs
 - add missing Dolt remotes
 - refuse a Git remote whose name Dolt cannot hold (one with a `/`, `.`, space or another character Dolt's remote names exclude), so it is never added and stops no sync with the others; naming it as the sync remote, or having it as the upstream or only remote, fails with the reason. Rename it (`git remote rename`) to sync with it.
+- read a path URL as git reads it. A relative one (`../remote.git`, `sub/remote.git`, `remote.git`) is made absolute against the top of the checkout that read it, so Dolt is handed only absolute paths and non-path URLs. `remote.git` with no `./` names a local directory, pushed over `git+file`, not a host. Checkouts at different depths read one relative URL as different repositories, as git does: the shared store holds whichever the last reconcile read, and a receive from the other checkout fetches rather than skips, since its remote's URL is not the one recorded.
+- refuse, the same way as a name, a URL no value handed to Dolt can mean as git means it: a path with a `..` after a directory name, relative or absolute (git resolves a symlink before the `..`, Dolt cleans the `..` first), a path starting with `~` (git reads it against a home directory), a Windows drive-relative path (`C:x.git`), and a URL that is empty or has whitespace at an end (git keeps it, Dolt trims it). A refused remote's Dolt remote is removed, with its tracking refs and fork points, until the URL is put right (`git remote set-url`).
+- leave out a remote with no fetch URL (a `pushurl`-only remote, say): git cannot fetch it, and lit does not sync with it.
 
 ## Push automation
 
