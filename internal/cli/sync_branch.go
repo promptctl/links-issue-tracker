@@ -75,9 +75,6 @@ func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, 
 	if err != nil {
 		return "", fmt.Errorf("resolve sync branch for remote %q: %w", remote.Name(), err)
 	}
-	if source != "" {
-		telemetry.Set(ctx, "sync.branch_source", source)
-	}
 	if branch == "" {
 		return "", fmt.Errorf(
 			"resolve sync branch for remote %q: default branch unavailable; configure %s to override",
@@ -85,6 +82,7 @@ func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, 
 			debugSyncBranchEnvVar,
 		)
 	}
+	telemetry.Set(ctx, "sync.branch_source", source)
 	return branch, nil
 }
 
@@ -115,7 +113,7 @@ func knownSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, re
 	branch, source, err := localSyncBranch(ctx, env, ws, remote, syncBranchAnswer{source: "recorded", ask: func() (string, error) {
 		recorded, err := os.ReadFile(advertisedSyncBranchPath(ws, remote))
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("%v; the record of what the remote last said is unreadable: %w", syncBranchNotKnownError{remote: remote}, err)
+			return "", fmt.Errorf("git names no default branch of remote %q in refs/remotes/%s/HEAD, and the record of what the remote last advertised is unreadable: %w", remote, remote, err)
 		}
 		return strings.TrimSpace(string(recorded)), nil
 	}})

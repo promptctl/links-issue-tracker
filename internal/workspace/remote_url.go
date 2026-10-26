@@ -80,13 +80,13 @@ func (r GitRemote) SyncableRemote() (SyncableRemote, error) {
 	url := r.url()
 	name, err := storage.ParseRemoteName(r.name)
 	if refusal := (storage.RefusedRemoteError{}); errors.As(err, &refusal) {
-		return SyncableRemote{}, RefusedGitRemote{Remote: r, Refusal: refusal}
+		return SyncableRemote{}, RefusedGitRemote{Remote: r, Reason: refusal.Reason}
 	}
 	if err != nil {
 		return SyncableRemote{}, err
 	}
 	if url.refusal != nil {
-		return SyncableRemote{}, RefusedGitRemote{Remote: r, Refusal: storage.RefusedRemoteError{Name: r.name, Reason: url.refusal}}
+		return SyncableRemote{}, RefusedGitRemote{Remote: r, Reason: url.refusal}
 	}
 	return SyncableRemote{name: name, url: url}, nil
 }
@@ -95,13 +95,19 @@ func (r GitRemote) SyncableRemote() (SyncableRemote, error) {
 // caller that still has a question for it (init's fork check) asks the remote
 // that was refused rather than looking it up again.
 type RefusedGitRemote struct {
-	Remote  GitRemote
-	Refusal storage.RefusedRemoteError
+	Remote GitRemote
+	Reason storage.RemoteRefusal
 }
 
-func (e RefusedGitRemote) Error() string { return e.Refusal.Error() }
+// Refusal is the refusal as storage names it. [LAW:one-source-of-truth] its
+// name is the remote's, derived here, never stored beside it.
+func (e RefusedGitRemote) Refusal() storage.RefusedRemoteError {
+	return storage.RefusedRemoteError{Name: e.Remote.name, Reason: e.Reason}
+}
 
-func (e RefusedGitRemote) Unwrap() error { return e.Refusal }
+func (e RefusedGitRemote) Error() string { return e.Refusal().Error() }
+
+func (e RefusedGitRemote) Unwrap() error { return e.Refusal() }
 
 // SyncableRemote is a git remote lit syncs with. Only GitRemote.SyncableRemote
 // builds one that names a remote; the zero value names none.

@@ -222,7 +222,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	// fresh, unless it carries lit data: a fresh store would fork from that
 	// backlog, which only the remote, once fixed, can adopt. [LAW:no-silent-failure]
 	if refused := (workspace.RefusedGitRemote{}); errors.As(err, &refused) {
-		name := refused.Refusal.Name
+		name := refused.Remote.Name()
 		hasData, dataErr := ws.Repository().RefusedRemoteHasDoltData(ctx, env, refused)
 		if dataErr != nil {
 			return nil, initSyncOutcome{State: initSyncFailed, Remote: name, Error: dataErr.Error()}

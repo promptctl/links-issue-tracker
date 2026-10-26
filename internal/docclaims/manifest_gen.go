@@ -454,6 +454,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "find the detached-worker lock: %w", Src: "find the detached-worker lock: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "footprint: not measured", Src: "footprint: not measured"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "git ls-remote <url>", Src: "check the remote URL, credentials, or run `git ls-remote <url>`."},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "git names no default branch of remote %q in refs/remotes/%s/HEAD, and the record of what the remote last advertised is unreadable: %w", Src: "git names no default branch of remote %q in refs/remotes/%s/HEAD, and the record of what the remote last advertised is unreadable: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "has %q in its name, which Dolt does not allow in a remote's name", Src: "has %q in its name, which Dolt does not allow in a remote's name"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "hold the detached-worker lock: %w", Src: "hold the detached-worker lock: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "hooks install", Src: "hooks install"},
