@@ -331,9 +331,6 @@ func backgroundMirrorLeaf() bareLeaf {
 			})
 		}
 		defer stopAnswering()
-		if built.failed != nil {
-			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, built.failed, stopAnswering)
-		}
 
 		// Wait for the spawning command's embedded engine to be released. Opening
 		// a second engine on the same path while the first is live collides on
@@ -348,6 +345,13 @@ func backgroundMirrorLeaf() bareLeaf {
 			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, fmt.Errorf(
 				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
 				parentPID, workerParentWaitTimeout), stopAnswering)
+		}
+		// A workspace that could not be built ends like the mirror's other
+		// pre-attempt deaths, once the parent has exited, so no push outcome is
+		// written while the spawning command may still be writing its own.
+		// [LAW:no-ambient-temporal-coupling]
+		if built.failed != nil {
+			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, built.failed, stopAnswering)
 		}
 
 		for {

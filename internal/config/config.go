@@ -354,6 +354,19 @@ func (l fileLayer) Content() ([]byte, error) {
 	return content, nil
 }
 
+// NoProject is the project layer of a worker that was handed none: it sets
+// nothing, and says so on the event, where "handed" would claim a handoff
+// that never arrived. [FRAMING:representation]
+func NoProject() ProjectLayer { return noProjectLayer{} }
+
+type noProjectLayer struct{}
+
+func (noProjectLayer) Content() ([]byte, error) { return nil, nil }
+
+func (noProjectLayer) String() string { return "no project config" }
+
+func (noProjectLayer) Source() string { return "none" }
+
 // handedLayer is a project layer that arrived as content.
 type handedLayer struct{ content []byte }
 

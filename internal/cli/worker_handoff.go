@@ -69,8 +69,8 @@ type workerWorkspace struct {
 
 // buildWorkerWorkspace reads the handoff from stdin and builds the workspace
 // for the store at loc. A failed build's workspace is the store with no
-// project layer of its own, so a failure's completion reads the global
-// config alone.
+// project layer (config.NoProject), so a failure's completion reads the
+// global config alone.
 func buildWorkerWorkspace(ctx context.Context, env environ.Env, loc workspace.Location, stdin io.Reader) workerWorkspace {
 	built := handedWorkerWorkspace(env, loc, stdin)
 	// Every worker's event says which project layer it ran with, a failed
@@ -83,7 +83,7 @@ func handedWorkerWorkspace(env environ.Env, loc workspace.Location, stdin io.Rea
 	ws, err := handedWorkspace(env, loc, stdin)
 	if err != nil {
 		failedWS := infoForLocation(loc)
-		failedWS.Project = config.HandedProject(nil)
+		failedWS.Project = config.NoProject()
 		return workerWorkspace{ws: failedWS, failed: fmt.Errorf("build the worker's workspace: %w", err)}
 	}
 	return workerWorkspace{ws: ws}

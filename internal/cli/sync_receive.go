@@ -67,8 +67,9 @@ func receiveBlockPendingPath(ws workspace.Info) string {
 
 // scheduleReceive starts the automatic receive when one is due, and returns
 // without waiting for it: the command's cost is a marker stat, a marker write,
-// a local `git remote` read and a process spawn, never a round trip to the
-// remote. The remote check, the fetch it may lead to and the reconcile behind
+// a local `git remote` read, the worker's handoff (handoffOf: the project
+// config file and, with two or more remotes, the branch's upstream) and a
+// process spawn, never a round trip to the remote. The remote check, the fetch it may lead to and the reconcile behind
 // that all run in the detached worker (backgroundReceiveLeaf) once this
 // process has exited. [LAW:effects-at-boundaries] the network is the
 // worker's, never the command's.
