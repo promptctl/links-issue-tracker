@@ -26,7 +26,7 @@ var backupFamily = commandFamily[appSubcommand]{
 	subcommands: []subcommandRow[appSubcommand]{
 		// create only reads the store: it exports issue data and writes the
 		// snapshot file outside the database, so a write lock is unnecessary.
-		// The backups set itself is serialized by takeBackup.
+		// The backups set has its own lock, held by backup.Take.
 		{name: "create", payload: appSubcommand{access: app.AccessRead, declare: backupCreateLeaf}},
 		{name: "list", payload: appSubcommand{access: app.AccessRead, declare: backupListLeaf}},
 		{name: "restore", payload: appSubcommand{access: app.AccessWrite, declare: backupRestoreLeaf}},
@@ -37,11 +37,7 @@ func backupCreateLeaf() appLeaf {
 	fs := newCobraFlagSet("backup create")
 	keep := fs.Int("keep", backup.Budget, "Snapshots to keep after rotation")
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		export, err := ap.Store.Export(ctx)
-		if err != nil {
-			return err
-		}
-		snapshot, err := takeBackup(ctx, ap.Workspace, export, *keep)
+		snapshot, err := takeBackup(ctx, ap.Workspace, *keep, func() (model.Export, error) { return ap.Store.Export(ctx) })
 		if err != nil {
 			return err
 		}
@@ -50,32 +46,19 @@ func backupCreateLeaf() appLeaf {
 	}}
 }
 
-// takeBackup snapshots export into the workspace's backups, then prunes them to
-// keep. The snapshot it took and whether the set already held that content go
-// on the invocation's event, for `backup create` and a restore's pre-restore
-// backup alike. The snapshot comes back even when the prune fails, since it
-// was written, and the prune's error names it. [LAW:nothing-unseen]
-//
-// [LAW:no-shared-mutable-globals] The backups set is written by every
-// `backup create` and every restore, and a take of content the set holds
-// rewrites a name a concurrent prune may already have listed as past keep. The
-// commit lock is the set's one owner, as it is for `lit snapshots`: the write
-// and the prune run under it, so no prune removes a take it did not see.
-func takeBackup(ctx context.Context, ws workspace.Info, export model.Export, keep int) (snapshot backup.Snapshot, err error) {
-	err = withCommitLock(ctx, ws, func() error {
-		taken, err := backup.Create(ws.StorageDir, export)
-		if err != nil {
-			return err
-		}
-		snapshot = taken.Snapshot
-		telemetry.Set(ctx, "backup.snapshot", taken.Name)
-		telemetry.Set(ctx, "backup.refreshed", taken.Refreshed)
-		if err := backup.Prune(ws.StorageDir, keep); err != nil {
-			return fmt.Errorf("prune backups after writing %s: %w", taken.Path, err)
-		}
-		return nil
-	})
-	return snapshot, err
+// takeBackup snapshots what read returns into the workspace's backups, then
+// prunes them to keep, through backup.Take. The snapshot it took and whether
+// the set already held that content go on the invocation's event, for `backup
+// create` and a restore's pre-restore backup alike. The snapshot comes back
+// even when the prune fails, since it was written. [LAW:nothing-unseen]
+func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (model.Export, error)) (backup.Snapshot, error) {
+	taken, err := backup.Take(ctx, ws.StorageDir, keep, read)
+	if taken == nil {
+		return backup.Snapshot{}, err
+	}
+	telemetry.Set(ctx, "backup.snapshot", taken.Name)
+	telemetry.Set(ctx, "backup.refreshed", taken.Refreshed)
+	return taken.Snapshot, err
 }
 
 func backupListLeaf() appLeaf {
@@ -212,7 +195,9 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if outcome.guard == guardChanged {
 		return outcome, RestoreOverwriteError{}
 	}
-	snapshot, err := takeBackup(ctx, ap.Workspace, localExport, backup.Budget)
+	// The pre-restore backup is of the state the guard judged, which is the
+	// state the replace below overwrites.
+	snapshot, err := takeBackup(ctx, ap.Workspace, backup.Budget, func() (model.Export, error) { return localExport, nil })
 	outcome.snapshot = snapshot.Path
 	if err != nil {
 		return outcome, err

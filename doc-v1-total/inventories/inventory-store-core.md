@@ -3352,13 +3352,13 @@ Three write surfaces consume `Store.Export`:
 
 **(a) `lit export` to stdout** — `internal/cli/cli.go`. No flags other than the shared set; `writeJSON(stdout, export)` (`cli.go`), which is `json.NewEncoder(w)` with `SetIndent("", "  ")` then `Encode` (`cli.go`). So: **two-space indent, one trailing newline** (Encoder.Encode appends `\n`), single JSON object, HTML escaping on (encoder default). Comment at `cli.go`: "Export is JSON-only — there is no text representation of a full database export."
 
-**(b) Backup snapshots** — `internal/backup/backup.go`. `Create(storageDir, export)`:
+**(b) Backup snapshots** — `internal/backup/backup.go`. `Take(ctx, storageDir, keep, read)`, the one writer, holds `<storageDir>/.links-backups.lock` while it reads, writes and prunes:
 - directory `filepath.Join(storageDir, "backups")`, created with mode `0o755`.
 - filename `syncfile.ContentHash(export) + ".json"`: a snapshot is named by its content, `exported_at` left out, so a take of content the set already holds replaces the snapshot of that name, which becomes the newest, and the set holds each content once; `Taken.Refreshed` says whether the name already existed.
 - written via `syncfile.WriteAtomic`.
 - returns `Taken{Snapshot, Refreshed}`, `Snapshot{Path, Name, Created (mtime UTC), Size}` with tags `json:"path"`, `"name"`, `"created"`, `"size"`.
 - `List` reads that dir, skips directories and any entry not ending in `.json`; a missing dir returns `[]Snapshot{}` and no error.
-- `Prune(storageDir, keep)` errors on `keep <= 0` (test `internal/backup/backup_test.go`); `backupCreateLeaf` defaults `--keep` to `backup.Budget` (20), and the restore prunes to it (`internal/cli/backup.go`).
+- `Take` refuses `keep <= 0` before it reads (test `internal/backup/backup_test.go`); `backupCreateLeaf` defaults `--keep` to `backup.Budget` (20), and the restore prunes to it (`internal/cli/backup.go`).
 
 **(c) Sync file** — `internal/syncfile/syncfile.go`. `WriteAtomic(path, export)`:
 - `marshalExport` = `json.MarshalIndent(export, "", "  ")` **plus a trailing `'\n'`** (`syncfile.go`).
