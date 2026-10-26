@@ -22,8 +22,8 @@ import (
 // relative remote URL is joined to it without touching the filesystem, and a
 // lexical join of a leading ".." gives the OS's answer only from a root with
 // no symlink left in it. The zero value names no checkout: a Remotes over it
-// fails every read at gitStdout, and NewGitRemote panics on a URL it would
-// join to it.
+// fails every read at gitStdout, and a GitRemote over it panics when its URL
+// is a path it would join to it.
 // [LAW:types-are-the-program]
 type CheckoutRoot struct {
 	path string
@@ -48,38 +48,66 @@ func ParseCheckoutRoot(path string) (CheckoutRoot, error) {
 	return CheckoutRoot{path: path}, nil
 }
 
-// GitRemote is one remote of git's remote list: its name as git spells it and
-// its fetch URL, already read as git reads it. NewGitRemote is the only way to
+// GitRemote is one remote of git's remote list: its name as git spells it,
+// its fetch URL as written, and the checkout root it was listed in, which
+// together say what git reads the URL as. NewGitRemote is the only way to
 // build one. [LAW:parse-dont-validate]
 type GitRemote struct {
-	name string
-	url  remoteURL
+	name    string
+	written string
+	root    CheckoutRoot
 }
 
-// NewGitRemote reads the fetch URL git lists for the remote, from the checkout
-// at root.
+// NewGitRemote is the remote git lists with the fetch URL written, as the
+// checkout at root lists it.
 func NewGitRemote(name, written string, root CheckoutRoot) GitRemote {
-	return GitRemote{name: name, url: readRemoteURL(written, root)}
+	return GitRemote{name: name, written: written, root: root}
 }
 
 // Name is the remote's name as git spells it.
 func (r GitRemote) Name() string { return r.name }
 
+// url is the fetch URL as git reads it from the root. [LAW:one-source-of-truth]
+// derived from the written URL and the root every time, never stored beside them.
+func (r GitRemote) url() remoteURL { return readRemoteURL(r.written, r.root) }
+
 // SyncableRemote is the one parse of a git remote into a remote lit syncs
 // with: a name Dolt can hold and a URL that means one repository wherever it
-// is read. Either refusal is a storage.RefusedRemoteError, so every caller
-// that tells a refused remote from a failure asks one question.
-// [LAW:single-enforcer]
+// is read. Either refusal is a RefusedGitRemote, which unwraps to a
+// storage.RefusedRemoteError, so every caller that tells a refused remote from
+// a failure asks one question. [LAW:single-enforcer]
 func (r GitRemote) SyncableRemote() (SyncableRemote, error) {
+	url := r.url()
 	name, err := storage.ParseRemoteName(r.name)
+	if refusal := (storage.RefusedRemoteError{}); errors.As(err, &refusal) {
+		return SyncableRemote{}, RefusedGitRemote{Remote: r, Reason: refusal.Reason}
+	}
 	if err != nil {
 		return SyncableRemote{}, err
 	}
-	if r.url.refusal != nil {
-		return SyncableRemote{}, storage.RefusedRemoteError{Name: r.name, Reason: r.url.refusal}
+	if url.refusal != nil {
+		return SyncableRemote{}, RefusedGitRemote{Remote: r, Reason: url.refusal}
 	}
-	return SyncableRemote{name: name, url: r.url}, nil
+	return SyncableRemote{name: name, url: url}, nil
 }
+
+// RefusedGitRemote is a remote lit refuses to sync with, carried whole, so a
+// caller that still has a question for it (init's fork check) asks the remote
+// that was refused rather than looking it up again.
+type RefusedGitRemote struct {
+	Remote GitRemote
+	Reason storage.RemoteRefusal
+}
+
+// Refusal is the refusal as storage names it. [LAW:one-source-of-truth] its
+// name is the remote's, derived here, never stored beside it.
+func (e RefusedGitRemote) Refusal() storage.RefusedRemoteError {
+	return storage.RefusedRemoteError{Name: e.Remote.name, Reason: e.Reason}
+}
+
+func (e RefusedGitRemote) Error() string { return e.Refusal().Error() }
+
+func (e RefusedGitRemote) Unwrap() error { return e.Refusal() }
 
 // SyncableRemote is a git remote lit syncs with. Only GitRemote.SyncableRemote
 // builds one that names a remote; the zero value names none.

@@ -31,7 +31,7 @@ const debugSyncBranchEnvVar = "LINKS_DEBUG_DOLT_SYNC_BRANCH"
 const firstPushSkipMessage = "Skipping lit sync: remote has no refs yet. " +
 	"This is normal ONLY for the very first push to a brand-new empty repo. " +
 	"If you have pushed to this remote before, this message means something is wrong — " +
-	"check the remote URL, credentials, or run `git ls-remote <remote>`."
+	"check the remote URL, credentials, or run `git ls-remote <url>`."
 
 // syncSession is an open sync engine together with the sync capability every
 // `lit sync` subcommand needs, resolved once before any handler runs.
@@ -953,14 +953,14 @@ func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession
 		return syncTarget{skip: syncTargetNoRemote}, nil
 	}
 	remoteName := syncable.Name()
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, env, ws.RootDir, remoteName.String())
+	hasRefs, refsErr := ws.Repository().RemoteHasRefs(ctx, env, syncable)
 	if refsErr != nil {
 		return syncTarget{remote: remoteName}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
 	}
 	if !hasRefs {
 		return syncTarget{remote: remoteName, skip: syncTargetRemoteEmpty}, nil
 	}
-	branch, err := resolveSyncBranch(ctx, env, ws, remoteName)
+	branch, err := resolveSyncBranch(ctx, env, ws, syncable)
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}

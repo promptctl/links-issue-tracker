@@ -312,71 +312,6 @@ func upstreamRemote(ctx context.Context, env environ.Env, cwd string) (string, e
 	return remote, nil
 }
 
-func RemoteHasRefs(ctx context.Context, env environ.Env, cwd string, remote string) (bool, error) {
-	remoteName := normalizeRemoteName(remote)
-	output, err := gitOutput(ctx, env, cwd, "ls-remote", remoteName)
-	if err != nil {
-		return false, err
-	}
-	return strings.TrimSpace(output) != "", nil
-}
-
-// RemoteDoltRefs is the remote's advertisement of lit's Dolt ticket data: every
-// ref under refs/dolt/* — the namespace lit pushes its store into — with the
-// object it points at, as `git ls-remote <remote> refs/dolt/*` prints it and
-// trimmed. It is one round trip and no transfer, so it is the cheapest true
-// answer to "has the remote moved": the same bytes back means the same store
-// is on the remote. Empty when the remote carries no Dolt data at all.
-// [LAW:one-source-of-truth] the one ls-remote of that namespace; the
-// has-data question below is derived from it, never asked again.
-func RemoteDoltRefs(ctx context.Context, env environ.Env, cwd string, remote string) (string, error) {
-	remoteName := normalizeRemoteName(remote)
-	output, err := gitOutput(ctx, env, cwd, "ls-remote", remoteName, "refs/dolt/*")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(output), nil
-}
-
-// RemoteHasDoltData reports whether the remote advertises lit's Dolt ticket data
-// — the refs/dolt/* namespace lit pushes its store into. This is the
-// authoritative "the remote carries a backlog" signal: RemoteHasRefs is true for
-// any git repo (code refs alone), so only the presence of refs/dolt/* tells
-// "remote has tickets to adopt" apart from "remote is just a code repo". The
-// adopt step keys its loud-vs-silent decision on this so an empty store that
-// hides a real remote backlog is unrepresentable. [LAW:one-source-of-truth]
-func RemoteHasDoltData(ctx context.Context, env environ.Env, cwd string, remote string) (bool, error) {
-	refs, err := RemoteDoltRefs(ctx, env, cwd, remote)
-	if err != nil {
-		return false, err
-	}
-	return refs != "", nil
-}
-
-// LocalRemoteHead is the remote's default branch as this repository already
-// records it: refs/remotes/<remote>/HEAD, which `git clone` sets and a plain
-// `git remote add` does not. It never touches the network, so any command may
-// ask it; "" when the ref is unset.
-func LocalRemoteHead(ctx context.Context, env environ.Env, cwd string, remote string) string {
-	remoteName := normalizeRemoteName(remote)
-	symbolicRefOutput, _ := gitOutput(ctx, env, cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
-	return strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
-}
-
-// AdvertisedRemoteHead asks the remote which branch its HEAD names: one
-// `git ls-remote --symref` round trip, unbounded but by ctx, so only a command
-// that already talks to the remote asks it. "" with a nil error means the
-// remote answered and advertises no HEAD branch; a failed ask is the error.
-// [LAW:no-silent-failure]
-func AdvertisedRemoteHead(ctx context.Context, env environ.Env, cwd string, remote string) (string, error) {
-	remoteName := normalizeRemoteName(remote)
-	lsRemoteOutput, err := gitOutput(ctx, env, cwd, "ls-remote", "--symref", remoteName, "HEAD")
-	if err != nil {
-		return "", fmt.Errorf("git ls-remote --symref %s HEAD: %w", remoteName, err)
-	}
-	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput)), nil
-}
-
 // Resolve finds the workspace containing cwd, creating its config on first
 // sight, with no prefix of its own to offer — the repository name supplies one.
 func Resolve(env environ.Env, cwd string) (Info, error) {
@@ -723,36 +658,6 @@ func classifyGitError(context string, err error) error {
 		return ErrNotGitRepo
 	}
 	return fmt.Errorf("%s: %w", context, err)
-}
-
-func normalizeRemoteName(remote string) string {
-	trimmed := strings.TrimSpace(remote)
-	if trimmed == "" {
-		return "origin"
-	}
-	return trimmed
-}
-
-func defaultRemoteBranchFromSymbolicRef(remote string, symbolicRef string) string {
-	ref := strings.TrimSpace(symbolicRef)
-	prefix := strings.TrimSpace(remote) + "/"
-	if !strings.HasPrefix(ref, prefix) {
-		return ""
-	}
-	return strings.TrimSpace(strings.TrimPrefix(ref, prefix))
-}
-
-func defaultRemoteBranchFromLSRemote(output string) string {
-	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "ref: refs/heads/") || !strings.HasSuffix(trimmed, "\tHEAD") {
-			continue
-		}
-		branch := strings.TrimPrefix(trimmed, "ref: refs/heads/")
-		branch = strings.TrimSuffix(branch, "\tHEAD")
-		return strings.TrimSpace(branch)
-	}
-	return ""
 }
 
 // resolveIssuePrefix is the single enforcer of the prefix rule. A workspace's

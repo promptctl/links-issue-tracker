@@ -11,13 +11,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
-	ws := branchTestWorkspace(t, t.TempDir())
-	got, err := resolveSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
+	ws := pushedRepoWithoutRemoteHead(t)
+	got, err := resolveSyncBranch(underInvocation(context.Background()), testEnv(), ws, originRemote(t, ws))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
@@ -31,8 +32,8 @@ func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 func TestResolveSyncBranchErrorsWhenRemoteAdvertisesNoDefault(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
-	runGit(t, ws.RootDir, "--git-dir", remoteURL(t, ws), "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
-	_, err := resolveSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
+	runGit(t, ws.RootDir, "--git-dir", originRemote(t, ws).URL(), "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
+	_, err := resolveSyncBranch(underInvocation(context.Background()), testEnv(), ws, originRemote(t, ws))
 	if err == nil {
 		t.Fatal("expected error when the remote advertises no default branch")
 	}
@@ -48,10 +49,10 @@ func TestResolveSyncBranchErrorsWhenRemoteAdvertisesNoDefault(t *testing.T) {
 // as "default branch unavailable". [LAW:no-silent-failure]
 func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(underInvocation(context.Background()))
 	cancel()
-	ws := branchTestWorkspace(t, t.TempDir())
-	_, err := resolveSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
+	ws := pushedRepoWithoutRemoteHead(t)
+	_, err := resolveSyncBranch(ctx, testEnv(), ws, originRemote(t, ws))
 	if err == nil {
 		t.Fatal("expected error when context is cancelled")
 	}
@@ -68,14 +69,15 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 func TestKnownSyncBranchReportsWhatTheSyncVerbResolved(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
-	if _, err := knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin")); err == nil {
+	ctx := underInvocation(context.Background())
+	if _, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin")); err == nil {
 		t.Fatal("knownSyncBranch() before any sync: want the not-known error")
 	}
-	synced, err := resolveSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
+	synced, err := resolveSyncBranch(ctx, testEnv(), ws, originRemote(t, ws))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
-	known, err := knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
+	known, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatalf("knownSyncBranch() after sync error = %v", err)
 	}
@@ -94,7 +96,7 @@ func TestKnownSyncBranchNeverAsksTheRemote(t *testing.T) {
 	runGit(t, repo, "remote", "add", "origin", silentRemoteURL(t))
 	ws := branchTestWorkspace(t, repo)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(underInvocation(context.Background()), 5*time.Second)
 	defer cancel()
 	_, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
 	if err == nil || !strings.Contains(err.Error(), "not known on this machine") || strings.Contains(err.Error(), "%!") {
@@ -112,9 +114,11 @@ func TestResolveSyncBranchSurfacesCancellationMidAsk(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runGit(t, repo, "remote", "add", "origin", silentRemoteURL(t))
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	ws := branchTestWorkspace(t, repo)
+	remote := originRemote(t, ws)
+	ctx, cancel := context.WithTimeout(underInvocation(context.Background()), 300*time.Millisecond)
 	defer cancel()
-	_, err := resolveSyncBranch(ctx, testEnv(), branchTestWorkspace(t, repo), remoteName(t, "origin"))
+	_, err := resolveSyncBranch(ctx, testEnv(), ws, remote)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want context.DeadlineExceeded in the chain", err)
 	}
@@ -154,12 +158,12 @@ func TestKnownSyncBranchPrefersGitsRefOverAnUnreadableRecord(t *testing.T) {
 	if err := os.Mkdir(advertisedSyncBranchPath(ws, remoteName(t, "origin")), 0o755); err != nil {
 		t.Fatalf("make the record unreadable: %v", err)
 	}
-	got, err := knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
+	got, err := knownSyncBranch(underInvocation(context.Background()), testEnv(), ws, remoteName(t, "origin"))
 	if err != nil || got != "trunk" {
 		t.Fatalf("knownSyncBranch() = %q, %v; want trunk", got, err)
 	}
 	runGit(t, ws.RootDir, "remote", "set-head", "origin", "--delete")
-	_, err = knownSyncBranch(context.Background(), testEnv(), ws, remoteName(t, "origin"))
+	_, err = knownSyncBranch(underInvocation(context.Background()), testEnv(), ws, remoteName(t, "origin"))
 	if err == nil || !strings.Contains(err.Error(), "unreadable") {
 		t.Fatalf("knownSyncBranch() error = %v, want the unreadable record named", err)
 	}
@@ -187,10 +191,16 @@ func pushedRepoWithoutRemoteHead(t *testing.T) workspace.Info {
 
 func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	t.Helper()
-	return workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), checkoutRoot(t, root))}
+	checkout := checkoutRoot(t, root)
+	return workspace.Info{
+		RootDir:  checkout.String(),
+		Location: workspace.Location{GitCommonDir: filepath.Join(checkout.String(), ".git"), StorageDir: t.TempDir()},
+		Remotes:  workspace.NewRemotes(testEnv(), checkout),
+	}
 }
 
-func remoteURL(t *testing.T, ws workspace.Info) string {
+// originRemote is the workspace's one remote, as lit syncs with it.
+func originRemote(t *testing.T, ws workspace.Info) workspace.SyncableRemote {
 	t.Helper()
 	remotes, err := workspace.NewRemotes(testEnv(), checkoutRoot(t, ws.RootDir)).List(underInvocation(context.Background()))
 	if err != nil || len(remotes) != 1 {
@@ -200,7 +210,50 @@ func remoteURL(t *testing.T, ws workspace.Info) string {
 	if err != nil {
 		t.Fatalf("SyncableRemote() error = %v", err)
 	}
-	return remote.URL()
+	return remote
+}
+
+// The event names which answer decided the branch: the override, git's
+// remote HEAD, or the remote's advertised HEAD for the branch a sync verb
+// syncs against; the override, git's remote HEAD, or the record of the
+// advertised one for the branch a read reports on. One command can make both
+// decisions, and each keeps its own fact. [LAW:nothing-unseen]
+func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
+	facts := func(t *testing.T, resolves ...func(ctx context.Context) (string, error)) map[string]any {
+		t.Helper()
+		rec := telemetry.Begin(telemetry.Event{})
+		for _, resolve := range resolves {
+			if _, err := resolve(telemetry.With(context.Background(), rec)); err != nil {
+				t.Fatalf("resolve: %v", err)
+			}
+		}
+		return rec.Finish(telemetry.End{}).Facts
+	}
+	ws := pushedRepoWithoutRemoteHead(t)
+	resolve := func(ctx context.Context) (string, error) {
+		return resolveSyncBranch(ctx, testEnv(), ws, originRemote(t, ws))
+	}
+	known := func(ctx context.Context) (string, error) {
+		return knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
+	}
+	check := func(t *testing.T, when string, got map[string]any, want map[string]any) {
+		t.Helper()
+		for _, key := range []string{"sync.branch_source", "freshness.branch_source"} {
+			if got[key] != want[key] {
+				t.Errorf("%s: %s = %v, want %v", when, key, got[key], want[key])
+			}
+		}
+	}
+
+	t.Setenv(debugSyncBranchEnvVar, "")
+	check(t, "a receive then a banner, remote HEAD unset", facts(t, resolve, known),
+		map[string]any{"sync.branch_source": "advertised", "freshness.branch_source": "recorded"})
+	runGit(t, ws.RootDir, "remote", "set-head", "origin", "trunk")
+	check(t, "set remote HEAD", facts(t, resolve, known),
+		map[string]any{"sync.branch_source": "remote_head", "freshness.branch_source": "remote_head"})
+	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
+	check(t, "override, a read alone", facts(t, known),
+		map[string]any{"freshness.branch_source": "override"})
 }
 
 // A git that cannot say which remote the branch tracks fails the selection
@@ -228,5 +281,29 @@ func TestAnUnreadableUpstreamFailsOnlyTheSelectionThatReadsIt(t *testing.T) {
 	}
 	if remote, ok, err := workspaceSyncRemote(underInvocation(context.Background()), ws, ""); err == nil || !strings.Contains(err.Error(), "ref lock") {
 		t.Fatalf("workspaceSyncRemote(\"\") = %q, %v, %v; want the upstream read's failure, not a fallback to none", remote.Name(), ok, err)
+	}
+}
+
+// The override decides alone: a remote HEAD git cannot read as a branch does
+// not fail a resolve the override has already answered, and no git is spawned
+// to ask it.
+func TestTheSyncBranchOverrideOutranksAnUnreadableRemoteHead(t *testing.T) {
+	ws := pushedRepoWithoutRemoteHead(t)
+	runGit(t, ws.RootDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/trunk")
+	remote := originRemote(t, ws)
+	t.Setenv(debugSyncBranchEnvVar, "")
+	if _, err := resolveSyncBranch(underInvocation(context.Background()), testEnv(), ws, remote); err == nil || !strings.Contains(err.Error(), "set-head") {
+		t.Fatalf("resolveSyncBranch() with no override = %v; want the remote HEAD's error naming set-head", err)
+	}
+	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
+	env := testEnv()
+	if got, err := resolveSyncBranch(underInvocation(context.Background()), env, ws, remote); err != nil || got != "debug-branch" {
+		t.Fatalf("resolveSyncBranch() = %q, %v; want debug-branch", got, err)
+	}
+	if got, err := knownSyncBranch(underInvocation(context.Background()), env, ws, remoteName(t, "origin")); err != nil || got != "debug-branch" {
+		t.Fatalf("knownSyncBranch() = %q, %v; want debug-branch", got, err)
+	}
+	if spawned := env.GitSpawns(); spawned != 0 {
+		t.Fatalf("the override's resolves spawned %d git; want none", spawned)
 	}
 }

@@ -84,7 +84,16 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 	measured["XDG_STATE_HOME"] = stateHome
 
 	geometry := "rev-parse --show-toplevel --git-common-dir --git-dir"
-	freshness := []string{geometry, "remote -v", "symbolic-ref --quiet --short refs/remotes/origin/HEAD", "worktree list --porcelain -z"}
+	// The remote-HEAD question is the repository's, not the checkout's: it
+	// names the git dir explicitly, as git itself reports it (symlinks
+	// resolved, so /tmp's macOS spelling does not leak into the want).
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(resolvedRoot, ".git")
+	remoteHead := "--git-dir " + gitDir + " --work-tree " + gitDir + " symbolic-ref --quiet refs/remotes/origin/HEAD"
+	freshness := []string{geometry, "remote -v", remoteHead, "worktree list --porcelain -z"}
 	// Order matters only for the receive: the first command that wants one
 	// asks whether there is a remote to receive from, and the debounce keeps
 	// the commands after it from scheduling another.

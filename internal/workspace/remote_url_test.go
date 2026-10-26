@@ -165,10 +165,10 @@ func TestRemoteListingReadsEveryLineShapeGitPrints(t *testing.T) {
 	if !reflect.DeepEqual(names, []string{"origin", "spaced", "thin"}) {
 		t.Fatalf("remotes = %v, want [origin spaced thin]", names)
 	}
-	if got := listing.remotes[2].url.location; got != "https://h/t.git" {
+	if got := listing.remotes[2].url().location; got != "https://h/t.git" {
 		t.Fatalf("partial clone's URL = %q, want it without the filter", got)
 	}
-	if got := listing.remotes[1].url.location; got != filepath.Join(root.path, "../my remote.git") {
+	if got := listing.remotes[1].url().location; got != filepath.Join(root.path, "../my remote.git") {
 		t.Fatalf("spaced URL = %q, want the whole path joined", got)
 	}
 	if !reflect.DeepEqual(listing.withoutURL, []string{"pushonly", "zzz-empty"}) {

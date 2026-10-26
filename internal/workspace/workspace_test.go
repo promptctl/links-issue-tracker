@@ -352,21 +352,11 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	if len(remotes) != 2 {
 		t.Fatalf("len(remotes) = %d, want 2", len(remotes))
 	}
-	if remotes[0].Name() != "origin" || remotes[0].url.location != "https://github.com/acme/origin.git" {
+	if remotes[0].Name() != "origin" || remotes[0].url().location != "https://github.com/acme/origin.git" {
 		t.Fatalf("origin remote mismatch: %+v", remotes[0])
 	}
-	if remotes[1].Name() != "upstream" || remotes[1].url.location != "https://github.com/acme/upstream.git" {
+	if remotes[1].Name() != "upstream" || remotes[1].url().location != "https://github.com/acme/upstream.git" {
 		t.Fatalf("upstream remote mismatch: %+v", remotes[1])
-	}
-}
-
-func TestDefaultRemoteBranchFromSymbolicRef(t *testing.T) {
-	branch := defaultRemoteBranchFromSymbolicRef("origin", "origin/master")
-	if branch != "master" {
-		t.Fatalf("defaultRemoteBranchFromSymbolicRef() = %q, want master", branch)
-	}
-	if got := defaultRemoteBranchFromSymbolicRef("origin", "upstream/master"); got != "" {
-		t.Fatalf("defaultRemoteBranchFromSymbolicRef() = %q, want empty", got)
 	}
 }
 
@@ -377,87 +367,6 @@ func TestDefaultRemoteBranchFromLSRemote(t *testing.T) {
 	}
 	if got := defaultRemoteBranchFromLSRemote("c0ffee\trefs/heads/master\n"); got != "" {
 		t.Fatalf("defaultRemoteBranchFromLSRemote() = %q, want empty", got)
-	}
-}
-
-// A remote added and pushed to, never cloned, is the ticket's shape: git has no
-// refs/remotes/origin/HEAD, so only asking the remote names its default branch.
-func TestRemoteHeadIsUnsetLocallyAndAdvertisedByTheRemote(t *testing.T) {
-	repo := t.TempDir()
-	remote := filepath.Join(t.TempDir(), "remote.git")
-	run(t, repo, "git", "init")
-	run(t, repo, "git", "checkout", "-b", "master")
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(README.md) error = %v", err)
-	}
-	run(t, repo, "git", "add", "README.md")
-	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
-	run(t, repo, "git", "init", "--bare", remote)
-	run(t, repo, "git", "remote", "add", "origin", remote)
-	run(t, repo, "git", "push", "-u", "origin", "master")
-	run(t, repo, "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/master")
-
-	if got := LocalRemoteHead(context.Background(), testEnv(), repo, "origin"); got != "" {
-		t.Fatalf("LocalRemoteHead() = %q, want empty: git push does not set refs/remotes/origin/HEAD", got)
-	}
-	got, err := AdvertisedRemoteHead(context.Background(), testEnv(), repo, "origin")
-	if err != nil {
-		t.Fatalf("AdvertisedRemoteHead() error = %v", err)
-	}
-	if got != "master" {
-		t.Fatalf("AdvertisedRemoteHead() = %q, want master", got)
-	}
-}
-
-func TestRemoteHasRefsReturnsFalseForEmptyBareRemote(t *testing.T) {
-	repo := t.TempDir()
-	remote := filepath.Join(t.TempDir(), "remote.git")
-	run(t, repo, "git", "init")
-	run(t, repo, "git", "init", "--bare", remote)
-	run(t, repo, "git", "remote", "add", "origin", remote)
-
-	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "origin")
-	if err != nil {
-		t.Fatalf("RemoteHasRefs() error = %v, want nil for empty bare remote", err)
-	}
-	if hasRefs {
-		t.Fatalf("RemoteHasRefs() = true, want false for empty bare remote")
-	}
-}
-
-func TestRemoteHasRefsReturnsTrueForPopulatedRemote(t *testing.T) {
-	repo := t.TempDir()
-	remote := filepath.Join(t.TempDir(), "remote.git")
-	run(t, repo, "git", "init")
-	run(t, repo, "git", "checkout", "-b", "master")
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(README.md) error = %v", err)
-	}
-	run(t, repo, "git", "add", "README.md")
-	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
-	run(t, repo, "git", "init", "--bare", remote)
-	run(t, repo, "git", "remote", "add", "origin", remote)
-	run(t, repo, "git", "push", "-u", "origin", "master")
-
-	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "origin")
-	if err != nil {
-		t.Fatalf("RemoteHasRefs() error = %v, want nil for populated remote", err)
-	}
-	if !hasRefs {
-		t.Fatalf("RemoteHasRefs() = false, want true for populated remote")
-	}
-}
-
-func TestRemoteHasRefsReturnsErrorForUnknownRemoteName(t *testing.T) {
-	repo := t.TempDir()
-	run(t, repo, "git", "init")
-
-	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "does-not-exist")
-	if err == nil {
-		t.Fatalf("RemoteHasRefs() error = nil, want error for unknown remote (got hasRefs=%v)", hasRefs)
-	}
-	if hasRefs {
-		t.Fatalf("RemoteHasRefs() = true, want false alongside error")
 	}
 }
 
@@ -530,77 +439,6 @@ func TestGitOutputCancellationKillsSubprocess(t *testing.T) {
 	var netErr net.Error
 	if _, err := io.Copy(io.Discard, conn); errors.As(err, &netErr) && netErr.Timeout() {
 		t.Fatalf("the connection is still open 2s after the cancel — a process git started outlived it")
-	}
-}
-
-// TestRemoteHasDoltDataFalseForCodeOnlyRemote is the distinction that makes the
-// adopt decision honest: a normal code remote has git refs (RemoteHasRefs is
-// true) but carries no lit ticket data, so RemoteHasDoltData must be false. This
-// is what lets init tell "remote is just a code repo" apart from "remote has a
-// backlog we failed to adopt".
-func TestRemoteHasDoltDataFalseForCodeOnlyRemote(t *testing.T) {
-	repo := t.TempDir()
-	remote := filepath.Join(t.TempDir(), "remote.git")
-	run(t, repo, "git", "init")
-	run(t, repo, "git", "checkout", "-b", "master")
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(README.md) error = %v", err)
-	}
-	run(t, repo, "git", "add", "README.md")
-	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
-	run(t, repo, "git", "init", "--bare", remote)
-	run(t, repo, "git", "remote", "add", "origin", remote)
-	run(t, repo, "git", "push", "-u", "origin", "master")
-
-	hasRefs, err := RemoteHasRefs(context.Background(), testEnv(), repo, "origin")
-	if err != nil || !hasRefs {
-		t.Fatalf("precondition: RemoteHasRefs() = %v, err = %v; want true,nil", hasRefs, err)
-	}
-	hasData, err := RemoteHasDoltData(context.Background(), testEnv(), repo, "origin")
-	if err != nil {
-		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
-	}
-	if hasData {
-		t.Fatalf("RemoteHasDoltData() = true for a code-only remote, want false")
-	}
-}
-
-// TestRemoteHasDoltDataTrueWhenDoltRefPresent confirms the refs/dolt/* namespace
-// is what RemoteHasDoltData keys on.
-func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
-	repo := t.TempDir()
-	remote := filepath.Join(t.TempDir(), "remote.git")
-	run(t, repo, "git", "init")
-	run(t, repo, "git", "checkout", "-b", "master")
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(README.md) error = %v", err)
-	}
-	run(t, repo, "git", "add", "README.md")
-	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
-	run(t, repo, "git", "init", "--bare", remote)
-	run(t, repo, "git", "remote", "add", "origin", remote)
-	// Mirror how lit's sync lands data: a ref under the refs/dolt/* namespace.
-	run(t, repo, "git", "push", "origin", "HEAD:refs/dolt/data")
-
-	hasData, err := RemoteHasDoltData(context.Background(), testEnv(), repo, "origin")
-	if err != nil {
-		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
-	}
-	if !hasData {
-		t.Fatalf("RemoteHasDoltData() = false when refs/dolt/data is present, want true")
-	}
-
-	// The advertisement the has-data answer derives from is the listing itself:
-	// the object the remote's refs/dolt/data points at, in ls-remote's shape.
-	// This is what the automatic receive compares across runs, so its content —
-	// not just its emptiness — is the contract.
-	refs, err := RemoteDoltRefs(context.Background(), testEnv(), repo, "origin")
-	if err != nil {
-		t.Fatalf("RemoteDoltRefs() error = %v, want nil", err)
-	}
-	want := runOutput(t, repo, "git", "rev-parse", "HEAD") + "\trefs/dolt/data"
-	if refs != want {
-		t.Fatalf("RemoteDoltRefs() = %q, want %q", refs, want)
 	}
 }
 
