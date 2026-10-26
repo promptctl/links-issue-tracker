@@ -2,6 +2,8 @@ package conformance
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +21,10 @@ import (
 // The LATER group is written first, and the pair of instants is the one whose
 // spellings sort the other way, so a reader returning rows as recorded and one
 // comparing the stamps' text both fail. Inside each group every row shares one
-// stamp, so only the tie-break orders it.
+// stamp, so only the tie-break orders it, and each group is written against
+// the tie-break: relations in descending key order. Comment ids are minted by
+// the engine, so comment write order is random; six comments a group make the
+// one order that would hide a missing tie-break, all six ascending, 1/720.
 func relationsAndCommentsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The creates are inside the later group, not before it: an unpinned create
 	// would stamp the real instant, later than either pinned one.
@@ -30,6 +35,7 @@ func relationsAndCommentsAreTotallyOrdered(t *testing.T, ctx context.Context, st
 	for _, title := range []string{"one", "two", "three", "four", "five", "six"} {
 		peers = append(peers, mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title, Topic: "core", ParentID: epic.ID}))
 	}
+	slices.SortFunc(peers, func(a, b model.Issue) int { return strings.Compare(b.ID, a.ID) })
 	for _, group := range []struct {
 		at    time.Time
 		peers []model.Issue
@@ -42,8 +48,10 @@ func relationsAndCommentsAreTotallyOrdered(t *testing.T, ctx context.Context, st
 			if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: subject.ID, DstID: peer.ID, Type: model.RelRelatedTo, CreatedBy: "ada"}); err != nil {
 				t.Fatalf("AddRelation related-to %s: %v", peer.ID, err)
 			}
-			if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: subject.ID, Body: storagetest.CommentBody(t, "on "+peer.Title), CreatedBy: "ada"}); err != nil {
-				t.Fatalf("AddComment: %v", err)
+			for _, nth := range []string{"first", "second"} {
+				if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: subject.ID, Body: storagetest.CommentBody(t, nth+" on "+peer.Title), CreatedBy: "ada"}); err != nil {
+					t.Fatalf("AddComment: %v", err)
+				}
 			}
 		}
 	}
@@ -74,8 +82,8 @@ func relationsAndCommentsAreTotallyOrdered(t *testing.T, ctx context.Context, st
 		name     string
 		comments []model.Comment
 	}{{"Export", export.Comments}, {"GetIssueDetail", detail.Comments}} {
-		if len(read.comments) != 6 {
-			t.Fatalf("%s returned %d comments, want 6", read.name, len(read.comments))
+		if len(read.comments) != 12 {
+			t.Fatalf("%s returned %d comments, want 12", read.name, len(read.comments))
 		}
 		assertCommentsOrdered(t, read.name, read.comments)
 	}

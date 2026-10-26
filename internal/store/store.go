@@ -1585,21 +1585,16 @@ func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comm
 	// [LAW:single-enforcer] Existence is verified by the SELECT inside the same mutation that deletes,
 	// so the row proven present is the row removed — no TOCTOU gap, no separate guard.
 	if err := s.withMutation(ctx, "delete comment", func(ctx context.Context, tx *sql.Tx) error {
-		var createdAt string
-		row := tx.QueryRowContext(ctx, `SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?`, id)
-		if err := row.Scan(&deleted.ID, &deleted.IssueID, &deleted.Body, &createdAt, &deleted.CreatedBy); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				// [LAW:one-type-per-behavior] Typed not-found error matches GetIssue / relation removals,
-				// so callers detect not-found via errors.As instead of string-matching the message.
-				return storage.NotFoundError{Entity: "comment", ID: id}
-			}
+		found, err := queryComments(ctx, tx, `comments WHERE id = ?`, id)
+		if err != nil {
 			return fmt.Errorf("read comment: %w", err)
 		}
-		t, err := scanTime(createdAt)
-		if err != nil {
-			return err
+		if len(found) == 0 {
+			// [LAW:one-type-per-behavior] Typed not-found error matches GetIssue / relation removals,
+			// so callers detect not-found via errors.As instead of string-matching the message.
+			return storage.NotFoundError{Entity: "comment", ID: id}
 		}
-		deleted.CreatedAt = t
+		deleted = found[0]
 		// [LAW:single-enforcer] one comments DELETE, shared with the replay's delta.
 		if _, err := deleteCommentTx(ctx, tx, id); err != nil {
 			return err

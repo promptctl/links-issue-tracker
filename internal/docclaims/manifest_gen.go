@@ -847,7 +847,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id FROM issues WHERE item_rank = '' ORDER BY status ASC, priority ASC, updated_at DESC, id ASC", Src: "SELECT id FROM issues WHERE item_rank = '' ORDER BY status ASC, priority ASC, updated_at DESC, id ASC"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id, created_at FROM issues WHERE id = ?", Src: "SELECT id, created_at FROM issues WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id, issue_id, body, created_at, created_by FROM", Src: "SELECT id, issue_id, body, created_at, created_by FROM "},
-	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?", Src: "SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews", Src: "SELECT id, issue_id, plan_digest, verdict, laws, created_at, created_by FROM plan_reviews "},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT id, item_rank FROM issues WHERE deleted_at IS NULL", Src: "SELECT id, item_rank FROM issues WHERE deleted_at IS NULL"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges", Src: "SELECT issue_id, issue_created_at, purged_at, purged_by FROM purges"},

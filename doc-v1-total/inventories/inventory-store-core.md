@@ -851,9 +851,8 @@ with `created_at` as RFC3339Nano; failure → `fmt.Errorf("insert comment: %w", 
 `store.go`:
 1. `id := strings.TrimSpace(commentID)`; empty → `model.ValidationError` `"comment id is required"` (`store.go`).
 2. Inside `withMutation(ctx, "delete comment", ...)`:
-   - `SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?` (`store.go`);
-   - `sql.ErrNoRows` → `storage.NotFoundError{Entity: "comment", ID: id}` (`store.go`); other → `fmt.Errorf("read comment: %w", err)`;
-   - `scanTime(createdAt)` into `deleted.CreatedAt` (`store.go`);
+   - `queryComments(ctx, tx, "comments WHERE id = ?", id)` (`store.go`); an error → `fmt.Errorf("read comment: %w", err)`;
+   - no row → `storage.NotFoundError{Entity: "comment", ID: id}` (`store.go`);
    - `deleteCommentTx(ctx, tx, id)` (`store.go`; `internal/store/row_deletes.go`).
    Existence and deletion share the tx — no TOCTOU gap (`store.go`).
 3. Returns the fully-populated deleted comment.
