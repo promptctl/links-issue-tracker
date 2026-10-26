@@ -953,14 +953,14 @@ func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession
 		return syncTarget{skip: syncTargetNoRemote}, nil
 	}
 	remoteName := syncable.Name()
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, env, ws.RootDir, remoteName.String())
+	hasRefs, refsErr := ws.Repository().RemoteHasRefs(ctx, env, syncable)
 	if refsErr != nil {
 		return syncTarget{remote: remoteName}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
 	}
 	if !hasRefs {
 		return syncTarget{remote: remoteName, skip: syncTargetRemoteEmpty}, nil
 	}
-	branch, err := resolveSyncBranch(ctx, env, ws, remoteName)
+	branch, err := resolveSyncBranch(ctx, env, ws, syncable)
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}

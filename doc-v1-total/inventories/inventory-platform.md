@@ -500,15 +500,13 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
     trimmed: the current branch's remote whole as git records it (`a/b` for a branch tracking
     `a/b/master`), `.` for a local upstream, empty for none or a detached HEAD; failure ⇒
     `git for-each-ref refs/heads/ (the current branch's upstream) in %q: %w`.
-- `RemoteHasRefs(ctx, cwd, remote)`: `git ls-remote <remote>` non-empty.
-- `RemoteDoltRefs(ctx, cwd, remote)`: the trimmed output of `git ls-remote <remote> refs/dolt/*` — one round trip, no transfer; empty when the remote carries no Dolt data.
-- `RemoteHasDoltData(ctx, cwd, remote)`: `RemoteDoltRefs` non-empty
-.
-- `LocalRemoteHead(ctx, cwd, remote)`: `git symbolic-ref --quiet --short refs/remotes/<r>/HEAD`,
-  `""` when unset; never touches the network.
-- `AdvertisedRemoteHead(ctx, cwd, remote)`: `git ls-remote --symref <r> HEAD` parsed for
-  `ref: refs/heads/…\tHEAD`; a failed ls-remote is returned as an error.
-- An empty/blank remote name normalizes to `origin`.
+- `Repository` (`repository.go`), minted only by `Location.Repository()`, is the repository's common git dir. Every question below runs `git --git-dir=<dir> --work-tree=<dir>` in that dir, with git's repository-locating variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_IMPLICIT_WORK_TREE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_INDEX_FILE`, `GIT_GRAFT_FILE`, `GIT_SHALLOW_FILE`, `GIT_PREFIX`) removed from its environment. A remote is asked by URL (`git ls-remote [--symref] -- <url> …`), never by name, so no `remote.<name>.*` config applies.
+  - `RemoteHasRefs(ctx, env, remote)`: `ls-remote` of the `SyncableRemote`'s URL non-empty; failure ⇒ `git ls-remote <url>: %w`.
+  - `RemoteDoltRefs(ctx, env, remote)`: the trimmed output of `git ls-remote -- <url> refs/dolt/*`. It is one round trip with no transfer, and is empty when the remote carries no Dolt data.
+  - `RemoteHasDoltData(ctx, env, remote)`: `RemoteDoltRefs` non-empty.
+  - `CheckoutRemoteHasDoltData(ctx, env, gitRemote)`: the same question for a `GitRemote`, asked by its URL as written and run in the checkout root it was listed in.
+  - `LocalRemoteHead(ctx, env, name)`: `git symbolic-ref --quiet refs/remotes/<r>/HEAD` with the `refs/remotes/<r>/` prefix cut. Exit 1 ⇒ `""` (unset). Any other failure ⇒ `git symbolic-ref <ref> in %q: %w`. A target outside `refs/remotes/<r>/` ⇒ `%s in %q names %q, which is no branch of remote %q`. It never touches the network.
+  - `AdvertisedRemoteHead(ctx, env, remote)`: `git ls-remote --symref -- <url> HEAD` parsed for `ref: refs/heads/…\tHEAD`; a failed ls-remote is returned as an error.
 
 ---
 

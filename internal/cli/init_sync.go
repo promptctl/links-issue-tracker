@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -222,7 +223,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	// fresh, unless it carries lit data: a fresh store would fork from that
 	// backlog, which only the remote, once fixed, can adopt. [LAW:no-silent-failure]
 	if refused := (storage.RefusedRemoteError{}); errors.As(err, &refused) {
-		hasData, dataErr := workspace.RemoteHasDoltData(ctx, env, ws.RootDir, refused.Name)
+		hasData, dataErr := refusedRemoteHasDoltData(ctx, env, ws, refused.Name)
 		if dataErr != nil {
 			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: dataErr.Error()}
 		}
@@ -240,14 +241,14 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	remote := syncable.Name()
 	// [LAW:single-enforcer] First-push detection is centralized so init, pull,
 	// and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, env, ws.RootDir, remote.String())
+	hasRefs, refsErr := ws.Repository().RemoteHasRefs(ctx, env, syncable)
 	if refsErr != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Error: refsErr.Error()}
 	}
 	if !hasRefs {
 		return freshOutcome(initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote.String()})
 	}
-	branch, err := resolveSyncBranch(ctx, env, ws, remote)
+	branch, err := resolveSyncBranch(ctx, env, ws, syncable)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Error: err.Error()}
 	}
@@ -257,7 +258,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	// empty result, reported silently; a remote that DOES carry data is adopted
 	// by clone. hasData==true always leads to a clone, never to a silent empty
 	// store. [LAW:no-silent-failure] [LAW:types-are-the-program]
-	hasData, dataErr := workspace.RemoteHasDoltData(ctx, env, ws.RootDir, remote.String())
+	hasData, dataErr := ws.Repository().RemoteHasDoltData(ctx, env, syncable)
 	if dataErr != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Branch: branch, Error: dataErr.Error()}
 	}
@@ -265,6 +266,21 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 		return freshOutcome(initSyncOutcome{State: initSyncNoRemoteData, Remote: remote.String(), Branch: branch})
 	}
 	return &adoptClonePlan{remote: remote, branch: branch, url: store.GitBackedRemoteURL(syncable.URL())}, initSyncOutcome{}
+}
+
+// refusedRemoteHasDoltData asks the remote lit refused, by the name the
+// refusal carries, whether it carries lit's ticket data. The refusal came from
+// the same listing, so a name the listing does not hold is a fault.
+func refusedRemoteHasDoltData(ctx context.Context, env environ.Env, ws workspace.Info, name string) (bool, error) {
+	remotes, err := ws.Remotes.List(ctx)
+	if err != nil {
+		return false, err
+	}
+	at := slices.IndexFunc(remotes, func(r workspace.GitRemote) bool { return r.Name() == name })
+	if at < 0 {
+		return false, fmt.Errorf("refused remote %q is not among git's remotes", name)
+	}
+	return ws.Repository().CheckoutRemoteHasDoltData(ctx, env, remotes[at])
 }
 
 // remoteSituationLine renders the resolved remote-data situation for the

@@ -49,17 +49,21 @@ func ParseCheckoutRoot(path string) (CheckoutRoot, error) {
 }
 
 // GitRemote is one remote of git's remote list: its name as git spells it and
-// its fetch URL, already read as git reads it. NewGitRemote is the only way to
+// its fetch URL, already read as git reads it, beside the URL as written and
+// the checkout root it was read from, which a remote lit refuses is asked by
+// (Repository.CheckoutRemoteHasDoltData). NewGitRemote is the only way to
 // build one. [LAW:parse-dont-validate]
 type GitRemote struct {
-	name string
-	url  remoteURL
+	name    string
+	url     remoteURL
+	written string
+	root    CheckoutRoot
 }
 
 // NewGitRemote reads the fetch URL git lists for the remote, from the checkout
 // at root.
 func NewGitRemote(name, written string, root CheckoutRoot) GitRemote {
-	return GitRemote{name: name, url: readRemoteURL(written, root)}
+	return GitRemote{name: name, url: readRemoteURL(written, root), written: written, root: root}
 }
 
 // Name is the remote's name as git spells it.
