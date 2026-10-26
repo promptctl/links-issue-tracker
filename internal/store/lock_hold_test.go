@@ -135,6 +135,51 @@ func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
 	}
 }
 
+// A connection rotation rotates the holder record with the engine: one
+// record stands after it, under the name the new hold announces.
+func TestAReconnectRotatesTheHolderRecordWithTheEngine(t *testing.T) {
+	s, err := Open(context.Background(), testEnv(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+	before := s.hold.name()
+	if err := s.reconnect(context.Background()); err != nil {
+		t.Fatalf("reconnect() error = %v", err)
+	}
+	if s.hold.name() == before {
+		t.Fatal("the reconnect kept the previous hold")
+	}
+	entries, err := os.ReadDir(lockHolderDir(s.hold.storageDir, s.hold.lockPath))
+	if err != nil {
+		t.Fatalf("read holder dir: %v", err)
+	}
+	var records []string
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
+			records = append(records, entry.Name())
+		}
+	}
+	if len(records) != 1 || records[0] != s.hold.name() {
+		t.Fatalf("holder records after reconnect = %q, want only the new hold's %q", records, s.hold.name())
+	}
+}
+
+// A hold has one life, so a second Taken is said aloud, never dropped.
+func TestASecondTakenOnOneHoldIsReported(t *testing.T) {
+	notices := captureLockNotices(t, time.Hour, time.Hour)
+	liftWaitOutOfPlay(t)
+	hold, _ := takenHold(t, engineWriteRoutine, &heldReports{})
+	hold.taken()
+	if printed := notices.String(); !strings.Contains(printed, "again under a hold that already took it") {
+		t.Fatalf("notices = %q, want the second Taken reported", printed)
+	}
+}
+
 // A long hold says nothing after its arrival, however its engine works: its
 // waiters judge it by stand-still and fail naming it, as they always have.
 func TestALongHoldNeverHeartbeats(t *testing.T) {

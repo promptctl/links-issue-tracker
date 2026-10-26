@@ -286,7 +286,7 @@ naming the holder.
 | `lock.hold.routine` | Whether the hold was routine. |
 | `lock.hold.held_ms` | How long the command held `LOCK`. |
 | `lock.hold.executing_ms` | How much of that the store's engine was working: opening, running statements, holding a transaction open, closing. |
-| `lock.hold.longest_idle_ms` | The longest stretch the command held `LOCK` while its engine did no work. A routine hold sends no heartbeat in such a stretch, so a stretch as long as the wait fails the commands waiting behind it. |
+| `lock.hold.longest_idle_ms` | The longest stretch the command held `LOCK` while its engine did no work. A routine hold sends at most one heartbeat into such a stretch, for the work just before it, so a stretch as long as the wait fails the commands waiting behind it. |
 | `lock.hold.heartbeats` | How many times the hold announced itself: once when it took `LOCK`, and once per heartbeat after. |
 | `lock.hold.heartbeat_failures` | How many of those announcements could not be written. The first failure also prints a line on stderr. The command's own result is unchanged. |
 

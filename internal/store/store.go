@@ -568,13 +568,9 @@ func openEngine(ctx context.Context, doltRootDir string, workspaceID string, acc
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	releaseEngineRecord := func() error { return nil }
-	if access.holdsLock() {
-		// The engine took LOCK through Dolt's own loader, so the record is
-		// published here rather than by acquireStoreLock.
-		releaseEngineRecord = hold.record(ctx)
-	}
-	return db, hold, releaseEngineRecord, nil
+	// The engine took LOCK through Dolt's own loader, so the record is
+	// published here rather than by acquireStoreLock.
+	return db, hold, hold.record(ctx), nil
 }
 
 // openHeldPool opens a pool on database at doltRootDir and pings it under
@@ -639,9 +635,10 @@ func openHeldPool(ctx context.Context, doltRootDir, workspaceID, database string
 // any holder this re-open waits on either releases or outlives this
 // mutation's bounded failure, and the commit lock is released either way.
 //
-// The holder record is not rotated with the engine: it names this process
-// and this command, both of which the rotation keeps, and the gap in which
-// LOCK is momentarily free is the one the commit lock already covers.
+// The holder record rotates with the engine, as reopenEngine's does: the
+// previous hold's record retires before its engine closes, and the next
+// hold's is published once its engine holds LOCK, so the record, the arrival
+// and the heartbeats a waiter reads carry one hold's name.
 func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
 	hold := newLockHold(ctx, s.doltRootDir, s.access)
@@ -649,20 +646,25 @@ func (s *Store) reconnect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
-	prev, prevHold := s.db, s.hold
-	s.db, s.hold = next, hold
+	prev, prevHold, releasePrevRecord := s.db, s.hold, s.releaseEngineRecord
+	s.db, s.hold, s.releaseEngineRecord = next, hold, func() error { return nil }
 	// The previous engine's hold ends with its close, before the next engine
 	// can take LOCK, so no heartbeat stands for the gap in which LOCK is free.
+	recordErr := releasePrevRecord()
 	closeErr := prev.Close()
 	prevHold.end()
 	if closeErr != nil && !errors.Is(closeErr, context.Canceled) {
-		return fmt.Errorf("close prior dolt connection after reconnect: %w", closeErr)
+		return errors.Join(recordErr, fmt.Errorf("close prior dolt connection after reconnect: %w", closeErr))
+	}
+	if recordErr != nil {
+		return fmt.Errorf("retire the prior engine's holder record: %w", recordErr)
 	}
 	pingErr := next.PingContext(hold.under(ctx))
 	hold.reportWait(ctx, pingErr)
 	if err := wrapEngineOpenContention(pingErr, s.doltRootDir); err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
+	s.releaseEngineRecord = hold.record(ctx)
 	return nil
 }
 
@@ -3141,7 +3143,10 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) erro
 		// A pool with no database takes no LOCK at its ping: the database it
 		// creates takes LOCK here, so this runs under the hold as well.
 		if _, err := db.ExecContext(hold.under(ctx), fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
-			return fmt.Errorf("create dolt database: %w", err)
+			// So a foreign journal-lock holder surfaces here, not at the
+			// ping; the wrapper names it, and passes every other failure
+			// through untouched.
+			return wrapEngineOpenContention(fmt.Errorf("create dolt database: %w", err), staging)
 		}
 		return nil
 	}(); err != nil {

@@ -215,8 +215,13 @@ func (h *lockHold) name() string { return filepath.Base(h.recordPath) }
 // record publishes this process as LOCK's holder under the hold's own name,
 // once the open that took LOCK has returned, and returns the release that
 // retires the record. It wraps a no-op lock release: the hold itself ends
-// when the engine closes.
+// when the engine closes. A read engine's hold takes no LOCK, so it records
+// nothing and its release is a no-op. [LAW:single-enforcer] the one place
+// that decides whether an open is recorded.
 func (h *lockHold) record(ctx context.Context) func() error {
+	if !h.access.holdsLock() {
+		return func() error { return nil }
+	}
 	return recordLockHolder(ctx, h.storageDir, h.lockPath, h.privatePath, h.recordPath, func() error { return nil })
 }
 
@@ -231,10 +236,16 @@ func (h *lockHold) under(ctx context.Context) context.Context {
 // which announces the arrival as it starts: at this instant, not after the
 // open returns (under load, seconds later), and not inside Dolt's open, which
 // this callback runs in.
+//
+// A hold has one life: every context it is installed on opens exactly one
+// journaled store, which takes LOCK once and lets it go at the engine's
+// close. A second Taken would be a LOCK this hold neither heartbeats nor
+// reports, so it is said aloud rather than dropped. [LAW:no-silent-failure]
 func (h *lockHold) taken() {
 	h.mu.Lock()
 	if h.state != holdUnheld {
 		h.mu.Unlock()
+		fmt.Fprintf(lockWaitNoticeWriter, "lit: Dolt took %s again under a hold that already took it; this hold is neither heartbeating for nor reporting the second\n", h.lockPath)
 		return
 	}
 	now := h.now()
@@ -273,7 +284,10 @@ func (h *lockHold) beat(stop <-chan struct{}, stopped chan<- struct{}) {
 }
 
 // tick writes one heartbeat when the hold is routine, holds LOCK, is not
-// inside a suspended phase, and its engine worked since the last tick.
+// inside a suspended phase, and its engine worked since the last tick. So the
+// first tick after engine work ends still writes one, for that work: a holder
+// that turns to a wait outside its engine sends at most one heartbeat into
+// it, and its waiters' clocks start at most one holdHeartbeatInterval late.
 func (h *lockHold) tick() {
 	h.mu.Lock()
 	worked := h.worked || h.executing > 0

@@ -168,9 +168,12 @@ var rotationCloseReserve = time.Second
 // took LOCK in the rotation's gap heartbeats through its own open
 // (lockHold), and the re-open waits that out too, until the holder reaches
 // for this commit lock: a wait in lit, outside its engine, where its
-// heartbeat stops and coResidentHolderWait runs. The order doc.go needs still
-// holds, since that holder's own commit-lock wait starts only then and runs
-// commitLockWaiterBudget, longer than the re-open's. The one commit-lock
+// heartbeat stops (after at most one more, a holdHeartbeatInterval) and
+// coResidentHolderWait runs. The order doc.go needs still holds, since that
+// holder's own commit-lock wait starts only then and runs
+// commitLockWaiterBudget, longer than the re-open's by a whole
+// coResidentHolderWait, which the one late heartbeat's quarter of it fits
+// inside. The one commit-lock
 // waiter holding no LOCK, `lit snapshots new`'s prune, can fail naming the
 // rotating writer when a rotation meets a slow gap-taker's open: a named
 // long operation failing the way it already fails.

@@ -269,7 +269,8 @@ func refuseLOCKUnderCommitLock(ctx context.Context) error {
 // The handle has no SQL connection for executingConnector to watch, so the
 // hold's engine work is bracketed here: the load, the write and the close. The
 // commit-lock wait between them is not engine work, so a handle waiting on a
-// rotating writer's commit lock sends no heartbeat.
+// rotating writer's commit lock sends no heartbeat after the one its load
+// earned (lockHold.tick).
 func holdForRefWrite(ctx context.Context, root string, access engineAccess, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
 	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
 		return err
