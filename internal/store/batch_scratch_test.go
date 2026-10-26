@@ -69,14 +69,14 @@ func countTasks(t *testing.T, ctx context.Context, st *Store) int {
 func TestALandedBatchMovesItsBranchByItsWritesAndLeavesNoScratch(t *testing.T) {
 	ctx := context.Background()
 	st, epic := openBatchStore(t, ctx)
-	result, head, err := withBatch(ctx, st, createTwo(st, epic))
+	result, landing, err := withBatch(ctx, st, createTwo(st, epic))
 	if err != nil {
 		t.Fatalf("withBatch() error = %v", err)
 	}
-	if len(result.Created) != 2 {
-		t.Fatalf("result = %+v; want both creates", result)
+	if len(result.Created) != 2 || !landing.Landed {
+		t.Fatalf("result = %+v, landing %+v; want both creates, landed", result, landing)
 	}
-	landed, err := countCommitsInRange(ctx, st.db, head, headCommit(t, ctx, st))
+	landed, err := countCommitsInRange(ctx, st.db, landing.From, headCommit(t, ctx, st))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +151,12 @@ func TestABatchLandingRetriesPastGCContention(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.landHookForTest = failOnFire(1, gcContention())
-	result, head, err := withBatch(ctx, st, createTwo(st, epic))
+	result, landing, err := withBatch(ctx, st, createTwo(st, epic))
 	st.landHookForTest = nil
 	if err != nil {
 		t.Fatalf("withBatch() error = %v; want the contended landing retried", err)
 	}
+	head := landing.From
 	if len(result.Created) != 2 || countTasks(t, ctx, st) != 2 {
 		t.Fatalf("result = %+v; want both creates landed", result)
 	}
@@ -176,8 +177,11 @@ func TestABatchThatCannotLandWritesNothing(t *testing.T) {
 	var heard []string
 	st.ObserveChanges(func(_ storage.Change, issue model.Issue) { heard = append(heard, issue.ID) })
 	st.landHookForTest = func() error { return errors.New("injected: cannot land") }
-	result, _, err := withBatch(ctx, st, createTwo(st, epic))
+	result, landing, err := withBatch(ctx, st, createTwo(st, epic))
 	st.landHookForTest = nil
+	if landing.Landed {
+		t.Errorf("landing = %+v; want not landed", landing)
+	}
 	if err == nil || !strings.Contains(err.Error(), "land") || !strings.Contains(err.Error(), "injected: cannot land") {
 		t.Fatalf("withBatch() error = %v; want the landing's failure", err)
 	}
@@ -197,23 +201,67 @@ func TestABatchThatCannotLandWritesNothing(t *testing.T) {
 	assertBatchLeftNoScratch(t, ctx, st)
 }
 
-// A batch does not start on another batch's branch: its sweep would delete
-// the branch it stands on.
-func TestABatchRefusesToStartOnABatchBranch(t *testing.T) {
+// A batch does not start on a scratch branch, a batch's or any other run's: a
+// scratch branch is deleted when its run ends, and the batch's sweep would
+// delete another batch's live branch.
+func TestABatchRefusesToStartOnAScratchBranch(t *testing.T) {
+	for _, prefix := range scratchPrefixes {
+		t.Run(prefix, func(t *testing.T) {
+			ctx := context.Background()
+			st, epic := openBatchStore(t, ctx)
+			head := headCommit(t, ctx, st)
+			outer := prefix + "outer"
+			if err := st.checkoutNewAt(ctx, outer, head); err != nil {
+				t.Fatal(err)
+			}
+			_, landing, err := withBatch(ctx, st, createTwo(st, epic))
+			if err == nil || !strings.Contains(err.Error(), outer) || landing.Landed {
+				t.Fatalf("withBatch() = %+v, %v; want a refusal naming %s", landing, err, outer)
+			}
+			if left := branchesUnder(t, ctx, st, prefix); left["outer"] == "" {
+				t.Fatalf("branches under %s = %v; want %s untouched", prefix, left, outer)
+			}
+		})
+	}
+}
+
+// A batch whose caller is cancelled while it lands lands whole: the reset
+// that moves its branch runs to the end, so a batch never reports nothing
+// landed beside a branch that moved.
+func TestABatchCancelledWhileLandingLandsWhole(t *testing.T) {
+	st, epic := openBatchStore(t, context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st.landHookForTest = func() error {
+		cancel()
+		return nil
+	}
+	result, landing, err := withBatch(ctx, st, createTwo(st, epic))
+	st.landHookForTest = nil
+	if err != nil || !landing.Landed || len(result.Created) != 2 {
+		t.Fatalf("withBatch() = %+v, %+v, %v; want both creates landed", result, landing, err)
+	}
+	if n := countTasks(t, context.Background(), st); n != 2 {
+		t.Fatalf("tasks after the batch = %d; want 2", n)
+	}
+	assertBatchLeftNoScratch(t, context.Background(), st)
+}
+
+// Creating a batch's branch that meets GC contention is retried as every write
+// is, so the batch lands whole.
+func TestABatchRetriesCreatingItsBranchPastGCContention(t *testing.T) {
 	ctx := context.Background()
 	st, epic := openBatchStore(t, ctx)
-	head := headCommit(t, ctx, st)
-	outer := batchScratchPrefix + "outer"
-	if err := st.checkoutNewAt(ctx, outer, head); err != nil {
-		t.Fatal(err)
+	st.createScratchHookForTest = failOnFire(1, gcContention())
+	result, landing, err := withBatch(ctx, st, createTwo(st, epic))
+	st.createScratchHookForTest = nil
+	if err != nil || !landing.Landed || len(result.Created) != 2 {
+		t.Fatalf("withBatch() = %+v, %+v, %v; want the contended creation retried and the batch landed", result, landing, err)
 	}
-	_, _, err := withBatch(ctx, st, createTwo(st, epic))
-	if err == nil || !strings.Contains(err.Error(), outer) {
-		t.Fatalf("withBatch() error = %v; want a refusal naming %s", err, outer)
+	if n := countTasks(t, ctx, st); n != 2 {
+		t.Fatalf("tasks after the batch = %d; want 2", n)
 	}
-	if left := branchesUnder(t, ctx, st, batchScratchPrefix); left["outer"] == "" {
-		t.Fatalf("batch branches = %v; want %s untouched", left, outer)
-	}
+	assertBatchLeftNoScratch(t, ctx, st)
 }
 
 // A fresh connection resumes on the branch the session was last switched to,
@@ -240,7 +288,7 @@ func TestAReconnectResumesTheCheckedOutBranch(t *testing.T) {
 
 // A scratch run whose return to its home branch fails recovers by one
 // reconnect, which resumes on home — here not the branch a fresh connection
-// opens on.
+// opens on — and deletes its branches from there.
 func TestLeavingScratchRecoversAFailedReturnByOneReconnect(t *testing.T) {
 	ctx := context.Background()
 	st, _ := openBatchStore(t, ctx)
@@ -259,5 +307,14 @@ func TestLeavingScratchRecoversAFailedReturnByOneReconnect(t *testing.T) {
 	}
 	if branch, err := activeBranch(ctx, st.db); err != nil || branch != "home" {
 		t.Fatalf("active branch = %q (%v); want home", branch, err)
+	}
+	// The recovered run deletes its own branch, so no later sweep reads it as
+	// one a killed run left.
+	if left := branchesUnder(t, ctx, st, batchScratchPrefix); len(left) != 0 {
+		t.Fatalf("batch branches left = %v; want none", left)
+	}
+	deletes, looked := st.ScratchDeletes()
+	if !looked || len(deletes) != 1 || deletes[0].Branch != scratch || deletes[0].Cause != storage.ScratchFinished || deletes[0].Err != nil {
+		t.Fatalf("ScratchDeletes() = %+v, looked %v; want %s, finished", deletes, looked, scratch)
 	}
 }

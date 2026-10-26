@@ -193,11 +193,18 @@ type Store struct {
 	commitWorkingSetHookForTest func() error
 
 	// landHookForTest, if non-nil, fires at the top of every attempt of a
-	// batch's landing (withBatch), and its error, if any, stands in for that
-	// attempt failing. Production callers leave it nil; the batch tests use it
-	// to fail a landing transiently, proving its retry rotates and resumes on
-	// the branch it lands on. Same per-Store seam rationale as above.
+	// scratch run's landing (landScratch), and its error, if any, stands in
+	// for that attempt failing. Production callers leave it nil; the batch
+	// tests use it to fail a landing transiently, proving its retry rotates and
+	// resumes on the branch it lands on. Same per-Store seam rationale as
+	// above.
 	landHookForTest func() error
+
+	// createScratchHookForTest, if non-nil, fires at the top of every attempt
+	// to create a scratch branch (runOnScratch), and its error, if any, stands
+	// in for that attempt failing. Production callers leave it nil. Same
+	// per-Store seam rationale as above.
+	createScratchHookForTest func() error
 
 	// moveForkPointsHookForTest, if non-nil, fires at the top of every
 	// moveForkPointsAcrossTheCut, and its error, if any, stands in for that

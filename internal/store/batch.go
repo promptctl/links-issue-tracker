@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -36,19 +37,23 @@ const batchScratchPrefix = "lit-batch/"
 // process staged and never committed is committed first
 // (commitStrandedWrites), so the stranded write stays from's and is never
 // carried onto the batch's branch. A batch's branch that a killed process left
-// is swept at the start of the next batch, and recorded as an orphan.
+// is swept at the start of the next batch, and recorded as an orphan; a sweep
+// that cannot list them fails the batch, as any read before it writes does.
 //
-// It returns the head the batch started from beside what of fn's result
-// stands: all of it when the batch landed; the zero result beside a
-// *storage.RefusedBatchError when fn refused it, or beside the landing's error
-// when the batch could not land. The observers hear the batch's changes
+// It returns what of fn's result stands beside the batch's landing: all of
+// the result when the batch landed, which a landed batch whose scratch
+// cleanup failed returns beside that failure; the zero result beside a
+// *storage.RefusedBatchError when fn refused it, or beside the landing's
+// error when the batch could not land. The observers hear the batch's changes
 // (notify queues them) only when it landed, once the lock is released, as a
 // lone Apply's observers do. [LAW:no-silent-failure] [LAW:nothing-unseen]
-func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, string, error) {
+func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, batchLanding, error) {
 	var built, stands R
 	var heard []heardChange
-	var from, head string
+	var landing batchLanding
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		var from string
+		var orphans []string
 		// Retried as every write is, since nothing is written yet: a re-run
 		// finds the stranded writes already committed and reads the same head.
 		if err := retryTransientGCContention(ctx, func(ctx context.Context) error {
@@ -59,52 +64,40 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 			if from, err = activeBranch(ctx, s.db); err != nil {
 				return err
 			}
-			head, err = readDoltHead(ctx, s.db)
+			if landing.From, err = readDoltHead(ctx, s.db); err != nil {
+				return err
+			}
+			orphans, err = s.branchesUnderPrefix(ctx, batchScratchPrefix)
 			return err
 		}, s.reconnect); err != nil {
 			return fmt.Errorf("batch: %w", err)
 		}
-		// Nothing runs a batch inside a batch, and the sweep below would
-		// delete the outer one's live branch.
-		if strings.HasPrefix(from, batchScratchPrefix) {
-			return fmt.Errorf("batch: refusing to start a batch on %q, another batch's branch", from)
+		// A batch lands on a branch that holds data: a scratch branch is
+		// deleted when its run ends, and the sweep below would delete another
+		// batch's live branch.
+		if slices.ContainsFunc(scratchPrefixes, func(prefix string) bool { return strings.HasPrefix(from, prefix) }) {
+			return fmt.Errorf("batch: refusing to start a batch on %q, a scratch branch", from)
 		}
-		// A leftover branch is never from and is never pushed, so a sweep
-		// that fails is reported and the batch goes on. [LAW:no-silent-failure]
-		if err := s.deleteBranchesUnder(ctx, batchScratchPrefix, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: a batch could not sweep the branches killed batches left: %v\n", err)
+		// A leftover branch is never from and is never pushed, so a delete
+		// that fails is reported, on the event and here, and the batch goes
+		// on. [LAW:no-silent-failure]
+		if err := s.deleteScratch(ctx, orphans, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: a batch could not delete the branches killed batches left: %v\n", err)
 		}
 		scratch := fmt.Sprintf("%s%d-%d", batchScratchPrefix, os.Getpid(), time.Now().UnixNano())
-		landed := false
-		err := s.runOnScratch(ctx, from, []string{scratch}, head, func() error {
+		err := s.runOnScratch(ctx, from, []string{scratch}, landing.From, func() error {
 			if cause := fn(context.WithValue(ctx, batchHearingKey{}, &heard), &built); cause != nil {
-				return &storage.RefusedBatchError{Head: head, Cause: cause}
+				return &storage.RefusedBatchError{Head: landing.From, Cause: cause}
 			}
-			// Retried as every write is: checkout recorded from, so a
-			// rotation resumes there, and the reset lands on it.
-			if err := retryTransientGCContention(ctx, func(ctx context.Context) error {
-				if s.landHookForTest != nil {
-					if err := s.landHookForTest(); err != nil {
-						return err
-					}
-				}
-				scratchHead, err := commitHashOfRef(ctx, s.db, scratch)
-				if err != nil {
-					return err
-				}
-				if err := s.checkout(ctx, from); err != nil {
-					return fmt.Errorf("switch to %q: %w", from, err)
-				}
-				return resetHardToRef(ctx, s.db, scratchHead)
-			}, s.reconnect); err != nil {
+			if err := s.landScratch(ctx, from, scratch); err != nil {
 				return fmt.Errorf("batch: land %s on %s: %w", scratch, from, err)
 			}
-			landed = true
+			landing.Landed = true
 			return nil
 		})
 		// What stands is whether from moved, not how the run ended: a
 		// landed batch whose scratch cleanup failed still stands whole.
-		if landed {
+		if landing.Landed {
 			stands = built
 		} else {
 			heard = nil
@@ -112,5 +105,13 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 		return err
 	})
 	s.hear(ctx, heard...)
-	return stands, head, err
+	return stands, landing, err
+}
+
+// batchLanding is where a batch started and whether it landed: From is the
+// head the batch started from, which the commits a landed batch wrote sit
+// directly above, as undo's commitsAbove reads them.
+type batchLanding struct {
+	From   string
+	Landed bool
 }

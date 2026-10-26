@@ -7,8 +7,9 @@ import (
 
 // The branch a session is on is per-connection state, and a rotated
 // connection (reconnect, reopenEngine) opens on the database's default
-// branch. So the Store records the branch a scratch user switched to, and
-// every fresh connection resumes on it: a write a rotation retried inside a
+// branch. So the Store records the branch a scratch user switched to, for as
+// long as its scratch run lasts (runOnScratch), and every fresh connection
+// resumes on it: a write a rotation retried inside a
 // scratch run lands on the scratch branch, and one retried while landing it
 // lands on the branch it lands on, never on whichever branch the connection
 // happened to open on. Nothing records the branch a connection opens on, so
@@ -27,12 +28,17 @@ func (s *Store) checkout(ctx context.Context, branch string) error {
 	return execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", branch)
 }
 
-// checkoutNewAt records branch, then creates it at commit and switches the
-// session to it; a branch of that name is reset to commit, the one the
-// session is on included. A failed switch is returned as checkout's is.
+// checkoutNewAt creates branch at commit and switches the session to it, then
+// records it; a branch of that name is reset to commit, the one the session is
+// on included. It records only a branch that exists, since a creation that
+// failed may have made none for a fresh connection to resume on; its retry
+// makes it again. A failed switch is returned as checkout's is.
 func (s *Store) checkoutNewAt(ctx context.Context, branch, commit string) error {
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", branch, commit); err != nil {
+		return err
+	}
 	s.checkedOut = branch
-	return execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", branch, commit)
+	return nil
 }
 
 // resumeCheckedOut puts a fresh connection on the branch the session was last

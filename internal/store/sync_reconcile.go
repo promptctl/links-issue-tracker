@@ -993,10 +993,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// pre-reconcile head, after it, at the complete replayed spine — never an
 	// in-between. [LAW:one-source-of-truth] one authoritative ordering; no per-machine
 	// merge-commit DAG — linear history that fast-forward pushes.
-	if err := s.checkout(ctx, dataBranch); err != nil {
-		return replayLanding{}, fmt.Errorf("return to data branch %q: %w", dataBranch, err)
-	}
-	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", replayedCommit); err != nil {
+	if err := s.landScratch(ctx, dataBranch, scratch.spine); err != nil {
 		return replayLanding{}, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
 	}
 	// The data branch now durably holds the result; roll the recovery snapshots off to
