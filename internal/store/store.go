@@ -2491,6 +2491,37 @@ type issueRow struct {
 	Status model.StatusView
 }
 
+// rowFields is a row's data as an issue with no lifecycle: every column the
+// row holds and its labels, the empty set for none. It is the one conversion
+// of row data into an issue. hydrateIssues gives the result its lifecycle;
+// undo reads its editable fields on each side of a write through
+// storage.IssueFieldValues, and any lifecycle read on it panics (the model's
+// own guard), so it never stands in for a hydrated issue. [LAW:one-source-of-truth]
+func rowFields(row partialIssue, labels []string) model.Issue {
+	issue := model.Issue{
+		ID:          row.ID,
+		Title:       row.Title,
+		Description: row.Description,
+		Prompt:      row.Prompt,
+		Plan:        row.Plan,
+		Priority:    row.Priority,
+		IssueType:   row.IssueType,
+		Topic:       row.Topic,
+		Assignee:    row.Assignee,
+		Rank:        row.Rank,
+		Lane:        row.Lane,
+		Labels:      labels,
+		FollowsUp:   row.FollowsUp,
+		CreatedAt:   row.CreatedAt,
+		UpdatedAt:   row.UpdatedAt,
+	}
+	issue.SetRetention(row.Retention)
+	if issue.Labels == nil {
+		issue.Labels = []string{}
+	}
+	return issue
+}
+
 // partialIssue is row data only; hydrateIssues is the only path that may turn
 // it into a returned model.Issue.
 // [LAW:single-enforcer] Store hydration, not raw row decoding, owns lifecycle construction.
@@ -2768,27 +2799,7 @@ func (s *Store) hydrateBelow(ctx context.Context, rows []issueRow, chains []*des
 	}
 	hydrated := make([]model.Issue, 0, len(rows))
 	for _, row := range rows {
-		base := model.Issue{
-			ID:          row.Issue.ID,
-			Title:       row.Issue.Title,
-			Description: row.Issue.Description,
-			Prompt:      row.Issue.Prompt,
-			Plan:        row.Issue.Plan,
-			Priority:    row.Issue.Priority,
-			IssueType:   row.Issue.IssueType,
-			Topic:       row.Issue.Topic,
-			Assignee:    row.Issue.Assignee,
-			Rank:        row.Issue.Rank,
-			Lane:        row.Issue.Lane,
-			Labels:      labelsByID[row.Issue.ID],
-			FollowsUp:   row.Issue.FollowsUp,
-			CreatedAt:   row.Issue.CreatedAt,
-			UpdatedAt:   row.Issue.UpdatedAt,
-		}
-		base.SetRetention(row.Issue.Retention)
-		if base.Labels == nil {
-			base.Labels = []string{}
-		}
+		base := rowFields(row.Issue, labelsByID[row.Issue.ID])
 		// [LAW:single-enforcer] This store hydrator is the only read boundary
 		// that turns row status plus child relations into model lifecycle state.
 		// HydrateRow owns the container-vs-leaf dispatch.

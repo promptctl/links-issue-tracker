@@ -2327,19 +2327,32 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	// failed too — so the event counts what landed either way.
 	// [LAW:nothing-unseen]
 	result, err := ap.Store.BulkApply(ctx, prefix.Value(), actor, specs)
-	telemetry.Set(ctx, "import.created", len(result.Created))
-	telemetry.Set(ctx, "import.updated", len(result.Updated))
-	telemetry.Set(ctx, "import.fields_held", len(result.FieldsHeld))
-	telemetry.Set(ctx, "import.reparented", len(result.Reparented))
-	telemetry.Set(ctx, "import.parent_held", len(result.ParentHeld))
-	telemetry.Set(ctx, "import.blocked_by_set", len(result.BlockedBySet))
-	telemetry.Set(ctx, "import.blocked_by_held", len(result.BlockedByHeld))
-	telemetry.Set(ctx, "import.edges_added", result.EdgesAdded)
-	telemetry.Set(ctx, "import.edges_removed", result.EdgesRemoved)
-	telemetry.Set(ctx, "import.ranked", len(result.Ranked.Resolutions))
+	recordBulkApplied(ctx, "import", result)
 	if err != nil {
 		return err
 	}
+	return printBulkApplied(stdout, result)
+}
+
+// recordBulkApplied puts what a bulk edit wrote on the command's event, under
+// command's name: every bulk edit is counted by one spelling.
+// [LAW:single-enforcer]
+func recordBulkApplied(ctx context.Context, command string, result storage.BulkApplyResult) {
+	telemetry.Set(ctx, command+".created", len(result.Created))
+	telemetry.Set(ctx, command+".updated", len(result.Updated))
+	telemetry.Set(ctx, command+".fields_held", len(result.FieldsHeld))
+	telemetry.Set(ctx, command+".reparented", len(result.Reparented))
+	telemetry.Set(ctx, command+".parent_held", len(result.ParentHeld))
+	telemetry.Set(ctx, command+".blocked_by_set", len(result.BlockedBySet))
+	telemetry.Set(ctx, command+".blocked_by_held", len(result.BlockedByHeld))
+	telemetry.Set(ctx, command+".edges_added", result.EdgesAdded)
+	telemetry.Set(ctx, command+".edges_removed", result.EdgesRemoved)
+	telemetry.Set(ctx, command+".ranked", len(result.Ranked.Resolutions))
+}
+
+// printBulkApplied reports what a bulk edit wrote: every bulk edit, an import
+// or an undo, reads back the same way.
+func printBulkApplied(stdout io.Writer, result storage.BulkApplyResult) error {
 	if _, err := fmt.Fprintf(stdout, "created %d issues\n", len(result.Created)); err != nil {
 		return err
 	}

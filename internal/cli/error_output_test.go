@@ -52,6 +52,7 @@ var reasonCodes = map[string]int{
 	"takeover_unconfirmed":        3,
 	"template_shape_refused":      3,
 	"transient_gc_contention":     1,
+	"undo_conflict":               5,
 	"unknown_command":             3,
 	"unsupported_flag":            3,
 	"usage_error":                 2,
@@ -72,6 +73,9 @@ func TestCommandErrorReason(t *testing.T) {
 	}{
 		{"merge conflict", MergeConflictError{Message: "sync conflict"}, "merge_conflict"},
 		{"restore would overwrite", RestoreOverwriteError{}, "restore_would_overwrite"},
+		{"undo conflict", storage.RevertConflictError{}, "undo_conflict"},
+		{"undo refused", storage.RevertRefusedError{}, "validation_refused"},
+		{"undo already held", storage.RevertHeldError{}, "state_already_holds"},
 		{
 			"sync divergence",
 			SyncFailureError{Failure: SyncFailure{Class: syncFailureProseHeld, Remote: "origin", Branch: "master"}},

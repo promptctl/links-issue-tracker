@@ -101,7 +101,7 @@ func TestABatchRefusedByCancellationStillResets(t *testing.T) {
 	st, epic := openBatchStore(t, context.Background())
 	head := headCommit(t, context.Background(), st)
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := withBatch(ctx, st, func(ctx context.Context, _ *storage.BulkApplyResult) error {
+	_, _, err := withBatch(ctx, st, func(ctx context.Context, _ *storage.BulkApplyResult) error {
 		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "lands", Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
@@ -156,7 +156,7 @@ func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
 	head := headCommit(t, ctx, st)
 	var heard []string
 	st.ObserveChanges(func(_ storage.Change, issue model.Issue) { heard = append(heard, issue.ID) })
-	written, err := withBatch(ctx, st, func(ctx context.Context, result *storage.BulkApplyResult) error {
+	written, _, err := withBatch(ctx, st, func(ctx context.Context, result *storage.BulkApplyResult) error {
 		*result = storage.BulkApplyResult{Created: []storage.IDMapping{storage.NewIDMapping("", "test-kept")}, Updated: []string{epic}, EdgesAdded: 2, EdgesRemoved: 1}
 		// A change the batch made: its write stands once the reset fails, so
 		// its observers are owed it.

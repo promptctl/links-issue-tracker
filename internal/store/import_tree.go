@@ -22,7 +22,7 @@ func (s *Store) ImportTree(ctx context.Context, prefix, actor string, specs []st
 	if err != nil {
 		return storage.ImportTreeResult{}, err
 	}
-	return withBatch(ctx, s, func(ctx context.Context, result *storage.ImportTreeResult) error {
+	imported, _, err := withBatch(ctx, s, func(ctx context.Context, result *storage.ImportTreeResult) error {
 		idMap := make(map[string]string, len(creates))
 		createdIDs := make([]string, 0, len(creates))
 		for _, create := range creates {
@@ -44,4 +44,5 @@ func (s *Store) ImportTree(ctx context.Context, prefix, actor string, specs []st
 		}
 		return nil
 	})
+	return imported, err
 }

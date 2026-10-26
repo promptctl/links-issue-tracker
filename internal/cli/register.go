@@ -777,6 +777,8 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: r.wsCmd(unquarantineLeaf)},
 		{Name: "upgrade", Summary: "Atomically install a newer lit binary to operate a workspace whose schema is ahead of this one", GroupID: "maintenance",
 			Run: r.wsCmd(upgradeLeaf)},
+		{Name: "undo", Summary: "List recent writes and what each moved, or revert chosen ones from the store's history as one bulk edit", GroupID: "operations",
+			Run: r.familyCmd(undoFamily), Subcommands: undoFamily.subcommandSpecs()},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
 			Run: r.familyCmd(bulkFamily), Subcommands: bulkSubcommands},
 	}

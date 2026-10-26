@@ -276,3 +276,81 @@ func TestTheDocumentOfAnIssueWithNoParentStatesNone(t *testing.T) {
 		t.Errorf("ParseBulkFile(the loose leaf's own document) error = %v", err)
 	}
 }
+
+// TestEveryFieldRestoresTheValueHistoryRecorded: for every editable field, the
+// value a change row records, restored onto a document and imported, lands as
+// exactly that value and moves no other field. The fields are read off the
+// table, so a field that joins it without a way back fails here.
+func TestEveryFieldRestoresTheValueHistoryRecorded(t *testing.T) {
+	recorded := model.Issue{
+		ID:          "links-x-1",
+		Title:       "a title",
+		Description: "first line\n\nsecond paragraph",
+		Prompt:      "a prompt",
+		Plan:        "a plan",
+		IssueType:   model.TypeTask,
+		Priority:    model.PriorityUrgent,
+		Assignee:    "ada",
+		Lane:        "a-lane",
+		Labels:      []string{"alpha", "beta"},
+	}
+	base := model.Issue{ID: recorded.ID, Title: "other", IssueType: model.TypeBug, Priority: model.PriorityNormal, Labels: []string{"gamma"}}
+	values := storage.IssueFieldValues(recorded)
+	for _, name := range storage.IssueFieldNames() {
+		t.Run(name, func(t *testing.T) {
+			doc := storage.BulkIssueSpec{ID: recorded.ID}
+			if err := storage.RestoreIssueField(&doc, name, values[name]); err != nil {
+				t.Fatalf("RestoreIssueField(%s, %q) = %v", name, values[name], err)
+			}
+			text, err := yaml.Marshal(doc)
+			if err != nil {
+				t.Fatalf("marshal the document: %v", err)
+			}
+			specs, err := storage.ParseBulkSpecs(text)
+			if err != nil {
+				t.Fatalf("ParseBulkSpecs = %v; the document:\n%s", err, text)
+			}
+			file, err := storage.ParseBulkFile(specs, map[string]model.IssueType{recorded.ID: base.IssueType})
+			if err != nil {
+				t.Fatalf("ParseBulkFile = %v; the document:\n%s", err, text)
+			}
+			after, changes, err := storage.ApplyIssueFields(base, file.Updates[0].Patch)
+			if err != nil {
+				t.Fatalf("ApplyIssueFields = %v", err)
+			}
+			if got := storage.IssueFieldValues(after)[name]; got != values[name] {
+				t.Errorf("%s restored as %q, want the recorded %q", name, got, values[name])
+			}
+			if len(changes) != 1 || changes[0].Field != name {
+				t.Errorf("restoring %s moved %+v, want %s alone", name, changes, name)
+			}
+		})
+	}
+}
+
+// TestRestoringAFieldNoRowCarriesIsRefused: a change row naming no editable
+// field has no way back, and saying so beats stating nothing.
+func TestRestoringAFieldNoRowCarriesIsRefused(t *testing.T) {
+	var doc storage.BulkIssueSpec
+	if err := storage.RestoreIssueField(&doc, "topic", "x"); err == nil {
+		t.Fatalf("RestoreIssueField(topic) = nil; want a refusal, topic is not editable")
+	}
+}
+
+// TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse: what is left
+// different after carrying one issue's fields onto another is what differs
+// outside the editable set.
+func TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse(t *testing.T) {
+	src := model.Issue{ID: "links-x-1", Title: "new", IssueType: model.TypeTask, Lane: "l", Labels: []string{"a"}, Rank: "b"}
+	dst := model.Issue{ID: "links-x-1", Title: "old", IssueType: model.TypeTask, Labels: []string{}, Rank: "a"}
+	got, err := storage.WithIssueFieldsOf(dst, src)
+	if err != nil {
+		t.Fatalf("WithIssueFieldsOf = %v", err)
+	}
+	if !maps.Equal(storage.IssueFieldValues(got), storage.IssueFieldValues(src)) {
+		t.Errorf("fields = %v, want src's %v", storage.IssueFieldValues(got), storage.IssueFieldValues(src))
+	}
+	if got.Rank != dst.Rank {
+		t.Errorf("rank = %q, want dst's %q: rank is not an editable field", got.Rank, dst.Rank)
+	}
+}

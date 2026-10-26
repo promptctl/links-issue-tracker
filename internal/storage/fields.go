@@ -20,11 +20,12 @@ import (
 //
 // One row carries a field's whole story: where a patch states it, where a bulk
 // update document states it — read in and written back out — how it lands on
-// the issue, and how its value encodes into a change row. Apply, diff, the
-// patch's emptiness, and the bulk translation in both directions walk the same
-// rows, so a field cannot be written without being recorded, stated without
-// being seen as stated, nor read in without being written back out — the
-// omission is unrepresentable rather than guarded against.
+// the issue, and how its value encodes into a change row and is restored from
+// one. Apply, diff, the patch's emptiness, the bulk translation in both
+// directions, and undo walk the same rows, so a field cannot be written without
+// being recorded, stated without being seen as stated, read in without being
+// written back out, nor recorded without being restorable — the omission is
+// unrepresentable rather than guarded against.
 // [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
 type issueField struct {
 	// name is the field's history vocabulary, which is the domain's own — the
@@ -36,6 +37,9 @@ type issueField struct {
 	toBulk   func(model.Issue, *BulkIssueSpec)
 	apply    func(*model.Issue, UpdateIssueInput) error
 	encode   func(model.Issue) string
+	// restore states on a bulk update document the value a change row
+	// recorded for this field: encode's inverse, landing where fromBulk reads.
+	restore func(*BulkIssueSpec, string) error
 }
 
 // FieldText is the shape a field's value takes for the person reading it.
@@ -95,7 +99,7 @@ func patchField[T any](
 	bulk bulkKey[T],
 	write func(*model.Issue, T) error,
 	current func(model.Issue) T,
-	encode func(T) string,
+	history historyCodec[T],
 ) issueField {
 	return issueField{
 		name:   name,
@@ -117,8 +121,24 @@ func patchField[T any](
 			}
 			return write(issue, *value)
 		},
-		encode: func(issue model.Issue) string { return encode(current(issue)) },
+		encode: func(issue model.Issue) string { return history.encode(current(issue)) },
+		restore: func(doc *BulkIssueSpec, recorded string) error {
+			value, err := history.decode(recorded)
+			if err != nil {
+				return fmt.Errorf("restore %s from recorded %q: %w", name, recorded, err)
+			}
+			bulk.state(doc, value)
+			return nil
+		},
 	}
+}
+
+// historyCodec is how a field's value is written into a change row and read
+// back out of one. The two are one value so a field cannot record a text it
+// has no way to restore.
+type historyCodec[T any] struct {
+	encode func(T) string
+	decode func(string) (T, error)
 }
 
 // bulkKey is the key of a bulk update document that states one field, both
@@ -161,8 +181,11 @@ func bulkParsed[R, T any](name string, key func(*BulkIssueSpec) **R, parse func(
 	}
 }
 
-// asText is the history encoding of a field whose value is already its text.
-func asText(v string) string { return v }
+// asText is the history codec of a field whose value is already its text.
+var asText = historyCodec[string]{
+	encode: func(v string) string { return v },
+	decode: func(v string) (string, error) { return v, nil },
+}
 
 // invalidValue is the one refusal of a document value its parse refused,
 // whichever document shape states it. It names the document key and the value
@@ -275,7 +298,7 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) model.IssueType { return issue.IssueType },
-		func(v model.IssueType) string { return string(v) }),
+		historyCodec[model.IssueType]{encode: func(v model.IssueType) string { return string(v) }, decode: model.ParseIssueType}),
 	patchField("priority", ShortText,
 		func(in *UpdateIssueInput) **model.Priority { return &in.Priority },
 		bulkParsed("priority", func(doc *BulkIssueSpec) **int { return &doc.Priority }, model.ParsePriority,
@@ -284,7 +307,16 @@ var issueFields = []issueField{
 		func(issue model.Issue) model.Priority { return issue.Priority },
 		// The numeric wire encoding, not the display name: history keeps what
 		// the field stores, so a replay reads back the value that was written.
-		func(v model.Priority) string { return strconv.Itoa(int(v)) }),
+		historyCodec[model.Priority]{
+			encode: func(v model.Priority) string { return strconv.Itoa(int(v)) },
+			decode: func(v string) (model.Priority, error) {
+				n, err := strconv.Atoi(v)
+				if err != nil {
+					return 0, err
+				}
+				return model.ParsePriority(n)
+			},
+		}),
 	patchField("assignee", ShortText,
 		func(in *UpdateIssueInput) **string { return &in.Assignee },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Assignee }),
@@ -317,7 +349,67 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) []string { return issue.Labels },
-		func(v []string) string { return strings.Join(v, ",") }),
+		// A label cannot hold a comma (model.NormalizeLabel), so the joined set
+		// splits back into exactly the labels it was joined from; the empty
+		// text is the empty set.
+		historyCodec[[]string]{
+			encode: func(v []string) string { return strings.Join(v, ",") },
+			decode: func(v string) ([]string, error) {
+				if v == "" {
+					return []string{}, nil
+				}
+				return strings.Split(v, ","), nil
+			},
+		}),
+}
+
+// IssueFieldValues is every editable field of issue as a change row records
+// it, by field name: the values a write's history is checked against.
+func IssueFieldValues(issue model.Issue) map[string]string {
+	values := make(map[string]string, len(issueFields))
+	for _, field := range issueFields {
+		values[field.name] = field.encode(issue)
+	}
+	return values
+}
+
+// IssueFieldNames is the editable fields' names in the table's order, the
+// order history reports a change to them in.
+func IssueFieldNames() []string {
+	names := make([]string, len(issueFields))
+	for i, field := range issueFields {
+		names[i] = field.name
+	}
+	return names
+}
+
+// RestoreIssueField states on doc the value a change row recorded for field,
+// through that field's own row, so a document restores exactly the value
+// history holds. A name no row carries is refused.
+func RestoreIssueField(doc *BulkIssueSpec, field, recorded string) error {
+	for _, row := range issueFields {
+		if row.name == field {
+			return row.restore(doc, recorded)
+		}
+	}
+	return fmt.Errorf("restore: %q is not an editable field", field)
+}
+
+// WithIssueFieldsOf is dst carrying src's editable fields and nothing else of
+// src: every field src holds, stated on a document and applied to dst through
+// the rows. What still differs between the result and src is what differs
+// outside the editable set.
+func WithIssueFieldsOf(dst, src model.Issue) (model.Issue, error) {
+	var doc BulkIssueSpec
+	for _, field := range issueFields {
+		field.toBulk(src, &doc)
+	}
+	patch, err := bulkUpdatePatch(doc)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	issue, _, err := ApplyIssueFields(dst, patch)
+	return issue, err
 }
 
 // ApplyIssueFields is the field axis of a patch, decided: the post-patch issue

@@ -622,6 +622,7 @@ var (
 	Repair          = capability[Repairer]{name: "repair"}
 	SchemaMigration = capability[SchemaMigrator]{name: "schema-migration"}
 	Import          = capability[Importer]{name: "import"}
+	Undo            = capability[Reverter]{name: "undo"}
 	TestSupport     = capability[RawExecutor]{name: "test-support"}
 )
 
@@ -635,6 +636,7 @@ var all = []Capability{
 	Repair,
 	SchemaMigration,
 	Import,
+	Undo,
 	TestSupport,
 }
 
