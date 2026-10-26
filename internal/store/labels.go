@@ -3,30 +3,12 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"slices"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
-
-func (s *Store) ListLabels(ctx context.Context, issueID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC`, issueID)
-	if err != nil {
-		return nil, fmt.Errorf("list labels: %w", err)
-	}
-	defer rows.Close()
-	var labels []string
-	for rows.Next() {
-		var label string
-		if err := rows.Scan(&label); err != nil {
-			return nil, err
-		}
-		labels = append(labels, label)
-	}
-	return labels, rows.Err()
-}
 
 // writeLabelsTx moves an issue's label rows from the set before to the set
 // after: a name only after holds is inserted, authored by author at at; a name

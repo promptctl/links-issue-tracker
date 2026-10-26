@@ -188,8 +188,9 @@ func TestRevertWritesPutsALabelVerbBack(t *testing.T) {
 }
 
 // What no document can put back refuses the undo by name, and nothing is
-// written: a lifecycle write, whose claim is derived from its event; a
-// ticket's creation; a purge.
+// written: a lifecycle write, whose claim is derived from its event; a label
+// write a lit before label verbs went through Apply made, which moved the
+// labels field with no change row; a ticket's creation; a purge.
 func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
@@ -200,6 +201,13 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 		t.Fatalf("Apply(start) error = %v", err)
 	}
 	started := headWrite(t, st)
+	// The label row an older lit's `lit label add` wrote, with no event.
+	if err := st.withMutation(ctx, "add label", func(ctx context.Context, tx *sql.Tx) error {
+		return insertLabelTx(ctx, tx, model.Label{IssueID: task.ID, Name: "x", CreatedAt: time.Now(), CreatedBy: "ada"})
+	}); err != nil {
+		t.Fatalf("insert label row error = %v", err)
+	}
+	labeled := headWrite(t, st)
 	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: "doomed", ParentID: epic.ID})
 	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: doomed.ID, Actor: "ada"}); err != nil {
 		t.Fatalf("Purge() error = %v", err)
@@ -209,6 +217,7 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 		write, want string
 	}{
 		{started, "`lit start`"},
+		{labeled, "no field-change record"},
 		{created, "created"},
 		{purged, "removed"},
 	} {

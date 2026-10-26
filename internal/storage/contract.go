@@ -135,14 +135,6 @@ type CommentStore interface {
 	DeleteComment(ctx context.Context, commentID string) (model.Comment, error)
 }
 
-// LabelStore reads the label set attached to an issue. The set is an issue
-// field, so it is written through Apply — AddLabel and RemoveLabel are the
-// plans the label verbs apply — and every write of it is recorded.
-// [LAW:single-enforcer]
-type LabelStore interface {
-	ListLabels(ctx context.Context, issueID string) ([]string, error)
-}
-
 // RelationStore reads and writes the structural edges between issues,
 // parentage included.
 //
@@ -297,7 +289,6 @@ type Store interface {
 	IssueWriter
 	CommentStore
 	PlanReviewStore
-	LabelStore
 	RelationStore
 	Ranker
 	BulkWriter

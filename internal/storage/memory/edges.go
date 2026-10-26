@@ -73,12 +73,6 @@ func (e *Engine) commentsFor(issueID string) []model.Comment {
 
 // --- labels ---------------------------------------------------------------
 
-func (e *Engine) ListLabels(ctx context.Context, issueID string) ([]string, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.labelNames(issueID), nil
-}
-
 // setLabels moves an issue's label rows to a canonical set: a name the issue
 // already holds keeps its row, and with it who added the label and when; a
 // new name gets a row authored by createdBy at now; a name the set leaves out

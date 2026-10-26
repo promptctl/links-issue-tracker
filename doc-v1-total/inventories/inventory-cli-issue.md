@@ -1857,16 +1857,17 @@ Family `labelFamily`, usage `"usage: lit label <add|rm> ..."`
 - Refusal: `len(positional) != 2` →
   `UsageError{"usage: lit label add <issue-id> <label>"}` → exit 2
   (`issue_relations.go`).
-- Calls `Store.AddLabel(AddLabelInput{IssueID, Name, CreatedBy: resolveActor()})`
-  (`issue_relations.go`); labels are normalized through `model.NormalizeLabel`
-  (`internal/store/labels.go`).
+- Calls `applyLabelEdit(ctx, ap, issueID, storage.AddLabel{Name, Actor: resolveActor()})`,
+  which runs `Store.Apply` and sets `label.changed` on the command's event —
+  `false` for a label the issue already holds (`issue_relations.go`); the set is
+  canonicalized by `storage.ApplyIssueFields` (`internal/storage/fields.go`).
 - Output: the resulting full label set, comma-joined on one line
   (`printLabels`, `output.go`), then the `update` breadcrumb.
 
 **`lit label rm <issue-id> <label>`** (`issue_relations.go`):
-- Same shape; no `--by`. Usage `"usage: lit label rm <issue-id> <label>"`.
-- Calls `Store.RemoveLabel(issueID, label)`; prints the remaining labels and the
-  `update` breadcrumb.
+- Same shape, `--by` registered. Usage `"usage: lit label rm <issue-id> <label>"`.
+- Calls `applyLabelEdit` with `storage.RemoveLabel{Name, Actor: resolveActor()}`;
+  prints the remaining labels and the `update` breadcrumb.
 
 Reserved label semantics: `needs-design` and `external` block readiness (§1.18, `ready_state.go`);
 `focus` marks a goal for focus-path ordering (`ready_state.go`).
@@ -2016,8 +2017,9 @@ before any id is acted on.
   (below) → exit 3; then blank `--label` →
   `ValidationError{"--label is required"}` → exit 3; only *then* is an unknown
   add/rm action resolved (`bulk.go`).
-- `add` calls `Store.AddLabel` with the resolved actor; `rm` calls
-  `Store.RemoveLabel` (actor unused) (`bulk.go`).
+- `add` and `rm` call `applyLabelEdit` with `storage.AddLabel` /
+  `storage.RemoveLabel` and the resolved actor, so each `bulk.items` entry
+  carries `label.changed` (`bulk.go`).
 
 **`lit bulk comment --ids <csv> (--body <text> | --body-file <path|->)`**
 (`bulkCommentLeaf`, `bulk.go`):

@@ -849,7 +849,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT issue_type FROM issues WHERE id = ?", Src: "SELECT issue_type FROM issues WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT issue_type, deleted_at FROM issues WHERE id = ?", Src: "SELECT issue_type, deleted_at FROM issues WHERE id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''", Src: "SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''"},
-	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC", Src: "SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT name FROM dolt_branches ORDER BY name", Src: "SELECT name FROM dolt_branches ORDER BY name"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name", Src: "SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "SELECT name, url, params FROM dolt_remotes", Src: "SELECT name, url, params FROM dolt_remotes"},

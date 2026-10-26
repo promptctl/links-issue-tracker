@@ -22,7 +22,7 @@ Path prefix for all citations: `/Users/bmf/code/links-issue-tracker/`
 
 ### 1.2 `Store` — the composed contract
 
-`Store` = `IssueReader` + `IssueWriter` + `CommentStore` + `PlanReviewStore` + `LabelStore` + `RelationStore` + `Ranker` + `BulkWriter` + `Exporter` + `Attributor` + `ChangeObserver` + `Close() error` (`internal/storage/contract.go`; `PlanReviewStore` is declared in `internal/storage/plan_review.go`).
+`Store` = `IssueReader` + `IssueWriter` + `CommentStore` + `PlanReviewStore` + `RelationStore` + `Ranker` + `BulkWriter` + `Exporter` + `Attributor` + `ChangeObserver` + `Close() error` (`internal/storage/contract.go`; `PlanReviewStore` is declared in `internal/storage/plan_review.go`).
 
 - `Close() error` is in the contract so a caller can release an engine's resources without knowing what they are; for Dolt this includes the workspace lock, and discarding the error strands it (`internal/storage/contract.go`).
 - Deliberately absent from `Store` (they are capabilities): sync, schema migration, checkpoints, repair, raw test access — named as `Syncer`, `Reconciler`, `Checkpointer`, `Repairer`, `SchemaMigrator`, `Importer`, `RawExecutor` (`internal/storage/contract.go`).
@@ -68,8 +68,9 @@ General contract: every method is a pure read from the caller's view; two identi
 **`CreateIssue(ctx, in CreateIssueInput) (model.Issue, error)`** — `internal/storage/contract.go`
 - Records a new issue and returns it as stored, with its id minted (`internal/storage/contract.go`).
 
-**`Apply(ctx, id string, c Change) (Applied, error)`** — `internal/storage/contract.go`
-- The single execution path for issue-record changes; the `Change` value carries all variability, so there is no second mutation verb (`internal/storage/contract.go`).
+**`Apply(ctx, id string, plan ChangePlan) (Applied, error)`** — `internal/storage/contract.go`
+- The single execution path for issue-record changes; the `Change` the plan decides carries all variability, so there is no second mutation verb (`internal/storage/contract.go`).
+- The plan is decided on the issue as the write finds it, under the write's own hold, so a change derived from the issue's current state is never planned against a state another writer has since moved (`internal/storage/contract.go`).
 - A pure no-op records nothing in history (`internal/storage/contract.go`).
 - An illegal transition is refused rather than silently ignored (`internal/storage/contract.go`).
 - `Applied` carries the issue as the change left it and the `claims.Handover` the change recorded, nil for every change but a start taking a ticket somebody had already taken (`internal/storage/issues.go`).
@@ -144,14 +145,13 @@ Records law reviews of a ticket's plan. A review is never edited or removed thro
 
 ---
 
-### 1.6 `LabelStore` (`internal/storage/contract.go`)
+### 1.6 Label plans (`internal/storage/issues.go`)
 
-Interface-wide rule: every mutating method returns the issue's *resulting label set*, so "what labels does it have now" is never a follow-up read a concurrent writer could answer differently (`internal/storage/contract.go`).
+The label set is an issue field, written only through `Apply`; the contract has no label method (`internal/storage/issues.go`).
 
-- `AddLabel(ctx, in AddLabelInput) ([]string, error)` — `internal/storage/contract.go`
-- `RemoveLabel(ctx, issueID, labelName string) ([]string, error)` — `internal/storage/contract.go`
-- `ReplaceLabels(ctx, issueID string, labels []string, createdBy string) error` — sets the whole set at once; the authored-document path, where the file states the labels an issue has rather than a delta (`internal/storage/contract.go`)
-- `ListLabels(ctx, issueID string) ([]string, error)` — `internal/storage/contract.go`
+- `ChangePlan` — `PlanChange(current model.Issue) (Change, error)`; a `Change` is its own plan (`internal/storage/issues.go`).
+- `AddLabel{Name, Actor}` — the issue's set with `Name` added, as a labels field edit by `Actor`; adding a held label restates the set, which records nothing (`internal/storage/issues.go`).
+- `RemoveLabel{Name, Actor}` — the issue's set without `Name` (normalized first); a name the issue does not hold → `NotFoundError{Entity: "label", ID: "<issueID>/<name>"}` (`internal/storage/issues.go`).
 
 ---
 
@@ -379,7 +379,6 @@ Rule for the whole struct: **every slice is an OR within itself and an AND again
 
 #### Edge inputs (`internal/storage/edges.go`)
 - `AddCommentInput{IssueID, Body, CreatedBy string}` — `internal/storage/edges.go`
-- `AddLabelInput{IssueID, Name, CreatedBy string}` — `internal/storage/edges.go`
 - `AddRelationInput{SrcID, DstID string; Type model.RelationType; CreatedBy string}` — `internal/storage/edges.go`
 - `SetParentInput{ChildID, ParentID, CreatedBy string}` — `internal/storage/edges.go`
 
@@ -905,26 +904,9 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 
 ### 2.10 Labels (`internal/storage/memory/edges.go`)
 
-**`AddLabel`**
-- `mustRecord(in.IssueID)` → `NotFoundError`.
-- `model.NormalizeLabel(in.Name)` → error propagates.
-- If the name is not already present, appends a `model.Label{IssueID, Name, CreatedAt: e.now(), CreatedBy: storage.Actor(in.CreatedBy)}` and re-sorts by name.
-- **Adding the same label twice is not an error**: the caller asked for the label to be there, and it is; the row keeps the authorship the first add gave it.
-- Returns the whole resulting set.
+The engine has no label method; the label verbs are `Apply` plans (§1.6), and `apply` moves the rows with `setLabels` on every apply.
 
-**`RemoveLabel`**
-- `mustRecord(issueID)` → `NotFoundError`.
-- `model.NormalizeLabel(labelName)` → error propagates.
-- Absent → `storage.NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, name)}`.
-- Otherwise deletes and returns the resulting set.
-
-**`ReplaceLabels`**
-- `mustRecord(issueID)`; `canonicalLabels(labels)`; `setLabels(issueID, canonical, e.now(), createdBy)`; returns nil.
-- **Rewrites every row's `CreatedAt` and `CreatedBy`.**
-
-**`ListLabels`** — returns `labelNames(issueID)` **without** a `mustRecord` check, so an unknown issue id returns an empty slice and no error.
-
-**`setLabels`** — the one label write, shared by create and replace; builds fresh rows with one author (`storage.Actor(createdBy)`) and one timestamp.
+**`setLabels`** — the one label write, shared by create and `apply`: a name the issue already holds keeps its row, `CreatedAt` and `CreatedBy` included; a new name gets a row authored by `storage.Actor(createdBy)` at the write's instant; a name the set leaves out loses its row.
 
 **`canonicalLabels`** — normalizes each name via `model.NormalizeLabel` (error propagates), collapses duplicates, then `slices.Sort`. It is a parser: nothing downstream re-normalizes.
 
@@ -1447,12 +1429,11 @@ Stated in `internal/storage/memory/doc.go`:
 - `Export.PlanReviews` holds both, the pass first.
 
 **`labels_roundtrip`**
-- `AddLabel` returns the resulting set.
+- `Apply` of `AddLabel`/`RemoveLabel` returns the resulting set in `Applied.Issue.Labels`, and records one event whose only change is `labels` From→To (the comma-joined sets), by the plan's actor.
 - The set is **ordered by name**, not by arrival: adding `zeta` then `alpha` yields `["alpha","zeta"]`.
-- Adding a label twice is the same end state, **not an error**.
-- `RemoveLabel` returns the resulting set.
-- Removing an absent label → `NotFoundError{Entity: "label"}`.
-- `ReplaceLabels` states the whole set: what was there and is not named is gone.
+- Adding a label twice is the same end state, **not an error**, and records nothing.
+- A label the edits did not add or remove keeps its row, `CreatedAt` and `CreatedBy` included.
+- Removing an absent label → `NotFoundError{Entity: "label"}`, and writes nothing.
 - `AddLabel` on a missing issue → `NotFoundError{Entity: "issue"}`.
 
 **`relations_roundtrip`**
@@ -1596,7 +1577,6 @@ Derived from what the suite never exercises (the `cases` table at is the complet
 - The exact `Rank` string encoding.
 - The exact minted-id shape.
 - `ListIssuesFilter.Resolutions` filtering (declared at `internal/storage/issues.go`, implemented at `internal/storage/memory/list.go`, but no case in the table exercises it).
-- `ReplaceLabels`/`ListLabels` against a missing issue.
 - `Close()` behavior beyond the engine factory's own cleanup.
 - `AddRelation` cycle rejection for `blocked-by` (implemented at `internal/storage/memory/edges.go`, not exercised by any listed case).
 - `ParseSortSpecs`, `ParseBulkSpecs`, `ParseImportTreeSpecs` — tested in the contract package instead (`internal/storage/specs_test.go`).
