@@ -420,21 +420,29 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
 
 ### 5.5 `Discover(roots)` (`internal/workspace/discover.go`)
 
-- Walks every root with `filepath.WalkDir`, folding results into a map keyed by canonical
-  `StorageDir`, then returns them sorted by `StorageDir`
-  (`internal/workspace/discover.go`).
-- Per-directory algorithm (`internal/workspace/discover.go`):
-  - A walk error is fatal: `scan %q: %w`.
-  - Any directory literally named `.git` ⇒ `filepath.SkipDir`.
+- Walks every root with `filepath.WalkDir`, then derives each working tree it reached,
+  folding results into a map keyed by canonical `StorageDir`, and returns them sorted by
+  `StorageDir` in a `Discovery` with `Directories` (directories visited) and
+  `WorkingTrees` (working trees reached) (`internal/workspace/discover.go`).
+- Walk, per directory (`internal/workspace/discover.go`):
+  - A walk error is fatal: `scan %q: %w`; the walk stops there.
   - Non-directories are skipped.
-  - `os.Lstat(<path>/.git)`: `os.ErrNotExist` ⇒ skip; any other stat error ⇒ `stat %q: %w`
-.
+  - `os.Lstat(<path>/.git)`: `os.ErrNotExist` ⇒ descend; any other stat error ⇒ `stat %q: %w`.
+  - Otherwise the directory is a working tree: recorded, then `filepath.SkipDir` — nothing
+    inside a working tree is walked, so a store nested in another repository's working tree
+    is found only by naming its directory as a root.
+- Derivation, per working tree, on an `errgroup` limited to `runtime.GOMAXPROCS(0)`
+  (`internal/workspace/discover.go`):
   - `Locate(path)`: `ErrNotGitRepo` ⇒ skip; any other error ⇒ surfaced.
   - `os.Stat(loc.DatabasePath)`: `os.ErrNotExist` ⇒ skip ("git repo, no lit store"); other error
     ⇒ `stat store database %q: %w`.
   - The database path must be a **directory**; a regular file there is skipped.
   - Otherwise `byStore[loc.StorageDir] = loc` — so all worktrees of one repository collapse to
     one entry.
+- The error returned is the first in walk order: a working tree's derivation error before
+  any later one, and before the walk error the walk stopped at.
+- `lit stores` (both forms) records `discover.directories`, `discover.working_trees` and
+  `discover.stores` as counts on its event (`internal/cli/stores.go`).
 
 ### 5.6 Multi-checkout enumeration (`internal/workspace/checkouts.go`)
 

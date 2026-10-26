@@ -114,7 +114,7 @@ Because everything hangs off the git *common* dir, all worktrees of one reposito
 
 ### Discovery across many roots
 
-`Discover(roots)` walks each root with `filepath.WalkDir`, collecting locations keyed (and deduplicated) by canonical `StorageDir`, returned sorted (`internal/workspace/discover.go`). Per directory: skip directories literally named `.git`; require a `.git` entry (`Lstat`); derive the location (skip on `ErrNotGitRepo`); require `DatabasePath` to exist **and be a directory** (a regular file there is skipped); walk and stat errors are fatal with context (`discover.go`).
+`Discover(roots)` walks each root with `filepath.WalkDir`, collecting locations keyed (and deduplicated) by canonical `StorageDir`, returned sorted with how many directories the walk visited and how many working trees it reached (`internal/workspace/discover.go`). A directory holding a `.git` entry (`Lstat`) is a working tree: the walk records it and does not descend into it, so a store whose repository sits inside another repository's working tree is found only by naming its directory as a root. Each working tree is then derived on a pool of `GOMAXPROCS` goroutines: derive the location (skip on `ErrNotGitRepo`); require `DatabasePath` to exist **and be a directory** (a regular file there is skipped). Walk, stat and derivation errors are fatal with context, and the one reported is the first in walk order (`discover.go`). `lit stores` records `discover.directories`, `discover.working_trees` and `discover.stores` on its event (`internal/cli/stores.go`).
 
 ### Multi-checkout enumeration
 

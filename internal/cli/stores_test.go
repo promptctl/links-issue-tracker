@@ -10,11 +10,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -58,7 +60,7 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 	gitInit(t, gitOnly)
 
 	var out bytes.Buffer
-	if err := runStores(context.Background(), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 
@@ -79,6 +81,40 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 	}
 }
 
+// A stores invocation's event says what discovery visited, so a slow scan
+// reads as a large walk or as many working trees.
+func TestRunStoresRecordsWhatDiscoveryVisited(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for _, name := range []string{"withStore", "gitOnly"} {
+		repo := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Join(repo, "src"), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		gitInit(t, repo)
+	}
+	addLitStore(t, filepath.Join(root, "withStore"))
+	if err := os.MkdirAll(filepath.Join(root, "plain", "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir plain: %v", err)
+	}
+
+	var out bytes.Buffer
+	recorder := telemetry.Begin(telemetry.Event{})
+	err := runStores(telemetry.With(context.Background(), recorder), cwdInvocation(&out, &out, nil), []string{root})
+	if err != nil {
+		t.Fatalf("runStores() error = %v", err)
+	}
+	ev := recorder.Finish(invocationEnd(time.Now(), err, nil))
+	// root, plain, plain/nested and the two working trees' roots; neither
+	// tree's src.
+	want := map[string]int{"discover.directories": 5, "discover.working_trees": 2, "discover.stores": 1}
+	for key, n := range want {
+		if got, ok := ev.Counts[key]; !ok || got != n {
+			t.Errorf("event counts[%q] = %d (recorded %v), want %d", key, got, ok, n)
+		}
+	}
+}
+
 // TestRunStoresPropagatesDiscoverError pins the error contract: when Discover
 // fails, runStores returns the error rather than printing an empty success. A
 // non-existent root makes the filesystem walk fail deterministically, without
@@ -88,7 +124,7 @@ func TestRunStoresPropagatesDiscoverError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	var out bytes.Buffer
-	err := runStores(context.Background(), cwdInvocation(&out, &out, nil), []string{missing})
+	err := runStores(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), []string{missing})
 	if err == nil {
 		t.Fatalf("runStores() returned nil error with output %q; want a surfaced Discover failure", out.String())
 	}
@@ -107,7 +143,7 @@ func TestRunStoresEmptyWhenNoStores(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runStores(context.Background(), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 	if out.Len() != 0 {
@@ -304,7 +340,7 @@ func TestGatherCrossProjectRollupUnreadableStoreIsErrorRow(t *testing.T) {
 		addLitStore(t, repo) // a store DIRECTORY exists but holds no real dolt data
 	}
 
-	rows, err := gatherCrossProjectRollup(context.Background(), testEnv(), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v; want error rows, not a fatal error", err)
 	}
@@ -403,7 +439,7 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 	gitInit(t, repo)
 	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
-	rows, err := gatherCrossProjectRollup(context.Background(), testEnv(), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
 	}
@@ -481,7 +517,7 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 		t.Fatalf("store.Close() error = %v", err)
 	}
 
-	rows, err := gatherCrossProjectRollup(ctx, testEnv(), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(ctx), testEnv(), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
 	}
@@ -520,8 +556,13 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
 	var counts bytes.Buffer
-	if err := runStores(underInvocation(context.Background()), cwdInvocation(&counts, &counts, nil), []string{"--counts", root}); err != nil {
+	recorder := telemetry.Begin(telemetry.Event{})
+	err = runStores(telemetry.With(context.Background(), recorder), cwdInvocation(&counts, &counts, nil), []string{"--counts", root})
+	if err != nil {
 		t.Fatalf("runStores --counts error = %v", err)
+	}
+	if ev := recorder.Finish(invocationEnd(time.Now(), err, nil)); ev.Counts["discover.stores"] != 1 || ev.Counts["discover.working_trees"] != 1 {
+		t.Fatalf("stores --counts event counts = %v, want the discovery's one store in one working tree", ev.Counts)
 	}
 	got := counts.String()
 	for _, want := range []string{"PROJECT", "READY", "IN-FLIGHT", "BLOCKED", wantPrefix, "TOTAL"} {
@@ -532,7 +573,7 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 
 	// Bare `stores` lists paths — no count table leaks in without the flag.
 	var plain bytes.Buffer
-	if err := runStores(context.Background(), cwdInvocation(&plain, &plain, nil), []string{root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), cwdInvocation(&plain, &plain, nil), []string{root}); err != nil {
 		t.Fatalf("runStores (no --counts) error = %v", err)
 	}
 	if strings.Contains(plain.String(), "PROJECT") || strings.Contains(plain.String(), "TOTAL") {

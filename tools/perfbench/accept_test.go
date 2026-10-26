@@ -38,12 +38,20 @@ func TestLitCarriesOutThePlan(t *testing.T) {
 			if len(members) != len(sz.members()) {
 				t.Fatalf("generated %d stores, want %d", len(members), len(sz.members()))
 			}
+			// Every workspace, copies included, carries a working tree's
+			// worth of directories for `lit stores` to not walk into.
+			for _, m := range members {
+				last := filepath.Join(m.root, "node_modules", fmt.Sprintf("pkg-%03d", dependencyPackages-1), "src")
+				if info, err := os.Stat(last); err != nil || !info.IsDir() {
+					t.Fatalf("%s lacks its dependency tree: %v", m, err)
+				}
+			}
 			store := members[0]
 			if len(store.ids) != sz.rows {
 				t.Fatalf("generation read %d ids back from the import, want one per row (%d)", len(store.ids), sz.rows)
 			}
-			// The fleet root holds the stores and nothing else, so the fleet
-			// probes time lit's walk over stores alone.
+			// The fleet root holds the workspaces and nothing else, so the
+			// fleet probes time lit's walk over workspaces alone.
 			entries, err := os.ReadDir(store.fleetRoot)
 			if err != nil {
 				t.Fatal(err)
