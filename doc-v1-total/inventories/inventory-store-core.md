@@ -608,7 +608,7 @@ failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.I
 
 #### 5.9 Relation, comment, and label reads
 
-`queryRelations(ctx, q, from, args...)` (`relations.go`) is every relations read: it writes `SELECT src_id, dst_id, type, created_at, created_by FROM ` and appends the caller's `from` (the FROM clause onward), scans by position, parses `created_at` via `scanTime`, and sorts in Go by `storage.RelationOrdering` (the instant, then `src_id`, `dst_id`, `type`) — never in SQL, `created_at` being a varchar. Error → `fmt.Errorf("list relations: %w", err)`. `q` is a `rowQueryer`, so the bulk transaction's `edgeWriterTx.Edges` reads through it too (`relations WHERE src_id = ? AND type = ?`, wrapped `"%s relations of %s: %w"`, `import_bulk.go`).
+`queryRelations(ctx, q, from, args...)` (`relations.go`) is every read that returns relation rows: it writes `SELECT src_id, dst_id, type, created_at, created_by FROM ` and appends the caller's `from` (the FROM clause onward), scans by position, parses `created_at` via `scanTime`, and sorts in Go by `storage.RelationOrdering` (the instant, then `src_id`, `dst_id`, `type`) — never in SQL, `created_at` being a varchar. Error → `fmt.Errorf("list relations: %w", err)`. `q` is a `rowQueryer`, so the bulk transaction's `edgeWriterTx.Edges` reads through it too (`relations WHERE src_id = ? AND type = ?`, wrapped `"%s relations of %s: %w"`, `import_bulk.go`).
 
 `listRelations(ctx, issueID)` (`store.go`): `queryRelations(ctx, s.db, "relations WHERE src_id = ? OR dst_id = ?", issueID, issueID)`.
 

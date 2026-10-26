@@ -65,8 +65,8 @@ func (e *Engine) commentsFor(issueID string) []model.Comment {
 	return e.commentsWhere(func(c model.Comment) bool { return c.IssueID == issueID })
 }
 
-// commentsWhere is every read of the comment table: the comments keep keeps,
-// in storage.CommentOrdering.
+// commentsWhere is every read of the comment table that returns comments: the
+// comments keep keeps, in storage.CommentOrdering.
 func (e *Engine) commentsWhere(keep func(model.Comment) bool) []model.Comment {
 	out := []model.Comment{}
 	for _, comment := range e.comments {

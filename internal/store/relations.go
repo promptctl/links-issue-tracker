@@ -213,10 +213,10 @@ var relationEndpointColumns = map[string]struct{}{"src_id": {}, "dst_id": {}}
 
 // relationsByEndpoint returns the structural relations whose given endpoint
 // column matches any of ids. Each half comes back in storage.RelationOrdering,
-// as every relations read does, and mergeRelations sorts their union again,
-// because two ordered halves do not make an ordered union. The second sort is
-// the price of one scan: no reader takes relations rows through an unsorted
-// path. [LAW:single-enforcer]
+// as every read that returns relation rows does, and mergeRelations sorts
+// their union again, because two ordered halves do not make an ordered union.
+// The halves' own sorts are the price of one read path: queryRelations sorts
+// whatever it returns. [LAW:single-enforcer]
 func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []string) ([]model.Relation, error) {
 	if _, ok := relationEndpointColumns[column]; !ok {
 		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)

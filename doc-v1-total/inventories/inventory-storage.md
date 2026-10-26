@@ -900,7 +900,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - Not found → `storage.NotFoundError{Entity: "comment", ID: id}`.
 - Deletes and returns the removed comment.
 
-**`commentsFor(issueID)`** — `commentsWhere` filtering by `IssueID`: in `storage.CommentOrdering`, a non-nil empty slice when there are none. `commentsWhere(keep)` is every read of the comment table — filter, then sort.
+**`commentsFor(issueID)`** — `commentsWhere` filtering by `IssueID`: in `storage.CommentOrdering`, a non-nil empty slice when there are none. `commentsWhere(keep)` is every read of the comment table that returns comments — filter, then sort.
 
 ### 2.10 Labels (`internal/storage/memory/edges.go`)
 
@@ -1080,7 +1080,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
-- Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews)}`.
+- Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.clock.Now(), Issues, Relations: e.relationsWhere(all), Comments: e.commentsWhere(all), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews)}`.
 - `Relations` and `Comments` come back sorted by `storage.RelationOrdering` / `storage.CommentOrdering` (`relationsWhere` / `commentsWhere` keeping every row); `PlanReviews` copied with their `Laws` slices and sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
 
