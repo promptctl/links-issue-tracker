@@ -85,6 +85,7 @@ the code it arrives on:
 | `merge_conflict` | 5 | A sync merge conflict |
 | `sync_divergence` | 5 | Local and remote diverged in a way the message tells you how to resolve |
 | `restore_would_overwrite` | 5 | `lit backup restore` would overwrite changes made since the last restore; `--force` restores anyway, after the backup it always takes |
+| `undo_conflict` | 5 | `lit undo revert` would put back something a later write moved again, which would erase that write; name the later write too, or leave the undo |
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
 | `no_ready_work` | 6 | `lit next` had no ticket for you |
 | `scope_exhausted` | 6 | `lit next` found open work in your claimed epic but none you can reach; the message names what stops it |
@@ -897,6 +898,44 @@ labels, so list every blocker the ticket should keep: `blocked_by: [A]` on a tic
 blocked by B and C drops B and C. Every `parent` and `blocked_by` in a file is written
 in one step that lands whole or not at all, judged on the graph the file ends with,
 so a file whose edges would close a cycle changes no edge.
+
+### `lit undo list` / `lit undo revert`
+
+```text
+lit undo list [--last <n>]
+lit undo revert --writes <id,id,...>
+```
+
+Reverses a change, or a run of changes, after the fact, from the history the store
+already keeps. Every lit write is one commit of the store's history.
+`lit undo list` shows the newest writes, newest first (20 by default). Each write's
+line gives its id, when it happened, and what command made it. Beneath that, every
+field, parent and blocked-by edge the write moved is listed as `<slot>: <from> → <to>`,
+and anything about it that cannot be undone is listed after `cannot undo:`.
+Listing reads history only. It takes no lock, so it runs beside other writers.
+
+`lit undo revert` puts back what the named writes moved, folding them newest
+first, as one bulk edit through the same path as `lit import`. It prints what it put
+back, what the bulk edit wrote, and the writes it landed as. Revert those to undo
+the undo. A field it restores records an ordinary field change with reason
+`undo <ids>`; the history of the reverted writes stays as it was.
+
+A revert writes nothing, and answers on its reason, when:
+
+- a later write moved again something it would put back (`undo_conflict`, exit 5).
+  Putting it back would erase that write, so name the later write in `--writes`
+  too, or leave it;
+- a named write changed something no update document can put back
+  (`validation_refused`, exit 3). This covers lifecycle moves (`lit start`, `done`,
+  `close`, `open`, `phase`, archive and delete), which also decide who holds a lane;
+  creating or purging a ticket; a rank move (`lit rank`); a related-to edge; a
+  comment; `lit label add`/`rm`, which record no field change yet; a write a sync
+  replay re-landed over a merged value; and migrations. Each is named, with the
+  command that reverses it where there is one;
+- the writes' effects are already gone (`state_already_holds`, exit 6);
+- an id is not on this branch's history (`entity_not_found`, exit 4). History past
+  the kept window is gone, and a sync replay gives local writes new ids, so
+  `lit undo list` shows the current ones.
 
 ---
 

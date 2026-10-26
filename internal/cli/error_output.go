@@ -106,6 +106,9 @@ var (
 	reasonOwnerApprovalRequired = commandReason{"owner_approval_required", ExitConflict}
 	reasonRestoreWouldOverwrite = commandReason{"restore_would_overwrite", ExitConflict}
 	reasonSyncDivergence        = commandReason{"sync_divergence", ExitConflict}
+	// An undo a later write stands in the way of: putting the slot back would
+	// erase that write, so the agent decides whether it goes too.
+	reasonUndoConflict = commandReason{"undo_conflict", ExitConflict}
 
 	// ExitNoWork: the command ran correctly and changed nothing. The router's
 	// three terminal answers share it because the caller's question is binary
@@ -183,6 +186,10 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 	var restoreOverwrite RestoreOverwriteError
 	if errors.As(err, &restoreOverwrite) {
 		return reasonRestoreWouldOverwrite
+	}
+	var undoConflict storage.RevertConflictError
+	if errors.As(err, &undoConflict) {
+		return reasonUndoConflict
 	}
 	// A schema ahead of this binary: a workspace it refuses to open or cannot
 	// downgrade, or a remote it will not write below. Terminal for the binary
@@ -423,6 +430,8 @@ func commandErrorRemediation(reason commandReason) string {
 		return ""
 	case reasonMergeConflict:
 		return "Sync and retry after resolving conflicts."
+	case reasonUndoConflict:
+		return "Run `lit undo list` to find the later write that moved it again; revert that write as well by naming it in --writes, or leave the undo."
 	case reasonRestoreWouldOverwrite:
 		return "Rerun with `--force` to restore anyway: the restore first takes a backup of the workspace it replaces, and `lit backup list` names it."
 	case reasonSyncDivergence:

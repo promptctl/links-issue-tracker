@@ -22,13 +22,21 @@ import (
 // [LAW:single-enforcer] one boundary owns ID resolution; what it writes is the
 // file storage.ParseBulkFile parsed once it judged it.
 func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
+	applied, _, err := s.bulkApply(ctx, prefix, actor, specs)
+	return applied, err
+}
+
+// bulkApply is BulkApply, also returning the batch's revert point: the head
+// the file's writes sit on, which withBatch owns. An undo names the commits it
+// landed from it.
+func (s *Store) bulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, string, error) {
 	existingTypes, err := s.issueTypesByIDs(ctx, storage.BulkExistingRefs(specs))
 	if err != nil {
-		return storage.BulkApplyResult{}, fmt.Errorf("bulk: read the issues the file places: %w", err)
+		return storage.BulkApplyResult{}, "", fmt.Errorf("bulk: read the issues the file places: %w", err)
 	}
 	file, err := storage.ParseBulkFile(specs, existingTypes)
 	if err != nil {
-		return storage.BulkApplyResult{}, err
+		return storage.BulkApplyResult{}, "", err
 	}
 
 	return withBatch(ctx, s, func(ctx context.Context, result *storage.BulkApplyResult) error {

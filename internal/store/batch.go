@@ -33,6 +33,10 @@ type batchResult interface{ Written() string }
 // hard-reset to the revert point on a context the caller's cancellation cannot
 // reach, so a Ctrl-C that refused the batch cannot also stop its reset.
 //
+// It also returns the revert point: the head the batch's own writes sit on,
+// so the commits above it are exactly what the batch landed, and a stranded
+// write committed first is below it. [LAW:one-source-of-truth]
+//
 // fn builds the batch's result in place, and withBatch returns what of it
 // stands: all of it when the batch lands; the zero result beside a
 // *storage.RefusedBatchError when the reset landed; all of it beside a
@@ -40,13 +44,13 @@ type batchResult interface{ Written() string }
 // observers hear the batch's changes (notify queues them) exactly when they
 // stand, on the same two outcomes, once the lock is released, as a lone
 // Apply's observers do. [LAW:no-silent-failure] [LAW:nothing-unseen]
-func withBatch[R batchResult](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, error) {
+func withBatch[R batchResult](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, string, error) {
 	var built, stands R
 	var heard []heardChange
+	var head string
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		// Retried as every write is, since nothing is written yet: a re-run
 		// finds the stranded writes already committed and reads the same head.
-		var head string
 		if err := retryTransientGCContention(ctx, func(ctx context.Context) error {
 			if err := s.commitStrandedWrites(ctx); err != nil {
 				return err
@@ -75,6 +79,6 @@ func withBatch[R batchResult](ctx context.Context, s *Store, fn func(ctx context
 		stands = built
 		return &storage.BatchResetFailedError{Head: head, Cause: cause, ResetErr: resetErr, Written: built.Written()}
 	})
-	s.deliver(heard)
-	return stands, err
+	s.hear(ctx, heard...)
+	return stands, head, err
 }

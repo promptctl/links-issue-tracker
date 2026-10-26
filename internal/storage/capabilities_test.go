@@ -54,6 +54,11 @@ type importEngine struct {
 	storage.Importer
 }
 
+type undoEngine struct {
+	storage.Store
+	storage.Reverter
+}
+
 type rawEngine struct {
 	storage.Store
 	storage.RawExecutor
@@ -67,13 +72,14 @@ type fullEngine struct {
 	storage.Repairer
 	storage.SchemaMigrator
 	storage.Importer
+	storage.Reverter
 	storage.RawExecutor
 }
 
 // capabilityCases pairs each capability with an engine offering that one and
 // nothing else. Every case therefore proves two things at once: the capability
-// is found on an engine that has it, and it is NOT found on the six engines
-// that don't — which is what catches a capability whose name has been wired to
+// is found on an engine that has it, and it is NOT found on any engine
+// that lacks it — which is what catches a capability whose name has been wired to
 // the wrong interface.
 func capabilityCases() []struct {
 	capability storage.Capability
@@ -89,6 +95,7 @@ func capabilityCases() []struct {
 		{storage.Repair, repairEngine{}},
 		{storage.SchemaMigration, schemaEngine{}},
 		{storage.Import, importEngine{}},
+		{storage.Undo, undoEngine{}},
 		{storage.TestSupport, rawEngine{}},
 	}
 }
