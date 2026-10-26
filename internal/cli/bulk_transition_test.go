@@ -314,14 +314,14 @@ func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
 	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
 		t.Errorf("reason = %s, want %s", reason, reasonBulkPartialFailure)
 	}
-	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused", `b landed and stdout did not print "claim transferred: x -> y\nb ok\n" of its report, which stopped the run before c: stdout closed`} {
+	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused. b landed", `b landed and stdout did not print "claim transferred: x -> y\nb ok\n" of its report, which stopped the run before c: stdout closed`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("message = %q, want it to contain %q", err.Error(), want)
 		}
 	}
 	ev := recorder.Finish(telemetry.End{})
-	if ev.Counts["bulk.not_run"] != 1 {
-		t.Errorf("bulk.not_run = %v, want 1", ev.Counts["bulk.not_run"])
+	if notRun, _ := ev.Facts["bulk.not_run"].([]string); !slices.Equal(notRun, []string{"c"}) {
+		t.Errorf("bulk.not_run = %#v, want [c]", ev.Facts["bulk.not_run"])
 	}
 	var reportErrors []any
 	for _, raw := range ev.Occurrences["bulk.items"] {
@@ -334,7 +334,9 @@ func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
 }
 
 // A run whose last report is refused landed every item, and still fails as a
-// partial failure: re-running it would apply every item again.
+// partial failure: re-running it would apply every item again. Its message
+// lists no item as not landed and says where it stopped in a sentence of its
+// own, and its event lists no id as not run.
 func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
@@ -344,8 +346,11 @@ func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
 	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
 		t.Errorf("runBulkOver error = %v, reason %s, want %s", err, reason, reasonBulkPartialFailure)
 	}
-	if got, ok := recorder.Finish(telemetry.End{}).Counts["bulk.not_run"]; !ok || got != 0 {
-		t.Errorf("bulk.not_run = %d (recorded %t), want a recorded 0", got, ok)
+	if want := `bulk operation: 0 of 1 item(s) did not land. a landed and stdout did not print "a ok\n" of its report, which stopped the run: stdout closed`; err.Error() != want {
+		t.Errorf("message = %q, want %q", err.Error(), want)
+	}
+	if notRun, ok := recorder.Finish(telemetry.End{}).Facts["bulk.not_run"].([]string); !ok || notRun == nil || len(notRun) != 0 {
+		t.Errorf("bulk.not_run = %#v (recorded %t), want a recorded []", notRun, ok)
 	}
 }
 

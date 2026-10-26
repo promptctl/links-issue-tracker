@@ -71,8 +71,9 @@ type BulkError struct {
 // report of IssueID, an item whose change landed, and the run stopped there
 // without reaching NotRun. Unprinted is the part of the report stdout did not
 // take, so what it never printed, such as the id of the comment
-// `bulk comment` added, still reaches stderr. Nil on a run that reached its last id. A closed pipe does
-// not reach here: lit dies of SIGPIPE at the write (links-observability-gvpn.4j3).
+// `bulk comment` added, still reaches stderr. Nil on a run that reached its
+// last id. A closed pipe does not reach here: lit dies of SIGPIPE at the
+// write (links-observability-gvpn.4j3).
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
 type bulkStop struct {
 	IssueID   string
@@ -91,26 +92,35 @@ func (s bulkStop) String() string {
 
 // Error names each unlanded item with the reason its error classifies as, the
 // reason its single command would have printed, so a run whose items differ
-// still says what each one calls for, and then where the run stopped, if it
-// did: the ids it never reached did not land either.
+// still says what each one calls for. Where the run stopped, if it did, is a
+// sentence of its own after that list, since the stopping item landed: the
+// ids it never reached are counted as not landed and named there.
 func (e BulkError) Error() string {
-	parts := make([]string, 0, len(e.Unlanded)+1)
-	for _, item := range e.Unlanded {
-		parts = append(parts, fmt.Sprintf("%s (%s): %v", item.IssueID, commandErrorReason(item.Err), item.Err))
+	parts := make([]string, len(e.Unlanded))
+	for i, item := range e.Unlanded {
+		parts[i] = fmt.Sprintf("%s (%s): %v", item.IssueID, commandErrorReason(item.Err), item.Err)
 	}
 	notLanded := len(e.Unlanded)
+	stop := ""
 	if e.Stopped != nil {
 		notLanded += len(e.Stopped.NotRun)
-		parts = append(parts, e.Stopped.String())
+		stop = ". " + e.Stopped.String()
 	}
-	return fmt.Sprintf("bulk operation: %d of %d item(s) did not land: %s", notLanded, e.Ran, strings.Join(parts, "; "))
+	msg := fmt.Sprintf("bulk operation: %d of %d item(s) did not land", notLanded, e.Ran)
+	if len(parts) > 0 {
+		msg += ": " + strings.Join(parts, "; ")
+	}
+	return msg + stop
 }
 
 // runBulkOver applies op to each issue ID in order, writing to stdout, per
 // landed item, the notice op returned for it and then one "id ok" line — the
 // data channel carries results only — and collecting every item that did not
 // land. A stdout that refuses a landed item's report stops the run there: the
-// rest would land with reports nobody reads. If any item did not land, or the
+// rest would land with reports nobody reads. The report is the command's
+// result, not a banner trailing it, so losing it fails the run, where
+// printMutationSyncStalenessWarning's lost banner leaves the exit code alone.
+// If any item did not land, or the
 // run stopped, it returns a BulkError, whose reason the classifier derives
 // from those items; they never reach stdout. This is the single place a bulk
 // item's landing is decided and the one way a bulk run fails, so the
@@ -122,8 +132,8 @@ func (e BulkError) Error() string {
 // report, and the facts and counts its work recorded, with those its error
 // declared about itself, as a failed single command's join its event. Run on
 // the event itself, the second item's facts would replace the first's. The
-// event counts the ids the run never reached, 0 when it reached them all.
-// [LAW:nothing-unseen]
+// event's fact bulk.not_run lists the ids the run never reached, [] when it
+// reached them all. [LAW:nothing-unseen]
 func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op func(ctx context.Context, issueID string) (notice string, err error)) error {
 	var unlanded []unlandedItem
 	var stopped *bulkStop
@@ -155,7 +165,7 @@ func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op fu
 			stopped = &bulkStop{IssueID: issueID, Unprinted: report[printed:], Err: reportErr, NotRun: issueIDs[reached+1:]}
 		}
 	}
-	telemetry.Count(ctx, "bulk.not_run", len(issueIDs)-reached)
+	telemetry.Set(ctx, "bulk.not_run", issueIDs[reached:])
 	if len(unlanded) > 0 || stopped != nil {
 		return BulkError{Ran: len(issueIDs), Unlanded: unlanded, Stopped: stopped}
 	}

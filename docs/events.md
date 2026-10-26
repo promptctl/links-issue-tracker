@@ -355,12 +355,13 @@ none of them.
 A bulk command puts one entry on `bulk.items` for each issue in `--ids` it ran,
 in the order given, whether the issue's change landed or failed. A run stops at
 a landed issue whose `<id> ok` line stdout refuses, so the issues after it have
-no entry, and the event's count `bulk.not_run` says how many there were: `0` for
-a run that reached the last issue. Each entry holds the facts and counts that issue's change recorded, so a `lit bulk start` entry
-carries the keys a `lit start` sets, a `lit bulk done` entry the keys a
-`lit done` sets, a `lit bulk comment` entry the `comment.id` a
-`lit comment add` sets, and a `lit bulk label` entry the `label.changed` a
-`lit label add` or `rm` sets. Those keys never appear at the event's top level.
+no entry, and the event's fact `bulk.not_run` lists them in order: `[]` for a
+run that reached the last issue. Each entry holds the facts and counts that
+issue's change recorded, so a `lit bulk start` entry carries the keys a
+`lit start` sets, a `lit bulk done` entry the keys a `lit done` sets, a
+`lit bulk comment` entry the `comment.id` a `lit comment add` sets, and a
+`lit bulk label` entry the `label.changed` a `lit label add` or `rm` sets.
+Those keys never appear at the event's top level.
 
 | Key | Meaning |
 | --- | --- |
