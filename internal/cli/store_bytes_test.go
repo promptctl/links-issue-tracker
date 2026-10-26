@@ -69,9 +69,9 @@ func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
 		_, producer, consumer, _, epicID := twoClonesOverOneDoltRemote(t)
 		runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 		runCLIInDir(t, producer, "sync", "push")
-		runCLIInDir(t, consumer, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+		runWorkerInDir(t, consumer, backgroundReceiveSubcommand)
 		ev := lastEvent(t)
-		if ev.Event != "lit sync "+backgroundReceiveSubcommand {
+		if ev.Event != "lit "+backgroundReceiveSubcommand {
 			t.Fatalf("last event = %q, want the receive worker's", ev.Event)
 		}
 		assertStoreMeasured(t, ev)

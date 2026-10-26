@@ -21,7 +21,7 @@ import (
 // geometry function so the fixture cannot drift from real stores.
 func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit")), Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
+	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit")), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 }
 
 // mirrorPendingSet is the in-package spelling of mirrorOwed for tests that
@@ -226,7 +226,7 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 // with ENOTDIR on POSIX only: Windows reports that path not found.
 func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit\x00")), Remotes: workspace.NewRemotes(testEnv(), workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit\x00")), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 
 	owed, err := mirrorOwed(ws)
 	if err == nil {

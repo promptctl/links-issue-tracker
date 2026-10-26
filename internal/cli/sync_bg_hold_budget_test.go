@@ -67,7 +67,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 	// The mirror's own entrypoint, in the foreground of its own goroutine:
 	// parent-pid 0 skips the parent wait, then the cycle clones, releases, and
 	// pushes into the wedge.
-	mirror := startInProcess(unboundedRunTripwire(healthyCycle, wedgedDeadline), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	mirror := startInProcess(unboundedRunTripwire(healthyCycle, wedgedDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
 	wedgedAt := awaitWedge(t, wedgeMarker, unboundedRunTripwire(healthyCycle, wedgedDeadline), mirror)
 
 	// The proof: with the push genuinely mid-hang, a foreground mutation on
@@ -156,7 +156,7 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 	wedgedDeadline := shrinkMirrorPushDeadline(t, healthyCycle)
 	wedgeMarker := installGitWedge(t, base, gitPath, "ls-remote")
 
-	mirrorOut, mirrorErr := runInProcess(unboundedRunTripwire(healthyCycle, wedgedDeadline), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	mirrorOut, mirrorErr := runInProcess(unboundedRunTripwire(healthyCycle, wedgedDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
 	cycleEnded := time.Now()
 	if mirrorErr != nil {
 		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", mirrorErr, mirrorOut.String())
@@ -214,7 +214,7 @@ func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 	store.MirrorPushDeadline = time.Nanosecond
 	t.Cleanup(func() { store.MirrorPushDeadline = restore })
 
-	out, err := runInProcess(unboundedRunTripwire(0, restore), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	out, err := runInProcess(unboundedRunTripwire(0, restore), workerArgv(t, root, backgroundMirrorSubcommand)...)
 	if err != nil {
 		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", err, out.String())
 	}
@@ -253,7 +253,7 @@ func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 		t.Fatalf("plant residue: %v", err)
 	}
 
-	out, err := runInProcess(unboundedRunTripwire(0, store.MirrorPushDeadline), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	out, err := runInProcess(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
 	if err != nil {
 		t.Fatalf("mirror cycle: %v\noutput:\n%s", err, out.String())
 	}
@@ -387,11 +387,15 @@ func setupMirrorDeadlineRepo(t *testing.T) (base, root, gitPath string, runInPro
 	startInProcess = func(timeout time.Duration, args ...string) inProcessRun {
 		out := &lockedBuffer{}
 		done := make(chan inProcessResult, 1)
+		inv := cwdInvocation(out, out, args)
+		if len(args) > 0 && args[0] == backgroundMirrorSubcommand {
+			inv.Stdin = strings.NewReader(workerHandoffStdin(t, root))
+		}
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			errCh := make(chan error, 1)
-			go func() { errCh <- Run(ctx, cwdInvocation(out, out, args)) }()
+			go func() { errCh <- Run(ctx, inv) }()
 			select {
 			case runErr := <-errCh:
 				done <- inProcessResult{out: out, err: runErr}
@@ -519,7 +523,7 @@ func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time
 	started := time.Now()
 	// The sample runs under the production deadline, so its hung bound is that
 	// deadline's, not a figure of this test's choosing. [LAW:one-source-of-truth]
-	out, err := runInProcess(unboundedRunTripwire(0, store.MirrorPushDeadline), "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+	out, err := runInProcess(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
 	healthyCycle := time.Since(started)
 	if err != nil {
 		t.Fatalf("unwedged mirror cycle failed, so there is no healthy cost to size the wedged run against: %v\noutput:\n%s", err, out.String())

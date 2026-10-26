@@ -52,11 +52,12 @@ func TestEverySettlingEntryPointMergesAForkBelowTheCut(t *testing.T) {
 		// fetch and settle are the commands whose events carry the fork
 		// point's record and the reconcile's base: one command for an entry
 		// point that does both.
-		fetch, settle []string
+		fetch  []string
+		settle func(t *testing.T, dir string)
 	}{
-		{name: "pull", settle: []string{"sync", "pull"}},
-		{name: "receive", settle: []string{"sync", backgroundReceiveSubcommand, "--parent-pid", "0"}},
-		{name: "reconcile", fetch: []string{"sync", "fetch"}, settle: []string{"sync", "reconcile"}},
+		{name: "pull", settle: func(t *testing.T, dir string) { runCLIInDir(t, dir, "sync", "pull") }},
+		{name: "receive", settle: func(t *testing.T, dir string) { runWorkerInDir(t, dir, backgroundReceiveSubcommand) }},
+		{name: "reconcile", fetch: []string{"sync", "fetch"}, settle: func(t *testing.T, dir string) { runCLIInDir(t, dir, "sync", "reconcile") }},
 	} {
 		t.Run(entry.name, func(t *testing.T) {
 			r, adopted := newForkedBelowTheCut(t)
@@ -64,7 +65,7 @@ func TestEverySettlingEntryPointMergesAForkBelowTheCut(t *testing.T) {
 				runCLIInDir(t, r.bravo, entry.fetch...)
 				assertForkPointRecorded(t, adopted)
 			}
-			runCLIInDir(t, r.bravo, entry.settle...)
+			entry.settle(t, r.bravo)
 			if entry.fetch == nil {
 				assertForkPointRecorded(t, adopted)
 			}
@@ -148,7 +149,7 @@ func TestAQuietForkPullsAcrossItsForkPoint(t *testing.T) {
 // says it landed across the fork point.
 func TestAQuietForkReceivesOntoTheRemoteHead(t *testing.T) {
 	r, _ := newForkedBelowTheCutAfter(t, func(reRootedCheckouts) {})
-	runCLIInDir(t, r.bravo, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+	runWorkerInDir(t, r.bravo, backgroundReceiveSubcommand)
 	ev := lastEvent(t)
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {

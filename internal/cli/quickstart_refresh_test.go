@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -208,7 +210,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	got, err := renderQuickstartGuidance(testEnv(), repo)
+	got, err := renderQuickstartGuidance(testEnv(), repo, config.CheckoutProject(testEnv(), pathspec.New(repo)))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() error = %v", err)
 	}
@@ -222,7 +224,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	// Verify default (no config) does not include the soil section.
 	xdg2 := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg2)
-	gotDefault, err := renderQuickstartGuidance(testEnv(), repo)
+	gotDefault, err := renderQuickstartGuidance(testEnv(), repo, config.CheckoutProject(testEnv(), pathspec.New(repo)))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() default error = %v", err)
 	}

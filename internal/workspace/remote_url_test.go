@@ -238,7 +238,7 @@ func TestReadingTheRemotesRecordsWhatTheReadDecided(t *testing.T) {
 	run(t, repo, "git", "config", "remote.zzz-empty.url", "")
 
 	recorder := telemetry.Begin(telemetry.Event{})
-	remotes := NewRemotes(testEnv(), testRoot(t, repo))
+	remotes := NewRemotes(testEnv(), testRepository(t, repo), testRoot(t, repo))
 	list, err := remotes.List(telemetry.With(context.Background(), recorder))
 	if err != nil {
 		t.Fatalf("List() error = %v", err)

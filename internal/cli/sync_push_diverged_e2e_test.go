@@ -29,7 +29,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 	} {
 		for _, step := range []struct {
 			name string
-			args []string
+			run  func(t *testing.T, dir string) (string, error)
 			// fails is whether the step exits with the refusal: `lit sync push`
 			// answers the terminal, the mirror has no terminal to answer.
 			fails bool
@@ -42,8 +42,10 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 			reason       string
 			failureClass any
 		}{
-			{name: "on-change mirror", args: []string{"sync", backgroundMirrorSubcommand, "--parent-pid", "0"}, liveStoreSteps: []string{"wait"}},
-			{name: "lit sync push", args: []string{"sync", "push"}, fails: true, reason: "sync_divergence", failureClass: "push_diverged"},
+			{name: "on-change mirror", run: func(t *testing.T, dir string) (string, error) {
+				return runWorkerInDirAllowError(t, dir, backgroundMirrorSubcommand)
+			}, liveStoreSteps: []string{"wait"}},
+			{name: "lit sync push", run: func(t *testing.T, dir string) (string, error) { return runCLIInDirAllowError(t, dir, "sync", "push") }, fails: true, reason: "sync_divergence", failureClass: "push_diverged"},
 		} {
 			t.Run(receive.name+"/"+step.name, func(t *testing.T) {
 				r, base := newSharedCheckouts(t)
@@ -51,11 +53,11 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				writeOwnerNotifyConfig(t, r.bravo, r.sink, receive.on)
 				runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
 				runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
-				runCLIInDir(t, r.alpha, "sync", backgroundMirrorSubcommand, "--parent-pid", "0")
+				runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)
 				assertPushDecision(t, lastEvent(t), pushDecisionPushed)
 				assertLiveStoreSteps(t, lastEvent(t), "record")
 
-				if _, err := runCLIInDirAllowError(t, r.bravo, step.args...); (err != nil) != step.fails {
+				if _, err := step.run(t, r.bravo); (err != nil) != step.fails {
 					t.Fatalf("bravo's %s error = %v; want an error: %t", step.name, err, step.fails)
 				}
 				ev := lastEvent(t)
@@ -86,7 +88,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 					}
 					// The receive merges alpha's commits and says it owes the
 					// merge a push; on-push cadence spawns no mirror here.
-					runCLIInDir(t, r.bravo, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+					runWorkerInDir(t, r.bravo, backgroundReceiveSubcommand)
 					if owed := lastEvent(t).Facts["receive.push_owed"]; owed != true {
 						t.Fatalf("bravo's receive.push_owed = %v; want true: its merge is not on the remote", owed)
 					}

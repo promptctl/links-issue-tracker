@@ -14,7 +14,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -189,13 +188,6 @@ var syncFamily = commandFamily[wsSubcommand]{
 			nested: &reconcileFamily,
 			bare:   withSyncStore(syncReconcileShowLeaf),
 		}},
-		// Hidden: the detached on-change mirror entrypoint. Absent from `usage`
-		// above, so it never shows in help; it manages its own store lifecycle
-		// (wait-for-parent, then open) and so is registered without withSyncStore.
-		{name: backgroundMirrorSubcommand, payload: wsSubcommand{declare: backgroundMirrorLeaf}, hidden: true},
-		// Hidden: the detached automatic-receive entrypoint, registered the
-		// same way and for the same reason.
-		{name: backgroundReceiveSubcommand, payload: wsSubcommand{declare: backgroundReceiveLeaf}, hidden: true},
 	},
 }
 
@@ -694,7 +686,7 @@ func performSyncPush(ctx, completionCtx context.Context, env environ.Env, sessio
 	// maintenance says the bound was not kept and why, and the event's
 	// history_bound.window_error carries the refusal, null when the window
 	// was read. [LAW:no-silent-failure]
-	cfg, cfgErr := config.Load(env, pathspec.New(ws.RootDir))
+	cfg, cfgErr := config.Load(env, ws.Project)
 	telemetry.Set(completionCtx, "history_bound.window_error", telemetry.ErrorText(cfgErr))
 	window := storage.BoundWindowRead(cfg.Sync.HistoryWindow, cfgErr)
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.

@@ -29,8 +29,7 @@ func TestMain(m *testing.M) {
 	// A detached worker spawns os.Executable(), which here is this test binary.
 	// Run as that worker rather than as a second copy of the whole suite; the
 	// suite's tests call the receive body directly and never mean to spawn one.
-	if len(os.Args) > 2 && os.Args[1] == "sync" &&
-		(os.Args[2] == backgroundReceiveSubcommand || os.Args[2] == backgroundMirrorSubcommand) {
+	if len(os.Args) > 1 && (os.Args[1] == backgroundReceiveSubcommand || os.Args[1] == backgroundMirrorSubcommand) {
 		if err := Run(context.Background(), cwdInvocation(os.Stdout, os.Stderr, os.Args[1:])); err != nil {
 			os.Exit(WriteCommandError(os.Stderr, err))
 		}

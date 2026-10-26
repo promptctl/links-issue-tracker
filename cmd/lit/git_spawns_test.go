@@ -93,7 +93,9 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 	}
 	gitDir := filepath.Join(resolvedRoot, ".git")
 	remoteHead := "--git-dir " + gitDir + " --work-tree " + gitDir + " symbolic-ref --quiet refs/remotes/origin/HEAD"
-	freshness := []string{geometry, "remote -v", remoteHead, "worktree list --porcelain -z"}
+	// The remote list is the repository's too, asked the same way.
+	remoteList := "--git-dir " + gitDir + " --work-tree " + gitDir + " remote -v"
+	freshness := []string{geometry, remoteList, remoteHead, "worktree list --porcelain -z"}
 	// Order matters only for the receive: the first command that wants one
 	// asks whether there is a remote to receive from, and the debounce keeps
 	// the commands after it from scheduling another.
@@ -103,10 +105,10 @@ func TestEachCommandAsksGitEachQuestionOnce(t *testing.T) {
 	}{
 		{[]string{"quickstart"}, []string{geometry}},
 		{[]string{"workspace"}, []string{geometry}},
-		{[]string{"ls"}, []string{geometry, "remote -v"}},
+		{[]string{"ls"}, []string{geometry, remoteList}},
 		{[]string{"backlog"}, freshness},
 		{[]string{"next"}, freshness},
-		{[]string{"new", "--type", "epic", "--title", "spawns-write", "--topic", "demo"}, []string{geometry, "remote -v"}},
+		{[]string{"new", "--type", "epic", "--title", "spawns-write", "--topic", "demo"}, []string{geometry, remoteList}},
 	} {
 		if err := os.WriteFile(log, nil, 0o644); err != nil {
 			t.Fatal(err)

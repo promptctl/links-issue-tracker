@@ -195,14 +195,14 @@ func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	return workspace.Info{
 		RootDir:  checkout.String(),
 		Location: workspace.Location{GitCommonDir: filepath.Join(checkout.String(), ".git"), StorageDir: t.TempDir()},
-		Remotes:  workspace.NewRemotes(testEnv(), checkout),
+		Remotes:  workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkout), Project: testProject(checkout),
 	}
 }
 
 // originRemote is the workspace's one remote, as lit syncs with it.
 func originRemote(t *testing.T, ws workspace.Info) workspace.SyncableRemote {
 	t.Helper()
-	remotes, err := workspace.NewRemotes(testEnv(), checkoutRoot(t, ws.RootDir)).List(underInvocation(context.Background()))
+	remotes, err := workspace.NewRemotes(testEnv(), repositoryOf(t, ws.RootDir), checkoutRoot(t, ws.RootDir)).List(underInvocation(context.Background()))
 	if err != nil || len(remotes) != 1 {
 		t.Fatalf("Remotes.List() = %v, %v; want one remote", remotes, err)
 	}

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,9 +21,9 @@ import (
 	"github.com/promptctl/primitives/filelock"
 )
 
-// backgroundMirrorSubcommand is the hidden `lit sync` subcommand the on-change
-// cadence owner spawns. It is absent from the family usage string, so it never
-// appears in help; it exists only as the detached worker's entrypoint.
+// backgroundMirrorSubcommand is the hidden top-level command the on-change
+// cadence owner spawns. It never appears in help; it exists only as the
+// detached worker's entrypoint.
 const backgroundMirrorSubcommand = "__mirror-bg"
 
 // mirrorLogName is the detached mirror's durable output sink. A detached
@@ -134,43 +135,71 @@ const (
 // separate process. The automation-trace env is set here so a push that runs
 // and fails records a trace through the one shared writer the pre-push hook
 // already uses. [LAW:one-source-of-truth]
-func spawnBackgroundMirror(env environ.Env, ws workspace.Info, parentPID int) error {
-	return spawnDetachedWorker(ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(env), parentPID)
+func spawnBackgroundMirror(ctx context.Context, env environ.Env, ws workspace.Info, parentPID int) error {
+	return spawnDetachedWorker(ctx, ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(env), parentPID)
 }
 
 // detachedWorkerLeaf is the worker side of spawnDetachedWorker, the one entry
-// every detached worker runs through: its --parent-pid flag, and the inherited
-// hold made this process's alone before work runs. The worker waits for its own
-// children, so close-on-exec drops only descendants that outlive it — a
-// backgrounded owner-notify hook, a git credential daemon — which would keep the
-// lock held, and every join waiting, long after this worker is gone.
+// every detached worker runs through: its --store and --parent-pid flags, the
+// inherited hold made this process's alone, and only then the build of its
+// workspace from the store and the handoff on stdin. The worker waits for its
+// own children, so close-on-exec drops only descendants that outlive it — a
+// backgrounded owner-notify hook, a git credential daemon — which would keep
+// the lock held, and every join waiting, long after this worker is gone.
 // [LAW:single-enforcer]
-func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context.Context, inv Invocation, ws workspace.Info, parentPID int) error) wsLeaf {
-	fs := newCobraFlagSet("sync " + subcommand)
+//
+// It acquires nothing before its work, because nothing that can fail may run
+// before the worker's own ordering: the store's Location is pure geometry, and
+// a build that fails is handed to the worker, which ends it through its
+// completion seam. [LAW:no-ambient-temporal-coupling]
+func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context.Context, inv Invocation, built workerWorkspace, parentPID int) error) bareLeaf {
+	fs := newCobraFlagSet(subcommand)
+	storageDir := fs.String("store", "", "storage directory of the store the spawning command ran against")
 	parentPID := fs.Int("parent-pid", 0, parentPIDUsage)
-	return wsLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ws workspace.Info, _ []string) error {
+	return bareLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, _ struct{}, _ []string) error {
+		if !filepath.IsAbs(*storageDir) {
+			return UsageError{Message: fmt.Sprintf("lit %s: --store must name the store's absolute storage directory, got %q", subcommand, *storageDir)}
+		}
+		loc := workspace.LocationFromStorageDir(*storageDir)
 		keepWorkerHoldFromChildren()
-		err := work(ctx, inv, ws, *parentPID)
+		err := work(ctx, inv, buildWorkerWorkspace(ctx, inv.Env, loc, inv.Stdin), *parentPID)
 		// The workspace's store, once, after the worker's own closes: the clones
 		// a worker pushes and fetches through are its means, not the store it
 		// ran against, and one fact read at each of their closes would keep only
 		// whichever closed last.
-		recordStoreBytes(ctx, ws.DatabasePath)
+		recordStoreBytes(ctx, loc.DatabasePath)
 		return err
 	}}
 }
 
-// spawnDetachedWorker starts one of the hidden `lit sync` worker subcommands
-// as a detached process of its own, told which process spawned it so it can
-// wait for that process's engine to be released, and returns without waiting.
-// [LAW:one-type-per-behavior] the mirror and the receive are two instances
-// of one detached worker; what differs is the subcommand, the log and the
-// environment, all values.
-func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env environ.Env, parentPID int) error {
+// spawnDetachedWorker starts one of the hidden worker commands as a detached
+// process of its own, told which store it runs against and which process
+// spawned it, so it can wait for that process's engine to be released, and
+// returns without waiting. The worker runs in the store's directory, which
+// lives exactly as long as the store, and reads the handoff (workerHandoff)
+// from its stdin. [LAW:one-type-per-behavior] the mirror and the receive are
+// two instances of one detached worker; what differs is the subcommand, the
+// log and the environment, all values.
+func spawnDetachedWorker(ctx context.Context, ws workspace.Info, subcommand, logName string, env environ.Env, parentPID int) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve lit binary: %w", err)
 	}
+	handoff, err := handoffOf(ctx, ws)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(handoff)
+	if err != nil {
+		return fmt.Errorf("encode the worker's handoff: %w", err)
+	}
+	handoffRead, handoffWrite, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("open the worker's handoff pipe: %w", err)
+	}
+	// Each end is also closed here, so no path leaks one; the read end is
+	// closed early, right after Start, and closing it again is a no-op.
+	defer func() { _ = handoffRead.Close(); _ = handoffWrite.Close() }()
 	// The worker is joinable from before it exists: the shared hold is taken
 	// here and inherited, so there is no instant at which the worker is alive
 	// and unheld. A worker nobody can join is the race the hold exists to
@@ -180,8 +209,8 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env envi
 	if err != nil {
 		return err
 	}
-	cmd := env.Command(ws.RootDir, self, "sync", subcommand, "--parent-pid", strconv.Itoa(parentPID))
-	cmd.Stdin = nil
+	cmd := env.Command(ws.StorageDir, self, subcommand, "--store", ws.StorageDir, "--parent-pid", strconv.Itoa(parentPID))
+	cmd.Stdin = handoffRead
 	cmd.ExtraFiles = holds
 	// Route the detached worker's output to a durable log. [LAW:no-silent-failure]
 	// If the log cannot be opened, surface that on the command's terminal-attached
@@ -200,6 +229,10 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env envi
 	}
 	cmd.SysProcAttr = detachSysProcAttr()
 	startErr := cmd.Start()
+	// The child holds its own copy of the read end from exec on. Closing ours
+	// is what makes a write to a worker that already died fail instead of
+	// waiting on a pipe nobody reads.
+	_ = handoffRead.Close()
 	if logFile != nil {
 		// The child inherited its own dup of the fd at exec; the parent's copy is
 		// no longer needed. Closing it cannot affect the child's logging.
@@ -211,7 +244,20 @@ func spawnDetachedWorker(ws workspace.Info, subcommand, logName string, env envi
 	for _, hold := range holds {
 		_ = hold.Close()
 	}
-	return startErr
+	if startErr != nil {
+		return startErr
+	}
+	// Written after Start, then closed by the defer, so the worker reads the
+	// whole handoff and then EOF. A write the pipe's buffer cannot take waits
+	// for the worker, which reads its handoff first.
+	//
+	// A failed write is a failed spawn: the worker holds the only read end, so
+	// the write fails only once the worker has exited, before it could finish
+	// reading and so before it recorded anything. Its hold went with it.
+	if _, err := handoffWrite.Write(payload); err != nil {
+		return fmt.Errorf("write the worker's handoff: %w", err)
+	}
+	return nil
 }
 
 // mirrorEnv builds the detached mirror's environment: the parent's environment
@@ -250,8 +296,9 @@ func workerEnv(parent environ.Env, strip []string, set ...string) environ.Env {
 // lock, never resting on timing. Losing therefore never strands a claim, and
 // the loser still exits without opening a store, writing a trace, or creating a
 // file — the quiescence property test cleanups rely on.
-func backgroundMirrorLeaf() wsLeaf {
-	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, inv Invocation, ws workspace.Info, parentPID int) error {
+func backgroundMirrorLeaf() bareLeaf {
+	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, parentPID int) error {
+		ws := built.ws
 		// A live mirror IS the coverage the claim protocol counts on, and its
 		// liveness is proven by the kernel: hold the beacon shared from entry —
 		// before the parent-exit wait, so mutations claiming during that wait read
@@ -298,6 +345,13 @@ func backgroundMirrorLeaf() wsLeaf {
 			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, fmt.Errorf(
 				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
 				parentPID, workerParentWaitTimeout), stopAnswering)
+		}
+		// A workspace that could not be built ends like the mirror's other
+		// pre-attempt deaths, once the parent has exited, so no push outcome is
+		// written while the spawning command may still be writing its own.
+		// [LAW:no-ambient-temporal-coupling]
+		if built.failed != nil {
+			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, built.failed, stopAnswering)
 		}
 
 		for {

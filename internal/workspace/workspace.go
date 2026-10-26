@@ -14,8 +14,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
 var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
@@ -99,6 +101,10 @@ type Info struct {
 	// Remotes is this checkout's git remote configuration, asked of git once
 	// per invocation; see Remotes for who owns it.
 	Remotes *Remotes
+	// Project is the project config layer every config read of this unit of
+	// work takes: the checkout's, or the one a detached worker was handed.
+	// [LAW:one-source-of-truth] no config read derives it from RootDir again.
+	Project config.ProjectLayer
 }
 
 // PrimaryClone says this checkout is the repository's primary clone rather than
@@ -233,7 +239,7 @@ func (p PrefixState) Stored() StoredPrefix {
 func (p PrefixState) Derived() bool { return p.spec.Derived() }
 
 // Remotes is a checkout's git remote configuration as one invocation reads it:
-// the remotes git has, and the one the current branch tracks. Each is asked of
+// the remotes the repository has, and the one the current branch tracks. Each is asked of
 // git at most once, on first use, and every later read in the invocation is
 // that answer — a command whose drift banner, sync-remote choice and automatic
 // receive all need the remotes spawns `git remote -v` once, not once each.
@@ -246,35 +252,63 @@ func (p PrefixState) Derived() bool { return p.spec.Derived() }
 // configuration; a remote added by hand mid-command is seen by the next one.
 // NewRemotes is the only way to build one.
 type Remotes struct {
-	env      environ.Env
-	root     CheckoutRoot
-	listing  func() (remoteListing, error)
-	upstream func() (string, error)
-	recorded sync.Once
+	env  environ.Env
+	repo Repository
+	root CheckoutRoot
+	// askUpstream is where the upstream answer comes from, kept as a value so
+	// a Reread asks the same source: a checkout's own branch, or the answer a
+	// detached worker was handed.
+	askUpstream func() (string, error)
+	listing     func() (remoteListing, error)
+	upstream    func() (string, error)
+	recorded    sync.Once
 }
 
-// NewRemotes reads the remote configuration of the checkout at root, lazily.
+// NewRemotes reads, lazily, the remote configuration the checkout at root
+// sees: the remote list is the repository's, asked of repo, and the upstream
+// is the checkout's current branch's.
 //
 // [LAW:dataflow-not-control-flow] Both queries read local config and cannot
 // hang on a network, so context.Background() — "never cancels" — is the honest
 // value, as for every geometry query in this file. A reader's ctx names the
 // event the listing's facts land on; it never cancels the read, which every
 // later reader in the command shares.
-func NewRemotes(env environ.Env, root CheckoutRoot) *Remotes {
+func NewRemotes(env environ.Env, repo Repository, root CheckoutRoot) *Remotes {
+	return remotesAsking(env, repo, root, func() (string, error) {
+		return upstreamRemote(context.Background(), env, root.path)
+	})
+}
+
+// HandedRemotes is the remote configuration a detached worker reads: the
+// repository's remote list, with relative path URLs joined to the root its
+// launcher handed it, and an upstream answered by the sync remote the
+// launcher's precedence chose. The upstream's one reader is that precedence
+// (chooseSyncRemote), so handing it the launcher's choice picks the remote the
+// launcher picked, and no git runs in a checkout the worker cannot know still
+// exists. [LAW:no-ambient-temporal-coupling]
+func HandedRemotes(env environ.Env, repo Repository, root CheckoutRoot, syncRemote string) *Remotes {
+	return remotesAsking(env, repo, root, func() (string, error) { return syncRemote, nil })
+}
+
+func remotesAsking(env environ.Env, repo Repository, root CheckoutRoot, askUpstream func() (string, error)) *Remotes {
 	return &Remotes{
-		env:  env,
-		root: root,
+		env:         env,
+		repo:        repo,
+		root:        root,
+		askUpstream: askUpstream,
 		listing: sync.OnceValues(func() (remoteListing, error) {
-			return gitRemotes(context.Background(), env, root)
+			return gitRemotes(context.Background(), env, repo, root)
 		}),
-		upstream: sync.OnceValues(func() (string, error) {
-			return upstreamRemote(context.Background(), env, root.path)
-		}),
+		upstream: sync.OnceValues(askUpstream),
 	}
 }
 
-// Reread is a reader of the same checkout's remotes that asks git afresh.
-func (r *Remotes) Reread() *Remotes { return NewRemotes(r.env, r.root) }
+// Reread is a reader that asks the repository for its remote list afresh, and
+// asks the upstream of the same source this one did.
+func (r *Remotes) Reread() *Remotes { return remotesAsking(r.env, r.repo, r.root, r.askUpstream) }
+
+// Root is the checkout root relative path URLs are joined to.
+func (r *Remotes) Root() CheckoutRoot { return r.root }
 
 // List is the checkout's remotes that have a fetch URL, sorted by name. git
 // cannot fetch a remote with none (a pushurl-only remote, say), so it is left
@@ -359,7 +393,29 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 		PrivateGitDir: privateGitDir,
 		// git prints --show-toplevel absolute with every symlink resolved, so its
 		// answer is a CheckoutRoot as it stands.
-		Remotes: NewRemotes(env, CheckoutRoot{path: geo.root}),
+		Remotes: NewRemotes(env, loc.Repository(), CheckoutRoot{path: geo.root}),
+		Project: config.CheckoutProject(env, pathspec.New(geo.root)),
+	}, nil
+}
+
+// Handed is the workspace a detached worker runs against: the store at loc,
+// and the values the command that launched it handed it from its own
+// checkout — the root relative path URLs are joined to, the sync remote its
+// precedence chose, and its project config layer. Nothing is asked of a
+// checkout, which may be gone by now, and nothing is created: the store
+// exists, because the launcher ran against it. [LAW:effects-at-boundaries]
+func Handed(env environ.Env, loc Location, root CheckoutRoot, syncRemote string, project config.ProjectLayer) (Info, error) {
+	cfg, err := ReadConfig(loc.ConfigPath)
+	if err != nil {
+		return Info{}, err
+	}
+	return Info{
+		Location:    loc,
+		RootDir:     root.path,
+		WorkspaceID: cfg.WorkspaceID,
+		IssuePrefix: parseStoredPrefix(loc.ConfigPath, cfg.IssuePrefix),
+		Remotes:     HandedRemotes(env, loc.Repository(), root, syncRemote),
+		Project:     project,
 	}, nil
 }
 

@@ -8,7 +8,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -61,4 +63,17 @@ func checkoutRoot(t testing.TB, dir string) workspace.CheckoutRoot {
 		t.Fatalf("ParseCheckoutRoot(%q): %v", resolved, err)
 	}
 	return root
+}
+
+// testProject is the project config layer Resolve gives the checkout at root.
+func testProject(root workspace.CheckoutRoot) config.ProjectLayer {
+	return config.CheckoutProject(testEnv(), pathspec.New(root.String()))
+}
+
+// repositoryOf is the repository a standard checkout at dir has, <dir>/.git,
+// named without asking git: a fixture whose dir is no repository gets one
+// whose questions fail, as asking that dir's checkout did.
+func repositoryOf(t testing.TB, dir string) workspace.Repository {
+	t.Helper()
+	return workspace.LocationFromStorageDir(filepath.Join(checkoutRoot(t, dir).String(), ".git", "links")).Repository()
 }

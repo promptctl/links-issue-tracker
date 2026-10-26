@@ -95,7 +95,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	}
 	receive := func() map[string]any {
 		t.Helper()
-		runCLIInDir(t, consumer, "sync", backgroundReceiveSubcommand, "--parent-pid", "0")
+		runWorkerInDir(t, consumer, backgroundReceiveSubcommand)
 		return oneOutcome(lastEvent(t).Occurrences["receive.outcomes"])
 	}
 

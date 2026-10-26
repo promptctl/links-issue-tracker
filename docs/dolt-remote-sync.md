@@ -188,7 +188,7 @@ default and toggled independently of push cadence:
 receive = true   # default
 ```
 
-The receive runs in a **detached worker**, a `lit sync __receive-bg` process the
+The receive runs in a **detached worker**, a `lit __receive-bg` process the
 command starts as it finishes, so no command waits on the remote: the remote
 check, the fetch it may lead to and the reconcile behind that all run after the
 command has returned. Embedded Dolt permits only one read-write engine on a path
@@ -395,6 +395,9 @@ keep = 1000        # default; at least 1 and fewer than re_root_at
 
 Each checkout that pushes applies its own window to the shared remote, so set
 it in the committed `.lit/config.toml`, where every clone reads the same one.
+A background push applies the window of the command that spawned it: the
+detached worker is handed that command's project config, so it reads no
+checkout, and finishes after the checkout that spawned it is removed.
 A count that is not a whole number, or a window that keeps no commit or keeps
 as many as it re-roots at, is a config error naming `sync.history_bound`.
 Pushes still land, but each says `history bound not kept` with the error, and
@@ -418,6 +421,9 @@ owner_notify_cmd = 'curl -s -H "Title: lit sync degraded" -d "$LIT_NOTIFY_SUMMAR
 ```
 
 The command runs via `sh -c` in the repo root, time-boxed to 10s, with the
+repo root being, for a background push or receive, the checkout whose command
+spawned it; if that checkout has been removed, the hook cannot start, and its
+failure is traced. It runs with the
 event's facts in the environment:
 
 | variable             | value                                                            |

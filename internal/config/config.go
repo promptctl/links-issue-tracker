@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -265,10 +266,10 @@ type UnknownKey struct {
 // Keys are as viper reads them, lowercased, which is also how Load matches
 // them to settings. Each layer is its own file, so a layer that does not parse
 // adds its error and hides nothing another layer sets.
-func UnknownKeys(env environ.Env, workspaceRoot pathspec.PathSpec) ([]UnknownKey, error) {
+func UnknownKeys(env environ.Env, project ProjectLayer) ([]UnknownKey, error) {
 	unknown := []UnknownKey{}
 	var errs []error
-	for _, layer := range configLayers(env, workspaceRoot) {
+	for _, layer := range configLayers(env, project) {
 		file, err := readLayer(layer)
 		if err != nil {
 			errs = append(errs, err)
@@ -285,14 +286,95 @@ func UnknownKeys(env environ.Env, workspaceRoot pathspec.PathSpec) ([]UnknownKey
 	return unknown, errors.Join(errs...)
 }
 
+// layer is one config file of the precedence chain: its content, which
+// readLayer parses, and its name for messages.
+type layer interface {
+	// Content is the layer's bytes: a layer with no file has none.
+	Content() ([]byte, error)
+	String() string
+}
+
 // layers is the config precedence chain: merged in slice order, so later
 // layers override earlier ones. [LAW:one-source-of-truth] This ordering is
 // the only encoding of global-vs-project precedence.
-type layers []pathspec.PathSpec
+type layers []layer
 
-func configLayers(env environ.Env, workspaceRoot pathspec.PathSpec) layers {
-	return layers{globalConfigPath(env), projectConfigPath(env, workspaceRoot)}
+func configLayers(env environ.Env, project ProjectLayer) layers {
+	return layers{fileLayer{globalConfigPath(env)}, project}
 }
+
+// ProjectLayer is the project config layer, read above the global one. It is
+// either a checkout's, the file at LIT_CONFIG_PROJECT_PATH or else the
+// checkout's .lit/config.toml, read when Load runs; or the content a detached
+// worker was handed by the command that launched it, whose checkout may be
+// gone by the time the worker reads config. [LAW:types-are-the-program] a
+// worker's layer is a value it holds, so no config read on its path can reach
+// for a checkout that no longer exists.
+type ProjectLayer interface {
+	// Content is what a launcher hands its worker.
+	layer
+	// Source names where the layer came from — checkout:<path> or handed —
+	// for the command's event: which file won is a fact of every command.
+	// [LAW:nothing-unseen]
+	Source() string
+}
+
+// CheckoutProject is the project layer of the checkout at workspaceRoot, the
+// file LIT_CONFIG_PROJECT_PATH names taking its place. An empty root has no
+// file of its own, but the variable still names one.
+func CheckoutProject(env environ.Env, workspaceRoot pathspec.PathSpec) ProjectLayer {
+	return fileLayer{projectConfigPath(env, workspaceRoot)}
+}
+
+// HandedProject is a project layer handed over as content, read from no file.
+func HandedProject(content []byte) ProjectLayer {
+	return handedLayer{content: content}
+}
+
+// fileLayer is a layer read from the file at path when Load runs.
+type fileLayer struct{ path pathspec.PathSpec }
+
+func (l fileLayer) String() string { return l.path.String() }
+
+func (l fileLayer) Source() string { return "checkout:" + l.path.String() }
+
+// Content is the file's bytes: no path, or no file at it, is a layer that
+// sets nothing.
+func (l fileLayer) Content() ([]byte, error) {
+	if l.path.IsEmpty() {
+		return nil, nil
+	}
+	content, err := os.ReadFile(l.path.String())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", l.path, err)
+	}
+	return content, nil
+}
+
+// NoProject is the project layer of a worker that was handed none: it sets
+// nothing, and says so on the event, where "handed" would claim a handoff
+// that never arrived. [FRAMING:representation]
+func NoProject() ProjectLayer { return noProjectLayer{} }
+
+type noProjectLayer struct{}
+
+func (noProjectLayer) Content() ([]byte, error) { return nil, nil }
+
+func (noProjectLayer) String() string { return "no project config" }
+
+func (noProjectLayer) Source() string { return "none" }
+
+// handedLayer is a project layer that arrived as content.
+type handedLayer struct{ content []byte }
+
+func (l handedLayer) String() string { return "handed project config" }
+
+func (l handedLayer) Source() string { return "handed" }
+
+func (l handedLayer) Content() ([]byte, error) { return l.content, nil }
 
 // merge folds every layer into v in precedence order and returns the
 // concatenated required-field contributions in that same order.
@@ -311,15 +393,15 @@ func (l layers) merge(v *viper.Viper) ([]string, error) {
 }
 
 // Load reads config from ~/.config/links-issue-tracker/config.toml and from
-// <workspace>/.lit/config.toml when a workspace root is present.
-// A missing file is not an error; defaults are returned.
-func Load(env environ.Env, workspaceRoot pathspec.PathSpec) (Config, error) {
+// the project layer above it. A missing file is not an error; defaults are
+// returned.
+func Load(env environ.Env, project ProjectLayer) (Config, error) {
 	v := viper.New()
 	for key, value := range settings {
 		v.SetDefault(key, value)
 	}
 
-	required, err := configLayers(env, workspaceRoot).merge(v)
+	required, err := configLayers(env, project).merge(v)
 	if err != nil {
 		return Config{}, err
 	}
@@ -377,34 +459,32 @@ func projectConfigPath(env environ.Env, workspaceRoot pathspec.PathSpec) pathspe
 		Or(workspaceRoot.Join(".lit", "config.toml"))
 }
 
-func mergeConfigFile(v *viper.Viper, path pathspec.PathSpec) ([]string, error) {
-	fileConfig, err := readLayer(path)
+func mergeConfigFile(v *viper.Viper, layer layer) ([]string, error) {
+	fileConfig, err := readLayer(layer)
 	if err != nil {
 		return nil, err
 	}
 	if err := v.MergeConfigMap(fileConfig.AllSettings()); err != nil {
-		return nil, fmt.Errorf("merge config %s: %w", path, err)
+		return nil, fmt.Errorf("merge config %s: %w", layer, err)
 	}
 	required := fileConfig.GetStringSlice("ready.required_fields")
 	required = append(required, fileConfig.GetStringSlice(legacyRequiredFieldsKey)...)
 	return required, nil
 }
 
-// readLayer parses one config layer. A layer with no path, or no file at its
-// path, reads as a file that sets nothing, so its callers have no absent case
-// of their own. [LAW:dataflow-not-control-flow]
-func readLayer(path pathspec.PathSpec) (*viper.Viper, error) {
-	if path.IsEmpty() {
-		return viper.New(), nil
+// readLayer parses one config layer's content as TOML, the format every
+// layer is documented in. A file and the same bytes handed to a worker are
+// one parse, so a launcher and its worker cannot read one layer two ways; a
+// layer with no content sets nothing. [LAW:one-source-of-truth]
+func readLayer(l layer) (*viper.Viper, error) {
+	content, err := l.Content()
+	if err != nil {
+		return nil, err
 	}
 	file := viper.New()
-	file.SetConfigFile(path.String())
-	if err := file.ReadInConfig(); err != nil {
-		var notFound viper.ConfigFileNotFoundError
-		if errors.As(err, &notFound) || os.IsNotExist(err) {
-			return viper.New(), nil
-		}
-		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	file.SetConfigType("toml")
+	if err := file.ReadConfig(bytes.NewReader(content)); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", l, err)
 	}
 	return file, nil
 }
