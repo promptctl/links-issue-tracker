@@ -37,28 +37,31 @@ func backupCreateLeaf() appLeaf {
 	fs := newCobraFlagSet("backup create")
 	keep := fs.Int("keep", backup.Budget, "Snapshots to keep after rotation")
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		snapshot, err := takeBackup(ctx, ap.Workspace, *keep, func() (model.Export, error) { return ap.Store.Export(ctx) })
-		if err != nil {
-			return err
+		taken, err := takeBackup(ctx, ap.Workspace, *keep, func() (model.Export, error) { return ap.Store.Export(ctx) })
+		// A snapshot that was written is printed even beside a prune that
+		// failed after it, as `snapshots new` prints its own.
+		if taken != nil {
+			_, printErr := fmt.Fprintf(inv.Stdout, "%s %s\n", taken.Name, taken.Path)
+			err = errors.Join(err, printErr)
 		}
-		_, err = fmt.Fprintf(inv.Stdout, "%s %s\n", snapshot.Name, snapshot.Path)
 		return err
 	}}
 }
 
 // takeBackup snapshots what read returns into the workspace's backups, then
-// prunes them to keep, through backup.Take. The snapshot it took and whether
-// the set already held that content go on the invocation's event, for `backup
-// create` and a restore's pre-restore backup alike. The snapshot comes back
-// even when the prune fails, since it was written. [LAW:nothing-unseen]
-func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (model.Export, error)) (backup.Snapshot, error) {
+// prunes them to keep, through backup.Take, and puts what the take did on the
+// invocation's event, for `backup create` and a restore's pre-restore backup
+// alike. A nil Taken means nothing was written. [LAW:nothing-unseen]
+func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (model.Export, error)) (*backup.Taken, error) {
 	taken, err := backup.Take(ctx, ws.StorageDir, keep, read)
 	if taken == nil {
-		return backup.Snapshot{}, err
+		return nil, err
 	}
 	telemetry.Set(ctx, "backup.snapshot", taken.Name)
 	telemetry.Set(ctx, "backup.refreshed", taken.Refreshed)
-	return taken.Snapshot, err
+	telemetry.Set(ctx, "backup.lock_wait_ms", taken.Waited.Milliseconds())
+	telemetry.Set(ctx, "backup.pruned", taken.Pruned)
+	return taken, err
 }
 
 func backupListLeaf() appLeaf {
@@ -196,9 +199,14 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 		return outcome, RestoreOverwriteError{}
 	}
 	// The pre-restore backup is of the state the guard judged, which is the
-	// state the replace below overwrites.
-	snapshot, err := takeBackup(ctx, ap.Workspace, backup.Budget, func() (model.Export, error) { return localExport, nil })
-	outcome.snapshot = snapshot.Path
+	// state the replace below overwrites. Read before the backups lock, it is
+	// still the store's state: this command's write Store holds Dolt's LOCK
+	// from open to close, so no other writer commits in between (the lock
+	// discipline in the store package doc).
+	taken, err := takeBackup(ctx, ap.Workspace, backup.Budget, func() (model.Export, error) { return localExport, nil })
+	if taken != nil {
+		outcome.snapshot = taken.Path
+	}
 	if err != nil {
 		return outcome, err
 	}

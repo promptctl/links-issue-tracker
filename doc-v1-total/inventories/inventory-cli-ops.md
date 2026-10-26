@@ -785,7 +785,7 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 |---|---|---|---|
 | `--keep` | `backup.Budget` (20) | "Snapshots to keep after rotation" | `backup.go` |
 
-`takeBackup` → `backup.Take(ctx, StorageDir, keep, ap.Store.Export)`, which reads the export, writes and prunes under the backups lock; event facts `backup.snapshot` = the name and `backup.refreshed` = whether the set already held that content; a prune failure's error names the snapshot written → stdout `<name> <path>` (`backup.go`).
+`takeBackup` → `backup.Take(ctx, StorageDir, keep, ap.Store.Export)`, which reads the export, writes and prunes under the backups lock; event facts `backup.snapshot` = the name, `backup.refreshed` = whether the set already held that content, `backup.lock_wait_ms` = the wait for the backups lock and `backup.pruned` = how many snapshots the prune removed; a prune failure's error names the snapshot written → stdout `<name> <path>` whenever a snapshot was written, even beside that error (`backup.go`).
 
 ### 7.2 `lit backup list`
 

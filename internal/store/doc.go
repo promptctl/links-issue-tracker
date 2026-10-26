@@ -1,6 +1,6 @@
 // Package store owns lit's workspace state in an embedded Dolt database:
 // opening and closing it, mutating it under locks, and minting every
-// lit-owned lock path but the config lock (see below).
+// lit-owned lock path but the config lock and the backups lock (see below).
 //
 // # The lock discipline
 //
@@ -155,6 +155,13 @@
 // its holder reads and writes config.json and acquires nothing else — so any
 // holder of any slot may take it, and no wait edge leaves it. See
 // workspace.withConfigLock.
+//
+// The backups lock sits outside the slots too: the backup package mints it
+// in the storage dir and holds it exclusively across each take's read of the
+// store, its write and its prune. It is a leaf as well — the read is a read
+// Store's export or an export already in hand, neither of which takes a lock —
+// so a restore holding Dolt's LOCK may take it, and no wait edge leaves it.
+// See backup.Take.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every lit-minted *LockPath helper in

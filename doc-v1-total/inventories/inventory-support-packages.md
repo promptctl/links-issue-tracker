@@ -72,14 +72,14 @@ above `internal/store` that names the Dolt engine's construction surface (packag
   return type is `storage.Store`; callers reach optional capabilities via
   `storage.<Cap>.Of` on the returned value.
 
-## `internal/backup` (`backup.go`, 136 lines)
+## `internal/backup` (`backup.go`, 203 lines)
 
 JSON export snapshots under `<storageDir>/backups/`, named by content digest.
 
 - `Snapshot{Path, Name, Created, Size}` with JSON tags `path/name/created/size`
   (`backup.go`).
 - `Budget = 20`: the `lit backup create --keep` default and the restore's prune.
-- `Take(ctx, storageDir, keep, read) (*Taken, error)` (`backup.go`): the one writer of the set. `keep <= 0` → `"keep must be > 0"` before anything is read; holds `<storageDir>/.links-backups.lock` exclusively (filelock, 3000 × 10ms; contention → `backup.ErrBusy`, reason `workspace_busy`) while it calls `read`, writes the export and prunes, so a read made before the lock cannot land after a newer one and no prune removes a take it did not list; `nil` when nothing was written, and a prune failure returns the `Taken` with `"prune backups after writing %s: %w"`.
+- `Take(ctx, storageDir, keep, read) (*Taken, error)` (`backup.go`): the one writer of the set. `keep <= 0` → `"keep must be > 0"` before anything is read; holds `<storageDir>/.links-backups.lock` exclusively (filelock, 3000 × 10ms; contention → `backup.ErrBusy`, reason `workspace_busy`) while it calls `read`, writes the export and prunes, so a read made before the lock cannot land after a newer one and no prune removes a take it did not list; `nil` when nothing was written, and a prune failure returns the `Taken` with `"prune backups after writing %s: %w"`. `Taken.Waited` is the wait for the lock and `Taken.Pruned` the count the prune removed.
 - `create` (`backup.go`): ensures `<storageDir>/backups`
   (`0o755`); filename is `syncfile.ContentHash(export) + ".json"`: a snapshot is named by its content, `exported_at` left out, so a take of content the set already holds replaces the snapshot of that name, which becomes the newest, and the set holds each content once; `Taken.Refreshed` says whether the name already existed;
   writes via `syncfile.WriteAtomic` (same indented-JSON format and atomicity as sync
@@ -87,7 +87,7 @@ JSON export snapshots under `<storageDir>/backups/`, named by content digest.
 - `List(storageDir)` (`backup.go`): missing backups dir → empty list, no error;
   skips directories and non-`.json` names; `Created` from each entry's mtime (UTC);
   sorted newest-first.
-- `prune` (`backup.go`): removes every snapshot after the first `keep` in newest-first order; stops with
+- `prune` (`backup.go`): returns the count it removed; removes every snapshot after the first `keep` in newest-first order; stops with
   `"remove backup %s: %w"` on the first removal failure.
 - `Latest(storageDir)` (`backup.go`): newest snapshot or `nil` when none exist;
   never an error for an empty/missing dir.

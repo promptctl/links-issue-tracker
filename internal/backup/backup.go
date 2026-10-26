@@ -45,11 +45,14 @@ type Snapshot struct {
 	Size    int64     `json:"size"`
 }
 
-// Taken is the snapshot a take wrote, and whether a snapshot of the same
-// content already stood at its name.
+// Taken is the snapshot a take wrote, whether a snapshot of the same content
+// already stood at its name, how long the take waited for the set's lock, and
+// how many older snapshots its prune removed.
 type Taken struct {
 	Snapshot
 	Refreshed bool
+	Waited    time.Duration
+	Pruned    int
 }
 
 // Take reads an export and writes it into the set, then prunes the set to keep,
@@ -62,11 +65,10 @@ func Take(ctx context.Context, storageDir string, keep int, read func() (model.E
 	if keep <= 0 {
 		return nil, fmt.Errorf("keep must be > 0")
 	}
-	if err := os.MkdirAll(storageDir, 0o755); err != nil {
-		return nil, fmt.Errorf("create storage dir: %w", err)
-	}
 	path := lockPath(storageDir)
+	start := time.Now()
 	release, acquired, err := filelock.Acquire(ctx, path, true, lockAttempts, lockRetryDelay)
+	waited := time.Since(start)
 	if err != nil {
 		return nil, fmt.Errorf("lock backups: %w", err)
 	}
@@ -75,6 +77,9 @@ func Take(ctx context.Context, storageDir string, keep int, read func() (model.E
 			ErrBusy, path, time.Duration(lockAttempts)*lockRetryDelay)
 	}
 	taken, err := takeHeld(storageDir, keep, read)
+	if taken != nil {
+		taken.Waited = waited
+	}
 	if relErr := release(); relErr != nil {
 		return taken, errors.Join(err, fmt.Errorf("release backups lock: %w", relErr))
 	}
@@ -90,7 +95,8 @@ func takeHeld(storageDir string, keep int, read func() (model.Export, error)) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := prune(storageDir, keep); err != nil {
+	taken.Pruned, err = prune(storageDir, keep)
+	if err != nil {
 		return &taken, fmt.Errorf("prune backups after writing %s: %w", taken.Path, err)
 	}
 	return &taken, nil
@@ -167,20 +173,21 @@ func List(storageDir string) ([]Snapshot, error) {
 	return snapshots, nil
 }
 
-func prune(storageDir string, keep int) error {
+// prune removes every snapshot past the newest keep and returns how many it
+// removed, stopping at the first removal that fails.
+func prune(storageDir string, keep int) (int, error) {
 	snapshots, err := List(storageDir)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if len(snapshots) <= keep {
-		return nil
-	}
-	for _, snapshot := range snapshots[keep:] {
+	removed := 0
+	for _, snapshot := range snapshots[min(keep, len(snapshots)):] {
 		if err := os.Remove(snapshot.Path); err != nil {
-			return fmt.Errorf("remove backup %s: %w", snapshot.Path, err)
+			return removed, fmt.Errorf("remove backup %s: %w", snapshot.Path, err)
 		}
+		removed++
 	}
-	return nil
+	return removed, nil
 }
 
 func Latest(storageDir string) (*Snapshot, error) {

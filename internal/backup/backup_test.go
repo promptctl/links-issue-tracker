@@ -47,6 +47,9 @@ func TestTakeListLatestAndPrune(t *testing.T) {
 	age(t, second.Path, time.Hour)
 	export.WorkspaceID = "ws-test-3"
 	third := take(t, storageDir, 2, export)
+	if first.Pruned != 0 || second.Pruned != 0 || third.Pruned != 1 {
+		t.Errorf("Pruned = %d, %d, %d; want 0, 0, 1", first.Pruned, second.Pruned, third.Pruned)
+	}
 
 	list, err := List(storageDir)
 	if err != nil {
@@ -94,27 +97,33 @@ func TestTakeWaitsForTheSetsLock(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("hold the backups lock: acquired=%v, %v", acquired, err)
 	}
-	var read atomic.Bool
-	done := make(chan error, 1)
+	var readAt atomic.Pointer[time.Time]
+	started := make(chan struct{})
+	done := make(chan *Taken, 1)
 	go func() {
-		_, err := Take(context.Background(), storageDir, Budget, func() (model.Export, error) {
-			read.Store(true)
+		close(started)
+		taken, err := Take(context.Background(), storageDir, Budget, func() (model.Export, error) {
+			now := time.Now()
+			readAt.Store(&now)
 			return model.Export{Version: 1, WorkspaceID: "ws-test"}, nil
 		})
-		done <- err
+		if err != nil {
+			t.Errorf("Take after the release: %v", err)
+		}
+		done <- taken
 	}()
+	<-started
 	time.Sleep(200 * time.Millisecond)
-	if read.Load() {
-		t.Fatalf("Take read the store while another process held the backups lock")
-	}
+	releasedAt := time.Now()
 	if err := release(); err != nil {
 		t.Fatalf("release the backups lock: %v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("Take after the release: %v", err)
+	taken := <-done
+	if at := readAt.Load(); at == nil || at.Before(releasedAt) {
+		t.Fatalf("Take read the store at %v, want after the lock's release at %v", at, releasedAt)
 	}
-	if !read.Load() {
-		t.Errorf("Take finished without reading the store")
+	if taken == nil || taken.Waited <= 0 {
+		t.Errorf("Take = %+v, want the wait for the lock recorded", taken)
 	}
 }
 

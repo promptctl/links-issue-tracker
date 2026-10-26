@@ -52,6 +52,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "another lit process is using this workspace; close other lit commands and retry", Src: "another lit process is using this workspace; close other lit commands and retry: %w"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes", Src: "another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "another process is holding this workspace's Dolt store open; retry after it completes", Src: "another process is holding this workspace's Dolt store open; retry after it completes: %w"},
+	{Doc: "doc-v1-total/04-store-operations.md", Text: "backup create", Src: "backup create"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "cannot update manifest", Src: "cannot update manifest"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "collection %q: source dump carries %d row(s) mapped here, rebuild has %d", Src: "collection %q: source dump carries %d row(s) mapped here, rebuild has %d"},
 	{Doc: "doc-v1-total/04-store-operations.md", Text: "constraint violations: %d", Src: "constraint violations: %d"},

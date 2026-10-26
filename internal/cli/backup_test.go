@@ -249,14 +249,18 @@ func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
 	}
 }
 
-// The snapshot a backup took, and whether the set already held its content,
+// The snapshot a backup took, whether the set already held its content, how
+// long it waited for the set's lock and how many snapshots its prune removed
 // are on the event of `backup create` and of a restore alike.
 func TestBackupEventNamesTheSnapshotItTook(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
 	name := strings.Fields(runCLIInDir(t, repo, "backup", "create"))[0]
-	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "false"})
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "false", "backup.pruned": "0"})
+	if wait, ok := writtenFacts(t, lastEvent(t))["backup.lock_wait_ms"].(float64); !ok || wait < 0 {
+		t.Errorf("backup create event backup.lock_wait_ms = %v, want a wait in milliseconds", wait)
+	}
 	runCLIInDir(t, repo, "backup", "create")
 	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true"})
 	runCLIInDir(t, repo, "backup", "restore", "--latest")
@@ -268,4 +272,8 @@ func TestBackupEventNamesTheSnapshotItTook(t *testing.T) {
 	if facts["backup.snapshot"] == name || facts["backup.refreshed"] != false {
 		t.Errorf("restore over a moved workspace event facts = %v, want a new snapshot, not refreshed", facts)
 	}
+	// The set now holds name and the moved state's snapshot; keeping one
+	// refreshes name and removes the other.
+	runCLIInDir(t, repo, "backup", "create", "--keep", "1")
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true", "backup.pruned": "1"})
 }
