@@ -208,26 +208,42 @@ func TestListWritesNamesAMadeOrRemovedTicketOnce(t *testing.T) {
 	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
 	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: "doomed", ParentID: epic.ID, Labels: []string{"x"}})
 	created := headWrite(t, st)
+	// Edges with the removed ticket at the far end are its removal too.
+	other := mustCreate(t, st, storage.CreateIssueInput{Title: "other", IssueType: "epic"})
+	blocked := mustCreate(t, st, storage.CreateIssueInput{Title: "blocked", ParentID: other.ID})
+	for _, in := range []storage.AddRelationInput{
+		{SrcID: blocked.ID, DstID: doomed.ID, Type: model.RelBlockedBy},
+		{SrcID: blocked.ID, DstID: doomed.ID, Type: model.RelRelatedTo},
+	} {
+		if _, err := st.AddRelation(ctx, in); err != nil {
+			t.Fatalf("AddRelation(%s) error = %v", in.Type, err)
+		}
+	}
 	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: doomed.ID, Actor: "ada"}); err != nil {
 		t.Fatalf("Purge() error = %v", err)
 	}
-	listed, err := st.ListWrites(ctx, 2)
+	purged := headWrite(t, st)
+	listed, err := st.ListWrites(ctx, 7)
 	if err != nil {
 		t.Fatalf("ListWrites() error = %v", err)
 	}
 	// A purge also writes its own record, which is a fact of its own.
-	for i, want := range [][]string{{doomed.ID + " removed", "the purges table changed"}, {doomed.ID + " created"}} {
-		w := listed[i]
+	want := map[string][]string{purged: {doomed.ID + " removed", "the purges table changed"}, created: {doomed.ID + " created"}}
+	for _, w := range listed {
+		if want[w.ID] == nil {
+			continue
+		}
 		var what []string
 		for _, u := range w.Unrevertable {
 			what = append(what, u.What)
 		}
-		if len(w.Moves) != 0 || !slices.Equal(what, want) {
-			t.Errorf("write %s lists moves %v and %q, want no moves and only %q", w.ID, w.Moves, what, want)
+		if len(w.Moves) != 0 || !slices.Equal(what, want[w.ID]) {
+			t.Errorf("write %s lists moves %v and %q, want no moves and only %q", w.ID, w.Moves, what, want[w.ID])
 		}
+		delete(want, w.ID)
 	}
-	if listed[1].ID != created {
-		t.Errorf("listed %s second, want the creation %s", listed[1].ID, created)
+	if len(want) != 0 {
+		t.Errorf("writes %v not listed", want)
 	}
 }
 

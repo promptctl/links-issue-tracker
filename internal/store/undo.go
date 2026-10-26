@@ -165,9 +165,12 @@ func (s *Store) namedWrites(ctx context.Context, ids []string) ([]write, error) 
 		}
 	}
 	writes := slices.Collect(maps.Values(found))
-	// commit_order ties across the branches of a merged history; the id breaks
-	// the tie, so a fold of the same writes runs in the same order every time.
-	slices.SortFunc(writes, func(a, b write) int { return cmp.Or(cmp.Compare(b.order, a.order), strings.Compare(a.id, b.id)) })
+	// commit_order ties across the branches of a merged history; the commit
+	// date, then the id, break the tie, so a fold of the same writes runs
+	// newest first, in the same order every time.
+	slices.SortFunc(writes, func(a, b write) int {
+		return cmp.Or(cmp.Compare(b.order, a.order), b.at.Compare(a.at), strings.Compare(a.id, b.id))
+	})
 	return writes, nil
 }
 
@@ -298,7 +301,7 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 	// not moves of their own.
 	made := map[string]bool{}
 	var fieldIDs, children []string
-	var events, changes []diffKey
+	var edges, events, changes []diffKey
 	for _, table := range tables {
 		switch table {
 		case "issues":
@@ -327,27 +330,8 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 				fieldIDs = append(fieldIDs, slices.Concat(key.from, key.to)[0])
 			}
 		case "relations":
-			keys, err := s.changedKeys(ctx, before, after, table, "src_id", "dst_id", "type")
-			if err != nil {
+			if edges, err = s.changedKeys(ctx, before, after, table, "src_id", "dst_id", "type"); err != nil {
 				return rows, err
-			}
-			for _, key := range keys {
-				// A row on both sides changed only its created_at/created_by
-				// stamps, which a re-set rewrites; it moved no edge.
-				if !key.added() && !key.removed() {
-					continue
-				}
-				edge := slices.Concat(key.from, key.to)
-				src, dst, relType := edge[0], edge[1], model.RelationType(edge[2])
-				switch relType {
-				case model.RelParentChild:
-					children = append(children, src)
-				case model.RelBlockedBy:
-					slot := storage.Slot{Kind: storage.BlockedBySlot, Issue: src, Name: dst}
-					rows.BlockedBy = append(rows.BlockedBy, storage.Move{Slot: slot, From: storage.EdgeValue(key.removed()), To: storage.EdgeValue(key.added())})
-				default:
-					outside(fmt.Sprintf("%s %s %s edge", src, relType, dst), "`lit dep` adds and removes it")
-				}
 			}
 		case "issue_events":
 			if events, err = s.changedKeys(ctx, before, after, table, "id", "issue_id"); err != nil {
@@ -361,10 +345,25 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 			outside(fmt.Sprintf("the %s table changed", table), "")
 		}
 	}
-	ofMade := func(issue string) bool { return made[issue] }
-	fieldIDs = slices.DeleteFunc(fieldIDs, ofMade)
-	children = slices.DeleteFunc(children, ofMade)
-	rows.BlockedBy = slices.DeleteFunc(rows.BlockedBy, func(move storage.Move) bool { return made[move.Slot.Issue] })
+	fieldIDs = slices.DeleteFunc(fieldIDs, func(issue string) bool { return made[issue] })
+	for _, key := range edges {
+		edge := slices.Concat(key.from, key.to)
+		src, dst, relType := edge[0], edge[1], model.RelationType(edge[2])
+		switch {
+		case made[src] || made[dst]:
+			// An edge of a ticket the write made or removed, at either end.
+		case !key.added() && !key.removed():
+			// A row on both sides changed only its created_at/created_by
+			// stamps, which a re-set rewrites; it moved no edge.
+		case relType == model.RelParentChild:
+			children = append(children, src)
+		case relType == model.RelBlockedBy:
+			slot := storage.Slot{Kind: storage.BlockedBySlot, Issue: src, Name: dst}
+			rows.BlockedBy = append(rows.BlockedBy, storage.Move{Slot: slot, From: storage.EdgeValue(key.removed()), To: storage.EdgeValue(key.added())})
+		default:
+			outside(fmt.Sprintf("%s %s %s edge", src, relType, dst), "`lit dep` adds and removes it")
+		}
+	}
 	// A change row moves with its event's row: read with an event the write
 	// added, or gone with one it removed. One whose event row the write left
 	// alone rewrote that event's history.
@@ -592,7 +591,7 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 		result.Writes, result.Moves = reverting, reverted.Moves
 		return nil
 	})
-	s.deliver(heard)
+	s.hear(ctx, heard...)
 	return result, err
 }
 
@@ -636,7 +635,8 @@ func (s *Store) currentState(ctx context.Context, deltas []storage.WriteDelta) (
 // what a batch whose revert point is from landed.
 func (s *Store) commitsAbove(ctx context.Context, from string) ([]string, error) {
 	var commits []string
-	err := s.queryRows(ctx, `SELECT commit_hash FROM dolt_log('HEAD', ?)`, []any{"^" + from}, func(rows *sql.Rows) error {
+	query, args := foldedChainQuery("commit_hash", "HEAD", from)
+	err := s.queryRows(ctx, query, args, func(rows *sql.Rows) error {
 		var commit string
 		err := rows.Scan(&commit)
 		commits = append(commits, commit)
