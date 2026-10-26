@@ -164,7 +164,7 @@ Parentage gets its own two verbs rather than riding `AddRelation` because it is 
 **`RemoveRelation(ctx, srcID, dstID string, relType model.RelationType) error`** — `internal/storage/contract.go`
 
 **`ListRelationsForIssue(ctx, issueID string, types ...model.RelationType) ([]model.Relation, error)`** — `internal/storage/contract.go`
-- Every edge incident to the issue in *either* direction, oldest first, optionally narrowed to the named types (`internal/storage/contract.go`).
+- Every edge incident to the issue in *either* direction, in `storage.RelationOrdering`, optionally narrowed to the named types (`internal/storage/contract.go`).
 
 **`GetRelationsByIDs(ctx, ids []string) (map[string]IssueRelations, error)`** — `internal/storage/contract.go`
 - The batch neighborhood read: one call for many issues, counterparts hydrated, avoiding `GetIssueDetail`'s per-issue comment and history cost (`internal/storage/contract.go`).
@@ -664,8 +664,8 @@ These types live in the contract, not in an engine, because a capability interfa
 | `attribution` | `model.Attribution` | Current attribution stamp |
 | `issues` | `map[string]*record` | The issue table |
 | `order` | `[]string` | **THE** total rank order, top first. `Issue.Rank` is rendered from a position in this slice at read time and stored nowhere, so a rank that contradicts the order is unrepresentable — which is why nothing here needs the inversion repair Dolt offers |
-| `relations` | `[]model.Relation` | Edge table, insertion order (oldest-first by construction) |
-| `comments` | `[]model.Comment` | Comment table, insertion order |
+| `relations` | `[]model.Relation` | Edge table, kept in write order; every read sorts by `storage.RelationOrdering` (`relationsWhere`) |
+| `comments` | `[]model.Comment` | Comment table, kept in write order; every read sorts by `storage.CommentOrdering` (`commentsWhere`) |
 | `planReviews` | `[]model.PlanReview` | The law reviews of every issue's plan, in recording order; a read orders them by `storage.PlanReviewOrdering` |
 | `events` | `map[string][]model.IssueEvent` | History, keyed by issue; each issue's run in insertion order, so one issue's history costs that issue's events rather than a scan of the store's |
 | `labels` | `map[string][]model.Label` | Keyed by issue, kept **sorted by name** because the sorted set is what every label read returns |
@@ -749,8 +749,8 @@ Order of checks is stated as contract: the parent must be resolved before the co
 
 **`GetIssueDetail`** (`internal/storage/memory/issues.go`) — returns `model.IssueDetail` with:
 - `Issue` — from `getIssue`
-- `Relations` — `incidentRelations(id)`, insertion order
-- `Comments` — `commentsFor(id)`, insertion order
+- `Relations` — `incidentRelations(id)`, in `storage.RelationOrdering`
+- `Comments` — `commentsFor(id)`, in `storage.CommentOrdering`
 - `Events` — `eventsFor(id)`, sorted (created_at, id)
 - `PlanReviews` — `planReviewsFor(id)`, the issue's reviews through `clonePlanReviews`: each a copy with its own `Laws` slice, sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id) (`internal/storage/memory/plan_review.go`)
 - `Children`, `BlockedBy`, `Blocks`, `Parent` — from `bucketRelations`
@@ -900,7 +900,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - Not found → `storage.NotFoundError{Entity: "comment", ID: id}`.
 - Deletes and returns the removed comment.
 
-**`commentsFor(issueID)`** — filters `comments` by `IssueID`, insertion order, returns a non-nil empty slice when there are none.
+**`commentsFor(issueID)`** — `commentsWhere` filtering by `IssueID`: in `storage.CommentOrdering`, a non-nil empty slice when there are none. `commentsWhere(keep)` is every read of the comment table — filter, then sort.
 
 ### 2.10 Labels (`internal/storage/memory/edges.go`)
 
@@ -934,7 +934,7 @@ The engine has no label method; the label verbs are `Apply` plans (§1.6), and `
 
 **`ListRelationsForIssue`**
 - `mustRecord(issueID)` → `NotFoundError`.
-- Returns `incidentRelations(issueID)` (either direction, write order) filtered by the variadic types; **naming no type means every type, never no types**.
+- Returns `incidentRelations(issueID)` (either direction, `storage.RelationOrdering`) filtered by the variadic types; **naming no type means every type, never no types**.
 
 **`GetRelationsByIDs`**
 - Deduplicates the input ids.
@@ -954,7 +954,7 @@ The engine has no label method; the label verbs are `Apply` plans (§1.6), and `
 - `mustRecord(childID)` → `NotFoundError`.
 - `clearParent`: `mustRecord(childID)`, `storage.RejectDetachingALeaf`, then `detachParents` drops every `RelParentChild` edge with `SrcID == childID`; **removed == 0** → `storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}` (`Satisfied()` true).
 
-**`incidentRelations`** — every edge touching the id in either direction, in write order.
+**`incidentRelations`** — every edge touching the id in either direction, through `relationsWhere(keep)`: the one read of the edge table that returns edges (incident edges, bulk `Edges`, export) — filter, then sort by `storage.RelationOrdering`.
 
 **`bucketRelations(focalID, relations, pos, ancestry)`** — the single definition of edge → bucket mapping:
 | Condition | Bucket | Counterpart |
@@ -1081,7 +1081,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Locks, then builds issues via `listIssues(ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **the WHOLE store**, out-of-flow work included, because an export honoring the listing default would silently drop exactly the rows a diff exists to notice.
 - Labels: flattened from the `labels` map, then sorted by `(IssueID, Name)` via `cmpThen`.
 - Returns `model.Export{Version: model.ExportVersion (5), WorkspaceID: e.workspaceID, ExportedAt: e.now(), Issues, Relations: slices.Clone(e.relations), Comments: slices.Clone(e.comments), Labels, Events: e.allEvents(), Purges: e.purgeList(), PlanReviews: clonePlanReviews(e.planReviews)}`.
-- `Relations` and `Comments` come back in **write order** (cloned, unsorted); `PlanReviews` copied with their `Laws` slices and sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
+- `Relations` and `Comments` come back sorted by `storage.RelationOrdering` / `storage.CommentOrdering` (`relationsWhere` / `commentsWhere` keeping every row); `PlanReviews` copied with their `Laws` slices and sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id); `Issues` in rank order; `Labels` in `(issue, name)` order; `Events` in `(created_at, id)` order; `Purges` in issue-id, then birth order (`purgeList` returns `model.UnionPurges(e.purges)`, `internal/storage/memory/purge.go`).
 - Every collection comes back in a total order so two stores holding the same facts serialize to the same bytes rather than to the same multiset.
 
 ### 2.14a `Purge` (`internal/storage/memory/purge.go`)

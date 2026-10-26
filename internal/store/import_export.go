@@ -17,11 +17,11 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
-	rels, err := s.listAllRelations(ctx)
+	rels, err := queryRelations(ctx, s.db, `relations`)
 	if err != nil {
 		return model.Export{}, err
 	}
-	comments, err := s.listAllComments(ctx)
+	comments, err := queryComments(ctx, s.db, `comments`)
 	if err != nil {
 		return model.Export{}, err
 	}

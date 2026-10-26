@@ -1968,8 +1968,8 @@ Family `depFamily`, usage `"usage: lit dep <add|rm|ls> ..."` (`dependency.go`).
   → exit 2 (`dependency.go`).
 - A non-blank `--type` is parsed (bad value errors); blank means no filter
   (`dependency.go`).
-- Output: one `depRelationLine` per relation, in stored order
-  (`dependency.go`). No breadcrumb, no header, empty output for none.
+- Output: one `depRelationLine` per relation, in `storage.RelationOrdering`
+  (`ListRelationsForIssue`, `dependency.go`). No breadcrumb, no header, empty output for none.
 
 ### 2.21 `lit bulk` — Bulk issue operations
 

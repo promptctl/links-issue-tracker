@@ -113,3 +113,27 @@ func EventOrdering(a, b model.IssueEvent) int {
 func PlanReviewOrdering(a, b model.PlanReview) int {
 	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
 }
+
+// RelationOrdering is the order an export, [IssueReader.GetIssueDetail] and
+// [RelationStore.ListRelationsForIssue] carry relations in: oldest first by the
+// instant, ties by the edge's identity — source, target, type — since a
+// relation has no id of its own.
+//
+// An export's order is part of its content: backup restore's guard compares
+// the digests of two exports, so a tie left to the engine could change the
+// digest of an unchanged store.
+func RelationOrdering(a, b model.Relation) int {
+	return cmp.Or(
+		a.CreatedAt.Compare(b.CreatedAt),
+		strings.Compare(a.SrcID, b.SrcID),
+		strings.Compare(a.DstID, b.DstID),
+		strings.Compare(string(a.Type), string(b.Type)),
+	)
+}
+
+// CommentOrdering is the order an export and [IssueReader.GetIssueDetail]
+// carry comments in: EventOrdering's rule — oldest first by the instant, ties
+// by id.
+func CommentOrdering(a, b model.Comment) int {
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+}
