@@ -219,7 +219,7 @@ func ensureMirrorCoverage(ctx context.Context, env environ.Env, ws workspace.Inf
 	// rather than pay fork/exec cost only to have the mirror discover "no
 	// remote" for itself. On-change is the shipped default, not an opt-in a
 	// user chose knowing the cost. [LAW:carrying-cost]
-	hasRemote, err := workspaceHasGitRemote(ctx, env, ws)
+	hasRemote, err := workspaceHasGitRemote(ws)
 	if err != nil {
 		releaseClaim()
 		fmt.Fprintf(os.Stderr, "lit: on-change background push not started, could not check git remotes: %v\n", err)
@@ -325,8 +325,8 @@ func remoteAbsentMarkerPath(ws workspace.Info) string {
 // the caller must surface, not silently treat as absence. [LAW:no-silent-failure]
 // [LAW:no-defensive-null-guards] The two conditions are distinct values, not one
 // folded bool.
-func workspaceHasGitRemote(ctx context.Context, env environ.Env, ws workspace.Info) (bool, error) {
-	remotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
+func workspaceHasGitRemote(ws workspace.Info) (bool, error) {
+	remotes, err := ws.Remotes.List()
 	if err != nil {
 		return false, err
 	}

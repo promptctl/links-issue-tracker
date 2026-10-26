@@ -44,6 +44,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 		RootDir:     workspaceRoot,
 		WorkspaceID: "test-workspace-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
+		Remotes:     workspace.NewRemotes(testEnv(), workspaceRoot),
 	}, st, stream)
 }
 

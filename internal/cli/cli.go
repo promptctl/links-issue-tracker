@@ -40,7 +40,7 @@ import (
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func Run(ctx context.Context, inv Invocation) (err error) {
 	recorder := beginInvocation(time.Now(), inv.Dir)
-	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env}
+	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env, gitSpawnsBefore: inv.Env.GitSpawns()}
 	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
 	defer func() {
 		panicked := recover()

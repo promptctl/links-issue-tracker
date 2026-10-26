@@ -15,7 +15,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
-	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -200,7 +199,7 @@ func syncRemoteLsLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync remote ls")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := readSyncRemoteState(ctx, inv.Env, session, ws)
+		syncState, err := readSyncRemoteState(ctx, session, ws)
 		if err != nil {
 			return err
 		}
@@ -234,8 +233,7 @@ func syncFetchLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := syncDoltRemotesFromGit(ctx, inv.Env, session, ws)
-		if err != nil {
+		if err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 			// A could-not-attempt failure (git-remote reconciliation itself failed,
 			// before any fetch was even tried) is still a decision this command
 			// reached — trace it, matching the coverage recordMirrorTraceError/
@@ -245,7 +243,7 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		// [LAW:one-source-of-truth] the remote every sync verb selects.
-		remoteName, ok, err := workspaceSyncRemote(ctx, inv.Env, ws, *remote, syncState.gitRemotes)
+		remoteName, ok, err := workspaceSyncRemote(ws, *remote)
 		if err != nil {
 			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "error", err, nil)
 			return err
@@ -258,7 +256,7 @@ func syncFetchLeaf() syncLeaf {
 			_, err := fmt.Fprintln(inv.Stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
 			return err
 		}
-		err = fetchAndFollow(ctx, inv.Env, session, ws, syncState.gitRemotes, remoteName)
+		err = fetchAndFollow(ctx, inv.Env, session, ws, remoteName)
 		recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
 		if err != nil {
 			return err
@@ -280,14 +278,14 @@ func syncFetchLeaf() syncLeaf {
 // network: a workspace with no sync remote, one Dolt cannot hold, or none
 // whose default branch is known here, has no freshness a re-root could
 // misreport, and follows nothing.
-func fetchAndFollow(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, gitRemotes []workspace.GitRemote, remote storage.RemoteName) error {
+func fetchAndFollow(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, remote storage.RemoteName) error {
 	if err := session.syncer.SyncFetch(ctx, remote); err != nil {
 		return err
 	}
 	if err := markFetchSuccess(ws, remote); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, env, ws, gitRemotes)
+	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, env, ws)
 	// Only a branch nothing here names, or a remote lit cannot sync with,
 	// skips the follow; a record that would name the branch but cannot be
 	// read is not that error, and fails the fetch.
@@ -713,7 +711,7 @@ func performSyncPush(ctx, completionCtx context.Context, env environ.Env, sessio
 	if pushErr == nil && result.Superseded == nil && result.Bound.Publication == storage.ReRootNotPushed {
 		proofCtx, cancelProof := context.WithTimeout(completionCtx, pushProofDeadline)
 		var unproven string
-		proven, unproven = provePushedAdvertisement(proofCtx, env, session.syncer, ws, remoteName, target.gitRemotes)
+		proven, unproven = provePushedAdvertisement(proofCtx, env, session.syncer, ws, remoteName)
 		cancelProof()
 		traceMetadata["advertisement"] = advertisementProofTrace(unproven)
 	}
@@ -794,7 +792,7 @@ func syncStatusLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync status")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := readSyncRemoteState(ctx, inv.Env, session, ws)
+		syncState, err := readSyncRemoteState(ctx, session, ws)
 		if err != nil {
 			return err
 		}
@@ -828,31 +826,45 @@ func syncStatusLeaf() syncLeaf {
 // remote Dolt cannot hold is refused, never skipped for another, which would
 // sync somewhere unmeant. The remote it returns is parsed, so nothing it
 // reaches checks the name again. [LAW:parse-dont-validate]
-func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (remote storage.RemoteName, ok bool, err error) {
-	chosen := strings.TrimSpace(requestedRemote)
-	// [LAW:no-silent-failure] Explicit remote that doesn't exist is a configuration error, not a skip condition.
-	if chosen != "" && !syncRemoteExists(chosen, gitRemotes) {
-		return storage.RemoteName{}, false, fmt.Errorf("requested remote %q not found in configured git remotes", chosen)
-	}
-	singleRemote := ""
-	if len(gitRemotes) == 1 {
-		singleRemote = strings.TrimSpace(gitRemotes[0].Name)
-	}
-	validatedUpstreamRemote := strings.TrimSpace(upstreamRemote)
-	if !syncRemoteExists(validatedUpstreamRemote, gitRemotes) {
-		validatedUpstreamRemote = ""
-	}
-	// [LAW:one-source-of-truth] Sync remote selection is derived once from ordered candidates and shared by pull/push.
-	// Candidates are trimmed where they are produced, so plain precedence suffices.
-	chosen = precedence.First(chosen, validatedUpstreamRemote, singleRemote)
-	if chosen == "" {
-		return storage.RemoteName{}, false, nil
+func resolveSyncRemote(requestedRemote string, upstream func() (string, error), gitRemotes []workspace.GitRemote) (remote storage.RemoteName, ok bool, err error) {
+	chosen, err := chooseSyncRemote(requestedRemote, upstream, gitRemotes)
+	if err != nil || chosen == "" {
+		return storage.RemoteName{}, false, err
 	}
 	remote, err = storage.ParseRemoteName(chosen)
 	if err != nil {
 		return storage.RemoteName{}, false, err
 	}
 	return remote, true, nil
+}
+
+// chooseSyncRemote is resolveSyncRemote's precedence, read as names, "" for
+// none. upstream is asked only when its answer can decide: a request outranks
+// it, no remote leaves it nothing to name, and with one remote the upstream it
+// could name is that remote. [LAW:single-enforcer] this is the one place the
+// precedence lives, so no caller decides for it whether the upstream is needed.
+func chooseSyncRemote(requestedRemote string, upstream func() (string, error), gitRemotes []workspace.GitRemote) (string, error) {
+	if requested := strings.TrimSpace(requestedRemote); requested != "" {
+		// [LAW:no-silent-failure] Explicit remote that doesn't exist is a configuration error, not a skip condition.
+		if !syncRemoteExists(requested, gitRemotes) {
+			return "", fmt.Errorf("requested remote %q not found in configured git remotes", requested)
+		}
+		return requested, nil
+	}
+	switch len(gitRemotes) {
+	case 0:
+		return "", nil
+	case 1:
+		return strings.TrimSpace(gitRemotes[0].Name), nil
+	}
+	upstreamRemote, err := upstream()
+	if err != nil {
+		return "", err
+	}
+	if !syncRemoteExists(upstreamRemote, gitRemotes) {
+		return "", nil
+	}
+	return strings.TrimSpace(upstreamRemote), nil
 }
 
 func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {
@@ -891,9 +903,6 @@ type syncTarget struct {
 	remote storage.RemoteName
 	branch string
 	skip   syncTargetSkip
-	// gitRemotes is the git remote list the target was resolved from, so a
-	// step after the push reads the same list rather than a second one.
-	gitRemotes []workspace.GitRemote
 }
 
 // traceMetadata renders the resolved remote as trace metadata — nil before one
@@ -920,11 +929,10 @@ func (t syncTarget) traceMetadata() map[string]string {
 // cancels here rather than outliving the interrupt until the grace-timer
 // hard-exit. [LAW:no-ambient-temporal-coupling]
 func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
-	syncState, err := syncDoltRemotesFromGit(ctx, env, session, ws)
-	if err != nil {
+	if err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 		return syncTarget{}, err
 	}
-	remoteName, ok, err := workspaceSyncRemote(ctx, env, ws, requestedRemote, syncState.gitRemotes)
+	remoteName, ok, err := workspaceSyncRemote(ws, requestedRemote)
 	if err != nil {
 		return syncTarget{}, err
 	}
@@ -942,7 +950,7 @@ func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}
-	return syncTarget{remote: remoteName, branch: branch, gitRemotes: syncState.gitRemotes}, nil
+	return syncTarget{remote: remoteName, branch: branch}, nil
 }
 
 // syncPullOutcome is the result of one pull attempt, independent of CLI
@@ -1081,10 +1089,10 @@ type remoteSyncState struct {
 	plan        remoteSyncPlan
 }
 
-func readSyncRemoteState(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info) (remoteSyncState, error) {
-	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
+func readSyncRemoteState(ctx context.Context, session syncSession, ws workspace.Info) (remoteSyncState, error) {
+	gitRemotes, err := ws.Remotes.List()
 	if err != nil {
-		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
+		return remoteSyncState{}, err
 	}
 	doltRemotes, err := session.syncer.SyncListRemotes(ctx)
 	if err != nil {
@@ -1099,10 +1107,10 @@ func readSyncRemoteState(ctx context.Context, env environ.Env, session syncSessi
 	}, nil
 }
 
-func syncDoltRemotesFromGit(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info) (remoteSyncState, error) {
-	state, err := readSyncRemoteState(ctx, env, session, ws)
+func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspace.Info) error {
+	state, err := readSyncRemoteState(ctx, session, ws)
 	if err != nil {
-		return remoteSyncState{}, err
+		return err
 	}
 	// Removals run first. A removal takes its refs with it only while their
 	// owner names no other Dolt remote (store.SyncRemoveRemote), so a remote
@@ -1112,24 +1120,20 @@ func syncDoltRemotesFromGit(ctx context.Context, env environ.Env, session syncSe
 	// again from what Dolt then holds. [LAW:no-ambient-temporal-coupling]
 	for _, name := range state.plan.remove {
 		if err := session.syncer.SyncRemoveRemote(ctx, name); err != nil {
-			return remoteSyncState{}, err
+			return err
 		}
 	}
 	for _, remote := range state.plan.update {
 		if err := session.syncer.SyncSetRemoteURL(ctx, remote.name, remote.url); err != nil {
-			return remoteSyncState{}, err
+			return err
 		}
 	}
 	for _, remote := range state.plan.add {
 		if err := session.syncer.SyncAddRemote(ctx, remote.name, remote.url); err != nil {
-			return remoteSyncState{}, err
+			return err
 		}
 	}
-	state.doltRemotes, err = session.syncer.SyncListRemotes(ctx)
-	if err != nil {
-		return remoteSyncState{}, err
-	}
-	return state, nil
+	return nil
 }
 
 func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.SyncRemote) remoteSyncPlan {

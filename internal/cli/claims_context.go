@@ -57,7 +57,7 @@ func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, 
 	// this run.
 	var local claims.LocalCheckouts
 	var addresses map[model.Attribution]workspace.Checkout
-	checkouts, err := workspace.LiveCheckouts(env, ap.Workspace.RootDir)
+	checkouts, err := workspace.LiveCheckouts(env, ap.Workspace)
 	if err != nil {
 		if _, printErr := fmt.Fprintf(stdout, "warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n", err); printErr != nil {
 			return claimContext{}, printErr

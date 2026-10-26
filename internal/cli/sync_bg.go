@@ -321,6 +321,12 @@ func backgroundMirrorLeaf() wsLeaf {
 			// marker older than it existed before this cycle's entry-clear ran,
 			// so its survival means the clear is failing, not that a claim landed.
 			cycleStart := time.Now()
+			// A cycle is a unit of work of its own, so it reads git's remote
+			// configuration afresh: a remote added while this worker kept
+			// cycling is pushed to by the next cycle, not the worker's next life.
+			// Replaced on the worker's one Info, so the cycle and everything after
+			// it read the same remotes. [LAW:one-source-of-truth]
+			ws.Remotes = workspace.NewRemotes(inv.Env, ws.RootDir)
 			attempted := mirrorCycle(ctx, inv.Env, inv.Stdout, ws, stopAnswering)
 			// Released only after the cycle's engine has closed (mirrorCycle's
 			// deferred Close), so the lock brackets the whole session. The kernel

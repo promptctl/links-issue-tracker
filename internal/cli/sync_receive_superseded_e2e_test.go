@@ -57,11 +57,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	}
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	gitRemotes, err := workspace.GitRemotes(ctx, testEnv(), ws.RootDir)
-	if err != nil {
-		t.Fatalf("read the consumer's git remotes: %v", err)
-	}
-	observed, err := askRemote(ctx, testEnv(), ws, gitRemotes)
+	observed, err := askRemote(ctx, testEnv(), ws)
 	if err != nil || observed.record() == nil {
 		t.Fatalf("askRemote() = %+v, %v; want the remote's advertisement", observed, err)
 	}

@@ -91,12 +91,8 @@ type remoteFetch struct {
 // banner is best-effort, so an unresolved remote prints no fetch line, as it
 // prints no freshness line; `lit doctor` names why.
 // [LAW:types-are-the-program] a known fetch always names its remote.
-func lastTargetFetch(ctx context.Context, env environ.Env, ws workspace.Info, now time.Time) *remoteFetch {
-	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
-	if err != nil {
-		return nil
-	}
-	remote, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
+func lastTargetFetch(ws workspace.Info, now time.Time) *remoteFetch {
+	remote, ok, err := workspaceSyncRemote(ws, "")
 	if err != nil || !ok {
 		return nil
 	}
@@ -211,7 +207,7 @@ func oneLineReason(reason string) string {
 // itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
 func printStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, env, ws, st)
-	fetch := lastTargetFetch(ctx, env, ws, now)
+	fetch := lastTargetFetch(ws, now)
 	// Build drift leads the whole banner. It is the deepest of the three: a
 	// binary that predates master can be the reason the sync lines below read
 	// the way they do, so a reader who takes it in first interprets everything
@@ -250,7 +246,7 @@ func printStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws
 func printMutationSyncStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws workspace.Info, now time.Time) {
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
 	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
-	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, env, ws, now))...)
+	lines = append(lines, fetchStalenessLines(lastTargetFetch(ws, now))...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: staleness banner not written: %v\n", err)

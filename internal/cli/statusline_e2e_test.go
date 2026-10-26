@@ -442,7 +442,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	fsperm.Deny(t, litDir, fsperm.Write)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
-	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}}
+	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}, Remotes: workspace.NewRemotes(testEnv(), root)}
 	recordStatusline(ctx, ws, statusline.Facts{statusline.NewStarted(statusline.Ticket{ID: "t-1", Title: "One"}, statusline.RollupProgress{CompletedCount: 0, TotalCount: 1})})
 	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
 	facts := writtenFacts(t, ev)

@@ -344,9 +344,9 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", "https://github.com/acme/origin.git")
 	run(t, repo, "git", "remote", "set-url", "--push", "origin", "git@github.com:acme/origin.git")
 
-	remotes, err := GitRemotes(context.Background(), testEnv(), repo)
+	remotes, err := NewRemotes(testEnv(), repo).List()
 	if err != nil {
-		t.Fatalf("GitRemotes() error = %v", err)
+		t.Fatalf("Remotes.List() error = %v", err)
 	}
 	if len(remotes) != 2 {
 		t.Fatalf("len(remotes) = %d, want 2", len(remotes))
@@ -603,9 +603,9 @@ func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
 	}
 }
 
-// TestUpstreamRemoteIsTheWholeName: a branch tracking remote team/fork's
+// TestUpstreamIsTheWholeRemoteName: a branch tracking remote team/fork's
 // master tracks team/fork, not team.
-func TestUpstreamRemoteIsTheWholeName(t *testing.T) {
+func TestUpstreamIsTheWholeRemoteName(t *testing.T) {
 	base := t.TempDir()
 	repo, remote := filepath.Join(base, "repo"), filepath.Join(base, "remote.git")
 	run(t, base, "git", "init", "--bare", remote)
@@ -614,17 +614,26 @@ func TestUpstreamRemoteIsTheWholeName(t *testing.T) {
 	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
 	run(t, repo, "git", "remote", "add", "origin", remote)
 	run(t, repo, "git", "remote", "add", "team/fork", remote)
-	ctx := context.Background()
-	if got := UpstreamRemote(ctx, testEnv(), repo); got != "" {
-		t.Fatalf("UpstreamRemote() with no upstream = %q, want empty", got)
+	// A fresh Remotes per read: each one answers for the branch state it was
+	// first asked in, and this test changes that state between reads.
+	upstream := func() string {
+		t.Helper()
+		got, err := NewRemotes(testEnv(), repo).Upstream()
+		if err != nil {
+			t.Fatalf("Upstream() error = %v", err)
+		}
+		return got
+	}
+	if got := upstream(); got != "" {
+		t.Fatalf("Upstream() with no upstream = %q, want empty", got)
 	}
 	run(t, repo, "git", "push", "--set-upstream", "team/fork", "master")
-	if got := UpstreamRemote(ctx, testEnv(), repo); got != "team/fork" {
-		t.Fatalf("UpstreamRemote() tracking team/fork/master = %q, want team/fork", got)
+	if got := upstream(); got != "team/fork" {
+		t.Fatalf("Upstream() tracking team/fork/master = %q, want team/fork", got)
 	}
 	run(t, repo, "git", "checkout", "--detach")
-	if got := UpstreamRemote(ctx, testEnv(), repo); got != "" {
-		t.Fatalf("UpstreamRemote() on a detached HEAD = %q, want empty", got)
+	if got := upstream(); got != "" {
+		t.Fatalf("Upstream() on a detached HEAD = %q, want empty", got)
 	}
 }
 

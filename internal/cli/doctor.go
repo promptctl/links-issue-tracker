@@ -138,16 +138,12 @@ func resolveDoctorSyncFreshness(ctx context.Context, env environ.Env, ws workspa
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
-	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
-	if err != nil {
-		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: fmt.Sprintf("read git remotes: %v", err)}
-	}
 	// [LAW:one-source-of-truth] Resolve the same remote `lit sync` uses, so
 	// doctor's freshness reflects exactly what `lit sync push/pull` act on; the
 	// branch is knownSyncBranch's, not resolveSyncBranch's, because this report
 	// is read by doctor and by every read command's banner, and neither waits
 	// on the network.
-	remoteName, branch, ok, err := freshnessSyncTarget(ctx, env, ws, gitRemotes)
+	remoteName, branch, ok, err := freshnessSyncTarget(ctx, env, ws)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}

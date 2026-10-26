@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sync"
@@ -117,15 +118,28 @@ func interruptedEnd(at time.Time, signal string, code int) telemetry.End {
 // exit fires — and its event is one record: the first end to arrive is
 // written, and a later one returns only once that write has landed, so the
 // hard exit cannot cut it short. [LAW:one-source-of-truth]
+//
+// gitSpawnsBefore is the env's git count when the invocation began, so the
+// event's git.lit_spawns is this invocation's even when one Env serves
+// several in-process runs one after another.
 type invocationRecord struct {
-	once     sync.Once
-	recorder *telemetry.Recorder
-	stderr   io.Writer
-	env      environ.Env
+	once            sync.Once
+	recorder        *telemetry.Recorder
+	stderr          io.Writer
+	env             environ.Env
+	gitSpawnsBefore int64
 }
 
 func (r *invocationRecord) close(end telemetry.End) {
-	r.once.Do(func() { recordInvocation(r.stderr, r.env, r.recorder.Finish(end)) })
+	r.once.Do(func() {
+		// Every git lit itself started for the invocation, zero included, on
+		// every way it can end. Dolt's own git inside a fetch or push is not
+		// started through the Env and is not in it. [LAW:nothing-unseen]
+		counts := map[string]int{"git.lit_spawns": int(r.env.GitSpawns() - r.gitSpawnsBefore)}
+		maps.Copy(counts, end.Counts)
+		end.Counts = counts
+		recordInvocation(r.stderr, r.env, r.recorder.Finish(end))
+	})
 }
 
 // recordInvocation is the export edge: the one place an invocation's event

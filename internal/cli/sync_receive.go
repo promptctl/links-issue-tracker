@@ -85,7 +85,7 @@ func scheduleReceive(ctx context.Context, env environ.Env, ws workspace.Info) {
 	if err := markReceiveAttempt(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
 	}
-	hasRemote, err := workspaceHasGitRemote(ctx, env, ws)
+	hasRemote, err := workspaceHasGitRemote(ws)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
@@ -258,7 +258,7 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	// Every receive says whether it owes a push; one that settles nothing
 	// owes none. [LAW:nothing-unseen]
 	telemetry.Set(ctx, "receive.push_owed", false)
-	gitRemotes, err := workspace.GitRemotes(ctx, env, ws.RootDir)
+	gitRemotes, err := ws.Remotes.List()
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
@@ -278,7 +278,7 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, store.ReceiveDeadline)
 	defer cancel()
 
-	observed, askErr := askRemote(timeoutCtx, env, ws, gitRemotes)
+	observed, askErr := askRemote(timeoutCtx, env, ws)
 	// Whether the remote answered is a fact of every receive that asked: null
 	// when it did, and when it could not tell, why — the fetch that follows
 	// reads the same either way. [LAW:nothing-unseen]
@@ -698,7 +698,7 @@ func performSyncReceive(ctx context.Context, env environ.Env, ws workspace.Info,
 		// target was resolved there; the live store's is reconciled here, so
 		// a re-pointed git remote reaches it without an explicit sync command.
 		// Local only: git's remote config and the store's remote table.
-		if _, err := syncDoltRemotesFromGit(ctx, env, session, ws); err != nil {
+		if err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 			stopAt(receiveStepLiveRemotes, fmt.Errorf("reconcile the live store's remotes from git: %w", err))
 		}
 	}

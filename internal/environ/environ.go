@@ -18,6 +18,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 )
@@ -30,6 +31,12 @@ import (
 type Env struct {
 	vars []string
 	goos string
+	// gitSpawns counts the git processes Git has started for this Env and
+	// every Env derived from it. [LAW:no-shared-mutable-globals] Its owner is
+	// the lineage one Of starts, which cmd/lit starts once per run; a caller
+	// that hands one Env to several runs shares the count among them. Git is
+	// its only writer and GitSpawns its reader.
+	gitSpawns *atomic.Int64
 }
 
 // IsZero reports whether e is the zero Env, which no Env built by Of or
@@ -44,7 +51,7 @@ func Of(list []string) Env {
 }
 
 func of(list []string, goos string) Env {
-	return Env{vars: slices.Clone(list), goos: goos}
+	return Env{vars: slices.Clone(list), goos: goos, gitSpawns: new(atomic.Int64)}
 }
 
 // Lookup is the value of key, as os.LookupEnv reports it: the last entry for
@@ -90,13 +97,13 @@ func (e Env) Without(keys ...string) Env {
 			kept = append(kept, kv)
 		}
 	}
-	return Env{vars: kept, goos: e.goos}
+	return Env{vars: kept, goos: e.goos, gitSpawns: e.gitSpawns}
 }
 
 // With is the environment with the KEY=VALUE entries set appended, so each
 // overrides any earlier entry for its key.
 func (e Env) With(set ...string) Env {
-	return Env{vars: append(slices.Clone(e.vars), set...), goos: e.goos}
+	return Env{vars: append(slices.Clone(e.vars), set...), goos: e.goos, gitSpawns: e.gitSpawns}
 }
 
 // List is the environment as a KEY=VALUE list, a copy of the Env's own. It is
@@ -130,8 +137,33 @@ func (e Env) CommandContext(ctx context.Context, dir, name string, args ...strin
 // environment. It takes no gitcmd.Spec, whose Env a caller could set only to
 // have it replaced: the environment is this Env, whole, and adding to it is
 // With's job.
+//
+// Every git lit itself starts is started here, so this is where they are
+// counted (GitSpawns), whether or not the git then starts; Dolt's own git,
+// inside a fetch or push, is started by Dolt and is not.
+// [LAW:nothing-unseen] [LAW:single-enforcer]
 func (e Env) Git(ctx context.Context, dir string, stdin io.Reader, args ...string) *gitcmd.Cmd {
+	e.countGit()
 	return gitcmd.Command(ctx, gitcmd.Spec{Dir: dir, Env: e.in(dir), Stdin: stdin}, args...)
+}
+
+// countGit counts one git for the lineage. The zero Env is no run's
+// environment and has no lineage to count for, so its git is counted nowhere;
+// it still runs, in the empty environment the zero Env reads as.
+func (e Env) countGit() {
+	if e.IsZero() {
+		return
+	}
+	e.gitSpawns.Add(1)
+}
+
+// GitSpawns is how many git commands Git has built for this Env's lineage —
+// every git lit itself ran. The zero Env counts none.
+func (e Env) GitSpawns() int64 {
+	if e.IsZero() {
+		return 0
+	}
+	return e.gitSpawns.Load()
 }
 
 // in is the list a child started in dir runs with: this Env's, with PWD

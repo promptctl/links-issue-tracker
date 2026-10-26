@@ -113,22 +113,26 @@ func readReceivedRefs(ws workspace.Info) []byte {
 // the full path already owns, so the caller falls through to it.
 // [LAW:one-source-of-truth] workspaceSyncRemote is the one selection rule, so
 // the remote asked here is the remote the fetch would have used.
-func askRemote(ctx context.Context, env environ.Env, ws workspace.Info, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
-	remoteName, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
+func askRemote(ctx context.Context, env environ.Env, ws workspace.Info) (remoteAdvertisement, error) {
+	remoteName, ok, err := workspaceSyncRemote(ws, "")
 	if err != nil {
 		return remoteAdvertisement{}, err
 	}
 	if !ok {
 		return remoteAdvertisement{}, nil
 	}
-	return advertise(ctx, env, ws, remoteName, gitRemotes)
+	return advertise(ctx, env, ws, remoteName)
 }
 
 // advertise is the round trip itself, against a named remote: the listing
 // comes from `git ls-remote`, the URL from the git config it was read from.
 // [LAW:one-source-of-truth] the receive's question and the push's proof both
 // build their advertisement here, so the two can only ever agree byte for byte.
-func advertise(ctx context.Context, env environ.Env, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (remoteAdvertisement, error) {
+func advertise(ctx context.Context, env environ.Env, ws workspace.Info, remoteName storage.RemoteName) (remoteAdvertisement, error) {
+	gitRemotes, err := ws.Remotes.List()
+	if err != nil {
+		return remoteAdvertisement{}, err
+	}
 	refs, err := workspace.RemoteDoltRefs(ctx, env, ws.RootDir, remoteName.String())
 	if err != nil {
 		return remoteAdvertisement{}, fmt.Errorf("list refs/dolt/* on remote %q: %w", remoteName, err)
@@ -182,8 +186,8 @@ const pushProofDeadline = 10 * time.Second
 // [LAW:one-source-of-truth] workspaceSyncRemote picks that remote, as it does
 // for the receive. [LAW:parse-dont-validate] the non-zero advertisement is the
 // proof; nothing downstream re-asks.
-func provePushedAdvertisement(ctx context.Context, env environ.Env, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName, gitRemotes []workspace.GitRemote) (proven remoteAdvertisement, unproven string) {
-	receiveRemote, ok, err := workspaceSyncRemote(ctx, env, ws, "", gitRemotes)
+func provePushedAdvertisement(ctx context.Context, env environ.Env, syncer storage.Syncer, ws workspace.Info, remoteName storage.RemoteName) (proven remoteAdvertisement, unproven string) {
+	receiveRemote, ok, err := workspaceSyncRemote(ws, "")
 	if err != nil {
 		return remoteAdvertisement{}, "resolve the remote the automatic receive asks: " + err.Error()
 	}
@@ -193,7 +197,7 @@ func provePushedAdvertisement(ctx context.Context, env environ.Env, syncer stora
 	if receiveRemote != remoteName {
 		return remoteAdvertisement{}, fmt.Sprintf("pushed remote %q is not the remote the automatic receive asks (%q)", remoteName, receiveRemote)
 	}
-	observed, err := advertise(ctx, env, ws, remoteName, gitRemotes)
+	observed, err := advertise(ctx, env, ws, remoteName)
 	if err != nil {
 		return remoteAdvertisement{}, err.Error()
 	}
