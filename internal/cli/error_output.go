@@ -583,7 +583,7 @@ func commandErrorRemediation(reason commandReason) string {
 		// workspace_schema_ahead gates its paths.
 		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonImportResetFailed:
-		return "Do not re-run the file unchanged — the writes the message names are still committed, and running the file again creates its created issues a second time. Delete the issues it names as created with `lit delete`, or drop their documents from the file, then fix what refused the file and import it again."
+		return "Do not re-run the file unchanged — the writes the message names are still committed, and running the file again creates its created issues a second time. To finish the import, delete the issues it names as created with `lit delete`, or drop their documents from the file, then fix what refused the file and import it again: its other writes are restated as the file states them. To abandon it, put back each write the message names."
 	case reasonBulkPartialFailure:
 		// No re-run of the whole command is advised: it applies every landed
 		// item again, an item a rule refused repeats its refusal, and one whose

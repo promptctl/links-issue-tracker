@@ -157,7 +157,7 @@ func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
 	var heard []string
 	st.ObserveChanges(func(_ storage.Change, issue model.Issue) { heard = append(heard, issue.ID) })
 	written, err := withBatch(ctx, st, func(ctx context.Context, result *storage.BulkApplyResult) error {
-		*result = storage.BulkApplyResult{Created: []storage.IDMapping{storage.NewIDMapping("", "test-kept")}, Updated: []string{epic}}
+		*result = storage.BulkApplyResult{Created: []storage.IDMapping{storage.NewIDMapping("", "test-kept")}, Updated: []string{epic}, EdgesAdded: 2, EdgesRemoved: 1}
 		// A change the batch made: its write stands once the reset fails, so
 		// its observers are owed it.
 		st.notify(ctx, storage.Change{}, model.Issue{ID: epic})
@@ -180,7 +180,7 @@ func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
 	if len(written.Created) != 1 || len(written.Updated) != 1 {
 		t.Errorf("result = %+v; want what stays written, not the zero result", written)
 	}
-	for _, want := range []string{"injected: refused", head, "1 creates [test-kept]", "1 updates [" + epic + "]"} {
+	for _, want := range []string{"injected: refused", head, "1 creates [test-kept]", "2 edges added and 1 removed", "1 updates [" + epic + "]"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q lacks %q", err.Error(), want)
 		}

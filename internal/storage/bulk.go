@@ -131,8 +131,8 @@ func (r BulkApplyResult) Written() string {
 	for i, res := range r.Ranked.Resolutions {
 		ranked[i] = res.RankedID
 	}
-	return fmt.Sprintf("%s, %d reparents [%s], %d blocked_by sets [%s], %d updates [%s] and the order of %d issues [%s]",
-		writtenCreates(r.Created), len(r.Reparented), strings.Join(r.Reparented, ","), len(r.BlockedBySet), strings.Join(r.BlockedBySet, ","), len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
+	return fmt.Sprintf("%s, %d reparents [%s], %d blocked_by sets [%s], %d edges added and %d removed, %d updates [%s] and the order of %d issues [%s]",
+		writtenCreates(r.Created), len(r.Reparented), strings.Join(r.Reparented, ","), len(r.BlockedBySet), strings.Join(r.BlockedBySet, ","), r.EdgesAdded, r.EdgesRemoved, len(r.Updated), strings.Join(r.Updated, ","), len(ranked), strings.Join(ranked, ","))
 }
 
 // Written is the result in words, as BulkApplyResult.Written says it.

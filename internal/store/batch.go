@@ -36,11 +36,13 @@ type batchResult interface{ Written() string }
 // fn builds the batch's result in place, and withBatch returns what of it
 // stands: all of it when the batch lands; the zero result beside a
 // *storage.RefusedBatchError when the reset landed; all of it beside a
-// *storage.BatchResetFailedError that names it when the reset failed. The observers
-// hear the batch's changes (notify queues them) exactly when they stand, on
-// the same two outcomes. [LAW:no-silent-failure] [LAW:nothing-unseen]
+// *storage.BatchResetFailedError that names it when the reset failed. The
+// observers hear the batch's changes (notify queues them) exactly when they
+// stand, on the same two outcomes, once the lock is released, as a lone
+// Apply's observers do. [LAW:no-silent-failure] [LAW:nothing-unseen]
 func withBatch[R batchResult](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, error) {
 	var built, stands R
+	var heard []heardChange
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		// Retried as every write is, since nothing is written yet: a re-run
 		// finds the stranded writes already committed and reads the same head.
@@ -55,20 +57,24 @@ func withBatch[R batchResult](ctx context.Context, s *Store, fn func(ctx context
 		}, s.reconnect); err != nil {
 			return fmt.Errorf("batch: %w", err)
 		}
-		var heard []heardChange
 		cause := fn(context.WithValue(ctx, batchHearingKey{}, &heard), &built)
 		if cause == nil {
-			s.deliver(heard)
 			stands = built
 			return nil
 		}
-		resetErr := resetHardToRef(context.WithoutCancel(ctx), s.db, head)
+		// Retried as every write is: a reset is idempotent, and a contended
+		// one that one reconnect clears is not a store left half-written.
+		resetErr := retryTransientGCContention(context.WithoutCancel(ctx), func(ctx context.Context) error {
+			return resetHardToRef(ctx, s.db, head)
+		}, s.reconnect)
 		if resetErr == nil {
+			// Nothing the batch made stands, so nobody is owed it.
+			heard = nil
 			return &storage.RefusedBatchError{Head: head, Cause: cause}
 		}
-		s.deliver(heard)
 		stands = built
 		return &storage.BatchResetFailedError{Head: head, Cause: cause, ResetErr: resetErr, Written: built.Written()}
 	})
+	s.deliver(heard)
 	return stands, err
 }
