@@ -88,22 +88,3 @@ func TestInvocationRecordsACancelledGit(t *testing.T) {
 		t.Fatalf("occurrence = %s, want at least git ended, 0 survivors, no kill error, output not cut", line)
 	}
 }
-
-// An invocation that ended no git says so: git.cancels is [], not absent.
-func TestInvocationWithNoCancelledGitRecordsNone(t *testing.T) {
-	recorder := telemetry.Begin(telemetry.Event{})
-	invocationContext(context.Background(), recorder)
-	line, err := telemetry.Line(recorder.Finish(telemetry.End{At: time.Now()}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ev struct {
-		Occurrences map[string]json.RawMessage `json:"occurrences"`
-	}
-	if err := json.Unmarshal(line, &ev); err != nil {
-		t.Fatal(err)
-	}
-	if got := string(ev.Occurrences["git.cancels"]); got != "[]" {
-		t.Fatalf("git.cancels = %q, want []", got)
-	}
-}

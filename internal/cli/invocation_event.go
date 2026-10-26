@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
+	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -55,16 +56,24 @@ func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 }
 
 // invocationContext is the context an invocation's dispatch runs under: its
-// open event, and the observer that puts on that event every git run its
-// context ended. Dolt's git included, whose errors reach lit only as text
-// through the SQL driver, while the context reaches the git Dolt starts.
-// "git.cancels" starts as [] so an invocation that ended no git says so, not
-// nothing. [LAW:nothing-unseen] [LAW:single-enforcer]
+// open event, and the observers that put Dolt's own facts on that event,
+// which reach lit only as text through the SQL driver, while the context
+// reaches the work Dolt does under it. One puts on the event every git run
+// its context ended, Dolt's git included. The other puts there every
+// recoverable journal problem a store opened under it reported, such as an
+// index a read open passed over to read the whole journal, in place of the
+// logrus line on stderr Dolt writes by default. Each key starts as [] so an
+// invocation that met none says so, not nothing. [LAW:nothing-unseen]
+// [LAW:single-enforcer]
 func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
-	ctx = telemetry.With(ctx, recorder)
-	telemetry.Append(ctx, "git.cancels")
+	event := telemetry.With(ctx, recorder)
+	telemetry.Append(event, "git.cancels")
+	telemetry.Append(event, "dolt.journal_warnings")
+	ctx = nbs.WithJournalWarningObserver(event, func(warning error) {
+		telemetry.Append(event, "dolt.journal_warnings", warning.Error())
+	})
 	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
-		telemetry.Append(ctx, "git.cancels", gitCancelValue(cancelled))
+		telemetry.Append(event, "git.cancels", gitCancelValue(cancelled))
 	})
 }
 
