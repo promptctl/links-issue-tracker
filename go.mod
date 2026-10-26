@@ -13,6 +13,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.3
 	github.com/promptctl/primitives v0.2.0
+	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
@@ -120,7 +121,6 @@ require (
 	github.com/sergi/go-diff v1.3.1 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
-	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/sony/gobreaker v0.5.0 // indirect
 	github.com/sourcegraph/conc v0.3.1-0.20240121214520-5f936abd7ae8 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
@@ -172,7 +172,7 @@ require (
 // newer upstream without silently restoring a copyleft import. Deliberately not
 // summarized here: the summary this replaced had gone stale.
 // [LAW:one-source-of-truth]
-replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20261026015638-e5cd59aa5690
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20261026040056-0bdb2f7bb33a
 
 replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69
 

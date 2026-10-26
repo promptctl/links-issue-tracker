@@ -77,10 +77,13 @@ var engineHandles = []string{"Store", "Open", "OpenForRead", "OpenSync"}
 var doltWorkspaceMachinery = map[string][]string{
 	// Kernel flocks and the paths they guard: taken around snapshot restore and
 	// commit, before and after any engine exists. WithHolderCommand names the
-	// run in the holder record each of these flocks publishes.
+	// run in the holder record each of these flocks publishes. The journal
+	// warning tests reach DoltJournalLockPath for the noms directory it sits
+	// in, to damage the journal there with no engine open, and because each
+	// warning names that directory.
 	"workspace and commit locks": {
 		"CommitLockPath", "LockCommitPath", "SettleCommitLockRelease",
-		"LockWorkspaceExclusive", "LockWorkspaceShared", "LockDoltJournalExclusive",
+		"LockWorkspaceExclusive", "LockWorkspaceShared", "LockDoltJournalExclusive", "DoltJournalLockPath",
 		"TryAcquireSyncPushLock", "TryAcquireReceiveLock", "WithHolderCommand",
 	},
 	// The detached mirror's cross-process handshake. Named in design.md §migration

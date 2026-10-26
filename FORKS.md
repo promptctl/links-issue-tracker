@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026015638-e5cd59aa5690` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026040056-0bdb2f7bb33a` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -506,7 +506,7 @@ lock holder appends to.
   bootstrap made, and only a store holding LOCK runs it. A read-only store
   reads through `O_RDONLY` handles, never creates `journal.idx`, and keeps no
   index handle once the read pass returns. If it cannot read the index, it
-  reports that through `warningsCb` and reads the whole journal. On a corrupt
+  reports that through `warningsCb` (Patch 16) and reads the whole journal. On a corrupt
   index, a writable bootstrap still empties the index and fails the open, as
   upstream did.
 - A journal syncs at close only when it holds unsynced chunk records
@@ -520,6 +520,43 @@ lit opens every read engine `JournalReadOnly` (driver `Config.JournalReadOnly`,
 without trying the lock and writes no file while read-only, and the `require`
 line moves past that change. Dropping it without that puts the writes back on
 every read command and lets a read command keep writers out.
+
+#### Patch 16 — a journal warning goes to the observer its store was opened under
+
+`go/store/nbs/journal.go`, `go/libraries/doltcore/dbfactory/file.go`, plus
+`go/store/nbs/journal_warnings_test.go` (a new file, not upstream's) and a test
+in `go/libraries/doltcore/dbfactory/file_cache_test.go`.
+
+Dolt reports a recoverable journal problem, such as a garbage journal tail or
+an index a read-only open passed over (Patch 15), through a journaling store's
+`warningsCb`. dbfactory hard-wired that callback to
+`nbs.JournalParserLoggingWarningsCb`, which calls `logrus.Error`, and
+`ChunkJournal`'s lazy bootstrap from `Persist` and `Open` hard-wired it again,
+so lit could see the warning only as a line on stderr, never on the command's
+event (`links-observability-gvpn.4q4`).
+
+- `nbs.WithJournalWarningObserver(ctx, observe)` puts an observer on a context,
+  the way `gitcmd.WithObserver` (Patch 13) does for git. The observer receives
+  an `nbs.JournalWarning`: the warning and the store it came from, its
+  directory on this filesystem (dbfactory's `storeDir`, the URL's path
+  unescaped and in the OS's separators), since one process opens several
+  stores. `nbs.JournalWarningsCb(ctx, store)` is the
+  callback that hands warnings to it, or the logging callback when the context
+  carries none.
+- dbfactory's `CreateDB` resolves the callback from the open's context, and a
+  `ChunkJournal` keeps the callback it was constructed with for every
+  bootstrap, eager or lazy.
+
+lit installs the observer in `invocationContext` (`internal/cli/invocation_event.go`),
+which records each warning as a `dolt.journal_warnings` occurrence
+(`docs/events.md`). `TestAReadThatPassedOverTheJournalIndexSaysSoOnItsEvent` and
+`TestAWriteThatRecoveredAJournalTailSaysSoOnItsEvent` in `internal/cli` fail
+without the patch.
+
+**Retire it when** upstream's dbfactory takes a journaling store's warnings
+callback from its caller instead of hard-wiring the logging one, and the
+`require` line moves past that change. Dropping it without that sends every
+journal warning back to stderr and leaves the command's event without it.
 
 ### promptctl/go-mysql-server
 
