@@ -334,7 +334,7 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID string, re
 // unlike DOLT_REMOTE add; remote being a storage.RemoteName is what keeps a
 // name Dolt cannot hold out of the clone. [LAW:parse-dont-validate]
 func cloneRemoteDatabase(ctx context.Context, serverRoot, workspaceID string, remote storage.RemoteName, remoteURL, branch string) error {
-	db, err := openDoltPool(serverRoot, workspaceID, "", engineWrite)
+	db, err := openDoltPool(serverRoot, workspaceID, "", newLockHold(ctx, serverRoot, engineWrite))
 	if err != nil {
 		return fmt.Errorf("open dolt for clone: %w", err)
 	}

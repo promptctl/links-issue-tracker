@@ -128,8 +128,8 @@ func TestCommandFamilyResolve(t *testing.T) {
 		wantHelpUsage string
 	}{
 		{name: "dep ls is read", family: depFamily, args: []string{"ls"}, want: app.AccessRead},
-		{name: "dep add is write", family: depFamily, args: []string{"add", "a", "b"}, want: app.AccessWrite},
-		{name: "dep rm is write", family: depFamily, args: []string{"rm", "a", "b"}, want: app.AccessWrite},
+		{name: "dep add is a routine write", family: depFamily, args: []string{"add", "a", "b"}, want: app.AccessWriteRoutine},
+		{name: "dep rm is a routine write", family: depFamily, args: []string{"rm", "a", "b"}, want: app.AccessWriteRoutine},
 		{name: "dep unknown rejected", family: depFamily, args: []string{"bogus"}, wantErr: true},
 		{name: "dep empty rejected", family: depFamily, args: nil, wantErr: true},
 		{name: "dep help flag answered as help", family: depFamily, args: []string{"--help"}, wantHelpUsage: depFamily.usage},

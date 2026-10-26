@@ -157,7 +157,7 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote storage.Re
 // move, run inside holdForRefWrite. atHead reports whether the ref now names
 // head, moved there or already there, as against left on a descendant of it.
 func settlePushedHead(ctx context.Context, root string, remote storage.RemoteName, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
-	err = holdForRefWrite(ctx, root, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, root, engineWriteRoutine, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		trackingRef := ref.NewRemoteRef(remote.String(), trimmedBranch)
 		pushedCommit, err := readFullCommit(holdCtx, ddb, hash.Parse(trimmedHead))
 		if err != nil {
@@ -260,19 +260,34 @@ func refuseLOCKUnderCommitLock(ctx context.Context) error {
 // rewrites the history the bound keeps. The caller
 // holds the workspace shared lock around it, so a rotation of the Dolt
 // directory cannot land inside the hold.
-func holdForRefWrite(ctx context.Context, root string, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
+//
+// access is the hold's kind (engineAccess), the caller's to state because only
+// the caller knows its write: a ref write is routine and heartbeats while it
+// works, a landing or a re-root grows with what it carries and is long.
+// [LAW:types-are-the-program]
+//
+// The handle has no SQL connection for executingConnector to watch, so the
+// hold's engine work is bracketed here: the load, the write and the close. The
+// commit-lock wait between them is not engine work, so a handle waiting on a
+// rotating writer's commit lock sends no heartbeat.
+func holdForRefWrite(ctx context.Context, root string, access engineAccess, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
 	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
 		return err
 	}
-	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root)
+	hold := newLockHold(ctx, root, access)
+	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root, hold)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		// The record retires first, then Close releases Dolt's LOCK and
 		// flushes the manifest; a failure in either is the caller's to hear.
-		// [LAW:no-silent-failure]
-		err = errors.Join(err, releaseRecord(), ddb.Close())
+		// The hold ends after the close, which Dolt's Released has usually
+		// already ended. [LAW:no-silent-failure]
+		recordErr := releaseRecord()
+		_, closeErr := within(hold, func() (struct{}, error) { return struct{}{}, ddb.Close() })
+		hold.end()
+		err = errors.Join(err, recordErr, closeErr)
 	}()
 	// The hold starts here: the open above took LOCK. Registered after the
 	// Close defer so it runs first and the cut is stamped on the error the
@@ -295,7 +310,8 @@ func holdForRefWrite(ctx context.Context, root string, budget time.Duration, wri
 	defer func() {
 		err = SettleCommitLockRelease(err, releaseCommit())
 	}()
-	return write(holdCtx, ddb)
+	_, err = within(hold, func() (struct{}, error) { return struct{}{}, write(holdCtx, ddb) })
+	return err
 }
 
 // openChunkStoreForRefWrite opens the workspace's Dolt database without a SQL
@@ -311,7 +327,12 @@ func holdForRefWrite(ctx context.Context, root string, budget time.Duration, wri
 // the handle (recordLockHolder, wrapping a no-op release since the hold
 // itself ends when the handle closes), exactly as a write engine does; the
 // returned release retires the record and must run before the handle closes.
-func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB, func() error, error) {
+//
+// Each load runs under hold (lockHold.under) and inside its executing
+// bracket, so the hold announces the instant Dolt takes LOCK and its open
+// after that counts as the hold's work, and the hold's wait (lockHold.wait)
+// is the retry policy, so the value that waited reports the wait.
+func openChunkStoreForRefWrite(ctx context.Context, root string, hold *lockHold) (*doltdb.DoltDB, func() error, error) {
 	nomsDir := filepath.Join(root, doltDatabaseName, dbfactory.DoltDataDir)
 	urlStr := "file://" + filepath.ToSlash(nomsDir)
 	var ddb *doltdb.DoltDB
@@ -321,7 +342,9 @@ func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB
 			dbfactory.DisableSingletonCacheParam:    struct{}{},
 			dbfactory.FailOnJournalLockTimeoutParam: struct{}{},
 		}
-		opened, err := doltdb.LoadDoltDBWithParams(ctx, types.Format_Default, urlStr, filesys.LocalFS, params)
+		opened, err := within(hold, func() (*doltdb.DoltDB, error) {
+			return doltdb.LoadDoltDBWithParams(hold.under(ctx), types.Format_Default, urlStr, filesys.LocalFS, params)
+		})
 		if err != nil {
 			if errors.Is(err, nbs.ErrDatabaseLocked) {
 				return err
@@ -331,7 +354,10 @@ func openChunkStoreForRefWrite(ctx context.Context, root string) (*doltdb.DoltDB
 		ddb = opened
 		return nil
 	}
-	if err := wrapEngineOpenContention(backoff.Retry(open, backoff.WithContext(newEngineOpenBackOff(root), ctx)), root); err != nil {
+	openErr := backoff.Retry(open, backoff.WithContext(hold.wait, ctx))
+	hold.reportWait(ctx, openErr)
+	if err := wrapEngineOpenContention(openErr, root); err != nil {
+		hold.end()
 		return nil, nil, fmt.Errorf("open dolt chunk store at %s: %w", nomsDir, err)
 	}
 	return ddb, recordLockHolder(ctx, workspaceStorageDir(root), DoltJournalLockPath(root), func() error { return nil }), nil

@@ -77,7 +77,10 @@
 // under the held commit lock. It cannot wedge — each re-open's wait is
 // bounded (every LOCK taker but the pushed-head record then waits on the
 // commit lock, so none can keep arriving in front of it past
-// coResidentHolderWait) and the retry makes that re-open at most once, only
+// coResidentHolderWait; a routine taker heartbeats through its own open, but
+// its commit-lock wait runs in lit, outside its engine, so its heartbeat
+// stops there, and the pushed-head record's handle waits on the commit lock
+// outside its engine too) and the retry makes that re-open at most once, only
 // while the mutation's whole hold still fits commitLockWaiterBudget, so the
 // inverted edge always breaks by the re-open failing the mutation loudly —
 // and BOTH bounds are the tolerance's whole justification, because the
@@ -131,6 +134,14 @@
 // the instant they succeed), and the shared takes retry only against a
 // probe's microsecond window (~1s budget). No inbound wait-edge from any
 // inner holder exists, so it cannot complete a cycle either.
+//
+// A write engine's hold of LOCK reports on itself (lock_hold.go): Dolt tells
+// it the instants LOCK is taken and let go, and a routine hold heartbeats
+// through LOCK's arrival file while its engine works, which a contender reads
+// as progress. The heartbeat is a write with no flock, so it adds no wait
+// edge, and a holder waiting on any lock is outside its engine and outside
+// any transaction (the commit lock is taken before one begins) and sends
+// none, so no wait cycle can keep itself alive on heartbeats.
 //
 // Holder records sit outside the slots as well. Every acquisition through
 // acquireStoreLock publishes one — a uniquely-named file under <storage

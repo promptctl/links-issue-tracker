@@ -98,7 +98,7 @@ func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted st
 		return storage.ReRooted{}, err
 	}
 	defer func() { err = errors.Join(err, release()) }()
-	err = holdForRefWrite(ctx, root, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, root, engineWrite, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		var rewriteErr error
 		reRooted, rewriteErr = reRootBranch(holdCtx, ddb, ref.NewBranchRef(branch), hash.Parse(cut))

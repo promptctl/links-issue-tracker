@@ -54,10 +54,10 @@ const remoteAbsentRecheckInterval = 10 * time.Second
 // shouldSyncAfterMutation is the pure push-cadence decision: only a mutating
 // (write) command under the on-change policy triggers the push mirror. Read-mode
 // commands and the opt-in on-push policy never do.
-// [LAW:dataflow-not-control-flow] The access mode is the mutation marker that
+// [LAW:dataflow-not-control-flow] The access mode's Writes() is the mutation marker that
 // already flows through the one app boundary; no command re-decides this.
 func shouldSyncAfterMutation(accessMode app.AccessMode, cadence config.SyncCadence) bool {
-	return accessMode == app.AccessWrite && cadence == config.SyncCadenceOnChange
+	return accessMode.Writes() && cadence == config.SyncCadenceOnChange
 }
 
 // maybeAutoSyncAfterCommand is the single owner of automatic sync. It runs after
@@ -90,7 +90,7 @@ func maybeAutoSyncAfterCommand(ctx context.Context, env environ.Env, accessMode 
 	// leaving the workspace whose config is broken, which is squarely the
 	// "nothing else collects this store" case, as the one workspace that
 	// silently loses its backstop. [LAW:decomposition]
-	if accessMode == app.AccessWrite {
+	if accessMode.Writes() {
 		maintainInline(ctx, env, ws)
 	}
 }

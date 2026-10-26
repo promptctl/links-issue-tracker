@@ -198,7 +198,7 @@ func LandFetchedHead(ctx context.Context, env environ.Env, doltRootDir string, c
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
 	var cacheErr error
-	err = holdForRefWrite(ctx, root, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, root, engineWrite, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
 		live, err := readRefHead(holdCtx, ddb, trackingRef)

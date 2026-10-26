@@ -345,7 +345,7 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	// refusal over a peer's commits is recorded diverged on the promise that
 	// this merge reaches the remote. The mirror waits for this worker to exit.
 	access := outcome.access()
-	telemetry.Set(ctx, "receive.push_owed", access == app.AccessWrite)
+	telemetry.Set(ctx, "receive.push_owed", access.Writes())
 	mirrorAfterReceive(ctx, env, access, ws)
 }
 

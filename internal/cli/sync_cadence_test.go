@@ -16,8 +16,9 @@ import (
 
 // The cadence decision is the load-bearing logic: only a write command under
 // the on-change policy mirrors. Every other combination — read-mode commands,
-// the opt-in on-push policy — stays silent. The truth table pins all four cells
-// so neither axis can drift into a spurious push.
+// the opt-in on-push policy — stays silent. The truth table pins every cell
+// so neither axis can drift into a spurious push, and a routine write is a
+// write: its hold's kind must never cost the remote its change.
 func TestShouldSyncAfterMutation(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -28,6 +29,8 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 	}{
 		{"write + on-change pushes", app.AccessWrite, config.SyncCadenceOnChange, true},
 		{"write + on-push stays on the hook", app.AccessWrite, config.SyncCadenceOnPush, false},
+		{"routine write + on-change pushes", app.AccessWriteRoutine, config.SyncCadenceOnChange, true},
+		{"routine write + on-push stays on the hook", app.AccessWriteRoutine, config.SyncCadenceOnPush, false},
 		{"read + on-change never pushes", app.AccessRead, config.SyncCadenceOnChange, false},
 		{"read + on-push never pushes", app.AccessRead, config.SyncCadenceOnPush, false},
 	}

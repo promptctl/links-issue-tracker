@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -252,9 +253,11 @@ func publishLockHolder(ctx context.Context, storageDir, lockPath string) (func()
 }
 
 // lockHolderArrivalName is the file in a lock's holder directory that names
-// the lock's latest arrival: the record name of the most recent acquisition.
-// It carries neither record prefix, so no sweep or listing ever reads it as a
-// record.
+// the lock's latest sign of progress: the record name of the most recent
+// acquisition, or a working routine holder's heartbeat, `<name>.<sequence>`
+// (lockHold). Either is a name no earlier writing used, which is all a waiter
+// reads from it. It carries neither record prefix, so no sweep or listing
+// ever reads it as a record.
 //
 // It exists because a record lives exactly as long as its hold, and a hold can
 // begin and end between two of a contender's polls: a `lit new` holds Dolt's
@@ -268,23 +271,44 @@ const lockHolderArrivalName = "arrival"
 
 // announceArrival names recordName as the lock's latest arrival, overwriting
 // the last one in place. Record names are unique among every record ever
-// minted, so the file's content changes on every acquisition and never returns
+// minted, and a heartbeat is one with a sequence after it, so the file's
+// content changes on every acquisition and every heartbeat and never returns
 // to an earlier value.
 //
 // In place, with no temporary name and no rename: a reader can catch the file
-// torn, empty, half-written, or — under two shared holders writing at once —
-// spliced from both names, but only while acquisitions are writing it. A
-// reading no acquisition wrote can therefore count real arrivals extra times,
-// each restarting a contender's clock a poll later than the arrivals alone
-// would, but it never reports a queue moving while nothing arrives.
+// torn, or — under two shared holders writing at once — spliced from both
+// names, but only while acquisitions are writing it. A reading no acquisition
+// wrote can therefore count real arrivals extra times, each restarting a
+// contender's clock a poll later than the arrivals alone would, but it never
+// reports a queue moving while nothing arrives.
+//
+// Never empty: the name is padded to lockArrivalWidth and written over the
+// whole file at offset 0, with no truncation, so a reader sees the last name
+// until the next one lands. A truncating write leaves the file empty until
+// its data lands, and under a storm of waiters polling this one file that
+// window measured up to 1.7s per write: a heartbeat every waiter read as
+// nothing.
 //
 // A rename would add a private name to strand and, on Windows, fail against
 // any reader holding the file open.
 // [LAW:no-ambient-temporal-coupling] the announcement is a value an
 // acquisition writes, not an interval a reader has to catch.
 func announceArrival(dir, recordName string) error {
-	return os.WriteFile(filepath.Join(dir, lockHolderArrivalName), []byte(recordName), 0o644)
+	if len(recordName) > lockArrivalWidth {
+		return fmt.Errorf("announce arrival: name %q is longer than the arrival file's %d bytes", recordName, lockArrivalWidth)
+	}
+	f, err := os.OpenFile(filepath.Join(dir, lockHolderArrivalName), os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.WriteAt([]byte(recordName+strings.Repeat(" ", lockArrivalWidth-len(recordName))), 0)
+	return errors.Join(writeErr, f.Close())
 }
+
+// lockArrivalWidth is the arrival file's size: every name is padded to it, so
+// each write covers the whole file. A heartbeat name is under 80 bytes
+// (holder-<pid>-<nonce>-<seq>.<sequence>).
+const lockArrivalWidth = 128
 
 // lockArrival is one reading of a lock's latest arrival: the record name that
 // announced it and when it was written. The zero value is a lock no
@@ -318,12 +342,14 @@ func latestArrival(storageDir, lockPath string) (lockArrival, error) {
 	if err != nil {
 		return lockArrival{}, fmt.Errorf("read lock arrival: %w", err)
 	}
-	return lockArrival{name: string(name), at: info.ModTime()}, nil
+	return lockArrival{name: strings.TrimRight(string(name), " "), at: info.ModTime()}, nil
 }
 
 // describeArrival is the holder account's clause about the lock's latest
-// arrival: how long ago the last lit acquisition announced itself. It says
-// no more than that — a holder that announces nothing, or a shared holder
+// arrival: how long ago the last lit acquisition announced itself, or the
+// holder's last heartbeat was written, told apart by the name's shape (a
+// record name has no '.', a heartbeat is `<name>.<sequence>`). It says no
+// more than that — a holder that announces nothing, or a shared holder
 // joining after it, can stand behind the age. Beside a refusal it tells apart
 // the two ways a wait ends — a queue that stopped moving a whole wait ago, or
 // a waiter that could not see a queue still moving — and it is where an
@@ -337,6 +363,8 @@ func describeArrival(storageDir, lockPath string) string {
 		return fmt.Sprintf("arrivals unreadable, so a waiter sees only the holders standing at each poll: %v", err)
 	case latest.at.IsZero():
 		return "no lit acquisition has announced an arrival here"
+	case strings.Contains(latest.name, "."):
+		return fmt.Sprintf("the holder's last heartbeat was %s ago", time.Since(latest.at).Round(time.Millisecond))
 	default:
 		return fmt.Sprintf("the last lit acquisition announced itself %s ago", time.Since(latest.at).Round(time.Millisecond))
 	}
@@ -662,6 +690,17 @@ func renderHolderCommand(command string) string {
 // failed it with a holder that was never wedged. Fails-in-seconds is the
 // promise about a holder that stands still.
 //
+// A working routine holder does not stand still: its heartbeat (lockHold) is
+// a fresh name in the arrival file while its engine works, read here like any
+// arrival. So one routine hold is waited out for as long as its engine keeps
+// working, however long a loaded machine stretches it. That is also the one
+// wait with no bound: a routine hold wedged inside a Dolt statement
+// heartbeats like a slow one, since from outside the two cannot be told apart
+// at any finite time, and its contenders wait, naming it every
+// lockWaitNoticeInterval. A slow-but-live routine holder failing every writer
+// behind it is the failure this exists to end, so a Dolt bug is what gives
+// way. A long hold sends no heartbeat and is never waited on that way.
+//
 // [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
 // is the lock's directory and its budget, both values. A holder that leaves
 // no name (a foreign dolt) contributes no progress, so under
@@ -692,6 +731,12 @@ type holdWait struct {
 	started   time.Time
 	since     time.Time
 	noticeDue time.Time
+	// heldAt is the latest poll that found the lock held since Reset, zero
+	// when none has, and progress how many holder names arrived after the
+	// baseline: what a LockWait reports, read off the polls the wait took
+	// rather than a reading of its own, and the first is what makes it one.
+	heldAt   time.Time
+	progress int
 }
 
 // newHoldWait builds the policy for one lock. wait is read at each poll, not
@@ -710,6 +755,7 @@ func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now fun
 func (w *holdWait) Reset() {
 	w.started = w.now()
 	w.known, w.since, w.noticeDue = nil, w.started, w.started.Add(lockWaitNoticeGrace)
+	w.heldAt, w.progress = time.Time{}, 0
 	w.arrived()
 }
 
@@ -723,6 +769,7 @@ func (w *holdWait) Reset() {
 // notice and the elapsed figure are measured at the same instant.
 func (w *holdWait) NextBackOff() time.Duration {
 	now := w.now()
+	w.heldAt = now
 	if w.arrived() {
 		w.since = now
 	}
@@ -753,10 +800,39 @@ func (w *holdWait) arrived() bool {
 	for _, name := range names {
 		if _, seen := w.known[name]; !seen {
 			w.known[name] = struct{}{}
-			arrived = !baseline
+			if !baseline {
+				arrived = true
+				w.progress++
+			}
 		}
 	}
 	return arrived
+}
+
+// report is this wait as a LockWait, given what the acquisition it policed
+// returned, and whether there was a wait to report: an acquisition that never
+// found its lock held waited for nothing. The outcome is read off the
+// acquisition's error, the one place that knows how the wait ended, since a
+// policy is never told of a success. [LAW:parse-dont-validate]
+func (w *holdWait) report(ctx context.Context, acquireErr error) (LockWait, bool) {
+	if w.heldAt.IsZero() {
+		return LockWait{}, false
+	}
+	outcome := LockWaitFailed
+	switch {
+	case acquireErr == nil:
+		outcome = LockWaitAcquired
+	case errors.Is(acquireErr, ErrWorkspaceBusy), errors.Is(acquireErr, errLockHeld), errors.Is(acquireErr, nbs.ErrDatabaseLocked):
+		outcome = LockWaitStoodStill
+	case ctx.Err() != nil && errors.Is(acquireErr, ctx.Err()):
+		outcome = LockWaitCancelled
+	}
+	return LockWait{
+		Lock:         filepath.Base(w.lockPath),
+		Waited:       w.heldAt.Sub(w.started),
+		ProgressSeen: w.progress,
+		Outcome:      outcome,
+	}, true
 }
 
 // holderNames is every holder name the lock shows at one instant: its standing

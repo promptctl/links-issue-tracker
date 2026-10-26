@@ -413,6 +413,9 @@ func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, l
 		release = acquiredRelease
 		return nil
 	}, backoff.WithContext(policy, ctx))
+	if wait, waited := policy.report(ctx, err); waited {
+		lockObserverFrom(ctx).Waited(wait)
+	}
 	if errors.Is(err, errLockHeld) {
 		return nil, fmt.Errorf("%s: %w", describeLockHolders(storageDir, lockPath), ErrWorkspaceBusy)
 	}

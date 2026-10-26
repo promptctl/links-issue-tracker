@@ -159,9 +159,21 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 var rotationCloseReserve = time.Second
 
 // rotationReserve is the longest one connection rotation can hold the commit
-// lock: the new engine's open, waited out against a co-resident holder for
+// lock while the holder in front of its re-open stands still: the new
+// engine's open, waited out against a co-resident holder for
 // coResidentHolderWait, plus the old engine's unbounded close
 // (rotationCloseReserve). The retry reserves it before its rotation.
+//
+// It bounds the stand-still part, not the wall time. A routine holder that
+// took LOCK in the rotation's gap heartbeats through its own open
+// (lockHold), and the re-open waits that out too, until the holder reaches
+// for this commit lock: a wait in lit, outside its engine, where its
+// heartbeat stops and coResidentHolderWait runs. The order doc.go needs still
+// holds, since that holder's own commit-lock wait starts only then and runs
+// commitLockWaiterBudget, longer than the re-open's. The one commit-lock
+// waiter holding no LOCK, `lit snapshots new`'s prune, can fail naming the
+// rotating writer when a rotation meets a slow gap-taker's open: a named
+// long operation failing the way it already fails.
 func rotationReserve() time.Duration {
 	return coResidentHolderWait + rotationCloseReserve
 }

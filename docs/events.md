@@ -72,7 +72,9 @@ lines here for reading:
   },
   "occurrences": {
     "dolt.journal_warnings": [],
-    "git.cancels": []
+    "git.cancels": [],
+    "lock.holds": [],
+    "lock.waits": []
   }
 }
 ```
@@ -95,9 +97,9 @@ lines here for reading:
 | `sink_rotation_error` | Present only when `sink_rotation` is `failed`: why. |
 | `counts` | The command's counts. A count of zero is written as `0`, so "ran and found none" is distinguishable from a command that does not count that thing. Every invocation counts `git.lit_spawns`: the git commands lit itself ran for it, `0` when none. Git that Dolt starts inside a fetch or push is not in it. |
 | `facts` | What the command decided, under keys prefixed with the command's name, with `statusline.` for what it wrote to the statusline file, with `store.` for the size of the store it ran against, with `workflows.` for the workflow occasion it fired, with `config.` for its config check, or with `schema_ahead.` for a refusal because the workspace's schema is ahead of this lit. A command that reads its git remotes records, once, on the first read: `remotes.refused`, each remote lit refuses mapped to why (`name_character`, `path_through_filesystem`, `home_relative_path`, `drive_relative_path`, `surrounding_whitespace`), `{}` when none; `remotes.resolved`, each remote whose relative path URL was made absolute mapped to that absolute path, `{}` when none; and `remotes.without_url`, the remotes git lists with no fetch URL, sorted, `[]` when none. `lit sync pull` records `pull.state`, its settle's state or, with nothing to pull from, its skip (`no_sync_remote`, `remote_empty`), and `pull.base` when it settled: where the settle's base came from, `merge_base` along shared history, `fork_point` across a re-root, or `none`. A command that settled which branch of its sync remote it syncs against records `sync.branch_source`, the answer that decided: `override` (`LINKS_DEBUG_DOLT_SYNC_BRANCH`), `remote_head` (git's `refs/remotes/<remote>/HEAD`), or `advertised` (the remote's HEAD, asked by the sync). A command that settled which branch its freshness reads report on (doctor, a read command's banner, `lit sync fetch`'s follow) records `freshness.branch_source`: `override`, `remote_head`, or `recorded` (what a sync here last learned from the remote). One command can record both; each is absent when no answer named a branch. An automatic receive that asked its remote whether it moved records `receive.remote_check_error`: null when the remote answered, else why it could not tell. A `lit import` file refused at a write records `import.reset_to`, the commit it reset the workspace to, and `import.reset_error`: empty when the reset landed, else why it failed and the file's earlier writes stand. |
-| `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A `lit bulk` command records `bulk.items` here, one entry per issue it ran. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `collection.records`, `reroot.declines`, `reroot.cuts_not_found`, `fork_point.records`, `remote.removals`, `reconcile.bases`, `settled_last.writes` and `history_bound.records` here, and the on-change mirror `mirror.live_store_steps`, one per cycle that took its clone. A command whose store looked for writes a failed commit left staged, as a sync does before it reads its freshness and an import does before it writes, records `stranded_writes.commits`: one entry per commit it landed over them, with `stranded_writes.tables`, the tables they touched. Every automatic receive puts exactly one entry on `receive.outcomes`, whose `receive.decision` says how it ended, a skip included, with `receive.remote` (`""` before one was chosen) and `receive.error` (null when none). Every invocation records `git.cancels`: one entry per git run that its context ended, lit's own or one Dolt started. Each entry has `git.cancel.cause` (the context's error), `git.cancel.processes` (how many processes the cancel ended, git and what it started; `0` when git had already exited), `git.cancel.survivors` (how many of those were still running 5s after the kill; null when no count was taken), `git.cancel.kill_error` (null when the kill succeeded) and `git.cancel.output_cut` (whether git's output was still open 1s after the processes the cancel ended had exited or been counted as survivors, and lit stopped reading it). Every invocation also records `dolt.journal_warnings`: one entry per recoverable problem a store's journal reported when the invocation opened it, so a problem that outlasts the open, such as an index a read cannot repair, has an entry for each open. Each entry has `dolt.journal_warning.store` (the directory of the store's Dolt chunk store, such as a workspace's `.dolt/noms`, since one invocation can open several stores) and `dolt.journal_warning.error` (what the journal reported), such as a read that could not read the journal's index and read the whole journal instead (`a read-only journal open passed over its index and read the whole journal: ...`), or a journal whose tail does not parse (`invalid journal record length: ...`). A command reports these here and not on stderr, and it runs all the same. A key's prefix names the command or part of lit that recorded it, not its map: `history_bound.window_error` is a fact, set once, and `history_bound.records` is an occurrence, one entry per push. |
+| `occurrences` | What can happen more than once in one invocation, under keys of their own: one entry per occurrence, in the order they happened. A key that was looked at and found nothing is `[]`; an absent key was not looked at. A `lit bulk` command records `bulk.items` here, one entry per issue it ran. A sync command records `push.outcomes`, `receive.outcomes`, `reroot.follows`, `collection.records`, `reroot.declines`, `reroot.cuts_not_found`, `fork_point.records`, `remote.removals`, `reconcile.bases`, `settled_last.writes` and `history_bound.records` here, and the on-change mirror `mirror.live_store_steps`, one per cycle that took its clone. A command whose store looked for writes a failed commit left staged, as a sync does before it reads its freshness and an import does before it writes, records `stranded_writes.commits`: one entry per commit it landed over them, with `stranded_writes.tables`, the tables they touched. Every automatic receive puts exactly one entry on `receive.outcomes`, whose `receive.decision` says how it ended, a skip included, with `receive.remote` (`""` before one was chosen) and `receive.error` (null when none). Every invocation records `git.cancels`: one entry per git run that its context ended, lit's own or one Dolt started. Each entry has `git.cancel.cause` (the context's error), `git.cancel.processes` (how many processes the cancel ended, git and what it started; `0` when git had already exited), `git.cancel.survivors` (how many of those were still running 5s after the kill; null when no count was taken), `git.cancel.kill_error` (null when the kill succeeded) and `git.cancel.output_cut` (whether git's output was still open 1s after the processes the cancel ended had exited or been counted as survivors, and lit stopped reading it). Every invocation also records `dolt.journal_warnings`: one entry per recoverable problem a store's journal reported when the invocation opened it, so a problem that outlasts the open, such as an index a read cannot repair, has an entry for each open. Each entry has `dolt.journal_warning.store` (the directory of the store's Dolt chunk store, such as a workspace's `.dolt/noms`, since one invocation can open several stores) and `dolt.journal_warning.error` (what the journal reported), such as a read that could not read the journal's index and read the whole journal instead (`a read-only journal open passed over its index and read the whole journal: ...`), or a journal whose tail does not parse (`invalid journal record length: ...`). A command reports these here and not on stderr, and it runs all the same. Every invocation also records `lock.waits` and `lock.holds`, described in [What a store lock records](#what-a-store-lock-records). A key's prefix names the command or part of lit that recorded it, not its map: `history_bound.window_error` is a fact, set once, and `history_bound.records` is an occurrence, one entry per push. |
 
-A command that records no counts or facts of its own writes only `git.lit_spawns` in `counts`, `{}` for `facts`, and only `"dolt.journal_warnings": []` and `"git.cancels": []` in `occurrences`.
+A command that records no counts or facts of its own writes only `git.lit_spawns` in `counts`, `{}` for `facts`, and only `"dolt.journal_warnings": []`, `"git.cancels": []`, `"lock.holds": []` and `"lock.waits": []` in `occurrences`.
 
 ## What `lit next` records
 
@@ -244,6 +246,49 @@ store once, when the worker ends, not the clones they push and fetch through.
 | --- | --- |
 | `store.chunk_store_bytes` | The chunk store's size in bytes, as the sum of its files' lengths; `null` when it could not be read. |
 | `store.chunk_store_bytes_error` | Why it could not be read, or `null`. A store with no chunk store at all is such a failure, never `0`. The command's own result is unchanged. |
+
+## What a store lock records
+
+A command that writes the store holds its Dolt lock (`LOCK`) for as long as
+its store is open, and a command that wants a lock another process holds
+waits for it. Every invocation records both, as occurrences.
+
+`lock.waits` has one entry for each time the command found a lock held and
+waited on it: Dolt's `LOCK`, or one of lit's own (`.links-workspace.lock`,
+`.links-bootstrap.lock`, `.links-commit-flock.lock` and the rest). A lock the
+command took without waiting has no entry.
+
+| Key | Meaning |
+| --- | --- |
+| `lock.wait.lock` | The lock's file name. |
+| `lock.wait.waited_ms` | How long the command kept finding the lock held: from its first attempt to the last poll that found the lock held. A wait that ended in `acquired` took the lock within one poll after. |
+| `lock.wait.progress_seen` | How many times the wait saw the holders in front of it make progress: each new holder taking the lock, and each heartbeat of a holder still working. A wait restarts its clock on each one, so a large number explains a long wait that ended in `acquired`. |
+| `lock.wait.outcome` | `acquired`; `stood_still`, when the holders in front showed no progress for the whole wait and the command failed with `workspace_busy`, naming them; `cancelled`, when the command's context ended first; or `failed`, when an attempt failed for another reason after the lock had been found held. |
+
+`lock.holds` has one entry for each time the command's write engine held
+`LOCK`: from the instant Dolt took it to the instant Dolt let it go. A command
+that only reads holds none.
+
+A hold is **routine** when the command makes a fixed number of changes,
+whatever its input: `lit new`, `lit update`, `lit comment add` and `rm`,
+`lit label add` and `rm`, `lit dep add` and `rm`, `lit parent set` and
+`clear`, `lit purge`, `lit verdict`, and the single-ticket transitions such as
+`lit start` and `lit done`. While a routine hold's engine is working, it
+writes a heartbeat that the commands waiting behind it read as progress, so
+they keep waiting however long a busy machine makes the hold. Every other
+write is a long hold and writes no heartbeat. A command waiting behind a long
+hold fails with `workspace_busy` once the hold shows no progress for the wait,
+naming the holder.
+
+| Key | Meaning |
+| --- | --- |
+| `lock.hold.lock` | `LOCK`. |
+| `lock.hold.routine` | Whether the hold was routine. |
+| `lock.hold.held_ms` | How long the command held `LOCK`. |
+| `lock.hold.executing_ms` | How much of that the store's engine was working: opening, running statements, holding a transaction open, closing. |
+| `lock.hold.longest_idle_ms` | The longest stretch the command held `LOCK` while its engine did no work. A routine hold sends no heartbeat in such a stretch, so a stretch as long as the wait fails the commands waiting behind it. |
+| `lock.hold.heartbeats` | How many times the hold announced itself: once when it took `LOCK`, and once per heartbeat after. |
+| `lock.hold.heartbeat_failures` | How many of those announcements could not be written. The first failure also prints a line on stderr. The command's own result is unchanged. |
 
 ## What checking the config records
 
