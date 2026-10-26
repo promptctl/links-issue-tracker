@@ -177,8 +177,9 @@ type RelationStore interface {
 	// issue may not be its own parent.
 	SetParent(ctx context.Context, in SetParentInput) (model.Relation, error)
 
-	// ClearParent detaches a child from its parent. Only a container can be
-	// detached (RejectDetachingALeaf). Clearing a container that has no parent
+	// ClearParent detaches a child from its parent. A missing id is
+	// NotFoundError, and only a container can be detached
+	// (RejectDetachingALeaf). Clearing a container that has no parent
 	// is RelationAbsentError: the state asked for already holds, so the request
 	// is satisfied, and a bare nil would report the removal of an edge that was
 	// never there. [LAW:no-silent-failure]
