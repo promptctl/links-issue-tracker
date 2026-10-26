@@ -206,7 +206,7 @@ type applyRefusingStore struct {
 	err error
 }
 
-func (s applyRefusingStore) Apply(context.Context, string, storage.Change) (storage.Applied, error) {
+func (s applyRefusingStore) Apply(context.Context, string, storage.ChangePlan) (storage.Applied, error) {
 	return storage.Applied{}, s.err
 }
 

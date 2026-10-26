@@ -413,7 +413,7 @@ INSERT INTO issues(
 ```
    Bound values in order: `issue.ID`, `issue.Title`, `issue.Description`, `nullableString(issue.Prompt)`, `issue.Plan`, `statusForStorage(issue)`, `issue.Priority`, `issue.IssueType`, `issue.Topic`, `issue.AssigneeValue()`, `issue.Rank`, `issue.Lane`, `nullableString(issue.FollowsUp)`, `issue.CreatedAt.Format(time.RFC3339Nano)`, `issue.UpdatedAt.Format(time.RFC3339Nano)`, `archivedCol`, `deletedCol`. `closed_at` is a literal `NULL`. Columns `resolution` and `redirect_target` are **not** in the insert list (left to their defaults). Failure → `fmt.Errorf("insert issue: %w", err)` (`store.go`).
 7. If `parentID != ""`: builds `model.Relation{SrcID: issue.ID, DstID: parentID, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: createdBy}` and routes it through `insertRelationTx` (`store.go`; `internal/store/relations.go`).
-8. `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy)` (`store.go`; `internal/store/labels.go`).
+8. `writeLabelsTx(ctx, tx, issue.ID, nil, issue.Labels, createdBy, now)` — every label is new, so each is inserted (`store.go`; `internal/store/labels.go`).
 9. Event: `createChanges := []model.FieldChange{}`; for **non-container** types appends `{Field:"status", From:"", To:"open"}`; containers get none (`store.go`). Then `s.recordEvent(ctx, tx, issue.ID, "created", "issue created", "links", createChanges)` (`store.go`) — action `"created"`, reason `"issue created"`, actor `"links"`.
 10. `smoothRanksIfNeededTx(ctx, tx, issue.Rank)` (`store.go`; `internal/store/ranking.go`).
 
@@ -655,10 +655,10 @@ The `c.field ASC` sort is deliberate so two reads of an unchanged event compare 
 
 ### 6. Update path
 
-#### 6.1 `Apply(ctx, id string, c storage.Change) (storage.Applied, error)`
+#### 6.1 `Apply(ctx, id string, plan storage.ChangePlan) (storage.Applied, error)`
 
 `store.go`, the single execution path for issue-record changes. Every step below runs under ONE `withCommitLock` hold, so no write lands between the plan's reads and its write; the reads run on `s.db` before the mutation's tx opens (the pool has one connection):
-1. `current, err := s.GetIssue(ctx, id)` — a not-found id fails here (`store.go`).
+1. `current, err := s.GetIssue(ctx, id)` — a not-found id fails here; then `c, err := plan.PlanChange(current)` decides the change on it, and a plan's refusal returns before any write (`store.go`).
 2. `planReadsHookForTest` fires here if set (`store.go`).
 3. `family := s.laneFamilyHistory(ctx, current.ID)`; `at := s.stamps.Stamp(s.clock, family)`; `history := eventsOf(current.ID, family)` (`store.go`).
 4. `actor := storage.Actor(c.Actor)` — trimmed; empty → `"unknown"` (`store.go`).
@@ -789,10 +789,10 @@ UPDATE issues SET
     WHERE id = ?
 ```
 bound `issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID`. Failure → `fmt.Errorf("update issue: %w", err)`. It is **unguarded** (no CAS) but touches no lifecycle column — `status`, `closed_at`, `resolution`, `redirect_target`, `archived_at`, `deleted_at` are all absent from the SET list (`store.go`).
-3. `if w.replaceLabels` → `s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor)` (`store.go`).
+3. `writeLabelsTx(ctx, tx, issue.ID, w.priorLabels, issue.Labels, w.actor, at)` — inserts the names the patch added and deletes the ones it removed; a set the patch left as it was moves no row (`store.go`).
 4. `if len(w.changes) > 0` → `insertEventTx(ctx, tx, event)` (`store.go`). A field-only update writes an event with a **NULL** `action` column (see §7).
 
-Evidence: a field plan taken against a stale snapshot lands its title change while a concurrently-applied close and archive both survive untouched (`store_test.go`); container↔leaf type changes are refused in both directions while a same-kind change (`task`→`bug`) succeeds (`store_test.go`); label replacement through `Apply` replaces the whole set (`store_test.go`).
+Evidence: a field plan taken against a stale snapshot lands its title change while a concurrently-applied close and archive both survive untouched (`store_test.go`); container↔leaf type changes are refused in both directions while a same-kind change (`task`→`bug`) succeeds (`store_test.go`); a label added and removed through `Apply` leaves the set the edits name (`store_test.go`).
 
 ---
 
@@ -951,7 +951,7 @@ Called on every write open (`store.go`) and by the bootstrap (`store.go`).
 | `s.migrate` | `migration_runner.go` | `store.go` |
 | `snapshotGuard` | `migrate_snapshot.go` | `store.go` |
 | `newIssueID` | `issue_ids.go` | `store.go` |
-| `canonicalizeLabels` / `replaceLabelsTx` | `labels.go` | `store.go` |
+| `canonicalizeLabels` / `writeLabelsTx` | `labels.go` | `store.go` |
 | `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` | `relations.go` | `store.go` |
 | `smoothRanksIfNeededTx` | `ranking.go` | `store.go` |
 | `deleteCommentTx` | `row_deletes.go` | `store.go` |
@@ -2620,67 +2620,45 @@ There is no ID parser or validator in this slice: lookups bind the id verbatim (
 - Contains a comma → `model.ValidationError{Message: "label cannot contain commas"}`.
 - No other characters are rejected; no length cap in code (the column is `VARCHAR(191)`, `migrations/00001_baseline.sql`).
 
-`store.normalizeLabel` is a pass-through wrapper — `internal/store/labels.go`.
-
 `canonicalizeLabels(labels)` — `internal/store/labels.go`: normalizes each (propagating the first error), de-duplicates on the normalized value keeping first occurrence, then `sort.Strings(out)`. Result is ascending-sorted, unique, lowercase.
 
-### 3.2 AddLabel
+### 3.2 The label verbs: `storage.AddLabel` / `storage.RemoveLabel`
 
-`Store.AddLabel(ctx, storage.AddLabelInput{IssueID, Name, CreatedBy})` — `internal/store/labels.go`:
-1. `s.GetIssue(ctx, in.IssueID)`; error returned as-is (a missing issue yields `storage.NotFoundError` from GetIssue).
-2. `normalizeLabel(in.Name)`; error returned.
-3. `createdBy := storage.Actor(in.CreatedBy)` — trimmed; empty → `"unknown"`.
-4. Inside `s.withMutation(ctx, "add label", ...)`:
-   ```sql
-   INSERT INTO labels(issue_id, label, created_at, created_by)
-   VALUES (?, ?, ?, ?)
-   ON DUPLICATE KEY UPDATE issue_id = issue_id
-   ```
-   bound with `in.IssueID`, normalized label, `time.Now().UTC().Format(time.RFC3339Nano)`, `createdBy` — `internal/store/labels.go`. The `ON DUPLICATE KEY UPDATE issue_id = issue_id` makes a re-add a no-op that preserves the original `created_at`/`created_by`. Error → `fmt.Errorf("insert label: %w", err)`.
-5. Returns `s.ListLabels(ctx, in.IssueID)` — the full label set after the add.
+The label set is an issue field, written only through `Apply`. `lit label add|rm` and `lit bulk label add|rm` call `Store.Apply(ctx, id, plan)` with a `storage.ChangePlan` — `internal/storage/issues.go`:
+- `storage.AddLabel{Name, Actor}.PlanChange(current)` states `Fields.Labels = current.Labels + Name`. `ApplyIssueFields` canonicalizes the set, so an invalid name is a `model.ValidationError`, and adding a label the issue already holds restates the set: no row, no event, no commit.
+- `storage.RemoveLabel{Name, Actor}.PlanChange(current)` normalizes `Name` and states the set without it. A name the issue does not hold → `storage.NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", current.ID, name)}`, rendering as `label "<issueID>/<label>" not found` (`internal/storage/errors.go`).
 
-### 3.3 RemoveLabel
+`apply` decides the plan on the issue it reads under the commit lock (`internal/store/store.go`), so the set is never computed from a read another writer has since moved. The write is `apply update`, and it records a `labels` field change (`From`/`To` are the comma-joined sets) by the plan's actor, so `lit history` lists it and `lit undo` reverts it. The caller reads the resulting set from `Applied.Issue.Labels`.
 
-`Store.RemoveLabel(ctx, issueID, labelName)` — `internal/store/labels.go`:
-1. `GetIssue` existence check; 2. `normalizeLabel(labelName)`.
-3. Inside `s.withMutation(ctx, "remove label"...)`: `deleteLabelTx(ctx, tx, labelKey{issueID, label})`, which runs `DELETE FROM labels WHERE issue_id = ? AND label = ?` — `internal/store/row_deletes.go`.
-4. `affected == 0` → `storage.NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, label)}`, rendering as `label "<issueID>/<label>" not found` (`internal/storage/errors.go`).
-5. Returns `s.ListLabels(ctx, issueID)`.
+### 3.3 writeLabelsTx
 
-Error-vs-not-found distinction: `execDelete` wraps a delete failure as `fmt.Errorf("delete %s: %w", subject, err)` and a `RowsAffected()` failure as `fmt.Errorf("delete %s: rows affected: %w", subject, err)`, where subject is `fmt.Sprintf("label %s:%s", key.issueID, key.name)` — `internal/store/row_deletes.go`. `TestRemoveLabelSurfacesGenuineRowsAffectedError` injects a driver whose `RowsAffected()` always fails and asserts the returned error is NOT a `storage.NotFoundError` and wraps the injected cause — `internal/store/relations_rows_affected_test.go`, fault harness.
+`writeLabelsTx(ctx, tx, issueID, before, after, author, at)` — `internal/store/labels.go` — moves an issue's label rows from one set to another:
+- each name only `before` holds: `deleteLabelTx(ctx, tx, labelKey{issueID, name})`, which runs `DELETE FROM labels WHERE issue_id = ? AND label = ?` — `internal/store/row_deletes.go`;
+- each name only `after` holds: `insertLabelTx` with `CreatedAt: at` and `CreatedBy: storage.Actor(author)` (trimmed; empty → `"unknown"`);
+- a name both hold keeps its row, `created_at`/`created_by` included.
 
-### 3.4 ReplaceLabels / replaceLabelsTx
+Callers: `applyFieldsTx` on every field write, from the patch's baseline set (`fieldWrite.priorLabels`) to the planned one, so a write that leaves the set as it was moves no row; and `CreateIssue`, from the empty set to `canonicalizeLabels(in.Labels)` — `internal/store/store.go`.
 
-`Store.ReplaceLabels(ctx, issueID, labels, createdBy)` — `internal/store/labels.go`: `GetIssue` check, `canonicalizeLabels`, then `s.withMutation(ctx, "replace labels"...)` calling `replaceLabelsTx`.
+Errors: `execDelete` wraps a delete failure as `fmt.Errorf("delete %s: %w", subject, err)` and a `RowsAffected()` failure as `fmt.Errorf("delete %s: rows affected: %w", subject, err)`, where subject is `fmt.Sprintf("label %s:%s", key.issueID, key.name)` — `internal/store/row_deletes.go`. `writeLabelsTx` ignores the affected count: the plan decided from the set it read under the commit lock that the row is present, and `RemoveLabel`'s NotFound comes from that set, never from the count.
 
-`replaceLabelsTx` — `internal/store/labels.go`:
-- `DELETE FROM labels WHERE issue_id = ?` — clears the whole set; error → `fmt.Errorf("clear labels: %w", err)`.
-- `author := storage.Actor(createdBy)` — trimmed; empty → `"unknown"`.
-- One `timestamp := time.Now().UTC().Format(time.RFC3339Nano)` shared by every inserted row.
-- Per label: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`; error → `fmt.Errorf("insert label %q: %w", label, err)`.
-- Consequence: replacing a set rewrites `created_at`/`created_by` for labels that survive the replace.
+### 3.5 Label read paths
 
-`replaceLabelsTx` is also the label writer during `CreateIssue` — `internal/store/store.go`, fed by `canonicalizeLabels(in.Labels)` at `internal/store/store.go`.
-
-### 3.5 ListLabels and other read paths
-
-- `Store.ListLabels` — `internal/store/labels.go`: `SELECT label FROM labels WHERE issue_id = ? ORDER BY label ASC`; query error → `fmt.Errorf("list labels: %w", err)`; scan errors returned bare; returns `nil` slice when there are no rows (the slice is never pre-allocated).
 - `loadLabelsByIssueIDs` — `internal/store/store.go`: one query, the ids joined as an `idSet` — `SELECT l.issue_id, l.label FROM <idSet> named JOIN labels l ON l.issue_id = named.id ORDER BY l.label ASC`; error → `fmt.Errorf("load labels by issue ids: %w", err)`.
 - `listAllLabels` — `internal/store/store.go`: `SELECT issue_id, label, created_at, created_by FROM labels ORDER BY issue_id ASC, label ASC`; error → `fmt.Errorf("list all labels: %w", err)`.
 - List filtering by label — `internal/store/store.go`: `filter.LabelsAll` is run through `canonicalizeLabels` and each label adds a conjunct `EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)` (AND semantics, one clause per label).
-- Import/restore insert: `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go`.
+- Insert (`insertLabelTx`, shared by `writeLabelsTx`, import/restore and the delta replay): `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)` with error `fmt.Errorf("insert label %s:%s: %w", label.IssueID, label.Name, err)` — `internal/store/import_export.go`.
 - Orphan check: `SELECT COUNT(*) FROM labels l LEFT JOIN issues i ON i.id = l.issue_id WHERE i.id IS NULL` — `internal/store/import_export.go`.
 - Delta replay uses `deleteLabelTx` + `insertLabelTx` keyed on `labelKey{issueID, name}` — `internal/store/export_delta.go`.
 
 ### 3.6 Uniqueness / cascade
 
-- Uniqueness is the `(issue_id, label)` primary key (`migrations/00001_baseline.sql`); `AddLabel` absorbs the duplicate via `ON DUPLICATE KEY UPDATE` (`internal/store/labels.go`), while `replaceLabelsTx`'s plain INSERT would surface a duplicate-key error — canonicalizeLabels' dedupe is what prevents that (`internal/store/labels.go`).
+- Uniqueness is the `(issue_id, label)` primary key (`migrations/00001_baseline.sql`). `writeLabelsTx` inserts only names the prior set lacks, from a canonical (deduped) set, so its plain INSERT never meets a duplicate (`internal/store/labels.go`).
 - Deleting an issue row removes its labels via `ON DELETE CASCADE` (`migrations/00001_baseline.sql`; noted at `internal/store/row_deletes.go`). Ordinary issue deletion is a soft `deleted_at` stamp, so no CRUD path triggers this cascade (`internal/store/row_deletes.go`).
 - There is no label rename operation anywhere in the Go source (no rename symbol under `internal/` touching labels).
 
 ### 3.7 Test-pinned label behavior
 
-`TestStoreLabelsAreWritableFirstClassData` — `internal/store/store_test.go`: creating with `Labels: []string{"Renderer", "gpu"}` yields `["gpu","renderer"]` (lowercased and sorted); `AddLabel("contracts")` returns 3 labels; `Apply` with `Labels: &[]string{"critical","renderer"}` replaces the set to exactly those two; `RemoveLabel("critical")` returns `["renderer"]`; the surviving label appears in `GetIssueDetail` and in export as `export.Labels[0].Name == "renderer"`.
+`TestStoreLabelsAreWritableFirstClassData` — `internal/store/store_test.go`: creating with `Labels: []string{"Renderer", "gpu"}` yields `["gpu","renderer"]` (lowercased and sorted); `Apply` with `storage.AddLabel{Name: "contracts"}` returns 3 labels; `Apply` with `Labels: &[]string{"critical","renderer"}` replaces the set to exactly those two; `Apply` with `storage.RemoveLabel{Name: "critical"}` returns `["renderer"]`; the surviving label appears in `GetIssueDetail` and in export as `export.Labels[0].Name == "renderer"`.
 
 ---
 
@@ -3136,8 +3114,8 @@ Test-pinned behavior in `internal/store/rank_repair_test.go`, against the pure r
 
 ## 6. Cross-cutting notes on these four subsystems
 
-- Every mutation in labels.go, relations.go and ranking.go runs through `s.withMutation(ctx, <label>, fn)` with labels: `"add label"`, `"remove label"`, `"replace labels"` (`internal/store/labels.go`), `"add relation"`, `"remove relation"`, `"set parent"`, `"clear parent"` (`internal/store/relations.go`), `"rank to top"`, `"rank set"`, `"rank to bottom"`, `"rank above"`, `"rank below"`, `"fix rank inversions"` (`internal/store/ranking.go`).
-- Author attribution defaults to the literal `"unknown"` in `AddLabel` (`internal/store/labels.go`), `replaceLabelsTx` (`internal/store/labels.go`), `AddRelation` (`internal/store/relations.go`) and `SetParent` (`internal/store/relations.go`). `CreateIssue` uses `createdBy := "links"` for both the parent edge and the initial labels (`internal/store/store.go`).
+- Every mutation in relations.go and ranking.go runs through `s.withMutation(ctx, <label>, fn)` with labels: `"add relation"`, `"remove relation"`, `"set parent"`, `"clear parent"` (`internal/store/relations.go`), `"rank to top"`, `"rank set"`, `"rank to bottom"`, `"rank above"`, `"rank below"`, `"fix rank inversions"` (`internal/store/ranking.go`).
+- Author attribution defaults to the literal `"unknown"` in `writeLabelsTx` (`internal/store/labels.go`), `AddRelation` (`internal/store/relations.go`) and `SetParent` (`internal/store/relations.go`). `CreateIssue` uses `createdBy := "links"` for both the parent edge and the initial labels (`internal/store/store.go`).
 - Every rank query filters `deleted_at IS NULL`, but they split on `item_rank != ''`: the `RankToTop`, `RankSet` and `RankToBottom` end queries and the creation placement queries include it (`internal/store/ranking.go`; `internal/store/store.go`); the `RankAbove`/`RankBelow` neighbor queries, the smoothing window, run and bound queries, and `loadRankOrder` do not (`internal/store/ranking.go`).
 
 
@@ -3612,7 +3590,7 @@ Value-by-value (`import_export.go`):
 
 Comments (`insertCommentTx`, `import_export.go`): `id, issue_id, body, created_at (RFC3339Nano), created_by` verbatim; error `"restore comment %s: %w"`.
 
-Labels (`insertLabelTx`, `import_export.go`): `issue_id, label(=Name), created_at (RFC3339Nano), created_by`; error `"restore label %s:%s: %w"` (issue id, name).
+Labels (`insertLabelTx`, `import_export.go`): `issue_id, label(=Name), created_at (RFC3339Nano), created_by`; error `"insert label %s:%s: %w"` (issue id, name).
 
 Events (`insertEventTx`, `import_export.go`):
 - `action` binds `nil` when `event.Action == ""`, else the string (`import_export.go`).
@@ -3989,7 +3967,7 @@ When the file states a parent on an update, `reparented %d issues` and `%d issue
 
 ## 7. Cross-cutting error-message index for this slice
 
-`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `restore label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
+`import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: %d`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `insert label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
 
 `import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
 
@@ -4330,7 +4308,7 @@ Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_delet
 
 ### 4.5 Callers and the affected-count decisions they make
 
-- `RemoveLabel` — `deleteLabelTx(... labelKey{issueID, name: label})`; `affected == 0` → `storage.NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, label)}` (`internal/store/labels.go`).
+- `writeLabelsTx` — `deleteLabelTx(... labelKey{issueID, name})` for each name the set drops; whether the label exists was decided by `storage.RemoveLabel`'s plan, so the count is not read (`internal/store/labels.go`).
 - `RemoveRelation` — endpoints canonicalized first via `relType.CanonicalEndpoints`; `affected == 0` → `storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}` (`internal/store/relations.go`).
 - `DeleteComment` — calls `deleteCommentTx` and **discards** the count (`internal/store/store.go`).
 - `Purge` — calls `deleteIssueTx` after proving the row exists in the same transaction, and **discards** the count (`internal/store/purge.go`).
@@ -4338,7 +4316,7 @@ Bind order for relations is `key.srcID, key.dstID, string(key.kind)` (`row_delet
 
 ### 4.6 Deletes deliberately NOT routed here
 
-Set-matching deletes are separate statements on purpose (`row_deletes.go`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), `replaceLabelsTx` (labels.go), and the self-edge sweep in import_export.go. Also outside: `writeWholeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues, purges` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go`) — nor `plan_reviews`, which cascades the same way — and `FixIntegrity`'s repairs (`import_export.go`).
+Set-matching deletes are separate statements on purpose (`row_deletes.go`): `setSingleValuedEdgeTx` (relations.go), `ClearParent` (relations.go), and the self-edge sweep in import_export.go. Also outside: `writeWholeExportTx`'s wholesale clear, which issues `DELETE FROM` for `labels, comments, relations, issues, purges` in that order and deliberately does not name `issue_events`/`issue_event_changes` because they cascade from issues (`internal/store/import_export.go`) — nor `plan_reviews`, which cascades the same way — and `FixIntegrity`'s repairs (`import_export.go`).
 
 ---
 

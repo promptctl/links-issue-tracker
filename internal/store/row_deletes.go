@@ -11,7 +11,7 @@ import (
 // The per-table row deletes, and the primary-key types that address them.
 //
 // They live apart from both of their callers on purpose. Two layers need them —
-// the commands (Purge, RemoveRelation, RemoveLabel, DeleteComment) and
+// the commands (Purge, RemoveRelation, a label set's move, DeleteComment) and
 // the reconcile replay's delta — and a primitive shared by two layers belongs
 // under both rather than inside whichever one happened to need it first.
 // Holding them in the diff layer would make the CRUD commands reach UP into it
@@ -69,15 +69,15 @@ type labelKey struct {
 // predicate — so they are separate statements on purpose, not strays that
 // escaped consolidation: setSingleValuedEdgeTx (relations.go, every edge of a
 // type from one source), ClearParent (relations.go, the parent edge by src and
-// type), replaceLabelsTx (labels.go, every label on an issue), and the
-// self-edge sweep in import_export.go. Consolidating those into a by-key helper
+// type), and the self-edge sweep in import_export.go. Consolidating those into a by-key helper
 // would mean looking up the rows first in order to delete them one at a time,
 // which is slower and no clearer. [LAW:single-enforcer] applies per operation,
 // not per table.
 //
 // They return the affected row count because the CRUD callers need it to tell
-// "removed" from "there was nothing there"; the delta ignores it, having
-// already decided from the diff that the row is present.
+// "removed" from "there was nothing there"; the delta and a label set's move
+// ignore it, each having already decided from what it read that the row is
+// present.
 
 // Deleting an issue takes its relations, comments, labels, events and event
 // changes with it — the schema's ON DELETE CASCADE — which is exactly what

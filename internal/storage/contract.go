@@ -98,11 +98,15 @@ type IssueWriter interface {
 	CreateIssue(ctx context.Context, in CreateIssueInput) (model.Issue, error)
 
 	// Apply is the single execution path for issue-record changes: the Change
-	// value carries all the variability, so there is no second mutation verb to
-	// drift from this one. A pure no-op records nothing — history reflects
+	// the plan decides carries all the variability, so there is no second
+	// mutation verb to drift from this one. The plan is decided on the issue as
+	// the write finds it, under the write's own hold, so a change derived from
+	// the issue's current state cannot be planned against a state another
+	// writer has since moved. A pure no-op records nothing — history reflects
 	// actual mutations — and an illegal transition is refused rather than
 	// silently ignored. [LAW:dataflow-not-control-flow]
-	Apply(ctx context.Context, id string, c Change) (Applied, error)
+	// [LAW:no-ambient-temporal-coupling]
+	Apply(ctx context.Context, id string, plan ChangePlan) (Applied, error)
 
 	// Purge permanently removes an issue: its row, comments, labels, history,
 	// and every edge to or from it, in one write, leaving a model.Purge record
@@ -129,21 +133,6 @@ type CommentStore interface {
 	// DeleteComment removes one comment and returns what was removed, so the
 	// deletion is reportable without a prior read.
 	DeleteComment(ctx context.Context, commentID string) (model.Comment, error)
-}
-
-// LabelStore maintains the label set attached to an issue.
-//
-// Every mutating method returns the issue's resulting label set rather than
-// nothing: the post-state is what a caller renders, and returning it here is
-// what keeps "what labels does it have now" from becoming a follow-up read
-// that a concurrent writer could answer differently.
-type LabelStore interface {
-	AddLabel(ctx context.Context, in AddLabelInput) ([]string, error)
-	RemoveLabel(ctx context.Context, issueID, labelName string) ([]string, error)
-	// ReplaceLabels sets the whole set at once — the authored-document path,
-	// where the file states the labels an issue has rather than a delta.
-	ReplaceLabels(ctx context.Context, issueID string, labels []string, createdBy string) error
-	ListLabels(ctx context.Context, issueID string) ([]string, error)
 }
 
 // RelationStore reads and writes the structural edges between issues,
@@ -300,7 +289,6 @@ type Store interface {
 	IssueWriter
 	CommentStore
 	PlanReviewStore
-	LabelStore
 	RelationStore
 	Ranker
 	BulkWriter

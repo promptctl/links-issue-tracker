@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // TestSyncReconcileDetectsUnrelatedHistories drives the ticket's acceptance: two
@@ -738,17 +739,17 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	// B's folded side: four data commits with distinct messages — plant the
-	// epic, create, update, add label — so each one is individually
+	// epic, create, update, add comment — so each one is individually
 	// identifiable on the spine.
 	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 	updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
-	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
+	addCommentLocal(t, ctx, rootB, localIssueID, "fold-comment")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add label"}
+	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add comment"}
 	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
 	res, err := syncB.SyncReconcileCombine(ctx, remoteName(t, "origin"), "master")
@@ -815,13 +816,13 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	localEpicID, localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
 	updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
-	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
+	addCommentLocal(t, ctx, rootB, localIssueID, "fold-comment")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add label"}
+	foldedMessages := []string{forkEpicCommitMessage, "create issue", "apply update", "add comment"}
 	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
@@ -896,19 +897,19 @@ func assertFoldedSpine(t *testing.T, spine []spineEntry, foldedMessages []string
 	}
 }
 
-// addLabelLocal adds a label to an issue and leaves it local (unpushed) — a
+// addCommentLocal comments on an issue and leaves it local (unpushed) — a
 // third distinct data-commit message for provenance fixtures.
-func addLabelLocal(t *testing.T, ctx context.Context, root, id, label string) {
+func addCommentLocal(t *testing.T, ctx context.Context, root, id, body string) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), root, "ws")
 	if err != nil {
-		t.Fatalf("Open(label %s): %v", root, err)
+		t.Fatalf("Open(comment %s): %v", root, err)
 	}
-	if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: id, Name: label, CreatedBy: "test"}); err != nil {
-		t.Fatalf("AddLabel(%s): %v", id, err)
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: id, Body: storagetest.CommentBody(t, body), CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddComment(%s): %v", id, err)
 	}
 	if err := st.Close(); err != nil {
-		t.Fatalf("Close(label): %v", err)
+		t.Fatalf("Close(comment): %v", err)
 	}
 }
 

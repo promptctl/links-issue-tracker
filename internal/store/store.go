@@ -719,7 +719,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 					return err
 				}
 			}
-			if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy, now); err != nil {
+			if err := writeLabelsTx(ctx, tx, issue.ID, nil, issue.Labels, createdBy, now); err != nil {
 				return err
 			}
 			// CreateIssue's "created" event records the initial status as a single
@@ -1346,11 +1346,12 @@ func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
 // status transition, so a combined update lands as one Dolt commit instead of
 // two. [LAW:decomposition] [LAW:effects-at-boundaries]
 type fieldWrite struct {
-	issue         model.Issue
-	replaceLabels bool
-	actor         string
-	reason        string
-	changes       []model.FieldChange
+	issue model.Issue
+	// priorLabels is the set the write moves the issue's label rows from.
+	priorLabels []string
+	actor       string
+	reason      string
+	changes     []model.FieldChange
 }
 
 // planFieldUpdate dresses the contract's field decision as this engine's write
@@ -1367,15 +1368,11 @@ func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor st
 	if err != nil {
 		return fieldWrite{}, err
 	}
-	// replaceLabels asks whether the label set MOVED, not whether the patch
-	// stated one: a restated set keeps its rows, authorship and timestamps
-	// included, since rewriting them would change who added a label with no
-	// change row to say so.
-	return fieldWrite{issue: issue, replaceLabels: !slices.Equal(baseline.Labels, issue.Labels), actor: actor, reason: in.Reason, changes: changes}, nil
+	return fieldWrite{issue: issue, priorLabels: baseline.Labels, actor: actor, reason: in.Reason, changes: changes}, nil
 }
 
 // applyFieldsTx writes a planned field mutation that moved at least one field
-// against tx: the issue UPDATE, the label replacement (when the set moved), and
+// against tx: the issue UPDATE, the label rows the set's move adds and drops, and
 // the change event. It owns only writes — every decision was made in planFieldUpdate — so
 // it composes into any transaction a caller already holds. [LAW:single-enforcer]
 // The UPDATE sets only the columns the field axis owns: the lifecycle columns
@@ -1391,10 +1388,10 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
-	if w.replaceLabels {
-		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor, at); err != nil {
-			return err
-		}
+	// [LAW:dataflow-not-control-flow] The label rows are always moved; a set
+	// the patch left as it was is a delta with nothing in it.
+	if err := writeLabelsTx(ctx, tx, issue.ID, w.priorLabels, issue.Labels, w.actor, at); err != nil {
+		return err
 	}
 	return insertEventTx(ctx, tx, event)
 }
@@ -1410,8 +1407,8 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 // history queries. The claimant is the (assignee, checkout) pair, never the assignee alone: two
 // checkouts of one identity taking a lane from each other move nothing on the row and everything on
 // the record.
-func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
-	applied, err := s.apply(ctx, id, c)
+func (s *Store) Apply(ctx context.Context, id string, plan storage.ChangePlan) (storage.Applied, error) {
+	c, applied, err := s.apply(ctx, id, plan)
 	if err != nil {
 		return storage.Applied{}, err
 	}
@@ -1455,8 +1452,9 @@ func (s *Store) deliver(heard []heardChange) {
 	}
 }
 
-// apply writes one change and tells no observer; Apply notifies.
-func (s *Store) apply(ctx context.Context, id string, c storage.Change) (storage.Applied, error) {
+// apply writes the change plan decides and tells no observer; Apply notifies
+// with the change it returns.
+func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (storage.Change, storage.Applied, error) {
 	// [LAW:no-ambient-temporal-coupling] The read, the stamp, the plan and the
 	// write share one commit-lock hold, so no write lands between what the plan
 	// read and what it writes: the holder a start takes the ticket from, the
@@ -1465,10 +1463,14 @@ func (s *Store) apply(ctx context.Context, id string, c storage.Change) (storage
 	// takes this lock, so under the hold the reads see exactly what the tx
 	// will. They run on s.db before the tx opens because the pool has one
 	// connection, which an open tx would hold.
+	var c storage.Change
 	var applied storage.Applied
 	if err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		current, err := s.GetIssue(ctx, id)
 		if err != nil {
+			return err
+		}
+		if c, err = plan.PlanChange(current); err != nil {
 			return err
 		}
 		if hook := s.planReadsHookForTest; hook != nil {
@@ -1542,9 +1544,9 @@ func (s *Store) apply(ctx context.Context, id string, c storage.Change) (storage
 		applied = storage.Applied{Issue: issue, Handover: handover, Fields: fw.changes}
 		return nil
 	}); err != nil {
-		return storage.Applied{}, err
+		return storage.Change{}, storage.Applied{}, err
 	}
-	return applied, nil
+	return c, applied, nil
 }
 
 // AddComment returns the commented-on issue alongside the comment: it already

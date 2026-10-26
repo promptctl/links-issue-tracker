@@ -167,7 +167,7 @@ func (d WriteDelta) Moves() []Move { return slices.Clone(d.moves) }
 // Classify decides what of one write an update document can put back. A field
 // is revertable only when the write recorded exactly the move the store shows:
 // a field that moved with no record of this write was written by something
-// that is not an edit (a restore, a reconcile, a label verb), and a record the
+// that is not an edit (a restore, a reconcile), and a record the
 // store disagrees with is a write a sync replay re-landed over a merged value.
 // Putting back the record's value would erase whatever the store's value came
 // from, so both are refused. [LAW:no-silent-failure]

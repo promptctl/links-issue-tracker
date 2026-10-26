@@ -518,7 +518,7 @@ func insertCommentTx(ctx context.Context, tx *sql.Tx, comment model.Comment) err
 func insertLabelTx(ctx context.Context, tx *sql.Tx, label model.Label) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`,
 		label.IssueID, label.Name, label.CreatedAt.Format(time.RFC3339Nano), label.CreatedBy); err != nil {
-		return fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)
+		return fmt.Errorf("insert label %s:%s: %w", label.IssueID, label.Name, err)
 	}
 	return nil
 }

@@ -58,7 +58,7 @@ func TestHydrationReadsCoverEveryID(t *testing.T) {
 		if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Close{Outcome: model.Wontfix{}}, Actor: "test", Reason: "hydration fixture"}); err != nil {
 			t.Fatalf("Apply(close child %d) error = %v", i, err)
 		}
-		if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: epic.ID, Name: label, CreatedBy: "test"}); err != nil {
+		if _, err := st.Apply(ctx, epic.ID, storage.AddLabel{Name: label, Actor: "test"}); err != nil {
 			t.Fatalf("AddLabel(epic %d) error = %v", i, err)
 		}
 		epics = append(epics, epic.ID)

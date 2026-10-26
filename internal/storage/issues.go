@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -174,6 +176,55 @@ func (r PurgeResult) EventRecord() map[string]int {
 
 func (c Change) IsEmpty() bool {
 	return c.Action == nil && c.Fields.IsEmpty()
+}
+
+// ChangePlan decides the Change to apply from the issue as the write finds
+// it. A Change is its own plan; a plan that reads the issue — the label verbs,
+// which state the set the issue holds with one name added or removed — is
+// decided under the write's hold, never from a read taken before it.
+// [LAW:no-ambient-temporal-coupling]
+type ChangePlan interface {
+	PlanChange(current model.Issue) (Change, error)
+}
+
+// PlanChange is c, whatever the issue holds.
+func (c Change) PlanChange(model.Issue) (Change, error) { return c, nil }
+
+// AddLabel is `lit label add`: the issue's label set with Name in it, written
+// as an edit of the labels field by Actor. Adding a label the issue already
+// holds restates the set, which records nothing.
+type AddLabel struct {
+	Name  string
+	Actor string
+}
+
+func (a AddLabel) PlanChange(current model.Issue) (Change, error) {
+	return labelsEdit(slices.Concat(current.Labels, []string{a.Name}), a.Actor), nil
+}
+
+// RemoveLabel is `lit label rm`: the issue's label set without Name, written as
+// an edit of the labels field by Actor. A label the issue does not hold is
+// NotFound — nothing was removed, and an empty edit would say otherwise.
+// [LAW:no-silent-failure]
+type RemoveLabel struct {
+	Name  string
+	Actor string
+}
+
+func (r RemoveLabel) PlanChange(current model.Issue) (Change, error) {
+	name, err := model.NormalizeLabel(r.Name)
+	if err != nil {
+		return Change{}, err
+	}
+	kept := slices.DeleteFunc(slices.Clone(current.Labels), func(label string) bool { return label == name })
+	if len(kept) == len(current.Labels) {
+		return Change{}, NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", current.ID, name)}
+	}
+	return labelsEdit(kept, r.Actor), nil
+}
+
+func labelsEdit(labels []string, actor string) Change {
+	return Change{Fields: UpdateIssueInput{Labels: &labels}, Actor: actor}
 }
 
 type SortSpec struct {

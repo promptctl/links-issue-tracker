@@ -355,8 +355,9 @@ A bulk command puts one entry on `bulk.items` for each issue in `--ids`, in the
 order given, whether the issue's change landed or failed. Each entry holds the
 facts and counts that issue's change recorded, so a `lit bulk start` entry
 carries the keys a `lit start` sets, a `lit bulk done` entry the keys a
-`lit done` sets, and a `lit bulk comment` entry the `comment.id` a
-`lit comment add` sets. Those keys never appear at the event's top level.
+`lit done` sets, a `lit bulk comment` entry the `comment.id` a
+`lit comment add` sets, and a `lit bulk label` entry the `label.changed` a
+`lit label add` or `rm` sets. Those keys never appear at the event's top level.
 
 | Key | Meaning |
 | --- | --- |
@@ -371,6 +372,12 @@ carries the keys a `lit start` sets, a `lit bulk done` entry the keys a
 | Key | Meaning |
 | --- | --- |
 | `comment.id` | The id of the comment the command wrote. A refused comment has none. |
+
+## What `lit label add` and `lit label rm` record
+
+| Key | Meaning |
+| --- | --- |
+| `label.changed` | `false` when the issue already held the label `lit label add` named, so nothing was recorded; `true` when the labels field moved. A refused edit, such as `lit label rm` of a label the issue does not hold, has none. |
 
 ## What `lit verdict` records
 

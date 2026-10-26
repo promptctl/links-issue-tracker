@@ -132,15 +132,11 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 	usage: "usage: lit bulk label <add|rm> ...",
 	subcommands: []subcommandRow[bulkLabelOp]{
 		{name: "add", payload: func(ctx context.Context, ap *app.App, issueID, label, actor string) error {
-			_, err := ap.Store.AddLabel(ctx, storage.AddLabelInput{
-				IssueID:   issueID,
-				Name:      label,
-				CreatedBy: actor,
-			})
+			_, err := applyLabelEdit(ctx, ap, issueID, storage.AddLabel{Name: label, Actor: actor})
 			return err
 		}},
-		{name: "rm", payload: func(ctx context.Context, ap *app.App, issueID, label, _ string) error {
-			_, err := ap.Store.RemoveLabel(ctx, issueID, label)
+		{name: "rm", payload: func(ctx context.Context, ap *app.App, issueID, label, actor string) error {
+			_, err := applyLabelEdit(ctx, ap, issueID, storage.RemoveLabel{Name: label, Actor: actor})
 			return err
 		}},
 	},

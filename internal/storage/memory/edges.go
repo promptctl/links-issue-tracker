@@ -73,83 +73,22 @@ func (e *Engine) commentsFor(issueID string) []model.Comment {
 
 // --- labels ---------------------------------------------------------------
 
-// AddLabel asks for a label to be present and reports the resulting set. Adding
-// one twice is that same end state rather than an error: the caller asked for
-// the label to be there, and it is — and the row keeps the authorship the
-// first add gave it.
-func (e *Engine) AddLabel(ctx context.Context, in storage.AddLabelInput) ([]string, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if _, err := e.mustRecord(in.IssueID); err != nil {
-		return nil, err
-	}
-	name, err := model.NormalizeLabel(in.Name)
-	if err != nil {
-		return nil, err
-	}
-	rows := e.labels[in.IssueID]
-	if !slices.ContainsFunc(rows, func(l model.Label) bool { return l.Name == name }) {
-		rows = append(rows, model.Label{IssueID: in.IssueID, Name: name, CreatedAt: e.clock.Now(), CreatedBy: storage.Actor(in.CreatedBy)})
-		slices.SortFunc(rows, func(a, b model.Label) int { return strings.Compare(a.Name, b.Name) })
-		e.labels[in.IssueID] = rows
-	}
-	return e.labelNames(in.IssueID), nil
-}
-
-// RemoveLabel drops one label and reports the resulting set. Removing what was
-// never there is not a silent success — nothing was removed, and saying
-// otherwise would be an answer-shaped void. [LAW:no-silent-failure]
-func (e *Engine) RemoveLabel(ctx context.Context, issueID, labelName string) ([]string, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if _, err := e.mustRecord(issueID); err != nil {
-		return nil, err
-	}
-	name, err := model.NormalizeLabel(labelName)
-	if err != nil {
-		return nil, err
-	}
-	rows := e.labels[issueID]
-	index := slices.IndexFunc(rows, func(l model.Label) bool { return l.Name == name })
-	if index < 0 {
-		return nil, storage.NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, name)}
-	}
-	e.labels[issueID] = slices.Delete(rows, index, index+1)
-	return e.labelNames(issueID), nil
-}
-
-// ReplaceLabels states the whole set at once — the authored-document path,
-// where the file says what labels an issue has rather than a delta.
-func (e *Engine) ReplaceLabels(ctx context.Context, issueID string, labels []string, createdBy string) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if _, err := e.mustRecord(issueID); err != nil {
-		return err
-	}
-	canonical, err := canonicalLabels(labels)
-	if err != nil {
-		return err
-	}
-	e.setLabels(issueID, canonical, e.clock.Now(), createdBy)
-	return nil
-}
-
-func (e *Engine) ListLabels(ctx context.Context, issueID string) ([]string, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.labelNames(issueID), nil
-}
-
-// setLabels writes a canonical label set, replacing whatever was there. It is
-// the one label write, shared by the create path and the replace path, so the
-// stored rows can only ever be the canonical form. [LAW:single-enforcer]
+// setLabels moves an issue's label rows to a canonical set: a name the issue
+// already holds keeps its row, and with it who added the label and when; a
+// new name gets a row authored by createdBy at now; a name the set leaves out
+// loses its row. It is the one label write, shared by the create path and the
+// field patch, so the stored rows can only ever be the canonical form, and a
+// write never re-authors a label it did not add. [LAW:single-enforcer]
 func (e *Engine) setLabels(issueID string, names []string, now time.Time, createdBy string) {
 	author := storage.Actor(createdBy)
+	held := e.labels[issueID]
 	rows := make([]model.Label, 0, len(names))
 	for _, name := range names {
+		index := slices.IndexFunc(held, func(l model.Label) bool { return l.Name == name })
+		if index >= 0 {
+			rows = append(rows, held[index])
+			continue
+		}
 		rows = append(rows, model.Label{IssueID: issueID, Name: name, CreatedAt: now, CreatedBy: author})
 	}
 	e.labels[issueID] = rows

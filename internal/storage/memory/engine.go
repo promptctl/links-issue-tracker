@@ -379,9 +379,7 @@ func (e *Engine) childRecords(parentID string, pos map[string]int) []*record {
 	return out
 }
 
-// labelNames returns an issue's label set, sorted by name — the whole set,
-// which is what every mutating label verb hands back so that "what does it
-// have now" is never a follow-up read.
+// labelNames returns an issue's label set, sorted by name.
 func (e *Engine) labelNames(issueID string) []string {
 	rows := e.labels[issueID]
 	names := make([]string, 0, len(rows))
