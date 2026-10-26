@@ -1046,6 +1046,10 @@ lit backup restore (--latest | --path <p>) [--force]
 
 Rotating JSON **data-export** backups (`--keep`, default 20) — the data-recovery
 family, wrapping `lit export`; distinct from the filesystem-level `lit snapshots`.
+A backup is named by its content, so the set holds each state once: backing up a
+state it already holds makes that backup the newest instead of adding a copy.
+`list` prints each backup's name, when it was taken, its size and its path, newest
+first.
 `restore` refuses to overwrite changes made since the last restore without
 `--force`, and is the one
 home for loading an export JSON. It replaces the whole workspace, so every ticket

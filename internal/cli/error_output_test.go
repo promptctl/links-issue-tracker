@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -179,6 +180,11 @@ func TestCommandErrorReason(t *testing.T) {
 		{
 			"workspace config busy",
 			fmt.Errorf("%w: another lit process held config.json's lock for over 5s; retry once it exits", workspace.ErrConfigBusy),
+			"workspace_busy",
+		},
+		{
+			"backups busy",
+			fmt.Errorf("%w: another lit process held .links-backups.lock for over 30s; retry once it exits", backup.ErrBusy),
 			"workspace_busy",
 		},
 		// The router's terminal answers are answers, not faults, and each names

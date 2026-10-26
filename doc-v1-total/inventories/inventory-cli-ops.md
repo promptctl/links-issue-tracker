@@ -783,13 +783,13 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 
 | Flag | Default | Effect | Line |
 |---|---|---|---|
-| `--keep` | `20` | "Snapshots to keep after rotation" | `backup.go` |
+| `--keep` | `backup.Budget` (20) | "Snapshots to keep after rotation" | `backup.go` |
 
-`ap.Store.Export(ctx)` → `backup.Create(StorageDir, export)` → `backup.Prune(StorageDir, keep)` → stdout `<name> <path>` (`backup.go`).
+`takeBackup` → `backup.Take(ctx, StorageDir, keep, ap.Store.Export)`, which reads the export, writes and prunes under the backups lock; event facts `backup.snapshot` = the name, `backup.refreshed` = whether the set already held that content, `backup.lock_wait_ms` = the wait for the backups lock and `backup.pruned` = how many snapshots the prune removed; a prune failure's error names the snapshot written → stdout `<name> <path>` whenever a snapshot was written, even beside that error (`backup.go`).
 
 ### 7.2 `lit backup list`
 
-`backupListLeaf` — `backup.go`. No flags. One line per snapshot: `<name> <size> <path>` (`backup.go`).
+`backupListLeaf` — `backup.go`. No flags. One line per snapshot: `<name> <created RFC3339> <size> <path>`, created being the file's mtime (`backup.go`).
 
 ### 7.3 `lit backup restore`
 
@@ -810,7 +810,7 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 1. Requires the `storage.Import` capability up front, before any read/write (`backup.go`).
 2. `syncfile.Read(path)`, `ap.Store.Export(ctx)`.
 3. **Overwrite refusal** (`guardRestore`, `backup.go`): the verdict is `forced` when `--force` is given (the digest is not read), `unrecorded` when `<StorageDir>/restore.digest` does not exist, else `unchanged` or `changed` as `syncfile.ContentHash` of the current export (canonical `MarshalIndent` + trailing newline with `exported_at` zeroed, lowercase hex) equals or differs from the recorded digest; `changed` returns `RestoreOverwriteError{}` → reason `restore_would_overwrite`, **exit 5**.
-4. Always takes a pre-restore backup: `backup.Create(StorageDir, localExport)` then `backup.Prune(StorageDir, 20)` — the 20 is hard-coded here (`backup.go`).
+4. Always takes a pre-restore backup through `takeBackup(ctx, ws, backup.Budget, …)` of `localExport`, the state the guard judged, the same helper and event facts as `backup create` (`backup.go`).
 5. `replacement := importer.ReplaceFromExport(ctx, targetExport)` — the tickets it removed (`Removed`, read inside the replace's transaction, so a write that landed after step 2's export is counted too) and, in `Landing`, the parent edges the restore cut because they closed a loop, the tickets it moved into an epic and the tickets it gave a rank key of their own (`04-store-operations.md`).
 6. Re-exports the store (`backup.go`).
 7. `writeMarkerAtomic(<StorageDir>/restore.digest, syncfile.ContentHash(restoredExport))` — a file in the clone's storage dir, not a store row, because the store syncs and the digest is of this clone's restore (`backup.go`).

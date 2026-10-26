@@ -253,8 +253,9 @@ types gets the reason of the earliest one:
     item landed — else `bulk_partial_failure`
 29. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-30. `errors.Is(err, store.ErrWorkspaceBusy)` or
-    `errors.Is(err, workspace.ErrConfigBusy)` → `workspace_busy`
+30. `errors.Is(err, store.ErrWorkspaceBusy)`,
+    `errors.Is(err, workspace.ErrConfigBusy)` or `errors.Is(err, backup.ErrBusy)`
+    → `workspace_busy`
 31. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
 32. anything else → `command_failed`
 

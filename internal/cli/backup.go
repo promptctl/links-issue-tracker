@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/backup"
@@ -16,6 +17,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -24,6 +26,7 @@ var backupFamily = commandFamily[appSubcommand]{
 	subcommands: []subcommandRow[appSubcommand]{
 		// create only reads the store: it exports issue data and writes the
 		// snapshot file outside the database, so a write lock is unnecessary.
+		// The backups set has its own lock, held by backup.Take.
 		{name: "create", payload: appSubcommand{access: app.AccessRead, declare: backupCreateLeaf}},
 		{name: "list", payload: appSubcommand{access: app.AccessRead, declare: backupListLeaf}},
 		{name: "restore", payload: appSubcommand{access: app.AccessWrite, declare: backupRestoreLeaf}},
@@ -32,22 +35,33 @@ var backupFamily = commandFamily[appSubcommand]{
 
 func backupCreateLeaf() appLeaf {
 	fs := newCobraFlagSet("backup create")
-	keep := fs.Int("keep", 20, "Snapshots to keep after rotation")
+	keep := fs.Int("keep", backup.Budget, "Snapshots to keep after rotation")
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		export, err := ap.Store.Export(ctx)
-		if err != nil {
-			return err
+		taken, err := takeBackup(ctx, ap.Workspace, *keep, func() (model.Export, error) { return ap.Store.Export(ctx) })
+		// A snapshot that was written is printed even beside a prune that
+		// failed after it, as `snapshots new` prints its own.
+		if taken != nil {
+			_, printErr := fmt.Fprintf(inv.Stdout, "%s %s\n", taken.Name, taken.Path)
+			err = errors.Join(err, printErr)
 		}
-		snapshot, err := backup.Create(ap.Workspace.StorageDir, export)
-		if err != nil {
-			return err
-		}
-		if err := backup.Prune(ap.Workspace.StorageDir, *keep); err != nil {
-			return err
-		}
-		_, err = fmt.Fprintf(inv.Stdout, "%s %s\n", snapshot.Name, snapshot.Path)
 		return err
 	}}
+}
+
+// takeBackup snapshots what read returns into the workspace's backups, then
+// prunes them to keep, through backup.Take, and puts what the take did on the
+// invocation's event, for `backup create` and a restore's pre-restore backup
+// alike. A nil Taken means nothing was written. [LAW:nothing-unseen]
+func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (model.Export, error)) (*backup.Taken, error) {
+	taken, err := backup.Take(ctx, ws.StorageDir, keep, read)
+	if taken == nil {
+		return nil, err
+	}
+	telemetry.Set(ctx, "backup.snapshot", taken.Name)
+	telemetry.Set(ctx, "backup.refreshed", taken.Refreshed)
+	telemetry.Set(ctx, "backup.lock_wait_ms", taken.Waited.Milliseconds())
+	telemetry.Set(ctx, "backup.pruned", taken.Pruned)
+	return taken, err
 }
 
 func backupListLeaf() appLeaf {
@@ -58,7 +72,7 @@ func backupListLeaf() appLeaf {
 			return err
 		}
 		for _, snapshot := range snapshots {
-			if _, err := fmt.Fprintf(inv.Stdout, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
+			if _, err := fmt.Fprintf(inv.Stdout, "%s %s %d %s\n", snapshot.Name, snapshot.Created.Format(time.RFC3339), snapshot.Size, snapshot.Path); err != nil {
 				return err
 			}
 		}
@@ -184,12 +198,16 @@ func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool
 	if outcome.guard == guardChanged {
 		return outcome, RestoreOverwriteError{}
 	}
-	snapshot, err := backup.Create(ap.Workspace.StorageDir, localExport)
-	if err != nil {
-		return outcome, err
+	// The pre-restore backup is of the state the guard judged, which is the
+	// state the replace below overwrites. Read before the backups lock, it is
+	// still the store's state: this command's write Store holds Dolt's LOCK
+	// from open to close, so no other writer commits in between (the lock
+	// discipline in the store package doc).
+	taken, err := takeBackup(ctx, ap.Workspace, backup.Budget, func() (model.Export, error) { return localExport, nil })
+	if taken != nil {
+		outcome.snapshot = taken.Path
 	}
-	outcome.snapshot = snapshot.Path
-	if err := backup.Prune(ap.Workspace.StorageDir, 20); err != nil {
+	if err != nil {
 		return outcome, err
 	}
 	replacement, err := importer.ReplaceFromExport(ctx, targetExport)

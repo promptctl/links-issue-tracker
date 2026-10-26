@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -372,9 +373,10 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 	if errors.As(err, &writeBlocked) {
 		return reasonWorkspaceWriteBlocked
 	}
-	// A store lock and the config lock are two locks with one answer: another
-	// lit process holds what this one needs, and a retry after it exits succeeds.
-	if errors.Is(err, store.ErrWorkspaceBusy) || errors.Is(err, workspace.ErrConfigBusy) {
+	// A store lock, the config lock and the backups lock are locks with one
+	// answer: another lit process holds what this one needs, and a retry after it
+	// exits succeeds.
+	if errors.Is(err, store.ErrWorkspaceBusy) || errors.Is(err, workspace.ErrConfigBusy) || errors.Is(err, backup.ErrBusy) {
 		return reasonWorkspaceBusy
 	}
 	if errors.Is(err, store.ErrTransientGCContention) {

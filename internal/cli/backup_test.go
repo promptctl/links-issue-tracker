@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -58,9 +60,9 @@ func TestResolveRestorePathCap(t *testing.T) {
 		dir := t.TempDir()
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: dir}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
-		snapshot, err := backup.Create(dir, export)
+		snapshot, err := backup.Take(context.Background(), dir, backup.Budget, func() (model.Export, error) { return export, nil })
 		if err != nil {
-			t.Fatalf("backup.Create() error = %v", err)
+			t.Fatalf("backup.Take() error = %v", err)
 		}
 		got, err := resolveRestorePath(ap, "", true)
 		if err != nil || got != snapshot.Path {
@@ -207,4 +209,71 @@ func TestARestoreDigestStaysInTheCloneThatRestored(t *testing.T) {
 	if check := restoreTraceRecord(t, adopted).Metadata["restore_guard"]; check != string(guardUnrecorded) {
 		t.Errorf("first restore in a clone that adopted a restored store restore_guard = %q, want %q", check, guardUnrecorded)
 	}
+}
+
+// Each `restore --latest` restores the previous restore's pre-restore backup,
+// so a run of them swings the workspace between two states. The backups hold
+// each state once, so the run takes no slot from the distinct backups made
+// before it.
+func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
+	repo := newInitTestRepo(t)
+	epic := newEpicInDir(t, repo, "Home")
+	for _, title := range []string{"one", "two", "three"} {
+		runCLIInDir(t, repo, "new", "--type", "task", "--title", title, "--topic", "demo", "--parent", epic)
+		if title != "three" {
+			runCLIInDir(t, repo, "backup", "create")
+		}
+	}
+	for range backup.Budget {
+		runCLIInDir(t, repo, "backup", "restore", "--latest")
+	}
+
+	var held []string
+	for _, line := range strings.Split(strings.TrimSpace(runCLIInDir(t, repo, "backup", "list")), "\n") {
+		fields := strings.Fields(line)
+		path := fields[len(fields)-1]
+		export, _, err := syncfile.Read(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var titles []string
+		for _, issue := range export.Issues {
+			titles = append(titles, issue.Title)
+		}
+		slices.Sort(titles)
+		held = append(held, strings.Join(titles, ","))
+	}
+	slices.Sort(held)
+	if want := []string{"Home,one", "Home,one,three,two", "Home,one,two"}; !slices.Equal(held, want) {
+		t.Errorf("backups hold %q, want each state once: %q", held, want)
+	}
+}
+
+// The snapshot a backup took, whether the set already held its content, how
+// long it waited for the set's lock and how many snapshots its prune removed
+// are on the event of `backup create` and of a restore alike.
+func TestBackupEventNamesTheSnapshotItTook(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	epic := newEpicInDir(t, repo, "Home")
+	name := strings.Fields(runCLIInDir(t, repo, "backup", "create"))[0]
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "false", "backup.pruned": "0"})
+	if wait, ok := writtenFacts(t, lastEvent(t))["backup.lock_wait_ms"].(float64); !ok || wait < 0 {
+		t.Errorf("backup create event backup.lock_wait_ms = %v, want a wait in milliseconds", wait)
+	}
+	runCLIInDir(t, repo, "backup", "create")
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true"})
+	runCLIInDir(t, repo, "backup", "restore", "--latest")
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true"})
+
+	runCLIInDir(t, repo, "new", "--type", "task", "--title", "Made since", "--topic", "demo", "--parent", epic)
+	runCLIInDir(t, repo, "backup", "restore", "--latest", "--force")
+	facts := writtenFacts(t, lastEvent(t))
+	if facts["backup.snapshot"] == name || facts["backup.refreshed"] != false {
+		t.Errorf("restore over a moved workspace event facts = %v, want a new snapshot, not refreshed", facts)
+	}
+	// The set now holds name and the moved state's snapshot; keeping one
+	// refreshes name and removes the other.
+	runCLIInDir(t, repo, "backup", "create", "--keep", "1")
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true", "backup.pruned": "1"})
 }
