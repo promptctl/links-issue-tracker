@@ -178,9 +178,9 @@ type RelationStore interface {
 	SetParent(ctx context.Context, in SetParentInput) (model.Relation, error)
 
 	// ClearParent detaches a child from its parent. Clearing a child that has
-	// no parent is NotFoundError, not a silent success: the caller asked to
-	// remove an edge, and reporting removal of an edge that was never there
-	// would be an answer-shaped void. [LAW:no-silent-failure]
+	// no parent is RelationAbsentError: the state asked for already holds, so
+	// the request is satisfied, and a bare nil would report the removal of an
+	// edge that was never there. [LAW:no-silent-failure]
 	ClearParent(ctx context.Context, childID string) error
 }
 
