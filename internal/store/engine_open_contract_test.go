@@ -170,7 +170,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 // write-open contention handling must NOT disturb: a read open beside a live
 // foreign writer serves reads — reading a store someone else is writing is
 // exactly what a read open is for. A read engine never tries the journal lock
-// (TestAReadOpenWritesNothing), so the holder is never in its way.
+// (TestAWriteOpensBesideAnOpenReader), so the holder is never in its way.
 func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -664,7 +664,7 @@ func renderHolderCommand(command string) string {
 //
 // [LAW:dataflow-not-control-flow] Every wait runs the same loop; what varies
 // is the lock's directory and its budget, both values. A holder that leaves
-// no name (a foreign dolt, a read engine) contributes no progress, so under
+// no name (a foreign dolt) contributes no progress, so under
 // it the rule is the plain elapsed budget it reduces to when there is nothing
 // to read.
 //

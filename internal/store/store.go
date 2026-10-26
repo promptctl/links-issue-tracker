@@ -469,8 +469,11 @@ func (s *Store) Close() error {
 // construction, not by whichever query happens to run first.
 //
 // A read engine opens Dolt read-only without trying the journal lock, so it
-// contributes no wait edge to the ordering, keeps no writer out, and writes
-// none of the store's files at open or close (TestAReadOpenWritesNothing).
+// contributes no wait edge to the ordering, keeps no writer out
+// (TestAWriteOpensBesideAnOpenReader), and writes nothing to the chunk store
+// under .dolt/noms at open or close (TestAReadOpenWritesNothing). Dolt's
+// environment load around the engine still keeps .dolt/temptf: it creates the
+// empty directory where one is missing and sweeps temp files older than a day.
 // Being read-only for the engine's lifetime costs a reader nothing, because a
 // read open never applies DDL — one that finds the schema trailing hands off
 // to Open (see OpenForRead).

@@ -204,7 +204,9 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 // captured holds no data, so it is never a rollback.
 //
 // The snapshot is read in place by a read engine, which opens Dolt read-only
-// and writes none of the snapshot's files, so reading it costs no copy.
+// and writes nothing to the snapshot's chunk store, so reading it costs no
+// copy. The one entry it adds is Dolt's empty .dolt/temptf directory, which a
+// snapshot omits and every engine open recreates.
 func snapshotWritable(ctx context.Context, env environ.Env, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
 	snap, err := openStoreConnection(ctx, env, snapshotPath, workspaceID, engineRead)
 	if err != nil {

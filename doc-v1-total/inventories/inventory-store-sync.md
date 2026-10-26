@@ -1045,7 +1045,7 @@ Tests: `TestPreGooseAdoptionStampsWithoutRerunningBaseline` (`migration_runner_t
 
 `searchRollbackSnapshot(ctx, maxSupported)` (`migrate_snapshot.go`) returns a `rollbackSearch{snapshot string; examined, unreadable int; err error}`. `dbsnapshot.List(s.doltRootDir)`; a listing error → `err: "list snapshots: %w"`. For each entry passing `IsMigrationSnapshotName`, newest first: `snapshotWritable`; then a canceled `ctx` → `"stopped looking for a rollback snapshot: %w"` ends the search, counting nothing for that entry; otherwise `examined++`, and an error → `unreadable++`, `"read the schema snapshot %s holds: %w"` kept, the entry passed over; the first writable entry is the `snapshot`. The kept errors are joined into `err`.
 
-`snapshotWritable(ctx, snapshotPath, workspaceID, maxSupported)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`: `phaseFresh` → false; otherwise `operability(ctx, appliedVersion, maxSupported).writable()`. The store is closed and a close error joined. The read engine writes none of the snapshot's files.
+`snapshotWritable(ctx, snapshotPath, workspaceID, maxSupported)` (`migrate_snapshot.go`): `openStoreConnection(ctx, snapshotPath, workspaceID, engineRead)` on the snapshot in place, then `classifyMigrationState`: `phaseFresh` → false; otherwise `operability(ctx, appliedVersion, maxSupported).writable()`. The store is closed and a close error joined. The read engine writes nothing to the snapshot's chunk store; it adds only the empty `.dolt/temptf` directory the snapshot omits.
 
 ### 8.13 Migration error types
 
