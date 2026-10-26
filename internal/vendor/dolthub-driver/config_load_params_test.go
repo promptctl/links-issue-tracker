@@ -30,7 +30,8 @@ import (
 // TestConfigDBLoadParamMapping pins how the Config knobs translate into the
 // engine's DBLoadParams: BackOff implies the cache bypass and fail-fast
 // (upstream behavior), the cache bypass is addressable without a BackOff, and
-// JournalReadOnly is the one lock param whatever else is set.
+// JournalReadOnly is the one lock param whatever else is set: a read-only open
+// never contends for the lock, so a BackOff beside it has nothing to retry.
 func TestConfigDBLoadParamMapping(t *testing.T) {
 	cases := []struct {
 		name              string
@@ -40,7 +41,7 @@ func TestConfigDBLoadParamMapping(t *testing.T) {
 		wantReadOnly      bool
 	}{
 		{"neither by default", func(*Config) {}, false, false, false},
-		{"backoff implies both", func(c *Config) {
+		{"backoff implies the cache bypass and fail-fast", func(c *Config) {
 			c.BackOff = backoff.WithMaxRetries(backoff.NewConstantBackOff(0), 1)
 		}, true, true, false},
 		{"cache disable alone", func(c *Config) { c.DisableSingletonCache = true }, true, false, false},
