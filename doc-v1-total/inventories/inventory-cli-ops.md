@@ -193,8 +193,8 @@ Output, one line:
 
 Family usage `usage: lit sync remote ls` (`sync.go`); only row is `ls` (`sync.go`).
 `syncRemoteLsLeaf` — `sync.go`. No flags. Output:
-`git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>`, then one line per refused name, sorted: `refused <name>: Dolt cannot hold this name; rename it (git remote rename) to sync with it` (`sync.go`).
-The counts are the sets of `planRemoteSync` (`sync.go`), the one plan `syncDoltRemotesFromGit` executes: sorted lists comparing git remotes (translated via `store.GitBackedRemoteURL`) to Dolt remotes, with a git remote `storage.ParseRemoteName` refuses listed as refused and never added. Reading the plan sets the event fact `remotes.refused`.
+`git=<n> dolt=<n> added=<n> updated=<n> removed=<n> refused=<n>`, then one line per refused remote, sorted by name: `refused: ` and the refusal (`storage.RefusedRemoteError`) (`sync.go`).
+The counts are the sets of `planRemoteSync` (`sync.go`), the one plan `syncDoltRemotesFromGit` executes: sorted lists comparing git remotes (translated via `store.GitBackedRemoteURL`) to Dolt remotes, with a git remote `workspace.GitRemote.SyncableRemote` refuses (by its name or its URL) listed as refused and never added. The event fact `remotes.refused` is set by the remote read itself (`workspace/remote_url.go`).
 
 ### 2.4 `lit sync fetch`
 

@@ -136,6 +136,8 @@ func TestRemoteListingReadsEveryLineShapeGitPrints(t *testing.T) {
 		"pushonly\thttps://h/p.git (push)\n" +
 		"spaced\t../my remote.git (fetch)\n" +
 		"spaced\t../my remote.git (push)\n" +
+		"thin\thttps://h/t.git (fetch) [blob:none]\n" +
+		"thin\thttps://h/t.git (push)\n" +
 		"zzz-empty\t\n"
 	listing, err := parseRemoteListing(out, root)
 	if err != nil {
@@ -145,8 +147,11 @@ func TestRemoteListingReadsEveryLineShapeGitPrints(t *testing.T) {
 	for _, remote := range listing.remotes {
 		names = append(names, remote.Name())
 	}
-	if !reflect.DeepEqual(names, []string{"origin", "spaced"}) {
-		t.Fatalf("remotes = %v, want [origin spaced]", names)
+	if !reflect.DeepEqual(names, []string{"origin", "spaced", "thin"}) {
+		t.Fatalf("remotes = %v, want [origin spaced thin]", names)
+	}
+	if got := listing.remotes[2].url.location; got != "https://h/t.git" {
+		t.Fatalf("partial clone's URL = %q, want it without the filter", got)
 	}
 	if got := listing.remotes[1].url.location; got != filepath.Join(root.path, "../my remote.git") {
 		t.Fatalf("spaced URL = %q, want the whole path joined", got)
@@ -227,8 +232,8 @@ func TestReadingTheRemotesRecordsWhatTheReadDecided(t *testing.T) {
 		t.Fatalf("List() = %v, want the four remotes with a fetch URL", list)
 	}
 	later := telemetry.Begin(telemetry.Event{})
-	if _, err := remotes.WithoutURL(telemetry.With(context.Background(), later)); err != nil {
-		t.Fatalf("WithoutURL() error = %v", err)
+	if _, err := remotes.List(telemetry.With(context.Background(), later)); err != nil {
+		t.Fatalf("a later List() error = %v", err)
 	}
 
 	facts := recorder.Finish(telemetry.End{}).Facts

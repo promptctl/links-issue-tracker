@@ -22,7 +22,8 @@ import (
 // relative remote URL is joined to it without touching the filesystem, and a
 // lexical join of a leading ".." gives the OS's answer only from a root with
 // no symlink left in it. The zero value names no checkout: a Remotes over it
-// fails every read, at gitStdout, before any URL is joined.
+// fails every read at gitStdout, and NewGitRemote panics on a URL it would
+// join to it.
 // [LAW:types-are-the-program]
 type CheckoutRoot struct {
 	path string
@@ -234,9 +235,10 @@ func gitRemotes(ctx context.Context, env environ.Env, root CheckoutRoot) (remote
 
 // parseRemoteListing reads each line of `git remote -v` by its shape:
 //
-//	name TAB url SP "(fetch)"   the remote's fetch URL, spaces and all
-//	name TAB url SP "(push)"    a push URL, which is not lit's
-//	name TAB                    a remote with no fetch URL
+//	name TAB url SP "(fetch)"            the remote's fetch URL, spaces and all
+//	name TAB url SP "(fetch)" SP [filter] the same, for a partial clone
+//	name TAB url SP "(push)"             a push URL, which is not lit's
+//	name TAB                             a remote with no fetch URL
 //
 // Any other line is an error naming it. [LAW:parse-dont-validate]
 func parseRemoteListing(out string, root CheckoutRoot) (remoteListing, error) {
@@ -252,7 +254,7 @@ func parseRemoteListing(out string, root CheckoutRoot) (remoteListing, error) {
 				urlless[name] = true
 				continue
 			}
-			if url, ok := strings.CutSuffix(rest, " (fetch)"); ok {
+			if url, ok := cutFetchScope(rest); ok {
 				fetchURL[name] = url
 				continue
 			}
@@ -271,6 +273,19 @@ func parseRemoteListing(out string, root CheckoutRoot) (remoteListing, error) {
 		}
 	}
 	return listing, nil
+}
+
+// cutFetchScope cuts the " (fetch)" scope off a fetch line's URL, and the
+// " [filter]" git prints after it for a partial clone's remote.
+func cutFetchScope(rest string) (string, bool) {
+	if url, ok := strings.CutSuffix(rest, " (fetch)"); ok {
+		return url, true
+	}
+	at := strings.LastIndex(rest, " (fetch) [")
+	if at < 0 || !strings.HasSuffix(rest, "]") {
+		return "", false
+	}
+	return rest[:at], true
 }
 
 // record sets the listing's facts on ctx's event: which relative paths became

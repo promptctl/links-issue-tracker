@@ -62,4 +62,3 @@ func checkoutRoot(t testing.TB, dir string) workspace.CheckoutRoot {
 	}
 	return root
 }
-

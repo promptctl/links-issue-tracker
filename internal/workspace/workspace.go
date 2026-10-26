@@ -276,18 +276,12 @@ func NewRemotes(env environ.Env, root CheckoutRoot) *Remotes {
 // Reread is a reader of the same checkout's remotes that asks git afresh.
 func (r *Remotes) Reread() *Remotes { return NewRemotes(r.env, r.root) }
 
-// List is the checkout's remotes that have a fetch URL, sorted by name.
+// List is the checkout's remotes that have a fetch URL, sorted by name. git
+// cannot fetch a remote with none (a pushurl-only remote, say), so it is left
+// out, and named on the event as remotes.without_url.
 func (r *Remotes) List(ctx context.Context) ([]GitRemote, error) {
 	listing, err := r.read(ctx)
 	return listing.remotes, err
-}
-
-// WithoutURL is the names of the remotes git lists with no fetch URL (a
-// pushurl-only remote, say), sorted: git cannot fetch them, so List leaves
-// them out.
-func (r *Remotes) WithoutURL(ctx context.Context) ([]string, error) {
-	listing, err := r.read(ctx)
-	return listing.withoutURL, err
 }
 
 // read is the listing, whose facts land on the event of the first reader that
