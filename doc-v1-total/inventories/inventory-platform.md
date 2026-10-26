@@ -439,14 +439,17 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
 
 - `Checkout{Stream, Path, Branch}` (`internal/workspace/checkouts.go`); `Branch` is empty
   for a detached HEAD (`internal/workspace/checkouts.go`).
-- `LiveCheckouts(cwd)` runs `git worktree list --porcelain -z` with
+- `LiveCheckouts(ws)` runs `git worktree list --porcelain -z` in `ws.RootDir` with
   `context.Background()` (`internal/workspace/checkouts.go`). Any failure produces a
   message that always names the **git ≥ 2.36** `-z` requirement
   (`internal/workspace/checkouts.go`), and deliberately does **not** route through
   `classifyGitError` (`internal/workspace/checkouts.go`).
 - Records are filtered by `uninhabited()` = `prunable || bare`
   (`internal/workspace/checkouts.go`).
-- For each remaining record: `checkoutGitDir(record.path)` — `os.Stat(<path>/.git)`; a directory
+- For each remaining record: `record.gitDir(ws.GitCommonDir)`. The main worktree (the first
+  record) is the common dir — git lists it at the git dir itself in a submodule or
+  `--separate-git-dir` clone, where no `.git` entry exists. A linked worktree's is
+  `checkoutGitDir(record.path)` — `os.Stat(<path>/.git)`; a directory
   is the private git dir; a regular file is a gitfile, read whole: it must begin `gitdir: `, the
   path is the rest with trailing `\r`/`\n` removed, relative to the path, else
   `gitfile %q does not name a git dir: …`; then `canonicalGitDir`; no git subprocess (failure ⇒
@@ -455,7 +458,7 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
   fails the whole enumeration (`internal/workspace/checkouts.go`).
 - Porcelain `-z` parser (`internal/workspace/checkouts.go`):
   - Fields are NUL-separated; each field is `Cut` on the **first space only**.
-  - `worktree <path>` opens a record; an empty field is a record terminator
+  - `worktree <path>` opens a record, the first one marked `main`; an empty field is a record terminator
     and is skipped.
   - An attribute field before any `worktree` field ⇒
     ``git worktree list --porcelain -z opened with %q, which is not a `worktree <path>` field``.

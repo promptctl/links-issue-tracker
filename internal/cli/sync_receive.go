@@ -698,7 +698,7 @@ func performSyncReceive(ctx context.Context, env environ.Env, ws workspace.Info,
 		// target was resolved there; the live store's is reconciled here, so
 		// a re-pointed git remote reaches it without an explicit sync command.
 		// Local only: git's remote config and the store's remote table.
-		if _, err := syncDoltRemotesFromGit(ctx, env, session, ws); err != nil {
+		if err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 			stopAt(receiveStepLiveRemotes, fmt.Errorf("reconcile the live store's remotes from git: %w", err))
 		}
 	}

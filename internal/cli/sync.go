@@ -200,7 +200,7 @@ func syncRemoteLsLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync remote ls")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := readSyncRemoteState(ctx, inv.Env, session, ws)
+		syncState, err := readSyncRemoteState(ctx, session, ws)
 		if err != nil {
 			return err
 		}
@@ -234,7 +234,7 @@ func syncFetchLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		if _, err := syncDoltRemotesFromGit(ctx, inv.Env, session, ws); err != nil {
+		if err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 			// A could-not-attempt failure (git-remote reconciliation itself failed,
 			// before any fetch was even tried) is still a decision this command
 			// reached — trace it, matching the coverage recordMirrorTraceError/
@@ -793,7 +793,7 @@ func syncStatusLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync status")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		syncState, err := readSyncRemoteState(ctx, inv.Env, session, ws)
+		syncState, err := readSyncRemoteState(ctx, session, ws)
 		if err != nil {
 			return err
 		}
@@ -916,7 +916,7 @@ func (t syncTarget) traceMetadata() map[string]string {
 // cancels here rather than outliving the interrupt until the grace-timer
 // hard-exit. [LAW:no-ambient-temporal-coupling]
 func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
-	if _, err := syncDoltRemotesFromGit(ctx, env, session, ws); err != nil {
+	if err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 		return syncTarget{}, err
 	}
 	remoteName, ok, err := workspaceSyncRemote(ws, requestedRemote)
@@ -1076,7 +1076,7 @@ type remoteSyncState struct {
 	plan        remoteSyncPlan
 }
 
-func readSyncRemoteState(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info) (remoteSyncState, error) {
+func readSyncRemoteState(ctx context.Context, session syncSession, ws workspace.Info) (remoteSyncState, error) {
 	gitRemotes, err := ws.Remotes.List()
 	if err != nil {
 		return remoteSyncState{}, err
@@ -1094,10 +1094,10 @@ func readSyncRemoteState(ctx context.Context, env environ.Env, session syncSessi
 	}, nil
 }
 
-func syncDoltRemotesFromGit(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info) (remoteSyncState, error) {
-	state, err := readSyncRemoteState(ctx, env, session, ws)
+func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspace.Info) error {
+	state, err := readSyncRemoteState(ctx, session, ws)
 	if err != nil {
-		return remoteSyncState{}, err
+		return err
 	}
 	// Removals run first. A removal takes its refs with it only while their
 	// owner names no other Dolt remote (store.SyncRemoveRemote), so a remote
@@ -1107,24 +1107,20 @@ func syncDoltRemotesFromGit(ctx context.Context, env environ.Env, session syncSe
 	// again from what Dolt then holds. [LAW:no-ambient-temporal-coupling]
 	for _, name := range state.plan.remove {
 		if err := session.syncer.SyncRemoveRemote(ctx, name); err != nil {
-			return remoteSyncState{}, err
+			return err
 		}
 	}
 	for _, remote := range state.plan.update {
 		if err := session.syncer.SyncSetRemoteURL(ctx, remote.name, remote.url); err != nil {
-			return remoteSyncState{}, err
+			return err
 		}
 	}
 	for _, remote := range state.plan.add {
 		if err := session.syncer.SyncAddRemote(ctx, remote.name, remote.url); err != nil {
-			return remoteSyncState{}, err
+			return err
 		}
 	}
-	state.doltRemotes, err = session.syncer.SyncListRemotes(ctx)
-	if err != nil {
-		return remoteSyncState{}, err
-	}
-	return state, nil
+	return nil
 }
 
 func planRemoteSync(gitRemotes []workspace.GitRemote, doltRemotes []storage.SyncRemote) remoteSyncPlan {

@@ -180,10 +180,24 @@ func TestResolveAndTheEnumerationAgreeOnEveryCheckoutsIdentity(t *testing.T) {
 	linkedOfNewline := filepath.Join(t.TempDir(), "of-newline")
 	run(t, newlinePrimary, "git", "worktree", "add", "-b", "of-newline", linkedOfNewline)
 
-	agree := func(t *testing.T, enumerateFrom string, checkout string) {
+	// In both layouts below git lists the main worktree at its git dir, which
+	// holds no `.git` entry: the enumeration finds the identity there anyway.
+	separate := filepath.Join(t.TempDir(), "separate")
+	separateGitDir := filepath.Join(t.TempDir(), "separate.git")
+	run(t, filepath.Dir(separate), "git", "init", "--separate-git-dir="+separateGitDir, separate)
+	run(t, separate, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	linkedOfSeparate := filepath.Join(t.TempDir(), "of-separate")
+	run(t, separate, "git", "worktree", "add", "-b", "of-separate", linkedOfSeparate)
+
+	super := litRepoWithCommit(t)
+	run(t, super, "git", "-c", "protocol.file.allow=always", "submodule", "add", primary, "sub")
+	submodule := filepath.Join(super, "sub")
+	submoduleGitDir := filepath.Join(super, ".git", "modules", "sub")
+
+	agree := func(t *testing.T, enumerateFrom string, checkout string, listedAt string) {
 		t.Helper()
 		token := tokenOf(t, checkout)
-		checkouts, err := LiveCheckouts(testEnv(), enumerateFrom)
+		checkouts, err := LiveCheckouts(testEnv(), resolved(t, enumerateFrom))
 		if err != nil {
 			t.Fatalf("LiveCheckouts(%q) error = %v", enumerateFrom, err)
 		}
@@ -191,19 +205,23 @@ func TestResolveAndTheEnumerationAgreeOnEveryCheckoutsIdentity(t *testing.T) {
 		if at < 0 {
 			t.Fatalf("token %q that Resolve gave %q is not in the enumeration %+v", token, checkout, checkouts)
 		}
-		if got, want := physicalPath(t, checkouts[at].Path), physicalPath(t, checkout); got != want {
-			t.Fatalf("token %q is enumerated at %q, want the checkout that minted it, %q", token, got, want)
+		if got, want := physicalPath(t, checkouts[at].Path), physicalPath(t, listedAt); got != want {
+			t.Fatalf("token %q is enumerated at %q, want where git lists the checkout that minted it, %q", token, got, want)
 		}
 	}
-	for _, tc := range []struct{ name, from, checkout string }{
-		{"the primary clone", linked, primary},
-		{"a linked worktree", primary, linked},
-		{"a relative-path worktree", primary, relative},
-		{"a linked worktree at a path with a newline", primary, newlineLinked},
-		{"a primary clone at a path with a newline", linkedOfNewline, newlinePrimary},
-		{"a linked worktree of a primary clone at a path with a newline", newlinePrimary, linkedOfNewline},
+	for _, tc := range []struct{ name, from, checkout, listedAt string }{
+		{"the primary clone", linked, primary, primary},
+		{"a linked worktree", primary, linked, linked},
+		{"a relative-path worktree", primary, relative, relative},
+		{"a linked worktree at a path with a newline", primary, newlineLinked, newlineLinked},
+		{"a primary clone at a path with a newline", linkedOfNewline, newlinePrimary, newlinePrimary},
+		{"a linked worktree of a primary clone at a path with a newline", newlinePrimary, linkedOfNewline, linkedOfNewline},
+		{"a --separate-git-dir clone", separate, separate, separateGitDir},
+		{"a --separate-git-dir clone, from its linked worktree", linkedOfSeparate, separate, separateGitDir},
+		{"a linked worktree of a --separate-git-dir clone", separate, linkedOfSeparate, linkedOfSeparate},
+		{"a submodule", submodule, submodule, submoduleGitDir},
 	} {
-		t.Run(tc.name, func(t *testing.T) { agree(t, tc.from, tc.checkout) })
+		t.Run(tc.name, func(t *testing.T) { agree(t, tc.from, tc.checkout, tc.listedAt) })
 	}
 	// A git hook runs with GIT_DIR set to its own checkout's git dir; lit run
 	// from the hook is that checkout, with the identity it has anywhere else.
@@ -213,7 +231,7 @@ func TestResolveAndTheEnumerationAgreeOnEveryCheckoutsIdentity(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("GIT_DIR", info.PrivateGitDir)
-		agree(t, linked, linked)
+		agree(t, linked, linked, linked)
 		underHook, err := Resolve(testEnv(), linked)
 		if err != nil || underHook.PrivateGitDir != info.PrivateGitDir {
 			t.Fatalf("Resolve under GIT_DIR = %q, %v; want %q", underHook.PrivateGitDir, err, info.PrivateGitDir)
@@ -238,13 +256,14 @@ func TestResolveAndTheEnumerationEachSpawnOneGit(t *testing.T) {
 		run(t, primary, "git", "worktree", "add", "-b", name, filepath.Join(t.TempDir(), name))
 	}
 	env := testEnv()
-	if _, err := Resolve(env, primary); err != nil {
+	info, err := Resolve(env, primary)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got := env.GitSpawns(); got != 1 {
 		t.Fatalf("Resolve spawned %d git, want 1", got)
 	}
-	if _, err := LiveCheckouts(env, primary); err != nil {
+	if _, err := LiveCheckouts(env, info); err != nil {
 		t.Fatal(err)
 	}
 	if got := env.GitSpawns(); got != 2 {

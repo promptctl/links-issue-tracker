@@ -30,7 +30,7 @@ import (
 // error: this reports what it proved, or it reports that it proved nothing.
 // [LAW:no-silent-failure]
 func (a *App) LocalCheckouts(env environ.Env) (claims.LocalCheckouts, error) {
-	checkouts, err := workspace.LiveCheckouts(env, a.Workspace.RootDir)
+	checkouts, err := workspace.LiveCheckouts(env, a.Workspace)
 	if err != nil {
 		return claims.LocalCheckouts{}, err
 	}

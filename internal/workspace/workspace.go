@@ -545,7 +545,7 @@ func anchorGitPath(base string, gitPath string) string {
 // Git owns which directory belongs to which checkout; lit reads git's own record
 // of it and keeps no worktree registry.
 //
-// It is how LiveCheckouts finds every live checkout's identity without a git
+// It is how LiveCheckouts finds every linked worktree's identity without a git
 // subprocess per worktree, and it reads only what git wrote at each root: a
 // GIT_DIR a git hook exported answers rev-parse in every directory, and would
 // lend the hook's checkout's directory to every checkout asked about. Resolve

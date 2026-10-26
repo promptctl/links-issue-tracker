@@ -132,7 +132,7 @@ Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sy
   4. `workspace.RemoteHasRefs` error → `failed`; false → `remote_empty` (`init_sync.go`).
   5. `resolveSyncBranch` error → `failed` (`init_sync.go`).
   6. `workspace.RemoteHasDoltData` (checks `refs/dolt/*`) error → `failed`; false → `no_remote_data` (`init_sync.go`).
-  8. `gitBackedURLForRemote` empty → `failed` with `"remote %q carries lit data but its git URL could not be resolved for clone"` (`init_sync.go`).
+  7. `gitBackedURLForRemote` empty → `failed` with `"remote %q carries lit data but its git URL could not be resolved for clone"` (`init_sync.go`).
 - When a plan exists: progress `init: remote <remote>/<branch> carries lit data (refs/dolt/*); downloading the backlog now` (`init_sync.go`), then `store.AdoptRemoteByClone(ctx, DatabasePath, WorkspaceID, remote, url, branch)` (`init_sync.go`). A clone failure returns `initSyncFailed` with ``"remote %q carries lit ticket data (refs/dolt/*) but adopting it did not complete, so the local store is not usable yet… Retry `lit init`; underlying error: %v"`` (`init_sync.go`).
 - Benign terminals also emit one progress line plus the build note (`init_sync.go`), text from `remoteSituationLine` (`init_sync.go`):
   - `has_local_tickets` → "local store already holds tickets; leaving it untouched (ongoing sync handles updates)"
@@ -363,7 +363,7 @@ Trace reasons for the explicit commands (`reconcileCommandReasonForState`, `sync
 
 `knownSyncBranch` — `sync_branch.go` (doctor's freshness and the read banner, through `freshnessSyncTarget`: `workspaceSyncRemote` with no request, which is `resolveSyncRemote("", ws.Remotes.Upstream(), ws.Remotes.List())`, the same reading every sync verb, `askRemote`, `provePushedAdvertisement`, init's adopt and `lastTargetFetch` make, then this for a non-empty remote; and `lit sync fetch`'s follow): the same override and `LocalRemoteHead`, then the recorded advertised branch; never asks the remote. None known → `syncBranchNotKnownError`: `default branch of remote %q is not known on this machine: git names none in refs/remotes/%s/HEAD and no sync here has learned it from the remote; the next sync that reaches the remote learns it`, When the record exists but will not read, the error carries the same text with the read error appended, and it is not a `syncBranchNotKnownError`. A record that will not read is ignored when the override or the ref answers.
 
-`syncDoltRemotesFromGit` — `sync.go`: for every git remote, adds a Dolt remote (`store.GitBackedRemoteURL(url)`) when missing, or removes+re-adds when the URL differs; removes any Dolt remote with no matching git remote; re-lists at the end.
+`syncDoltRemotesFromGit` — `sync.go`: for every git remote, adds a Dolt remote (`store.GitBackedRemoteURL(url)`) when missing, or removes+re-adds when the URL differs; removes any Dolt remote with no matching git remote.
 
 ---
 

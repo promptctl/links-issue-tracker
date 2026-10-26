@@ -24,11 +24,22 @@ func tokenOf(t *testing.T, worktree string) string {
 	return id.Value()
 }
 
+// resolved is the workspace Info of the checkout at path, the value every
+// enumeration starts from.
+func resolved(t *testing.T, path string) Info {
+	t.Helper()
+	info, err := Resolve(testEnv(), path)
+	if err != nil {
+		t.Fatalf("Resolve(%q) error = %v", path, err)
+	}
+	return info
+}
+
 // liveTokens is the enumeration reduced to the only thing the claim predicate
 // compares: the set of tokens belonging to checkouts that still exist.
 func liveTokens(t *testing.T, cwd string) []string {
 	t.Helper()
-	checkouts, err := LiveCheckouts(testEnv(), cwd)
+	checkouts, err := LiveCheckouts(testEnv(), resolved(t, cwd))
 	if err != nil {
 		t.Fatalf("LiveCheckouts(%q) error = %v", cwd, err)
 	}
@@ -60,7 +71,7 @@ func TestLiveCheckoutsPairsEveryWorktreeWithItsOwnToken(t *testing.T) {
 	primaryToken := tokenOf(t, primary)
 	mutatedToken := tokenOf(t, mutated)
 
-	checkouts, err := LiveCheckouts(testEnv(), primary)
+	checkouts, err := LiveCheckouts(testEnv(), resolved(t, primary))
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -92,7 +103,7 @@ func TestLiveCheckoutsCarriesTheAddress(t *testing.T) {
 	run(t, primary, "git", "worktree", "add", "-b", "side-quest", onBranch)
 	run(t, primary, "git", "worktree", "add", "--detach", detached)
 
-	checkouts, err := LiveCheckouts(testEnv(), primary)
+	checkouts, err := LiveCheckouts(testEnv(), resolved(t, primary))
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -142,7 +153,7 @@ func TestLiveCheckoutsReportsTheLock(t *testing.T) {
 	run(t, primary, "git", "worktree", "add", open)
 	run(t, primary, "git", "worktree", "lock", held)
 
-	checkouts, err := LiveCheckouts(testEnv(), primary)
+	checkouts, err := LiveCheckouts(testEnv(), resolved(t, primary))
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -247,7 +258,7 @@ func TestLockedWorktreeIsNeverDeclaredDead(t *testing.T) {
 		t.Fatalf("RemoveAll(%q) error = %v", unplugged, err)
 	}
 
-	_, err := LiveCheckouts(testEnv(), primary)
+	_, err := LiveCheckouts(testEnv(), resolved(t, primary))
 	if err == nil {
 		t.Fatal("a checkout git lists as live but whose identity cannot be read must fail the enumeration, not be dropped from it")
 	}
@@ -277,7 +288,7 @@ func TestDamagedIdentityInAnotherCheckoutFailsLoudly(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	if _, err := LiveCheckouts(testEnv(), primary); err == nil {
+	if _, err := LiveCheckouts(testEnv(), resolved(t, primary)); err == nil {
 		t.Fatal("a checkout whose identity file is damaged must fail the enumeration, not be counted as having none")
 	} else if !strings.Contains(err.Error(), "malformed") {
 		t.Fatalf("LiveCheckouts() error = %q, want the malformed-token diagnosis", err)
@@ -296,7 +307,7 @@ func TestBareRepositoryContributesNoCheckout(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	run(t, bare, "git", "worktree", "add", linked)
 
-	checkouts, err := LiveCheckouts(testEnv(), linked)
+	checkouts, err := LiveCheckouts(testEnv(), resolved(t, linked))
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -341,7 +352,7 @@ func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 		t.Fatalf("token %q of a live worktree at %q is missing from %v — its path's tail was read as an attribute and the checkout was silently dropped", token, awkward, live)
 	}
 
-	checkouts, err := LiveCheckouts(testEnv(), primary)
+	checkouts, err := LiveCheckouts(testEnv(), resolved(t, primary))
 	if err != nil {
 		t.Fatalf("LiveCheckouts() error = %v", err)
 	}
@@ -374,7 +385,7 @@ func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 // way here would take a failed enumeration for an empty one — and an empty
 // enumeration is this machine declaring every checkout of the workspace deleted.
 func TestFailedEnumerationIsNeverTheNotARepoSentinel(t *testing.T) {
-	_, err := LiveCheckouts(testEnv(), t.TempDir())
+	_, err := LiveCheckouts(testEnv(), Info{RootDir: t.TempDir()})
 	if err == nil {
 		t.Fatal("enumerating outside a repository must fail")
 	}
@@ -395,22 +406,22 @@ func TestParseWorktreeListReadsEveryDocumentedShape(t *testing.T) {
 		{
 			name:   "a branch ref renders short",
 			output: "worktree /w\x00HEAD abc\x00branch refs/heads/feature/nested\x00\x00",
-			want:   []worktreeRecord{{path: "/w", branch: "feature/nested"}},
+			want:   []worktreeRecord{{path: "/w", main: true, branch: "feature/nested"}},
 		},
 		{
 			name:   "detached leaves no branch",
 			output: "worktree /w\x00HEAD abc\x00detached\x00\x00",
-			want:   []worktreeRecord{{path: "/w"}},
+			want:   []worktreeRecord{{path: "/w", main: true}},
 		},
 		{
 			name:   "prunable with a reason",
 			output: "worktree /w\x00HEAD abc\x00branch refs/heads/gone\x00prunable gitdir file points to non-existent location\x00\x00",
-			want:   []worktreeRecord{{path: "/w", branch: "gone", prunable: true}},
+			want:   []worktreeRecord{{path: "/w", main: true, branch: "gone", prunable: true}},
 		},
 		{
 			name:   "prunable with no reason",
 			output: "worktree /w\x00HEAD abc\x00prunable\x00\x00",
-			want:   []worktreeRecord{{path: "/w", prunable: true}},
+			want:   []worktreeRecord{{path: "/w", main: true, prunable: true}},
 		},
 		{
 			// Two facts, and the record carries both separately. `locked` is
@@ -419,27 +430,27 @@ func TestParseWorktreeListReadsEveryDocumentedShape(t *testing.T) {
 			// and stays git's call.
 			name:   "locked is recorded and is still not prunable",
 			output: "worktree /w\x00HEAD abc\x00branch refs/heads/held\x00locked on a usb stick\x00\x00",
-			want:   []worktreeRecord{{path: "/w", branch: "held", locked: true}},
+			want:   []worktreeRecord{{path: "/w", main: true, branch: "held", locked: true}},
 		},
 		{
 			name:   "locked with no reason",
 			output: "worktree /w\x00HEAD abc\x00branch refs/heads/held\x00locked\x00\x00",
-			want:   []worktreeRecord{{path: "/w", branch: "held", locked: true}},
+			want:   []worktreeRecord{{path: "/w", main: true, branch: "held", locked: true}},
 		},
 		{
 			name:   "a bare repository",
 			output: "worktree /repo.git\x00bare\x00\x00",
-			want:   []worktreeRecord{{path: "/repo.git", bare: true}},
+			want:   []worktreeRecord{{path: "/repo.git", main: true, bare: true}},
 		},
 		{
 			name:   "an attribute git has not invented yet is ignored",
 			output: "worktree /w\x00HEAD abc\x00branch refs/heads/main\x00quarantined by a future release\x00\x00",
-			want:   []worktreeRecord{{path: "/w", branch: "main"}},
+			want:   []worktreeRecord{{path: "/w", main: true, branch: "main"}},
 		},
 		{
 			name:   "a path containing spaces survives intact",
 			output: "worktree /some where/my worktree\x00HEAD abc\x00detached\x00\x00",
-			want:   []worktreeRecord{{path: "/some where/my worktree"}},
+			want:   []worktreeRecord{{path: "/some where/my worktree", main: true}},
 		},
 		{
 			// The shape this format exists to make unrepresentable: under the
@@ -449,18 +460,18 @@ func TestParseWorktreeListReadsEveryDocumentedShape(t *testing.T) {
 			// voiding a live checkout's claims silently.
 			name:   "a path whose tail collides with an attribute key",
 			output: "worktree /w/evil\nprunable\x00HEAD abc\x00branch refs/heads/evil\x00\x00",
-			want:   []worktreeRecord{{path: "/w/evil\nprunable", branch: "evil"}},
+			want:   []worktreeRecord{{path: "/w/evil\nprunable", main: true, branch: "evil"}},
 		},
 		{
 			name:   "a path whose tail collides with the bare key",
 			output: "worktree /w/evil\nbare\x00HEAD abc\x00detached\x00\x00",
-			want:   []worktreeRecord{{path: "/w/evil\nbare"}},
+			want:   []worktreeRecord{{path: "/w/evil\nbare", main: true}},
 		},
 		{
 			name:   "several records separated by blank lines",
 			output: "worktree /a\x00HEAD abc\x00branch refs/heads/main\x00\x00worktree /b\x00HEAD def\x00prunable\x00\x00worktree /c\x00HEAD ghi\x00detached\x00\x00",
 			want: []worktreeRecord{
-				{path: "/a", branch: "main"},
+				{path: "/a", main: true, branch: "main"},
 				{path: "/b", prunable: true},
 				{path: "/c"},
 			},

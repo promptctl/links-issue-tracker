@@ -39,7 +39,7 @@ type Checkout struct {
 	Locked bool
 }
 
-// LiveCheckouts enumerates every working tree of the repository containing cwd,
+// LiveCheckouts enumerates every working tree of the workspace's repository,
 // with the identity each one holds. It is the local half of the claim
 // predicate's liveness leg: a stream token that appears in the shared evidence
 // under this workspace's id but in none of these checkouts belongs to a checkout
@@ -67,7 +67,8 @@ type Checkout struct {
 // of the live set, which is not "we skipped one" — it is this machine asserting
 // the checkout is deleted, and voiding a live claimant's evidence on the
 // strength of an error it declined to mention.
-func LiveCheckouts(env environ.Env, cwd string) ([]Checkout, error) {
+func LiveCheckouts(env environ.Env, ws Info) ([]Checkout, error) {
+	cwd := ws.RootDir
 	// [LAW:dataflow-not-control-flow] A local enumeration that cannot block on a
 	// network, so context.Background() — "never cancels" — is the honest value,
 	// matching every other git query in this package. See Resolve for the note.
@@ -101,10 +102,7 @@ func LiveCheckouts(env environ.Env, cwd string) ([]Checkout, error) {
 	inhabited := slices.DeleteFunc(records, worktreeRecord.uninhabited)
 	checkouts := make([]Checkout, 0, len(inhabited))
 	for _, record := range inhabited {
-		// Read off the `.git` entry git keeps at the worktree's root, with no
-		// git subprocess per worktree; see checkoutGitDir for how this agrees
-		// with the identity Resolve gives the checkout it runs in.
-		privateGitDir, err := checkoutGitDir(record.path)
+		privateGitDir, err := record.gitDir(ws.GitCommonDir)
 		if err != nil {
 			return nil, fmt.Errorf("locate the git directory of worktree %q, which git lists as live: %w", record.path, err)
 		}
@@ -123,6 +121,7 @@ func LiveCheckouts(env environ.Env, cwd string) ([]Checkout, error) {
 // its holder has locked it.
 type worktreeRecord struct {
 	path     string
+	main     bool
 	branch   string
 	prunable bool
 	bare     bool
@@ -139,6 +138,22 @@ type worktreeRecord struct {
 // fails there), so it mints no identity and produces no evidence.
 func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 
+// gitDir is the record's own git directory, read with no git subprocess per
+// worktree.
+//
+// The main worktree's git dir IS the common dir, and its path cannot be used to
+// find it: git lists the main worktree at the common dir's path with a trailing
+// "/.git" stripped, which in a submodule or a --separate-git-dir clone is the
+// git dir itself, holding no `.git` entry to read. A linked worktree's is named
+// by the gitfile at its root; see checkoutGitDir for how that agrees with the
+// identity Resolve gives the checkout it runs in.
+func (w worktreeRecord) gitDir(commonDir string) (string, error) {
+	if w.main {
+		return commonDir, nil
+	}
+	return checkoutGitDir(w.path)
+}
+
 // parseWorktreeList reads `git worktree list --porcelain -z`. Records are groups
 // of NUL-terminated `key value` fields, a record ends with an extra NUL — which
 // arrives here as an empty field — and every record opens with a `worktree`
@@ -151,7 +166,8 @@ func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 // The accepted shapes, in full, because a format read loosely is a format read
 // wrongly:
 //
-//	worktree <path>       opens a record; the path, verbatim
+//	worktree <path>       opens a record; the path, verbatim. The first record
+//	                      is the main worktree — git lists it first, always
 //	branch <ref>          the checked-out ref, rendered short
 //	detached              no branch — a real state, so Branch is left empty
 //	bare                  a repository with no working tree
@@ -196,7 +212,7 @@ func parseWorktreeList(output string) ([]worktreeRecord, error) {
 		// byte for byte.
 		key, value, _ := strings.Cut(field, " ")
 		if key == "worktree" {
-			records = append(records, worktreeRecord{path: value})
+			records = append(records, worktreeRecord{path: value, main: len(records) == 0})
 			continue
 		}
 		if key == "" {

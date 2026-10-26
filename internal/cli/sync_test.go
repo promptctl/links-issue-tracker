@@ -565,7 +565,7 @@ func TestTheReconcileRemovesBeforeItAdds(t *testing.T) {
 		{Name: "fork", URL: "git+https://example.com/fork-old.git"},
 	}}
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
-	if _, err := syncDoltRemotesFromGit(ctx, testEnv(), syncSession{syncer: syncer}, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), dir)}); err != nil {
+	if err := syncDoltRemotesFromGit(ctx, syncSession{syncer: syncer}, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), dir)}); err != nil {
 		t.Fatalf("syncDoltRemotesFromGit() error = %v", err)
 	}
 	if want := []string{"remove team/origin", "update fork", "add team"}; !slices.Equal(syncer.calls, want) {
