@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -275,24 +276,104 @@ func TestBulkItemEntryCarriesWhatItsErrorDeclared(t *testing.T) {
 	}
 }
 
-// failingWriter refuses every write with err.
-type failingWriter struct{ err error }
+// failingWriter takes the first took bytes of a write and refuses the rest
+// with err.
+type failingWriter struct {
+	took int
+	err  error
+}
 
-func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+func (w failingWriter) Write(p []byte) (int, error) { return min(w.took, len(p)), w.err }
 
-// An item whose change landed is never reported failed: a stdout that cannot
-// take its report ends the run with the write's error, not with the item as a
-// failure to re-run.
-func TestBulkEndsAtAStdoutItCannotWriteWithoutFailingTheItem(t *testing.T) {
-	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+// A stdout that refuses a landed item's report stops the run there, and the
+// run still reports what it collected before it: the item refused ahead of
+// the stop, the landed item whose report was lost (never as a failure to
+// re-run), and the ids it never reached. It is a partial failure, whose
+// remediation forbids re-running what landed, never command_failed's retry.
+func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
 	closed := errors.New("stdout closed")
-	err := runBulkOver(ctx, failingWriter{err: closed}, []string{"a"}, func(context.Context, string) (string, error) {
+	refused := model.ValidationError{Message: "refused"}
+	err := runBulkOver(ctx, failingWriter{err: closed}, []string{"a", "b", "c"}, func(_ context.Context, issueID string) (string, error) {
+		if issueID == "a" {
+			return "", refused
+		}
 		return "claim transferred: x -> y\n", nil
 	})
 	var bulk BulkError
-	if !errors.Is(err, closed) || errors.As(err, &bulk) {
-		t.Errorf("runBulkOver error = %v (%T), want the write's %v and no item failure", err, err, closed)
+	if !errors.As(err, &bulk) {
+		t.Fatalf("runBulkOver error = %v (%T), want a BulkError", err, err)
 	}
+	if len(bulk.Unlanded) != 1 || bulk.Unlanded[0].IssueID != "a" {
+		t.Errorf("Unlanded = %+v, want only a", bulk.Unlanded)
+	}
+	if bulk.Stopped == nil || bulk.Stopped.IssueID != "b" || !errors.Is(bulk.Stopped.Err, closed) || !slices.Equal(bulk.Stopped.NotRun, []string{"c"}) {
+		t.Fatalf("Stopped = %+v, want b's report refused with %v and c not run", bulk.Stopped, closed)
+	}
+	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
+		t.Errorf("reason = %s, want %s", reason, reasonBulkPartialFailure)
+	}
+	for _, want := range []string{"2 of 3 item(s) did not land", "a (validation_refused): refused. b landed", `b landed and stdout did not print "claim transferred: x -> y\nb ok\n" of its report, which stopped the run before c: stdout closed`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message = %q, want it to contain %q", err.Error(), want)
+		}
+	}
+	ev := recorder.Finish(telemetry.End{})
+	if notRun, _ := ev.Facts["bulk.not_run"].([]string); !slices.Equal(notRun, []string{"c"}) {
+		t.Errorf("bulk.not_run = %#v, want [c]", ev.Facts["bulk.not_run"])
+	}
+	var reportErrors []any
+	for _, raw := range ev.Occurrences["bulk.items"] {
+		entry := raw.(map[string]any)
+		reportErrors = append(reportErrors, entry["bulk.item.id"], derefText(entry["bulk.item.report_error"]))
+	}
+	if want := []any{"a", "", "b", "stdout closed"}; !slices.Equal(reportErrors, want) {
+		t.Errorf("bulk.items (id, report_error) = %v, want %v", reportErrors, want)
+	}
+}
+
+// A run whose last report is refused landed every item, and still fails as a
+// partial failure: re-running it would apply every item again. Its message
+// lists no item as not landed and says where it stopped in a sentence of its
+// own, and its event lists no id as not run.
+func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
+	recorder := telemetry.Begin(telemetry.Event{})
+	ctx := telemetry.With(context.Background(), recorder)
+	err := runBulkOver(ctx, failingWriter{err: errors.New("stdout closed")}, []string{"a"}, func(context.Context, string) (string, error) {
+		return "", nil
+	})
+	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
+		t.Errorf("runBulkOver error = %v, reason %s, want %s", err, reason, reasonBulkPartialFailure)
+	}
+	if want := `bulk operation: 0 of 1 item(s) did not land. a landed and stdout did not print "a ok\n" of its report, which stopped the run: stdout closed`; err.Error() != want {
+		t.Errorf("message = %q, want %q", err.Error(), want)
+	}
+	if notRun, ok := recorder.Finish(telemetry.End{}).Facts["bulk.not_run"].([]string); !ok || notRun == nil || len(notRun) != 0 {
+		t.Errorf("bulk.not_run = %#v (recorded %t), want a recorded []", notRun, ok)
+	}
+}
+
+// A stdout that takes part of a landed item's report before refusing the
+// rest leaves on stderr only the part it did not print: the two together are
+// the whole report, and nothing stdout printed is called refused.
+func TestBulkStoppedMidReportCarriesOnlyWhatStdoutDidNotPrint(t *testing.T) {
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	err := runBulkOver(ctx, failingWriter{took: 2, err: errors.New("no space")}, []string{"ab"}, func(context.Context, string) (string, error) {
+		return "", nil
+	})
+	var bulk BulkError
+	if !errors.As(err, &bulk) || bulk.Stopped == nil || bulk.Stopped.Unprinted != " ok\n" {
+		t.Fatalf("runBulkOver error = %+v, want a stop whose Unprinted is %q", err, " ok\n")
+	}
+}
+
+// derefText reads a telemetry.ErrorText value, "" for a nil one.
+func derefText(v any) string {
+	if text, ok := v.(*string); ok && text != nil {
+		return *text
+	}
+	return ""
 }
 
 // Start's usage line names --take, singly and in bulk: it is the flag a
