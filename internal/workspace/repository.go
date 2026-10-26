@@ -50,12 +50,13 @@ func (r Repository) git(ctx context.Context, env environ.Env, dir string, args .
 // way Dolt's own transfer runs git: so no name-keyed config
 // (remote.<name>.uploadpack, .proxy, .vcs) makes a question answer otherwise
 // than the push or fetch it is about. The "--" keeps a URL that begins with
-// "-" from being read as an option. [LAW:one-source-of-truth]
+// "-" from being read as an option. The error names no URL: one can carry a
+// credential, and the caller names the remote. [LAW:one-source-of-truth]
 func (r Repository) lsRemote(ctx context.Context, env environ.Env, dir, url string, options []string, patterns ...string) (string, error) {
 	args := append(append(append([]string{"ls-remote"}, options...), "--", url), patterns...)
 	out, err := r.git(ctx, env, dir, args...)
 	if err != nil {
-		return "", fmt.Errorf("git ls-remote %s: %w", url, err)
+		return "", fmt.Errorf("git ls-remote: %w", err)
 	}
 	return out, nil
 }
@@ -90,13 +91,13 @@ func (r Repository) RemoteHasDoltData(ctx context.Context, env environ.Env, remo
 	return refs != "", err
 }
 
-// CheckoutRemoteHasDoltData is RemoteHasDoltData for a remote lit refuses to
+// RefusedRemoteHasDoltData is RemoteHasDoltData for a remote lit refuses to
 // sync with, which init still asks so a fresh store cannot fork a backlog the
-// remote carries. Such a remote has no URL lit can name, so it is asked by the
-// URL as written, from the checkout root it was listed in: the one reading of
-// it that exists, and git's own for that checkout.
-func (r Repository) CheckoutRemoteHasDoltData(ctx context.Context, env environ.Env, remote GitRemote) (bool, error) {
-	refs, err := r.lsRemote(ctx, env, remote.root.path, remote.written, nil, doltRefs)
+// remote carries. Such a remote may have no URL lit can name, so it is asked
+// by the URL as written, from the checkout root it was listed in: the one
+// reading of it that exists, and git's own for that checkout.
+func (r Repository) RefusedRemoteHasDoltData(ctx context.Context, env environ.Env, refused RefusedGitRemote) (bool, error) {
+	refs, err := r.lsRemote(ctx, env, refused.Remote.root.path, refused.Remote.written, nil, doltRefs)
 	return refs != "", err
 }
 
@@ -136,7 +137,7 @@ func (r Repository) LocalRemoteHead(ctx context.Context, env environ.Env, remote
 	}
 	branch, ok := strings.CutPrefix(target, "refs/remotes/"+remote.String()+"/")
 	if !ok || branch == "" {
-		return "", fmt.Errorf("%s in %q names %q, which is no branch of remote %q", ref, r.gitDir, target, remote)
+		return "", fmt.Errorf("%s in %q names %q, which is no branch of remote %q; `git remote set-head %s --auto` sets it from the remote", ref, r.gitDir, target, remote, remote)
 	}
 	return branch, nil
 }

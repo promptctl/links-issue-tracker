@@ -352,10 +352,10 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	if len(remotes) != 2 {
 		t.Fatalf("len(remotes) = %d, want 2", len(remotes))
 	}
-	if remotes[0].Name() != "origin" || remotes[0].url.location != "https://github.com/acme/origin.git" {
+	if remotes[0].Name() != "origin" || remotes[0].url().location != "https://github.com/acme/origin.git" {
 		t.Fatalf("origin remote mismatch: %+v", remotes[0])
 	}
-	if remotes[1].Name() != "upstream" || remotes[1].url.location != "https://github.com/acme/upstream.git" {
+	if remotes[1].Name() != "upstream" || remotes[1].url().location != "https://github.com/acme/upstream.git" {
 		t.Fatalf("upstream remote mismatch: %+v", remotes[1])
 	}
 }

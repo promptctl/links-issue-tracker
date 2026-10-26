@@ -278,3 +278,27 @@ func TestAnUnreadableUpstreamFailsOnlyTheSelectionThatReadsIt(t *testing.T) {
 		t.Fatalf("workspaceSyncRemote(\"\") = %q, %v, %v; want the upstream read's failure, not a fallback to none", remote.Name(), ok, err)
 	}
 }
+
+// The override decides alone: a remote HEAD git cannot read as a branch does
+// not fail a resolve the override has already answered, and no git is spawned
+// to ask it.
+func TestTheSyncBranchOverrideOutranksAnUnreadableRemoteHead(t *testing.T) {
+	ws := pushedRepoWithoutRemoteHead(t)
+	runGit(t, ws.RootDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/trunk")
+	remote := originRemote(t, ws)
+	t.Setenv(debugSyncBranchEnvVar, "")
+	if _, err := resolveSyncBranch(underInvocation(context.Background()), testEnv(), ws, remote); err == nil || !strings.Contains(err.Error(), "set-head") {
+		t.Fatalf("resolveSyncBranch() with no override = %v; want the remote HEAD's error naming set-head", err)
+	}
+	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
+	env := testEnv()
+	if got, err := resolveSyncBranch(underInvocation(context.Background()), env, ws, remote); err != nil || got != "debug-branch" {
+		t.Fatalf("resolveSyncBranch() = %q, %v; want debug-branch", got, err)
+	}
+	if got, err := knownSyncBranch(underInvocation(context.Background()), env, ws, remoteName(t, "origin")); err != nil || got != "debug-branch" {
+		t.Fatalf("knownSyncBranch() = %q, %v; want debug-branch", got, err)
+	}
+	if spawned := env.GitSpawns(); spawned != 0 {
+		t.Fatalf("the override's resolves spawned %d git; want none", spawned)
+	}
+}

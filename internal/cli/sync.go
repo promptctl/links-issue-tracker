@@ -31,7 +31,7 @@ const debugSyncBranchEnvVar = "LINKS_DEBUG_DOLT_SYNC_BRANCH"
 const firstPushSkipMessage = "Skipping lit sync: remote has no refs yet. " +
 	"This is normal ONLY for the very first push to a brand-new empty repo. " +
 	"If you have pushed to this remote before, this message means something is wrong — " +
-	"check the remote URL, credentials, or run `git ls-remote <remote>`."
+	"check the remote URL, credentials, or run `git ls-remote <url>`."
 
 // syncSession is an open sync engine together with the sync capability every
 // `lit sync` subcommand needs, resolved once before any handler runs.

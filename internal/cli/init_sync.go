@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"slices"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -222,15 +221,16 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	// A remote lit cannot sync with has nothing init can adopt, so init starts
 	// fresh, unless it carries lit data: a fresh store would fork from that
 	// backlog, which only the remote, once fixed, can adopt. [LAW:no-silent-failure]
-	if refused := (storage.RefusedRemoteError{}); errors.As(err, &refused) {
-		hasData, dataErr := refusedRemoteHasDoltData(ctx, env, ws, refused.Name)
+	if refused := (workspace.RefusedGitRemote{}); errors.As(err, &refused) {
+		name := refused.Refusal.Name
+		hasData, dataErr := ws.Repository().RefusedRemoteHasDoltData(ctx, env, refused)
 		if dataErr != nil {
-			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: dataErr.Error()}
+			return nil, initSyncOutcome{State: initSyncFailed, Remote: name, Error: dataErr.Error()}
 		}
 		if hasData {
-			return nil, initSyncOutcome{State: initSyncFailed, Remote: refused.Name, Error: fmt.Sprintf("remote %q carries lit ticket data (refs/dolt/*), which lit cannot adopt: %v", refused.Name, err)}
+			return nil, initSyncOutcome{State: initSyncFailed, Remote: name, Error: fmt.Sprintf("remote %q carries lit ticket data (refs/dolt/*), which lit cannot adopt: %v", name, err)}
 		}
-		return freshOutcome(initSyncOutcome{State: initSyncRemoteRefused, Remote: refused.Name})
+		return freshOutcome(initSyncOutcome{State: initSyncRemoteRefused, Remote: name})
 	}
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
@@ -266,21 +266,6 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 		return freshOutcome(initSyncOutcome{State: initSyncNoRemoteData, Remote: remote.String(), Branch: branch})
 	}
 	return &adoptClonePlan{remote: remote, branch: branch, url: store.GitBackedRemoteURL(syncable.URL())}, initSyncOutcome{}
-}
-
-// refusedRemoteHasDoltData asks the remote lit refused, by the name the
-// refusal carries, whether it carries lit's ticket data. The refusal came from
-// the same listing, so a name the listing does not hold is a fault.
-func refusedRemoteHasDoltData(ctx context.Context, env environ.Env, ws workspace.Info, name string) (bool, error) {
-	remotes, err := ws.Remotes.List(ctx)
-	if err != nil {
-		return false, err
-	}
-	at := slices.IndexFunc(remotes, func(r workspace.GitRemote) bool { return r.Name() == name })
-	if at < 0 {
-		return false, fmt.Errorf("refused remote %q is not among git's remotes", name)
-	}
-	return ws.Repository().CheckoutRemoteHasDoltData(ctx, env, remotes[at])
 }
 
 // remoteSituationLine renders the resolved remote-data situation for the

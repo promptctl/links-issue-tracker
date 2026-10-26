@@ -15,7 +15,7 @@ import (
 )
 
 // The automatic receive asks before it fetches, rather than paying a full
-// DOLT_FETCH to learn the remote has not moved. One `git ls-remote <remote>
+// DOLT_FETCH to learn the remote has not moved. One `git ls-remote <url>
 // refs/dolt/*` answers the same question with no transfer and no store open
 // (1.2–1.3s over ssh to GitHub, 0.5–0.6s over https, measured 2026-09-27), so
 // the fetch and the reconcile behind it run only when the advertisement

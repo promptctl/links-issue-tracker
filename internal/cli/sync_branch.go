@@ -22,40 +22,45 @@ import (
 // so it takes what this machine already knows — which includes what the last
 // sync verb here was told, so both report the same branch.
 
-// syncBranchAnswer is one answer to "which branch", named by where it came
-// from: the debug override, git's refs/remotes/<remote>/HEAD, the record of
-// what the remote last advertised here, or the remote's advertised HEAD.
+// syncBranchAnswer is one source of the sync branch, named on the event by
+// where it comes from: the debug override, git's refs/remotes/<remote>/HEAD,
+// the remote's advertised HEAD, or the record of what it last advertised here.
+// ask is the source's question, "" for no answer.
 type syncBranchAnswer struct {
 	source string
-	branch string
+	ask    func() (string, error)
 }
 
-// localSyncBranch is the answers that cost no network, in precedence order:
-// the debug override, then git's refs/remotes/<remote>/HEAD. A git that fails
-// to read that ref is the error, never an empty answer.
-// [LAW:one-source-of-truth] the one local chain both resolvers below start from.
-func localSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote storage.RemoteName) ([]syncBranchAnswer, error) {
-	head, err := ws.Repository().LocalRemoteHead(ctx, env, remote)
-	if err != nil {
-		return nil, err
-	}
-	return []syncBranchAnswer{
-		{source: "override", branch: strings.TrimSpace(env.Get(debugSyncBranchEnvVar))},
-		{source: "remote_head", branch: head},
-	}, nil
-}
-
-// firstSyncBranch is the first non-empty answer, its source set on the
-// command's event as sync.branch_source. [LAW:nothing-unseen] which answer
-// decided the branch is recorded where the decision is made.
-func firstSyncBranch(ctx context.Context, answers ...syncBranchAnswer) string {
+// firstSyncBranch asks the sources in precedence order and takes the first
+// branch named. A source is asked only when every source ahead of it named
+// none: the override decides alone, so no git it would outrank can fail the
+// resolve, and nothing is spawned for a branch already decided. The deciding
+// source lands on the command's event as sync.branch_source.
+// [LAW:nothing-unseen] [LAW:single-enforcer] the one precedence both resolvers run.
+func firstSyncBranch(ctx context.Context, answers ...syncBranchAnswer) (string, error) {
 	for _, answer := range answers {
-		if answer.branch != "" {
+		branch, err := answer.ask()
+		if err != nil {
+			return "", err
+		}
+		if branch != "" {
 			telemetry.Set(ctx, "sync.branch_source", answer.source)
-			return answer.branch
+			return branch, nil
 		}
 	}
-	return ""
+	return "", nil
+}
+
+// localSyncBranch is the sources that cost no network, ahead of both
+// resolvers' last one: the debug override, then git's
+// refs/remotes/<remote>/HEAD, whose failed read is the error, never an empty
+// answer. [LAW:one-source-of-truth] the one local chain both resolvers start from.
+func localSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote storage.RemoteName, last syncBranchAnswer) (string, error) {
+	return firstSyncBranch(ctx,
+		syncBranchAnswer{source: "override", ask: func() (string, error) { return strings.TrimSpace(env.Get(debugSyncBranchEnvVar)), nil }},
+		syncBranchAnswer{source: "remote_head", ask: func() (string, error) { return ws.Repository().LocalRemoteHead(ctx, env, remote) }},
+		last,
+	)
 }
 
 // resolveSyncBranch is the branch push, pull, receive and init sync against.
@@ -64,18 +69,12 @@ func firstSyncBranch(ctx context.Context, answers ...syncBranchAnswer) string {
 // [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks
 // consume one canonical branch decision.
 func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote workspace.SyncableRemote) (string, error) {
-	local, err := localSyncBranch(ctx, env, ws, remote.Name())
+	branch, err := localSyncBranch(ctx, env, ws, remote.Name(), syncBranchAnswer{source: "advertised", ask: func() (string, error) {
+		return advertiseSyncBranch(ctx, env, ws, remote)
+	}})
 	if err != nil {
 		return "", fmt.Errorf("resolve sync branch for remote %q: %w", remote.Name(), err)
 	}
-	if branch := firstSyncBranch(ctx, local...); branch != "" {
-		return branch, nil
-	}
-	advertised, err := ws.Repository().AdvertisedRemoteHead(ctx, env, remote)
-	if err != nil {
-		return "", fmt.Errorf("resolve sync branch for remote %q: %w", remote.Name(), err)
-	}
-	branch := firstSyncBranch(ctx, syncBranchAnswer{source: "advertised", branch: advertised})
 	if branch == "" {
 		return "", fmt.Errorf(
 			"resolve sync branch for remote %q: default branch unavailable; configure %s to override",
@@ -83,8 +82,18 @@ func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, 
 			debugSyncBranchEnvVar,
 		)
 	}
-	// The branch is resolved whether or not the record lands; a lost record only
-	// costs read commands their sync banner until the next sync verb writes it.
+	return branch, nil
+}
+
+// advertiseSyncBranch asks the remote which branch its HEAD names, and
+// records a named one for knownSyncBranch. The branch is resolved whether or
+// not the record lands; a lost record only costs read commands their sync
+// banner until the next sync verb writes it.
+func advertiseSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote workspace.SyncableRemote) (string, error) {
+	branch, err := ws.Repository().AdvertisedRemoteHead(ctx, env, remote)
+	if err != nil || branch == "" {
+		return "", err
+	}
 	if err := writeMarkerAtomic(advertisedSyncBranchPath(ws, remote.Name()), []byte(branch+"\n")); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: sync branch record not written: %v\n", err)
 	}
@@ -97,12 +106,15 @@ func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, 
 // unreadable record is that error's cause, and matters only when nothing
 // ahead of the record answered.
 func knownSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote storage.RemoteName) (string, error) {
-	local, err := localSyncBranch(ctx, env, ws, remote)
+	var readErr error
+	branch, err := localSyncBranch(ctx, env, ws, remote, syncBranchAnswer{source: "recorded", ask: func() (string, error) {
+		recorded, err := os.ReadFile(advertisedSyncBranchPath(ws, remote))
+		readErr = err
+		return strings.TrimSpace(string(recorded)), nil
+	}})
 	if err != nil {
 		return "", fmt.Errorf("known sync branch for remote %q: %w", remote, err)
 	}
-	recorded, readErr := os.ReadFile(advertisedSyncBranchPath(ws, remote))
-	branch := firstSyncBranch(ctx, append(local, syncBranchAnswer{source: "recorded", branch: strings.TrimSpace(string(recorded))})...)
 	if branch != "" {
 		return branch, nil
 	}

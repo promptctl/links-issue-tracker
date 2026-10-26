@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -218,7 +219,7 @@ func TestRemoteQuestionsReadALeadingDashAsAURL(t *testing.T) {
 
 // A remote lit refuses is asked by its URL as written, read from the checkout
 // root it was listed in, as git reads it there.
-func TestCheckoutRemoteHasDoltDataReadsTheWrittenURLFromTheRoot(t *testing.T) {
+func TestRefusedRemoteHasDoltDataReadsTheWrittenURLFromTheRoot(t *testing.T) {
 	r := newRemotes(t)
 	repo := buildLayout(t, layouts[0], r.populated)
 	root := filepath.Dir(repo.gitDir)
@@ -226,9 +227,14 @@ func TestCheckoutRemoteHasDoltDataReadsTheWrittenURLFromTheRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	remote := NewGitRemote("origin", relative, testRoot(t, root))
-	if has, err := repo.CheckoutRemoteHasDoltData(context.Background(), testEnv(), remote); err != nil || !has {
-		t.Fatalf("CheckoutRemoteHasDoltData(%q) = %v, %v; want true", relative, has, err)
+	// A name Dolt cannot hold is refused; its URL, relative, still names the remote.
+	_, err = NewGitRemote("my.origin", relative, testRoot(t, root)).SyncableRemote()
+	var refused RefusedGitRemote
+	if !errors.As(err, &refused) {
+		t.Fatalf("SyncableRemote() error = %v, want a RefusedGitRemote", err)
+	}
+	if has, err := repo.RefusedRemoteHasDoltData(context.Background(), testEnv(), refused); err != nil || !has {
+		t.Fatalf("RefusedRemoteHasDoltData(%q) = %v, %v; want true", relative, has, err)
 	}
 }
 
@@ -239,4 +245,18 @@ func remoteName(t *testing.T, name string) storage.RemoteName {
 		t.Fatal(err)
 	}
 	return parsed
+}
+
+// A URL can carry a credential, and a failed question's error reaches events
+// and traces, so the error never quotes the URL.
+func TestAFailedRemoteQuestionKeepsTheURLsCredentialOutOfItsError(t *testing.T) {
+	repo := buildLayout(t, layouts[0], "unused")
+	remote := syncable(t, "https://u:ghp_secret@127.0.0.1:1/x.git")
+	_, err := repo.RemoteHasRefs(context.Background(), testEnv(), remote)
+	if err == nil {
+		t.Fatal("RemoteHasRefs() of a closed port = nil error; want the failure")
+	}
+	if strings.Contains(err.Error(), "ghp_secret") {
+		t.Fatalf("error %q quotes the credential", err)
+	}
 }
