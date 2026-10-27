@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"time"
 
@@ -96,10 +96,10 @@ func (a remoteAdvertisement) unmoved(recorded []byte) bool {
 // readReceivedRefs returns the record, nil when no receive has recorded one.
 // Any other read failure is reported and reads as nil: the remote is then
 // fetched, the safe side of "could not tell". [LAW:no-silent-failure]
-func readReceivedRefs(ws workspace.Info) []byte {
+func readReceivedRefs(stderr io.Writer, ws workspace.Info) []byte {
 	payload, err := store.ReadReceivedRefs(ws.DatabasePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lit: received-refs marker unreadable: %v\n", err)
+		fmt.Fprintf(stderr, "lit: received-refs marker unreadable: %v\n", err)
 		return nil
 	}
 	return payload
@@ -212,13 +212,13 @@ func provePushedAdvertisement(ctx context.Context, env environ.Env, syncer stora
 // workspace hold keeps a rotation from landing before the write. The mirror's
 // proof is written by store.RecordPushedHead instead, inside its own hold on
 // the live store. The zero advertisement leaves the record standing.
-func recordPushedAdvertisement(ws workspace.Info, proven remoteAdvertisement) {
+func recordPushedAdvertisement(stderr io.Writer, ws workspace.Info, proven remoteAdvertisement) {
 	payload := proven.record()
 	if payload == nil {
 		return
 	}
 	if err := store.WriteReceivedRefs(ws.DatabasePath, payload); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: received-refs marker not written: %v\n", err)
+		fmt.Fprintf(stderr, "lit: received-refs marker not written: %v\n", err)
 	}
 }
 
@@ -239,16 +239,16 @@ func recordPushedAdvertisement(ws workspace.Info, proven remoteAdvertisement) {
 // unanswered question never reads as "unmoved".
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] the outcome's values
 // decide; the caller runs this after every fetch path.
-func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remoteAdvertisement) {
+func recordReceived(stderr io.Writer, ws workspace.Info, outcome syncReceiveOutcome, observed remoteAdvertisement) {
 	if outcome.fetched() {
 		if err := markFetchSuccess(ws, outcome.remote); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+			fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
 		}
 	}
 	payload := observed.record()
 	if outcome.settledCleanly() && outcome.landed.LandsTheFetch() && payload != nil {
 		if err := store.WriteReceivedRefs(ws.DatabasePath, payload); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: received-refs marker not written: %v\n", err)
+			fmt.Fprintf(stderr, "lit: received-refs marker not written: %v\n", err)
 		}
 	}
 }
@@ -258,11 +258,11 @@ func recordReceived(ws workspace.Info, outcome syncReceiveOutcome, observed remo
 // fetch-success marker moves, and the receive's trace and event say a receive
 // ran and what it decided — a skipped fetch is a decision, not silence.
 // [LAW:no-silent-failure]
-func confirmRemoteUnmoved(ctx context.Context, env environ.Env, ws workspace.Info, observed remoteAdvertisement) {
+func confirmRemoteUnmoved(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, observed remoteAdvertisement) {
 	if err := markFetchSuccess(ws, observed.remote); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+		fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	recordReceiveDecided(ctx, env, ws, receiveDecisionRemoteUnmoved,
+	recordReceiveDecided(ctx, stderr, env, ws, receiveDecisionRemoteUnmoved,
 		"automatic receive found the remote unmoved since the last receive; nothing fetched",
 		observed.remote, nil)
 }

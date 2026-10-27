@@ -38,7 +38,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// receive is answered without a fetch.
 	runCLIInDir(t, consumer, "new", "--title", "pushed-by-hand", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, consumer, "sync", "push")
-	if got, want := string(readReceivedRefs(ws)), advertised(); got != want {
+	if got, want := string(readReceivedRefs(testStderr(t), ws)), advertised(); got != want {
 		t.Fatalf("received-refs record after `lit sync push` = %q, want the remote's advertisement %q", got, want)
 	}
 	if got := lastPushTrace(t, ws).Metadata["advertisement"]; got != "proven" {
@@ -52,7 +52,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// live store, with the same effect.
 	runCLIInDir(t, consumer, "new", "--title", "pushed-by-the-mirror", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runWorkerInDir(t, consumer, backgroundMirrorSubcommand)
-	if got, want := string(readReceivedRefs(ws)), advertised(); got != want {
+	if got, want := string(readReceivedRefs(testStderr(t), ws)), advertised(); got != want {
 		t.Fatalf("received-refs record after the mirror = %q, want the remote's advertisement %q", got, want)
 	}
 	if got := receive(); got.Decision != receiveDecisionRemoteUnmoved {
@@ -114,7 +114,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 			t.Fatalf("open consumer sync session: %v", err)
 		}
 		ctx := underInvocation(context.Background())
-		outcome, err := performSyncPush(ctx, ctx, testEnv(), session, resolved, "", false, false, pushStep(tc.superseded))
+		outcome, err := performSyncPush(ctx, ctx, testStderr(t), testEnv(), session, resolved, "", false, false, pushStep(tc.superseded))
 		if closeErr := closeStore(); closeErr != nil {
 			t.Fatalf("close consumer sync session: %v", closeErr)
 		}

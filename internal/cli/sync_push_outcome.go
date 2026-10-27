@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,11 +197,11 @@ func pushFailureDecision(pushErr error, remote storage.RemoteName, receiveMerges
 // derived once, from the same two values, for every producer. The record also
 // lands on the invocation's event, one value per attempt on push.outcomes.
 // [LAW:nothing-unseen]
-func completePushAttempt(ctx context.Context, env environ.Env, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
-	rec := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion())
+func completePushAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
+	rec := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion(stderr))
 	telemetry.Append(ctx, "push.outcomes", rec.eventValue())
-	recordPushOutcome(ws, rec)
-	observePushOutcomeForOwner(ctx, env, ws, rec)
+	recordPushOutcome(stderr, ws, rec)
+	observePushOutcomeForOwner(ctx, stderr, env, ws, rec)
 }
 
 // eventValue is the record as one value of the event's push.outcomes list.
@@ -221,7 +222,7 @@ func (r pushOutcomeRecord) eventValue() map[string]any {
 // reader must see one whole record or the other). A write failure is surfaced to
 // stderr and not returned — the push's own success or failure is already decided
 // and must not be re-colored by bookkeeping. [LAW:no-silent-failure]
-func recordPushOutcome(ws workspace.Info, rec pushOutcomeRecord) {
+func recordPushOutcome(stderr io.Writer, ws workspace.Info, rec pushOutcomeRecord) {
 	err := func() error {
 		payload, err := json.Marshal(rec)
 		if err != nil {
@@ -230,7 +231,7 @@ func recordPushOutcome(ws workspace.Info, rec pushOutcomeRecord) {
 		return writeMarkerAtomic(pushOutcomeMarkerPath(ws), append(payload, '\n'))
 	}()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lit: push-outcome marker not written: %v\n", err)
+		fmt.Fprintf(stderr, "lit: push-outcome marker not written: %v\n", err)
 	}
 }
 
@@ -239,10 +240,10 @@ func recordPushOutcome(ws workspace.Info, rec pushOutcomeRecord) {
 // unreadable version is reported on stderr and returned as "", the value a dev
 // build has: bookkeeping must not fail a push whose outcome is already decided.
 // [LAW:no-silent-failure]
-func runningBinaryVersion() string {
+func runningBinaryVersion(stderr io.Writer) string {
 	info, err := version.Get()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lit: push-outcome provenance unavailable, build version unreadable: %v\n", err)
+		fmt.Fprintf(stderr, "lit: push-outcome provenance unavailable, build version unreadable: %v\n", err)
 		return ""
 	}
 	return info.Version
@@ -269,22 +270,22 @@ func pushOutcomeProvenance(rec pushOutcomeRecord, running string) string {
 // quiet ok=false. [LAW:no-silent-failure] at reads what
 // [LAW:one-source-of-truth] the file's own mtime records: when the attempt
 // completed.
-func lastPushOutcome(ws workspace.Info, now time.Time) (rec pushOutcomeRecord, age time.Duration, ok bool) {
+func lastPushOutcome(stderr io.Writer, ws workspace.Info, now time.Time) (rec pushOutcomeRecord, age time.Duration, ok bool) {
 	path := pushOutcomeMarkerPath(ws)
 	info, err := os.Stat(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "lit: push-outcome marker unreadable: %v\n", err)
+			fmt.Fprintf(stderr, "lit: push-outcome marker unreadable: %v\n", err)
 		}
 		return pushOutcomeRecord{}, 0, false
 	}
 	payload, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lit: push-outcome marker unreadable: %v\n", err)
+		fmt.Fprintf(stderr, "lit: push-outcome marker unreadable: %v\n", err)
 		return pushOutcomeRecord{}, 0, false
 	}
 	if err := json.Unmarshal(payload, &rec); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: push-outcome marker corrupt: %v\n", err)
+		fmt.Fprintf(stderr, "lit: push-outcome marker corrupt: %v\n", err)
 		return pushOutcomeRecord{}, 0, false
 	}
 	return rec, now.Sub(info.ModTime()), true

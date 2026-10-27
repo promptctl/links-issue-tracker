@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"golang.org/x/mod/semver"
 
@@ -152,7 +153,7 @@ type upgradeResolver interface {
 // schema version — so it depends on that one verb, not on a whole opened store.
 // This keeps the pipeline testable without a real Dolt workspace.
 type schemaReader interface {
-	AppliedSchemaVersion(ctx context.Context) (int64, error)
+	AppliedSchemaVersion(ctx context.Context, stderr io.Writer) (int64, error)
 }
 
 // workspaceSchemaReader reads the workspace schema by opening the store
@@ -171,7 +172,7 @@ type workspaceSchemaReader struct {
 	env environ.Env
 }
 
-func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (applied int64, err error) {
+func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context, stderr io.Writer) (applied int64, err error) {
 	st, err := engine.Open(ctx, r.env, engine.ReadOnly, r.ws.DatabasePath, r.ws.WorkspaceID)
 	if err != nil {
 		if v, ok := appliedVersionFromOpenErr(err); ok {
@@ -188,7 +189,7 @@ func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (applie
 			err = cerr
 		}
 	}()
-	reportOpenMigration(ctx, storage.OpenMigration(st))
+	reportOpenMigration(ctx, stderr, storage.OpenMigration(st))
 	migrator, err := storage.SchemaMigration.Of(st)
 	if err != nil {
 		return 0, err
@@ -283,7 +284,7 @@ func upgradeLeafWith(
 		// so installing it would strand the user; the refusal names the right remedy
 		// (downgrade vs. a newer target) from whether this binary's schema support
 		// covers the span from the target up to the workspace.
-		applied, err := scope.schema.AppliedSchemaVersion(ctx)
+		applied, err := scope.schema.AppliedSchemaVersion(ctx, inv.Stderr)
 		if err != nil {
 			return fmt.Errorf("upgrade: read workspace schema version: %w", err)
 		}

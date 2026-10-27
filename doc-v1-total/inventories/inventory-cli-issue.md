@@ -300,8 +300,8 @@ empty string means no `remediation:` line is printed:
 
 ### 1.10 Progress channel
 
-`progressf(operation, format, args...)` writes `lit: <operation>: <text>\n` to
-`progressOut`, which is `os.Stderr` (`progress.go`).
+`progressf(stderr, operation, format, args...)` writes `lit: <operation>: <text>\n`
+to `stderr`, the stderr its invocation was given (`progress.go`).
 Stdout stays the result channel.
 
 ### 1.11 Identity resolution (assignee / actor)
@@ -358,7 +358,7 @@ breadcrumb (`purge.go`), and neither does `verdict` (`verdict.go`).
 
 ### 1.14 Workflow event dispatch
 
-Every dispatch is `workflows.Dispatch(stdout, os.Stderr, ap.Workspace, occasion)`.
+Every dispatch is `workflows.Dispatch(env, stdout, stderr, ws, o)`, with the invocation's stdout and stderr.
 Occasion builders (`workflow_events.go`):
 - `showTicketOccasion` → `EventShowTicket`, carries IssueID + Labels
 - `backlogOccasion` → `EventShowBacklog`, no IssueID/Labels

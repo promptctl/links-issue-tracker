@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -123,7 +124,7 @@ func backupRestoreLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		restored, err := restoreFromExportPath(ctx, inv.Env, ap, restorePath, *force)
+		restored, err := restoreFromExportPath(ctx, inv.Stderr, inv.Env, ap, restorePath, *force)
 		if err == nil {
 			_, err = fmt.Fprintf(inv.Stdout, "restored %s\n", restorePath)
 		}
@@ -155,7 +156,7 @@ type restoreOutcome struct {
 // record, failed or not: it records the digest the next restore's guard
 // compares against, and the record carries the verdict and the changes.
 // [LAW:nothing-unseen]
-func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, path string, force bool) (outcome restoreOutcome, err error) {
+func restoreFromExportPath(ctx context.Context, stderr io.Writer, env environ.Env, ap *app.App, path string, force bool) (outcome restoreOutcome, err error) {
 	defer func() {
 		metadata := map[string]string{"path": filepath.Clean(path)}
 		// The guard's verdict says why a restore went ahead or was refused; a
@@ -168,7 +169,7 @@ func restoreFromExportPath(ctx context.Context, env environ.Env, ap *app.App, pa
 		if outcome.replacement != nil {
 			replacementMetadata(metadata, *outcome.replacement)
 		}
-		recordSyncCommandTrace(env, ap.Workspace, "lit backup restore", "restored", err, metadata)
+		recordSyncCommandTrace(stderr, env, ap.Workspace, "lit backup restore", "restored", err, metadata)
 	}()
 	return restoreFromExport(ctx, ap, path, force)
 }

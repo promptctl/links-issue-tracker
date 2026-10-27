@@ -22,7 +22,7 @@ func TestASkippedReceiveRecordsItsSkip(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	target := syncTarget{remote: remoteName(t, "origin"), skip: syncTargetRemoteEmpty}
-	outcome, closeLive := performSyncReceive(ctx, testEnv(), ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
+	outcome, closeLive := performSyncReceive(ctx, testStderr(t), testEnv(), ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
 	if outcome.skip != syncTargetRemoteEmpty {
 		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}
@@ -49,7 +49,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testEnv(), workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(checkoutRoot(t, dir))})
+	receiveOnce(ctx, testStderr(t), testEnv(), workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(checkoutRoot(t, dir))})
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
@@ -122,7 +122,7 @@ func receiveNow(t *testing.T, dir string) {
 	if err != nil {
 		t.Fatalf("resolve workspace %s: %v", dir, err)
 	}
-	receiveOnce(underInvocation(context.Background()), testEnv(), ws)
+	receiveOnce(underInvocation(context.Background()), testStderr(t), testEnv(), ws)
 }
 
 // TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles pins the
@@ -141,7 +141,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		reconcile: &reconcileOutcome{},
 		stopped:   receiveStepReconcile, err: errors.New("reconcile backend unavailable"),
 	}
-	surfaceReceiveOutcome(context.Background(), testEnv(), ws, unconverged, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), testEnv(), ws, unconverged, now)
 	block, err := os.ReadFile(receiveBlockPendingPath(ws))
 	if err != nil {
 		t.Fatalf("an unconverged receive left no block for the next command: %v", err)
@@ -150,7 +150,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		t.Fatalf("pending block does not carry the receive's failure:\n%s", block)
 	}
 
-	surfaceReceiveOutcome(context.Background(), testEnv(), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), testEnv(), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a receive that settled cleanly left the earlier block pending (stat err = %v)", err)
 	}
@@ -158,8 +158,8 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 	// Every other surface that converges a divergence — `lit sync pull`,
 	// `lit sync reconcile` — ends the episode the same way, so a block left
 	// before it is retired too.
-	surfaceReceiveOutcome(context.Background(), testEnv(), ws, unconverged, now)
-	endDivergenceEpisode(ws)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), testEnv(), ws, unconverged, now)
+	endDivergenceEpisode(testStderr(t), ws)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a converged divergence left the receive's block pending (stat err = %v)", err)
 	}
@@ -189,7 +189,7 @@ func TestTheReceiveWaitsForALiveMirror(t *testing.T) {
 	if _, err := awaitNoLiveMirror(context.Background(), ws, 300*time.Millisecond); err == nil {
 		t.Fatalf("the receive stopped waiting while a mirror was owed")
 	}
-	clearMirrorPending(ws)
+	clearMirrorPending(testStderr(t), ws)
 
 	release, err := store.HoldMirrorBeacon(context.Background(), ws.DatabasePath)
 	if err != nil {

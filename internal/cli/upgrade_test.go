@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -62,7 +63,7 @@ type stubSchemaReader struct {
 	called  bool
 }
 
-func (s *stubSchemaReader) AppliedSchemaVersion(_ context.Context) (int64, error) {
+func (s *stubSchemaReader) AppliedSchemaVersion(_ context.Context, _ io.Writer) (int64, error) {
 	s.called = true
 	return s.version, s.err
 }

@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -21,9 +21,9 @@ import (
 // left to report on and cannot change what the command did, so it changes
 // nothing. [LAW:dataflow-not-control-flow] the warnings are values written
 // every time.
-func reportOpenMigration(ctx context.Context, done storage.Migrated) {
+func reportOpenMigration(ctx context.Context, stderr io.Writer, done storage.Migrated) {
 	telemetry.Record(ctx, done.EventRecord(), nil)
-	fmt.Fprint(os.Stderr, strings.Join(openWarnings(done), ""))
+	fmt.Fprint(stderr, strings.Join(openWarnings(done), ""))
 }
 
 // openWarnings is the lines the failures an open survived add to a command's

@@ -131,7 +131,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 // its reason says so.
 func assertOutcomeRecordsTheCut(t *testing.T, ws workspace.Info) {
 	t.Helper()
-	rec, _, ok := lastPushOutcome(ws, time.Now())
+	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok {
 		t.Fatalf("no push-outcome record after a cut attempt")
 	}
@@ -227,7 +227,7 @@ func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 	}
 	assertNoMirrorClone(t, ws)
 	assertOutcomeRecordsTheCut(t, ws)
-	rec, _, _ := lastPushOutcome(ws, time.Now())
+	rec, _, _ := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !strings.Contains(rec.Reason, "open sync store on the clone") {
 		t.Fatalf("push-outcome reason %q does not name the open the deadline cut", rec.Reason)
 	}
@@ -536,7 +536,7 @@ func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time
 		t.Fatalf("resolve workspace: %v", err)
 	}
 	now := time.Now()
-	outcome, age, recorded := lastPushOutcome(ws, now)
+	outcome, age, recorded := lastPushOutcome(testStderr(t), ws, now)
 	if !recorded || outcome.Decision != pushDecisionPushed || age > now.Sub(started) {
 		t.Fatalf("the sample cycle did not land a push (outcome %+v, recorded %t, %s old against a %s sample), so its cost is not the cost of a healthy cycle:\noutput:\n%s",
 			outcome, recorded, age, now.Sub(started), out.String())

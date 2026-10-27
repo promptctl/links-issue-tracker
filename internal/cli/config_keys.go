@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
@@ -19,12 +19,12 @@ import (
 // It runs where a command acquires its workspace, once, not inside
 // config.Load, which one command can call several times and which commands
 // that read no setting never call. [LAW:single-enforcer]
-func reportConfigLayers(ctx context.Context, env environ.Env, project config.ProjectLayer) {
+func reportConfigLayers(ctx context.Context, stderr io.Writer, env environ.Env, project config.ProjectLayer) {
 	telemetry.Set(ctx, "config.project", project.Source())
 	unknown, err := config.UnknownKeys(env, project)
 	telemetry.Set(ctx, "config.unknown_keys", unknown)
 	telemetry.Set(ctx, "config.unknown_keys_error", telemetry.ErrorText(err))
-	fmt.Fprint(os.Stderr, unknownConfigKeyWarnings(unknown, err))
+	fmt.Fprint(stderr, unknownConfigKeyWarnings(unknown, err))
 }
 
 // unknownConfigKeyWarnings is the line each unknown key adds to the command's

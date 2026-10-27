@@ -3,8 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -82,7 +82,7 @@ func compactMarkerPath(ws workspace.Info) string {
 // recorded through the same sync-trace seam every other automatic sync failure
 // uses, so a store that has stopped collecting is discoverable rather than
 // silently growing. [LAW:no-silent-failure]
-func maintainInline(ctx context.Context, env environ.Env, ws workspace.Info) {
+func maintainInline(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) {
 	if !shouldRunNow(compactMarkerPath(ws), time.Now(), compactProbeInterval) {
 		return
 	}
@@ -94,19 +94,19 @@ func maintainInline(ctx context.Context, env environ.Env, ws workspace.Info) {
 		// proceed: skipping maintenance because a debounce file cannot be
 		// written would trade a bounded annoyance for an unbounded store.
 		// [LAW:no-silent-failure]
-		fmt.Fprintf(os.Stderr, "lit: compaction probe interval not recorded: %v\n", err)
+		fmt.Fprintf(stderr, "lit: compaction probe interval not recorded: %v\n", err)
 	}
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, compactTimeout)
 	defer cancel()
 	m, closeStore, err := openMaintainer(timeoutCtx, env, ws)
 	if err != nil {
-		recordBackstopFailure(env, ws, fmt.Errorf("open store for compaction: %w", err))
+		recordBackstopFailure(stderr, env, ws, fmt.Errorf("open store for compaction: %w", err))
 		return
 	}
 	defer closeStore()
 
-	maintainThrough(timeoutCtx, env, ws, m)
+	maintainThrough(timeoutCtx, stderr, env, ws, m)
 }
 
 // maintainer is all the backstop asks of the engine. The backstop runs after a
@@ -140,7 +140,7 @@ func openMaintainer(ctx context.Context, env environ.Env, ws workspace.Info) (ma
 // the storage seam exists to prevent. Taking the maintainer as a parameter
 // lets a fake engine produce each outcome directly, the way runSyncCompact is
 // already tested.
-func maintainThrough(ctx context.Context, env environ.Env, ws workspace.Info, m maintainer) {
+func maintainThrough(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, m maintainer) {
 	// What is owed is the engine's judgment, not this caller's: it is a fact
 	// about how the engine stores data. [LAW:decomposition]
 	outcome, err := m.MaintainIfDue(ctx)
@@ -150,7 +150,7 @@ func maintainThrough(ctx context.Context, env environ.Env, ws workspace.Info, m 
 		// failed partway still retired what it named, and the depth is known
 		// here even when the pass never got that far. None of it survives
 		// anywhere else once this returns. [LAW:no-silent-failure]
-		recordSyncCommandTrace(env, ws, compactTraceCommand, "error", err, maintenanceTraceMetadata(outcome))
+		recordSyncCommandTrace(stderr, env, ws, compactTraceCommand, "error", err, maintenanceTraceMetadata(outcome))
 		return
 	}
 	decision, spoken := maintenanceDecision(outcome)
@@ -159,7 +159,7 @@ func maintainThrough(ctx context.Context, env environ.Env, ws workspace.Info, m 
 		// case, and not worth a trace.
 		return
 	}
-	recordSyncCommandTrace(env, ws, compactTraceCommand, decision, nil, maintenanceTraceMetadata(outcome))
+	recordSyncCommandTrace(stderr, env, ws, compactTraceCommand, decision, nil, maintenanceTraceMetadata(outcome))
 }
 
 // maintenanceDecision names what a probe did, or reports it did nothing worth
@@ -210,8 +210,8 @@ const compactedDecision = "compacted"
 // reaches the durable trail. It renders through compactionAttemptMetadata, as
 // the backstop's maintenanceTraceMetadata does, so the trail carries one shape
 // for a pass whichever entry point ran it.
-func recordCompactionSuccess(env environ.Env, ws workspace.Info, command string, outcome storage.CompactionOutcome) {
-	recordSyncCommandTrace(env, ws, command, compactedDecision, nil, compactionAttemptMetadata(outcome))
+func recordCompactionSuccess(stderr io.Writer, env environ.Env, ws workspace.Info, command string, outcome storage.CompactionOutcome) {
+	recordSyncCommandTrace(stderr, env, ws, command, compactedDecision, nil, compactionAttemptMetadata(outcome))
 }
 
 // compactionDepthMetadata names the depth alone, for the outcome that has
@@ -235,8 +235,8 @@ func compactionDepthMetadata(depth storage.GCMode) map[string]string {
 // reconnect that failed behind a finished deep collection is recorded as the
 // rewrite it was, rather than as an error that reads like nothing happened.
 // [LAW:no-silent-failure]
-func recordCompactFailure(env environ.Env, ws workspace.Info, command string, outcome storage.CompactionOutcome, cause error) {
-	recordSyncCommandTrace(env, ws, command, "error", cause, compactionAttemptMetadata(outcome))
+func recordCompactFailure(stderr io.Writer, env environ.Env, ws workspace.Info, command string, outcome storage.CompactionOutcome, cause error) {
+	recordSyncCommandTrace(stderr, env, ws, command, "error", cause, compactionAttemptMetadata(outcome))
 }
 
 // compactionAttemptMetadata renders what is known about a pass that was
@@ -290,6 +290,6 @@ const syncCompactTraceCommand = "lit sync compact"
 // The zero outcome is the honest argument for a failure with no pass behind it —
 // a store that could not even be opened attempted nothing, and the renderer
 // records no depth for it rather than inventing one.
-func recordBackstopFailure(env environ.Env, ws workspace.Info, cause error) {
-	recordCompactFailure(env, ws, compactTraceCommand, storage.CompactionOutcome{}, cause)
+func recordBackstopFailure(stderr io.Writer, env environ.Env, ws workspace.Info, cause error) {
+	recordCompactFailure(stderr, env, ws, compactTraceCommand, storage.CompactionOutcome{}, cause)
 }

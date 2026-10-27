@@ -82,15 +82,15 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		if err != nil {
 			t.Fatalf("takeReceiveClone() error = %v", err)
 		}
-		defer removeReceiveClone(clone)
-		fetch, err := fetchIntoClone(ctx, testEnv(), ws, clone)
+		defer removeReceiveClone(testStderr(t), clone)
+		fetch, err := fetchIntoClone(ctx, testStderr(t), testEnv(), ws, clone)
 		if err != nil || fetch.fetchErr != nil {
 			t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 		}
 		unblock := blockTheLanding(t, ws)
-		outcome := landAndRecord(ctx, testEnv(), ws, clone, fetch, remoteAdvertisement{})
+		outcome := landAndRecord(ctx, testStderr(t), testEnv(), ws, clone, fetch, remoteAdvertisement{})
 		unblock()
-		surfaceReceiveOutcome(ctx, testEnv(), ws, outcome, time.Now())
+		surfaceReceiveOutcome(ctx, testStderr(t), testEnv(), ws, outcome, time.Now())
 		return oneOutcome(writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"])
 	}
 	receive := func() map[string]any {
@@ -159,7 +159,10 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	if err := markReceiveAttempt(ws); err != nil {
 		t.Fatalf("mark receive attempt: %v", err)
 	}
-	surface := captureStderr(t, func() { runCLIInDir(t, consumer, "backlog") })
+	_, surface, err := runCLIInDirSplit(t, consumer, "backlog")
+	if err != nil {
+		t.Fatalf("lit backlog error = %v\nstderr:\n%s", err, surface)
+	}
 	if !strings.Contains(surface, "could not bring it into this checkout") {
 		t.Fatalf("the next command did not print the receive_unsettled block:\n%s", surface)
 	}
@@ -292,8 +295,8 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
-	t.Cleanup(func() { removeReceiveClone(clone) })
-	fetch, err := fetchIntoClone(ctx, testEnv(), ws, clone)
+	t.Cleanup(func() { removeReceiveClone(testStderr(t), clone) })
+	fetch, err := fetchIntoClone(ctx, testStderr(t), testEnv(), ws, clone)
 	if err != nil || fetch.fetchErr != nil || fetch.target.skip != syncTargetReady {
 		t.Fatalf("fetchIntoClone() = %+v, %v; want a ready target fetched cleanly", fetch, err)
 	}
@@ -306,7 +309,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	blockTheLanding(t, ws)
-	err := receivePushedReRoot(ctx, testEnv(), ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
+	err := receivePushedReRoot(ctx, testStderr(t), testEnv(), ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
 	if err == nil || !strings.Contains(err.Error(), "stopped at land") {
 		t.Fatalf("receivePushedReRoot() error = %v; want the landing's stop", err)
 	}
@@ -326,7 +329,7 @@ func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	landed := pushedHead{remote: fetch.target.remote, branch: fetch.target.branch, head: "pushed", followedReRoot: true}
-	liveStoreLearns(ctx, testEnv(), io.Discard, ws, clone, landed)
+	liveStoreLearns(ctx, testStderr(t), testEnv(), io.Discard, ws, clone, landed)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {
@@ -351,7 +354,7 @@ func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 func TestAReceiveWhoseOpenFailsHasNothingToClose(t *testing.T) {
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
-	outcome, closeLive := performSyncReceive(ctx, testEnv(), ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
+	outcome, closeLive := performSyncReceive(ctx, testStderr(t), testEnv(), ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
 	if outcome.stopped != receiveStepOpen {
 		t.Fatalf("receive stopped at %q (err %v); want the open", outcome.stopped, outcome.err)
 	}

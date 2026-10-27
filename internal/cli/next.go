@@ -60,7 +60,7 @@ func nextLeaf() appLeaf {
 		}
 		// [LAW:single-enforcer] Same staleness warning, same position, as every
 		// other ordinary read command.
-		if err := printStalenessWarning(ctx, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		if err := printStalenessWarning(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 			return err
 		}
 		// The whole queue, not the filtered one: routing applies the filter to
@@ -81,7 +81,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		return dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, occasion)
+		return dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, occasion)
 	}}
 }
 

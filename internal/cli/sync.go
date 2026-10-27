@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -179,7 +178,7 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 				return markEngineOpenContention(err, ws)
 			}
 			return runThenMeasure(ctx, ws.DatabasePath, closeStore, func() error {
-				reportOpenMigration(ctx, storage.OpenMigration(session.engine))
+				reportOpenMigration(ctx, inv.Stderr, storage.OpenMigration(session.engine))
 				return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
 			})
 		})
@@ -255,26 +254,26 @@ func syncFetchLeaf() syncLeaf {
 			// reached — trace it, matching the coverage recordMirrorTraceError/
 			// recordReceiveError give this same failure class on the mirror/receive
 			// paths. [LAW:no-silent-failure]
-			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "error", err, nil)
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync fetch", "error", err, nil)
 			return err
 		}
 		// [LAW:one-source-of-truth] the remote every sync verb selects.
 		syncable, ok, err := workspaceSyncRemote(ctx, ws, *remote)
 		if err != nil {
-			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "error", err, nil)
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync fetch", "error", err, nil)
 			return err
 		}
 		if !ok {
 			// Said in every mode: the staleness banner sends people here, and a
 			// fetch that silently fetched nothing would leave them stale with no
 			// sign why. [LAW:no-silent-failure]
-			recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", string(syncTargetNoRemote), nil, nil)
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync fetch", string(syncTargetNoRemote), nil, nil)
 			_, err := fmt.Fprintln(inv.Stdout, "skipped sync fetch: no eligible git remote; name one with --remote")
 			return err
 		}
 		remoteName := syncable.Name()
-		err = fetchAndFollow(ctx, inv.Env, session, ws, remoteName)
-		recordSyncCommandTrace(inv.Env, ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
+		err = fetchAndFollow(ctx, inv.Stderr, inv.Env, session, ws, remoteName)
+		recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
 		if err != nil {
 			return err
 		}
@@ -295,12 +294,12 @@ func syncFetchLeaf() syncLeaf {
 // network: a workspace with no sync remote, one Dolt cannot hold, or none
 // whose default branch is known here, has no freshness a re-root could
 // misreport, and follows nothing.
-func fetchAndFollow(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, remote storage.RemoteName) error {
+func fetchAndFollow(ctx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, remote storage.RemoteName) error {
 	if err := session.syncer.SyncFetch(ctx, remote); err != nil {
 		return err
 	}
 	if err := markFetchSuccess(ws, remote); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+		fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, env, ws)
 	// Only a branch nothing here names, or a remote lit cannot sync with,
@@ -322,20 +321,20 @@ func syncPullLeaf() syncLeaf {
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		ws, session := scope.ws, scope.session
-		progressf("sync pull", "starting: reconciling remotes and resolving the sync source")
-		target, err := resolveSyncTarget(ctx, inv.Env, session, ws, *remote)
+		progressf(inv.Stderr, "sync pull", "starting: reconciling remotes and resolving the sync source")
+		target, err := resolveSyncTarget(ctx, inv.Stderr, inv.Env, session, ws, *remote)
 		if err != nil {
 			// A could-not-attempt failure — traced like every other decision this
 			// command reaches, matching the coverage recordMirrorTraceError/
 			// recordReceiveError give this same failure class on the mirror/receive
 			// paths. [LAW:no-silent-failure]
-			recordSyncCommandTrace(inv.Env, ws, "lit sync pull", "error", err, target.traceMetadata())
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync pull", "error", err, target.traceMetadata())
 			return err
 		}
 		if target.skip != syncTargetReady {
 			// traceMetadata is nil before a remote was selected, so the no-remote and
 			// empty-remote skips trace exactly what resolution established.
-			recordSyncCommandTrace(inv.Env, ws, "lit sync pull", string(target.skip), nil, target.traceMetadata())
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync pull", string(target.skip), nil, target.traceMetadata())
 			// A pull with nothing to pull from says which skip, under the
 			// state's key; there was no settle, so no base. [LAW:nothing-unseen]
 			telemetry.Set(ctx, "pull.state", string(target.skip))
@@ -343,11 +342,11 @@ func syncPullLeaf() syncLeaf {
 			return printSyncPullOutcome(inv.Stdout, syncPullOutcome{skip: target.skip, remote: target.remote}, *verbose)
 		}
 		remoteName, resolvedBranch := target.remote, target.branch
-		progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
+		progressf(inv.Stderr, "sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
 		result, err := session.syncer.SyncPull(ctx, remoteName, resolvedBranch)
 		pullTraceMetadata := map[string]string{"remote": remoteName.String(), "sync_branch": resolvedBranch}
 		if err != nil {
-			recordSyncCommandTrace(inv.Env, ws, "lit sync pull", "error", err, pullTraceMetadata)
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync pull", "error", err, pullTraceMetadata)
 			// An explicit pull is not best-effort: a fetch or reconcile failure is
 			// surfaced as a command error, not swallowed the way the background
 			// receive tolerates a transient hiccup. [LAW:no-silent-failure] A remote
@@ -360,7 +359,7 @@ func syncPullLeaf() syncLeaf {
 		// successfully (the fetch is the first step of every outcome branch below),
 		// so this is a real "we talked to the remote" moment regardless of state.
 		if err := markFetchSuccess(ws, remoteName); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+			fmt.Fprintf(inv.Stderr, "lit: fetch-success marker not written: %v\n", err)
 		}
 		pullTraceMetadata["state"] = string(result.State)
 		pullTraceMetadata["base"] = string(result.Base)
@@ -375,19 +374,19 @@ func syncPullLeaf() syncLeaf {
 		// the identical state, rather than a stdout line under a success exit. Every
 		// other pull outcome is rendered by the outcome printer. [LAW:single-enforcer]
 		if failure, held := syncFailureFromPull(remoteName, resolvedBranch, result, time.Now()); held {
-			recordSyncHeldTrace(inv.Env, ws, "lit sync pull", failure, pullTraceMetadata)
+			recordSyncHeldTrace(inv.Stderr, inv.Env, ws, "lit sync pull", failure, pullTraceMetadata)
 			// A held pull is a detection moment: the owner hears out-of-band, the day
 			// it happens, not through later archaeology (links-sync-pgct.4).
 			if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-				maybeNotifyOwner(ctx, inv.Env, ws, ev)
+				maybeNotifyOwner(ctx, inv.Stderr, inv.Env, ws, ev)
 			}
 			return failure
 		}
 		landingMetadata(pullTraceMetadata, result.Landing)
-		recordSyncCommandTrace(inv.Env, ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
+		recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 		// A pull that completed without a held state converged (or found nothing to
 		// converge): the divergence episode, if one was notified, is over.
-		endDivergenceEpisode(ws)
+		endDivergenceEpisode(inv.Stderr, ws)
 		return printSyncPullOutcome(inv.Stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State, landing: result.Landing}, *verbose)
 	}}
 }
@@ -463,7 +462,7 @@ func syncCompactLeaf() syncLeaf {
 			// failure — which this call site cannot see and would record as a bare
 			// error. Handing the recorder the local mode would leave two places
 			// spelling one fact. [LAW:one-source-of-truth]
-			recordCompactFailure(inv.Env, ws, syncCompactTraceCommand, outcome, err)
+			recordCompactFailure(inv.Stderr, inv.Env, ws, syncCompactTraceCommand, outcome, err)
 			return err
 		}
 		// Recorded before the write, so a stdout that has gone away cannot erase the
@@ -478,7 +477,7 @@ func syncCompactLeaf() syncLeaf {
 		// the outcome is gone. This records through the same seam the automatic pass
 		// uses, so the two cannot describe one event differently — only the command
 		// name distinguishes them. [LAW:one-source-of-truth]
-		recordCompactionSuccess(inv.Env, ws, syncCompactTraceCommand, outcome)
+		recordCompactionSuccess(inv.Stderr, inv.Env, ws, syncCompactTraceCommand, outcome)
 		// The engine reports what it reclaimed in its own vocabulary; this renders
 		// that account rather than re-deriving it from a storage layout the command
 		// layer has no business reading. [LAW:decomposition]
@@ -510,25 +509,25 @@ func syncPushLeaf() syncLeaf {
 		// next mutation re-claims and re-spawns rather than a stale "covered"
 		// promise papering over a push that never landed.
 		// [LAW:no-ambient-temporal-coupling]
-		clearMirrorPending(ws)
+		clearMirrorPending(inv.Stderr, ws)
 		// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
 		// backs) compacts atomically with the push; the on-change mirror pushes
 		// without compaction. The choice is the push step passed as a value, so
 		// performSyncPush has no compaction branch and a skipped push never compacts.
-		outcome, err := performSyncPush(ctx, ctx, inv.Env, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
+		outcome, err := performSyncPush(ctx, ctx, inv.Stderr, inv.Env, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
 		if err != nil {
 			// A could-not-attempt failure (performSyncPush returned before reaching
 			// its own trace-recording push attempt) — traced here, matching the
 			// coverage recordMirrorTraceError already gives this exact failure class on
 			// the on-change mirror path that shares performSyncPush.
 			// [LAW:no-silent-failure]
-			recordSyncCommandTrace(inv.Env, ws, "lit sync push", "error", err, nil)
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync push", "error", err, nil)
 			return err
 		}
 		// [LAW:no-silent-failure] The push error surfaces as the command's exit
 		// status only after its trace has been recorded inside performSyncPush —
 		// the skipped/ok outcome is never printed over a failed push.
-		recordPushedAdvertisement(ws, outcome.proven)
+		recordPushedAdvertisement(inv.Stderr, ws, outcome.proven)
 		if outcome.pushErr != nil {
 			// A remote schema ahead of this binary, and a push refused over a
 			// peer's commits, surface as the one sync-failure contract rather
@@ -658,7 +657,7 @@ func syncPushTraceMetadata(remoteName storage.RemoteName, syncBranch string, res
 // owner-notify hook — which must not inherit an operation budget that has, by
 // definition, already expired whenever a cut push needs them most.
 // A foreground caller passes the same context twice: its one lifetime is both.
-func performSyncPush(ctx, completionCtx context.Context, env environ.Env, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
@@ -673,22 +672,22 @@ func performSyncPush(ctx, completionCtx context.Context, env environ.Env, sessio
 	// [LAW:no-silent-failure]
 	defer func() {
 		if r := recover(); r != nil {
-			completePushAttempt(completionCtx, env, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
+			completePushAttempt(completionCtx, stderr, env, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
 			panic(r)
 		}
-		completePushAttempt(completionCtx, env, ws, outcome, retErr)
+		completePushAttempt(completionCtx, stderr, env, ws, outcome, retErr)
 	}()
 	// Each step the push deadline bounds takes its verdict where it returns,
 	// so the attempt's record — this function's own, through the defer — is
 	// the one that names a cut. [LAW:single-enforcer]
-	target, err := resolveSyncTarget(ctx, env, session, ws, remote)
+	target, err := resolveSyncTarget(ctx, stderr, env, session, ws, remote)
 	if err != nil {
 		return syncPushOutcome{}, cutByPushDeadline(ctx, completionCtx, err)
 	}
 	if target.skip != syncTargetReady {
 		// traceMetadata is nil before a remote was selected, so the no-remote and
 		// empty-remote skips trace exactly what resolution established.
-		recordSyncCommandTrace(env, ws, "lit sync push", string(target.skip), nil, target.traceMetadata())
+		recordSyncCommandTrace(stderr, env, ws, "lit sync push", string(target.skip), nil, target.traceMetadata())
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
 		return syncPushOutcome{skip: target.skip, remote: target.remote}, nil
 	}
@@ -785,7 +784,7 @@ func performSyncPush(ctx, completionCtx context.Context, env environ.Env, sessio
 		pushErr:       pushErr,
 	}
 	decided := classifyPushOutcome(outcome, nil)
-	recordSyncTraceLogged(env, ws, syncTraceRecord{
+	recordSyncTraceLogged(stderr, env, ws, syncTraceRecord{
 		Command:   formatCommand(syncCommandArgs),
 		Decision:  decided.Decision,
 		Status:    traceStatus,
@@ -946,7 +945,7 @@ func (t syncTarget) traceMetadata() map[string]string {
 // must be able to abandon: ctx flows to the subprocess so a network-hung fetch
 // cancels here rather than outliving the interrupt until the grace-timer
 // hard-exit. [LAW:no-ambient-temporal-coupling]
-func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
+func resolveSyncTarget(ctx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
 	if err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 		return syncTarget{}, err
 	}
@@ -965,7 +964,7 @@ func resolveSyncTarget(ctx context.Context, env environ.Env, session syncSession
 	if !hasRefs {
 		return syncTarget{remote: remoteName, skip: syncTargetRemoteEmpty}, nil
 	}
-	branch, err := resolveSyncBranch(ctx, env, ws, syncable)
+	branch, err := resolveSyncBranch(ctx, stderr, env, ws, syncable)
 	if err != nil {
 		return syncTarget{remote: remoteName}, err
 	}

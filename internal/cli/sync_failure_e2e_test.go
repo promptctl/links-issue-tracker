@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,57 +12,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
-
-// captureStderr swaps os.Stderr for a pipe across fn and returns what was written.
-// The automatic sync writes its surface to os.Stderr directly (the command's
-// stdout is already produced), so an end-to-end assertion on that surface must
-// capture the process stderr rather than the command's writer.
-//
-// A reader goroutine drains the pipe concurrently with fn. fn runs a full CLI
-// command, and reading the pipe only *after* fn returns would deadlock the moment
-// that command's stderr exceeded the OS pipe buffer (~64KB) — nothing would drain
-// the read end while the write blocked. Concurrent draining makes the capture
-// independent of how much fn writes, rather than betting the output stays small.
-// [LAW:no-ambient-temporal-coupling]
-func captureStderr(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stderr
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe() error = %v", err)
-	}
-	os.Stderr = w
-	// Restore os.Stderr and close the write end even when fn calls t.Fatal
-	// (runtime.Goexit runs deferred funcs): the restore keeps every later test in
-	// the process off a dangling pipe, and this close is the ONLY thing that
-	// unblocks the reader below on the Goexit path — without it that goroutine
-	// would block on ReadAll forever. Both are idempotent with the normal-path
-	// close, which then double-closes harmlessly.
-	defer func() { os.Stderr = old }()
-	defer func() { _ = w.Close() }()
-
-	type readResult struct {
-		data []byte
-		err  error
-	}
-	// Buffered so the reader can hand back its bytes even on the Goexit path, where
-	// nothing is left to receive.
-	drained := make(chan readResult, 1)
-	go func() {
-		data, err := io.ReadAll(r)
-		drained <- readResult{data, err}
-	}()
-
-	fn()
-	if err := w.Close(); err != nil { // EOF for the reader on the normal path
-		t.Fatalf("close stderr pipe error = %v", err)
-	}
-	res := <-drained
-	if res.err != nil {
-		t.Fatalf("read stderr pipe error = %v", res.err)
-	}
-	return string(res.data)
-}
 
 // assertSyncFailureBlock pins that a captured surface carries every element of the
 // sync-failure contract — the same four-part check the unit tests use, applied to
@@ -146,9 +94,10 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 		t.Fatalf("mark receive attempt: %v", err)
 	}
 	t.Setenv(DisableAutoSyncEnvVar, "0")
-	surface := captureStderr(t, func() {
-		runCLIInDir(t, consumer, "backlog")
-	})
+	_, surface, err := runCLIInDirSplit(t, consumer, "backlog")
+	if err != nil {
+		t.Fatalf("lit backlog error = %v\nstderr:\n%s", err, surface)
+	}
 
 	assertSyncFailureBlock(t, surface, "lit sync reconcile")
 	if !strings.Contains(surface, ticketID) || !strings.Contains(surface, "description") {
@@ -157,8 +106,8 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	if !strings.Contains(surface, "the automatic receive reached this sync-failure block") {
 		t.Fatalf("the delivered block does not say when the receive reached it:\n%s", surface)
 	}
-	if again := captureStderr(t, func() { runCLIInDir(t, consumer, "backlog") }); strings.Contains(again, ticketID) {
-		t.Fatalf("the second command printed the block again; one receive's block reaches one command:\n%s", again)
+	if _, again, err := runCLIInDirSplit(t, consumer, "backlog"); err != nil || strings.Contains(again, ticketID) {
+		t.Fatalf("the second command printed the block again, or failed (%v); one receive's block reaches one command:\n%s", err, again)
 	}
 }
 

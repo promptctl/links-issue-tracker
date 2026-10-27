@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"time"
 
@@ -89,9 +89,9 @@ func recordSyncTrace(env environ.Env, ws workspace.Info, record syncTraceRecord)
 // recordSyncCommandTrace covers) still needs. [LAW:no-silent-failure]
 // [LAW:one-source-of-truth] one place decides how a trace-write failure is
 // surfaced, for every caller that builds its own record.
-func recordSyncTraceLogged(env environ.Env, ws workspace.Info, record syncTraceRecord) {
+func recordSyncTraceLogged(stderr io.Writer, env environ.Env, ws workspace.Info, record syncTraceRecord) {
 	if _, traceErr := recordSyncTrace(env, ws, record); traceErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: %s trace not recorded: %v\n", record.Command, traceErr)
+		fmt.Fprintf(stderr, "lit: %s trace not recorded: %v\n", record.Command, traceErr)
 	}
 }
 
@@ -101,7 +101,7 @@ func recordSyncTraceLogged(env environ.Env, ws workspace.Info, record syncTraceR
 // label. A trace-write failure is reported to stderr and never returned: the
 // command's own success or failure is already decided by err, independent of
 // whether recording it durably also succeeded. [LAW:no-silent-failure]
-func recordSyncCommandTrace(env environ.Env, ws workspace.Info, command, decision string, err error, metadata map[string]string) {
+func recordSyncCommandTrace(stderr io.Writer, env environ.Env, ws workspace.Info, command, decision string, err error, metadata map[string]string) {
 	status := "ok"
 	reason := ""
 	if err != nil {
@@ -109,7 +109,7 @@ func recordSyncCommandTrace(env environ.Env, ws workspace.Info, command, decisio
 		decision = "error"
 		reason = err.Error()
 	}
-	recordSyncTraceLogged(env, ws, syncTraceRecord{
+	recordSyncTraceLogged(stderr, env, ws, syncTraceRecord{
 		Command:   command,
 		Decision:  decision,
 		Status:    status,
@@ -176,12 +176,12 @@ func infoForLocation(loc workspace.Location) workspace.Info {
 // command's path, never its argv, whose free-text payloads (titles, bodies,
 // pasted secrets) never reached the store and must not be durably persisted
 // here as a side effect of the store being busy.
-func recordEngineOpenContentionTrace(ctx context.Context, env environ.Env, err error) {
+func recordEngineOpenContentionTrace(ctx context.Context, stderr io.Writer, env environ.Env, err error) {
 	var open engineOpenContentionError
 	if !errors.As(err, &open) {
 		return
 	}
-	recordSyncTraceLogged(env, open.ws, syncTraceRecord{
+	recordSyncTraceLogged(stderr, env, open.ws, syncTraceRecord{
 		Command:   telemetry.EventName(ctx),
 		Decision:  commandErrorReason(err).String(),
 		Status:    "error",
@@ -200,8 +200,8 @@ func recordEngineOpenContentionTrace(ctx context.Context, env environ.Env, err e
 // is a durable one-line-per-decision log, not a copy of the block already
 // printed to the operator. [LAW:one-source-of-truth] BuildNote is read off
 // the failure the caller already resolved, so it is not recomputed here.
-func recordSyncHeldTrace(env environ.Env, ws workspace.Info, command string, failure SyncFailureError, metadata map[string]string) {
-	recordSyncTraceLogged(env, ws, syncTraceRecord{
+func recordSyncHeldTrace(stderr io.Writer, env environ.Env, ws workspace.Info, command string, failure SyncFailureError, metadata map[string]string) {
+	recordSyncTraceLogged(stderr, env, ws, syncTraceRecord{
 		Command:   command,
 		Decision:  string(failure.Failure.Class),
 		Status:    "ok",

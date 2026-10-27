@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,8 +96,8 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
-		progress := captureProgress(t)
-		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), testEnv(), ws)
+		var progress bytes.Buffer
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, testEnv(), ws)
 		if outcome.State != initSyncHasLocalTickets {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncHasLocalTickets)
 		}
@@ -113,8 +115,8 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
-		progress := captureProgress(t)
-		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), testEnv(), ws)
+		var progress bytes.Buffer
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, testEnv(), ws)
 		if outcome.State != initSyncNotConfigured {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncNotConfigured)
 		}
@@ -158,19 +160,21 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	progress := captureProgress(t)
-	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks")
+	initOut, progress, err := runCLIInDirSplit(t, consumer, "init", "--skip-hooks")
+	if err != nil {
+		t.Fatalf("consumer init error = %v\nstderr:\n%s", err, progress)
+	}
 	if !strings.Contains(initOut, "Pulled existing backlog from origin/master") {
 		t.Fatalf("consumer init output missing adopt line:\n%s", initOut)
 	}
 	// The phase narration a user watching a slow init depends on: the adopt
 	// announces itself, then announces the resolved remote situation as the
 	// download begins — on the progress channel, never mixed into the report.
-	if !strings.Contains(progress.String(), "lit: init: checking whether a git remote already carries a lit backlog") {
-		t.Fatalf("init progress missing the start announcement:\n%s", progress.String())
+	if !strings.Contains(progress, "lit: init: checking whether a git remote already carries a lit backlog") {
+		t.Fatalf("init progress missing the start announcement:\n%s", progress)
 	}
-	if !strings.Contains(progress.String(), "lit: init: remote origin/master carries lit data (refs/dolt/*); downloading the backlog now") {
-		t.Fatalf("init progress missing the download announcement:\n%s", progress.String())
+	if !strings.Contains(progress, "lit: init: remote origin/master carries lit data (refs/dolt/*); downloading the backlog now") {
+		t.Fatalf("init progress missing the download announcement:\n%s", progress)
 	}
 	backlog := runCLIInDir(t, consumer, "backlog")
 	if !strings.Contains(backlog, "remote-ticket") {
@@ -179,16 +183,18 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 
 	// A subsequent pull narrates the same way: operation start, then the
 	// resolved source as the transfer begins.
-	progress.Reset()
-	pullOut := runCLIInDir(t, consumer, "sync", "pull")
+	pullOut, progress, err := runCLIInDirSplit(t, consumer, "sync", "pull")
+	if err != nil {
+		t.Fatalf("consumer sync pull error = %v\nstderr:\n%s", err, progress)
+	}
 	if !strings.Contains(pullOut, "pulled") {
 		t.Fatalf("sync pull output missing result line:\n%s", pullOut)
 	}
-	if !strings.Contains(progress.String(), "lit: sync pull: starting: reconciling remotes and resolving the sync source") {
-		t.Fatalf("sync pull progress missing the start announcement:\n%s", progress.String())
+	if !strings.Contains(progress, "lit: sync pull: starting: reconciling remotes and resolving the sync source") {
+		t.Fatalf("sync pull progress missing the start announcement:\n%s", progress)
 	}
-	if !strings.Contains(progress.String(), "lit: sync pull: pulling lit data from origin/master") {
-		t.Fatalf("sync pull progress missing the transfer announcement:\n%s", progress.String())
+	if !strings.Contains(progress, "lit: sync pull: pulling lit data from origin/master") {
+		t.Fatalf("sync pull progress missing the transfer announcement:\n%s", progress)
 	}
 }
 
@@ -224,10 +230,12 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 	}
 
 	fresh, freshWS := consumerOf("bravo")
-	progress := captureProgress(t)
-	runCLIInDir(t, fresh, "init", "--skip-hooks")
-	if !strings.Contains(progress.String(), "lit cannot sync with the git remote (`lit sync remote ls` says why); starting with an empty backlog") {
-		t.Fatalf("init beside my.fork with no lit data: progress missing the fresh start:\n%s", progress.String())
+	_, progress, err := runCLIInDirSplit(t, fresh, "init", "--skip-hooks")
+	if err != nil {
+		t.Fatalf("init beside my.fork with no lit data error = %v\nstderr:\n%s", err, progress)
+	}
+	if !strings.Contains(progress, "lit cannot sync with the git remote (`lit sync remote ls` says why); starting with an empty backlog") {
+		t.Fatalf("init beside my.fork with no lit data: progress missing the fresh start:\n%s", progress)
 	}
 	if _, err := os.Stat(freshWS.DatabasePath); err != nil {
 		t.Fatalf("init beside my.fork with no lit data created no store: %v", err)
@@ -443,8 +451,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	// told "starting fresh" by a command that then refuses to.
 	writeAbandonedAdoptMarker()
 	runGit(t, consumer, "remote", "remove", "origin")
-	progress := captureProgress(t)
-	out, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks")
+	out, progress, initErr := runCLIInDirSplit(t, consumer, "init", "--skip-hooks")
 	if initErr == nil {
 		t.Fatalf("Run(init, remote gone) error = nil, want the interrupted-adopt refusal; output:\n%s", out)
 	}
@@ -453,8 +460,8 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 			t.Fatalf("init error = %q, want it to contain %q", initErr.Error(), want)
 		}
 	}
-	if strings.Contains(progress.String(), "empty backlog") {
-		t.Fatalf("init narrated a start-fresh decision it then refused:\n%s", progress.String())
+	if strings.Contains(progress, "empty backlog") {
+		t.Fatalf("init narrated a start-fresh decision it then refused:\n%s", progress)
 	}
 }
 
@@ -524,20 +531,32 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 		adoptRemoteTimeout = prevTimeout
 	}()
 
+	// The stand-in prints while the run waits on it, then outlives the run
+	// and prints again: the first line belongs on the run's stderr, the
+	// second must never reach it.
 	started := make(chan struct{})
-	adoptRemoteTicketsBlockingFn = func(ctx context.Context, _ environ.Env, ws workspace.Info) initSyncOutcome {
+	abandoned := make(chan struct{})
+	adoptRemoteTicketsBlockingFn = func(ctx context.Context, stderr io.Writer, _ environ.Env, ws workspace.Info) initSyncOutcome {
+		fmt.Fprintln(stderr, "while the run waits")
 		close(started)
 		<-ctx.Done() // a fetch that never finishes until it is abandoned
+		fmt.Fprintln(stderr, "after the run returned")
+		close(abandoned)
 		return initSyncOutcome{State: initSyncAdopted, Remote: "origin", Branch: "master"}
 	}
 	adoptRemoteTimeout = 20 * time.Millisecond
 
-	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), testEnv(), workspace.Info{})
+	var stderr bytes.Buffer
+	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, testEnv(), workspace.Info{})
 
 	select {
 	case <-started:
 	default:
 		t.Fatal("adopt body was never started")
+	}
+	<-abandoned
+	if got := stderr.String(); !strings.Contains(got, "while the run waits") || strings.Contains(got, "after the run returned") {
+		t.Fatalf("run stderr = %q, want the line written while the run waited and nothing the abandoned adopt wrote after it returned", got)
 	}
 	if outcome.State != initSyncFailed {
 		t.Fatalf("outcome.State = %q, want %q (hard-stop must fail loudly)", outcome.State, initSyncFailed)
@@ -586,6 +605,15 @@ func newEpicInDir(t *testing.T, dir, title string) string {
 func runCLIInDirAllowError(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	return runCLIInDirWithStdin(t, dir, "", args...)
+}
+
+// runCLIInDirSplit is runCLIInDirAllowError with the run's stdout and stderr
+// kept apart, for a test that asserts on what the command warned or narrated.
+func runCLIInDirSplit(t *testing.T, dir string, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	runErr := Run(context.Background(), dirInvocation(dir, &out, &errOut, args))
+	return out.String(), errOut.String(), runErr
 }
 
 // runCLIInDirWithStdin is runCLIInDirAllowError with stdin as what the command

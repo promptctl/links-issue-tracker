@@ -36,7 +36,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 		t.Fatalf("first receive decision = %q, want %q", first.Decision, storage.SyncReceiveUpToDate)
 	}
 	wantRecord := "origin " + remote + "\n" + remoteDoltHead(t, remote) + "\trefs/dolt/data\n"
-	if got := string(readReceivedRefs(ws)); got != wantRecord {
+	if got := string(readReceivedRefs(testStderr(t), ws)); got != wantRecord {
 		t.Fatalf("received-refs record = %q, want %q", got, wantRecord)
 	}
 	// The store as it stands now — first-ticket received, and the record saying
@@ -78,7 +78,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 		t.Fatalf("consumer backlog missing second-ticket after the remote moved:\n%s", backlog)
 	}
 	wantRecord = "origin " + remote + "\n" + remoteDoltHead(t, remote) + "\trefs/dolt/data\n"
-	if got := string(readReceivedRefs(ws)); got != wantRecord {
+	if got := string(readReceivedRefs(testStderr(t), ws)); got != wantRecord {
 		t.Fatalf("received-refs record after fast-forward = %q, want %q", got, wantRecord)
 	}
 
@@ -91,7 +91,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if backlog := runCLIInDir(t, consumer, "backlog"); strings.Contains(backlog, "second-ticket") {
 		t.Fatalf("restore did not take the consumer back to first-only:\n%s", backlog)
 	}
-	if got := readReceivedRefs(ws); got != nil {
+	if got := readReceivedRefs(testStderr(t), ws); got != nil {
 		t.Fatalf("received-refs record survived a snapshot restore: %q", got)
 	}
 	receiveNow(t, consumer)
@@ -102,7 +102,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if backlog := runCLIInDir(t, consumer, "backlog"); !strings.Contains(backlog, "second-ticket") {
 		t.Fatalf("consumer backlog missing second-ticket after the restore's receive:\n%s", backlog)
 	}
-	if got := string(readReceivedRefs(ws)); got != wantRecord {
+	if got := string(readReceivedRefs(testStderr(t), ws)); got != wantRecord {
 		t.Fatalf("received-refs record after the restore's receive = %q, want %q", got, wantRecord)
 	}
 
@@ -128,7 +128,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if traces[1].Decision != "error" {
 		t.Fatalf("second trace decision = %q, want error (the fetch ran and failed)", traces[1].Decision)
 	}
-	if got := string(readReceivedRefs(ws)); got != wantRecord {
+	if got := string(readReceivedRefs(testStderr(t), ws)); got != wantRecord {
 		t.Fatalf("a failed receive rewrote the received-refs record: %q", got)
 	}
 }
@@ -242,8 +242,8 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 			// remote the receive fetched, even when the question went unanswered.
 			outcome := tc.outcome
 			outcome.remote = observed.remote
-			recordReceived(ws, outcome, tc.observed)
-			if got := readReceivedRefs(ws); string(got) != string(tc.wantRecord) {
+			recordReceived(testStderr(t), ws, outcome, tc.observed)
+			if got := readReceivedRefs(testStderr(t), ws); string(got) != string(tc.wantRecord) {
 				t.Fatalf("record = %q, want %q", got, tc.wantRecord)
 			}
 			_, err := os.Stat(fetchSuccessMarkerPath(ws, observed.remote))

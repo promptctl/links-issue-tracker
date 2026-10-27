@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -48,7 +49,7 @@ type idPrefixCount struct {
 // store, so requiring one here would send each command's remediation to the
 // other. Not-initialized is read as the census of an absent store; every other
 // open failure propagates. [LAW:no-silent-failure]
-func readWorkspaceIDPrefixCensus(ctx context.Context, env environ.Env, ws workspace.Info) (census idPrefixCensus, err error) {
+func readWorkspaceIDPrefixCensus(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) (census idPrefixCensus, err error) {
 	st, err := engine.Open(ctx, env, engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if errors.Is(err, store.ErrWorkspaceNotInitialized) {
 		return idPrefixCensus{noStore: true}, nil
@@ -63,7 +64,7 @@ func readWorkspaceIDPrefixCensus(ctx context.Context, env environ.Env, ws worksp
 			err = cerr
 		}
 	}()
-	reportOpenMigration(ctx, storage.OpenMigration(st))
+	reportOpenMigration(ctx, stderr, storage.OpenMigration(st))
 	return readIDPrefixCensus(ctx, st)
 }
 

@@ -438,7 +438,7 @@ func TestRecordSyncCommandTraceErrorPath(t *testing.T) {
 	}
 
 	cause := fmt.Errorf("simulated backend failure")
-	recordSyncCommandTrace(testEnv(), ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})
+	recordSyncCommandTrace(testStderr(t), testEnv(), ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})
 
 	records := readSyncTraceRecords(t, ws)
 	if len(records) != 1 {

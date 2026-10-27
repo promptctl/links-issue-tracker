@@ -135,8 +135,8 @@ const (
 // separate process. The automation-trace env is set here so a push that runs
 // and fails records a trace through the one shared writer the pre-push hook
 // already uses. [LAW:one-source-of-truth]
-func spawnBackgroundMirror(ctx context.Context, env environ.Env, ws workspace.Info, parentPID int) error {
-	return spawnDetachedWorker(ctx, ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(env), parentPID)
+func spawnBackgroundMirror(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, parentPID int) error {
+	return spawnDetachedWorker(ctx, stderr, ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(env), parentPID)
 }
 
 // detachedWorkerLeaf is the worker side of spawnDetachedWorker, the one entry
@@ -162,7 +162,7 @@ func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context
 		}
 		loc := workspace.LocationFromStorageDir(*storageDir)
 		keepWorkerHoldFromChildren()
-		err := work(ctx, inv, buildWorkerWorkspace(ctx, inv.Env, loc, inv.Stdin), *parentPID)
+		err := work(ctx, inv, buildWorkerWorkspace(ctx, inv.Stderr, inv.Env, loc, inv.Stdin), *parentPID)
 		// The workspace's store, once, after the worker's own closes: the clones
 		// a worker pushes and fetches through are its means, not the store it
 		// ran against, and one fact read at each of their closes would keep only
@@ -180,7 +180,7 @@ func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context
 // from its stdin. [LAW:one-type-per-behavior] the mirror and the receive are
 // two instances of one detached worker; what differs is the subcommand, the
 // log and the environment, all values.
-func spawnDetachedWorker(ctx context.Context, ws workspace.Info, subcommand, logName string, env environ.Env, parentPID int) error {
+func spawnDetachedWorker(ctx context.Context, stderr io.Writer, ws workspace.Info, subcommand, logName string, env environ.Env, parentPID int) error {
 	self, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve lit binary: %w", err)
@@ -219,11 +219,11 @@ func spawnDetachedWorker(ctx context.Context, ws workspace.Info, subcommand, log
 	// than swallowed.
 	logPath := filepath.Join(ws.StorageDir, logName)
 	if _, rotateErr := rotateLog(logPath, workerLogMaxBytes); rotateErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: %s rotation failed (%v); the log keeps growing past its cap\n", logName, rotateErr)
+		fmt.Fprintf(stderr, "lit: %s rotation failed (%v); the log keeps growing past its cap\n", logName, rotateErr)
 	}
 	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if logErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: %s unavailable (%v); background worker output will be discarded\n", logName, logErr)
+		fmt.Fprintf(stderr, "lit: %s unavailable (%v); background worker output will be discarded\n", logName, logErr)
 	} else {
 		cmd.Stdout, cmd.Stderr = logFile, logFile
 	}
@@ -312,9 +312,9 @@ func backgroundMirrorLeaf() bareLeaf {
 		releaseBeacon, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
 		if beaconErr != nil {
 			if ctx.Err() != nil {
-				return teardownMirror(inv.Env, ws, ctx.Err(), stopAnswering)
+				return teardownMirror(inv.Stderr, inv.Env, ws, ctx.Err(), stopAnswering)
 			}
-			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr), stopAnswering)
+			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr), stopAnswering)
 		}
 		var stopOnce sync.Once
 		stopAnswering = func() {
@@ -326,7 +326,7 @@ func backgroundMirrorLeaf() bareLeaf {
 				// kernel's on-exit release remains the backstop.
 				// [LAW:no-silent-failure]
 				if relErr := releaseBeacon(); relErr != nil {
-					fmt.Fprintf(os.Stderr, "lit: mirror beacon not released (%v); concurrent claims may read this dying mirror as live until process exit\n", relErr)
+					fmt.Fprintf(inv.Stderr, "lit: mirror beacon not released (%v); concurrent claims may read this dying mirror as live until process exit\n", relErr)
 				}
 			})
 		}
@@ -340,9 +340,9 @@ func backgroundMirrorLeaf() bareLeaf {
 		// [LAW:no-ambient-temporal-coupling]
 		if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 			if ctx.Err() != nil {
-				return teardownMirror(inv.Env, ws, ctx.Err(), stopAnswering)
+				return teardownMirror(inv.Stderr, inv.Env, ws, ctx.Err(), stopAnswering)
 			}
-			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, fmt.Errorf(
+			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, fmt.Errorf(
 				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
 				parentPID, workerParentWaitTimeout), stopAnswering)
 		}
@@ -351,7 +351,7 @@ func backgroundMirrorLeaf() bareLeaf {
 		// written while the spawning command may still be writing its own.
 		// [LAW:no-ambient-temporal-coupling]
 		if built.failed != nil {
-			return completeMirrorWithoutAttempt(ctx, inv.Env, ws, built.failed, stopAnswering)
+			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, built.failed, stopAnswering)
 		}
 
 		for {
@@ -359,11 +359,11 @@ func backgroundMirrorLeaf() bareLeaf {
 			// SIGTERM grace window), starting another engine cycle would fight the
 			// shutdown for its last seconds. [LAW:no-ambient-temporal-coupling]
 			if ctx.Err() != nil {
-				return teardownMirror(inv.Env, ws, ctx.Err(), stopAnswering)
+				return teardownMirror(inv.Stderr, inv.Env, ws, ctx.Err(), stopAnswering)
 			}
 			release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
 			if err != nil {
-				return completeMirrorWithoutAttempt(ctx, inv.Env, ws, fmt.Errorf("acquire sync-push lock: %w", err), stopAnswering)
+				return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, fmt.Errorf("acquire sync-push lock: %w", err), stopAnswering)
 			}
 			if !acquired {
 				// Lost the single-flight race: the holder's post-release re-check
@@ -381,7 +381,7 @@ func backgroundMirrorLeaf() bareLeaf {
 			// Replaced on the worker's one Info, so the cycle and everything after
 			// it read the same remotes. [LAW:one-source-of-truth]
 			ws.Remotes = ws.Remotes.Reread()
-			attempted := mirrorCycle(ctx, inv.Env, inv.Stdout, ws, stopAnswering)
+			attempted := mirrorCycle(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, stopAnswering)
 			// Released only after the cycle's engine has closed (mirrorCycle's
 			// deferred Close), so the lock brackets the whole session. The kernel
 			// drops the flock on process exit, so an unlock error cannot strand
@@ -399,7 +399,7 @@ func backgroundMirrorLeaf() bareLeaf {
 				// marker, or a marker this cycle's own clear failed to remove) is
 				// terminal, loudly: cycling on it would push forever against a
 				// marker that never goes away. [LAW:no-silent-failure]
-				recordMirrorTraceError(inv.Env, ws, recheckErr)
+				recordMirrorTraceError(inv.Stderr, inv.Env, ws, recheckErr)
 				return nil
 			}
 			if !again {
@@ -431,10 +431,10 @@ func backgroundMirrorLeaf() bareLeaf {
 // stopAnswering runs FIRST: a mirror being dismantled will never push, so it
 // must stop reading as an answerer before any teardown effect — the same
 // ordering contract completeMirrorWithoutAttempt enforces.
-func teardownMirror(env environ.Env, ws workspace.Info, cause error, stopAnswering func()) error {
+func teardownMirror(stderr io.Writer, env environ.Env, ws workspace.Info, cause error, stopAnswering func()) error {
 	stopAnswering()
-	clearMirrorPending(ws)
-	recordMirrorTraceError(env, ws, cause)
+	clearMirrorPending(stderr, ws)
+	recordMirrorTraceError(stderr, env, ws, cause)
 	return nil
 }
 
@@ -573,8 +573,8 @@ func cloneLiveStore(ctx context.Context, ws workspace.Info, base string, underHo
 // copy, it is a stalled one, and the cut is reported as such through the
 // could-not-attempt seam — the hold explanation names the step so the reader
 // does not go looking for a network fault.
-func takeMirrorClone(ctx context.Context, ws workspace.Info) (mirrorClone, error) {
-	clone, cut, err := cloneLiveStore(ctx, ws, mirrorCloneBase(ws), func() { clearMirrorPending(ws) })
+func takeMirrorClone(ctx context.Context, stderr io.Writer, ws workspace.Info) (mirrorClone, error) {
+	clone, cut, err := cloneLiveStore(ctx, ws, mirrorCloneBase(ws), func() { clearMirrorPending(stderr, ws) })
 	if err != nil {
 		err = fmt.Errorf("take the push's clone: %w", err)
 		if cut {
@@ -709,12 +709,12 @@ func (p pushedHead) liveStoreStep() liveStoreStep {
 // push= too, under its own deadline; its share is history_bound.elapsed_ms.
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
-func mirrorCycle(ctx context.Context, env environ.Env, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
+func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
 	start := time.Now()
 	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s, push deadline %s)\n", start.UTC().Format(time.RFC3339), store.MirrorHoldBudget, store.MirrorPushDeadline)
-	clone, err := takeMirrorClone(ctx, ws)
+	clone, err := takeMirrorClone(ctx, stderr, ws)
 	if err != nil {
-		_ = completeMirrorWithoutAttempt(ctx, env, ws, err, stopAnswering)
+		_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, err, stopAnswering)
 		fmt.Fprintf(log, "%s mirror cycle end attempted=false push_deadline_cut=false hold=%s elapsed=%s\n",
 			time.Now().UTC().Format(time.RFC3339), clone.held.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 		return false
@@ -738,16 +738,16 @@ func mirrorCycle(ctx context.Context, env environ.Env, log io.Writer, ws workspa
 		openElapsed = time.Since(pushStart)
 		if err != nil {
 			ending = cutByPushDeadline(pushCtx, ctx, fmt.Errorf("open sync store on the clone: %w", err))
-			_ = completeMirrorWithoutAttempt(ctx, env, ws, ending, stopAnswering)
+			_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, ending, stopAnswering)
 			return false
 		}
 		defer closeStore()
-		landed, ending = mirrorOnce(pushCtx, ctx, env, session, ws)
+		landed, ending = mirrorOnce(pushCtx, ctx, stderr, env, session, ws)
 		return true
 	}()
 	pushElapsed := time.Since(pushStart)
 
-	record, recordHeld := liveStoreLearns(ctx, env, log, ws, clone.liveClone, landed)
+	record, recordHeld := liveStoreLearns(ctx, stderr, env, log, ws, clone.liveClone, landed)
 	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s open=%s push=%s elapsed=%s\n",
 		time.Now().UTC().Format(time.RFC3339), attempted, pushDeadlineCutOf(ending),
 		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
@@ -765,12 +765,12 @@ func mirrorCycle(ctx context.Context, env environ.Env, log io.Writer, ws workspa
 // so it lands the clone's fetch and follows the same re-root, which arrives
 // at the hashes the clone pushed. [LAW:one-source-of-truth] the tracking ref
 // still says where the remote is, through the receive's own landing.
-func liveStoreLearns(ctx context.Context, env environ.Env, log io.Writer, ws workspace.Info, clone liveClone, landed pushedHead) (record store.PushedHeadRecord, recordHeld time.Duration) {
+func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, clone liveClone, landed pushedHead) (record store.PushedHeadRecord, recordHeld time.Duration) {
 	step := landed.liveStoreStep()
 	var stepErr error
 	switch step {
 	case liveStoreReceives:
-		stepErr = receivePushedReRoot(ctx, env, ws, clone, landed)
+		stepErr = receivePushedReRoot(ctx, stderr, env, ws, clone, landed)
 		fmt.Fprintf(log, "%s mirror step=receive_reroot received=%t err=%v\n", time.Now().UTC().Format(time.RFC3339), stepErr == nil, stepErr)
 	case liveStoreRecords:
 		recordStart := time.Now()
@@ -795,7 +795,7 @@ func liveStoreLearns(ctx context.Context, env environ.Env, log io.Writer, ws wor
 			} else {
 				stepErr = fmt.Errorf("record the pushed head on the live store (freshness reads say \"not pushed\" until the next fetch): %w", recordErr)
 			}
-			recordMirrorTraceError(env, ws, stepErr)
+			recordMirrorTraceError(stderr, env, ws, stepErr)
 		}
 		fmt.Fprintf(log, "%s mirror hold released step=record elapsed=%s ref=%s\n", time.Now().UTC().Format(time.RFC3339), recordHeld.Round(time.Millisecond), record)
 	}
@@ -817,16 +817,16 @@ func liveStoreLearns(ctx context.Context, env environ.Env, log io.Writer, ws wor
 // of post-fetch stops and leaves writing it to the automatic receive, which
 // fetches past the head this push moved and counts its own stop
 // (leaveUnsettledRun).
-func receivePushedReRoot(ctx context.Context, env environ.Env, ws workspace.Info, clone liveClone, landed pushedHead) error {
+func receivePushedReRoot(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
-	outcome, closeLive := performSyncReceive(ctx, env, ws, clone, receiveFetch{target: target, pruned: landed.pruned}, leaveUnsettledRun(ws.DatabasePath))
+	outcome, closeLive := performSyncReceive(ctx, stderr, env, ws, clone, receiveFetch{target: target, pruned: landed.pruned}, leaveUnsettledRun(ws.DatabasePath))
 	if err := closeLive(); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: on-change mirror: live store not closed cleanly after receiving its re-rooted push: %v\n", err)
+		fmt.Fprintf(stderr, "lit: on-change mirror: live store not closed cleanly after receiving its re-rooted push: %v\n", err)
 	}
 	if outcome.traceErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
+		fmt.Fprintf(stderr, "lit: on-change mirror: receive trace not recorded: %v\n", outcome.traceErr)
 	}
-	surfaceReceiveOutcome(ctx, env, ws, outcome, time.Now())
+	surfaceReceiveOutcome(ctx, stderr, env, ws, outcome, time.Now())
 	if outcome.err != nil {
 		return fmt.Errorf("receive the re-rooted push on the live store: stopped at %s: %w", outcome.stopped, outcome.err)
 	}
@@ -929,7 +929,7 @@ func pushDeadlineCutExplanation() error {
 // commit that lands after the clone is a fresh mirror-pending claim, and the
 // caller's post-release re-check answers it with another whole cycle. The
 // unsynced window shrinks toward zero without ever blocking a mutation.
-func mirrorOnce(ctx, completionCtx context.Context, env environ.Env, session syncSession, ws workspace.Info) (pushedHead, error) {
+func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info) (pushedHead, error) {
 	// The mirror pushes without compaction, from a clone: SyncPushFromClone,
 	// never the compact-and-push variant the explicit command uses. The clone
 	// variant is what makes a race with that explicit command safe — nothing
@@ -937,18 +937,18 @@ func mirrorOnce(ctx, completionCtx context.Context, env environ.Env, session syn
 	// this one is in flight, and the rejection that follows is judged by
 	// whether the remote carries the clone's head, not reported as a failure
 	// over a remote that is fully up to date.
-	outcome, err := performSyncPush(ctx, completionCtx, env, session, ws, "", false, false, session.syncer.SyncPushFromClone)
+	outcome, err := performSyncPush(ctx, completionCtx, stderr, env, session, ws, "", false, false, session.syncer.SyncPushFromClone)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
 		// own deferred completion already recorded the outcome, but no trace,
 		// so this is the event's one trace owner. [LAW:single-enforcer]
-		recordMirrorTraceError(env, ws, err)
+		recordMirrorTraceError(stderr, env, ws, err)
 		return pushedHead{}, err
 	}
 	// performSyncPush records its own trace (push-ok, push-failure, or skip). If
 	// that trace write itself failed, surface it rather than drop it. [LAW:no-silent-failure]
 	if outcome.traceErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: on-change mirror trace not recorded: %v\n", outcome.traceErr)
+		fmt.Fprintf(stderr, "lit: on-change mirror trace not recorded: %v\n", outcome.traceErr)
 	}
 	// A remote schema ahead of this binary is NOT the "next push retries" case: it
 	// will never succeed until the binary is upgraded, so surface the one
@@ -958,7 +958,7 @@ func mirrorOnce(ctx, completionCtx context.Context, env environ.Env, session syn
 	// is already captured in the trace; the mutation is durable locally and the next
 	// push retries, so the mirror stops cleanly either way.
 	if failure, ok := remoteSchemaAheadFailure(outcome.pushErr); ok {
-		fmt.Fprintln(os.Stderr, failure.blockString())
+		fmt.Fprintln(stderr, failure.blockString())
 	}
 	if outcome.skip != syncTargetReady || outcome.pushErr != nil {
 		return pushedHead{}, outcome.pushErr
@@ -1030,11 +1030,11 @@ func waitForParentExit(ctx context.Context, parentPID int, getppid func() int, t
 // stop-before-effects ordering lives here and in teardownMirror, not at the
 // call sites, so every current and future pre-attempt death gets it by
 // construction.
-func completeMirrorWithoutAttempt(ctx context.Context, env environ.Env, ws workspace.Info, cause error, stopAnswering func()) error {
+func completeMirrorWithoutAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, cause error, stopAnswering func()) error {
 	stopAnswering()
-	clearMirrorPending(ws)
-	completePushAttempt(ctx, env, ws, syncPushOutcome{}, cause)
-	recordMirrorTraceError(env, ws, cause)
+	clearMirrorPending(stderr, ws)
+	completePushAttempt(ctx, stderr, env, ws, syncPushOutcome{}, cause)
+	recordMirrorTraceError(stderr, env, ws, cause)
 	return nil
 }
 
@@ -1047,7 +1047,7 @@ func completeMirrorWithoutAttempt(ctx context.Context, env environ.Env, ws works
 // already ran inside performSyncPush (a failure after the attempt started) or
 // is completeMirrorWithoutAttempt's job (a failure before it) — this function
 // writing it too would double-complete one attempt.
-func recordMirrorTraceError(env environ.Env, ws workspace.Info, cause error) {
+func recordMirrorTraceError(stderr io.Writer, env environ.Env, ws workspace.Info, cause error) {
 	if _, traceErr := maybeRecordAutomatedCommandTrace(
 		env,
 		ws,
@@ -1057,11 +1057,11 @@ func recordMirrorTraceError(env environ.Env, ws workspace.Info, cause error) {
 		cause.Error(),
 		map[string]string{"error": cause.Error()},
 	); traceErr != nil {
-		fmt.Fprintf(os.Stderr,
+		fmt.Fprintf(stderr,
 			"lit: on-change mirror could not record failure trace (%v); original error: %v\n",
 			traceErr, cause)
 	}
 	// recordSyncCommandTrace already sets Reason from cause; no metadata needed
 	// to carry the same string a second time.
-	recordSyncCommandTrace(env, ws, "lit sync push", "error", cause, nil)
+	recordSyncCommandTrace(stderr, env, ws, "lit sync push", "error", cause, nil)
 }

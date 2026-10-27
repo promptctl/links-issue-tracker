@@ -89,7 +89,7 @@ type initSyncOutcome struct {
 // without a real (slow, leak-prone) fetch. Production never reassigns it.
 var adoptRemoteTicketsBlockingFn = adoptRemoteTicketsBlocking
 
-func adoptRemoteTicketsOnInit(ctx context.Context, env environ.Env, ws workspace.Info) initSyncOutcome {
+func adoptRemoteTicketsOnInit(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) initSyncOutcome {
 	// dolt's fetch does NOT honor context cancellation mid-operation (verified: an
 	// expired deadline does not unblock a slow fetch), so a context timeout alone
 	// cannot stop a lockup. The adopt therefore runs in a goroutine we hard-stop
@@ -97,11 +97,15 @@ func adoptRemoteTicketsOnInit(ctx context.Context, env environ.Env, ws workspace
 	// lockout loudly. The short-lived `lit init` process reclaims the abandoned
 	// goroutine when it exits. A bounded, loud failure always beats an unbounded
 	// hang. [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
-	progressf("init", "checking whether a git remote already carries a lit backlog")
+	// The goroutine prints through a lease on stderr, revoked on either arm of
+	// the select, so an abandoned adopt can never write after this returns.
+	progressf(stderr, "init", "checking whether a git remote already carries a lit backlog")
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	lease := leaseStderr(stderr)
+	defer lease.revoke()
 	done := make(chan initSyncOutcome, 1)
-	go func() { done <- adoptRemoteTicketsBlockingFn(runCtx, env, ws) }()
+	go func() { done <- adoptRemoteTicketsBlockingFn(runCtx, lease, env, ws) }()
 	select {
 	case outcome := <-done:
 		return outcome
@@ -121,8 +125,8 @@ func adoptRemoteTicketsOnInit(ctx context.Context, env environ.Env, ws workspace
 	}
 }
 
-func adoptRemoteTicketsBlocking(ctx context.Context, env environ.Env, ws workspace.Info) initSyncOutcome {
-	plan, outcome := planRemoteAdopt(ctx, env, ws)
+func adoptRemoteTicketsBlocking(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) initSyncOutcome {
+	plan, outcome := planRemoteAdopt(ctx, stderr, env, ws)
 	if plan == nil {
 		// A terminal outcome was already decided (local tickets to preserve, no
 		// remote, remote empty, no lit data on the remote, or a resolution error).
@@ -132,11 +136,11 @@ func adoptRemoteTicketsBlocking(ctx context.Context, env environ.Env, ws workspa
 			// IS the moment init commits to a "start fresh" decision (no remote
 			// backlog adopted); naming the build removes the guesswork in a later
 			// "why didn't my ticket show up" investigation. [LAW:effects-at-boundaries]
-			progressf("init", "%s (%s)", situation, resolveBuildStatusNote(time.Now()))
+			progressf(stderr, "init", "%s (%s)", situation, resolveBuildStatusNote(time.Now()))
 		}
 		return outcome
 	}
-	progressf("init", "remote %s/%s carries lit data (refs/dolt/*); downloading the backlog now", plan.remote, plan.branch)
+	progressf(stderr, "init", "remote %s/%s carries lit data (refs/dolt/*); downloading the backlog now", plan.remote, plan.branch)
 	// The remote advertises lit data (refs/dolt/*) and the local store is empty,
 	// so adopt it by CLONING — the bulk whole-archive transfer the git-backed
 	// medium supports — rather than the chunk-by-chunk fetch pipeline, which
@@ -182,7 +186,7 @@ type adoptClonePlan struct {
 // from the authoritative refs/dolt/* signal directly — not derived from a
 // post-fetch tracking ref — so no slow fetch happens here.
 // [LAW:dataflow-not-control-flow] [LAW:types-are-the-program]
-func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*adoptClonePlan, initSyncOutcome) {
+func planRemoteAdopt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) (*adoptClonePlan, initSyncOutcome) {
 	// residueErr is non-nil when the workspace holds an interrupted adopt's
 	// residue. A residue workspace may still ADOPT (the clone path heals it),
 	// but it must never resolve to a benign "start fresh with an empty
@@ -207,7 +211,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	// not create the store, so a fresh init leaves the target path untouched for
 	// the clone to be its first writer. [LAW:no-silent-failure]
 	hasTickets, migrated, err := store.LocalHasTickets(ctx, env, ws.DatabasePath, ws.WorkspaceID)
-	reportOpenMigration(ctx, migrated)
+	reportOpenMigration(ctx, stderr, migrated)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
@@ -248,7 +252,7 @@ func planRemoteAdopt(ctx context.Context, env environ.Env, ws workspace.Info) (*
 	if !hasRefs {
 		return freshOutcome(initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote.String()})
 	}
-	branch, err := resolveSyncBranch(ctx, env, ws, syncable)
+	branch, err := resolveSyncBranch(ctx, stderr, env, ws, syncable)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote.String(), Error: err.Error()}
 	}
@@ -325,7 +329,7 @@ func writeInitSyncLine(w io.Writer, outcome initSyncOutcome, buildNote string) e
 // decision itself already happened one way or the other by this point, and
 // failing to durably log it does not undo it or need to block the rest of
 // init. [LAW:effects-at-boundaries]
-func recordInitSyncTrace(env environ.Env, ws workspace.Info, outcome initSyncOutcome, now time.Time) {
+func recordInitSyncTrace(stderr io.Writer, env environ.Env, ws workspace.Info, outcome initSyncOutcome, now time.Time) {
 	status := "ok"
 	if outcome.State == initSyncFailed {
 		status = "error"
@@ -338,7 +342,7 @@ func recordInitSyncTrace(env environ.Env, ws workspace.Info, outcome initSyncOut
 		"remote":      outcome.Remote,
 		"sync_branch": outcome.Branch,
 	}
-	recordSyncTraceLogged(env, ws, syncTraceRecord{
+	recordSyncTraceLogged(stderr, env, ws, syncTraceRecord{
 		Command:   "lit init",
 		Decision:  string(outcome.State),
 		Status:    status,

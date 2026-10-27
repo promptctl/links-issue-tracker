@@ -5,23 +5,10 @@ import (
 	"testing"
 )
 
-// captureProgress redirects progress lines into a buffer for the test's
-// lifetime, restoring stderr on cleanup. These tests must not run in parallel
-// (they mutate a package var, like the adopt-timeout tests).
-func captureProgress(t *testing.T) *bytes.Buffer {
-	t.Helper()
-	prev := progressOut
-	buf := &bytes.Buffer{}
-	progressOut = buf
-	t.Cleanup(func() { progressOut = prev })
-	return buf
-}
-
 func TestProgressfPrefixesOperationAndTerminatesLine(t *testing.T) {
-	// serial: no t.Parallel — captureProgress swaps the package-level
-	// progressOut; parallel writers through progressf would race on it.
-	buf := captureProgress(t)
-	progressf("sync pull", "pulling lit data from %s/%s", "origin", "master")
+	t.Parallel()
+	var buf bytes.Buffer
+	progressf(&buf, "sync pull", "pulling lit data from %s/%s", "origin", "master")
 	want := "lit: sync pull: pulling lit data from origin/master\n"
 	if got := buf.String(); got != want {
 		t.Fatalf("progressf() wrote %q, want %q", got, want)
