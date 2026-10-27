@@ -52,17 +52,23 @@ func backupCreateLeaf() appLeaf {
 // takeBackup snapshots what read returns into the workspace's backups, then
 // prunes them to keep, through backup.Take, and puts what the take did on the
 // invocation's event, for `backup create` and a restore's pre-restore backup
-// alike. A nil Taken means nothing was written. [LAW:nothing-unseen]
-func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (model.Export, error)) (*backup.Taken, error) {
+// alike. A nil Written means nothing was written. [LAW:nothing-unseen]
+func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (model.Export, error)) (*backup.Written, error) {
 	taken, err := backup.Take(ctx, ws.StorageDir, keep, read)
 	if taken == nil {
 		return nil, err
 	}
-	telemetry.Set(ctx, "backup.snapshot", taken.Name)
-	telemetry.Set(ctx, "backup.refreshed", taken.Refreshed)
 	telemetry.Set(ctx, "backup.lock_wait_ms", taken.Waited.Milliseconds())
-	telemetry.Set(ctx, "backup.pruned", taken.Pruned)
-	return taken, err
+	telemetry.Set(ctx, "backup.residue_removed", taken.ResidueRemoved)
+	telemetry.Set(ctx, "backup.residue_stuck", taken.ResidueStuck)
+	written := taken.Written
+	if written == nil {
+		return nil, err
+	}
+	telemetry.Set(ctx, "backup.snapshot", written.Name)
+	telemetry.Set(ctx, "backup.refreshed", written.Refreshed)
+	telemetry.Set(ctx, "backup.pruned", written.Pruned)
+	return written, err
 }
 
 func backupListLeaf() appLeaf {

@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Durability says whether a replacement must survive a crash of the machine,
@@ -36,6 +37,30 @@ const (
 	Durable
 )
 
+// tempInfix names a write's temporary file <name>.tmp-<digits>, the digits
+// being what os.CreateTemp draws. It extends the target's name, so a pattern
+// that covers name* covers an in-flight write too (the statusline's git
+// exclude), and it never ends in the target's extension, so a reader that
+// picks files by extension (backup listing keeps *.json) passes it over.
+const tempInfix = ".tmp-"
+
+// TempTarget reports the name of the target a file named name is the
+// temporary file of, and whether name is one at all. It is the one parser of
+// the names Replace gives its temporary files, so a directory's owner that
+// knows no write into it is running can tell what a killed write left there
+// from everything else in it.
+func TempTarget(name string) (target string, ok bool) {
+	i := strings.LastIndex(name, tempInfix)
+	if i <= 0 {
+		return "", false
+	}
+	digits := name[i+len(tempInfix):]
+	if digits == "" || strings.Trim(digits, "0123456789") != "" {
+		return "", false
+	}
+	return name[:i], true
+}
+
 // WriteFile replaces name with data, as Replace does.
 func WriteFile(name string, data []byte, perm fs.FileMode, durability Durability) error {
 	return Replace(name, perm, durability, func(w io.Writer) error {
@@ -55,12 +80,8 @@ func WriteFile(name string, data []byte, perm fs.FileMode, durability Durability
 func Replace(name string, perm fs.FileMode, durability Durability, write func(io.Writer) error) error {
 	syncFile, syncParent := durability.syncs()
 	dir := filepath.Dir(name)
-	// name.tmp-<random>: a sibling, on the target's filesystem, so the rename
-	// is atomic. It extends the target's name, so a pattern that covers name*
-	// covers an in-flight write too (the statusline's git exclude), and it
-	// never ends in the target's extension, so a reader that picks files by
-	// extension (backup listing keeps *.json) passes it over.
-	tmp, err := os.CreateTemp(dir, filepath.Base(name)+".tmp-*")
+	// A sibling, on the target's filesystem, so the rename is atomic.
+	tmp, err := os.CreateTemp(dir, filepath.Base(name)+tempInfix+"*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}

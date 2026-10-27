@@ -61,10 +61,11 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 		dir := t.TempDir()
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: dir}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
-		snapshot, err := backup.Take(context.Background(), dir, backup.Budget, func() (model.Export, error) { return export, nil })
+		taken, err := backup.Take(context.Background(), dir, backup.Budget, func() (model.Export, error) { return export, nil })
 		if err != nil {
 			t.Fatalf("backup.Take() error = %v", err)
 		}
+		snapshot := taken.Written
 		want, err := os.ReadFile(snapshot.Path)
 		if err != nil {
 			t.Fatalf("read snapshot: %v", err)
@@ -275,19 +276,25 @@ func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
 }
 
 // The snapshot a backup took, whether the set already held its content, how
-// long it waited for the set's lock and how many snapshots its prune removed
-// are on the event of `backup create` and of a restore alike.
+// long it waited for the set's lock, how many killed backups' temp files it
+// removed and could not remove, and how many snapshots its prune removed are
+// on the event of `backup create` and of a restore alike.
 func TestBackupEventNamesTheSnapshotItTook(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
-	name := strings.Fields(runCLIInDir(t, repo, "backup", "create"))[0]
-	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "false", "backup.pruned": "0"})
+	created := strings.Fields(runCLIInDir(t, repo, "backup", "create"))
+	name := created[0]
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "false", "backup.residue_removed": "0", "backup.residue_stuck": "0", "backup.pruned": "0"})
 	if wait, ok := writtenFacts(t, lastEvent(t))["backup.lock_wait_ms"].(float64); !ok || wait < 0 {
 		t.Errorf("backup create event backup.lock_wait_ms = %v, want a wait in milliseconds", wait)
 	}
+	residue := filepath.Join(filepath.Dir(created[1]), "killed.json.tmp-7")
+	if err := os.WriteFile(residue, []byte("{"), 0o644); err != nil {
+		t.Fatalf("leave a killed backup's temp file: %v", err)
+	}
 	runCLIInDir(t, repo, "backup", "create")
-	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true"})
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true", "backup.residue_removed": "1"})
 	runCLIInDir(t, repo, "backup", "restore", "--latest")
 	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "true"})
 

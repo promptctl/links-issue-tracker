@@ -15,13 +15,13 @@ import (
 )
 
 // take runs Take for export and fails the test unless it wrote a snapshot.
-func take(t *testing.T, storageDir string, keep int, export model.Export) *Taken {
+func take(t *testing.T, storageDir string, keep int, export model.Export) *Written {
 	t.Helper()
 	taken, err := Take(context.Background(), storageDir, keep, func() (model.Export, error) { return export, nil })
-	if err != nil || taken == nil {
+	if err != nil || taken == nil || taken.Written == nil {
 		t.Fatalf("Take(%s) = %+v, %v", export.WorkspaceID, taken, err)
 	}
-	return taken
+	return taken.Written
 }
 
 // age sets a snapshot's mtime ago into the past. A take's mtime is the

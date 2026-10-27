@@ -122,6 +122,36 @@ func TestAnInFlightWriteMatchesTheTargetsNameButNotItsExtension(t *testing.T) {
 	}
 }
 
+// The temporary file of a write in flight parses back to its target, and no
+// other name parses at all, so an owner removing what killed writes left in
+// its directory removes nothing else.
+func TestTempTargetParsesAnInFlightWriteAndNothingElse(t *testing.T) {
+	dir := t.TempDir()
+	name := filepath.Join(dir, "snapshot.json")
+	err := Replace(name, 0o644, Replaceable, func(w io.Writer) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		if len(entries) != 1 {
+			t.Fatalf("directory holds %v while the write is in flight, want the temp file alone", entries)
+		}
+		if target, ok := TempTarget(entries[0].Name()); !ok || target != "snapshot.json" {
+			t.Errorf("TempTarget(%q) = %q, %v; want snapshot.json, true", entries[0].Name(), target, ok)
+		}
+		_, err = w.Write([]byte("{}"))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("Replace() = %v", err)
+	}
+	for _, other := range []string{"snapshot.json", "snapshot.json.tmp", "snapshot.json.tmp-", "snapshot.json.tmp-12a", "snapshot.tmp-1.json", ".tmp-123"} {
+		if target, ok := TempTarget(other); ok {
+			t.Errorf("TempTarget(%q) = %q, true; want no target", other, target)
+		}
+	}
+}
+
 // The zero Durability is illegal too, so one nobody set cannot pass for
 // Replaceable; and the panic comes before anything is written.
 func TestAnIllegalDurabilityPanicsAndLeavesNothing(t *testing.T) {
