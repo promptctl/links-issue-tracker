@@ -115,7 +115,7 @@ func TestListRefusesAStoredLoopByName(t *testing.T) {
 	repo := newInitTestRepo(t)
 	outer, inner := newNestedEpicsInDir(t, repo)
 	ctx := context.Background()
-	ap, err := app.Open(ctx, testEnv(), resolvedWorkspace(t, repo), app.AccessWrite)
+	ap, err := app.Open(ctx, testEnv(), testStderr(t), resolvedWorkspace(t, repo), app.AccessWrite)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}

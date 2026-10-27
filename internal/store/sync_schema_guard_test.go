@@ -26,7 +26,7 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL s
 	}
 	future := registryMax + 1
 
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
@@ -192,7 +192,7 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	// Property: zero commits reached the remote. A fresh clone still sees the seed
 	// state, without B's edit.
 	adoptRemote(t, ctx, rootC, remoteURL)
-	stC, err := Open(ctx, testEnv(), rootC, "ws")
+	stC, err := Open(ctx, testEnv(), testStderr(), rootC, "ws")
 	if err != nil {
 		t.Fatalf("Open(C): %v", err)
 	}
@@ -264,7 +264,7 @@ func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id str
 	if err != nil {
 		t.Fatalf("MaxVersion: %v", err)
 	}
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(advance %s): %v", root, err)
 	}

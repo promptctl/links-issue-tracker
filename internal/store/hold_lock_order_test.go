@@ -18,7 +18,7 @@ func TestHoldForRefWriteRefusesUnderTheCommitLock(t *testing.T) {
 	root := migratedDoltDir(t)
 	lockedCtx := context.WithValue(context.Background(), commitLockContextKey{}, time.Now())
 	wrote := false
-	err := holdForRefWrite(lockedCtx, root, engineWrite, time.Minute, func(context.Context, *doltdb.DoltDB) error {
+	err := holdForRefWrite(lockedCtx, testStderr(), root, engineWrite, time.Minute, func(context.Context, *doltdb.DoltDB) error {
 		wrote = true
 		return nil
 	})

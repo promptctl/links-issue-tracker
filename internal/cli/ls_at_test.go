@@ -39,7 +39,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		t.Fatalf("WriteFile(config.json) error = %v", err)
 	}
 
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, loc.DatabasePath, wsID)
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, loc.DatabasePath, wsID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 
 	ctx := context.Background()
 	loc := workspace.LocationFromStorageDir(storeDir)
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, loc.DatabasePath, "ws-foreign")
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, loc.DatabasePath, "ws-foreign")
 	if err != nil {
 		t.Fatalf("engine.Open() after read error = %v — read left the store un-writable", err)
 	}
@@ -124,7 +124,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 	// The --at cwd contract: no workspace anywhere near the cwd.
 	chdir(t, t.TempDir())
 
-	release, err := store.LockWorkspaceExclusive(context.Background(), loc.DatabasePath)
+	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), loc.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	release, err := store.LockWorkspaceExclusive(context.Background(), ws.DatabasePath)
+	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}

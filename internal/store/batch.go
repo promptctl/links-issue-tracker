@@ -83,7 +83,7 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 		// that fails is reported, on the event and here, and the batch goes
 		// on. [LAW:no-silent-failure]
 		if err := s.deleteScratch(ctx, orphans, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: a batch could not delete the branches killed batches left: %v\n", err)
+			fmt.Fprintf(s.stderr, "lit: a batch could not delete the branches killed batches left: %v\n", err)
 		}
 		scratch := fmt.Sprintf("%s%d-%d", batchScratchPrefix, os.Getpid(), time.Now().UnixNano())
 		err := s.runOnScratch(ctx, from, []string{scratch}, landing.From, s.retryInPlace, func() error {

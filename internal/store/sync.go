@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -24,7 +24,7 @@ import (
 const minEmbeddedDoltVersion = "v0.40.5-0.20260314011441-62975ef6bf36"
 const minEmbeddedDriverVersion = "v0.2.1-0.20260314000741-0fe74e7ee31a"
 
-func OpenSync(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (_ *Store, err error) {
+func OpenSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	// [LAW:single-enforcer] Route through the one argument-validation boundary
 	// rather than re-inlining the same two checks, so OpenSync cannot drift from
 	// the rest of the store's exported entry points on what an acceptable path or
@@ -39,7 +39,7 @@ func OpenSync(ctx context.Context, env environ.Env, doltRootDir string, workspac
 	// EnsureDatabase so the bootstrap and the long-lived sync connection
 	// are both protected against a concurrent `lit snapshots restore`
 	// rotating the Dolt directory — the same invariant store.Open enforces.
-	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func OpenSync(ctx context.Context, env environ.Env, doltRootDir string, workspac
 		return nil, err
 	}
 	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
-	bootstrap, err := ensureDoltDatabase(ctx, doltRootDir, workspaceID)
+	bootstrap, err := ensureDoltDatabase(ctx, stderr, doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +70,7 @@ func OpenSync(ctx context.Context, env environ.Env, doltRootDir string, workspac
 	// earlier mirror's) still-live engine instead of colliding with it — the
 	// wait happens inside the eager engine open, on Dolt's own journal lock,
 	// bounded by coResidentHolderWait.
-	s, err := openStoreConnection(ctx, env, doltRootDir, workspaceID, engineWrite)
+	s, err := openStoreConnection(ctx, env, stderr, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +614,7 @@ func (s *Store) settleReceived(ctx context.Context, remote storage.RemoteName, b
 	var write storage.SettledLastWrite
 	if err := writeSettledLast(s.doltRootDir, time.Now()); err != nil {
 		write.Err = err.Error()
-		fmt.Fprintf(os.Stderr, "lit: the settle landed and stands, but this checkout's record of it (settled.last) was not written: %v\n", err)
+		fmt.Fprintf(s.stderr, "lit: the settle landed and stands, but this checkout's record of it (settled.last) was not written: %v\n", err)
 	}
 	s.settledLastWrites = append(s.settledLastWrites, write)
 	return result, nil
@@ -1437,7 +1437,7 @@ func parseUnixSeconds(raw sql.NullString) (sql.NullInt64, error) {
 
 func (s *Store) runSyncMutation(ctx context.Context, operation retryOperation) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, operation, s.reconnect)
+		return retryTransientGCContention(ctx, s.stderr, operation, s.reconnect)
 	})
 }
 

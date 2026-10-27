@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"sort"
 
@@ -107,7 +108,7 @@ type UnexplainedDrop struct {
 // [LAW:one-source-of-truth] dump is read-only across the whole loop; every pass
 // reuses it unchanged, so attempt N's conservation check cannot be contaminated
 // by attempt N-1 (each rejected candidate is discarded whole before the next).
-func Recover(ctx context.Context, env environ.Env, canonicalDoltDir string, dump RawDump, mapper Mapper, maxAttempts int) (RecoveryOutcome, error) {
+func Recover(ctx context.Context, env environ.Env, stderr io.Writer, canonicalDoltDir string, dump RawDump, mapper Mapper, maxAttempts int) (RecoveryOutcome, error) {
 	// [LAW:types-are-the-program] At least one pass must run, or Unconverged would
 	// carry an empty residual — making "failure with no residual" representable and
 	// breaking the variant's contract. The budget is a caller-supplied programming
@@ -129,7 +130,7 @@ func Recover(ctx context.Context, env environ.Env, canonicalDoltDir string, dump
 	parentDir := filepath.Dir(canonicalDoltDir)
 	feedback := ""
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		outcome, next, err := runAttempt(ctx, env, parentDir, dump, mapper, feedback)
+		outcome, next, err := runAttempt(ctx, env, stderr, parentDir, dump, mapper, feedback)
 		if err != nil {
 			return nil, err
 		}
@@ -151,12 +152,12 @@ func Recover(ctx context.Context, env environ.Env, canonicalDoltDir string, dump
 // advances or turns its failure into the feedback datum. A non-reconciling
 // candidate is discarded here, so the loop never carries residue forward — the
 // next pass starts from an empty tree.
-func runAttempt(ctx context.Context, env environ.Env, parentDir string, dump RawDump, mapper Mapper, feedback string) (RecoveryOutcome, string, error) {
+func runAttempt(ctx context.Context, env environ.Env, stderr io.Writer, parentDir string, dump RawDump, mapper Mapper, feedback string) (RecoveryOutcome, string, error) {
 	mapping, err := mapper(dump, feedback)
 	if err != nil {
 		return nil, fmt.Sprintf("the mapper could not propose a mapping: %v", err), nil
 	}
-	cand, err := RebuildCandidate(ctx, env, parentDir, dump, mapping)
+	cand, err := RebuildCandidate(ctx, env, stderr, parentDir, dump, mapping)
 	if err != nil {
 		// [LAW:no-silent-failure] Only a mapping rejection is self-repairable
 		// feedback. A build failure past a valid mapping — filesystem, store I/O,

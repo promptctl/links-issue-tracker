@@ -264,7 +264,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 		return done, &DowngradeSpanUnsupportedError{Current: done.From, Target: targetSchemaVersion, Support: state.support}
 	}
 
-	guard := newSnapshotGuard(s.doltRootDir, formatDowngradeSnapshotLabel(time.Now()))
+	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatDowngradeSnapshotLabel(time.Now()))
 	snap, err := guard.ensure(ctx)
 	if err != nil {
 		return done, fmt.Errorf("downgrade: %w", err)

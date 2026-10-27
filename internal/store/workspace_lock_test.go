@@ -32,7 +32,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -40,7 +40,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 		t.Fatalf("bootstrap Close() error = %v", err)
 	}
 
-	first, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("first OpenForRead() error = %v", err)
 	}
@@ -55,7 +55,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		s, err := OpenForRead(openCtx, testEnv(), doltRoot, "test-workspace-id")
+		s, err := OpenForRead(openCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 		if err != nil {
 			done <- err
 			return
@@ -86,13 +86,13 @@ func TestWorkspaceLockExclusiveRefusesWhileSharedHeld(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
 
-	release, err := LockWorkspaceExclusive(ctx, doltRoot)
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if err == nil {
 		_ = release()
 		t.Fatal("LockWorkspaceExclusive succeeded while a Store held a shared hold; expected refusal")
@@ -112,7 +112,7 @@ func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 
 	// Bootstrap the database so Open's only failure mode here is the lock.
-	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -120,7 +120,7 @@ func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 		t.Fatalf("bootstrap Close() error = %v", err)
 	}
 
-	release, err := LockWorkspaceExclusive(ctx, doltRoot)
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive() error = %v", err)
 	}
@@ -129,7 +129,7 @@ func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 	// Constrain the shared-side wait so this test stays bounded.
 	shortCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	_, err = acquireWorkspaceShared(shortCtx, doltRoot)
+	_, err = acquireWorkspaceShared(shortCtx, testStderr(), doltRoot)
 	if err == nil {
 		t.Fatal("acquireWorkspaceShared succeeded while exclusive held; expected refusal or context deadline")
 	}
@@ -149,7 +149,7 @@ func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -157,7 +157,7 @@ func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	release, err := LockWorkspaceExclusive(ctx, doltRoot)
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive after Close error = %v", err)
 	}
@@ -178,7 +178,7 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -187,13 +187,13 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 	}
 
 	// Hold exclusive to force a workspace-busy refusal from acquireWorkspaceShared.
-	exclusive, err := LockWorkspaceExclusive(ctx, doltRoot)
+	exclusive, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive() error = %v", err)
 	}
 	shortCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
-	_, sharedErr := acquireWorkspaceShared(shortCtx, doltRoot)
+	_, sharedErr := acquireWorkspaceShared(shortCtx, testStderr(), doltRoot)
 	if sharedErr == nil {
 		t.Fatal("acquireWorkspaceShared succeeded under exclusive hold; expected refusal")
 	}
@@ -203,12 +203,12 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 	_ = exclusive()
 
 	// Now hold shared and verify LockWorkspaceExclusive's refusal wraps the sentinel.
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open under no contention error = %v", err)
 	}
 	defer st.Close()
-	_, exclErr := LockWorkspaceExclusive(ctx, doltRoot)
+	_, exclErr := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if exclErr == nil {
 		t.Fatal("LockWorkspaceExclusive succeeded while shared held; expected refusal")
 	}
@@ -234,7 +234,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -244,7 +244,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 
 	// Hold the exclusive workspace lock — the shape lit snapshots restore
 	// takes while it rotates the database directory.
-	release, err := LockWorkspaceExclusive(ctx, doltRoot)
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive() error = %v", err)
 	}
@@ -261,7 +261,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 
 	shortCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	_, err = OpenForRead(shortCtx, testEnv(), doltRoot, "test-workspace-id")
+	_, err = OpenForRead(shortCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("OpenForRead succeeded while exclusive workspace lock held; expected workspace-busy refusal")
 	}
@@ -286,14 +286,14 @@ func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	defer st.Close()
 
 	// While the sync Store is open, exclusive acquire must refuse.
-	release, err := LockWorkspaceExclusive(ctx, doltRoot)
+	release, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if err == nil {
 		_ = release()
 		t.Fatal("LockWorkspaceExclusive succeeded while OpenSync Store held shared; expected refusal")
@@ -394,11 +394,11 @@ func TestMirrorBeaconLivenessProof(t *testing.T) {
 		t.Fatalf("nobody ever held the beacon; want BeaconUnheld, got %v", verdict)
 	}
 
-	release1, err := HoldMirrorBeacon(ctx, dbPath)
+	release1, err := HoldMirrorBeacon(ctx, testStderr(), dbPath)
 	if err != nil {
 		t.Fatalf("first shared hold: %v", err)
 	}
-	release2, err := HoldMirrorBeacon(ctx, dbPath)
+	release2, err := HoldMirrorBeacon(ctx, testStderr(), dbPath)
 	if err != nil {
 		t.Fatalf("second shared hold: %v (concurrent answerers are legal and must coexist)", err)
 	}
@@ -451,7 +451,7 @@ func TestMirrorBeaconLivenessProof(t *testing.T) {
 
 	// The probe took (and released) holds to answer; an answerer starting
 	// right after must still be able to take the beacon.
-	release3, err := HoldMirrorBeacon(ctx, dbPath)
+	release3, err := HoldMirrorBeacon(ctx, testStderr(), dbPath)
 	if err != nil {
 		t.Fatalf("hold after a completed probe: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
 
 	// Initialize the parent dir by opening and closing a Store once. The lock
 	// file lives in the workspace storage dir, so its parent must exist.
-	bootstrap, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("bootstrap Open() error = %v", err)
 	}
@@ -488,7 +488,7 @@ func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
 		t.Fatalf("bootstrap Close() error = %v", err)
 	}
 
-	first, err := LockWorkspaceExclusive(ctx, doltRoot)
+	first, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("first exclusive acquire error = %v", err)
 	}
@@ -501,7 +501,7 @@ func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		release, err := LockWorkspaceExclusive(ctx, doltRoot)
+		release, err := LockWorkspaceExclusive(ctx, testStderr(), doltRoot)
 		if err == nil {
 			_ = release()
 			secondErr = nil

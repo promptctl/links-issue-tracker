@@ -173,7 +173,7 @@ type workspaceSchemaReader struct {
 }
 
 func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context, stderr io.Writer) (applied int64, err error) {
-	st, err := engine.Open(ctx, r.env, engine.ReadOnly, r.ws.DatabasePath, r.ws.WorkspaceID)
+	st, err := engine.Open(ctx, r.env, stderr, engine.ReadOnly, r.ws.DatabasePath, r.ws.WorkspaceID)
 	if err != nil {
 		if v, ok := appliedVersionFromOpenErr(err); ok {
 			return v, nil

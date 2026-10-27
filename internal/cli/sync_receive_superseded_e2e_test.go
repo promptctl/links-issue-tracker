@@ -61,7 +61,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	if err != nil || observed.record() == nil {
 		t.Fatalf("askRemote() = %+v, %v; want the remote's advertisement", observed, err)
 	}
-	clone, err := takeReceiveClone(ctx, ws)
+	clone, err := takeReceiveClone(ctx, testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func assertLevelWithTheRemote(t *testing.T, dir string, target syncTarget) {
 	if err != nil {
 		t.Fatalf("resolve %s: %v", dir, err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), ws)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
 	}

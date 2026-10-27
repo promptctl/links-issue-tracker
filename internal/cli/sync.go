@@ -51,8 +51,8 @@ type syncSession struct {
 // openSyncSession opens a sync session on the workspace's store. The returned
 // close is the caller's to defer; it releases the workspace lock, so a caller
 // that drops it strands the lock.
-func openSyncSession(ctx context.Context, env environ.Env, ws workspace.Info) (syncSession, func() error, error) {
-	return openSyncSessionAt(ctx, env, ws.DatabasePath, ws.WorkspaceID)
+func openSyncSession(ctx context.Context, env environ.Env, stderr io.Writer, ws workspace.Info) (syncSession, func() error, error) {
+	return openSyncSessionAt(ctx, env, stderr, ws.DatabasePath, ws.WorkspaceID)
 }
 
 // openSyncSessionAt opens the sync engine on an explicit dolt root rather
@@ -60,8 +60,8 @@ func openSyncSession(ctx context.Context, env environ.Env, ws workspace.Info) (s
 // workspace's store, which is the same database at another path, under the
 // same workspace identity. [LAW:one-type-per-behavior] one opener, the path
 // is data.
-func openSyncSessionAt(ctx context.Context, env environ.Env, databasePath, workspaceID string) (syncSession, func() error, error) {
-	st, syncer, err := openSyncEngineAt(ctx, env, databasePath, workspaceID)
+func openSyncSessionAt(ctx context.Context, env environ.Env, stderr io.Writer, databasePath, workspaceID string) (syncSession, func() error, error) {
+	st, syncer, err := openSyncEngineAt(ctx, env, stderr, databasePath, workspaceID)
 	if err != nil {
 		return syncSession{}, nil, err
 	}
@@ -86,8 +86,8 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, databasePath, works
 // openSyncEngineAt is the one place a sync engine is opened and its
 // capability resolved. [LAW:single-enforcer] A sync session wraps it with the
 // close that reports what the engine did; compaction wraps it with a plain one.
-func openSyncEngineAt(ctx context.Context, env environ.Env, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
-	st, err := engine.Open(ctx, env, engine.Sync, databasePath, workspaceID)
+func openSyncEngineAt(ctx context.Context, env environ.Env, stderr io.Writer, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
+	st, err := engine.Open(ctx, env, stderr, engine.Sync, databasePath, workspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -171,7 +171,7 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
 		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-			session, closeStore, err := openSyncSession(ctx, inv.Env, ws)
+			session, closeStore, err := openSyncSession(ctx, inv.Env, inv.Stderr, ws)
 			if err != nil {
 				// The open boundary stamps holder contention so Run's trace can
 				// tell a starved OPEN from a handler-traced mid-command contention.

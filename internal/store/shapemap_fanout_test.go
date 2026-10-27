@@ -67,7 +67,7 @@ func TestFanOutConservesIssueHistoryAgainstReconcile(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first): %v", err)
 	}
@@ -97,7 +97,7 @@ func TestFanOutConservesIssueHistoryAgainstReconcile(t *testing.T) {
 	}
 
 	// Path B (lifeboat): dump below the gate, fan the issue_history table out.
-	dump, err := DumpRaw(ctx, testEnv(), doltRoot, "test-workspace-id")
+	dump, err := DumpRaw(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("DumpRaw: %v", err)
 	}

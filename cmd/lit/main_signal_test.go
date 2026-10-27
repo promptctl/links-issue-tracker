@@ -100,7 +100,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 
 	seizeCtx, cancelSeize := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelSeize()
-	releaseSeize, err := store.LockCommitPath(seizeCtx, ws.DatabasePath)
+	releaseSeize, err := store.LockCommitPath(seizeCtx, os.Stderr, ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("seize commit lock: %v", err)
 	}

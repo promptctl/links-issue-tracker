@@ -191,7 +191,7 @@ func TestTheReceiveWaitsForALiveMirror(t *testing.T) {
 	}
 	clearMirrorPending(testStderr(t), ws)
 
-	release, err := store.HoldMirrorBeacon(context.Background(), ws.DatabasePath)
+	release, err := store.HoldMirrorBeacon(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("hold the mirror beacon: %v", err)
 	}

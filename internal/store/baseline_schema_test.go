@@ -66,7 +66,7 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -96,7 +96,7 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 	}
 
 	// Reopen — reconcile must forward-migrate the workspace, NOT refuse it.
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v — reconcile must forward-migrate pre-converged workspaces, not refuse", err)
 	}

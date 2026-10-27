@@ -152,7 +152,7 @@ func adoptRemoteTicketsBlocking(ctx context.Context, stderr io.Writer, env envir
 	// each blob once. The probe connection is closed; AdoptRemoteByClone takes
 	// the exclusive workspace hold and swaps the Dolt directory in place.
 	// [LAW:decomposition] adopt is a clone, not a fetch.
-	if err := store.AdoptRemoteByClone(ctx, ws.DatabasePath, ws.WorkspaceID, plan.remote, plan.url, plan.branch); err != nil {
+	if err := store.AdoptRemoteByClone(ctx, stderr, ws.DatabasePath, ws.WorkspaceID, plan.remote, plan.url, plan.branch); err != nil {
 		// The remote DID carry data (we checked before cloning), so an empty
 		// store here is a hazard, not a benign result: surface it loudly and name
 		// the refs/dolt/* data we could not adopt so the operator knows not to
@@ -214,7 +214,7 @@ func planRemoteAdopt(ctx context.Context, stderr io.Writer, env environ.Env, ws 
 	// adopt, because adopt-by-clone replaces the store wholesale. The check does
 	// not create the store, so a fresh init leaves the target path untouched for
 	// the clone to be its first writer. [LAW:no-silent-failure]
-	hasTickets, migrated, err := store.LocalHasTickets(ctx, env, ws.DatabasePath, ws.WorkspaceID)
+	hasTickets, migrated, err := store.LocalHasTickets(ctx, env, stderr, ws.DatabasePath, ws.WorkspaceID)
 	reportOpenMigration(ctx, stderr, migrated)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}

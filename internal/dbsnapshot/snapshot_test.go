@@ -14,7 +14,7 @@ import (
 func TestTake_RejectsMissingSource(t *testing.T) {
 	t.Parallel()
 	db := filepath.Join(t.TempDir(), "nonexistent")
-	_, err := Take(context.Background(), db, "")
+	_, err := Take(context.Background(), os.Stderr, db, "")
 	if err == nil {
 		t.Fatalf("Take against missing source should error")
 	}
@@ -46,7 +46,7 @@ func TestTakeAndList_NewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if _, err := Take(context.Background(), src, ""); err != nil {
+		if _, err := Take(context.Background(), os.Stderr, src, ""); err != nil {
 			t.Fatalf("Take %d: %v", i, err)
 		}
 	}
@@ -121,7 +121,7 @@ func TestRestore_RoundTrip(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "sub", "deep.txt"), []byte("deep"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := Take(context.Background(), src, "")
+	snap, err := Take(context.Background(), os.Stderr, src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestRestore_TrailingSeparatorRotatesToSibling(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := Take(context.Background(), src, "")
+	snap, err := Take(context.Background(), os.Stderr, src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestRestore_SurvivesMissingDatabaseDir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := Take(context.Background(), src, "")
+	snap, err := Take(context.Background(), os.Stderr, src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestPrune_KeepsExactlyN(t *testing.T) {
 	}
 	snapshotsDir := DirFor(src)
 	for i := 0; i < 7; i++ {
-		if _, err := Take(context.Background(), src, ""); err != nil {
+		if _, err := Take(context.Background(), os.Stderr, src, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -362,12 +362,12 @@ func TestPruneMatching_KindAwareRetention(t *testing.T) {
 	// (label="kind-b"). With keep=2 against an "a" matcher, only "a"
 	// snapshots should be pruned, leaving 2 of them; every "b" must remain.
 	for i := 0; i < 6; i++ {
-		if _, err := Take(context.Background(), src, "kind-a"); err != nil {
+		if _, err := Take(context.Background(), os.Stderr, src, "kind-a"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if _, err := Take(context.Background(), src, "kind-b"); err != nil {
+		if _, err := Take(context.Background(), os.Stderr, src, "kind-b"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -410,7 +410,7 @@ func TestPruneMatching_NilMatchPrunesAll(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		if _, err := Take(context.Background(), src, ""); err != nil {
+		if _, err := Take(context.Background(), os.Stderr, src, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -433,7 +433,7 @@ func TestTake_LabelAppearsInName(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := Take(context.Background(), src, "pre-migration #5 / foo!")
+	snap, err := Take(context.Background(), os.Stderr, src, "pre-migration #5 / foo!")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +496,7 @@ func TestTake_HandlesRapidConsecutive(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for i := 0; i < 50; i++ {
-		s, err := Take(context.Background(), src, "")
+		s, err := Take(context.Background(), os.Stderr, src, "")
 		if err != nil {
 			t.Fatalf("Take %d: %v", i, err)
 		}
@@ -532,7 +532,7 @@ func TestTake_ConcurrentNoCollisions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, err := Take(context.Background(), src, "")
+			s, err := Take(context.Background(), os.Stderr, src, "")
 			if err != nil {
 				errs <- err
 				return

@@ -448,7 +448,7 @@ func (st migrationState) willMutate() bool {
 // [LAW:single-enforcer] Store-level Open routes all schema convergence through
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
 func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
-	guard := newSnapshotGuard(s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
+	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
 	op, pruneErr, fail := s.runMigration(ctx, guard)
 	if fail != nil {
 		fail.PruneErr = pruneErr

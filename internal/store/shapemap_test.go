@@ -347,7 +347,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		}
 	})
 
-	dump, err := DumpRaw(ctx, testEnv(), src, ws)
+	dump, err := DumpRaw(ctx, testEnv(), testStderr(), src, ws)
 	if err != nil {
 		t.Fatalf("DumpRaw: %v", err)
 	}

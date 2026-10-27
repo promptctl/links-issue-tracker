@@ -158,6 +158,9 @@ const (
 // it. end stops the ticker and waits out any write it had begun, so nothing
 // is written once end returns.
 type lockHold struct {
+	// stderr is the run's operator channel, where the hold reports what it
+	// cannot do.
+	stderr      io.Writer
 	storageDir  string
 	lockPath    string
 	privatePath string
@@ -193,11 +196,12 @@ type lockHold struct {
 // inside the store's long phase (phase). The observer it reports to is read
 // from the opener's context now, since the hold ends in a close that carries
 // none.
-func newLockHold(ctx context.Context, doltRootDir string, access engineAccess, phase *longPhase) *lockHold {
+func newLockHold(ctx context.Context, stderr io.Writer, doltRootDir string, access engineAccess, phase *longPhase) *lockHold {
 	observer := lockObserverFrom(ctx)
 	storageDir, lockPath := workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir)
 	privatePath, recordPath := lockHolderRecordNames(lockHolderDir(storageDir, lockPath))
 	return &lockHold{
+		stderr:      stderr,
 		storageDir:  storageDir,
 		lockPath:    lockPath,
 		privatePath: privatePath,
@@ -209,7 +213,7 @@ func newLockHold(ctx context.Context, doltRootDir string, access engineAccess, p
 		// same holder the same wait and read the same progress. One per open:
 		// backoff state is per-open, and the connector Resets it before each.
 		// [LAW:one-source-of-truth]
-		wait:   newHoldWait(storageDir, lockPath, coResidentHolderWaitNow, time.Now),
+		wait:   newHoldWait(stderr, storageDir, lockPath, coResidentHolderWaitNow, time.Now),
 		now:    time.Now,
 		held:   observer.Held,
 		waited: observer.Waited,
@@ -229,7 +233,7 @@ func (h *lockHold) record(ctx context.Context) func() error {
 	if !h.access.holdsLock() {
 		return func() error { return nil }
 	}
-	return recordLockHolder(ctx, h.storageDir, h.lockPath, h.privatePath, h.recordPath, func() error { return nil })
+	return recordLockHolder(ctx, h.stderr, h.storageDir, h.lockPath, h.privatePath, h.recordPath, func() error { return nil })
 }
 
 // under is ctx carrying this hold as Dolt's journal lock observer: the
@@ -255,7 +259,7 @@ func (h *lockHold) taken() {
 	h.mu.Lock()
 	if h.state != holdUnheld {
 		h.mu.Unlock()
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: Dolt took %s again under a hold that already took it; this hold is neither heartbeating for nor reporting the second\n", h.lockPath)
+		fmt.Fprintf(h.stderr, "lit: Dolt took %s again under a hold that already took it; this hold is neither heartbeating for nor reporting the second\n", h.lockPath)
 		return
 	}
 	now := h.now()
@@ -321,7 +325,7 @@ func (h *lockHold) announce(name string) {
 	defer h.mu.Unlock()
 	if err != nil {
 		if h.failures == 0 {
-			fmt.Fprintf(lockWaitNoticeWriter, "lit: could not write this process's heartbeat for %s (the lock is held; a contender waiting now may give up on a holder still working): %v\n", h.lockPath, err)
+			fmt.Fprintf(h.stderr, "lit: could not write this process's heartbeat for %s (the lock is held; a contender waiting now may give up on a holder still working): %v\n", h.lockPath, err)
 		}
 		h.failures++
 		return

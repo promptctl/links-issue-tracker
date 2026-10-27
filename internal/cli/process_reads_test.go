@@ -15,18 +15,21 @@ import (
 	"testing"
 )
 
-// processReads are the process-wide values no code Run can reach may read,
-// by import path: Run is handed its own copies in the Invocation cmd/lit's
-// main builds, and a second reader would make two runs in one process see each
-// other's. filepath.Abs is here because it reads os.Getwd for a relative path,
-// os.ExpandEnv because it reads os.Getenv, and os.TempDir and the user
-// directories because they read the variables that name them, inside the
+// processReads are the process-wide values no code Run can reach may read or
+// write, by import path: Run is handed its own copies in the Invocation
+// cmd/lit's main builds, and a second user would make two runs in one process
+// see each other's. filepath.Abs is here because it reads os.Getwd for a
+// relative path, os.ExpandEnv because it reads os.Getenv, os.TempDir and the
+// user directories because they read the variables that name them, and fmt's
+// and log's printers because they write os.Stdout and os.Stderr, inside the
 // standard library where a scan of this module cannot see it.
 // [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 var processReads = map[string][]string{
-	"os":            {"Getwd", "Args", "Stdin", "Getenv", "LookupEnv", "Environ", "ExpandEnv", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir"},
+	"os":            {"Getwd", "Args", "Stdin", "Stdout", "Stderr", "Getenv", "LookupEnv", "Environ", "ExpandEnv", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir"},
 	"path/filepath": {"Abs"},
 	"syscall":       {"Getenv", "Environ"},
+	"fmt":           {"Print", "Printf", "Println"},
+	"log":           {"Print", "Printf", "Println", "Fatal", "Fatalf", "Fatalln", "Panic", "Panicf", "Panicln", "Writer", "Default"},
 }
 
 // childBuilders are the ways to build a child process. A child built with one
@@ -81,7 +84,7 @@ func TestNothingRunReachesReadsTheProcess(t *testing.T) {
 	}
 	if len(found) > 0 {
 		sort.Strings(found)
-		t.Errorf("code cli.Run can reach reads the process or builds a child outside %s; take the value from the Invocation, and build the child with its Env:\n  %s", environBuilderDir, strings.Join(found, "\n  "))
+		t.Errorf("code cli.Run can reach reads or writes the process or builds a child outside %s; take the value from the Invocation, and build the child with its Env:\n  %s", environBuilderDir, strings.Join(found, "\n  "))
 	}
 }
 
@@ -229,7 +232,10 @@ func TestProcessScansFindEverySpelling(t *testing.T) {
 		{"environment reads", processReadsIn, `import "os"; func f() { os.Getenv("A"); os.LookupEnv("A"); _ = os.Environ(); os.ExpandEnv("$A") }`, []string{"os.Getenv", "os.LookupEnv", "os.Environ", "os.ExpandEnv"}},
 		{"syscall environment reads", processReadsIn, `import "syscall"; func f() { syscall.Getenv("A"); _ = syscall.Environ() }`, []string{"syscall.Getenv", "syscall.Environ"}},
 		{"directories the environment names", processReadsIn, `import "os"; func f() { os.UserHomeDir(); os.UserConfigDir(); os.UserCacheDir(); os.TempDir() }`, []string{"os.UserHomeDir", "os.UserConfigDir", "os.UserCacheDir", "os.TempDir"}},
-		{"other os names", processReadsIn, `import "os"; var w = os.Stdout; func f() { os.Getpid() }`, nil},
+		{"standard streams", processReadsIn, `import "os"; var w = os.Stdout; func f() { fmt.Fprintln(os.Stderr) }`, []string{"os.Stdout", "os.Stderr"}},
+		{"printers that write the standard streams", processReadsIn, `import ("fmt"; "log"); func f() { fmt.Println(); fmt.Printf(""); log.Printf(""); _ = log.Default() }`, []string{"fmt.Println", "fmt.Printf", "log.Printf", "log.Default"}},
+		{"printers handed a writer", processReadsIn, `import "fmt"; func f(w W) { fmt.Fprintln(w); _ = fmt.Sprintf("") }`, nil},
+		{"other os names", processReadsIn, `import "os"; func f() { os.Getpid() }`, nil},
 		{"same name, other package", processReadsIn, `import os "example.com/notos"; var r = os.Stdin`, nil},
 		{"exec constructors", childBuildsIn, `import "os/exec"; func f() { exec.Command("x"); exec.CommandContext(nil, "x") }`, []string{"os/exec.Command", "os/exec.CommandContext"}},
 		{"aliased exec", childBuildsIn, `import run "os/exec"; func f() { run.Command("x") }`, []string{"os/exec.Command"}},

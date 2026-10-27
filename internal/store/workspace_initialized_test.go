@@ -27,18 +27,18 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 		run  func(ctx context.Context, doltRoot string) error
 	}{
 		{"OpenForRead", func(ctx context.Context, doltRoot string) error {
-			st, err := OpenForRead(ctx, testEnv(), doltRoot, "ws")
+			st, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "ws")
 			if st != nil {
 				_ = st.Close()
 			}
 			return err
 		}},
 		{"DumpRaw", func(ctx context.Context, doltRoot string) error {
-			_, err := DumpRaw(ctx, testEnv(), doltRoot, "ws")
+			_, err := DumpRaw(ctx, testEnv(), testStderr(), doltRoot, "ws")
 			return err
 		}},
 		{"LockDoltJournalExclusive", func(ctx context.Context, doltRoot string) error {
-			release, err := LockDoltJournalExclusive(ctx, doltRoot)
+			release, err := LockDoltJournalExclusive(ctx, testStderr(), doltRoot)
 			if err == nil {
 				_ = release()
 			}
@@ -114,7 +114,7 @@ func TestDamagedDoltTreeIsNotReportedAsUninitialized(t *testing.T) {
 		t.Fatalf("seed the workspace root: %v", err)
 	}
 
-	release, err := LockDoltJournalExclusive(context.Background(), databasePath)
+	release, err := LockDoltJournalExclusive(context.Background(), testStderr(), databasePath)
 	if err == nil {
 		_ = release()
 		t.Fatal("LockDoltJournalExclusive() with no noms directory succeeded; want a refusal that does not mint Dolt's tree")

@@ -127,7 +127,7 @@ var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
 // copy whose retry must first reclaim a dead predecessor's store-sized corpse
 // is the motivating regime, and any wiring downstream of a successful take
 // (the retention tail, say) is unreachable in exactly that regime.
-func Take(ctx context.Context, databaseDir, label string) (Taken, error) {
+func Take(ctx context.Context, stderr io.Writer, databaseDir, label string) (Taken, error) {
 	// One explicit gate so a pre-canceled ctx refuses identically on every
 	// platform — Darwin's single-syscall Clonefile fast path would otherwise
 	// mint a snapshot the walk-based platforms refuse.
@@ -154,7 +154,7 @@ func Take(ctx context.Context, databaseDir, label string) (Taken, error) {
 	// sync_reconcile.go). [LAW:no-silent-failure] loud, but never a false
 	// failure of work that can still succeed.
 	if collectErr := collectOrphanedResidue(snapshotsDir); collectErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: could not collect orphaned snapshot residue (the take proceeds; collection retries next take): %v\n", collectErr)
+		fmt.Fprintf(stderr, "lit: could not collect orphaned snapshot residue (the take proceeds; collection retries next take): %v\n", collectErr)
 	}
 	releaseBeacon, acquired, err := filelock.Acquire(ctx, producerBeaconPath(snapshotsDir), false, producerBeaconRetryAttempts, producerBeaconRetryDelay)
 	if err != nil {
@@ -171,7 +171,7 @@ func Take(ctx context.Context, databaseDir, label string) (Taken, error) {
 	// a possibly-already-durable snapshot into a reported failure.
 	defer func() {
 		if relErr := releaseBeacon(); relErr != nil {
-			fmt.Fprintf(os.Stderr, "lit: could not release snapshot producer beacon (residue collection defers until this process exits): %v\n", relErr)
+			fmt.Fprintf(stderr, "lit: could not release snapshot producer beacon (residue collection defers until this process exits): %v\n", relErr)
 		}
 	}()
 	reserved, err := reserveSnapshotPaths(snapshotsDir, label)

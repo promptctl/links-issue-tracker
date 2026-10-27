@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -65,9 +66,12 @@ func (a engineAccess) routine() bool {
 
 type Store struct {
 	db *sql.DB
-	// env is the environment of the run that opened the store: the store's own
-	// git launches on its mirrors run in it (mirrorGit).
+	// env and stderr are the environment and the operator channel of the run
+	// that opened the store: the store's own git launches on its mirrors run
+	// in env (mirrorGit), and every notice it prints about work it did not
+	// fail lands on stderr.
 	env                  environ.Env
+	stderr               io.Writer
 	workspaceID          string
 	doltRootDir          string
 	access               engineAccess
@@ -219,20 +223,20 @@ type Store struct {
 // Open opens the store for a long write hold (engineWrite): the hold every
 // write takes unless it states it is routine. Its waiters fail after
 // coResidentHolderWait, naming it, as they always have.
-func Open(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (*Store, error) {
-	return openWrite(ctx, env, doltRootDir, workspaceID, engineWrite)
+func Open(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (*Store, error) {
+	return openWrite(ctx, env, stderr, doltRootDir, workspaceID, engineWrite)
 }
 
 // OpenRoutine opens the store for a routine write hold (engineWriteRoutine):
 // a command that makes a fixed number of issue changes. Its hold heartbeats
 // while its engine works (lockHold), so a hold slowed by a loaded machine is
 // waited out rather than failing the writers behind it.
-func OpenRoutine(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (*Store, error) {
-	return openWrite(ctx, env, doltRootDir, workspaceID, engineWriteRoutine)
+func OpenRoutine(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (*Store, error) {
+	return openWrite(ctx, env, stderr, doltRootDir, workspaceID, engineWriteRoutine)
 }
 
 // openWrite is the one write open, for either hold.
-func openWrite(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string, access engineAccess) (_ *Store, err error) {
+func openWrite(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string, access engineAccess) (_ *Store, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
@@ -242,7 +246,7 @@ func openWrite(ctx context.Context, env environ.Env, doltRootDir string, workspa
 	// Acquiring after would leave a window in which `lit snapshots restore`
 	// or an adopt could rotate the directory between the check and the
 	// install.
-	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -272,11 +276,11 @@ func openWrite(ctx context.Context, env environ.Env, doltRootDir string, workspa
 	if err = requireNoPendingAdopt(doltRootDir); err != nil {
 		return nil, err
 	}
-	bootstrap, err := ensureDoltDatabase(ctx, doltRootDir, workspaceID)
+	bootstrap, err := ensureDoltDatabase(ctx, stderr, doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(ctx, env, doltRootDir, workspaceID, access)
+	s, err := openStoreConnection(ctx, env, stderr, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, err
 	}
@@ -314,8 +318,8 @@ func openWrite(ctx context.Context, env environ.Env, doltRootDir string, workspa
 	return s, nil
 }
 
-func OpenForRead(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string) (_ *Store, err error) {
-	s, err := openInitialized(ctx, env, doltRootDir, workspaceID, engineRead)
+func OpenForRead(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (_ *Store, err error) {
+	s, err := openInitialized(ctx, env, stderr, doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +349,7 @@ func OpenForRead(ctx context.Context, env environ.Env, doltRootDir string, works
 	if err := s.Close(); err != nil {
 		return nil, err
 	}
-	writer, err := Open(ctx, env, doltRootDir, workspaceID)
+	writer, err := Open(ctx, env, stderr, doltRootDir, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("this read open found %s and handed off to the write open to bring it forward: %w", assessment, err)
 	}
@@ -361,15 +365,15 @@ func OpenForRead(ctx context.Context, env environ.Env, doltRootDir string, works
 // [LAW:single-enforcer] The read open and the below-the-gate entry points
 // (DumpRaw, Unquarantine) reach the database through this one sequence, so the
 // post-lock adopt check cannot be left out of any of them.
-func openInitialized(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
+func openInitialized(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	release, err := acquireLiveStoreHold(ctx, doltRootDir)
+	release, err := acquireLiveStoreHold(ctx, stderr, doltRootDir)
 	if err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(ctx, env, doltRootDir, workspaceID, access)
+	s, err := openStoreConnection(ctx, env, stderr, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, errors.Join(err, release())
 	}
@@ -425,11 +429,11 @@ func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
 // the lock is never re-entered.
 // [LAW:single-enforcer] one lock discipline for every write-capable
 // bootstrap, owned at the entry points that hold it.
-func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
+func EnsureDatabase(ctx context.Context, stderr io.Writer, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return storage.BootstrapNone, err
 	}
-	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
 	if err != nil {
 		return storage.BootstrapNone, err
 	}
@@ -444,7 +448,7 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 	if err := requireNoPendingAdopt(doltRootDir); err != nil {
 		return storage.BootstrapNone, err
 	}
-	return ensureDoltDatabase(ctx, doltRootDir, workspaceID)
+	return ensureDoltDatabase(ctx, stderr, doltRootDir, workspaceID)
 }
 
 // validateOpenArgs stays a pure argument check — no filesystem reads — so a
@@ -561,9 +565,9 @@ func (s *Store) Close() error {
 // engine does not: it never holds LOCK, and a record naming a reader would send
 // an operator after the wrong pid. The one branch is the open contract's own
 // discriminator. [LAW:dataflow-not-control-flow]
-func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
+func openStoreConnection(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	phase := &longPhase{}
-	db, hold, releaseEngineRecord, err := openEngine(ctx, doltRootDir, workspaceID, access, phase)
+	db, hold, releaseEngineRecord, err := openEngine(ctx, stderr, doltRootDir, workspaceID, access, phase)
 	if err != nil {
 		return nil, err
 	}
@@ -571,6 +575,7 @@ func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir strin
 		db:                  db,
 		phase:               phase,
 		env:                 env,
+		stderr:              stderr,
 		workspaceID:         workspaceID,
 		doltRootDir:         doltRootDir,
 		access:              access,
@@ -590,8 +595,8 @@ func openStoreConnection(ctx context.Context, env environ.Env, doltRootDir strin
 // openEngine opens the engine openStoreConnection describes (openHeldPool)
 // and returns it with its hold of LOCK (lockHold) and the release of its LOCK
 // holder record: a no-op for a read engine, which records nothing.
-func openEngine(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess, phase *longPhase) (*sql.DB, *lockHold, func() error, error) {
-	db, hold, err := openHeldPool(ctx, doltRootDir, workspaceID, doltDatabaseName, access, phase)
+func openEngine(ctx context.Context, stderr io.Writer, doltRootDir string, workspaceID string, access engineAccess, phase *longPhase) (*sql.DB, *lockHold, func() error, error) {
+	db, hold, err := openHeldPool(ctx, stderr, doltRootDir, workspaceID, doltDatabaseName, access, phase)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -609,8 +614,8 @@ func openEngine(ctx context.Context, doltRootDir string, workspaceID string, acc
 // statement that creates one, which its caller runs under the same hold
 // (lockHold.under). A contended open fails naming the holder
 // (wrapEngineOpenContention).
-func openHeldPool(ctx context.Context, doltRootDir, workspaceID, database string, access engineAccess, phase *longPhase) (*sql.DB, *lockHold, error) {
-	hold := newLockHold(ctx, doltRootDir, access, phase)
+func openHeldPool(ctx context.Context, stderr io.Writer, doltRootDir, workspaceID, database string, access engineAccess, phase *longPhase) (*sql.DB, *lockHold, error) {
+	hold := newLockHold(ctx, stderr, doltRootDir, access, phase)
 	db, err := openDoltPool(doltRootDir, workspaceID, database, hold)
 	if err != nil {
 		return nil, nil, err
@@ -668,7 +673,7 @@ func openHeldPool(ctx context.Context, doltRootDir, workspaceID, database string
 // and the heartbeats a waiter reads carry one hold's name.
 func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
-	hold := newLockHold(ctx, s.doltRootDir, s.access, s.phase)
+	hold := newLockHold(ctx, s.stderr, s.doltRootDir, s.access, s.phase)
 	next, err := openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, hold)
 	if err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
@@ -3093,9 +3098,9 @@ func nullableStringPtr(value *string) any {
 // are paid for only by the call that builds. [LAW:carrying-cost]
 //
 // Reports what this call did to make the database exist.
-func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
+func ensureDoltDatabase(ctx context.Context, stderr io.Writer, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
 	root := filepath.Clean(doltRootDir)
-	release, err := acquireBootstrapLock(ctx, root)
+	release, err := acquireBootstrapLock(ctx, stderr, root)
 	if err != nil {
 		return storage.BootstrapNone, err
 	}
@@ -3112,7 +3117,7 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 	if err != nil {
 		return storage.BootstrapNone, err
 	}
-	if err := buildDoltRoot(ctx, staging, workspaceID); err != nil {
+	if err := buildDoltRoot(ctx, stderr, staging, workspaceID); err != nil {
 		return storage.BootstrapNone, errors.Join(err, os.RemoveAll(staging))
 	}
 	if err := installDoltRoot(staging, root); err != nil {
@@ -3147,7 +3152,7 @@ func discardDeadBuilds(paths ...string) (storage.Bootstrap, error) {
 
 // buildDoltRoot lays a fresh Dolt root down at staging, which the caller has
 // cleared: the database created and its default branch named master.
-func buildDoltRoot(ctx context.Context, staging string, workspaceID string) error {
+func buildDoltRoot(ctx context.Context, stderr io.Writer, staging string, workspaceID string) error {
 	if err := os.MkdirAll(staging, 0o755); err != nil {
 		return fmt.Errorf("create bootstrap staging root: %w", err)
 	}
@@ -3157,7 +3162,7 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) erro
 	// still live. [LAW:no-ambient-temporal-coupling] The explicit Close IS the
 	// ordering owner — a deferred close would hold both engines at once.
 	if err := func() error {
-		db, hold, err := openHeldPool(ctx, staging, workspaceID, "", engineWrite, &longPhase{})
+		db, hold, err := openHeldPool(ctx, stderr, staging, workspaceID, "", engineWrite, &longPhase{})
 		if err != nil {
 			return err
 		}
@@ -3175,7 +3180,7 @@ func buildDoltRoot(ctx context.Context, staging string, workspaceID string) erro
 	}(); err != nil {
 		return err
 	}
-	db, hold, err := openHeldPool(ctx, staging, workspaceID, doltDatabaseName, engineWrite, &longPhase{})
+	db, hold, err := openHeldPool(ctx, stderr, staging, workspaceID, doltDatabaseName, engineWrite, &longPhase{})
 	if err != nil {
 		return err
 	}

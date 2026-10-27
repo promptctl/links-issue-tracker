@@ -25,7 +25,7 @@ func TestLockDoltJournalExclusiveRefusesUninitializedWorkspace(t *testing.T) {
 	t.Parallel()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	release, err := LockDoltJournalExclusive(context.Background(), doltRoot)
+	release, err := LockDoltJournalExclusive(context.Background(), testStderr(), doltRoot)
 	if err == nil {
 		_ = release()
 		t.Fatal("LockDoltJournalExclusive() succeeded on an uninitialized workspace; want a not-initialized refusal")
@@ -68,11 +68,11 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 
 	openOneVersionBehind(t, ctx, doltRoot)
 
-	release, err := LockDoltJournalExclusive(ctx, doltRoot)
+	release, err := LockDoltJournalExclusive(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = reader.Close()
 		_ = release()
@@ -90,7 +90,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 		t.Fatalf("release journal lock: %v", err)
 	}
 
-	healed, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	healed, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() after release error = %v; want the retried open to apply the migration", err)
 	}
@@ -117,7 +117,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -152,11 +152,11 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 		t.Fatalf("read dirtied journal: %v", err)
 	}
 
-	release, err := LockDoltJournalExclusive(ctx, doltRoot)
+	release, err := LockDoltJournalExclusive(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		_ = release()
 		t.Fatalf("OpenForRead() under the journal hold error = %v; the read-only engine must serve it", err)
@@ -184,7 +184,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	}
 
 	// Lock free: a read still recovers nothing.
-	reader2, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader2, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() after release error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	// Detector arm: lock free, a write open runs recovery and truncates the
 	// dirty tail — proving the read arms' byte-equality was a read that writes
 	// nothing, not a journal that needed no recovery.
-	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after release error = %v", err)
 	}

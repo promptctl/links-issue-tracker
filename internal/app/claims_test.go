@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -38,7 +39,7 @@ func run(t *testing.T, dir string, name string, args ...string) {
 // overlapping opens — which is also how the real commands use it.
 func openIn(t *testing.T, checkout string, mode AccessMode, body func(*App)) {
 	t.Helper()
-	ap, err := Open(context.Background(), testEnv(), resolvedWorkspace(t, checkout), mode)
+	ap, err := Open(context.Background(), testEnv(), os.Stderr, resolvedWorkspace(t, checkout), mode)
 	if err != nil {
 		t.Fatalf("Open(%q, %v) error = %v", checkout, mode, err)
 	}

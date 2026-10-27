@@ -62,7 +62,7 @@ func newForkBelowTheCutAfter(t *testing.T, ctx context.Context, deltaWrites func
 		createAndPush(t, ctx, f.alpha, f.epic, title)
 	}
 	var err error
-	f.alphaReRoot, err = ReRoot(ctx, f.alpha, "master", headAt(t, ctx, f.alpha))
+	f.alphaReRoot, err = ReRoot(ctx, testStderr(), f.alpha, "master", headAt(t, ctx, f.alpha))
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -210,7 +210,7 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 	updateLocal(t, ctx, delta, ticket, storage.UpdateIssueInput{Title: strptr(deltaTitle)})
 
 	other := unrelatedDoltDir(t)
-	st, err := Open(ctx, testEnv(), other, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), other, "ws")
 	if err != nil {
 		t.Fatalf("Open(other) error = %v", err)
 	}
@@ -270,7 +270,7 @@ func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
 	updateLocal(t, ctx, delta, ticket, storage.UpdateIssueInput{Description: strptr("delta-description")})
 
 	updateLocal(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr("alpha-description")})
-	if _, err := ReRoot(ctx, alpha, "master", headAt(t, ctx, alpha)); err != nil {
+	if _, err := ReRoot(ctx, testStderr(), alpha, "master", headAt(t, ctx, alpha)); err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, alpha)
@@ -743,7 +743,7 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 		{FetchedHeadMoved, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.adopted, Outcome: storage.ForkPointRecorded}},
 		{FetchedHeadUnchanged, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.remoteHead, Outcome: storage.ForkPointKept}},
 	} {
-		landed, err := LandFetchedHead(ctx, testEnv(), f.delta, clone, remoteName(t, "origin"), "master", nil)
+		landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), f.delta, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
@@ -776,7 +776,7 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 // its id.
 func createAndPush(t *testing.T, ctx context.Context, root, epic, title string) string {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(%s) error = %v", root, err)
 	}

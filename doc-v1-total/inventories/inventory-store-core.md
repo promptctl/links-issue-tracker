@@ -90,7 +90,7 @@ Both hooks are per-`Store` instance state, not package globals (`store.go`).
 
 #### 1.5 `newEngineOpenBackOff`
 
-`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Each `NextBackOff` (called only after a refused attempt) that does not return `backoff.Stop` also prints `lit: still waiting for <lock> after <d>; <holder account>` to `lockWaitNoticeWriter` (stderr) once `lockWaitNoticeGrace` = 2s has passed since `Reset`, then every `lockWaitNoticeInterval` = 30s (`lock_holder.go`). Only attached for `engineWrite` (`store.go`).
+`store.go`. `newHoldWait(workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir), coResidentHolderWaitNow, time.Now)` per connector: `holdWait` (`lock_holder.go`) polls every `storeLockPollInterval` = 100ms and returns `backoff.Stop` once no holder-record name it has not seen before has appeared under the lock's holder directory for the wait; `Reset` starts the clock and takes the first reading. Each `NextBackOff` (called only after a refused attempt) that does not return `backoff.Stop` also prints `lit: still waiting for <lock> after <d>; <holder account>` to the stderr the store was opened with (`holdWait.stderr`) once `lockWaitNoticeGrace` = 2s has passed since `Reset`, then every `lockWaitNoticeInterval` = 30s (`lock_holder.go`). Only attached for `engineWrite` (`store.go`).
 
 #### 1.6 `wrapEngineOpenContention`
 

@@ -20,7 +20,7 @@ func TestConcurrentOpenWaitsForLiveWriteEngine(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("first Open() error = %v", err)
 	}
@@ -29,7 +29,7 @@ func TestConcurrentOpenWaitsForLiveWriteEngine(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		s, openErr := Open(openCtx, testEnv(), doltRoot, "test-workspace-id")
+		s, openErr := Open(openCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 		if openErr != nil {
 			done <- openErr
 			return
@@ -73,7 +73,7 @@ func TestOpenSyncWaitsForLiveForegroundEngine(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	foreground, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	foreground, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("foreground Open() error = %v", err)
 	}
@@ -82,7 +82,7 @@ func TestOpenSyncWaitsForLiveForegroundEngine(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		s, openErr := OpenSync(mirrorCtx, testEnv(), doltRoot, "test-workspace-id")
+		s, openErr := OpenSync(mirrorCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 		if openErr != nil {
 			done <- openErr
 			return
@@ -123,7 +123,7 @@ func TestOpenForReadDoesNotWaitForLiveWriteEngine(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -131,7 +131,7 @@ func TestOpenForReadDoesNotWaitForLiveWriteEngine(t *testing.T) {
 
 	readCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
-	reader, err := OpenForRead(readCtx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(readCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v while a write engine was open; read opens must not wait on the journal lock", err)
 	}

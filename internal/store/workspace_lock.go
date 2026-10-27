@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -81,8 +82,8 @@ func workspaceStorageDir(databasePath string) string {
 // an exclusive holder for coResidentHolderWait so a casual concurrent
 // lit snapshots restore — a rename — does not paper-cut every reader, and
 // surfaces a "workspace busy" error naming the rotator that outlasts it.
-func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
-	release, err := acquireWorkspaceLock(ctx, doltRootDir, false, coResidentHolderWait)
+func acquireWorkspaceShared(ctx context.Context, stderr io.Writer, doltRootDir string) (func() error, error) {
+	release, err := acquireWorkspaceLock(ctx, stderr, doltRootDir, false, coResidentHolderWait)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Wrap the sentinel so errors.Is(err, ErrWorkspaceBusy) detects
 		// contention while the operator sees which holders to suspect.
@@ -103,8 +104,8 @@ func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() err
 // — this lock, in shared mode. The commit lock is a writer-vs-writer gate on a
 // different file, which an adopt's exclusive hold never contends with, so a
 // snapshot copy under only the commit lock can tear.
-func LockWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
-	return acquireWorkspaceShared(ctx, doltRootDir)
+func LockWorkspaceShared(ctx context.Context, stderr io.Writer, doltRootDir string) (func() error, error) {
+	return acquireWorkspaceShared(ctx, stderr, doltRootDir)
 }
 
 // LockWorkspaceExclusive takes an exclusive hold for the duration of an
@@ -123,8 +124,8 @@ func LockWorkspaceShared(ctx context.Context, doltRootDir string) (func() error,
 // that cannot forget it does not start. The forgetting lives here, in the
 // one act every rotator performs, so none of them can leave a record that
 // leads the directory it now sits beside. [LAW:single-enforcer]
-func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() error, error) {
-	release, err := acquireWorkspaceLock(ctx, doltRootDir, true, 0)
+func LockWorkspaceExclusive(ctx context.Context, stderr io.Writer, doltRootDir string) (func() error, error) {
+	release, err := acquireWorkspaceLock(ctx, stderr, doltRootDir, true, 0)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		return nil, fmt.Errorf("another lit process is using this workspace; close other lit commands and retry: %w", err)
 	}
@@ -158,8 +159,8 @@ func bootstrapStagingPath(databasePath string) string {
 // acquireBootstrapLock takes the bootstrap lock exclusively, waiting out a
 // builder for coResidentHolderWait — a build is two engine opens, well inside
 // it — and naming a holder that outlasts the wait.
-func acquireBootstrapLock(ctx context.Context, doltRootDir string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, workspaceStorageDir(doltRootDir), bootstrapLockPath(doltRootDir), true, coResidentHolderWait)
+func acquireBootstrapLock(ctx context.Context, stderr io.Writer, doltRootDir string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), bootstrapLockPath(doltRootDir), true, coResidentHolderWait)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		return nil, fmt.Errorf("a lit process is creating this workspace's database; retry after it completes: %w", err)
 	}
@@ -233,8 +234,8 @@ func MirrorBeaconLockPath(databasePath string) string {
 // so a mirror starting inside one probe's window waits it out instead of
 // dying to that collision, and it is the package's one wait rather than a
 // figure of its own. [LAW:one-source-of-truth]
-func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, coResidentHolderWait)
+func HoldMirrorBeacon(ctx context.Context, stderr io.Writer, databasePath string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, coResidentHolderWait)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Only a probe's instantaneous exclusive hold can legitimately contend,
 		// so outlasting the whole budget means something anomalous is squatting
@@ -354,8 +355,8 @@ func ProbeMirrorBeacon(databasePath string) (MirrorBeaconVerdict, error) {
 	return BeaconUnheld, nil
 }
 
-func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, wait time.Duration) (func() error, error) {
-	return acquireStoreLock(ctx, workspaceStorageDir(doltRootDir), WorkspaceLockPath(doltRootDir), exclusive, wait)
+func acquireWorkspaceLock(ctx context.Context, stderr io.Writer, doltRootDir string, exclusive bool, wait time.Duration) (func() error, error) {
+	return acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), WorkspaceLockPath(doltRootDir), exclusive, wait)
 }
 
 // errLockHeld is the retry loop's own signal that an attempt found the lock
@@ -384,8 +385,8 @@ var errLockHeld = errors.New("lock held")
 // ErrWorkspaceBusy — and carries the same account, so a caller whose deadline
 // ran out in the wait learns who it was waiting on.
 // [LAW:single-enforcer]
-func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
-	return acquireStoreLockOn(ctx, time.Now, storageDir, lockPath, exclusive, wait)
+func acquireStoreLock(ctx context.Context, stderr io.Writer, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
+	return acquireStoreLockOn(ctx, stderr, time.Now, storageDir, lockPath, exclusive, wait)
 }
 
 // acquireStoreLockOn is acquireStoreLock with the wait measured on now, the
@@ -393,14 +394,14 @@ func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusiv
 // own clock drives the whole acquisition, policy and all, through instants it
 // chose, so no assertion about the wait depends on how fast the machine runs.
 // [LAW:effects-at-boundaries]
-func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
+func acquireStoreLockOn(ctx context.Context, stderr io.Writer, now func() time.Time, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
 	var release func() error
 	// sawHeld stays set once any try found the lock held: a ctx that ends
 	// mid-wait surfaces as a bare ctx error — from the retry loop between
 	// tries, or from filelock's own entry check on the next try — and this is
 	// what still knows a holder was in front of it.
 	var sawHeld bool
-	policy := newHoldWait(storageDir, lockPath, func() time.Duration { return wait }, now)
+	policy := newHoldWait(stderr, storageDir, lockPath, func() time.Duration { return wait }, now)
 	err := backoff.Retry(func() error {
 		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
 		if err != nil {
@@ -427,12 +428,12 @@ func acquireStoreLockOn(ctx context.Context, now func() time.Time, storageDir, l
 	}
 	dir := lockHolderDir(storageDir, lockPath)
 	privatePath, recordPath := lockHolderRecordNames(dir)
-	recorded := recordLockHolder(ctx, storageDir, lockPath, privatePath, recordPath, release)
+	recorded := recordLockHolder(ctx, stderr, storageDir, lockPath, privatePath, recordPath, release)
 	// The arrival is announced whether or not the record could be minted: it
 	// is a fact about the acquisition, which has happened either way, and the
 	// drawn name is unique whether or not a record ever carries it.
 	if err := announceArrival(dir, filepath.Base(recordPath)); err != nil {
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not announce this process's arrival at %s (the lock is held; a contender waiting now may miss this arrival): %v\n", lockPath, err)
+		fmt.Fprintf(stderr, "lit: could not announce this process's arrival at %s (the lock is held; a contender waiting now may miss this arrival): %v\n", lockPath, err)
 	}
 	return recorded, nil
 }
@@ -477,7 +478,7 @@ func DoltJournalLockPath(databasePath string) string {
 // the workspace lock and BEFORE the commit lock, per the acquisition order
 // in this package's doc (doc.go) — taking it inside the commit lock inverts the
 // order against every live write Store.
-func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() error, error) {
+func LockDoltJournalExclusive(ctx context.Context, stderr io.Writer, databasePath string) (func() error, error) {
 	lockPath := DoltJournalLockPath(databasePath)
 	// This helper CONTENDS on Dolt's lock; it never mints Dolt's tree. The
 	// shared acquisition path MkdirAll+O_CREATEs missing lock files — right
@@ -508,7 +509,7 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 	// connector waits with holdWait on this lock's own holder directory, so
 	// an engine and a copy contending for LOCK read one policy.
 	// [LAW:one-source-of-truth]
-	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), lockPath, true, coResidentHolderWait)
+	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(databasePath), lockPath, true, coResidentHolderWait)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees

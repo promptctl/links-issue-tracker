@@ -81,7 +81,7 @@ func TestDoltTransferKeepsStdoutClean(t *testing.T) {
 
 	// DOLT_CLONE — the confirmed heavy emitter (init adopt bootstraps by clone).
 	cloneOut := captureStdout(t, func() error {
-		return AdoptRemoteByClone(ctx, consumer, "ws", remoteName(t, "origin"), remoteURL, "master")
+		return AdoptRemoteByClone(ctx, testStderr(), consumer, "ws", remoteName(t, "origin"), remoteURL, "master")
 	})
 	if len(cloneOut) != 0 {
 		t.Fatalf("adopt-by-clone wrote %d bytes to stdout, want 0: %q", len(cloneOut), cloneOut)
@@ -105,7 +105,7 @@ func TestDoltTransferKeepsStdoutClean(t *testing.T) {
 // store so a subsequent fetch has chunks to move.
 func seedSecondChange(t *testing.T, ctx context.Context, root, remoteURL string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(second change): %v", err)
 	}

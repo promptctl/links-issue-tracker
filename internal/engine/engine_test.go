@@ -21,7 +21,7 @@ func TestOpenRejectsUnknownMode(t *testing.T) {
 	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "dolt")
 	for _, mode := range []Mode{"", "admin", "readwrite"} {
-		st, err := Open(context.Background(), testEnv(), mode, dir, "test-workspace-id")
+		st, err := Open(context.Background(), testEnv(), os.Stderr, mode, dir, "test-workspace-id")
 		if err == nil {
 			st.Close()
 			t.Fatalf("Open(%q) succeeded, want invalid-mode error", mode)

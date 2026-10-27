@@ -162,7 +162,7 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
-	release, err := store.LockCommitPath(context.Background(), ws.DatabasePath)
+	release, err := store.LockCommitPath(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire commit lock: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
-	release, err := store.LockDoltJournalExclusive(context.Background(), ws.DatabasePath)
+	release, err := store.LockDoltJournalExclusive(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire dolt journal lock: %v", err)
 	}
@@ -264,7 +264,7 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 		t.Fatalf("lock dir moved across Restore: was %q, now %q", filepath.Dir(lockPath), pathDir)
 	}
 	// And another lock acquisition succeeds at the same path afterwards.
-	release, err := store.LockCommitPath(context.Background(), ws.DatabasePath)
+	release, err := store.LockCommitPath(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire commit lock after restore: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 
 	// Open a long-lived Store that holds the shared workspace lock — the
 	// concrete shape of an `lit ls`/`lit show` reader.
-	reader, err := engine.Open(context.Background(), testEnv(), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	reader, err := engine.Open(context.Background(), testEnv(), testStderr(t), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("OpenForRead: %v", err)
 	}
@@ -410,7 +410,7 @@ func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
-	release, err := store.LockWorkspaceExclusive(context.Background(), ws.DatabasePath)
+	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}

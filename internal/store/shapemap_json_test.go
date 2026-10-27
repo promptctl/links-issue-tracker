@@ -299,7 +299,7 @@ func TestDecodedMappingRecoversNovelAheadShape(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	outcome, err := Recover(ctx, testEnv(), canonicalUnder(t), dump, staticMapper(mapping), 1)
+	outcome, err := Recover(ctx, testEnv(), testStderr(), canonicalUnder(t), dump, staticMapper(mapping), 1)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}

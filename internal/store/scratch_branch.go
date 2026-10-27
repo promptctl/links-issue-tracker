@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -27,7 +26,7 @@ type scratchAttempt func(ctx context.Context, op retryOperation) error
 
 // retryInPlace is the attempt of a run that owns its own recovery.
 func (s *Store) retryInPlace(ctx context.Context, op retryOperation) error {
-	return retryTransientGCContention(ctx, op, s.reconnect)
+	return retryTransientGCContention(ctx, s.stderr, op, s.reconnect)
 }
 
 // attemptOnce is the attempt of a run whose caller's retry owns its recovery.
@@ -124,14 +123,14 @@ func (s *Store) landScratch(ctx context.Context, home, commit string, attempt sc
 // ones fail the operation.
 func (s *Store) leaveScratch(ctx context.Context, home string, created []string) error {
 	if err := s.checkout(ctx, home); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: could not return to branch %q from a scratch branch (%v); rotating connection to recover\n", home, err)
+		fmt.Fprintf(s.stderr, "lit: could not return to branch %q from a scratch branch (%v); rotating connection to recover\n", home, err)
 		if reconnectErr := s.reconnect(ctx); reconnectErr != nil {
 			return fmt.Errorf("a scratch run left the store on its scratch branch and could not recover: checkout %q failed (%v); connection rotation failed: %w", home, err, reconnectErr)
 		}
 	}
 	for _, branch := range created {
 		if err := s.deleteBranch(ctx, branch, storage.ScratchFinished); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: could not delete scratch branch %q: %v\n", branch, err)
+			fmt.Fprintf(s.stderr, "lit: could not delete scratch branch %q: %v\n", branch, err)
 		}
 	}
 	return nil

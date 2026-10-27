@@ -50,6 +50,7 @@ func Run(ctx context.Context, inv Invocation) (err error) {
 	case inv.Stderr == nil:
 		return errors.New("the invocation was given no stderr")
 	}
+	inv.Stderr = &serialWriter{w: inv.Stderr}
 	recorder := beginInvocation(time.Now(), inv.Dir)
 	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env, gitSpawnsBefore: inv.Env.GitSpawns()}
 	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
@@ -184,7 +185,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 		return err
 	}
 	// [LAW:single-enforcer] Cobra command registration owns app access selection so startup mode is declared once per entrypoint.
-	ap, err := app.Open(ctx, inv.Env, ws, accessMode)
+	ap, err := app.Open(ctx, inv.Env, inv.Stderr, ws, accessMode)
 	if err != nil {
 		// The open boundary stamps holder contention so Run's trace can tell a
 		// starved OPEN from a handler-traced mid-command contention, filed under
@@ -548,7 +549,7 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 	}
 	if l.fs.Changed(lsAtFlag) {
 		loc := workspace.LocationFromStorageDir(atDir.path())
-		st, err := app.OpenLocationForRead(ctx, inv.Env, loc)
+		st, err := app.OpenLocationForRead(ctx, inv.Env, inv.Stderr, loc)
 		if err != nil {
 			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
 			// store dir is an actionable error, not an empty list. The open

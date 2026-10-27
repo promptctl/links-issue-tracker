@@ -49,7 +49,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
 	r := reRootedRemote{alpha: migratedDoltDir(t), bravo: migratedDoltDir(t), remoteURL: remoteURL}
 	epic := seedReconcileRemote(t, ctx, r.alpha, remoteURL)
-	st, err := Open(ctx, testEnv(), r.alpha, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), r.alpha, "ws")
 	if err != nil {
 		t.Fatalf("Open(alpha) error = %v", err)
 	}
@@ -83,7 +83,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 		updateAndPush(t, ctx, r.alpha, r.ticket, storage.UpdateIssueInput{Description: strptr(alphaDescription)})
 	}
 
-	r.alphaReRoot, err = ReRoot(ctx, r.alpha, "master", r.cut)
+	r.alphaReRoot, err = ReRoot(ctx, testStderr(), r.alpha, "master", r.cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -615,7 +615,7 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
 	alpha, bravo := migratedDoltDir(t), migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
-	st, err := Open(ctx, testEnv(), alpha, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), alpha, "ws")
 	if err != nil {
 		t.Fatalf("Open(alpha) error = %v", err)
 	}
@@ -644,12 +644,12 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 		lowCut = firstParentBelowHead(t, ctx, ddb, 4)
 		highCut = firstParentBelowHead(t, ctx, ddb, 1)
 	})
-	if _, err := ReRoot(ctx, bravo, "master", lowCut.String()); err != nil {
+	if _, err := ReRoot(ctx, testStderr(), bravo, "master", lowCut.String()); err != nil {
 		t.Fatalf("ReRoot(bravo, low cut) error = %v", err)
 	}
 	updateLocal(t, ctx, bravo, ticket, storage.UpdateIssueInput{Title: strptr(bravoTitle)})
 	updateAndPush(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr(alphaDescription)})
-	alphaReRoot, err := ReRoot(ctx, alpha, "master", highCut.String())
+	alphaReRoot, err := ReRoot(ctx, testStderr(), alpha, "master", highCut.String())
 	if err != nil {
 		t.Fatalf("ReRoot(alpha, high cut) error = %v", err)
 	}

@@ -49,7 +49,7 @@ func unfiredBound(t *testing.T) storage.BoundWindow {
 // cut, zero when it ran none.
 func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bound historywindow.Window) (storage.HistoryBound, storage.Collection) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(%s) error = %v", root, err)
 	}
@@ -260,7 +260,7 @@ func TestABoundKeptOnTheMirrorsCloneCollectsNothing(t *testing.T) {
 	remoteURL, _ := gitRemote(t)
 	alpha := migratedDoltDir(t)
 	epic := seedReconcileRemote(t, ctx, alpha, remoteURL)
-	st, err := Open(ctx, testEnv(), alpha, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), alpha, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,7 +685,7 @@ func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer, err := Open(ctx, testEnv(), bravo, "ws")
+	newer, err := Open(ctx, testEnv(), testStderr(), bravo, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -117,7 +117,7 @@ func execOnStore(t *testing.T, dir string, statements ...string) {
 		t.Fatalf("resolve workspace %s: %v", dir, err)
 	}
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open(%s) error = %v", dir, err)
 	}

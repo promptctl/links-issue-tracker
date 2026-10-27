@@ -216,13 +216,13 @@ type lockHolderRecord struct {
 // its hold, so the next acquisition proves it unheld and retires it. On
 // Windows that failure needs nothing worse than a concurrent sweep's probe
 // holding the file open, since filelock's open denies the delete right.
-func recordLockHolder(ctx context.Context, storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
+func recordLockHolder(ctx context.Context, stderr io.Writer, storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
 	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
+		fmt.Fprintf(stderr, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
 	}
 	releaseRecord, err := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
 	if err != nil {
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
+		fmt.Fprintf(stderr, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
 		return lockRelease
 	}
 	return func() error {
@@ -230,7 +230,7 @@ func recordLockHolder(ctx context.Context, storageDir, lockPath, privatePath, re
 		// which the next acquirer holds the lock while this record still
 		// answers for it.
 		if err := releaseRecord(); err != nil {
-			fmt.Fprintf(lockWaitNoticeWriter, "lit: could not retire this process's holder record for %s (the lock is still released; a later acquisition retires the record): %v\n", lockPath, err)
+			fmt.Fprintf(stderr, "lit: could not retire this process's holder record for %s (the lock is still released; a later acquisition retires the record): %v\n", lockPath, err)
 		}
 		return lockRelease()
 	}
@@ -719,6 +719,9 @@ func renderHolderCommand(command string) string {
 // recovering its journal, a holder record written on a loaded disk — as a
 // wait on a holder that does not exist. [LAW:one-source-of-truth]
 type holdWait struct {
+	// stderr is where the wait reports itself once it outlasts the notice
+	// grace: the run's operator channel.
+	stderr     io.Writer
 	storageDir string
 	lockPath   string
 	wait       func() time.Duration
@@ -755,8 +758,8 @@ type holdWait struct {
 // stretch a wait; a test passes one it advances itself, so the rule is pinned
 // by the instants it is handed rather than by how fast a loaded machine runs.
 // [LAW:effects-at-boundaries]
-func newHoldWait(storageDir, lockPath string, wait func() time.Duration, now func() time.Time) *holdWait {
-	return &holdWait{storageDir: storageDir, lockPath: lockPath, wait: wait, now: now}
+func newHoldWait(stderr io.Writer, storageDir, lockPath string, wait func() time.Duration, now func() time.Time) *holdWait {
+	return &holdWait{stderr: stderr, storageDir: storageDir, lockPath: lockPath, wait: wait, now: now}
 }
 
 // Reset starts the clock and takes the first reading of who is there.
@@ -786,7 +789,7 @@ func (w *holdWait) NextBackOff() time.Duration {
 		return backoff.Stop
 	}
 	if !now.Before(w.noticeDue) {
-		fmt.Fprintf(lockWaitNoticeWriter, "lit: still waiting for %s after %s; %s\n",
+		fmt.Fprintf(w.stderr, "lit: still waiting for %s after %s; %s\n",
 			w.lockPath, now.Sub(w.started).Round(time.Second), describeLockHolders(w.storageDir, w.lockPath))
 		w.noticeDue = now.Add(lockWaitNoticeInterval)
 	}
@@ -921,9 +924,4 @@ var (
 	// through the production one.
 	lockWaitNoticeGrace    = 2 * time.Second
 	lockWaitNoticeInterval = 30 * time.Second
-
-	// lockWaitNoticeWriter is where operator notices land. Stderr per the CLI
-	// binding — stdout is the parseable channel, stderr the human one — which
-	// is also where every other operator notice in this package goes.
-	lockWaitNoticeWriter io.Writer = os.Stderr
 )

@@ -31,7 +31,7 @@ func TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef(t *testing.T) 
 	remote := seedBareGitRemote(t, t.TempDir())
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef(t *testing.T) 
 	}
 	var mirror string
 	for _, op := range operations {
-		session, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+		session, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("%s: OpenSync() error = %v", op.name, err)
 		}
@@ -124,7 +124,7 @@ func pushedMirror(t *testing.T) (doltRoot, remote, mirror string) {
 	ctx := context.Background()
 	remote = seedBareGitRemote(t, t.TempDir())
 	doltRoot = migratedDoltDir(t)
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -132,7 +132,7 @@ func pushedMirror(t *testing.T) (doltRoot, remote, mirror string) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	session, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	session, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -206,7 +206,7 @@ func TestSweepCollectsOrphanedInstanceRefsAndKeepsTheNewestTrackingRefAsLastKnow
 	gitAt(t, mirror, nil, "", "update-ref", localOrphan, unpushed)
 	gitAt(t, mirror, nil, "", "update-ref", notAnInstance, head)
 
-	session, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	session, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -244,7 +244,7 @@ func TestSweepKeepsAnExistingLastKnownRef(t *testing.T) {
 	newer := gitAt(t, mirror, []string{"GIT_COMMITTER_DATE=2099-01-01T00:00:00Z"}, "", "commit-tree", oldCommit+"^{tree}", "-m", "a newer-dated orphan")
 	gitAt(t, mirror, nil, "", "update-ref", "refs/dolt/remotes/origin/dolt/data/"+uuid.NewString(), newer)
 
-	session, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	session, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -270,7 +270,7 @@ func TestSyncCompactAndPushReportsTheSweep(t *testing.T) {
 	oldCommit, _ := orphanSnapshot(t, mirror, 1<<20)
 	gitAt(t, mirror, nil, "", "update-ref", "refs/dolt/remotes/origin/dolt/data/"+uuid.NewString(), oldCommit)
 
-	session, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	session, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -303,7 +303,7 @@ func TestSyncCompactSweepsAndReportsItInDetail(t *testing.T) {
 	oldCommit, _ := orphanSnapshot(t, mirror, 1<<20)
 	gitAt(t, mirror, nil, "", "update-ref", "refs/dolt/remotes/origin/dolt/data/"+uuid.NewString(), oldCommit)
 
-	session, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	session, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -344,7 +344,7 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	}
 
 	peer := copyOf("peer")
-	st, err := Open(ctx, testEnv(), peer, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), peer, "ws")
 	if err != nil {
 		t.Fatalf("Open(peer) error = %v", err)
 	}
@@ -352,7 +352,7 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close(peer) error = %v", err)
 	}
-	peerSync, err := OpenSync(ctx, testEnv(), peer, "ws")
+	peerSync, err := OpenSync(ctx, testEnv(), testStderr(), peer, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(peer) error = %v", err)
 	}
@@ -367,7 +367,7 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 
 	cloneRoot := copyOf("clone")
 	clone := takenClone(t, ctx, cloneRoot)
-	cloneSync, err := OpenSync(ctx, testEnv(), cloneRoot, "ws")
+	cloneSync, err := OpenSync(ctx, testEnv(), testStderr(), cloneRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(clone) error = %v", err)
 	}
@@ -378,7 +378,7 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	if fetchErr != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", fetchErr)
 	}
-	if _, err := LandFetchedHead(ctx, testEnv(), live, clone, remoteName(t, "origin"), "master", nil); err != nil {
+	if _, err := LandFetchedHead(ctx, testEnv(), testStderr(), live, clone, remoteName(t, "origin"), "master", nil); err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
 

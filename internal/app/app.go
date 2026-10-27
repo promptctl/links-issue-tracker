@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -92,14 +93,14 @@ var accessContracts = map[AccessMode]accessContract{
 // one, and the mode is validated exactly once — the lookup below is both the
 // validity check and the dispatch, so no second switch can classify an unknown
 // mode differently.
-func Open(ctx context.Context, env environ.Env, ws workspace.Info, mode AccessMode) (*App, error) {
+func Open(ctx context.Context, env environ.Env, stderr io.Writer, ws workspace.Info, mode AccessMode) (*App, error) {
 	contract, known := accessContracts[mode]
 	if !known {
 		// [LAW:no-silent-failure] An unknown mode (including the zero value)
 		// fails closed instead of being granted write access by a default arm.
 		return nil, fmt.Errorf("invalid access mode %q", string(mode))
 	}
-	st, err := engine.Open(ctx, env, contract.mode, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, env, stderr, contract.mode, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		return nil, StoreOpenError{Workspace: ws, Err: err}
 	}
@@ -200,12 +201,12 @@ func changeStatuslineFacts(action model.Action, issue model.Issue) statusline.Fa
 // The workspace_id a read open requires is not part of a Location — discovery
 // reads no config — so it is read here from the store's own config.json via
 // ReadConfig, a pure read that never writes the foreign store.
-func OpenLocationForRead(ctx context.Context, env environ.Env, loc workspace.Location) (storage.Store, error) {
+func OpenLocationForRead(ctx context.Context, env environ.Env, stderr io.Writer, loc workspace.Location) (storage.Store, error) {
 	cfg, err := workspace.ReadConfig(loc.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	return engine.Open(ctx, env, engine.ReadOnly, loc.DatabasePath, cfg.WorkspaceID)
+	return engine.Open(ctx, env, stderr, engine.ReadOnly, loc.DatabasePath, cfg.WorkspaceID)
 }
 
 func (a *App) Close() error { return a.Store.Close() }

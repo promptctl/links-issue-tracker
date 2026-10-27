@@ -80,7 +80,7 @@ func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) stri
 		t.Fatalf("resolve alpha: %v", err)
 	}
 	_, branch := syncHeadAndBranch(t, r.alpha)
-	reRooted, err := store.ReRoot(context.Background(), alphaWS.DatabasePath, branch, cut)
+	reRooted, err := store.ReRoot(context.Background(), testStderr(t), alphaWS.DatabasePath, branch, cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -108,7 +108,7 @@ func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 	if err != nil {
 		t.Fatalf("resolve %s: %v", dir, err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), ws)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
 	}

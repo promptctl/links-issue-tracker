@@ -441,7 +441,7 @@ func strptr(s string) *string { return &s }
 // epic carries (title, lane, priority, labels).
 func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
@@ -486,7 +486,7 @@ func adoptRemote(t *testing.T, ctx context.Context, root, remoteURL string) {
 // updateLocal applies a field update to an issue and leaves it local (unpushed).
 func updateLocal(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(update %s): %v", root, err)
 	}
@@ -513,7 +513,7 @@ func updateAndPush(t *testing.T, ctx context.Context, root, id string, in storag
 
 func openSyncOrFatal(t *testing.T, ctx context.Context, root string) *Store {
 	t.Helper()
-	sync, err := OpenSync(ctx, testEnv(), root, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(%s): %v", root, err)
 	}
@@ -689,7 +689,7 @@ func assertIssuePresentAsOf(t *testing.T, ctx context.Context, st *Store, commit
 func TestReconcileScratchCleanupSurvivesCallerCancel(t *testing.T) {
 	t.Parallel()
 	bg := context.Background()
-	st, err := Open(bg, testEnv(), migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(bg, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

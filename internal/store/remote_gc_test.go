@@ -312,7 +312,7 @@ func TestAPushThatReadTheRemoteBeforeItsGCLandsAfterIt(t *testing.T) {
 	createAndPush(t, ctx, alpha, epic, "a1")
 	landed := landReRootWithoutGC(t, ctx, alpha, 3)
 	adoptRemote(t, ctx, bravo, remoteURL)
-	st, err := Open(ctx, testEnv(), bravo, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), bravo, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +464,7 @@ func TestEachOpenOfARemoteIsItsCallersOwn(t *testing.T) {
 	base := t.TempDir()
 	root := filepath.Join(base, "producer")
 	seedReconcileRemote(t, ctx, root, "file://"+filepath.Join(base, "remote"))
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"sync"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
@@ -72,4 +73,20 @@ func (d WorkingDir) resolve(path string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, path), nil
+}
+
+// serialWriter is a run's stderr as every callee is handed it: one Write at a
+// time, as os/exec.Cmd writes a child's shared streams. A routine store hold
+// reports a failed heartbeat from its own goroutine while the command writes
+// from the run's, and the writer a caller passed in owes neither of them
+// that ordering. [LAW:single-enforcer] Run wraps it once.
+type serialWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *serialWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

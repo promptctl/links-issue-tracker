@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -72,7 +73,7 @@ var reRootRef = ref.NewInternalRef("reroot")
 // It contacts no network and opens no SQL engine; the hold is
 // holdForRefWrite's, under ReRootHoldBudget. Deciding when to re-root, and
 // where, is the caller's.
-func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (storage.ReRooted, error) {
+func ReRoot(ctx context.Context, stderr io.Writer, doltRootDir, branch, cut string) (storage.ReRooted, error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return storage.ReRooted{}, err
@@ -85,20 +86,20 @@ func ReRoot(ctx context.Context, doltRootDir, branch, cut string) (storage.ReRoo
 	if !isDoltCommitHash(trimmedCut) {
 		return storage.ReRooted{}, fmt.Errorf("re-root %s: %q is not a Dolt commit hash", trimmedBranch, cut)
 	}
-	reRooted, err := reRootUnderHold(ctx, root, trimmedBranch, trimmedCut)
+	reRooted, err := reRootUnderHold(ctx, stderr, root, trimmedBranch, trimmedCut)
 	return settleReRoot(reRooted, err, trimmedBranch, trimmedCut)
 }
 
 // reRootUnderHold is ReRoot's work under the live store's holds, both
 // released before it returns. Its result's Head is set exactly when the
 // branch moved, whatever the error.
-func reRootUnderHold(ctx context.Context, root, branch, cut string) (reRooted storage.ReRooted, err error) {
-	release, err := acquireLiveStoreHold(ctx, root)
+func reRootUnderHold(ctx context.Context, stderr io.Writer, root, branch, cut string) (reRooted storage.ReRooted, err error) {
+	release, err := acquireLiveStoreHold(ctx, stderr, root)
 	if err != nil {
 		return storage.ReRooted{}, err
 	}
 	defer func() { err = errors.Join(err, release()) }()
-	err = holdForRefWrite(ctx, root, engineWrite, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, stderr, root, engineWrite, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		var rewriteErr error
 		reRooted, rewriteErr = reRootBranch(holdCtx, ddb, ref.NewBranchRef(branch), hash.Parse(cut))

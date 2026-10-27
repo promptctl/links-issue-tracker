@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,7 +44,7 @@ type PromotionResult struct {
 // is "canonical absent, backup present", a detectable and recoverable state. The
 // original is moved aside and never wiped, so "pre-recovery data destroyed" is
 // likewise unrepresentable — the original is always one rename from restored.
-func PromoteCandidate(ctx context.Context, env environ.Env, canonicalDoltDir string, cand *Candidate) (_ PromotionResult, err error) {
+func PromoteCandidate(ctx context.Context, env environ.Env, stderr io.Writer, canonicalDoltDir string, cand *Candidate) (_ PromotionResult, err error) {
 	// [LAW:single-enforcer][LAW:one-source-of-truth] Validate and canonicalize the
 	// path before deriving the lock path, backup names, and rename target from it,
 	// so the swap never creates artifacts in an unintended (cwd-relative) directory
@@ -61,7 +62,7 @@ func PromoteCandidate(ctx context.Context, env environ.Env, canonicalDoltDir str
 		return PromotionResult{}, fmt.Errorf("surrender candidate workspace for promotion: %w", err)
 	}
 
-	release, err := LockWorkspaceExclusive(ctx, canonicalDoltDir)
+	release, err := LockWorkspaceExclusive(ctx, stderr, canonicalDoltDir)
 	if err != nil {
 		return PromotionResult{}, err
 	}
@@ -87,7 +88,7 @@ func PromoteCandidate(ctx context.Context, env environ.Env, canonicalDoltDir str
 	// install: a check outside the lock would reopen the very dump→promote window
 	// this closes. A mismatch aborts before any rename, so the abort path changes
 	// nothing on disk — the concurrent commit stays live, undisturbed.
-	if headErr := verifyHeadUnchanged(ctx, env, canonicalDoltDir, cand.workspaceID, cand.expectedHead); headErr != nil {
+	if headErr := verifyHeadUnchanged(ctx, env, stderr, canonicalDoltDir, cand.workspaceID, cand.expectedHead); headErr != nil {
 		return PromotionResult{}, headErr
 	}
 
@@ -147,7 +148,7 @@ var ErrMissingDumpProvenance = errors.New("dump has no recorded head commit")
 // cannot be confirmed unchanged, installing the candidate could silently regress a
 // concurrent commit, so the safe action is to refuse and surface why. Read-only
 // below the gate, the worst case is a read error with the live workspace untouched.
-func verifyHeadUnchanged(ctx context.Context, env environ.Env, canonicalDoltDir, workspaceID, expectedHead string) (err error) {
+func verifyHeadUnchanged(ctx context.Context, env environ.Env, stderr io.Writer, canonicalDoltDir, workspaceID, expectedHead string) (err error) {
 	// [LAW:no-silent-failure] A candidate with no recorded head cannot be checked
 	// for staleness; promoting it would gamble the live workspace on an unverifiable
 	// snapshot. Refuse with the provenance-specific error rather than comparing
@@ -155,7 +156,7 @@ func verifyHeadUnchanged(ctx context.Context, env environ.Env, canonicalDoltDir,
 	if expectedHead == "" {
 		return fmt.Errorf("%w: cannot verify the live workspace has not advanced; re-run `lit lifeboat dump` against the current workspace and recover from that artifact", ErrMissingDumpProvenance)
 	}
-	s, err := openStoreConnection(ctx, env, canonicalDoltDir, workspaceID, engineRead)
+	s, err := openStoreConnection(ctx, env, stderr, canonicalDoltDir, workspaceID, engineRead)
 	if err != nil {
 		return fmt.Errorf("re-read live workspace head: %w", err)
 	}
@@ -187,7 +188,7 @@ func verifyHeadUnchanged(ctx context.Context, env environ.Env, canonicalDoltDir,
 // repair a fresh recovery runs first. Without this pre-step the promote-start heal
 // is unreachable after a crash, because the read path gates on the canonical
 // directory existing.
-func HealWorkspace(ctx context.Context, canonicalDoltDir string) (err error) {
+func HealWorkspace(ctx context.Context, stderr io.Writer, canonicalDoltDir string) (err error) {
 	// [LAW:single-enforcer][LAW:one-source-of-truth] Validate and canonicalize: an
 	// empty path would put .links-workspace.lock in cwd and scan cwd for backups,
 	// and a trailing separator would make healCanonical/newestBackup look in the
@@ -197,7 +198,7 @@ func HealWorkspace(ctx context.Context, canonicalDoltDir string) (err error) {
 	if err != nil {
 		return err
 	}
-	release, err := LockWorkspaceExclusive(ctx, canonicalDoltDir)
+	release, err := LockWorkspaceExclusive(ctx, stderr, canonicalDoltDir)
 	if err != nil {
 		return err
 	}

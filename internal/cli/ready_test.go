@@ -28,7 +28,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 	ctx := context.Background()
 	databasePath := storeTemplate.Copy(t)
 	workspaceRoot := filepath.Dir(databasePath)
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, databasePath, "test-workspace-id")
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, databasePath, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

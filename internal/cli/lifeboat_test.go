@@ -20,7 +20,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
 	canonical := filepath.Join(root, "dolt")
-	st, err := engine.Open(context.Background(), testEnv(), engine.ReadWrite, canonical, "test-workspace-id")
+	st, err := engine.Open(context.Background(), testEnv(), testStderr(t), engine.ReadWrite, canonical, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
@@ -120,7 +120,7 @@ func dropFieldFedBy(m *store.ShapeMapping, table, column string) bool {
 // a known-valid mapping to drive the operator path's wiring without hand-authoring.
 func mappingForWorkspace(t *testing.T, ws workspace.Info) store.ShapeMapping {
 	t.Helper()
-	dump, err := store.DumpRaw(context.Background(), testEnv(), ws.DatabasePath, ws.WorkspaceID)
+	dump, err := store.DumpRaw(context.Background(), testEnv(), testStderr(t), ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("dump workspace: %v", err)
 	}

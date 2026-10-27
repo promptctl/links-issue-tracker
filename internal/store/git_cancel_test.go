@@ -59,7 +59,7 @@ func TestCancelledDoltTransferEndsItsTransport(t *testing.T) {
 			}()
 
 			dir := unrelatedDoltDir(t)
-			st, err := Open(context.Background(), testEnv(), dir, "ws")
+			st, err := Open(context.Background(), testEnv(), testStderr(), dir, "ws")
 			if err != nil {
 				t.Fatal(err)
 			}

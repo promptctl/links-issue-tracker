@@ -78,7 +78,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		t.Helper()
 		recorder := telemetry.Begin(telemetry.Event{})
 		ctx := telemetry.With(context.Background(), recorder)
-		clone, err := takeReceiveClone(ctx, ws)
+		clone, err := takeReceiveClone(ctx, testStderr(t), ws)
 		if err != nil {
 			t.Fatalf("takeReceiveClone() error = %v", err)
 		}
@@ -291,7 +291,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 		t.Fatalf("resolve workspace: %v", err)
 	}
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
-	clone, err := takeReceiveClone(ctx, ws)
+	clone, err := takeReceiveClone(ctx, testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}

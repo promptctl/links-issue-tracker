@@ -46,7 +46,7 @@ func TestRemoteCacheKeyMatchesDoltLayout(t *testing.T) {
 	remote := seedBareGitRemote(t, base)
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -55,7 +55,7 @@ func TestRemoteCacheKeyMatchesDoltLayout(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 	remote := seedBareGitRemote(t, base)
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -112,7 +112,7 @@ func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -150,7 +150,7 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 	remote := seedBareGitRemote(t, base)
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -159,7 +159,7 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -221,7 +221,7 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 	remote := seedBareGitRemote(t, base)
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -230,7 +230,7 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -319,7 +319,7 @@ func pushedSyncStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 	remote := seedBareGitRemote(t, t.TempDir())
 	doltRoot := migratedDoltDir(t)
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -327,7 +327,7 @@ func pushedSyncStore(t *testing.T, ctx context.Context) *Store {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -530,7 +530,7 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 	}
 	commit := func(root, title string) {
 		t.Helper()
-		st, err := Open(ctx, testEnv(), root, "ws")
+		st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
@@ -541,7 +541,7 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 	}
 	holds := func(label, root string, commits []string) bool {
 		t.Helper()
-		st, err := OpenSync(ctx, testEnv(), root, "ws")
+		st, err := OpenSync(ctx, testEnv(), testStderr(), root, "ws")
 		if err != nil {
 			t.Fatalf("%s: OpenSync() error = %v", label, err)
 		}
@@ -554,7 +554,7 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 	}
 
 	commit(doltRoot, "c1")
-	st, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	st, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -589,7 +589,7 @@ func TestSyncRemoteMirrorHoldsItsOwnPushNotAPeersLaterOne(t *testing.T) {
 		t.Fatalf("CloneTree() error = %v", err)
 	}
 	commit(peerRoot, "c2")
-	peer, err := OpenSync(ctx, testEnv(), peerRoot, "ws")
+	peer, err := OpenSync(ctx, testEnv(), testStderr(), peerRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(peer) error = %v", err)
 	}

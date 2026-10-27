@@ -74,7 +74,7 @@ func TestTake_CloneFailureLeavesNoResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshotsDir := DirFor(src)
-	_, err := Take(context.Background(), src, "")
+	_, err := Take(context.Background(), os.Stderr, src, "")
 	if err == nil {
 		// Darwin's Clonefile clones FIFOs wholesale; only the walk-based
 		// paths refuse them. Either outcome is legal — the residue contract
