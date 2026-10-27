@@ -253,9 +253,13 @@ func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
 	for _, line := range strings.Split(strings.TrimSpace(runCLIInDir(t, repo, "backup", "list")), "\n") {
 		fields := strings.Fields(line)
 		path := fields[len(fields)-1]
-		export, _, err := syncfile.Read(path)
+		payload, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
+		}
+		export, _, err := syncfile.Decode(payload)
+		if err != nil {
+			t.Fatalf("decode %s: %v", path, err)
 		}
 		var titles []string
 		for _, issue := range export.Issues {

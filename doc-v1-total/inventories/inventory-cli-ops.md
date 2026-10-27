@@ -879,7 +879,7 @@ Family usage `usage: lit lifeboat <dump|recover> ...` (`lifeboat.go`). Workspace
 
 - Any positional → `UsageError{"usage: lit lifeboat recover [--mapping <file>]"}` (`lifeboat.go`).
 - `--mapping` is an input file (`registerInputFile`, `inputfile.go`): `parseLeaf` reads it before the workspace opens, and an unreadable path is `UsageError{"read --mapping: <os error>"}` → exit 2.
-- `recoverMapper` (`lifeboat.go`): no `--mapping` → `store.DeterministicMapper`; else `json.Unmarshal` into `store.ShapeMapping` (error `parse --mapping: %w`), wrapped as a constant mapper.
+- `recoverMapper` (`lifeboat.go`): no `--mapping` → `store.DeterministicMapper`; else `json.Unmarshal` into `store.ShapeMapping` (error `parse --mapping %s: %w`), wrapped as a constant mapper.
 - `store.HealWorkspace(ctx, DatabasePath)` runs FIRST, unconditionally — heals a promotion that crashed between renames (`lifeboat.go`).
 - `store.DumpRaw` → `store.Recover(ctx, DatabasePath, dump, mapper, recoverAttempts)` with `recoverAttempts = 1` (`lifeboat.go`, rationale).
 - Three outcomes (`lifeboat.go`):

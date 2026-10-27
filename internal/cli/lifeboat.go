@@ -51,7 +51,7 @@ func recoverMapper(file *inputFile) (store.Mapper, error) {
 	}
 	var mapping store.ShapeMapping
 	if err := json.Unmarshal(file.data, &mapping); err != nil {
-		return nil, fmt.Errorf("parse --mapping: %w", err)
+		return nil, fmt.Errorf("parse --mapping %s: %w", file.path, err)
 	}
 	return func(store.RawDump, string) (store.ShapeMapping, error) { return mapping, nil }, nil
 }
