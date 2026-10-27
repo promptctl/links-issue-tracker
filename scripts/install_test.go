@@ -569,7 +569,8 @@ func mustAbs(t *testing.T, name string) string {
 // releaseServer is install.sh's network for one run: a stub curl on PATH that
 // answers a request for any URL ending in /<name> with files/<name> when that
 // file exists and fails it as a 404 otherwise, recording every requested URL
-// and, as "<url> <header>" lines, every header it was sent on stdin (-H @-).
+// and, as "<url> <header>" lines, every line it read on stdin for -H @-, blank
+// ones included, as curl reads them.
 // jq is the host's, linked in, because install.sh's release mode reads the
 // manifest with it; nothing else on PATH can hold a lit.
 type releaseServer struct {
@@ -591,7 +592,7 @@ while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift;; -H) header=$2; shift;; *:/
 echo "$url" >>'`+s.requests+`'
 case $header in
   '') ;;
-  @-) while IFS= read -r line; do [ -z "$line" ] || echo "$url $line" >>'`+s.headers+`'; done ;;
+  @-) while IFS= read -r line || [ -n "$line" ]; do echo "$url $line" >>'`+s.headers+`'; done ;;
   *) echo "$url on argv: $header" >>'`+s.headers+`' ;;
 esac
 file='`+s.files+`'/${url##*/}
@@ -687,7 +688,6 @@ func TestInstallLatestReleaseAuthenticatesTheFeedWithTheTokenGhWouldUse(t *testi
 			server.serve(t, "latest", []byte(`{"tag_name":"v1.2.3"}`))
 			server.serveManifest(t, litrelease.Manifest{Artifacts: []litrelease.Artifact{{Platform: "linux/amd64", URL: archive}}})
 			writeFile(t, filepath.Join(server.stubBin, "uname"), "#!/bin/sh\ncase $1 in -s) echo Linux;; -m) echo x86_64;; esac\n", 0o755)
-			writeFile(t, filepath.Join(server.stubBin, "tar"), "#!/bin/sh\nexit 1\n", 0o755)
 			out, requests, _ := server.install(t, tc.env, "--latest-release")
 
 			manifest := litrelease.DefaultBaseURL + "/v1.2.3/release-manifest.json"
@@ -713,30 +713,68 @@ func TestInstallLatestReleaseAuthenticatesTheFeedWithTheTokenGhWouldUse(t *testi
 	}
 }
 
-// TestInstallLatestReleaseFeedFailureNamesTheWaysOut: a refused feed request
-// (GitHub's 403 at its rate limit, here the stub's failure) stops the install
-// with an error naming the credentials it was asked with and both ways on.
+// TestInstallLatestReleaseFeedFailureNamesTheWaysOut: a failed feed request
+// stops the install with an error naming the credentials it was asked with.
+// When GitHub answered and refused (curl's exit 22: its 403 at the rate limit,
+// or a 401 for a token it rejects) the error adds the way out that fits those
+// credentials; when curl itself failed, its own message stands alone.
 func TestInstallLatestReleaseFeedFailureNamesTheWaysOut(t *testing.T) {
 	t.Parallel()
 	const token = "token-from-GH_TOKEN-5f3a"
-	out, requests, err := newReleaseServer(t).install(t, []string{"GH_TOKEN=" + token}, "--latest-release")
-	if err == nil {
-		t.Fatalf("exited 0 through a feed request that failed:\n%s", out)
-	}
-	if want := []string{litrelease.DefaultLatestReleaseURL}; !slices.Equal(requests, want) {
-		t.Errorf("requests %q, want %q", requests, want)
-	}
-	for _, want := range []string{
-		"error: could not fetch " + litrelease.DefaultLatestReleaseURL + " (credentials: GH_TOKEN)",
-		"(set GH_TOKEN or GITHUB_TOKEN)",
-		"--from-release <tag>",
+	feed := litrelease.DefaultLatestReleaseURL
+	for _, tc := range []struct {
+		name string
+		env  []string
+		// curl replaces the release server's stub curl when set.
+		curl        string
+		want, lacks []string
+	}{
+		{
+			name:  "GitHub refuses a request with no token",
+			want:  []string{"error: could not fetch " + feed + " (credentials: none)", "set GH_TOKEN or GITHUB_TOKEN", "--from-release <tag>"},
+			lacks: []string{"unset it"},
+		},
+		{
+			name:  "GitHub refuses a request with a token",
+			env:   []string{"GH_TOKEN=" + token},
+			want:  []string{"error: could not fetch " + feed + " (credentials: GH_TOKEN)", "refused the request made with GH_TOKEN", "unset it", "--from-release <tag>"},
+			lacks: []string{"set GH_TOKEN or GITHUB_TOKEN"},
+		},
+		{
+			name:  "curl cannot reach GitHub",
+			env:   []string{"GH_TOKEN=" + token},
+			curl:  "curl: (6) Could not resolve host: api.github.com",
+			want:  []string{"error: could not fetch " + feed + " (credentials: GH_TOKEN)", "Could not resolve host"},
+			lacks: []string{"rate-limits", "refused", "--from-release <tag>"},
+		},
 	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("output lacks %q:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, token) {
-		t.Errorf("output prints the token:\n%s", out)
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := newReleaseServer(t)
+			if tc.curl != "" {
+				writeFile(t, filepath.Join(server.stubBin, "curl"), "#!/bin/sh\nfor a; do case $a in *://*) echo \"$a\" >>'"+server.requests+"';; esac; done\necho '"+tc.curl+"' >&2\nexit 6\n", 0o755)
+			}
+			out, requests, err := server.install(t, tc.env, "--latest-release")
+			if err == nil {
+				t.Fatalf("exited 0 through a feed request that failed:\n%s", out)
+			}
+			if want := []string{feed}; !slices.Equal(requests, want) {
+				t.Errorf("requests %q, want %q", requests, want)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("output lacks %q:\n%s", want, out)
+				}
+			}
+			for _, lack := range tc.lacks {
+				if strings.Contains(out, lack) {
+					t.Errorf("output has %q:\n%s", lack, out)
+				}
+			}
+			if strings.Contains(out, token) {
+				t.Errorf("output prints the token:\n%s", out)
+			}
+		})
 	}
 }
 

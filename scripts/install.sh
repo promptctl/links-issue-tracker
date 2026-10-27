@@ -327,11 +327,13 @@ case "$mode" in
             # GitHub rate-limits unauthenticated API calls per source address,
             # and CI runners share addresses, so the feed request carries a
             # token when one is set: GH_TOKEN, then GITHUB_TOKEN, gh's own
-            # precedence. The header reaches curl on stdin (-H @-), never on
-            # argv where ps shows it; with no token the stdin is empty and
-            # adds no header. [LAW:dataflow-not-control-flow] one request, the
-            # credential is a value. [LAW:nothing-unseen] which one won is
-            # printed; the token never is.
+            # precedence. The header reaches curl on a pipe from the printf
+            # builtin (-H @-): never argv, where ps shows it, and never a
+            # here-string, which bash before 5.1 (macOS's /bin/bash) backs with
+            # a temp file. With no token the pipe carries no bytes.
+            # [LAW:dataflow-not-control-flow] one request, the credential is a
+            # value. [LAW:nothing-unseen] which one won is printed; the token
+            # never is.
             credentials=none auth_header=
             for var in GH_TOKEN GITHUB_TOKEN; do
                 if [ -n "${!var:-}" ]; then
@@ -340,9 +342,16 @@ case "$mode" in
                 fi
             done
             echo "Resolving the latest release from $REPO_LATEST_API (credentials: $credentials) ..."
-            feed="$(curl -fsSL -H @- "$REPO_LATEST_API" <<<"$auth_header")" || {
+            feed="$(printf '%s' "$auth_header" | curl -fsSL -H @- "$REPO_LATEST_API")" || {
+                curl_status=$?
                 echo "error: could not fetch $REPO_LATEST_API (credentials: $credentials)" >&2
-                echo "       GitHub rate-limits requests that carry no token (set GH_TOKEN or GITHUB_TOKEN) and refuses an invalid one; or name the tag with --from-release <tag>" >&2
+                # 22 is curl's HTTP-error exit: GitHub answered and refused.
+                # Any other exit is curl's own failure (DNS, TLS, network),
+                # which its -S message above already names.
+                case $curl_status:$credentials in
+                    22:none) echo "       GitHub rate-limits requests that carry no token: set GH_TOKEN or GITHUB_TOKEN, or name the tag with --from-release <tag>" >&2 ;;
+                    22:*) echo "       GitHub refused the request made with $credentials: if that token is expired or meant for another host, unset it; or name the tag with --from-release <tag>" >&2 ;;
+                esac
                 exit 1
             }
             release_tag="$(jq -r .tag_name <<<"$feed")"
