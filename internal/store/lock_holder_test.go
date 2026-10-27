@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -149,15 +150,7 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 		if at%time.Second != 0 || at > 3*time.Second {
 			return
 		}
-		next, err := acquireStoreLock(ctx, notices, storageDirOf(lockPath), lockPath, false, 0)
-		if err != nil {
-			t.Fatalf("holder arriving at %s: %v", at, err)
-		}
-		previous := holder
-		holder = next
-		if err := previous(); err != nil {
-			t.Fatalf("release the holder before %s: %v", at, err)
-		}
+		handOver(t, &holder, arriveShared(t, notices, lockPath, at), at)
 	})
 	if _, err := acquireStoreLockOn(ctx, notices, clock, storageDirOf(lockPath), lockPath, true, 10*time.Second); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
@@ -1050,6 +1043,25 @@ func (c *stepClock) elapsed() time.Duration { return c.instant.Sub(time.Unix(0, 
 
 func noTick(time.Duration) {}
 
+// arriveShared is a new shared holder of lockPath arriving at instant at.
+func arriveShared(t *testing.T, stderr io.Writer, lockPath string, at time.Duration) func() error {
+	release, err := acquireStoreLock(context.Background(), stderr, storageDirOf(lockPath), lockPath, false, 0)
+	if err != nil {
+		t.Fatalf("holder arriving at %s: %v", at, err)
+	}
+	return release
+}
+
+// handOver makes next the holder and then releases the one it replaces, in
+// that order, so a lock handed along between shared holders is never free.
+func handOver(t *testing.T, holder *func() error, next func() error, at time.Duration) {
+	previous := *holder
+	*holder = next
+	if err := previous(); err != nil {
+		t.Fatalf("release the holder before %s: %v", at, err)
+	}
+}
+
 // TestWaitOutlastsHoldersThatKeepChanging pins holdWait's rule through the
 // acquisition every contender runs: the wait counts from the last holder to
 // arrive at the lock, not from the contender's arrival. Shared holders hand
@@ -1085,15 +1097,7 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 		if at > steps*storeLockPollInterval {
 			return
 		}
-		next, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 0)
-		if err != nil {
-			t.Fatalf("holder arriving at %s: %v", at, err)
-		}
-		previous := holder
-		holder = next
-		if err := previous(); err != nil {
-			t.Fatalf("release the holder before %s: %v", at, err)
-		}
+		handOver(t, &holder, arriveShared(t, testStderr(), lockPath, at), at)
 	})
 
 	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
@@ -1130,28 +1134,23 @@ func TestWaitEndsInTheLockOnceTheQueueDrains(t *testing.T) {
 	})
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	holder, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, false, 0)
-	if err != nil {
-		t.Fatalf("first holder: %v", err)
-	}
+	holder := arriveShared(t, testStderr(), lockPath, 0)
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release last holder: %v", err)
+		}
+	}()
 	lastArrival := steps * storeLockPollInterval
 	drained := lastArrival + storeLockPollInterval
 	clock := newStepClock(t, func(at time.Duration) {
-		next := func() error { return nil }
-		if at <= lastArrival {
-			var err error
-			if next, err = acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, false, 0); err != nil {
-				t.Fatalf("holder arriving at %s: %v", at, err)
-			}
-		}
 		if at > drained {
 			t.Fatalf("the contender was still waiting at %s, after the last holder left at %s", at, drained)
 		}
-		previous := holder
-		holder = next
-		if err := previous(); err != nil {
-			t.Fatalf("release the holder before %s: %v", at, err)
+		next := func() error { return nil }
+		if at <= lastArrival {
+			next = arriveShared(t, testStderr(), lockPath, at)
 		}
+		handOver(t, &holder, next, at)
 	})
 
 	release, err := acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
@@ -1468,10 +1467,11 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 		t.Fatalf("hold the planted record: acquired=%v err=%v", alive, err)
 	}
 
-	// At the first poll the holder dies without retiring its record, and that
-	// poll's notice (due at every poll here) sweeps it; by the second poll the
-	// record must be gone, so the sweep is proven to land mid-wait rather than
-	// in the refusal's own holder account at the end.
+	// The first poll, at the wait's start, reads the holder; it dies before
+	// the second without retiring its record, and the second poll's notice
+	// (due at every poll here) sweeps it; before the third poll the record must
+	// be gone, so the sweep is proven to land mid-wait rather than in the
+	// refusal's own holder account at the end.
 	clock := newStepClock(t, func(at time.Duration) {
 		switch at {
 		case storeLockPollInterval:

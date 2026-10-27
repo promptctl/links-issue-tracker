@@ -400,8 +400,9 @@ type lockClock interface {
 }
 
 // wallClock is the lockClock every contender runs on: the system clock, whose
-// readings carry the monotonic clock, and a real timer. One per acquisition,
-// since its timer is that retry loop's state.
+// readings carry the monotonic clock, and a real timer — the timer
+// backoff.Retry sleeps on, which backoff keeps unexported (defaultTimer). One
+// per acquisition, since its timer is that retry loop's state.
 type wallClock struct{ timer *time.Timer }
 
 func (*wallClock) Now() time.Time { return time.Now() }
