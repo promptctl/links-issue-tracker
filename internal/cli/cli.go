@@ -38,6 +38,18 @@ import (
 // recording to do itself.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func Run(ctx context.Context, inv Invocation) (err error) {
+	// A missing stream is refused before anything holds it, the invocation's
+	// own record included, rather than at the rare warning or read that would
+	// otherwise panic on it mid-command; such an invocation opens no event, as
+	// it has no stderr to report a failed one on. [LAW:no-silent-failure]
+	switch {
+	case inv.Stdin == nil:
+		return errors.New("the invocation was given no stdin")
+	case inv.Stdout == nil:
+		return errors.New("the invocation was given no stdout")
+	case inv.Stderr == nil:
+		return errors.New("the invocation was given no stderr")
+	}
 	recorder := beginInvocation(time.Now(), inv.Dir)
 	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env, gitSpawnsBefore: inv.Env.GitSpawns()}
 	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
@@ -60,16 +72,6 @@ func dispatch(ctx context.Context, inv Invocation) error {
 	// empty environment its zero Env would read as. [LAW:no-silent-failure]
 	if inv.Env.IsZero() {
 		return errors.New("the invocation was given no environment")
-	}
-	// A missing stream is refused the same way, here rather than at the rare
-	// warning or read that would otherwise panic on it mid-command.
-	for _, stream := range []struct {
-		name    string
-		missing bool
-	}{{"stdin", inv.Stdin == nil}, {"stdout", inv.Stdout == nil}, {"stderr", inv.Stderr == nil}} {
-		if stream.missing {
-			return fmt.Errorf("the invocation was given no %s", stream.name)
-		}
 	}
 	stdout := inv.Stdout
 	normalizedArgs, err := parseGlobalArgs(inv.Args)

@@ -19,7 +19,6 @@ import (
 // loud failure always beats any possibility of an unbounded hang on a setup step.
 // [LAW:no-ambient-temporal-coupling] init owns the time budget explicitly here;
 // it does not depend on the remote, the network, or dolt finishing "eventually".
-//
 const adoptRemoteTimeout = 120 * time.Second
 
 // adoptRemoteDeadline is when the adopt is abandoned. A var solely so a test
@@ -105,6 +104,8 @@ func adoptRemoteTicketsOnInit(ctx context.Context, stderr io.Writer, env environ
 	progressf(stderr, "init", "checking whether a git remote already carries a lit backlog")
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Deferred after cancel so it runs first: the adopt wakes from the
+	// cancel to a lease already revoked.
 	lease := leaseStderr(stderr)
 	defer lease.revoke()
 	done := make(chan initSyncOutcome, 1)

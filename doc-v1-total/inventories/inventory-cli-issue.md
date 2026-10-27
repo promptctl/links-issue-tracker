@@ -16,7 +16,7 @@ into* one of those, the call and its observable effect are recorded here.
 ### 1.1 Entry point and global argument handling
 
 - `Run(ctx, inv)` is the package entry (`internal/cli/cli.go`); `inv` is the `Invocation` (directory, args, environment, stdin, stdout, stderr) (`internal/cli/invocation.go`).
-  It first refuses an `Invocation` whose `Env` is the zero `Env` (`Env.IsZero`), the one a literal that leaves `Env` out holds, with `the invocation was given no environment`, and one whose `Stdin`, `Stdout` or `Stderr` is nil with an error naming that stream; then it runs `parseGlobalArgs` (`cli.go`), then builds the cobra root
+  It first refuses an `Invocation` whose `Stdin`, `Stdout` or `Stderr` is nil, before opening its event, with an error naming that stream. It then refuses one whose `Env` is the zero `Env` (`Env.IsZero`), the one a literal that leaves `Env` out holds, with `the invocation was given no environment`; then it runs `parseGlobalArgs` (`cli.go`), then builds the cobra root
   (`cli.go`), sets args/out/err, sets `SilenceErrors = true` and
   `SilenceUsage = true` (`cli.go`), and executes.
 - `pflag.ErrHelp` and the internal `errHelpHandled` sentinel are swallowed and
