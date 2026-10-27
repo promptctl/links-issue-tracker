@@ -2101,8 +2101,9 @@ outside a git repository (`register.go`; asserted in `retired_command_test.go`).
   `UsageError{importUsage}` → exit 2. `importUsage` verbatim:
   ``"usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"``
   (`cli.go`).
-- Reads the file; a read error → `fmt.Errorf("read import spec: %w", err)` → exit 1
-  (`cli.go`).
+- `--path` is an input file (`registerInputFile`, `inputfile.go`): `parseLeaf` reads it before
+  the workspace opens, so an unreadable path is refused ahead of any store refusal as
+  `UsageError{"read --path: <os error>"}` → exit 2 (`readFlagFile`, `inputfile.go`).
 - **Format is selected by the file extension** (lowercased) (`cli.go`):
   - `.yaml` / `.yml` → `runImportBulk`
   - anything else → `runImportTreeJSON` (`cli.go`).

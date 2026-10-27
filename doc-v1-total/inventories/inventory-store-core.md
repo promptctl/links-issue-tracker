@@ -3739,7 +3739,7 @@ Test `TestImportTreeRejectsCycle` (`import_tree_test.go`) uses `a blocked_by b`,
 
 ### 4.6 CLI surface
 
-`lit import --path <file>` (`internal/cli/cli.go`). ``importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`` (`cli.go`) — raised for an empty `--path` or any positional argument. The file is read with `os.ReadFile`, error `"read import spec: %w"`. Dispatch is on `strings.ToLower(filepath.Ext(path))`: `.yaml`/`.yml` → bulk; **anything else** (including `.json` and no extension) → tree JSON (`cli.go`).
+`lit import --path <file>` (`internal/cli/cli.go`). ``importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"`` (`cli.go`) — raised for an empty `--path` or any positional argument. The file is read in the parse, before the workspace opens; an unreadable one is a usage error, `"read --path: %v"` (`inputfile.go`). Dispatch is on `strings.ToLower(filepath.Ext(path))`: `.yaml`/`.yml` → bulk; **anything else** (including `.json` and no extension) → tree JSON (`cli.go`).
 
 Both branches pass the resolved actor (session, else `--by`) to the store (`cli.go`).
 
@@ -4191,7 +4191,7 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 ### 2.9 CLI consumption of the outcomes (`internal/cli/lifeboat.go`)
 
 - `lit lifeboat recover [--mapping <file>]`; wrong arg count → `UsageError{Message: "usage: lit lifeboat recover [--mapping <file>]"}` (`lifeboat.go`).
-- With no `--mapping`, the mapper is `store.DeterministicMapper`; with one, the file is read and `json.Unmarshal`ed into a `store.ShapeMapping` and wrapped as a constant mapper (`lifeboat.go`). Errors: `read mapping %s: %w` (`lifeboat.go`), `parse mapping %s: %w` (`lifeboat.go`).
+- With no `--mapping`, the mapper is `store.DeterministicMapper`; with one, the file (read in the parse; an unreadable one is the usage error `read --%s: %v`, `inputfile.go`) is `json.Unmarshal`ed into a `store.ShapeMapping` and wrapped as a constant mapper (`lifeboat.go`). Error: `parse --mapping: %w` (`lifeboat.go`).
 - Sequence: `store.HealWorkspace(ctx, ws.DatabasePath)` → `store.DumpRaw(...)` → `store.Recover(..., recoverAttempts)` (`lifeboat.go`).
 - `Reconciled` → `promoteReconciled`: `store.PromoteCandidate`, then prints `recovered: rebuilt workspace promoted to %s (%s)\n` where the parenthetical is `previous contents preserved at %s` or, when `result.Backup == ""`, the literal `no previous contents to preserve` (`lifeboat.go`). The candidate is discarded in a defer, joining `discard candidate scratch after promotion: %w` on failure (`lifeboat.go`).
 - `RequiresDrop` → candidate discarded, and error: `recovery needs a human decision: the mapping discards %d source column(s) with no recorded justification:\n%s\nnothing was changed; supply a mapping that maps or intentionally drops these before recovering` with the drops rendered one per line as `  - %s` (`lifeboat.go`, `formatDrops` at `lifeboat.go`).

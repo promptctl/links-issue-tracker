@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -100,10 +99,8 @@ func (f *longTextFlag) read(ctx context.Context, inv Invocation) (*string, error
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		// A path that cannot be read is an argument to correct, not a failure
-		// to retry, so it is refused as usage.
-		if data, err = os.ReadFile(path); err != nil {
-			return nil, UsageError{Message: fmt.Sprintf("read --%s-file: %v", f.name, err)}
+		if data, err = readFlagFile(f.name+"-file", path); err != nil {
+			return nil, err
 		}
 	}
 	// A file or stdin that carries no text is a missing heredoc or pipe far

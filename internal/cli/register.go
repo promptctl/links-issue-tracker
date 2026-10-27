@@ -355,8 +355,12 @@ func parseLeaf[R any](ctx context.Context, l leaf[R], args []string, inv Invocat
 	if err := resolvePaths(l.fs, inv.Dir); err != nil {
 		return nil, err
 	}
-	// A long text read from a file or stdin is input, not work: it is read
-	// here, before acquisition, so waiting on it never holds the workspace.
+	// A long text or an input file is input, not work: it is read here, before
+	// acquisition, so waiting on it never holds the workspace and a mistaken
+	// path is refused without opening one.
+	if err := readInputFiles(l.fs); err != nil {
+		return nil, err
+	}
 	if err := readLongTexts(ctx, l.fs, inv); err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -360,6 +361,22 @@ func TestRunImportRequiresPath(t *testing.T) {
 	}
 	if ExitCode(err) != ExitUsage {
 		t.Fatalf("runImportTree(no --path) exit code = %d, want %d", ExitCode(err), ExitUsage)
+	}
+}
+
+// An import spec that cannot be read is refused as usage in the parse, before
+// the workspace opens, as a long-text file is: outside any workspace the
+// refusal is the same, and the invocation's event records the usage exit.
+func TestRunImportRefusesAnUnreadablePathBeforeTheWorkspaceOpens(t *testing.T) {
+	isolateEvents(t)
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	_, err := runCLIInDirAllowError(t, t.TempDir(), "import", "--path", missing)
+	var usage UsageError
+	if !errors.As(err, &usage) || !strings.HasPrefix(usage.Message, "read --path: open ") {
+		t.Fatalf("import --path <missing> outside any workspace error = %v, want the unreadable-file UsageError", err)
+	}
+	if ev := lastEvent(t); ev.ExitCode != ExitUsage {
+		t.Errorf("event exit_code = %d, want %d", ev.ExitCode, ExitUsage)
 	}
 }
 
