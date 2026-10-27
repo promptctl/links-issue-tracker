@@ -38,7 +38,7 @@ func TestHelperKillMidCommit(t *testing.T) {
 		t.Skip("helper test; runs only via TestMidMutationProcessKillRecovers's re-exec")
 	}
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), dir, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("helper Open() error = %v", err)
 	}
@@ -86,7 +86,7 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 	// store must recover, not stay wedged behind a lock the dead process
 	// never released, nor leave the working set unreadable.
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), dir, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after mid-commit kill error = %v", err)
 	}
@@ -151,7 +151,7 @@ func TestHelperKillMidMigrationStep(t *testing.T) {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 		select {} // unreachable if the kill lands; guards against any delay
 	}
-	_, _ = Open(context.Background(), testEnv(), dir, "test-workspace-id")
+	_, _ = Open(context.Background(), testEnv(), testStderr(), dir, "test-workspace-id")
 	t.Fatal("helper process was not killed inside the migration-step hook")
 }
 
@@ -190,7 +190,7 @@ func TestMidMigrationStepProcessKillRecovers(t *testing.T) {
 	// neither shape may surface as QuarantineBlockError or
 	// CheckpointResetError, since no Go error was ever returned for the
 	// killed step to be quarantined against.
-	st, err := Open(ctx, testEnv(), dir, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after mid-migration-step kill error = %v", err)
 	}

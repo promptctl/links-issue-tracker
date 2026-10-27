@@ -309,7 +309,7 @@ func backgroundMirrorLeaf() bareLeaf {
 		// stopAnswering is the idempotent release the dying paths run BEFORE their
 		// completion effects (see the helpers); a no-op until the hold exists.
 		stopAnswering := func() {}
-		releaseBeacon, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
+		releaseBeacon, beaconErr := store.HoldMirrorBeacon(ctx, inv.Stderr, ws.DatabasePath)
 		if beaconErr != nil {
 			if ctx.Err() != nil {
 				return teardownMirror(inv.Stderr, inv.Env, ws, ctx.Err(), stopAnswering)
@@ -498,7 +498,7 @@ type liveClone struct {
 // before anything runs on it; a clone that will not open for that read fails
 // the take, since the session the caller opens on it next would not open
 // either.
-func cloneLiveStore(ctx context.Context, ws workspace.Info, base string, underHold func()) (clone liveClone, cut bool, err error) {
+func cloneLiveStore(ctx context.Context, stderr io.Writer, ws workspace.Info, base string, underHold func()) (clone liveClone, cut bool, err error) {
 	if err := os.RemoveAll(base); err != nil {
 		return liveClone{}, false, fmt.Errorf("collect a dead holder's clone under %s: %w", base, err)
 	}
@@ -508,7 +508,7 @@ func cloneLiveStore(ctx context.Context, ws workspace.Info, base string, underHo
 	}
 	clone = liveClone{dir: dir, databasePath: filepath.Join(dir, "dolt")}
 	var holdStart time.Time
-	err = withDoltDirectoryHeld(ctx, ws, func() error {
+	err = withDoltDirectoryHeld(ctx, stderr, ws, func() error {
 		holdStart = time.Now()
 		holdCtx, cancel := context.WithTimeout(ctx, store.MirrorHoldBudget)
 		defer cancel()
@@ -574,7 +574,7 @@ func cloneLiveStore(ctx context.Context, ws workspace.Info, base string, underHo
 // could-not-attempt seam — the hold explanation names the step so the reader
 // does not go looking for a network fault.
 func takeMirrorClone(ctx context.Context, stderr io.Writer, ws workspace.Info) (mirrorClone, error) {
-	clone, cut, err := cloneLiveStore(ctx, ws, mirrorCloneBase(ws), func() { clearMirrorPending(stderr, ws) })
+	clone, cut, err := cloneLiveStore(ctx, stderr, ws, mirrorCloneBase(ws), func() { clearMirrorPending(stderr, ws) })
 	if err != nil {
 		err = fmt.Errorf("take the push's clone: %w", err)
 		if cut {
@@ -734,7 +734,7 @@ func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.
 	var landed pushedHead
 	var openElapsed time.Duration
 	attempted = func() bool {
-		session, closeStore, err := openSyncSessionAt(pushCtx, env, clone.databasePath, ws.WorkspaceID)
+		session, closeStore, err := openSyncSessionAt(pushCtx, env, stderr, clone.databasePath, ws.WorkspaceID)
 		openElapsed = time.Since(pushStart)
 		if err != nil {
 			ending = cutByPushDeadline(pushCtx, ctx, fmt.Errorf("open sync store on the clone: %w", err))
@@ -775,7 +775,7 @@ func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log
 	case liveStoreRecords:
 		recordStart := time.Now()
 		var recordErr error
-		record, recordErr = store.RecordPushedHead(ctx, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
+		record, recordErr = store.RecordPushedHead(ctx, stderr, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
 		recordHeld = time.Since(recordStart)
 		if recordErr != nil {
 			// The push landed and its outcome stands; what failed is the

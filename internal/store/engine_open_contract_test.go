@@ -39,7 +39,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	// failure.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -58,7 +58,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
 	start := time.Now()
-	opened, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	opened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		_ = opened.Close()
@@ -87,7 +87,7 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	release := time.AfterFunc(300*time.Millisecond, func() { _ = releaseLock() })
 	defer release.Stop()
 
-	reopened, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reopened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after holder release error = %v; want the open retry to absorb the handoff", err)
 	}
@@ -135,7 +135,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -153,7 +153,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	coResidentHolderWait = 700 * time.Millisecond
 	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
-	opened, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	opened, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = opened.Close()
 		t.Fatalf("OpenSync() succeeded against a foreign journal-lock holder; want bounded contention")
@@ -175,7 +175,7 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -196,7 +196,7 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() beside a journal-lock holder error = %v; want the read-only engine to serve it", err)
 	}
@@ -257,7 +257,7 @@ func TestAReadOpenWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -284,7 +284,7 @@ func TestAReadOpenWritesNothing(t *testing.T) {
 		t.Fatalf("backdate %s: %v", doltRoot, err)
 	}
 	before := stampTree(t, doltRoot)
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
@@ -328,7 +328,7 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 	// so a writer that did wait on the reader fails within the test's time.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -344,13 +344,13 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 	coResidentHolderWait = 300 * time.Millisecond
 	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
 	defer reader.Close()
 
-	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() beside an open reader error = %v; a reader must hold no journal lock", err)
 	}
@@ -377,7 +377,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -385,7 +385,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	releaseJournal, err := LockDoltJournalExclusive(WithHolderCommand(ctx, "lit backlog"), doltRoot)
+	releaseJournal, err := LockDoltJournalExclusive(WithHolderCommand(ctx, "lit backlog"), testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
@@ -396,7 +396,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	t.Cleanup(func() { coResidentHolderWait = prevWait })
 
 	start := time.Now()
-	opened, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	opened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		_ = opened.Close()
@@ -430,7 +430,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 func TestStoreOutlivesTheContextItWasOpenedUnder(t *testing.T) {
 	t.Parallel()
 	openCtx, cancel := context.WithCancel(context.Background())
-	st, err := Open(openCtx, testEnv(), migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(openCtx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -456,7 +456,7 @@ func TestAReaderOutlivesAFullCompactionBesideIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	s, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -473,13 +473,13 @@ func TestAReaderOutlivesAFullCompactionBesideIt(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
 	defer reader.Close()
 
-	writer, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() beside the reader error = %v", err)
 	}

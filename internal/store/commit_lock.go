@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -119,7 +119,7 @@ func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx co
 func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn func(ctx context.Context, tx *sql.Tx) error) error {
 	staged := false
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, func(ctx context.Context) error {
+		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
 			if !staged {
 				tx, err := s.db.BeginTx(ctx, nil)
 				if err != nil {
@@ -254,7 +254,7 @@ func commitLockWaiterBudget() time.Duration {
 // [LAW:nothing-unseen] A rotation is announced on the operator channel before
 // it runs, so a write that recovered here can be told apart from one that
 // never needed to.
-func retryTransientGCContention(ctx context.Context, operation retryOperation, rotate connectionRotator) error {
+func retryTransientGCContention(ctx context.Context, stderr io.Writer, operation retryOperation, rotate connectionRotator) error {
 	heldSince, held := commitLockHeldSince(ctx)
 	if !held {
 		return errors.New("retryTransientGCContention called without the commit lock held; its rotation swaps the store's connection, which only the lock's holder may do")
@@ -268,7 +268,7 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 	if time.Since(heldSince)+rotationReserve()+firstRun >= commitLockWaiterBudget() {
 		return exhaustedContentionError(err)
 	}
-	fmt.Fprintf(lockWaitNoticeWriter, "lit: the store connection failed (%v); reopening it and retrying once\n", err)
+	fmt.Fprintf(stderr, "lit: the store connection failed (%v); reopening it and retrying once\n", err)
 	if rotateErr := rotate(ctx); rotateErr != nil {
 		return rotateErr
 	}
@@ -323,7 +323,7 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 	// [LAW:single-enforcer] commitWorkingSet is the single mutation boundary that owns transient commit retry behavior.
 	// [LAW:one-source-of-truth] A process-shared commit lock at this boundary is the canonical writer serialization mechanism.
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, func(ctx context.Context) error {
+		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
 			return s.commitWorkingSetOnce(ctx, commitStamp{Message: message})
 		}, s.reconnect)
 	})
@@ -381,7 +381,7 @@ func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) (e
 	// The deferred release must fire on panic too; SettleCommitLockRelease
 	// owns how its outcome combines with the operation's.
 	defer func() {
-		err = SettleCommitLockRelease(err, release())
+		err = SettleCommitLockRelease(s.stderr, err, release())
 	}()
 	return operation(lockedCtx)
 }
@@ -397,14 +397,14 @@ func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) (e
 // prune's established post-durable-success demotion. [LAW:no-silent-failure]
 // loud, but not a false failure. [LAW:single-enforcer] Exported so the CLI's
 // LockCommitPath spelling settles by the same rule.
-func SettleCommitLockRelease(opErr, releaseErr error) error {
+func SettleCommitLockRelease(stderr io.Writer, opErr, releaseErr error) error {
 	if releaseErr == nil {
 		return opErr
 	}
 	if opErr != nil {
 		return errors.Join(opErr, releaseErr)
 	}
-	fmt.Fprintf(os.Stderr, "lit: commit lock release failed after the operation completed (the hold is gone; nothing to redo): %v\n", releaseErr)
+	fmt.Fprintf(stderr, "lit: commit lock release failed after the operation completed (the hold is gone; nothing to redo): %v\n", releaseErr)
 	return nil
 }
 
@@ -412,7 +412,7 @@ func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func() 
 	if _, held := commitLockHeldSince(ctx); held {
 		return ctx, func() error { return nil }, nil
 	}
-	release, err := acquireCommitLockAtPath(ctx, s.commitLockStorageDir, s.commitLockPath)
+	release, err := acquireCommitLockAtPath(ctx, s.stderr, s.commitLockStorageDir, s.commitLockPath)
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -436,8 +436,8 @@ func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func() 
 //
 // [LAW:single-enforcer] Routes through the same acquireCommitLockAtPath
 // primitive Store uses, so writer serialization stays at one boundary.
-func LockCommitPath(ctx context.Context, databasePath string) (func() error, error) {
-	return acquireCommitLockAtPath(ctx, workspaceStorageDir(databasePath), commitLockPathForDolt(databasePath))
+func LockCommitPath(ctx context.Context, stderr io.Writer, databasePath string) (func() error, error) {
+	return acquireCommitLockAtPath(ctx, stderr, workspaceStorageDir(databasePath), commitLockPathForDolt(databasePath))
 }
 
 // CommitLockPath returns the conventional commit-lock path for a workspace's
@@ -474,8 +474,8 @@ func commitLockPathForDolt(databasePath string) string {
 // ErrWorkspaceBusy; this boundary only adds the commit-specific operator
 // guidance, so errors.Is(err, ErrWorkspaceBusy) discriminates commit
 // contention exactly as it does every other store lock's.
-func acquireCommitLockAtPath(ctx context.Context, storageDir, lockPath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, storageDir, lockPath, true, commitLockWaiterBudget())
+func acquireCommitLockAtPath(ctx context.Context, stderr io.Writer, storageDir, lockPath string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, stderr, storageDir, lockPath, true, commitLockWaiterBudget())
 	if err != nil {
 		return nil, wrapCommitLockContention(err)
 	}

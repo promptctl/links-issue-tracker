@@ -48,7 +48,7 @@ func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
 // migration gate.
 func doltHead(t *testing.T, ws workspace.Info) string {
 	t.Helper()
-	dump, err := store.DumpRaw(context.Background(), testEnv(), ws.DatabasePath, ws.WorkspaceID)
+	dump, err := store.DumpRaw(context.Background(), testEnv(), testStderr(t), ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("read HEAD of %s: %v", ws.DatabasePath, err)
 	}
@@ -78,7 +78,7 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
-	st, err := engine.Open(context.Background(), testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(context.Background(), testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

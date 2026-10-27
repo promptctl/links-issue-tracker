@@ -61,7 +61,7 @@ func TestRebuildCandidateValidMappingYieldsFreshWorkspace(t *testing.T) {
 	ctx := context.Background()
 	dump := preGooseDump()
 
-	cand, err := RebuildCandidate(ctx, testEnv(), t.TempDir(), dump, mustMap(t, dump))
+	cand, err := RebuildCandidate(ctx, testEnv(), testStderr(), t.TempDir(), dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("RebuildCandidate rejected a valid mapping: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 	dump := preGooseDump()
 
 	// An empty mapping is not total over the dump's columns: Apply rejects it.
-	if _, err := RebuildCandidate(ctx, testEnv(), parent, dump, ShapeMapping{}); err == nil {
+	if _, err := RebuildCandidate(ctx, testEnv(), testStderr(), parent, dump, ShapeMapping{}); err == nil {
 		t.Fatal("RebuildCandidate accepted an incomplete mapping")
 	}
 	if n := dirEntryCount(t, parent); n != 0 {
@@ -103,7 +103,7 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 	// Same dump, now a valid mapping: the next attempt starts clean and conserves
 	// every issue. If the rejected attempt had contaminated state, this count
 	// would be wrong.
-	cand, err := RebuildCandidate(ctx, testEnv(), parent, dump, mustMap(t, dump))
+	cand, err := RebuildCandidate(ctx, testEnv(), testStderr(), parent, dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("RebuildCandidate rejected a valid mapping after a prior reject: %v", err)
 	}
@@ -141,12 +141,12 @@ func TestRebuildCandidateAttemptsAreIsolated(t *testing.T) {
 	parent := t.TempDir()
 	dump := preGooseDump()
 
-	first, err := RebuildCandidate(ctx, testEnv(), parent, dump, mustMap(t, dump))
+	first, err := RebuildCandidate(ctx, testEnv(), testStderr(), parent, dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("first RebuildCandidate: %v", err)
 	}
 	t.Cleanup(func() { _ = first.Discard() })
-	second, err := RebuildCandidate(ctx, testEnv(), parent, dump, mustMap(t, dump))
+	second, err := RebuildCandidate(ctx, testEnv(), testStderr(), parent, dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("second RebuildCandidate: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
 	parent := t.TempDir()
 	dump := preGooseDump()
 
-	cand, err := RebuildCandidate(ctx, testEnv(), parent, dump, mustMap(t, dump))
+	cand, err := RebuildCandidate(ctx, testEnv(), testStderr(), parent, dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("RebuildCandidate: %v", err)
 	}

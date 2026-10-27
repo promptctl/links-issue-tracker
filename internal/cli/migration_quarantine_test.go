@@ -26,7 +26,7 @@ func TestAQuarantinedMigrationRefusesAtExit3WithItsOwnReason(t *testing.T) {
 	}
 	latest := info.Schema.Max
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -71,7 +71,7 @@ func quarantineTop(t *testing.T, ws workspace.Info, n int64) int64 {
 	}
 	first := info.Schema.Max - n + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

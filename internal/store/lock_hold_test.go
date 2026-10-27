@@ -5,6 +5,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,11 +44,12 @@ func liftWaitOutOfPlay(t *testing.T) {
 }
 
 // takenHold is a hold of kind access on a fresh store root, told by hand that
-// Dolt took LOCK, with what it reports going to reports.
-func takenHold(t *testing.T, access engineAccess, reports *heldReports) (*lockHold, func() string) {
+// Dolt took LOCK, with what it reports going to reports and what it prints to
+// stderr.
+func takenHold(t *testing.T, stderr io.Writer, access engineAccess, reports *heldReports) (*lockHold, func() string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "dolt")
-	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), root, access, &longPhase{})
+	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), stderr, root, access, &longPhase{})
 	hold.taken()
 	t.Cleanup(hold.end)
 	arrival := func() string {
@@ -71,7 +73,7 @@ func takenHold(t *testing.T, access engineAccess, reports *heldReports) (*lockHo
 // the tick's instant, decides.
 func TestARoutineHoldHeartbeatsOnEveryTickItsEngineWorked(t *testing.T) {
 	liftWaitOutOfPlay(t)
-	hold, arrival := takenHold(t, engineWriteRoutine, &heldReports{})
+	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 	name := arrival()
 	if isHeartbeat(name) {
 		t.Fatalf("arrival at LOCK taken = %q, want the hold's record-shaped name", name)
@@ -109,7 +111,7 @@ func TestARoutineHoldHeartbeatsOnEveryTickItsEngineWorked(t *testing.T) {
 // is read.
 func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
 	liftWaitOutOfPlay(t)
-	hold, arrival := takenHold(t, engineWriteRoutine, &heldReports{})
+	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 	release := hold.record(context.Background())
 	t.Cleanup(func() {
 		if err := release(); err != nil {
@@ -136,7 +138,7 @@ func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
 // and sends no heartbeat until the phase ends.
 func TestALongPhaseOutlivesAConnectionRotation(t *testing.T) {
 	liftWaitOutOfPlay(t)
-	s, err := OpenRoutine(context.Background(), testEnv(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	s, err := OpenRoutine(context.Background(), testEnv(), testStderr(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenRoutine() error = %v", err)
 	}
@@ -176,7 +178,7 @@ func TestALongPhaseOutlivesAConnectionRotation(t *testing.T) {
 // A connection rotation rotates the holder record with the engine: one
 // record stands after it, under the name the new hold announces.
 func TestAReconnectRotatesTheHolderRecordWithTheEngine(t *testing.T) {
-	s, err := Open(context.Background(), testEnv(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	s, err := Open(context.Background(), testEnv(), testStderr(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -211,7 +213,7 @@ func TestAReconnectRotatesTheHolderRecordWithTheEngine(t *testing.T) {
 func TestASecondTakenOnOneHoldIsReported(t *testing.T) {
 	notices := captureLockNotices(t, time.Hour, time.Hour)
 	liftWaitOutOfPlay(t)
-	hold, _ := takenHold(t, engineWriteRoutine, &heldReports{})
+	hold, _ := takenHold(t, notices, engineWriteRoutine, &heldReports{})
 	hold.taken()
 	if printed := notices.String(); !strings.Contains(printed, "again under a hold that already took it") {
 		t.Fatalf("notices = %q, want the second Taken reported", printed)
@@ -223,7 +225,7 @@ func TestASecondTakenOnOneHoldIsReported(t *testing.T) {
 func TestALongHoldNeverHeartbeats(t *testing.T) {
 	liftWaitOutOfPlay(t)
 	reports := &heldReports{}
-	hold, arrival := takenHold(t, engineWrite, reports)
+	hold, arrival := takenHold(t, testStderr(), engineWrite, reports)
 	name := arrival()
 	hold.enter()
 	hold.tick()
@@ -243,7 +245,7 @@ func TestALongHoldNeverHeartbeats(t *testing.T) {
 // heartbeat while it runs, and they resume when it is done.
 func TestASuspendedRoutineHoldSendsNoHeartbeat(t *testing.T) {
 	liftWaitOutOfPlay(t)
-	hold, arrival := takenHold(t, engineWriteRoutine, &heldReports{})
+	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 	resume := hold.phase.enter()
 	before := arrival()
 	hold.enter()
@@ -266,7 +268,7 @@ func TestASuspendedRoutineHoldSendsNoHeartbeat(t *testing.T) {
 func TestAnEndedHoldReportsOnceAndWritesNothingMore(t *testing.T) {
 	liftWaitOutOfPlay(t)
 	reports := &heldReports{}
-	hold, arrival := takenHold(t, engineWriteRoutine, reports)
+	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, reports)
 	hold.enter()
 	hold.exit()
 	hold.tick()
@@ -292,7 +294,7 @@ func TestAnEndedHoldReportsOnceAndWritesNothingMore(t *testing.T) {
 // engine's, or an open that lost the race.
 func TestAHoldThatNeverTookTheLockReportsNothing(t *testing.T) {
 	reports := &heldReports{}
-	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), filepath.Join(t.TempDir(), "dolt"), engineWriteRoutine, &longPhase{})
+	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), testStderr(), filepath.Join(t.TempDir(), "dolt"), engineWriteRoutine, &longPhase{})
 	hold.enter()
 	hold.exit()
 	hold.end()
@@ -308,7 +310,7 @@ func contend(t *testing.T, open func(context.Context, string) (*Store, error), w
 	t.Helper()
 	ctx := WithLockObserver(context.Background(), reports.observer())
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	initial, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
+	initial, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
@@ -323,7 +325,7 @@ func contend(t *testing.T, open func(context.Context, string) (*Store, error), w
 	go func() { holderDone <- errors.Join(work(holder), holder.Close()) }()
 
 	start := time.Now()
-	contender, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	contender, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		err = contender.Close()
@@ -350,7 +352,7 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 	shrinkWait(t, 400*time.Millisecond)
 	reports := &heldReports{}
 	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
-		return OpenRoutine(ctx, testEnv(), root, "test-workspace-id")
+		return OpenRoutine(ctx, testEnv(), testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
 		return s.ExecRawForTest(context.Background(), "SELECT SLEEP(2)")
 	}, reports)
@@ -382,7 +384,7 @@ func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
 	shrinkWait(t, 400*time.Millisecond)
 	reports := &heldReports{}
 	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
-		return Open(WithHolderCommand(ctx, "lit import"), testEnv(), root, "test-workspace-id")
+		return Open(WithHolderCommand(ctx, "lit import"), testEnv(), testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
 		return s.ExecRawForTest(context.Background(), "SELECT SLEEP(2)")
 	}, reports)
@@ -419,7 +421,7 @@ func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
 	// serial: rewrites the package-level coResidentHolderWait.
 	shrinkWait(t, time.Minute)
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	holder, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
+	holder, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("holder Open() error = %v", err)
 	}
@@ -431,7 +433,7 @@ func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
 	reports := &heldReports{}
 	ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 500*time.Millisecond)
 	defer cancel()
-	if contender, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id"); err == nil {
+	if contender, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id"); err == nil {
 		_ = contender.Close()
 		t.Fatal("a writer opened beside a live holder")
 	}
@@ -444,7 +446,7 @@ func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
 // acquisition failed, failed: neither refused nor cancelled.
 func TestAWaitWhoseAttemptFailedReportsFailed(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
-	w := newHoldWait(storageDirOf(lockPath), lockPath, func() time.Duration { return time.Hour }, time.Now)
+	w := newHoldWait(testStderr(), storageDirOf(lockPath), lockPath, func() time.Duration { return time.Hour }, time.Now)
 	w.Reset()
 	w.NextBackOff()
 	if wait, waited := w.report(context.Background(), errors.New("disk on fire")); !waited || wait.Outcome != LockWaitFailed {
@@ -457,7 +459,7 @@ func TestAWaitWhoseAttemptFailedReportsFailed(t *testing.T) {
 func TestABootstrapEnginesHoldIsReported(t *testing.T) {
 	reports := &heldReports{}
 	ctx := WithLockObserver(context.Background(), reports.observer())
-	if err := buildDoltRoot(ctx, filepath.Join(t.TempDir(), "staging"), "test-workspace-id"); err != nil {
+	if err := buildDoltRoot(ctx, testStderr(), filepath.Join(t.TempDir(), "staging"), "test-workspace-id"); err != nil {
 		t.Fatalf("buildDoltRoot() error = %v", err)
 	}
 	if holds, _ := reports.snapshot(); len(holds) != 2 {
@@ -473,7 +475,7 @@ func TestAWriterBehindARoutineHolderOutsideItsEngineFails(t *testing.T) {
 	shrinkWait(t, 400*time.Millisecond)
 	reports := &heldReports{}
 	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
-		return OpenRoutine(WithHolderCommand(ctx, "lit purge"), testEnv(), root, "test-workspace-id")
+		return OpenRoutine(WithHolderCommand(ctx, "lit purge"), testEnv(), testStderr(), root, "test-workspace-id")
 	}, func(*Store) error {
 		time.Sleep(2 * time.Second)
 		return nil
@@ -591,7 +593,7 @@ func (fakeTx) Rollback() error { return nil }
 func TestARoutineHoldHeartbeatsWhileATransactionIsOpen(t *testing.T) {
 	liftWaitOutOfPlay(t)
 	for _, end := range []string{"commit", "rollback"} {
-		hold, arrival := takenHold(t, engineWriteRoutine, &heldReports{})
+		hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 		conn := executingConn{inner: fakeConn{}, hold: hold}
 		tx, err := conn.BeginTx(context.Background(), driver.TxOptions{})
 		if err != nil {

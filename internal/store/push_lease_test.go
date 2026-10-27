@@ -40,7 +40,7 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	withChunkStore(t, alpha, func(ddb *doltdb.DoltDB) {
 		cut = firstParentBelowHead(t, ctx, ddb, 1).String()
 	})
-	rewritten, err := ReRoot(ctx, alpha, "master", cut)
+	rewritten, err := ReRoot(ctx, testStderr(), alpha, "master", cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -133,7 +133,7 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newer, err := Open(ctx, testEnv(), bravo, "ws")
+	newer, err := Open(ctx, testEnv(), testStderr(), bravo, "ws")
 	if err != nil {
 		t.Fatal(err)
 	}

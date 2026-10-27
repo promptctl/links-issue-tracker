@@ -351,7 +351,7 @@ func TestGatherCrossProjectRollupUnreadableStoreIsErrorRow(t *testing.T) {
 		addLitStore(t, repo) // a store DIRECTORY exists but holds no real dolt data
 	}
 
-	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), testStderr(t), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v; want error rows, not a fatal error", err)
 	}
@@ -378,7 +378,7 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	storageDir = filepath.Join(repoDir, ".git", "links")
 	dbPath := filepath.Join(storageDir, "dolt")
 
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, dbPath, workspaceID)
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, dbPath, workspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open(%q) error = %v", dbPath, err)
 	}
@@ -450,7 +450,7 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 	gitInit(t, repo)
 	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
-	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), testStderr(t), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
 	}
@@ -497,7 +497,7 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 	storageDir, _ := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, filepath.Join(storageDir, "dolt"), "real-workspace-id")
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, filepath.Join(storageDir, "dolt"), "real-workspace-id")
 	if err != nil {
 		t.Fatalf("engine.Open error = %v", err)
 	}
@@ -528,7 +528,7 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 		t.Fatalf("store.Close() error = %v", err)
 	}
 
-	rows, err := gatherCrossProjectRollup(underInvocation(ctx), testEnv(), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(ctx), testEnv(), testStderr(t), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
 	}

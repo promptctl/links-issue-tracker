@@ -40,7 +40,7 @@ func TestASnapshotLeavesOutTheRemoteCacheAndStillSyncsOnceRestored(t *testing.T)
 	// second checkout of the same remote holds one.
 	peerRoot := cloneStoreTree(t, ctx, root, t.TempDir())
 
-	snap, err := dbsnapshot.Take(ctx, root, "test")
+	snap, err := dbsnapshot.Take(ctx, testStderr(), root, "test")
 	if err != nil {
 		t.Fatalf("Take() error = %v", err)
 	}
@@ -53,7 +53,7 @@ func TestASnapshotLeavesOutTheRemoteCacheAndStillSyncsOnceRestored(t *testing.T)
 
 	writeAndPush := func(root, title string) {
 		t.Helper()
-		st, err := Open(ctx, testEnv(), root, "ws")
+		st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 		if err != nil {
 			t.Fatalf("Open(%s) error = %v", root, err)
 		}

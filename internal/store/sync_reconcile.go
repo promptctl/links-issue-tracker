@@ -476,11 +476,11 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 	// branch, never pushed — so a sweep that fails is reported and the
 	// reconcile goes on. [LAW:no-silent-failure]
 	if err := s.deleteBranchesUnder(ctx, reconcileScratchPrefix+"-", ""); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile could not sweep stale scratch branches: %v\n", err)
+		fmt.Fprintf(s.stderr, "lit: reconcile could not sweep stale scratch branches: %v\n", err)
 	}
 	scratchBranch := newReconcileScratch()
-	guard := newSnapshotGuard(s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
-	return retryTransientGCContention(ctx, func(ctx context.Context) error {
+	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
+	return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
 		return body(ctx, guard, scratchBranch)
 	}, s.reconnect)
 }
@@ -1009,7 +1009,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// stderr but not promoted. [LAW:no-silent-failure] loud, but not a false failure
 	// over a durable success.
 	if _, err := s.pruneAutomaticSnapshots(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
+		fmt.Fprintf(s.stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
 	return replayLanding{replayed: replayed, landing: landing}, nil
 }

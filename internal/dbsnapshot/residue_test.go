@@ -48,7 +48,7 @@ func TestCollectOrphanedResidue_RemovesDeadResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshotsDir := DirFor(src)
-	snap, err := Take(context.Background(), src, "keep-me")
+	snap, err := Take(context.Background(), os.Stderr, src, "keep-me")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestTake_CollectsResidueAtEntry(t *testing.T) {
 	}
 	tmpPath, reservePath := fabricateDeadResidue(t, snapshotsDir, "1700000000000000004")
 
-	snap, err := Take(context.Background(), src, "")
+	snap, err := Take(context.Background(), os.Stderr, src, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
 	fsperm.Deny(t, nested, fsperm.RemoveAll)
 	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
-	snap, err := Take(context.Background(), src, "")
+	snap, err := Take(context.Background(), os.Stderr, src, "")
 	if err != nil {
 		t.Fatalf("Take must succeed despite a collection failure: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestTake_CanceledContextRefusesCleanly(t *testing.T) {
 	snapshotsDir := DirFor(src)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := Take(ctx, src, "")
+	_, err := Take(ctx, os.Stderr, src, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled, got %v", err)
 	}
@@ -423,7 +423,7 @@ func TestTake_HoldsBeaconSharedForConcurrentProducers(t *testing.T) {
 	// exclusive probe must skip (any of it could be the live producer's own
 	// in-flight paths), and the take itself must still proceed.
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000009")
-	if _, err := Take(context.Background(), src, ""); err != nil {
+	if _, err := Take(context.Background(), os.Stderr, src, ""); err != nil {
 		t.Fatalf("Take must coexist with another live producer's shared hold: %v", err)
 	}
 	if _, err := os.Stat(tmpPath); err != nil {

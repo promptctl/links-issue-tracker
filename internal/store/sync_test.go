@@ -20,7 +20,7 @@ func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -30,7 +30,7 @@ func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -48,7 +48,7 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -67,7 +67,7 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 // first.
 func seedSyncEpic(t *testing.T, ctx context.Context, doltRoot, workspace string) string {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), doltRoot, workspace)
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, workspace)
 	if err != nil {
 		t.Fatalf("Open(epic) error = %v", err)
 	}
@@ -92,7 +92,7 @@ func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot string) {
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
-	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", newLockHold(context.Background(), doltRoot, engineWrite, &longPhase{}))
+	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", newLockHold(context.Background(), testStderr(), doltRoot, engineWrite, &longPhase{}))
 	if err != nil {
 		t.Fatalf("openDoltPool() bootstrap error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestOpenSyncNormalizesPreMadeMainBranchToMaster(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := premadeMainBranchDB(t, ctx)
 
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -142,7 +142,7 @@ func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	release, err := LockCommitPath(ctx, doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
 
 	openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	sync, err := OpenSync(openCtx, testEnv(), doltRoot, "test-workspace-id")
+	sync, err := OpenSync(openCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() under a held commit lock error = %v", err)
 	}
@@ -178,7 +178,7 @@ func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 	// EnsureDatabase over a pre-existing database is a no-op — branch
 	// normalization is owned by write opens, so a pre-made main-branch store
 	// stays on main here...
-	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
+	if _, err := EnsureDatabase(ctx, testStderr(), doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
 	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch == "master" {
@@ -187,7 +187,7 @@ func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 
 	// ...and the contract — on master before any write use — holds at the
 	// first write open. [LAW:behavior-not-structure]
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -204,7 +204,7 @@ func TestSyncRemoteLifecycle(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -212,7 +212,7 @@ func TestSyncRemoteLifecycle(t *testing.T) {
 		t.Fatalf("Close() initial error = %v", err)
 	}
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -251,7 +251,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -345,7 +345,7 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -362,7 +362,7 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -416,7 +416,7 @@ func TestSyncCompactRefusesAnIllegalDepth(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "illegal-depth-ws")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "illegal-depth-ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -454,7 +454,7 @@ func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "compaction-attempt-ws")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "compaction-attempt-ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -512,7 +512,7 @@ func TestMeasureCompactionSignalsMatchesDoltsRealOldGenLayout(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "layout-ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "layout-ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -533,7 +533,7 @@ func TestMeasureCompactionSignalsMatchesDoltsRealOldGenLayout(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "layout-ws")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "layout-ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -646,7 +646,7 @@ func TestSyncFreshnessRequiresBranch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -669,7 +669,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	epicID := seedSyncEpic(t, ctx, doltRoot, "ws")
 
 	commit := func(title string) {
-		st, err := Open(ctx, testEnv(), doltRoot, "ws")
+		st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
@@ -702,7 +702,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 
 	commit("c1")
 
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -727,7 +727,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 
 	// Local commit not pushed: ahead by 1.
 	commit("c2")
-	sync, err = OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err = OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() after c2 error = %v", err)
 	}
@@ -750,7 +750,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 		t.Fatalf("Close() before c3 error = %v", err)
 	}
 	commit("c3")
-	sync, err = OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err = OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() after c3 error = %v", err)
 	}
@@ -762,7 +762,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	// `lit doctor` opens the store read-only, so prove SyncFreshness's queries
 	// (dolt_remote_branches, ACTIVE_BRANCH, dolt_log) run on an OpenForRead store
 	// and not just the sync store the rest of this test drives.
-	readStore, err := OpenForRead(ctx, testEnv(), doltRoot, "ws")
+	readStore, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
@@ -785,7 +785,7 @@ func TestSyncPushDelivers(t *testing.T) {
 	epicID := seedSyncEpic(t, ctx, doltRoot, "ws")
 
 	commit := func(title string) {
-		st, err := Open(ctx, testEnv(), doltRoot, "ws")
+		st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
@@ -798,7 +798,7 @@ func TestSyncPushDelivers(t *testing.T) {
 	}
 
 	commit("c1")
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -827,7 +827,7 @@ func TestSyncPushDelivers(t *testing.T) {
 
 	// A later commit pushed without compaction must also reach the remote.
 	commit("c2")
-	sync2, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync2, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() after c2 error = %v", err)
 	}
@@ -858,7 +858,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -873,7 +873,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -915,7 +915,7 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -942,7 +942,7 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 		}
 	}
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -976,7 +976,7 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1003,7 +1003,7 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 		}
 	}
 
-	syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -1032,7 +1032,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1049,7 +1049,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 	dbBefore := st.db
 	attempts := 0
 	err = st.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, func(context.Context) error {
+		return retryTransientGCContention(ctx, testStderr(), func(context.Context) error {
 			attempts++
 			if attempts == 1 {
 				return gcReset
@@ -1087,7 +1087,7 @@ func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1120,7 +1120,7 @@ func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 	// A brand-new Open (fresh engine) must see the committed value. If the staged
 	// write had been lost on reconnect, the commit above would have been a no-op
 	// and this read returns empty.
-	reopened, err := Open(ctx, testEnv(), doltRoot, "ws")
+	reopened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("reopen Open() error = %v", err)
 	}
@@ -1149,7 +1149,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 
 	// Producer: a real workspace with a ticket inside an epic, pushed to the remote.
 	producerRoot := migratedDoltDir(t)
-	producer, err := Open(ctx, testEnv(), producerRoot, "ws-producer")
+	producer, err := Open(ctx, testEnv(), testStderr(), producerRoot, "ws-producer")
 	if err != nil {
 		t.Fatalf("Open(producer) error = %v", err)
 	}
@@ -1163,7 +1163,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	if err := producer.Close(); err != nil {
 		t.Fatalf("Close(producer) error = %v", err)
 	}
-	producerSync, err := OpenSync(ctx, testEnv(), producerRoot, "ws-producer")
+	producerSync, err := OpenSync(ctx, testEnv(), testStderr(), producerRoot, "ws-producer")
 	if err != nil {
 		t.Fatalf("OpenSync(producer) error = %v", err)
 	}
@@ -1179,7 +1179,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 
 	// Consumer: a brand-new store with an unrelated bootstrap root.
 	consumerRoot := unrelatedDoltDir(t)
-	consumer, err := OpenSync(ctx, testEnv(), consumerRoot, "ws-consumer")
+	consumer, err := OpenSync(ctx, testEnv(), testStderr(), consumerRoot, "ws-consumer")
 	if err != nil {
 		t.Fatalf("OpenSync(consumer) error = %v", err)
 	}
@@ -1207,7 +1207,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 
 	// A regular Open runs migrations on the adopted store and reads the ticket
 	// and the epic it lives in.
-	adopted, err := Open(ctx, testEnv(), consumerRoot, "ws-consumer")
+	adopted, err := Open(ctx, testEnv(), testStderr(), consumerRoot, "ws-consumer")
 	if err != nil {
 		t.Fatalf("Open(consumer after adopt) error = %v", err)
 	}
@@ -1238,7 +1238,7 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	// can never exercise.
 	root := filepath.Join(t.TempDir(), "dolt")
 
-	pristine, err := OpenSync(ctx, testEnv(), root, "ws")
+	pristine, err := OpenSync(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -1249,7 +1249,7 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 		t.Fatalf("Close(pristine) error = %v", err)
 	}
 
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1278,7 +1278,7 @@ func TestSyncResetToRemoteHeadRequiresBranch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	st, err := OpenSync(ctx, testEnv(), doltRoot, "ws")
+	st, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -1384,14 +1384,14 @@ func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
 	} {
 		t.Run(raw, func(t *testing.T) {
 			doltRoot := migratedDoltDir(t)
-			st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+			st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 			if err != nil {
 				t.Fatalf("Open() error = %v", err)
 			}
 			if err := st.Close(); err != nil {
 				t.Fatalf("Close() error = %v", err)
 			}
-			syncStore, err := OpenSync(ctx, testEnv(), doltRoot, "test-workspace-id")
+			syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 			if err != nil {
 				t.Fatalf("OpenSync() error = %v", err)
 			}
@@ -1434,7 +1434,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	epicID := seedSyncEpic(t, ctx, rootA, "ws")
 	createIssue := func(root, title string) {
 		t.Helper()
-		st, err := Open(ctx, testEnv(), root, "ws")
+		st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 		if err != nil {
 			t.Fatalf("Open(%s,%q) error = %v", root, title, err)
 		}
@@ -1447,7 +1447,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	}
 	issueCount := func(root string) int {
 		t.Helper()
-		st, err := OpenForRead(ctx, testEnv(), root, "ws")
+		st, err := OpenForRead(ctx, testEnv(), testStderr(), root, "ws")
 		if err != nil {
 			t.Fatalf("OpenForRead(%s) error = %v", root, err)
 		}
@@ -1460,7 +1460,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	}
 	pushFrom := func(root string, setUpstream bool) {
 		t.Helper()
-		st, err := OpenSync(ctx, testEnv(), root, "ws")
+		st, err := OpenSync(ctx, testEnv(), testStderr(), root, "ws")
 		if err != nil {
 			t.Fatalf("OpenSync(%s) for push error = %v", root, err)
 		}
@@ -1473,7 +1473,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	}
 	receive := func(label string, wantState storage.SyncReceiveState) storage.SyncReceiveResult {
 		t.Helper()
-		st, err := OpenSync(ctx, testEnv(), rootB, "ws")
+		st, err := OpenSync(ctx, testEnv(), testStderr(), rootB, "ws")
 		if err != nil {
 			t.Fatalf("%s: OpenSync(B) error = %v", label, err)
 		}
@@ -1490,7 +1490,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 
 	// A seeds the remote with its epic and one issue.
 	createIssue(rootA, "c1")
-	syncA, err := OpenSync(ctx, testEnv(), rootA, "ws")
+	syncA, err := OpenSync(ctx, testEnv(), testStderr(), rootA, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(A) error = %v", err)
 	}
@@ -1505,7 +1505,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	}
 
 	// B adopts the remote: it now has the epic and c1 and is up to date.
-	syncB, err := OpenSync(ctx, testEnv(), rootB, "ws")
+	syncB, err := OpenSync(ctx, testEnv(), testStderr(), rootB, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync(B) error = %v", err)
 	}

@@ -205,7 +205,7 @@ var (
 // failure to stderr rather than silently stranding a hold whose presence
 // falsifies later probes.
 func answerForClaim(ctx context.Context, stderr io.Writer, ws workspace.Info) func() {
-	release, err := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
+	release, err := store.HoldMirrorBeacon(ctx, stderr, ws.DatabasePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "lit: mirror beacon not held by claimant (%v); racing claims may spawn redundant mirrors\n", err)
 		return func() {}

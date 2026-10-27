@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -118,7 +119,7 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // already past head was carried there by something that recorded a newer
 // advertisement. A nil record leaves the one on disk standing.
 // [LAW:one-source-of-truth]
-func RecordPushedHead(ctx context.Context, doltRootDir string, remote storage.RemoteName, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
+func RecordPushedHead(ctx context.Context, stderr io.Writer, doltRootDir string, remote storage.RemoteName, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return 0, err
@@ -131,12 +132,12 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote storage.Re
 	if !isDoltCommitHash(trimmedHead) {
 		return 0, fmt.Errorf("record pushed head: %q is not a Dolt commit hash", head)
 	}
-	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
+	releaseWorkspace, err := acquireLiveStoreHold(ctx, stderr, root)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
-	record, atHead, err := settlePushedHead(ctx, root, remote, trimmedBranch, trimmedHead)
+	record, atHead, err := settlePushedHead(ctx, stderr, root, remote, trimmedBranch, trimmedHead)
 	if err != nil {
 		return 0, err
 	}
@@ -156,8 +157,8 @@ func RecordPushedHead(ctx context.Context, doltRootDir string, remote storage.Re
 // settlePushedHead is RecordPushedHead's ref write: the one ref comparison and
 // move, run inside holdForRefWrite. atHead reports whether the ref now names
 // head, moved there or already there, as against left on a descendant of it.
-func settlePushedHead(ctx context.Context, root string, remote storage.RemoteName, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
-	err = holdForRefWrite(ctx, root, engineWriteRoutine, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+func settlePushedHead(ctx context.Context, stderr io.Writer, root string, remote storage.RemoteName, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
+	err = holdForRefWrite(ctx, stderr, root, engineWriteRoutine, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		trackingRef := ref.NewRemoteRef(remote.String(), trimmedBranch)
 		pushedCommit, err := readFullCommit(holdCtx, ddb, hash.Parse(trimmedHead))
 		if err != nil {
@@ -201,8 +202,8 @@ func settlePushedHead(ctx context.Context, root string, remote storage.RemoteNam
 // swap the directory under the open, on a workspace that is initialized and
 // has no adopt pending. The caller releases it once everything it writes
 // under the workspace has landed. [LAW:single-enforcer]
-func acquireLiveStoreHold(ctx context.Context, root string) (func() error, error) {
-	release, err := acquireWorkspaceShared(ctx, root)
+func acquireLiveStoreHold(ctx context.Context, stderr io.Writer, root string) (func() error, error) {
+	release, err := acquireWorkspaceShared(ctx, stderr, root)
 	if err != nil {
 		return nil, err
 	}
@@ -271,11 +272,11 @@ func refuseLOCKUnderCommitLock(ctx context.Context) error {
 // commit-lock wait between them is not engine work, so a handle waiting on a
 // rotating writer's commit lock sends no heartbeat after the one its load
 // earned (lockHold.tick).
-func holdForRefWrite(ctx context.Context, root string, access engineAccess, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
+func holdForRefWrite(ctx context.Context, stderr io.Writer, root string, access engineAccess, budget time.Duration, write func(holdCtx context.Context, ddb *doltdb.DoltDB) error) (err error) {
 	if err := refuseLOCKUnderCommitLock(ctx); err != nil {
 		return err
 	}
-	hold := newLockHold(ctx, root, access, &longPhase{})
+	hold := newLockHold(ctx, stderr, root, access, &longPhase{})
 	ddb, releaseRecord, err := openChunkStoreForRefWrite(ctx, root, hold)
 	if err != nil {
 		return err
@@ -304,12 +305,12 @@ func holdForRefWrite(ctx context.Context, root string, access engineAccess, budg
 	// a writer mid-mutation whose GC-contention reconnect has momentarily
 	// dropped LOCK (doc.go's tolerated inversion); LOCK alone would let this
 	// write land inside that gap.
-	releaseCommit, err := acquireCommitLockAtPath(holdCtx, workspaceStorageDir(root), commitLockPathForDolt(root))
+	releaseCommit, err := acquireCommitLockAtPath(holdCtx, stderr, workspaceStorageDir(root), commitLockPathForDolt(root))
 	if err != nil {
 		return err
 	}
 	defer func() {
-		err = SettleCommitLockRelease(err, releaseCommit())
+		err = SettleCommitLockRelease(stderr, err, releaseCommit())
 	}()
 	return withinErr(hold, func() error { return write(holdCtx, ddb) })
 }

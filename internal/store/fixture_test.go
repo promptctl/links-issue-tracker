@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 
@@ -64,7 +65,7 @@ func unrelatedDoltDir(t *testing.T) string {
 // buildStoreTemplate opens a new store at dir and closes it, so the template
 // holds no engine.
 func buildStoreTemplate(dir string) error {
-	st, err := Open(context.Background(), testEnv(), dir, "test-workspace-id")
+	st, err := Open(context.Background(), testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		return fmt.Errorf("template Open: %w", err)
 	}
@@ -78,3 +79,7 @@ func TestMain(m *testing.M) {
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the store it opens runs.
 func testEnv() environ.Env { return environ.Of(os.Environ()) }
+
+// testStderr is where a store a test opens prints its notices: the test
+// binary's own stderr, which go test shows beside a failure.
+func testStderr() io.Writer { return os.Stderr }

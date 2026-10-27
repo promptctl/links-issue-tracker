@@ -20,7 +20,7 @@ import (
 
 func openIssueStore(t testing.TB, ctx context.Context) *Store {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1772,10 +1772,10 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 // TestCloseTwiceRetiresTheHolderRecordOnce pins that a second Close of a write
 // store is a no-op: it returns nil and says nothing, rather than releasing the
 // holder record's file lock again through the fd the first Close closed.
-//
-// Not parallel: it swaps the package's notice writer.
 func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
-	st, err := Open(context.Background(), testEnv(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	t.Parallel()
+	notices := &syncWriter{}
+	st, err := Open(context.Background(), testEnv(), notices, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1784,15 +1784,12 @@ func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
 	}
 	// Only the second Close is listened to: what Open and the first Close say
 	// is not this contract.
-	var notices strings.Builder
-	restore := lockWaitNoticeWriter
-	lockWaitNoticeWriter = &notices
-	t.Cleanup(func() { lockWaitNoticeWriter = restore })
+	before := notices.String()
 	if err := st.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
 	}
-	if notices.Len() != 0 {
-		t.Fatalf("second Close() wrote notices:\n%s", notices.String())
+	if wrote := strings.TrimPrefix(notices.String(), before); wrote != "" {
+		t.Fatalf("second Close() wrote notices:\n%s", wrote)
 	}
 }
 
@@ -1801,7 +1798,7 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -1811,7 +1808,7 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
-	st, err = Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err = Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() reopen error = %v", err)
 	}
@@ -1829,7 +1826,7 @@ func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -1843,7 +1840,7 @@ func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 		t.Fatalf("Close() initial error = %v", err)
 	}
 
-	st, err = Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err = Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() reopen error = %v", err)
 	}
@@ -1863,7 +1860,7 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() initial error = %v", err)
 	}
@@ -1873,7 +1870,7 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
-	readStore, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	readStore, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
@@ -1894,7 +1891,7 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	readStore, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	readStore, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = readStore.Close()
 		t.Fatal("OpenForRead() error = nil, want missing database failure")
@@ -1926,10 +1923,10 @@ func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
+	if _, err := EnsureDatabase(ctx, testStderr(), doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-	seed, err := openStoreConnection(ctx, testEnv(), doltRoot, "test-workspace-id", engineWrite)
+	seed, err := openStoreConnection(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}
@@ -1945,7 +1942,7 @@ func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 		t.Fatalf("seed Close() error = %v", err)
 	}
 
-	_, err = OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	_, err = OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("OpenForRead() on an unreconcilable schema returned nil error; expected a specific structural error")
 	}
@@ -2172,7 +2169,7 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -2180,7 +2177,7 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v", err)
 	}

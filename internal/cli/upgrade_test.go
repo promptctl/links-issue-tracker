@@ -597,7 +597,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	}
 	ahead := current.Schema.Max + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -613,7 +613,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	}
 	// The precondition the case is about: the ahead workspace opens cleanly, so
 	// the version below comes from a clean open, not from a schema-ahead refusal.
-	ro, err := engine.Open(ctx, testEnv(), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	ro, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("read-only open of the ahead workspace: %v; want a clean open", err)
 	}

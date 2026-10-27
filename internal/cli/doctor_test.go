@@ -127,7 +127,7 @@ func TestPrintSyncFreshness(t *testing.T) {
 func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 	repo, _ := initBootstrapTestRepo(t)
 	ctx := context.Background()
-	ap, err := app.Open(ctx, testEnv(), resolvedWorkspace(t, repo), app.AccessRead)
+	ap, err := app.Open(ctx, testEnv(), testStderr(t), resolvedWorkspace(t, repo), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}

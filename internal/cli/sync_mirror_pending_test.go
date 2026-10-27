@@ -110,7 +110,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	// The claimant dies (its hold evaporates); a separate answerer stands in.
 	releaseAnswer()
 
-	releaseBeacon, err := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
+	releaseBeacon, err := store.HoldMirrorBeacon(ctx, testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("hold mirror beacon as the live answerer: %v", err)
 	}

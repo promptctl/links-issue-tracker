@@ -486,7 +486,7 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 // onlyRemoteIDs, sharedID).
 func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB, remoteURL, sharedTitleOnB string) ([]string, []string, string) {
 	t.Helper()
-	stA, err := Open(ctx, testEnv(), rootA, "wsA")
+	stA, err := Open(ctx, testEnv(), testStderr(), rootA, "wsA")
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
@@ -520,7 +520,7 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 		t.Fatalf("Close(A sync): %v", err)
 	}
 
-	stB, err := Open(ctx, testEnv(), rootB, "wsB")
+	stB, err := Open(ctx, testEnv(), testStderr(), rootB, "wsB")
 	if err != nil {
 		t.Fatalf("Open(B): %v", err)
 	}
@@ -901,7 +901,7 @@ func assertFoldedSpine(t *testing.T, spine []spineEntry, foldedMessages []string
 // third distinct data-commit message for provenance fixtures.
 func addCommentLocal(t *testing.T, ctx context.Context, root, id, body string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(comment %s): %v", root, err)
 	}
@@ -930,7 +930,7 @@ const forkEpicCommitMessage = "plant fork epic"
 // issue" has to stay the one commit that says so.
 func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL string) (string, string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(fork %s): %v", root, err)
 	}

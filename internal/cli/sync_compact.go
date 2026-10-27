@@ -99,7 +99,7 @@ func maintainInline(ctx context.Context, stderr io.Writer, env environ.Env, ws w
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, compactTimeout)
 	defer cancel()
-	m, closeStore, err := openMaintainer(timeoutCtx, env, ws)
+	m, closeStore, err := openMaintainer(timeoutCtx, env, stderr, ws)
 	if err != nil {
 		recordBackstopFailure(stderr, env, ws, fmt.Errorf("open store for compaction: %w", err))
 		return
@@ -120,8 +120,8 @@ type maintainer interface {
 
 // openMaintainer opens the workspace's sync engine for maintenance alone. The
 // returned close is the caller's to defer; it releases the workspace lock.
-func openMaintainer(ctx context.Context, env environ.Env, ws workspace.Info) (maintainer, func() error, error) {
-	st, syncer, err := openSyncEngineAt(ctx, env, ws.DatabasePath, ws.WorkspaceID)
+func openMaintainer(ctx context.Context, env environ.Env, stderr io.Writer, ws workspace.Info) (maintainer, func() error, error) {
+	st, syncer, err := openSyncEngineAt(ctx, env, stderr, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}

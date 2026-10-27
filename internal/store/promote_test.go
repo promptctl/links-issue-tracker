@@ -77,7 +77,7 @@ func seedRealWorkspace(t *testing.T, ctx context.Context, doltRoot string, title
 			}
 		}
 	})
-	dump, err := DumpRaw(ctx, testEnv(), doltRoot, "test-workspace-id")
+	dump, err := DumpRaw(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("DumpRaw seed: %v", err)
 	}
@@ -94,7 +94,7 @@ func freshExportIDs(t *testing.T, ctx context.Context, src string) map[string]bo
 	t.Helper()
 	dst := filepath.Join(t.TempDir(), "freshread")
 	copyTree(t, src, dst)
-	st, err := Open(ctx, testEnv(), dst, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), dst, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("open fresh copy of %q: %v", src, err)
 	}
@@ -160,7 +160,7 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 		t.Fatalf("seed produced %d issues, want 3 (the epic and its two subjects)", len(originalIDs))
 	}
 
-	outcome, err := Recover(ctx, testEnv(), canonical, dump, DeterministicMapper, 1)
+	outcome, err := Recover(ctx, testEnv(), testStderr(), canonical, dump, DeterministicMapper, 1)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
@@ -169,7 +169,7 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 		t.Fatalf("want Reconciled, got %T", outcome)
 	}
 
-	result, err := PromoteCandidate(ctx, testEnv(), canonical, recon.Candidate)
+	result, err := PromoteCandidate(ctx, testEnv(), testStderr(), canonical, recon.Candidate)
 	if err != nil {
 		t.Fatalf("PromoteCandidate: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 			t.Fatalf("rebuild did not conserve original issue %q; promoted has %v", id, promotedIDs)
 		}
 	}
-	st, err := Open(ctx, testEnv(), canonical, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), canonical, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("reopen promoted workspace: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 	canonical := migratedDoltDir(t)
 
 	dump := seedRealWorkspace(t, ctx, canonical, "original subject")
-	outcome, err := Recover(ctx, testEnv(), canonical, dump, DeterministicMapper, 1)
+	outcome, err := Recover(ctx, testEnv(), testStderr(), canonical, dump, DeterministicMapper, 1)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 		concurrentID = issue.ID
 	})
 
-	_, err = PromoteCandidate(ctx, testEnv(), canonical, recon.Candidate)
+	_, err = PromoteCandidate(ctx, testEnv(), testStderr(), canonical, recon.Candidate)
 	if !errors.Is(err, ErrWorkspaceAdvanced) {
 		t.Fatalf("PromoteCandidate over an advanced workspace: err = %v; want ErrWorkspaceAdvanced", err)
 	}
@@ -360,7 +360,7 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 	canonical := filepath.Join(storageDir, "dolt")
 	markerDir(t, canonical+".backup-1700000000000000007", "pre-crash")
 
-	if err := HealWorkspace(ctx, canonical); err != nil {
+	if err := HealWorkspace(ctx, testStderr(), canonical); err != nil {
 		t.Fatalf("HealWorkspace: %v", err)
 	}
 	if got := readMarker(t, canonical); got != "pre-crash" {
@@ -368,7 +368,7 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 	}
 
 	// Running again on the now-healthy workspace must be a no-op, not a re-restore.
-	if err := HealWorkspace(ctx, canonical); err != nil {
+	if err := HealWorkspace(ctx, testStderr(), canonical); err != nil {
 		t.Fatalf("HealWorkspace (no-op): %v", err)
 	}
 	if got := readMarker(t, canonical); got != "pre-crash" {
@@ -394,13 +394,13 @@ func TestPromoteCandidateRefusesDumpWithoutProvenance(t *testing.T) {
 
 	// preGooseDump is a synthetic dump with no recorded DoltHead — the missing-
 	// provenance shape. The candidate it builds carries an empty expected head.
-	cand, err := RebuildCandidate(ctx, testEnv(), storageDir, preGooseDump(), mustMap(t, preGooseDump()))
+	cand, err := RebuildCandidate(ctx, testEnv(), testStderr(), storageDir, preGooseDump(), mustMap(t, preGooseDump()))
 	if err != nil {
 		t.Fatalf("RebuildCandidate: %v", err)
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	_, err = PromoteCandidate(ctx, testEnv(), canonical, cand)
+	_, err = PromoteCandidate(ctx, testEnv(), testStderr(), canonical, cand)
 	if !errors.Is(err, ErrMissingDumpProvenance) {
 		t.Fatalf("PromoteCandidate of a no-provenance candidate: err = %v; want ErrMissingDumpProvenance", err)
 	}
@@ -431,7 +431,7 @@ func TestPromoteCandidateRejectsDiscardedCandidate(t *testing.T) {
 	canonical := filepath.Join(storageDir, "dolt")
 	markerDir(t, canonical, "original")
 
-	cand, err := RebuildCandidate(ctx, testEnv(), storageDir, preGooseDump(), mustMap(t, preGooseDump()))
+	cand, err := RebuildCandidate(ctx, testEnv(), testStderr(), storageDir, preGooseDump(), mustMap(t, preGooseDump()))
 	if err != nil {
 		t.Fatalf("RebuildCandidate: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestPromoteCandidateRejectsDiscardedCandidate(t *testing.T) {
 		t.Fatalf("Discard: %v", err)
 	}
 
-	if _, err := PromoteCandidate(ctx, testEnv(), canonical, cand); err == nil {
+	if _, err := PromoteCandidate(ctx, testEnv(), testStderr(), canonical, cand); err == nil {
 		t.Fatal("PromoteCandidate must reject a discarded candidate")
 	}
 	// The canonical workspace must be untouched — no swap was attempted.
@@ -463,7 +463,7 @@ func TestPromoteCandidateRollsBackOnInstallFailure(t *testing.T) {
 	dump := seedRealWorkspace(t, ctx, canonical, "original subject")
 	originalIDs := freshExportIDs(t, ctx, canonical)
 
-	cand, err := RebuildCandidate(ctx, testEnv(), storageDir, dump, mustMap(t, dump))
+	cand, err := RebuildCandidate(ctx, testEnv(), testStderr(), storageDir, dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("RebuildCandidate: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestPromoteCandidateRollsBackOnInstallFailure(t *testing.T) {
 		t.Fatalf("remove candidate dolt dir: %v", err)
 	}
 
-	if _, err := PromoteCandidate(ctx, testEnv(), canonical, cand); err == nil {
+	if _, err := PromoteCandidate(ctx, testEnv(), testStderr(), canonical, cand); err == nil {
 		t.Fatal("PromoteCandidate must fail when the rebuilt directory is missing")
 	}
 

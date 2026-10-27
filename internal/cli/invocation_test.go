@@ -5,7 +5,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
@@ -93,4 +96,61 @@ func testProject(root workspace.CheckoutRoot) config.ProjectLayer {
 func repositoryOf(t testing.TB, dir string) workspace.Repository {
 	t.Helper()
 	return workspace.LocationFromStorageDir(filepath.Join(checkoutRoot(t, dir).String(), ".git", "links")).Repository()
+}
+
+// A run's stderr is written from more than one goroutine — a routine store
+// hold reports a failed heartbeat from its own — so the writer Run hands its
+// callees lets one Write through at a time, whatever the caller passed in.
+func TestSerialWriterLetsOneWriteThroughAtATime(t *testing.T) {
+	t.Parallel()
+	var under overlapWriter
+	w := &serialWriter{w: &under}
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			for range 200 {
+				if _, err := w.Write([]byte("x")); err != nil {
+					t.Errorf("Write() error = %v", err)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if under.overlapped.Load() {
+		t.Fatal("two writes reached the caller's writer at once")
+	}
+}
+
+// A file Run is handed stays that file, so a child it starts on it (the $EDITOR
+// `lit workflows edit` opens) gets the descriptor rather than a pipe; any
+// other writer is serialized.
+func TestSerializeWritesKeepsAFileAFile(t *testing.T) {
+	t.Parallel()
+	file, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if got := serializeWrites(file); got != io.Writer(file) {
+		t.Fatalf("serializeWrites(file) = %T, want the file itself", got)
+	}
+	var buf strings.Builder
+	if _, ok := serializeWrites(&buf).(*serialWriter); !ok {
+		t.Fatalf("serializeWrites(&strings.Builder{}) = %T, want *serialWriter", serializeWrites(&buf))
+	}
+}
+
+// overlapWriter records whether a Write began while another was in flight.
+type overlapWriter struct {
+	inFlight   atomic.Int32
+	overlapped atomic.Bool
+}
+
+func (o *overlapWriter) Write(p []byte) (int, error) {
+	if o.inFlight.Add(1) > 1 {
+		o.overlapped.Store(true)
+	}
+	runtime.Gosched()
+	o.inFlight.Add(-1)
+	return len(p), nil
 }

@@ -80,7 +80,7 @@ func exerciseEveryEventKind(t *testing.T, ctx context.Context, st *Store) {
 func TestUnattributedStoreLeavesAttributionNull(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -109,7 +109,7 @@ func TestUnattributedStoreLeavesAttributionNull(t *testing.T) {
 func TestAttributedStoreStampsEveryEventKind(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -136,7 +136,7 @@ func TestAttributedStoreStampsEveryEventKind(t *testing.T) {
 func TestAttributeToRejectsAHalfPair(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -165,7 +165,7 @@ func TestAttributeToRejectsAHalfPair(t *testing.T) {
 func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	source, err := Open(ctx, testEnv(), migratedDoltDir(t), "producer-workspace")
+	source, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "producer-workspace")
 	if err != nil {
 		t.Fatalf("Open(source) error = %v", err)
 	}
@@ -179,7 +179,7 @@ func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
 		t.Fatalf("Close(source) error = %v", err)
 	}
 
-	target, err := Open(ctx, testEnv(), unrelatedDoltDir(t), "restorer-workspace")
+	target, err := Open(ctx, testEnv(), testStderr(), unrelatedDoltDir(t), "restorer-workspace")
 	if err != nil {
 		t.Fatalf("Open(target) error = %v", err)
 	}
@@ -211,7 +211,7 @@ func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
 func TestRestoringACorruptedExportWritesNoHalfPair(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	source, err := Open(ctx, testEnv(), migratedDoltDir(t), "producer-workspace")
+	source, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "producer-workspace")
 	if err != nil {
 		t.Fatalf("Open(source) error = %v", err)
 	}
@@ -227,7 +227,7 @@ func TestRestoringACorruptedExportWritesNoHalfPair(t *testing.T) {
 
 	corrupted := corruptEveryEventsAttribution(t, dump, map[string]any{"stream": "orphanstream"})
 
-	target, err := Open(ctx, testEnv(), unrelatedDoltDir(t), "restorer-workspace")
+	target, err := Open(ctx, testEnv(), testStderr(), unrelatedDoltDir(t), "restorer-workspace")
 	if err != nil {
 		t.Fatalf("Open(target) error = %v", err)
 	}
@@ -276,7 +276,7 @@ func TestRecoveredWorkspaceKeepsItsAttribution(t *testing.T) {
 		exerciseEveryEventKind(t, ctx, st)
 	})
 
-	dump, err := DumpRaw(ctx, testEnv(), src, ws)
+	dump, err := DumpRaw(ctx, testEnv(), testStderr(), src, ws)
 	if err != nil {
 		t.Fatalf("DumpRaw() error = %v", err)
 	}

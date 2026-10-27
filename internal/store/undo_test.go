@@ -17,7 +17,7 @@ import (
 func newUndoStore(t *testing.T) (*Store, string) {
 	t.Helper()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	st, err := Open(context.Background(), testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -410,7 +410,7 @@ func TestListWritesTakesNoCommitLock(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	release, err := LockCommitPath(ctx, doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}
@@ -421,7 +421,7 @@ func TestListWritesTakesNoCommitLock(t *testing.T) {
 	}()
 	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	reader, err := OpenForRead(readCtx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(readCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}

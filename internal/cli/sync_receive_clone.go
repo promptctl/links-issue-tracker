@@ -41,8 +41,8 @@ type receiveFetch struct {
 // dead receive's clone safe. The live store is held for the copy alone: the
 // fetch — seconds on the network — runs from the clone with none of the live
 // store's locks held.
-func takeReceiveClone(ctx context.Context, ws workspace.Info) (liveClone, error) {
-	clone, cut, err := cloneLiveStore(ctx, ws, receiveCloneBase(ws), func() {})
+func takeReceiveClone(ctx context.Context, stderr io.Writer, ws workspace.Info) (liveClone, error) {
+	clone, cut, err := cloneLiveStore(ctx, stderr, ws, receiveCloneBase(ws), func() {})
 	if err != nil {
 		// The hold's cost travels with the failure, as the mirror's does: a
 		// cut read without it cannot tell a stalled copy from a slow one.
@@ -71,7 +71,7 @@ func removeReceiveClone(stderr io.Writer, clone liveClone) {
 // returned error is a could-not-attempt failure (the open, the target); a
 // fetch that ran and failed is receiveFetch.fetchErr.
 func fetchIntoClone(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone) (fetch receiveFetch, err error) {
-	session, closeClone, err := openSyncSessionAt(ctx, env, clone.databasePath, ws.WorkspaceID)
+	session, closeClone, err := openSyncSessionAt(ctx, env, stderr, clone.databasePath, ws.WorkspaceID)
 	if err != nil {
 		return receiveFetch{}, fmt.Errorf("open sync store on the receive's clone: %w", err)
 	}
@@ -96,7 +96,7 @@ func fetchIntoClone(ctx context.Context, stderr io.Writer, env environ.Env, ws w
 // lost is that the live store's next network operation downloads those
 // objects again.
 func landFetch(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
-	landed, err := store.LandFetchedHead(ctx, env, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
+	landed, err := store.LandFetchedHead(ctx, env, stderr, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
 	if errors.Is(err, store.ErrRemoteCacheNotLanded) {
 		fmt.Fprintf(stderr, "lit: automatic receive: %v\n", err)
 		return landed, nil

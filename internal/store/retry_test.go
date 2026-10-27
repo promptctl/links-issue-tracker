@@ -45,6 +45,7 @@ func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 
 	err := retryTransientGCContention(
 		heldCommitLock(context.Background(), 0),
+		testStderr(),
 		op.run,
 		noRotate,
 	)
@@ -66,6 +67,7 @@ func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T)
 
 	err := retryTransientGCContention(
 		heldCommitLock(context.Background(), 0),
+		testStderr(),
 		op.run,
 		noRotate,
 	)
@@ -100,6 +102,7 @@ func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.
 
 	err := retryTransientGCContention(
 		heldCommitLock(context.Background(), 0),
+		testStderr(),
 		op.run,
 		noRotate,
 	)
@@ -131,6 +134,7 @@ func TestRetryTransientGCContentionKeepsExhaustedGCResetTransient(t *testing.T) 
 
 	err := retryTransientGCContention(
 		heldCommitLock(context.Background(), 0),
+		testStderr(),
 		op.run,
 		noRotate,
 	)
@@ -154,6 +158,7 @@ func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
 
 	err := retryTransientGCContention(
 		heldCommitLock(context.Background(), 0),
+		testStderr(),
 		op.run,
 		noRotate,
 	)
@@ -180,6 +185,7 @@ func TestRetryTransientGCContentionRotatesConnectionOnceBeforeTheRetry(t *testin
 
 	err := retryTransientGCContention(
 		heldCommitLock(context.Background(), 0),
+		testStderr(),
 		op.run,
 		func(context.Context) error { rotations++; return nil },
 	)
@@ -209,6 +215,7 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 
 	err := retryTransientGCContention(
 		heldCommitLock(context.Background(), 0),
+		testStderr(),
 		op.run,
 		func(context.Context) error { return rotateErr },
 	)
@@ -245,6 +252,7 @@ func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.
 	go func() {
 		done <- retryTransientGCContention(
 			ctx,
+			testStderr(),
 			op.run,
 			func(rotateCtx context.Context) error { <-rotateCtx.Done(); return rotateCtx.Err() },
 		)
@@ -452,7 +460,7 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 
 			ctx := heldCommitLock(context.Background(), tc.heldBefore)
 			heldSince, _ := commitLockHeldSince(ctx)
-			err := retryTransientGCContention(ctx, op, rotate)
+			err := retryTransientGCContention(ctx, testStderr(), op, rotate)
 			hold := time.Since(heldSince)
 
 			var blocked WorkspaceWriteBlockedError
@@ -477,7 +485,7 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 func TestRetryTransientGCContentionRefusesAContextWithoutTheCommitLock(t *testing.T) {
 	t.Parallel()
 	op := &fakeRetryOperation{results: []error{nil}}
-	err := retryTransientGCContention(context.Background(), op.run, noRotate)
+	err := retryTransientGCContention(context.Background(), testStderr(), op.run, noRotate)
 	if err == nil || !strings.Contains(err.Error(), "without the commit lock held") {
 		t.Fatalf("retryTransientGCContention() error = %v, want the missing-lock refusal", err)
 	}
@@ -489,19 +497,15 @@ func TestRetryTransientGCContentionRefusesAContextWithoutTheCommitLock(t *testin
 // TestRetryTransientGCContentionAnnouncesTheRotation pins that a write which
 // recovered on a rotated connection says so on the operator channel, naming
 // the failure that caused it. [LAW:nothing-unseen]
-//
-// Not parallel: it swaps the package's notice writer.
 func TestRetryTransientGCContentionAnnouncesTheRotation(t *testing.T) {
+	t.Parallel()
 	var notices strings.Builder
-	restore := lockWaitNoticeWriter
-	lockWaitNoticeWriter = &notices
-	t.Cleanup(func() { lockWaitNoticeWriter = restore })
 
 	op := &fakeRetryOperation{results: []error{
 		transientGCContentionError{err: errors.New("gc reset seen by this connection")},
 		nil,
 	}}
-	if err := retryTransientGCContention(heldCommitLock(context.Background(), 0), op.run, noRotate); err != nil {
+	if err := retryTransientGCContention(heldCommitLock(context.Background(), 0), &notices, op.run, noRotate); err != nil {
 		t.Fatalf("retryTransientGCContention() error = %v", err)
 	}
 	if got := notices.String(); !strings.Contains(got, "gc reset seen by this connection") || !strings.Contains(got, "retrying once") {

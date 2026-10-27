@@ -36,7 +36,7 @@ func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -88,7 +88,7 @@ func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) adoption error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) adoption error = %v", err)
 	}
@@ -158,7 +158,7 @@ func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 // driver/shutdown failures don't get swallowed silently.
 func withStore(t *testing.T, ctx context.Context, doltRoot string, body func(*Store)) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -302,7 +302,7 @@ func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
 
-	_, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() of corrupt-baseline ahead-of-registry workspace returned nil; want refusal")
 	}
@@ -465,7 +465,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 
 	stampGooseVersionAhead(t, ctx, doltRoot)
 
-	_, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() returned nil; want UnsupportedSchemaVersionError")
 	}
@@ -504,7 +504,7 @@ func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	}
 	fsperm.Deny(t, snapshotsDir, fsperm.Read)
 
-	_, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	var refusal *UnsupportedSchemaVersionError
 	if !errors.As(err, &refusal) {
 		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
@@ -570,7 +570,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(fresh) error = %v", err)
 	}
@@ -589,7 +589,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() of workspace at exactly the max version = %v; want clean open", err)
 	}
@@ -632,7 +632,7 @@ func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 		mustCommit(t, ctx, st, "test: simulate version-slot reuse (goose fully applied, v2/v3 content missing)")
 	})
 
-	repaired, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	repaired, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() of version-slot-reuse workspace error = %v; want a transparent repair, not a refusal", err)
 	}
@@ -665,7 +665,7 @@ func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 
 	// A second Open must be a clean no-op: the drift is gone, so
 	// verifyAppliedVersionsMatchRegistry finds nothing to repair.
-	reopened, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reopened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("second Open() after repair error = %v; want clean open", err)
 	}

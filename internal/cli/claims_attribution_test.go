@@ -17,7 +17,7 @@ import (
 // program does.
 func checkoutIdentity(t *testing.T, dir string) model.Attribution {
 	t.Helper()
-	ap, err := app.Open(context.Background(), testEnv(), resolvedWorkspace(t, dir), app.AccessRead)
+	ap, err := app.Open(context.Background(), testEnv(), testStderr(t), resolvedWorkspace(t, dir), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open(%s) error = %v", dir, err)
 	}
@@ -34,7 +34,7 @@ func checkoutIdentity(t *testing.T, dir string) model.Attribution {
 // backlog, which checkout produced which work.
 func eventsByAttribution(t *testing.T, dir string) map[model.Attribution][]model.IssueEvent {
 	t.Helper()
-	ap, err := app.Open(context.Background(), testEnv(), resolvedWorkspace(t, dir), app.AccessRead)
+	ap, err := app.Open(context.Background(), testEnv(), testStderr(t), resolvedWorkspace(t, dir), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open(%s) error = %v", dir, err)
 	}

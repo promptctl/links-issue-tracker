@@ -30,7 +30,7 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -389,7 +389,7 @@ func assertWorkingSetClean(t *testing.T, ctx context.Context, st *Store) {
 // is a pre-migration commit. Returns the issue id.
 func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
@@ -427,7 +427,7 @@ func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 func advanceOldSchemaRemote(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in) // Open() migrates to registry max, then edits
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open(advance %s): %v", root, err)
 	}

@@ -28,7 +28,7 @@ func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -57,7 +57,7 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -69,7 +69,7 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 		t.Fatalf("List snapshots after first open error = %v", err)
 	}
 
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v", err)
 	}
@@ -97,7 +97,7 @@ func TestMigrateSnapshotFailureNamesTheSnapshot(t *testing.T) {
 	sentinel := errors.New("synthetic post-snapshot failure")
 	injectFailpoint(t, sentinel, stepMigrationProvider)
 
-	_, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	_, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() returned nil error; expected the migration_provider step's failure")
 	}
@@ -127,7 +127,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// First Open creates the workspace + retains its pre-migrate snapshot.
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -154,7 +154,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	// the failpoint to exactly the failing Open so subsequent Opens in this
 	// test cannot trip it.
 	clear := injectFailpoint(t, errors.New("synthetic failure"), stepReconcile)
-	failedOpen, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	failedOpen, openErr := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	clear()
 	if openErr == nil {
 		_ = failedOpen.Close()
@@ -177,7 +177,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(rotated) })
 
 	// After restore, Open must succeed and return a usable Store.
-	restored, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	restored, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after restore error = %v", err)
 	}
@@ -209,7 +209,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -223,7 +223,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	// touch them at all.
 	for i := 0; i < automaticSnapshotsPerKind+5; i++ {
 		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
-		if _, err := dbsnapshot.Take(context.Background(), doltRoot, label); err != nil {
+		if _, err := dbsnapshot.Take(context.Background(), testStderr(), doltRoot, label); err != nil {
 			t.Fatalf("Take migration-shaped snapshot %d error = %v", i, err)
 		}
 	}
@@ -235,7 +235,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	// Force the migration to do something so Prune runs at the tail.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v", err)
 	}
@@ -255,7 +255,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -286,7 +286,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	fsperm.Deny(t, stuck, fsperm.RemoveAll)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v, want the migration reported without one", err)
 	}
@@ -332,7 +332,7 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// Bootstrap the workspace so the snapshots dir exists.
-	first, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
@@ -344,20 +344,20 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	// plus several extra migration snapshots beyond the migration retention.
 	const userSnaps = 25
 	for i := 0; i < userSnaps; i++ {
-		if _, err := dbsnapshot.Take(context.Background(), doltRoot, "user"); err != nil {
+		if _, err := dbsnapshot.Take(context.Background(), testStderr(), doltRoot, "user"); err != nil {
 			t.Fatalf("Take user snapshot %d: %v", i, err)
 		}
 	}
 	for i := 0; i < automaticSnapshotsPerKind+5; i++ {
 		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
-		if _, err := dbsnapshot.Take(context.Background(), doltRoot, label); err != nil {
+		if _, err := dbsnapshot.Take(context.Background(), testStderr(), doltRoot, label); err != nil {
 			t.Fatalf("Take migration snapshot %d: %v", i, err)
 		}
 	}
 
 	// Drive another mutating Open so migrate() runs and prunes.
 	withGooseHistoryDropped(t, ctx, doltRoot)
-	second, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v", err)
 	}
@@ -432,7 +432,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// Step 1: Seed the workspace with rich data covering all required fields.
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(seed) error = %v", err)
 	}
@@ -551,7 +551,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// failure carrying it.
 	sentinel := errors.New("synthetic post-snapshot failure")
 	clear := injectFailpoint(t, sentinel, stepReconcile)
-	_, openErr := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	_, openErr := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	clear()
 	if openErr == nil {
 		t.Fatal("Open() after goose-history drop returned nil error; expected the reconcile step's failure")
@@ -572,7 +572,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	t.Cleanup(func() { _ = os.RemoveAll(rotated) })
 
 	// Step 6: Reopen, export, and assert byte-identical state.
-	restored, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	restored, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(restored) error = %v", err)
 	}
@@ -632,7 +632,7 @@ func assertExportStateIdentical(t *testing.T, want, got model.Export) {
 // write to it races every concurrently migrating Open.
 func withGooseHistoryDropped(t *testing.T, ctx context.Context, doltRoot string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("withGooseHistoryDropped Open error = %v", err)
 	}
@@ -687,7 +687,7 @@ func rollbackHistory(t *testing.T, ctx context.Context, doltRoot string) []dbsna
 // migration that rewrote the baseline would leave it.
 func breakSnapshotBaseline(t *testing.T, ctx context.Context, snapshotPath string) {
 	t.Helper()
-	snap, err := openStoreConnection(ctx, testEnv(), snapshotPath, "test-workspace-id", engineWrite)
+	snap, err := openStoreConnection(ctx, testEnv(), testStderr(), snapshotPath, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("open snapshot %s: %v", snapshotPath, err)
 	}

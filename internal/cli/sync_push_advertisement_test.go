@@ -69,7 +69,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), resolved)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), resolved)
 	if err != nil {
 		t.Fatalf("open consumer sync session: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 		superseded error
 		wantProven bool
 	}{{nil, true}, {errors.New("rejected, remote already carries HEAD"), false}} {
-		session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), resolved)
+		session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), resolved)
 		if err != nil {
 			t.Fatalf("open consumer sync session: %v", err)
 		}

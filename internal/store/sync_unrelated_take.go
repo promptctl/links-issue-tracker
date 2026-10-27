@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"slices"
 	"time"
 
@@ -207,9 +206,9 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// binary gets the newer data), not a regression. A stale binary holding a
 		// purge the remote lacks is refused instead, since carrying it writes below
 		// the newer schema; upgrading lit is the way on.
-		guard := newSnapshotGuard(s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
+		guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
-		return retryTransientGCContention(ctx, func(ctx context.Context) error {
+		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
 		}, s.reconnect)
 	case storage.TakeLocal:
@@ -249,7 +248,7 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 	// take (a retry would find nothing to do). A leftover snapshot is inert.
 	// [LAW:no-silent-failure] surfaced, not promoted.
 	if _, err := s.pruneAutomaticSnapshots(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: take-remote could not prune old recovery snapshots (reset already done): %v\n", err)
+		fmt.Fprintf(s.stderr, "lit: take-remote could not prune old recovery snapshots (reset already done): %v\n", err)
 	}
 	result.State = storage.SyncReconcileTookRemote
 	return nil

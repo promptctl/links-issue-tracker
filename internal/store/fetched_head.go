@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"maps"
 	"os"
@@ -158,7 +159,7 @@ type LandedFetch struct {
 // because the chunks and ref they follow are already written and stand. A
 // superseded landing carries none of the plan out, and so none of its
 // failures.
-func LandFetchedHead(ctx context.Context, env environ.Env, doltRootDir string, clone TakenClone, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
+func LandFetchedHead(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, clone TakenClone, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return LandedFetch{}, err
@@ -192,13 +193,13 @@ func LandFetchedHead(ctx context.Context, env environ.Env, doltRootDir string, c
 	// last-writer-wins rule every close follows.
 	cachePlan := planRemoteCacheLanding(ctx, env, remoteCacheBaseAt(root), remoteCacheBaseAt(clone.root), remote)
 
-	releaseWorkspace, err := acquireLiveStoreHold(ctx, root)
+	releaseWorkspace, err := acquireLiveStoreHold(ctx, stderr, root)
 	if err != nil {
 		return LandedFetch{}, err
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
 	var cacheErr error
-	err = holdForRefWrite(ctx, root, engineWrite, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, stderr, root, engineWrite, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
 		live, err := readRefHead(holdCtx, ddb, trackingRef)

@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
@@ -72,4 +74,32 @@ func (d WorkingDir) resolve(path string) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, path), nil
+}
+
+// serializeWrites is a run's stderr as every callee is handed it: one Write at
+// a time, as os/exec.Cmd writes a child's shared streams. A routine store hold
+// reports a failed heartbeat from its own goroutine while the command writes
+// from the run's, and the writer a caller passed in owes neither of them that
+// ordering. An *os.File already gives it — each Write holds the descriptor's
+// write lock — and stays itself, because os/exec hands a file's descriptor to
+// a child (the $EDITOR `lit workflows edit` opens) where any other writer gets
+// a pipe that Wait drains until every process holding it has closed it.
+// [LAW:single-enforcer] Run wraps it once.
+func serializeWrites(w io.Writer) io.Writer {
+	if file, ok := w.(*os.File); ok {
+		return file
+	}
+	return &serialWriter{w: w}
+}
+
+// serialWriter lets one Write through to w at a time.
+type serialWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *serialWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
 }

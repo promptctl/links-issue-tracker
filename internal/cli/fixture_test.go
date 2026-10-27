@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
@@ -21,7 +22,7 @@ import (
 // workspace as already initialized, and two checkouts seeded from one template
 // share history that production checkouts never would.
 var storeTemplate = dirtemplate.New("dolt", func(dir string) error {
-	st, err := engine.Open(context.Background(), testEnv(), engine.ReadWrite, dir, "test-workspace-id")
+	st, err := engine.Open(context.Background(), testEnv(), os.Stderr, engine.ReadWrite, dir, "test-workspace-id")
 	if err != nil {
 		return err
 	}
@@ -37,7 +38,7 @@ func TestAStoreTemplateCopyOpensWithoutBuildingOrMigrating(t *testing.T) {
 	ws := workspace.Info{Location: workspace.Location{DatabasePath: storeTemplate.Copy(t)}, WorkspaceID: "test-workspace-id", Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	before := doltHead(t, ws)
 
-	st, err := engine.Open(context.Background(), testEnv(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(context.Background(), testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

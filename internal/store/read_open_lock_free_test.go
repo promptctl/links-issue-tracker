@@ -22,7 +22,7 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -37,7 +37,7 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	release, err := LockCommitPath(ctx, doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}
@@ -52,7 +52,7 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 	// open that does not, so a deadline here separates the two.
 	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	reader, err := OpenForRead(readCtx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(readCtx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() under a held commit lock error = %v; a read open must not wait on the commit lock", err)
 	}
@@ -70,7 +70,7 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 // migration back, the state a read open hands to Open, then closes it.
 func openOneVersionBehind(t *testing.T, ctx context.Context, doltRoot string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestOpenForReadBringsTrailingSchemaForwardThroughOpen(t *testing.T) {
 
 	openOneVersionBehind(t, ctx, doltRoot)
 
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() on a trailing schema error = %v; want the workspace brought forward", err)
 	}
@@ -140,7 +140,7 @@ func TestOpenForReadRepairsContentDrift(t *testing.T) {
 		mustCommit(t, ctx, st, "test: simulate version-slot reuse (goose fully applied, v2/v3 content missing)")
 	})
 
-	reader, err := OpenForRead(ctx, testEnv(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() of a drifted workspace error = %v; want a transparent repair, not a refusal", err)
 	}

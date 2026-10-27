@@ -52,7 +52,7 @@ func runStores(ctx context.Context, inv Invocation, args []string) error {
 		roots = append(roots, abs)
 	}
 	if *counts {
-		rows, err := gatherCrossProjectRollup(ctx, inv.Env, roots)
+		rows, err := gatherCrossProjectRollup(ctx, inv.Env, inv.Stderr, roots)
 		if err != nil {
 			return err
 		}
@@ -123,14 +123,14 @@ type projectRollup struct {
 // fatal and loud, but a single store that fails to open or read becomes an error
 // row [LAW:no-silent-failure] — surfaced, never skipped — so one broken store can
 // never hide the projects that read cleanly.
-func gatherCrossProjectRollup(ctx context.Context, env environ.Env, roots []string) ([]projectRollup, error) {
+func gatherCrossProjectRollup(ctx context.Context, env environ.Env, stderr io.Writer, roots []string) ([]projectRollup, error) {
 	locations, err := discoverStores(ctx, env, roots)
 	if err != nil {
 		return nil, err
 	}
 	rows := make([]projectRollup, 0, len(locations))
 	for _, loc := range locations {
-		rows = append(rows, rollupLocation(ctx, env, loc))
+		rows = append(rows, rollupLocation(ctx, env, stderr, loc))
 	}
 	return rows, nil
 }
@@ -144,12 +144,12 @@ func gatherCrossProjectRollup(ctx context.Context, env environ.Env, roots []stri
 // here re-reads config that OpenLocationForRead also reads for the workspace_id —
 // cheap read-only JSON with no drift risk, and it keeps the cross-project open on
 // the single OpenLocationForRead path rather than opening the store by hand.
-func rollupLocation(ctx context.Context, env environ.Env, loc workspace.Location) (row projectRollup) {
+func rollupLocation(ctx context.Context, env environ.Env, stderr io.Writer, loc workspace.Location) (row projectRollup) {
 	row = projectRollup{Label: loc.StorageDir, StorageDir: loc.StorageDir}
 	if cfg, err := workspace.ReadConfig(loc.ConfigPath); err == nil && cfg.IssuePrefix != "" {
 		row.Label = cfg.IssuePrefix
 	}
-	st, err := app.OpenLocationForRead(ctx, env, loc)
+	st, err := app.OpenLocationForRead(ctx, env, stderr, loc)
 	if err != nil {
 		row.Err = err
 		return row

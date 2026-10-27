@@ -12,7 +12,7 @@ import (
 // an external dolt binary.
 func observeDolt(t *testing.T, ctx context.Context, doltRoot, workspaceID string, fn func(s *Store)) {
 	t.Helper()
-	s, err := openStoreConnection(ctx, testEnv(), doltRoot, workspaceID, engineRead)
+	s, err := openStoreConnection(ctx, testEnv(), testStderr(), doltRoot, workspaceID, engineRead)
 	if err != nil {
 		t.Fatalf("open %s read-only to observe it: %v", doltRoot, err)
 	}

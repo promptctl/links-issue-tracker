@@ -116,7 +116,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// the create runs on a single value (did we adopt?), not a scatter of cases.
 		dbCreated := true
 		if syncOutcome.State != initSyncAdopted {
-			bootstrap, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)
+			bootstrap, err := store.EnsureDatabase(ctx, inv.Stderr, ws.DatabasePath, ws.WorkspaceID)
 			if err != nil {
 				return err
 			}

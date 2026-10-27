@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -73,7 +74,7 @@ var ErrInvalidMapping = errors.New("mapping is not applicable to the dump")
 // created (empty means the system temp dir). The caller owns where recovery
 // scratch lives; the unique per-call subdirectory is what guarantees each
 // attempt starts clean.
-func RebuildCandidate(ctx context.Context, env environ.Env, parentDir string, dump RawDump, mapping ShapeMapping) (_ *Candidate, err error) {
+func RebuildCandidate(ctx context.Context, env environ.Env, stderr io.Writer, parentDir string, dump RawDump, mapping ShapeMapping) (_ *Candidate, err error) {
 	// [LAW:single-enforcer] Apply folds through Validate — the one well-formedness
 	// boundary — so a rejection here is exactly "the mapping is invalid/incomplete".
 	export, err := Apply(dump, mapping)
@@ -107,7 +108,7 @@ func RebuildCandidate(ctx context.Context, env environ.Env, parentDir string, du
 
 	// Open at a child of root so its sibling artifacts (workspace lock, migration
 	// snapshots) land inside root rather than escaping into parentDir.
-	st, err = Open(ctx, env, filepath.Join(root, "workspace"), dump.WorkspaceID)
+	st, err = Open(ctx, env, stderr, filepath.Join(root, "workspace"), dump.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("open candidate workspace: %w", err)
 	}

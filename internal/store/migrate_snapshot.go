@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -96,13 +97,15 @@ func isAllDigits(s string) bool {
 // branches on it. The steps after the snapshot receive it from ensure as a
 // value instead (snapshotted), so their failures carry it by construction.
 type snapshotGuard struct {
+	stderr      io.Writer
 	databaseDir string
 	label       string
 	taken       *dbsnapshot.Taken
 }
 
-func newSnapshotGuard(databaseDir, label string) *snapshotGuard {
+func newSnapshotGuard(stderr io.Writer, databaseDir, label string) *snapshotGuard {
 	return &snapshotGuard{
+		stderr:      stderr,
 		databaseDir: databaseDir,
 		label:       label,
 	}
@@ -114,7 +117,7 @@ func (g *snapshotGuard) ensure(ctx context.Context) (dbsnapshot.Taken, error) {
 	if g.taken != nil {
 		return *g.taken, nil
 	}
-	snap, err := dbsnapshot.Take(ctx, g.databaseDir, g.label)
+	snap, err := dbsnapshot.Take(ctx, g.stderr, g.databaseDir, g.label)
 	if err != nil {
 		return dbsnapshot.Taken{}, fmt.Errorf("snapshot before migration: %w", err)
 	}
@@ -178,7 +181,7 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 		if !IsMigrationSnapshotName(snap.Name) {
 			continue
 		}
-		writable, err := snapshotWritable(ctx, s.env, snap.Path, s.workspaceID, maxSupported)
+		writable, err := snapshotWritable(ctx, s.env, s.stderr, snap.Path, s.workspaceID, maxSupported)
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			errs = append(errs, fmt.Errorf("stopped looking for a rollback snapshot: %w", ctxErr))
 			break
@@ -207,8 +210,8 @@ func (s *Store) searchRollbackSnapshot(ctx context.Context, maxSupported int64) 
 // and writes nothing to the snapshot's chunk store, so reading it costs no
 // copy. The one entry it adds is Dolt's empty .dolt/temptf directory, which a
 // snapshot omits and every engine open recreates.
-func snapshotWritable(ctx context.Context, env environ.Env, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
-	snap, err := openStoreConnection(ctx, env, snapshotPath, workspaceID, engineRead)
+func snapshotWritable(ctx context.Context, env environ.Env, stderr io.Writer, snapshotPath, workspaceID string, maxSupported int64) (_ bool, err error) {
+	snap, err := openStoreConnection(ctx, env, stderr, snapshotPath, workspaceID, engineRead)
 	if err != nil {
 		return false, err
 	}

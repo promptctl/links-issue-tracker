@@ -12,7 +12,7 @@ import (
 // batches below create under.
 func openBatchStore(t *testing.T, ctx context.Context) (*Store, string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), migratedDoltDir(t), "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestABatchRefusedByCancellationLeavesTheBranchWhereItStarted(t *testing.T) 
 func TestARefusedImportKeepsAStrandedWrite(t *testing.T) {
 	ctx := context.Background()
 	root := migratedDoltDir(t)
-	st, err := Open(ctx, testEnv(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

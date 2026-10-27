@@ -46,7 +46,7 @@ func TestHelperBlockMidBatch(t *testing.T) {
 		t.Skip("helper test; runs only via TestABatchKilledPartwayWritesNothing's re-exec")
 	}
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), dir, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("helper Open() error = %v", err)
 	}
@@ -80,7 +80,7 @@ func TestABatchKilledPartwayWritesNothing(t *testing.T) {
 	}
 	ctx := context.Background()
 	dir := migratedDoltDir(t)
-	st, err := Open(ctx, testEnv(), dir, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestABatchKilledPartwayWritesNothing(t *testing.T) {
 	}
 	waitForFile(t, marker, cmd)
 
-	reader, err := OpenForRead(ctx, testEnv(), dir, "test-workspace-id")
+	reader, err := OpenForRead(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		_ = cmd.Process.Kill()
 		t.Fatalf("OpenForRead() beside the batch error = %v", err)
@@ -120,7 +120,7 @@ func TestABatchKilledPartwayWritesNothing(t *testing.T) {
 		t.Fatalf("a reader beside the batch saw %d of its creates; want none before it lands", beside)
 	}
 
-	st, err = Open(ctx, testEnv(), dir, "test-workspace-id")
+	st, err = Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() after the kill error = %v", err)
 	}

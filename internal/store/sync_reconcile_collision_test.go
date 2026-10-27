@@ -16,7 +16,7 @@ import (
 // whole point: nothing coordinates the number across machines.
 func createChildLocally(t *testing.T, ctx context.Context, root, workspace, parentID, title, description string) string {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, workspace)
+	st, err := Open(ctx, testEnv(), testStderr(), root, workspace)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", root, err)
 	}
@@ -47,7 +47,7 @@ func createChildLocally(t *testing.T, ctx context.Context, root, workspace, pare
 // rather than leaning on a minter. [LAW:behavior-not-structure]
 func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace, oldID, newID string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, workspace)
+	st, err := Open(ctx, testEnv(), testStderr(), root, workspace)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", root, err)
 	}
@@ -288,7 +288,7 @@ func TestSyncPullSurfacesIDCollision(t *testing.T) {
 // rather than union.
 func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, remoteURL string) string {
 	t.Helper()
-	stA, err := Open(ctx, testEnv(), rootA, "wsA")
+	stA, err := Open(ctx, testEnv(), testStderr(), rootA, "wsA")
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
@@ -321,7 +321,7 @@ func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, rem
 		t.Fatalf("Close(A sync): %v", err)
 	}
 
-	stB, err := Open(ctx, testEnv(), rootB, "wsB")
+	stB, err := Open(ctx, testEnv(), testStderr(), rootB, "wsB")
 	if err != nil {
 		t.Fatalf("Open(B): %v", err)
 	}
@@ -404,7 +404,7 @@ func TestSyncReconcileCombineRefusesIDCollision(t *testing.T) {
 // only in the commit above it.
 func removeIssueLocally(t *testing.T, ctx context.Context, root, workspace, id string) {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), root, workspace)
+	st, err := Open(ctx, testEnv(), testStderr(), root, workspace)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", root, err)
 	}
