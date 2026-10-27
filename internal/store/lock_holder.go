@@ -696,8 +696,8 @@ func renderHolderCommand(command string) string {
 // A working routine holder does not stand still: its heartbeat (lockHold) is
 // a fresh name in the arrival file while its engine works, read here like any
 // arrival. So one routine hold is waited out for as long as its engine keeps
-// working, however long a loaded machine stretches it. So that wait has no
-// bound either: a routine hold wedged inside a Dolt statement
+// working, however long a loaded machine stretches it. Like the bootstrap
+// lock's, that wait has no bound: a routine hold wedged inside a Dolt statement
 // heartbeats like a slow one, since from outside the two cannot be told apart
 // at any finite time, and its contenders wait, naming it every
 // lockWaitNoticeInterval. A slow-but-live routine holder failing every writer
