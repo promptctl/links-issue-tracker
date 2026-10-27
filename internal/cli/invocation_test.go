@@ -40,6 +40,23 @@ func TestRunRefusesAnInvocationGivenNoEnvironment(t *testing.T) {
 	}
 }
 
+// A literal that leaves a standard stream out holds a nil one. Run refuses it
+// before any command can write to or read from it.
+func TestRunRefusesAnInvocationGivenNoStream(t *testing.T) {
+	t.Parallel()
+	for name, drop := range map[string]func(*Invocation){
+		"stdin":  func(inv *Invocation) { inv.Stdin = nil },
+		"stdout": func(inv *Invocation) { inv.Stdout = nil },
+		"stderr": func(inv *Invocation) { inv.Stderr = nil },
+	} {
+		inv := dirInvocation(t.TempDir(), io.Discard, io.Discard, []string{"version"})
+		drop(&inv)
+		if err := Run(context.Background(), inv); err == nil || err.Error() != "the invocation was given no "+name {
+			t.Errorf("lit version with no %s = %v, want it refused as given none", name, err)
+		}
+	}
+}
+
 // cwdInvocation is dirInvocation for a test that steers Run by changing the
 // process's directory; links-testperf-xxsx.2.1 hands those tests their
 // directory instead.

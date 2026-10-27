@@ -123,7 +123,7 @@ Any positional argument → `UsageError{initUsage}`, exit 2 (`init.go`), where `
 Outcome states (`init_sync.go`): `has_local_tickets`, `not_configured`, `remote_refused`, `remote_empty`, `no_remote_data`, `adopted`, `failed`.
 Outcome struct fields JSON-tagged `state`, `remote`, `branch`, `error` (`init_sync.go`).
 
-- Timeout: `adoptRemoteTimeout = 120 * time.Second` (`init_sync.go`), a `var` so tests can shorten it.
+- Timeout: `adoptRemoteTimeout = 120 * time.Second` (`init_sync.go`), read through `adoptRemoteDeadline`, a `var` so a test can fire the deadline itself.
 - `adoptRemoteTicketsOnInit` prints progress `init: checking whether a git remote already carries a lit backlog` (`init_sync.go`), runs the adopt in a goroutine, and on deadline returns `initSyncFailed` with the message beginning `"adopting the remote backlog exceeded 120s and was aborted — the store is not usable yet…"` including "Pushing from this workspace would risk the remote backlog…", "Retry `lit init` — the interrupted download's leftovers are set aside automatically on retry" (`init_sync.go`). Abandoned goroutine is reclaimed at process exit (`init_sync.go`).
 - Planning (`planRemoteAdopt`, `init_sync.go`), in order:
   1. `store.PendingAdopt(ws.DatabasePath)` read; if residue exists, every *benign* terminal below is converted into `initSyncFailed` carrying the residue error (`init_sync.go`).

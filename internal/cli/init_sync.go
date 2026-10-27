@@ -20,9 +20,12 @@ import (
 // [LAW:no-ambient-temporal-coupling] init owns the time budget explicitly here;
 // it does not depend on the remote, the network, or dolt finishing "eventually".
 //
-// A var, not a const, solely so tests can shorten it to force the deadline path
-// deterministically; production never reassigns it.
-var adoptRemoteTimeout = 120 * time.Second
+const adoptRemoteTimeout = 120 * time.Second
+
+// adoptRemoteDeadline is when the adopt is abandoned. A var solely so a test
+// can fire the deadline itself, at a point it chooses in the adopt's work, and
+// so reach the deadline path in a known order; production never reassigns it.
+var adoptRemoteDeadline = func() <-chan time.Time { return time.After(adoptRemoteTimeout) }
 
 // initSyncState classifies what init's remote-adopt step did. It is the single
 // discriminant the renderer switches on, so a label that contradicts the outcome
@@ -109,7 +112,7 @@ func adoptRemoteTicketsOnInit(ctx context.Context, stderr io.Writer, env environ
 	select {
 	case outcome := <-done:
 		return outcome
-	case <-time.After(adoptRemoteTimeout):
+	case <-adoptRemoteDeadline():
 		return initSyncOutcome{
 			State: initSyncFailed,
 			Error: fmt.Sprintf(

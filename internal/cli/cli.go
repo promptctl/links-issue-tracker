@@ -61,6 +61,16 @@ func dispatch(ctx context.Context, inv Invocation) error {
 	if inv.Env.IsZero() {
 		return errors.New("the invocation was given no environment")
 	}
+	// A missing stream is refused the same way, here rather than at the rare
+	// warning or read that would otherwise panic on it mid-command.
+	for _, stream := range []struct {
+		name    string
+		missing bool
+	}{{"stdin", inv.Stdin == nil}, {"stdout", inv.Stdout == nil}, {"stderr", inv.Stderr == nil}} {
+		if stream.missing {
+			return fmt.Errorf("the invocation was given no %s", stream.name)
+		}
+	}
 	stdout := inv.Stdout
 	normalizedArgs, err := parseGlobalArgs(inv.Args)
 	if err != nil {

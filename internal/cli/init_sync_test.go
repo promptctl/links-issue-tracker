@@ -522,38 +522,33 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 // blocking on it.
 func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
-	// adoptRemoteTicketsBlockingFn and adoptRemoteTimeout; parallel init
+	// adoptRemoteTicketsBlockingFn and adoptRemoteDeadline; parallel init
 	// paths reading them would race.
 	prevFn := adoptRemoteTicketsBlockingFn
-	prevTimeout := adoptRemoteTimeout
+	prevDeadline := adoptRemoteDeadline
 	defer func() {
 		adoptRemoteTicketsBlockingFn = prevFn
-		adoptRemoteTimeout = prevTimeout
+		adoptRemoteDeadline = prevDeadline
 	}()
 
-	// The stand-in prints while the run waits on it, then outlives the run
-	// and prints again: the first line belongs on the run's stderr, the
-	// second must never reach it.
-	started := make(chan struct{})
+	// The stand-in prints while the run waits on it, then passes the deadline
+	// and outlives the run, printing again: the first line belongs on the run's
+	// stderr, the second must never reach it.
+	deadline := make(chan time.Time)
 	abandoned := make(chan struct{})
+	adoptRemoteDeadline = func() <-chan time.Time { return deadline }
 	adoptRemoteTicketsBlockingFn = func(ctx context.Context, stderr io.Writer, _ environ.Env, ws workspace.Info) initSyncOutcome {
 		fmt.Fprintln(stderr, "while the run waits")
-		close(started)
+		close(deadline)
 		<-ctx.Done() // a fetch that never finishes until it is abandoned
 		fmt.Fprintln(stderr, "after the run returned")
 		close(abandoned)
 		return initSyncOutcome{State: initSyncAdopted, Remote: "origin", Branch: "master"}
 	}
-	adoptRemoteTimeout = 20 * time.Millisecond
 
 	var stderr bytes.Buffer
 	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, testEnv(), workspace.Info{})
 
-	select {
-	case <-started:
-	default:
-		t.Fatal("adopt body was never started")
-	}
 	<-abandoned
 	if got := stderr.String(); !strings.Contains(got, "while the run waits") || strings.Contains(got, "after the run returned") {
 		t.Fatalf("run stderr = %q, want the line written while the run waited and nothing the abandoned adopt wrote after it returned", got)
