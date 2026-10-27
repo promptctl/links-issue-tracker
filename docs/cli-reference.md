@@ -1184,9 +1184,9 @@ lit stores [<root> ...] [--counts]
 ```
 
 Discovers every lit store beneath the given roots (default: current directory). The
-search does not look inside a repository's working tree, so a repository nested in
-another's (a vendored checkout, say) is listed only when its own directory is named as a
-root. By default it prints one canonical storage directory per line — the paths that feed
+search stops at each directory holding a `.git` entry, a working tree's root, and does
+not look beneath it, so a repository nested in another's (a vendored checkout, say) is
+listed only when its own directory is named as a root. By default it prints one canonical storage directory per line — the paths that feed
 `lit ls --at <dir>`. With `--counts` it instead reports each discovered store's
 ready / in-flight / blocked counts as a cross-project rollup (an aligned table with a
 `TOTAL` row and clearly marked error rows for stores that could not be read) — the

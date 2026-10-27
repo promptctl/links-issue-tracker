@@ -34,10 +34,10 @@ type Discovery struct {
 // skipped. Multiple worktrees of one repository share one git-common-dir and so
 // collapse to a single Location.
 //
-// The walk does not descend into a working tree: what is inside one belongs to
-// its repository (source, node_modules, build output, vendored checkouts), so
-// the scan costs the directories outside working trees, not every file under
-// the root. A store whose repository sits inside another repository's working
+// The walk stops at each working tree's root it reaches: what is beneath one
+// belongs to its repository (source, node_modules, build output, vendored
+// checkouts), so the scan costs the directories outside the working trees it
+// reaches, not every file under the root. A store whose repository sits inside another repository's working
 // tree is found by naming its directory as a root.
 //
 // This is the discovery half of the cross-project seam: it turns roots into the

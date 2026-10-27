@@ -234,7 +234,7 @@ instead.
 
 | Key | Meaning |
 | --- | --- |
-| `counts.discover.directories` | The directories the search visited: every directory outside a working tree, and each working tree's root. It does not look inside a working tree. |
+| `counts.discover.directories` | The directories the search visited. It stops at each working tree's root, a directory holding a `.git` entry, and does not look beneath it. |
 | `counts.discover.working_trees` | The working trees it reached, each asked once where its store would be. |
 | `counts.discover.stores` | The distinct stores it found. Absent when the search failed. |
 

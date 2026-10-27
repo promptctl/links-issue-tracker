@@ -429,7 +429,7 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
   - Non-directories are skipped.
   - `os.Lstat(<path>/.git)`: `os.ErrNotExist` ⇒ descend; any other stat error ⇒ `stat %q: %w`.
   - Otherwise the directory is a working tree: recorded, then `filepath.SkipDir` — nothing
-    inside a working tree is walked, so a store nested in another repository's working tree
+    beneath it is walked, so a store nested in another repository's working tree
     is found only by naming its directory as a root.
 - Derivation, per working tree, on an `errgroup` limited to `runtime.GOMAXPROCS(0)`
   (`internal/workspace/discover.go`):
@@ -440,9 +440,11 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
   - Otherwise `byStore[loc.StorageDir] = loc` — so all worktrees of one repository collapse to
     one entry.
 - The error returned is the first in walk order: a working tree's derivation error before
-  any later one, and before the walk error the walk stopped at.
-- `lit stores` (both forms) records `discover.directories`, `discover.working_trees` and
-  `discover.stores` as counts on its event (`internal/cli/stores.go`).
+  any later one, and before the walk error the walk stopped at. It comes with the
+  `Directories` and `WorkingTrees` visited before the scan stopped, and no `Locations`.
+- `lit stores` (both forms) records `discover.directories` and `discover.working_trees` as
+  counts on its event whether or not the scan failed, and `discover.stores` only when it
+  succeeded (`internal/cli/stores.go`).
 
 ### 5.6 Multi-checkout enumeration (`internal/workspace/checkouts.go`)
 
