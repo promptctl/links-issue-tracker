@@ -16,6 +16,25 @@ import (
 // cut reachable through the GC. [LAW:one-source-of-truth]
 var scratchPrefixes = []string{reconcileScratchPrefix + "-", reRootScratchPrefix, batchScratchPrefix}
 
+// scratchAttempt runs one step of a scratch run, the creation of its branches and
+// its landing, under the recovery its caller owns: a batch retries each step
+// in place (retryInPlace), since nothing outside it rebuilds its run, and a
+// reconcile runs each step once (attemptOnce), since its outer retry rebuilds
+// the whole run on a fresh connection and an inner rotation would be a second
+// one inside that attempt. [LAW:single-enforcer] a scratch run's recovery has
+// one owner, named by the value its caller passes.
+type scratchAttempt func(ctx context.Context, op retryOperation) error
+
+// retryInPlace is the attempt of a run that owns its own recovery.
+func (s *Store) retryInPlace(ctx context.Context, op retryOperation) error {
+	return retryTransientGCContention(ctx, op, s.reconnect)
+}
+
+// attemptOnce is the attempt of a run whose caller's retry owns its recovery.
+func attemptOnce(ctx context.Context, op retryOperation) error {
+	return op(ctx)
+}
+
 // runOnScratch force-creates each of branches at commit, runs body on them,
 // and — whatever body returns — returns the session to home and deletes them
 // (leaveScratch). Everything body writes lands on a scratch branch, so home
@@ -36,7 +55,7 @@ var scratchPrefixes = []string{reconcileScratchPrefix + "-", reRootScratchPrefix
 // short must not also strand the session on a scratch branch. The branch a
 // rotation resumes on is the run's only while it lasts, so the cleanup puts
 // back what the session recorded before it.
-func (s *Store) runOnScratch(ctx context.Context, home string, branches []string, commit string, body func() error) (err error) {
+func (s *Store) runOnScratch(ctx context.Context, home string, branches []string, commit string, attempt scratchAttempt, body func() error) (err error) {
 	// created names only the branches that exist, so cleanup deletes exactly
 	// those and never warns about one that was never made.
 	var created []string
@@ -47,19 +66,18 @@ func (s *Store) runOnScratch(ctx context.Context, home string, branches []string
 		}
 		s.checkedOut = before
 	}()
-	// -B recreates each branch if a prior attempt of this same run left it
-	// behind, so a creation is retried as every write is: checkoutNewAt
-	// records a branch only once it exists, so a rotation resumes on the last
-	// one made and the retry makes this one again.
+	// -B recreates each branch if a prior attempt left it behind.
+	// checkoutNewAt records a branch only once it exists, so a rotation
+	// resumes on the last one made and a retry makes this one again.
 	for _, branch := range branches {
-		if err := retryTransientGCContention(ctx, func(ctx context.Context) error {
+		if err := attempt(ctx, func(ctx context.Context) error {
 			if s.createScratchHookForTest != nil {
 				if err := s.createScratchHookForTest(); err != nil {
 					return err
 				}
 			}
 			return s.checkoutNewAt(ctx, branch, commit)
-		}, s.reconnect); err != nil {
+		}); err != nil {
 			return fmt.Errorf("create scratch branch %q: %w", branch, err)
 		}
 		created = append(created, branch)
@@ -69,13 +87,13 @@ func (s *Store) runOnScratch(ctx context.Context, home string, branches []string
 
 // landScratch moves home to scratch's head with one hard reset, the one move
 // of home a scratch run makes: home holds the head before or the head after,
-// never a part. It is retried as every write is, and checkout records home, so
-// a rotation resumes there. It runs on a context the caller cannot cancel: a
-// reset that applied and then read the caller's cancel would report a landed
-// run as not landed. [LAW:single-enforcer] a batch and a reconcile land
-// through it. [LAW:no-ambient-temporal-coupling]
-func (s *Store) landScratch(ctx context.Context, home, scratch string) error {
-	return retryTransientGCContention(context.WithoutCancel(ctx), func(ctx context.Context) error {
+// never a part. checkout records home, so a rotation resumes there. It runs on
+// a context the caller cannot cancel: a reset that applied and then read the
+// caller's cancel would report a landed run as not landed.
+// [LAW:single-enforcer] a batch and a reconcile land through it.
+// [LAW:no-ambient-temporal-coupling]
+func (s *Store) landScratch(ctx context.Context, home, scratch string, attempt scratchAttempt) error {
+	return attempt(context.WithoutCancel(ctx), func(ctx context.Context) error {
 		if s.landHookForTest != nil {
 			if err := s.landHookForTest(); err != nil {
 				return err
@@ -89,7 +107,7 @@ func (s *Store) landScratch(ctx context.Context, home, scratch string) error {
 			return fmt.Errorf("switch to %q: %w", home, err)
 		}
 		return resetHardToRef(ctx, s.db, head)
-	}, s.reconnect)
+	})
 }
 
 // leaveScratch returns the session to home and deletes the scratch branches.

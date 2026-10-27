@@ -221,6 +221,11 @@ func TestABatchRefusesToStartOnAScratchBranch(t *testing.T) {
 			if left := branchesUnder(t, ctx, st, prefix); left["outer"] == "" {
 				t.Fatalf("branches under %s = %v; want %s untouched", prefix, left, outer)
 			}
+			// Refused before it writes anything: no stranded write was
+			// committed onto the scratch branch, nor looked for.
+			if _, looked := st.StrandedWritesCommits(); looked {
+				t.Fatal("the refused batch looked for stranded writes; want it refused before writing anything")
+			}
 		})
 	}
 }

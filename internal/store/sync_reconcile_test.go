@@ -704,7 +704,7 @@ func TestReconcileScratchCleanupSurvivesCallerCancel(t *testing.T) {
 	head := headCommit(t, bg, st)
 	// A scratch run's caller holds the commit lock, as every reconcile does.
 	err = st.withCommitLock(ctx, func(ctx context.Context) error {
-		return st.runOnScratch(ctx, dataBranch, []string{newReconcileScratch().spine}, head, func() error {
+		return st.runOnScratch(ctx, dataBranch, []string{newReconcileScratch().spine}, head, attemptOnce, func() error {
 			cancel()
 			return ctx.Err()
 		})

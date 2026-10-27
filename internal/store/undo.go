@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"maps"
 	"reflect"
@@ -580,18 +581,16 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 			return storage.RevertHeldError{Writes: reverting}
 		}
 		// A batch lands whole or not at all (withBatch), so what the undo
-		// put back stands exactly when its bulk edit landed — beside an error
-		// too, when the batch landed and then could not leave its scratch
-		// branch. The commits it landed are read only from a store left whole.
-		// [LAW:nothing-unseen]
+		// put back, and the commits it landed, stand exactly when its bulk
+		// edit landed — beside an error too, when the batch landed and then
+		// could not leave its scratch branch. [LAW:nothing-unseen]
 		applied, landing, err := s.bulkApply(ctx, "", actor, reverted.Documents)
 		if landing.Landed {
 			result.Writes, result.Moves, result.Applied = reverting, reverted.Moves, applied
+			var readErr error
+			result.Landed, readErr = s.commitsAbove(ctx, landing.From)
+			err = errors.Join(err, readErr)
 		}
-		if err != nil {
-			return err
-		}
-		result.Landed, err = s.commitsAbove(ctx, landing.From)
 		return err
 	})
 	s.hear(ctx, heard...)

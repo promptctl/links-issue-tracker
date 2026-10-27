@@ -56,12 +56,19 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 		var orphans []string
 		// Retried as every write is, since nothing is written yet: a re-run
 		// finds the stranded writes already committed and reads the same head.
-		if err := retryTransientGCContention(ctx, func(ctx context.Context) error {
-			if err := s.commitStrandedWrites(ctx); err != nil {
-				return err
-			}
+		if err := s.retryInPlace(ctx, func(ctx context.Context) error {
 			var err error
 			if from, err = activeBranch(ctx, s.db); err != nil {
+				return err
+			}
+			// A batch lands on a branch that holds data, so it refuses a
+			// scratch branch before it writes anything there: a scratch branch
+			// is deleted when its run ends, and the sweep below would delete
+			// another batch's live branch.
+			if slices.ContainsFunc(scratchPrefixes, func(prefix string) bool { return strings.HasPrefix(from, prefix) }) {
+				return fmt.Errorf("refusing to start a batch on %q, a scratch branch", from)
+			}
+			if err := s.commitStrandedWrites(ctx); err != nil {
 				return err
 			}
 			if landing.From, err = readDoltHead(ctx, s.db); err != nil {
@@ -69,14 +76,8 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 			}
 			orphans, err = s.branchesUnderPrefix(ctx, batchScratchPrefix)
 			return err
-		}, s.reconnect); err != nil {
+		}); err != nil {
 			return fmt.Errorf("batch: %w", err)
-		}
-		// A batch lands on a branch that holds data: a scratch branch is
-		// deleted when its run ends, and the sweep below would delete another
-		// batch's live branch.
-		if slices.ContainsFunc(scratchPrefixes, func(prefix string) bool { return strings.HasPrefix(from, prefix) }) {
-			return fmt.Errorf("batch: refusing to start a batch on %q, a scratch branch", from)
 		}
 		// A leftover branch is never from and is never pushed, so a delete
 		// that fails is reported, on the event and here, and the batch goes
@@ -85,11 +86,11 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 			fmt.Fprintf(os.Stderr, "lit: a batch could not delete the branches killed batches left: %v\n", err)
 		}
 		scratch := fmt.Sprintf("%s%d-%d", batchScratchPrefix, os.Getpid(), time.Now().UnixNano())
-		err := s.runOnScratch(ctx, from, []string{scratch}, landing.From, func() error {
+		err := s.runOnScratch(ctx, from, []string{scratch}, landing.From, s.retryInPlace, func() error {
 			if cause := fn(context.WithValue(ctx, batchHearingKey{}, &heard), &built); cause != nil {
 				return &storage.RefusedBatchError{Head: landing.From, Cause: cause}
 			}
-			if err := s.landScratch(ctx, from, scratch); err != nil {
+			if err := s.landScratch(ctx, from, scratch, s.retryInPlace); err != nil {
 				return fmt.Errorf("batch: land %s on %s: %w", scratch, from, err)
 			}
 			landing.Landed = true

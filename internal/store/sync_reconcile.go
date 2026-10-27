@@ -498,7 +498,7 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
 func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead, baseCommit string) error {
-	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, func() error {
+	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// A loop the base held is history: the replay reports the cuts made to
 		// the two heads, whose content is what lands.
 		base, _, err := s.exportAtCommit(ctx, scratch.read, baseCommit)
@@ -516,7 +516,7 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncRe
 // difference from the shared path is the empty base and the labels — so nothing is dropped
 // and no side is picked. [LAW:one-source-of-truth] one merge-and-replay tail, two producers.
 func (s *Store) combineFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
-	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, func() error {
+	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// [LAW:types-are-the-program] no merge-base is the empty export, which merge.ThreeWay
 		// reads as "both sides changed every field from empty" — exactly the two-way union.
 		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead}, model.Export{}, combineCommitMessage, storage.SyncReconcileCombined)
@@ -993,7 +993,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// pre-reconcile head, after it, at the complete replayed spine — never an
 	// in-between. [LAW:one-source-of-truth] one authoritative ordering; no per-machine
 	// merge-commit DAG — linear history that fast-forward pushes.
-	if err := s.landScratch(ctx, dataBranch, scratch.spine); err != nil {
+	if err := s.landScratch(ctx, dataBranch, scratch.spine, attemptOnce); err != nil {
 		return replayLanding{}, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
 	}
 	// The data branch now durably holds the result; roll the recovery snapshots off to
