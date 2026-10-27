@@ -60,6 +60,7 @@ func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (m
 	}
 	telemetry.Set(ctx, "backup.lock_wait_ms", taken.Waited.Milliseconds())
 	telemetry.Set(ctx, "backup.residue_removed", taken.ResidueRemoved)
+	telemetry.Set(ctx, "backup.residue_stuck", taken.ResidueStuck)
 	written := taken.Written
 	if written == nil {
 		return nil, err

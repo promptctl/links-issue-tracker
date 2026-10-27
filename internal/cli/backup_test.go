@@ -277,15 +277,15 @@ func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
 
 // The snapshot a backup took, whether the set already held its content, how
 // long it waited for the set's lock, how many killed backups' temp files it
-// removed and how many snapshots its prune removed are on the event of
-// `backup create` and of a restore alike.
+// removed and could not remove, and how many snapshots its prune removed are
+// on the event of `backup create` and of a restore alike.
 func TestBackupEventNamesTheSnapshotItTook(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
 	created := strings.Fields(runCLIInDir(t, repo, "backup", "create"))
 	name := created[0]
-	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "false", "backup.residue_removed": "0", "backup.pruned": "0"})
+	assertFacts(t, map[string]string{"backup.snapshot": name, "backup.refreshed": "false", "backup.residue_removed": "0", "backup.residue_stuck": "0", "backup.pruned": "0"})
 	if wait, ok := writtenFacts(t, lastEvent(t))["backup.lock_wait_ms"].(float64); !ok || wait < 0 {
 		t.Errorf("backup create event backup.lock_wait_ms = %v, want a wait in milliseconds", wait)
 	}

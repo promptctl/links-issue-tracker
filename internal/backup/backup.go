@@ -44,10 +44,13 @@ func dir(storageDir string) string {
 	return filepath.Join(storageDir, "backups")
 }
 
+// snapshotExt ends every snapshot's name: create names one <digest>.json.
+const snapshotExt = ".json"
+
 // isSnapshotName reports whether a file of the set's directory named name is
 // a snapshot.
 func isSnapshotName(name string) bool {
-	return strings.HasSuffix(name, ".json")
+	return strings.HasSuffix(name, snapshotExt)
 }
 
 type Snapshot struct {
@@ -58,13 +61,14 @@ type Snapshot struct {
 }
 
 // Taken is what a take that held the set's lock did: how long it waited for
-// the lock, how many killed takes' temp files it removed, and the snapshot it
-// wrote, nil when its read or its create failed. [LAW:nothing-unseen] Each fact
+// the lock, how many killed takes' temp files it removed and how many it could
+// not, and the snapshot it wrote, nil when its read or its create failed. [LAW:nothing-unseen] Each fact
 // is here exactly when the step that produces it ran, so a removal that never
 // ran cannot read as one that found nothing.
 type Taken struct {
 	Waited         time.Duration
 	ResidueRemoved int
+	ResidueStuck   int
 	Written        *Written
 }
 
@@ -113,9 +117,9 @@ func Take(ctx context.Context, storageDir string, keep int, read func() (model.E
 // [LAW:dataflow-not-control-flow]: one temp file that will not go must not
 // cost the set its next snapshot.
 func takeHeld(storageDir string, keep int, read func() (model.Export, error)) (Taken, error) {
-	removed, residueErr := removeResidue(dir(storageDir))
+	removed, stuck, residueErr := removeResidue(dir(storageDir))
 	written, err := write(storageDir, keep, read)
-	return Taken{ResidueRemoved: removed, Written: written}, errors.Join(residueErr, err)
+	return Taken{ResidueRemoved: removed, ResidueStuck: stuck, Written: written}, errors.Join(residueErr, err)
 }
 
 // write reads an export, writes it into the set and prunes the set to keep. A
@@ -139,7 +143,8 @@ func write(storageDir string, keep int, read func() (model.Export, error)) (*Wri
 
 // removeResidue removes the temp files of takes killed mid-write (a SIGKILL
 // or a power loss between atomicfile's temp file and its rename) and returns
-// how many it removed, beside an error naming each it could not. Each is the
+// how many it removed and how many it could not, beside an error naming each
+// of those. Each is the
 // size of an export, under a name no later take reuses, so nothing else would
 // ever reclaim it.
 //
@@ -151,16 +156,15 @@ func write(storageDir string, keep int, read func() (model.Export, error)) (*Wri
 // removed too, and its rename then fails loudly; on Windows, where the writer's
 // open handle forbids the removal, this take reports the temp it could not
 // remove.
-func removeResidue(backupsDir string) (int, error) {
+func removeResidue(backupsDir string) (removed, stuck int, err error) {
 	entries, err := os.ReadDir(backupsDir)
 	if errors.Is(err, fs.ErrNotExist) {
 		// A set never written to holds nothing.
-		return 0, nil
+		return 0, 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("read backups dir: %w", err)
+		return 0, 0, fmt.Errorf("read backups dir: %w", err)
 	}
-	removed := 0
 	var errs []error
 	for _, entry := range entries {
 		// atomicfile's temp files are files; a directory under such a name is
@@ -176,7 +180,7 @@ func removeResidue(backupsDir string) (int, error) {
 		}
 		removed++
 	}
-	return removed, errors.Join(errs...)
+	return removed, len(errs), errors.Join(errs...)
 }
 
 // create writes export as the snapshot named by its content digest, the one
@@ -195,7 +199,7 @@ func create(storageDir string, export model.Export) (Written, error) {
 	if err != nil {
 		return Written{}, err
 	}
-	path := filepath.Join(backupsDir, digest+".json")
+	path := filepath.Join(backupsDir, digest+snapshotExt)
 	// Whether the name was already taken is recorded, never acted on: the
 	// write below is the same either way.
 	_, err = os.Stat(path)

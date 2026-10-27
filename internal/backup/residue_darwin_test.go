@@ -42,8 +42,8 @@ func TestATempFileThatWillNotGoCostsTheSetNoSnapshot(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), stuck) {
 		t.Errorf("Take error = %v, want one naming %s", err, stuck)
 	}
-	if taken == nil || taken.Written == nil || taken.ResidueRemoved != 1 {
-		t.Fatalf("Take = %+v; want a snapshot and the removable temp file removed", taken)
+	if taken == nil || taken.Written == nil || taken.ResidueRemoved != 1 || taken.ResidueStuck != 1 {
+		t.Fatalf("Take = %+v; want a snapshot, the removable temp file removed and the other counted stuck", taken)
 	}
 	if _, err := os.Stat(taken.Written.Path); err != nil {
 		t.Errorf("the snapshot was not written: stat = %v", err)
