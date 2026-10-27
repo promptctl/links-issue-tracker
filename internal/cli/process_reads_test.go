@@ -20,9 +20,10 @@ import (
 // cmd/lit's main builds, and a second user would make two runs in one process
 // see each other's. filepath.Abs is here because it reads os.Getwd for a
 // relative path, os.ExpandEnv because it reads os.Getenv, os.TempDir and the
-// user directories because they read the variables that name them, and fmt's
-// and log's printers because they write os.Stdout and os.Stderr, inside the
-// standard library where a scan of this module cannot see it.
+// user directories because they read the variables that name them, and fmt's,
+// log's and slog's printers because they write os.Stdout and os.Stderr (slog's
+// through log's default logger), inside the standard library where a scan of
+// this module cannot see it.
 // [LAW:effects-at-boundaries] [LAW:no-shared-mutable-globals]
 var processReads = map[string][]string{
 	"os":            {"Getwd", "Args", "Stdin", "Stdout", "Stderr", "Getenv", "LookupEnv", "Environ", "ExpandEnv", "UserHomeDir", "UserConfigDir", "UserCacheDir", "TempDir"},
@@ -30,6 +31,7 @@ var processReads = map[string][]string{
 	"syscall":       {"Getenv", "Environ"},
 	"fmt":           {"Print", "Printf", "Println"},
 	"log":           {"Print", "Printf", "Println", "Fatal", "Fatalf", "Fatalln", "Panic", "Panicf", "Panicln", "Writer", "Default"},
+	"log/slog":      {"Debug", "DebugContext", "Info", "InfoContext", "Warn", "WarnContext", "Error", "ErrorContext", "Log", "LogAttrs", "Default"},
 }
 
 // childBuilders are the ways to build a child process. A child built with one
@@ -234,6 +236,7 @@ func TestProcessScansFindEverySpelling(t *testing.T) {
 		{"directories the environment names", processReadsIn, `import "os"; func f() { os.UserHomeDir(); os.UserConfigDir(); os.UserCacheDir(); os.TempDir() }`, []string{"os.UserHomeDir", "os.UserConfigDir", "os.UserCacheDir", "os.TempDir"}},
 		{"standard streams", processReadsIn, `import "os"; var w = os.Stdout; func f() { fmt.Fprintln(os.Stderr) }`, []string{"os.Stdout", "os.Stderr"}},
 		{"printers that write the standard streams", processReadsIn, `import ("fmt"; "log"); func f() { fmt.Println(); fmt.Printf(""); log.Printf(""); _ = log.Default() }`, []string{"fmt.Println", "fmt.Printf", "log.Printf", "log.Default"}},
+		{"slog's default logger", processReadsIn, `import "log/slog"; func f() { slog.Warn(""); slog.ErrorContext(nil, ""); _ = slog.Default(); _ = slog.New(nil) }`, []string{"log/slog.Warn", "log/slog.ErrorContext", "log/slog.Default"}},
 		{"printers handed a writer", processReadsIn, `import "fmt"; func f(w W) { fmt.Fprintln(w); _ = fmt.Sprintf("") }`, nil},
 		{"other os names", processReadsIn, `import "os"; func f() { os.Getpid() }`, nil},
 		{"same name, other package", processReadsIn, `import os "example.com/notos"; var r = os.Stdin`, nil},

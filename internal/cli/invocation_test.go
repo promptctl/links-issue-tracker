@@ -121,6 +121,25 @@ func TestSerialWriterLetsOneWriteThroughAtATime(t *testing.T) {
 	}
 }
 
+// A file Run is handed stays that file, so a child it starts on it (the $EDITOR
+// `lit workflows edit` opens) gets the descriptor rather than a pipe; any
+// other writer is serialized.
+func TestSerializeWritesKeepsAFileAFile(t *testing.T) {
+	t.Parallel()
+	file, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	t.Cleanup(func() { _ = file.Close() })
+	if got := serializeWrites(file); got != io.Writer(file) {
+		t.Fatalf("serializeWrites(file) = %T, want the file itself", got)
+	}
+	var buf strings.Builder
+	if _, ok := serializeWrites(&buf).(*serialWriter); !ok {
+		t.Fatalf("serializeWrites(&strings.Builder{}) = %T, want *serialWriter", serializeWrites(&buf))
+	}
+}
+
 // overlapWriter records whether a Write began while another was in flight.
 type overlapWriter struct {
 	inFlight   atomic.Int32
