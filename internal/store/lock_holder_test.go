@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -123,10 +124,10 @@ func TestContentionErrorNamesTheLiveHolder(t *testing.T) {
 // that said "after 2s" thirty seconds in would hide exactly the wait the
 // notice exists to show.
 //
-// The contender's clock steps one second per poll, so the schedule is read
-// off the instants the wait is handed rather than off how fast the machine
-// runs. Shared holders hand the lock along at the first three polls, so the
-// last arrives at 3s and the 10s wait refuses at 13s; the notice is due at
+// The contender runs on a stepClock, so the schedule is read off the
+// instants its own sleeps reach rather than off how fast the machine runs.
+// Shared holders hand the lock along at 1s, 2s and 3s, so the last arrives
+// at 3s and the 10s wait refuses at 13s; the notice is due at
 // the 3s grace and then every 2s interval, which is 3s, 5s, 7s, 9s and 11s.
 // The 13s poll is due a notice too and prints none: it is the refusal, and a
 // wait that has given up is not still waiting.
@@ -135,31 +136,20 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	holder, err := acquireStoreLock(ctx, notices, storageDirOf(lockPath), lockPath, false, 0)
-	if err != nil {
-		t.Fatalf("holder acquireStoreLock() error = %v", err)
-	}
+	holder := arriveShared(t, notices, lockPath, 0)
 	defer func() {
 		if err := holder(); err != nil {
 			t.Errorf("release holder: %v", err)
 		}
 	}()
 
-	clock := newStepClock(t, time.Second, func(read int) {
-		if read == 0 || read > 3 {
+	clock := newStepClock(t, func(at time.Duration) {
+		if at%time.Second != 0 || at > 3*time.Second {
 			return
 		}
-		next, err := acquireStoreLock(ctx, notices, storageDirOf(lockPath), lockPath, false, 0)
-		if err != nil {
-			t.Fatalf("holder %d: %v", read+1, err)
-		}
-		previous := holder
-		holder = next
-		if err := previous(); err != nil {
-			t.Fatalf("release holder %d: %v", read, err)
-		}
+		handOver(t, &holder, arriveShared(t, notices, lockPath, at), at)
 	})
-	if _, err := acquireStoreLockOn(ctx, notices, clock.now, storageDirOf(lockPath), lockPath, true, 10*time.Second); !errors.Is(err, ErrWorkspaceBusy) {
+	if _, err := acquireStoreLockOn(ctx, notices, clock, storageDirOf(lockPath), lockPath, true, 10*time.Second); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
 
@@ -1001,46 +991,73 @@ func treeUnder(t *testing.T, root string) []string {
 	return paths
 }
 
-// stepClock is a clock a test owns for one wait. Its first reading is the
-// epoch and each later one is a step past the one before; tick runs with a
-// reading's index before that reading is handed out, so whatever a test does
-// at a tick lands exactly between two of the policy's polls. The contender
-// polls on its own goroutine, which is the test's, so no reading races.
+// stepClock is a lockClock a test owns for one wait. Reading it never moves
+// it; only a sleep does, by exactly the duration the retry loop asked for, so
+// every instant the policy measures is the sum of the intervals it chose —
+// an interval that drifts from storeLockPollInterval moves every instant a
+// test asserts. tick runs with the instant each sleep reaches before the
+// attempt after it, so whatever a test does at a tick lands exactly between
+// two of the policy's polls. The contender sleeps on its own goroutine, which
+// is the test's, so no reading races.
 //
-// [LAW:no-ambient-temporal-coupling] Every gap the policy measures is a
-// whole number of steps however slowly the machine runs. A policy that never
-// gives up would poll forever, so past stepClockReadLimit readings the clock
-// fails the test instead.
+// [LAW:no-ambient-temporal-coupling] Every gap the policy measures is the
+// interval it asked for however slowly the machine runs, and no real time
+// passes. A policy that never gives up — or that asks for no sleep at all —
+// would poll forever, so past stepClockSleepLimit sleeps the clock fails the
+// test instead.
 type stepClock struct {
 	t       *testing.T
-	step    time.Duration
-	tick    func(read int)
-	reads   int
+	tick    func(at time.Duration)
+	sleeps  int
 	instant time.Time
+	fired   chan time.Time
 }
 
-const stepClockReadLimit = 100
+const stepClockSleepLimit = 1000
 
-func newStepClock(t *testing.T, step time.Duration, tick func(read int)) *stepClock {
-	return &stepClock{t: t, step: step, tick: tick, instant: time.Unix(0, 0)}
+func newStepClock(t *testing.T, tick func(at time.Duration)) *stepClock {
+	return &stepClock{t: t, tick: tick, instant: time.Unix(0, 0), fired: make(chan time.Time, 1)}
 }
 
-func (c *stepClock) now() time.Time {
-	if c.reads == stepClockReadLimit {
-		c.t.Fatalf("the wait was still polling after %d readings (%s); it never gave up", c.reads, c.elapsed())
+func (c *stepClock) Now() time.Time { return c.instant }
+
+func (c *stepClock) Start(d time.Duration) {
+	if c.sleeps == stepClockSleepLimit {
+		c.t.Fatalf("the wait was still polling after %d sleeps (%s); it never gave up", c.sleeps, c.elapsed())
 	}
-	if c.reads > 0 {
-		c.instant = c.instant.Add(c.step)
-	}
-	c.tick(c.reads)
-	c.reads++
-	return c.instant
+	c.sleeps++
+	c.instant = c.instant.Add(d)
+	c.tick(c.elapsed())
+	c.fired <- c.instant
 }
 
-// elapsed is the span from the first reading to the latest.
+func (c *stepClock) Stop() {}
+
+func (c *stepClock) C() <-chan time.Time { return c.fired }
+
+// elapsed is the span from the wait's start to the latest instant.
 func (c *stepClock) elapsed() time.Duration { return c.instant.Sub(time.Unix(0, 0)) }
 
-func noTick(int) {}
+func noTick(time.Duration) {}
+
+// arriveShared is a new shared holder of lockPath arriving at instant at.
+func arriveShared(t *testing.T, stderr io.Writer, lockPath string, at time.Duration) func() error {
+	release, err := acquireStoreLock(context.Background(), stderr, storageDirOf(lockPath), lockPath, false, 0)
+	if err != nil {
+		t.Fatalf("holder arriving at %s: %v", at, err)
+	}
+	return release
+}
+
+// handOver makes next the holder and then releases the one it replaces, in
+// that order, so a lock handed along between shared holders is never free.
+func handOver(t *testing.T, holder *func() error, next func() error, at time.Duration) {
+	previous := *holder
+	*holder = next
+	if err := previous(); err != nil {
+		t.Fatalf("release the holder before %s: %v", at, err)
+	}
+}
 
 // TestWaitOutlastsHoldersThatKeepChanging pins holdWait's rule through the
 // acquisition every contender runs: the wait counts from the last holder to
@@ -1064,31 +1081,20 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 		steps = 8
 	)
 
-	holder, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 0)
-	if err != nil {
-		t.Fatalf("first holder: %v", err)
-	}
+	holder := arriveShared(t, testStderr(), lockPath, 0)
 	defer func() {
 		if err := holder(); err != nil {
 			t.Errorf("release last holder: %v", err)
 		}
 	}()
-	clock := newStepClock(t, storeLockPollInterval, func(read int) {
-		if read == 0 || read > steps {
+	clock := newStepClock(t, func(at time.Duration) {
+		if at > steps*storeLockPollInterval {
 			return
 		}
-		next, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 0)
-		if err != nil {
-			t.Fatalf("holder %d: %v", read+1, err)
-		}
-		previous := holder
-		holder = next
-		if err := previous(); err != nil {
-			t.Fatalf("release holder %d: %v", read, err)
-		}
+		handOver(t, &holder, arriveShared(t, testStderr(), lockPath, at), at)
 	})
 
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	_, err := acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the last holder stood still", err)
 	}
@@ -1098,6 +1104,62 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 	}
 	if got := clock.elapsed(); got != lastArrival+wait {
 		t.Fatalf("the contender gave up %s in, want %s: one %s wait after the last holder arrived at %s", got, lastArrival+wait, wait, lastArrival)
+	}
+}
+
+// TestWaitEndsInTheLockOnceTheQueueDrains pins the outcome every wait exists
+// for: a contender refused while holders keep arriving keeps waiting past its
+// stand-still budget, and the first attempt after the last holder leaves
+// takes the lock. Shared holders hand the lock along at every poll for longer
+// than the wait, then the last one releases between two polls; the contender
+// must hold the lock at exactly that next attempt, and its LockWait must say
+// it acquired after the eight arrivals it saw, measured to the last poll that
+// found the lock held.
+func TestWaitEndsInTheLockOnceTheQueueDrains(t *testing.T) {
+	t.Parallel()
+	const (
+		wait  = 300 * time.Millisecond
+		steps = 8
+	)
+	var waits []LockWait
+	ctx := WithLockObserver(context.Background(), LockObserver{
+		Waited: func(w LockWait) { waits = append(waits, w) },
+		Held:   func(LockHold) {},
+	})
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+
+	holder := arriveShared(t, testStderr(), lockPath, 0)
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release last holder: %v", err)
+		}
+	}()
+	lastArrival := steps * storeLockPollInterval
+	drained := lastArrival + storeLockPollInterval
+	clock := newStepClock(t, func(at time.Duration) {
+		if at > drained {
+			t.Fatalf("the contender was still waiting at %s, after the last holder left at %s", at, drained)
+		}
+		next := func() error { return nil }
+		if at <= lastArrival {
+			next = arriveShared(t, testStderr(), lockPath, at)
+		}
+		handOver(t, &holder, next, at)
+	})
+
+	release, err := acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	if err != nil {
+		t.Fatalf("acquireStoreLockOn() error = %v, want the lock once the last holder left", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release the contender: %v", err)
+	}
+	if got := clock.elapsed(); got != drained {
+		t.Fatalf("the contender acquired %s in, want %s: the first attempt after the last holder left", got, drained)
+	}
+	want := LockWait{Lock: filepath.Base(lockPath), Waited: lastArrival, ProgressSeen: steps, Outcome: LockWaitAcquired}
+	if len(waits) != 1 || waits[0] != want {
+		t.Fatalf("lock waits reported = %+v, want exactly %+v", waits, want)
 	}
 }
 
@@ -1128,20 +1190,16 @@ func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
 	}
 	defer func() { _ = release() }()
 
-	clock := newStepClock(t, storeLockPollInterval, func(read int) {
-		if read == 0 || read > steps {
+	clock := newStepClock(t, func(at time.Duration) {
+		if at > steps*storeLockPollInterval {
 			return
 		}
-		brief, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 0)
-		if err != nil {
-			t.Fatalf("brief holder %d: %v", read, err)
-		}
-		if err := brief(); err != nil {
-			t.Fatalf("release brief holder %d: %v", read, err)
+		if err := arriveShared(t, testStderr(), lockPath, at)(); err != nil {
+			t.Fatalf("release brief holder at %s: %v", at, err)
 		}
 	})
 
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
 	}
@@ -1212,17 +1270,17 @@ func TestWaitSeesHoldersThatAnnounceNoArrival(t *testing.T) {
 	}
 	defer func() { _ = release() }()
 
-	clock := newStepClock(t, storeLockPollInterval, func(read int) {
-		if read == 0 || read > steps {
+	clock := newStepClock(t, func(at time.Duration) {
+		if at > steps*storeLockPollInterval {
 			return
 		}
 		_, recordPath := lockHolderRecordNames(dir)
 		if err := os.WriteFile(recordPath, []byte("{}"), 0o644); err != nil {
-			t.Fatalf("record holder %d: %v", read, err)
+			t.Fatalf("record holder at %s: %v", at, err)
 		}
 	})
 
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
 	}
@@ -1285,8 +1343,8 @@ func TestWaitFailsOnceHoldersStandStill(t *testing.T) {
 		}
 	}()
 
-	clock := newStepClock(t, storeLockPollInterval, noTick)
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	clock := newStepClock(t, noTick)
+	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -1312,8 +1370,8 @@ func TestWaitUnderAnUnrecordedHolderIsTheElapsedBudget(t *testing.T) {
 	}
 	defer func() { _ = release() }()
 
-	clock := newStepClock(t, storeLockPollInterval, noTick)
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	clock := newStepClock(t, noTick)
+	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -1399,23 +1457,24 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 		t.Fatalf("hold the planted record: acquired=%v err=%v", alive, err)
 	}
 
-	// At the first poll the holder dies without retiring its record, and that
-	// poll's notice (due at every poll here) sweeps it; by the second poll the
-	// record must be gone, so the sweep is proven to land mid-wait rather than
-	// in the refusal's own holder account at the end.
-	clock := newStepClock(t, storeLockPollInterval, func(read int) {
-		switch read {
-		case 1:
+	// The first poll, at the wait's start, reads the holder; it dies before
+	// the second without retiring its record, and the second poll's notice
+	// (due at every poll here) sweeps it; before the third poll the record must
+	// be gone, so the sweep is proven to land mid-wait rather than in the
+	// refusal's own holder account at the end.
+	clock := newStepClock(t, func(at time.Duration) {
+		switch at {
+		case storeLockPollInterval:
 			if err := dies(); err != nil {
 				t.Fatalf("release the planted record: %v", err)
 			}
-		case 2:
+		case 2 * storeLockPollInterval:
 			if _, statErr := os.Stat(dying); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("the dead holder's record was not swept during the wait (stat: %v); the test did not exercise a sweep", statErr)
 			}
 		}
 	})
-	_, err = acquireStoreLockOn(ctx, notices, clock.now, storageDirOf(lockPath), lockPath, true, wait)
+	_, err = acquireStoreLockOn(ctx, notices, clock, storageDirOf(lockPath), lockPath, true, wait)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy", err)
 	}

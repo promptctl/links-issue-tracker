@@ -386,23 +386,57 @@ var errLockHeld = errors.New("lock held")
 // ran out in the wait learns who it was waiting on.
 // [LAW:single-enforcer]
 func acquireStoreLock(ctx context.Context, stderr io.Writer, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
-	return acquireStoreLockOn(ctx, stderr, time.Now, storageDir, lockPath, exclusive, wait)
+	return acquireStoreLockOn(ctx, stderr, &wallClock{}, storageDir, lockPath, exclusive, wait)
 }
 
-// acquireStoreLockOn is acquireStoreLock with the wait measured on now, the
-// one input every contender shares and a test replaces: a test that steps its
-// own clock drives the whole acquisition, policy and all, through instants it
-// chose, so no assertion about the wait depends on how fast the machine runs.
+// lockClock is the time a lock wait runs on: the instants holdWait measures
+// and the timer the retry loop sleeps on between attempts. They are one value
+// so a wait cannot measure on one timeline and sleep on another — a test that
+// steps the instants also takes the sleeps, and every sleep moves the instants
+// by exactly what the policy asked for. [LAW:one-source-of-truth]
+type lockClock interface {
+	Now() time.Time
+	backoff.Timer
+}
+
+// wallClock is the lockClock every contender runs on: the system clock, whose
+// readings carry the monotonic clock, and a real timer — the timer
+// backoff.Retry sleeps on, which backoff keeps unexported (defaultTimer). One
+// per acquisition, since its timer is that retry loop's state.
+type wallClock struct{ timer *time.Timer }
+
+func (*wallClock) Now() time.Time { return time.Now() }
+
+func (c *wallClock) Start(d time.Duration) {
+	if c.timer == nil {
+		c.timer = time.NewTimer(d)
+		return
+	}
+	c.timer.Reset(d)
+}
+
+func (c *wallClock) Stop() {
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+}
+
+func (c *wallClock) C() <-chan time.Time { return c.timer.C }
+
+// acquireStoreLockOn is acquireStoreLock on clock, the one input every
+// contender shares and a test replaces: a test's clock drives the whole
+// acquisition, policy and sleeps alike, through instants it chose, so no
+// assertion about the wait depends on how fast the machine runs.
 // [LAW:effects-at-boundaries]
-func acquireStoreLockOn(ctx context.Context, stderr io.Writer, now func() time.Time, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
+func acquireStoreLockOn(ctx context.Context, stderr io.Writer, clock lockClock, storageDir, lockPath string, exclusive bool, wait time.Duration) (func() error, error) {
 	var release func() error
 	// sawHeld stays set once any try found the lock held: a ctx that ends
 	// mid-wait surfaces as a bare ctx error — from the retry loop between
 	// tries, or from filelock's own entry check on the next try — and this is
 	// what still knows a holder was in front of it.
 	var sawHeld bool
-	policy := newHoldWait(stderr, storageDir, lockPath, func() time.Duration { return wait }, now)
-	err := backoff.Retry(func() error {
+	policy := newHoldWait(stderr, storageDir, lockPath, func() time.Duration { return wait }, clock.Now)
+	err := backoff.RetryNotifyWithTimer(func() error {
 		acquiredRelease, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, 1, 0)
 		if err != nil {
 			return backoff.Permanent(err)
@@ -413,7 +447,7 @@ func acquireStoreLockOn(ctx context.Context, stderr io.Writer, now func() time.T
 		}
 		release = acquiredRelease
 		return nil
-	}, backoff.WithContext(policy, ctx))
+	}, backoff.WithContext(policy, ctx), nil, clock)
 	if wait, waited := policy.report(ctx, err); waited {
 		lockObserverFrom(ctx).Waited(wait)
 	}

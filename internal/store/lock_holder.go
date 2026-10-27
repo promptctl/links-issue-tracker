@@ -753,10 +753,11 @@ type holdWait struct {
 // newHoldWait builds the policy for one lock. wait is read at each poll, not
 // at construction, so a policy built into a long-lived connector still waits
 // the figure a test has since shrunk. [LAW:one-source-of-truth] now is the
-// clock the wait is measured on: every contender passes time.Now, whose
-// readings carry the monotonic clock, so a wall-clock step cannot shorten or
-// stretch a wait; a test passes one it advances itself, so the rule is pinned
-// by the instants it is handed rather than by how fast a loaded machine runs.
+// clock the wait is measured on, and it must be the timeline the retry loop
+// sleeps on between polls: acquireStoreLockOn takes both from one lockClock,
+// so a test that steps the instants also takes the sleeps; an engine open
+// passes time.Now beside Dolt's own real timer. time.Now's readings carry the
+// monotonic clock, so a wall-clock step cannot shorten or stretch a wait.
 // [LAW:effects-at-boundaries]
 func newHoldWait(stderr io.Writer, storageDir, lockPath string, wait func() time.Duration, now func() time.Time) *holdWait {
 	return &holdWait{stderr: stderr, storageDir: storageDir, lockPath: lockPath, wait: wait, now: now}
