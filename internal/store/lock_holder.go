@@ -690,13 +690,14 @@ func renderHolderCommand(command string) string {
 // (a snapshot copy) can in principle wait out a write storm that never
 // pauses, and it lands when the storm does, where a ceiling would have
 // failed it with a holder that was never wedged. Fails-in-seconds is the
-// promise about a holder that stands still.
+// promise about a holder that stands still, under every budget but the
+// bootstrap lock's, which is none (acquireBootstrapLock).
 //
 // A working routine holder does not stand still: its heartbeat (lockHold) is
 // a fresh name in the arrival file while its engine works, read here like any
 // arrival. So one routine hold is waited out for as long as its engine keeps
-// working, however long a loaded machine stretches it. That is also the one
-// wait with no bound: a routine hold wedged inside a Dolt statement
+// working, however long a loaded machine stretches it. So that wait has no
+// bound either: a routine hold wedged inside a Dolt statement
 // heartbeats like a slow one, since from outside the two cannot be told apart
 // at any finite time, and its contenders wait, naming it every
 // lockWaitNoticeInterval. A slow-but-live routine holder failing every writer
@@ -911,8 +912,8 @@ var (
 	// lockWaitNoticeGrace is how long a wait stays quiet before it is worth
 	// reporting: long enough that the ordinary case — two lit commands
 	// overlapping for a few milliseconds — prints nothing, short enough to
-	// land inside coResidentHolderWait, the budget of every wait an operator
-	// could mistake for a hang, so a contender that is about to fail has
+	// land inside coResidentHolderWait, the stand-still budget of every wait
+	// that gives up, so a contender that is about to fail has
 	// already said who it is waiting on. A grace under a second would report
 	// the overlaps this one exists to ignore. lockWaitNoticeInterval then
 	// repeats the notice, because a wait behind a queue of holders can run

@@ -149,8 +149,7 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 // A racer waits out a builder however long the build runs, since a build's
 // length is the machine's load: with the stand-still wait shrunk far below
 // the builder's hold, the racer still takes the lock once the builder lets
-// go, and its wait reports acquired. On master the racer failed "workspace
-// busy" one stand-still wait into the hold.
+// go, and its wait reports acquired.
 func TestARacerWaitsOutABuilderPastTheStandStillWait(t *testing.T) {
 	// serial: rewrites the package-level coResidentHolderWait.
 	shrinkWait(t, 100*time.Millisecond)
