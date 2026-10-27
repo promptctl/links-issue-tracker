@@ -37,7 +37,9 @@ func TestMain(m *testing.M) {
 }
 
 // killMidWrite runs this test binary again as a write to path, kills it once
-// its temp file stands beside path, and returns that temp file.
+// its temp file stands beside path, and returns that temp file. The writer is
+// killed on every way out, a failed wait for its temp file included, so none
+// outlives the test.
 func killMidWrite(t *testing.T, path string) string {
 	t.Helper()
 	writer := exec.Command(os.Args[0], "-test.run=^$")
@@ -46,6 +48,15 @@ func killMidWrite(t *testing.T, path string) string {
 	if err := writer.Start(); err != nil {
 		t.Fatalf("start the writer: %v", err)
 	}
+	defer func() {
+		if err := writer.Process.Kill(); err != nil {
+			t.Errorf("kill the writer: %v", err)
+		}
+		var exit *exec.ExitError
+		if err := writer.Wait(); !errors.As(err, &exit) {
+			t.Errorf("wait for the killed writer = %v, want its kill", err)
+		}
+	}()
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		temps, err := filepath.Glob(path + ".tmp-*")
@@ -53,13 +64,6 @@ func killMidWrite(t *testing.T, path string) string {
 			t.Fatalf("glob the writer's temp file: %v", err)
 		}
 		if len(temps) == 1 {
-			if err := writer.Process.Kill(); err != nil {
-				t.Fatalf("kill the writer: %v", err)
-			}
-			var exit *exec.ExitError
-			if err := writer.Wait(); !errors.As(err, &exit) {
-				t.Fatalf("wait for the killed writer = %v, want its kill", err)
-			}
 			return temps[0]
 		}
 		if time.Now().After(deadline) {
@@ -74,7 +78,8 @@ func readExport() (model.Export, error) {
 }
 
 // The next take removes the temp file a take killed mid-write left, and
-// leaves the temp file of anything that is not a snapshot.
+// leaves the temp file of anything that is not a snapshot, and a directory
+// that only wears a temp file's name.
 func TestTakeRemovesTheTempFileOfAKilledTake(t *testing.T) {
 	t.Parallel()
 	storageDir := t.TempDir()
@@ -86,6 +91,10 @@ func TestTakeRemovesTheTempFileOfAKilledTake(t *testing.T) {
 	if err := os.WriteFile(foreign, []byte("mine"), 0o644); err != nil {
 		t.Fatalf("write a temp file of something else: %v", err)
 	}
+	directory := filepath.Join(dir(storageDir), "kept.json.tmp-1")
+	if err := os.MkdirAll(filepath.Join(directory, "inside"), 0o755); err != nil {
+		t.Fatalf("make a directory under a temp file's name: %v", err)
+	}
 
 	taken, err := Take(context.Background(), storageDir, Budget, readExport)
 	if err != nil || taken == nil || taken.Written == nil || taken.ResidueRemoved != 1 {
@@ -96,6 +105,9 @@ func TestTakeRemovesTheTempFileOfAKilledTake(t *testing.T) {
 	}
 	if _, err := os.Stat(foreign); err != nil {
 		t.Errorf("a temp file of something other than a snapshot was removed: stat = %v", err)
+	}
+	if _, err := os.Stat(directory); err != nil {
+		t.Errorf("a directory under a temp file's name was removed: stat = %v", err)
 	}
 }
 

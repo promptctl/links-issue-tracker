@@ -59,7 +59,7 @@ type Snapshot struct {
 
 // Taken is what a take that held the set's lock did: how long it waited for
 // the lock, how many killed takes' temp files it removed, and the snapshot it
-// wrote, nil when its read or its write failed. [LAW:nothing-unseen] Each fact
+// wrote, nil when its read or its create failed. [LAW:nothing-unseen] Each fact
 // is here exactly when the step that produces it ran, so a removal that never
 // ran cannot read as one that found nothing.
 type Taken struct {
@@ -108,33 +108,41 @@ func Take(ctx context.Context, storageDir string, keep int, read func() (model.E
 
 // takeHeld removes the residue first, before the write that needs the room:
 // on a full disk a take whose write fails reaches no later step, so a removal
-// after it would never run in the one case it matters most.
+// after it would never run in the one case it matters most. A removal that
+// fails is reported beside the write, never in place of it
+// [LAW:dataflow-not-control-flow]: one temp file that will not go must not
+// cost the set its next snapshot.
 func takeHeld(storageDir string, keep int, read func() (model.Export, error)) (Taken, error) {
 	var taken Taken
-	var err error
-	taken.ResidueRemoved, err = removeResidue(dir(storageDir))
-	if err != nil {
-		return taken, err
-	}
+	removed, residueErr := removeResidue(dir(storageDir))
+	taken.ResidueRemoved = removed
+	written, err := write(storageDir, keep, read)
+	taken.Written = written
+	return taken, errors.Join(residueErr, err)
+}
+
+// write reads an export, writes it into the set and prunes the set to keep. A
+// nil Written means its read or its create failed; a prune that fails after
+// the create returns the Written with an error naming it.
+func write(storageDir string, keep int, read func() (model.Export, error)) (*Written, error) {
 	export, err := read()
 	if err != nil {
-		return taken, err
+		return nil, err
 	}
 	written, err := create(storageDir, export)
 	if err != nil {
-		return taken, err
+		return nil, err
 	}
-	taken.Written = &written
 	written.Pruned, err = prune(storageDir, keep)
 	if err != nil {
-		return taken, fmt.Errorf("prune backups after writing %s: %w", written.Path, err)
+		return &written, fmt.Errorf("prune backups after writing %s: %w", written.Path, err)
 	}
-	return taken, nil
+	return &written, nil
 }
 
 // removeResidue removes the temp files of takes killed mid-write (a SIGKILL
 // or a power loss between atomicfile's temp file and its rename) and returns
-// how many it removed, those removed before a failure included. Each is the
+// how many it removed, beside an error naming each it could not. Each is the
 // size of an export, under a name no later take reuses, so nothing else would
 // ever reclaim it.
 //
@@ -142,8 +150,10 @@ func takeHeld(storageDir string, keep int, read func() (model.Export, error)) (T
 // writer, so under the lock no write into the directory is running, and the
 // kernel drops a killed take's hold with its process: the lock is the proof
 // that every temp file here is dead, with no age to guess at. A take by lit
-// v0.23 or older holds no such lock, so a temp of one still running is
-// removed too, and its rename then fails loudly.
+// v0.23 or older holds no such lock. On POSIX a temp of one still running is
+// removed too, and its rename then fails loudly; on Windows, where the writer's
+// open handle forbids the removal, this take reports the temp it could not
+// remove.
 func removeResidue(backupsDir string) (int, error) {
 	entries, err := os.ReadDir(backupsDir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -154,18 +164,22 @@ func removeResidue(backupsDir string) (int, error) {
 		return 0, fmt.Errorf("read backups dir: %w", err)
 	}
 	removed := 0
+	var errs []error
 	for _, entry := range entries {
+		// atomicfile's temp files are files; a directory under such a name is
+		// someone else's.
 		target, ok := atomicfile.TempTarget(entry.Name())
-		if !ok || !isSnapshotName(target) {
+		if entry.IsDir() || !ok || !isSnapshotName(target) {
 			continue
 		}
 		path := filepath.Join(backupsDir, entry.Name())
 		if err := os.Remove(path); err != nil {
-			return removed, fmt.Errorf("remove a killed backup's temp file %s: %w", path, err)
+			errs = append(errs, fmt.Errorf("remove a killed backup's temp file %s: %w", path, err))
+			continue
 		}
 		removed++
 	}
-	return removed, nil
+	return removed, errors.Join(errs...)
 }
 
 // create writes export as the snapshot named by its content digest, the one
