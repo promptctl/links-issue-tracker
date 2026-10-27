@@ -5,6 +5,54 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.24.0] - 2026-10-26
+
+### Added
+
+- `lit ls --format yaml` reads a selection out as the update documents `lit import` writes back, so an agent edits many tickets by editing one file. (links-bulk-edit-h2rg.7)
+- YAML update documents reparent, judged on the hierarchy the file ends with, and state `blocked_by`, with every edge written in one step. (links-bulk-edit-h2rg.2, links-bulk-edit-h2rg.3)
+- `lit bulk` covers `start`, `done` and `open`, each running the single verb's transition step; `unarchive`, `delete` and `restore`; and `comment`, which adds one comment to many tickets. (links-bulk-edit-h2rg.4, links-bulk-edit-h2rg.5, links-bulk-edit-h2rg.6)
+- `lit undo list` shows the store's history of writes, and `lit undo revert` reverts the ones you choose. (links-bulk-edit-h2rg.fv9)
+- `lit --help` lists `import` beside `update` and `bulk`, and `lit update --help` and bulk's refusal name the bulk-edit path. `lit backup restore` names every ticket it removes, the backup that still holds them, and the bulk-edit path. (links-bulk-edit-h2rg.8, links-bulk-edit-h2rg.9)
+- `lit unquarantine` clears a failed migration's quarantine. (links-store-integrity-e59t.877)
+- `lit next` says which checkout a pick is started from. (links-unfiled-fc79.hboc)
+- The store holds itself under a size ceiling, 25% above its measured inputs, and prunes automatic recovery snapshots to fit. (links-scale-dy46.7, links-scale-dy46.8l0)
+- A command's event says what its duration was spent on. (links-perf-kw6z.4)
+
+### Changed
+
+- lit generates no CLAUDE.md or AGENTS.md. The opening instruction is the description of the plugin's quickstart skill. (promptctl-guidance-5vf5.6q5)
+- A read command opens the store read-only and writes none of its files. (links-scale-dy46.boy)
+- A bulk run answers with the reason its unlanded items share. A run where some items landed gives no re-run advice. (links-bulk-edit-h2rg.bqc)
+- A backup is named by its content, so the backup set holds each state once. (links-bulk-edit-h2rg.no2)
+- Every read returns relations and comments oldest first, ties broken by the row's key. (links-bulk-edit-h2rg.d6u)
+- A store's journal warnings go on the command event. (links-observability-gvpn.4q4)
+- A focused `lit backlog` lists this checkout's lanes and their epics, matching the order `lit next` routes to them. A row from the focus-scoped pool names the focus it was drawn under. (links-listing-toai, links-next-ynrs)
+- lit syncs only with remotes Dolt can hold, and each ref has one owner. (links-storage-3k6u.ypd)
+- A command asks git each question once, an id-keyed read is one query, and `lit show` of an epic reads the epic once with no focus walk. (links-scale-dy46.86o, links-scale-dy46.zi4, links-query-efficiency-k3hw)
+
+### Fixed
+
+- A bulk batch lands whole or not at all. A killed import writes nothing, a reader never sees part of a batch, and a batch that landed before a later step failed reports `batch_landed_then_failed`. (links-bulk-edit-h2rg.nul)
+- An import file refused at any write writes nothing. (links-bulk-edit-h2rg.7vz)
+- A file read out by `lit ls --format yaml` merges onto the store as it stands at import, so other writers' changes survive. (links-bulk-edit-h2rg.er3)
+- A bulk run stopped by a stdout it cannot write still reports what it collected. (links-bulk-edit-h2rg.7rl)
+- `lit label add`, `lit label rm` and `lit bulk label` are recorded as label edits, so history and undo see them. (links-bulk-edit-h2rg.c67)
+- A restore over a workspace unchanged since the last restore goes ahead without `--force`. (links-bulk-edit-h2rg.hql)
+- Concurrent writers complete: a lock waiter sees every holder that arrived, and a write's lock hold heartbeats while its engine works, so waiters outlast a slow but live holder. (links-scale-dy46.5tv, links-scale-dy46.833)
+- A write is planned under the hold it commits in and stamped past the lane history it was planned against, so its From names the holder that held. (links-scale-dy46.w61, links-scale-dy46.i49)
+- A detached sync worker reads no checkout, so it finishes after the worktree that spawned it is removed. (links-scale-dy46.37o)
+- A git remote given as a path means one repository wherever lit reads it, and lit asks the remote its questions by URL with an explicit `--git-dir`. (promptctl-sync-bryp.0kv, promptctl-sync-bryp.c68)
+- Two checkouts sync across the history bound with no maintenance command. A push refused over a re-root retries straight after the follow; a checkout with nothing past its fork point lands on the remote head; every fetch prunes, and the receive carries the prune to the live store. (links-storage-3k6u.3sm, links-storage-3k6u.u0l, links-storage-3k6u.xgc, links-storage-3k6u.2xs)
+- A push refused over a peer's commits prints the sync-failure block naming pull, then push. A push counts as refused only when the remote refused it on its history, and a push through a view read before the remote's GC lands. (links-storage-3k6u.hhb, links-storage-3k6u.9r8, links-storage-3k6u.a53)
+- A receive pushes the merge it settles, a refusal nothing merges pages the owner, and a receive that fetched and keeps stopping reaches the failure surface. (links-storage-3k6u.bzg, links-storage-3k6u.m01)
+- A cancelled git ends everything it started. (links-unfiled-fc79.709k)
+- A write open collects the temp table files a killed Dolt process left, and a recovery snapshot leaves out the remote cache and Dolt's temp files. (links-scale-dy46.562, links-scale-dy46.5u8)
+- A parent loop is cut where an export lands and refused where it is read. (links-store-integrity-e59t.acv)
+- A failed migration reaches the CLI as one error naming the step that failed. (links-unfiled-fc79.gnkk)
+- git runs with long paths on, so Windows can push to a git-backed remote. (links-windows-qr8l.8m6)
+- The `/next` skill quotes every answer `lit next` gives without a ticket. (links-templates-y4up)
+
 ## [0.23.0] - 2026-10-19
 
 ### Added
