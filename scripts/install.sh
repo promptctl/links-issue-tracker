@@ -345,20 +345,23 @@ case "$mode" in
             feed="$(printf '%s' "$auth_header" | curl -fsSL -H @- "$REPO_LATEST_API")" || {
                 curl_status=$?
                 echo "error: could not fetch $REPO_LATEST_API (credentials: $credentials)" >&2
-                # 22 is curl's HTTP-error exit: GitHub answered and refused.
-                # Any other exit is curl's own failure (DNS, TLS, network),
-                # which its -S message above already names.
+                # 22 is curl's HTTP-error exit: GitHub answered with a status
+                # curl's -S message above names, and only that status says why,
+                # so the way out is offered against it. Any other exit is curl's
+                # own failure (DNS, TLS, network), which its message names alone.
                 case $curl_status:$credentials in
-                    22:none) echo "       GitHub rate-limits requests that carry no token: set GH_TOKEN or GITHUB_TOKEN, or name the tag with --from-release <tag>" >&2 ;;
-                    22:*) echo "       GitHub refused the request made with $credentials: if that token is expired or meant for another host, unset it; or name the tag with --from-release <tag>" >&2 ;;
+                    22:none) echo "       if GitHub answered 403, it rate-limited a request that carried no token: set GH_TOKEN or GITHUB_TOKEN; or name the tag with --from-release <tag>" >&2 ;;
+                    22:*) echo "       if GitHub answered 401, it rejected the token in $credentials (expired, or meant for another host): unset or replace it; or name the tag with --from-release <tag>" >&2 ;;
                 esac
                 exit 1
             }
-            release_tag="$(jq -r .tag_name <<<"$feed")"
-            if [ -z "$release_tag" ] || [ "$release_tag" = "null" ]; then
+            # [LAW:parse-dont-validate] one step turns the feed into a tag or
+            # refuses it: a body that is not JSON, or a tag_name that is
+            # missing, null, or empty, all fail here naming the feed.
+            release_tag="$(jq -er '.tag_name | strings | select(. != "")' <<<"$feed")" || {
                 echo "error: could not resolve latest release tag from $REPO_LATEST_API" >&2
                 exit 1
-            fi
+            }
             echo "Latest release: $release_tag"
         fi
 

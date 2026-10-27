@@ -703,9 +703,11 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
     (`-H @-`) from the first non-empty of `GH_TOKEN`, `GITHUB_TOKEN`, and
     printing `(credentials: GH_TOKEN|GITHUB_TOKEN|none)`; a failed lookup exits
     1 with `error: could not fetch <feed> (credentials: …)`, and when GitHub
-    refused it (curl exit 22) adds the way out for those credentials (set a
-    token when none was sent, unset the one that was) beside
-    `--from-release <tag>`.
+    answered an HTTP error (curl exit 22) adds the way out for the status that
+    fits those credentials (403 with no token: set one; 401 with one: unset or
+    replace it) beside `--from-release <tag>`. A feed that is not JSON with a
+    non-empty string `tag_name` exits 1 with
+    `error: could not resolve latest release tag from <feed>`.
   - Tag normalization: strip then re-add a leading `v`, then require
     `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` else
     `error: release tag '<tag>' is not a canonical semver release tag (expected vX.Y.Z)`.

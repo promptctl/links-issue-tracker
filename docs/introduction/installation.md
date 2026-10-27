@@ -31,8 +31,9 @@ installs `lit` onto your `PATH`, and warns about any stale `lit` binaries that
 would shadow it. To find the latest release it asks GitHub's API, which
 rate-limits requests that carry no token by source address — and CI runners
 share addresses. When `GH_TOKEN` or `GITHUB_TOKEN` is set, the installer sends
-it with that one request; in GitHub Actions, add
-`GH_TOKEN: ${{ github.token }}` to the step's `env`. Confirm it landed:
+it with that one request, and a token GitHub rejects fails the lookup; in
+GitHub Actions, add `GH_TOKEN: ${{ github.token }}` to the step's `env`.
+Confirm it landed:
 
 ```sh
 lit version

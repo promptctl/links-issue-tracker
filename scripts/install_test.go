@@ -715,9 +715,10 @@ func TestInstallLatestReleaseAuthenticatesTheFeedWithTheTokenGhWouldUse(t *testi
 
 // TestInstallLatestReleaseFeedFailureNamesTheWaysOut: a failed feed request
 // stops the install with an error naming the credentials it was asked with.
-// When GitHub answered and refused (curl's exit 22: its 403 at the rate limit,
-// or a 401 for a token it rejects) the error adds the way out that fits those
-// credentials; when curl itself failed, its own message stands alone.
+// When GitHub answered an HTTP error (curl's exit 22) the error adds the way
+// out for the status that fits those credentials, 403 at the rate limit with
+// no token, 401 for a token it rejects; when curl itself failed, its own
+// message stands alone.
 func TestInstallLatestReleaseFeedFailureNamesTheWaysOut(t *testing.T) {
 	t.Parallel()
 	const token = "token-from-GH_TOKEN-5f3a"
@@ -731,13 +732,13 @@ func TestInstallLatestReleaseFeedFailureNamesTheWaysOut(t *testing.T) {
 	}{
 		{
 			name:  "GitHub refuses a request with no token",
-			want:  []string{"error: could not fetch " + feed + " (credentials: none)", "set GH_TOKEN or GITHUB_TOKEN", "--from-release <tag>"},
-			lacks: []string{"unset it"},
+			want:  []string{"error: could not fetch " + feed + " (credentials: none)", "if GitHub answered 403", "set GH_TOKEN or GITHUB_TOKEN", "--from-release <tag>"},
+			lacks: []string{"unset or replace it"},
 		},
 		{
 			name:  "GitHub refuses a request with a token",
 			env:   []string{"GH_TOKEN=" + token},
-			want:  []string{"error: could not fetch " + feed + " (credentials: GH_TOKEN)", "refused the request made with GH_TOKEN", "unset it", "--from-release <tag>"},
+			want:  []string{"error: could not fetch " + feed + " (credentials: GH_TOKEN)", "if GitHub answered 401, it rejected the token in GH_TOKEN", "unset or replace it", "--from-release <tag>"},
 			lacks: []string{"set GH_TOKEN or GITHUB_TOKEN"},
 		},
 		{
@@ -745,7 +746,7 @@ func TestInstallLatestReleaseFeedFailureNamesTheWaysOut(t *testing.T) {
 			env:   []string{"GH_TOKEN=" + token},
 			curl:  "curl: (6) Could not resolve host: api.github.com",
 			want:  []string{"error: could not fetch " + feed + " (credentials: GH_TOKEN)", "Could not resolve host"},
-			lacks: []string{"rate-limits", "refused", "--from-release <tag>"},
+			lacks: []string{"GitHub answered", "--from-release <tag>"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -773,6 +774,31 @@ func TestInstallLatestReleaseFeedFailureNamesTheWaysOut(t *testing.T) {
 			}
 			if strings.Contains(out, token) {
 				t.Errorf("output prints the token:\n%s", out)
+			}
+		})
+	}
+}
+
+// TestInstallLatestReleaseRefusesAFeedWithNoTag: a feed GitHub served but that
+// is not JSON (a captive portal's page) or holds no non-empty string tag_name
+// stops the install naming the feed, before any manifest is asked for.
+func TestInstallLatestReleaseRefusesAFeedWithNoTag(t *testing.T) {
+	t.Parallel()
+	feed := litrelease.DefaultLatestReleaseURL
+	for _, body := range []string{`<html>sign in to continue</html>`, `{}`, `{"tag_name":null}`, `{"tag_name":""}`, `{"tag_name":5}`} {
+		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+			server := newReleaseServer(t)
+			server.serve(t, "latest", []byte(body))
+			out, requests, err := server.install(t, nil, "--latest-release")
+			if err == nil {
+				t.Fatalf("exited 0 through a feed with no tag:\n%s", out)
+			}
+			if want := []string{feed}; !slices.Equal(requests, want) {
+				t.Errorf("requests %q, want %q", requests, want)
+			}
+			if want := "error: could not resolve latest release tag from " + feed; !strings.Contains(out, want) {
+				t.Errorf("output lacks %q:\n%s", want, out)
 			}
 		})
 	}
