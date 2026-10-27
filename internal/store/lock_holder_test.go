@@ -136,10 +136,7 @@ func TestWaitAnnouncesItselfRepeatedly(t *testing.T) {
 	ctx := context.Background()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 
-	holder, err := acquireStoreLock(ctx, notices, storageDirOf(lockPath), lockPath, false, 0)
-	if err != nil {
-		t.Fatalf("holder acquireStoreLock() error = %v", err)
-	}
+	holder := arriveShared(t, notices, lockPath, 0)
 	defer func() {
 		if err := holder(); err != nil {
 			t.Errorf("release holder: %v", err)
@@ -1084,10 +1081,7 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 		steps = 8
 	)
 
-	holder, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 0)
-	if err != nil {
-		t.Fatalf("first holder: %v", err)
-	}
+	holder := arriveShared(t, testStderr(), lockPath, 0)
 	defer func() {
 		if err := holder(); err != nil {
 			t.Errorf("release last holder: %v", err)
@@ -1100,7 +1094,7 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 		handOver(t, &holder, arriveShared(t, testStderr(), lockPath, at), at)
 	})
 
-	_, err = acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
+	_, err := acquireStoreLockOn(ctx, testStderr(), clock, storageDirOf(lockPath), lockPath, true, wait)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the last holder stood still", err)
 	}
@@ -1200,11 +1194,7 @@ func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
 		if at > steps*storeLockPollInterval {
 			return
 		}
-		brief, err := acquireStoreLock(ctx, testStderr(), storageDirOf(lockPath), lockPath, false, 0)
-		if err != nil {
-			t.Fatalf("brief holder at %s: %v", at, err)
-		}
-		if err := brief(); err != nil {
+		if err := arriveShared(t, testStderr(), lockPath, at)(); err != nil {
 			t.Fatalf("release brief holder at %s: %v", at, err)
 		}
 	})
