@@ -410,9 +410,9 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 		_, err := fmt.Fprintln(w, resolved[0].value)
 		return err
 	}
-	// A long text keeps its authored lines; every other value is one row, held
-	// to it so a value holding a break cannot print a line that reads as
-	// another field's.
+	// A long text keeps its authored lines, as in show's detail view; every
+	// other value is one row, held to it so a title or lane holding a break
+	// cannot print a line that reads as another field's.
 	long := map[string]bool{}
 	for _, field := range storage.LongTextFields() {
 		long[field.Name] = true

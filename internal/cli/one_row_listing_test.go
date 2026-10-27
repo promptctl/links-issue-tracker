@@ -23,8 +23,9 @@ const forged = "FORGED"
 // listing. The values are planted under the write path, as data older than
 // any write gate is: each title and the lane hold a different break form, or
 // an ESC a terminal can turn into one, followed by forged text. A listing that
-// printed one raw would start a line with that text; held to its row, the
-// break prints as quotedBreak in front of it. [LAW:behavior-not-structure]
+// printed one raw would start a line with that text, or hand the terminal its
+// ESC; held to its row, a break prints as quotedBreak in front of it and the
+// ESC as U+FFFD. [LAW:behavior-not-structure]
 func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "epic", Topic: "demo", IssueType: model.TypeEpic})
@@ -72,6 +73,11 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 		printed := out.String()
 		if !strings.Contains(printed, quotedBreak+forged) {
 			t.Errorf("%s printed no planted value held to its row (want %q in it):\n%s", name, quotedBreak+forged, printed)
+		}
+		// No break form splits at an ESC, so a raw one is caught by its presence:
+		// every ESC is a terminal control no listing means to print.
+		if strings.ContainsRune(printed, '\x1b') {
+			t.Errorf("%s printed a planted ESC raw:\n%q", name, printed)
 		}
 		// Split at every break form a reader may take for one, not only \n.
 		for _, line := range strings.Split(lineBreakNormalizer.Replace(printed), "\n") {
