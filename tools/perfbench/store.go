@@ -154,7 +154,34 @@ func generateStore(bin litBinary, root string, rows int, env []string, run stepR
 		}
 		ids = append(ids, loaded...)
 	}
+	if err := addDependencyTree(root); err != nil {
+		return generatedStore{}, err
+	}
 	return resolved(generatedStore{root: root, fleetRoot: fleetRoot, env: env, ids: ids, imported: imported})
+}
+
+// A real working tree holds far more than its store: ~/code's 95 working trees
+// held ~240k directories on 2026-10-26 (links-scale-dy46.8lo), about 2,500
+// each, nearly all of it dependencies and build output. A generated workspace
+// carries a dependency tree of that order, so a `lit stores` that walks into
+// working trees pays for it here, over every member of a fleet, and breaches
+// its budget instead of passing over workspaces that hold nothing to walk.
+const dependencyPackages = 500
+
+// addDependencyTree gives the workspace at root a node_modules of
+// dependencyPackages packages, each a directory with lib, dist and src
+// beneath it: 2,001 directories. It is generated with the store, so every
+// copy carries it.
+func addDependencyTree(root string) error {
+	for i := range dependencyPackages {
+		pkg := filepath.Join(root, "node_modules", fmt.Sprintf("pkg-%03d", i))
+		for _, sub := range []string{"lib", "dist", "src"} {
+			if err := os.MkdirAll(filepath.Join(pkg, sub), 0o755); err != nil {
+				return fmt.Errorf("writing the workspace's dependency tree: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // replicate copies src's workspace to dir and answers the copy, the same rows

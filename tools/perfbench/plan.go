@@ -267,16 +267,14 @@ var tenfoldStore = size{name: "10x-store", rows: scaleFactor * slices.Max(fleetC
 // census size more than three times rather than ten copies each of the ten
 // largest.
 //
-// WHAT IT CANNOT SEE. A generated workspace holds its store and nothing else,
-// so `lit stores`' walk over a real working tree (node_modules, build output)
-// costs nothing here. That walk is what made `lit stores ~/code` take 15.5s
-// over today's 30 stores on 2026-10-23 (links-scale-dy46.8lo); this fleet
-// measures what lit pays per store, not per file under the root. And a
-// generated store is row data: one import's history, no recovery snapshots,
-// no remote cache, and, with no remote, none of the background receive and
-// mirror work a live store does. So its fleet bytes are the rows' cost on
-// disk, not the machine's lit disk, which the same stores' history,
-// snapshots and caches multiply several times over.
+// WHAT IT CANNOT SEE. A generated workspace holds its store and a dependency
+// tree (addDependencyTree), not a real project's source and build output, so
+// `lit stores` over it pays a working tree's worth of directories only if it
+// walks into one. And a generated store is row data: one import's history, no
+// recovery snapshots, no remote cache, and, with no remote, none of the
+// background receive and mirror work a live store does. So its fleet bytes
+// are the rows' cost on disk, not the machine's lit disk, which the same
+// stores' history, snapshots and caches multiply several times over.
 var tenfoldFleet = fleetOf("10x-fleet", fleetCensus, scaleFactor)
 
 // namedSizes are the scale points `--sizes` takes by name. Each is a value

@@ -229,6 +229,15 @@ instead.
 | `counts.stores.temp_table_files_collected` | How many temp table files a dead Dolt process left the opens removed, summed over the stores. A read open removes them only when it hands a store behind this lit's schema to the open that migrates it. |
 | `counts.stores.temp_table_files_failures` | The stores whose open could not remove all of them. Each gets a `~ <storage dir>: warning: temp table files a dead writer left were not all removed:` line after the table. |
 
+`lit stores` records what its search for stores visited, with or without
+`--counts`, and when the search fails, what it visited before it stopped.
+
+| Key | Meaning |
+| --- | --- |
+| `counts.discover.directories` | The directories the search visited. It stops at each working tree's root, a directory holding a `.git` entry, and does not look beneath it. |
+| `counts.discover.working_trees` | The working trees it reached, each asked once where its store would be. |
+| `counts.discover.stores` | The distinct stores it found. Absent when the search failed. |
+
 ## What the store a command ran against records
 
 A ticket command (`lit ls`, `lit backlog`, `lit new` and the rest that open

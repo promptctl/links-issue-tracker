@@ -59,11 +59,9 @@ func runStores(ctx context.Context, inv Invocation, args []string) error {
 		telemetry.Record(ctx, nil, rollupMigrationCounts(rows))
 		return printCrossProjectRollup(stdout, rows)
 	}
-	locations, err := workspace.Discover(inv.Env, roots)
+	locations, err := discoverStores(ctx, inv.Env, roots)
 	if err != nil {
-		// [LAW:no-silent-failure] Wrap at the CLI boundary so the failure names
-		// the command the operator ran, not just the workspace-layer detail.
-		return fmt.Errorf("discover stores: %w", err)
+		return err
 	}
 	for _, loc := range locations {
 		if _, err := fmt.Fprintln(stdout, loc.StorageDir); err != nil {
@@ -71,6 +69,26 @@ func runStores(ctx context.Context, inv Invocation, args []string) error {
 		}
 	}
 	return nil
+}
+
+// discoverStores is the one discovery both forms of `lit stores` run: it finds
+// the stores beneath roots and records on the invocation's event what the scan
+// visited, so a slow scan says whether it was the walk or the stores.
+func discoverStores(ctx context.Context, env environ.Env, roots []string) ([]workspace.Location, error) {
+	found, err := workspace.Discover(env, roots)
+	// [LAW:nothing-unseen] What the scan visited lands whether or not it
+	// failed; a scan that failed has no store count, which is not a count of 0.
+	telemetry.Record(ctx, nil, map[string]int{
+		"discover.directories":   found.Directories,
+		"discover.working_trees": found.WorkingTrees,
+	})
+	if err != nil {
+		// [LAW:no-silent-failure] Wrap at the CLI boundary so the failure names
+		// the command the operator ran, not just the workspace-layer detail.
+		return nil, fmt.Errorf("discover stores: %w", err)
+	}
+	telemetry.Record(ctx, nil, map[string]int{"discover.stores": len(found.Locations)})
+	return found.Locations, nil
 }
 
 // projectRollup is one project's row in the cross-project overview. It carries
@@ -106,9 +124,9 @@ type projectRollup struct {
 // row [LAW:no-silent-failure] — surfaced, never skipped — so one broken store can
 // never hide the projects that read cleanly.
 func gatherCrossProjectRollup(ctx context.Context, env environ.Env, roots []string) ([]projectRollup, error) {
-	locations, err := workspace.Discover(env, roots)
+	locations, err := discoverStores(ctx, env, roots)
 	if err != nil {
-		return nil, fmt.Errorf("discover stores: %w", err)
+		return nil, err
 	}
 	rows := make([]projectRollup, 0, len(locations))
 	for _, loc := range locations {

@@ -3,6 +3,7 @@ package workspace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -69,7 +70,8 @@ func TestDiscoverListsExactlyTheDistinctStores(t *testing.T) {
 	// A non-git directory (with a nested non-git subdir) — must be skipped.
 	mkdir(t, filepath.Join(root, "plain", "nested"))
 
-	locations, err := Discover(testEnv(), []string{root})
+	found, err := Discover(testEnv(), []string{root})
+	locations := found.Locations
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -99,7 +101,8 @@ func TestDiscoverReturnsNoStoresWhenNoneExist(t *testing.T) {
 	run(t, gitOnly, "git", "init")
 	mkdir(t, filepath.Join(root, "plain", "deeper"))
 
-	locations, err := Discover(testEnv(), []string{root})
+	found, err := Discover(testEnv(), []string{root})
+	locations := found.Locations
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -123,7 +126,8 @@ func TestDiscoverSurfacesBrokenGitInsteadOfEmptySuccess(t *testing.T) {
 	// *exec.Error, not an *exec.ExitError — the infrastructure failure class.
 	t.Setenv("PATH", "")
 
-	locations, err := Discover(testEnv(), []string{root})
+	found, err := Discover(testEnv(), []string{root})
+	locations := found.Locations
 	if err == nil {
 		t.Fatalf("Discover() returned nil error with %d locations; want a surfaced git failure", len(locations))
 	}
@@ -143,7 +147,8 @@ func TestDiscoverSkipsFileShapedStoreDatabase(t *testing.T) {
 		t.Fatalf("WriteFile(dolt file) error = %v", err)
 	}
 
-	locations, err := Discover(testEnv(), []string{root})
+	found, err := Discover(testEnv(), []string{root})
+	locations := found.Locations
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -169,7 +174,8 @@ func TestDiscoverMatchesResolveDerivation(t *testing.T) {
 	// discovery to count it, mirroring a real `lit init`.
 	addLitStore(t, repo)
 
-	locations, err := Discover(testEnv(), []string{root})
+	found, err := Discover(testEnv(), []string{root})
+	locations := found.Locations
 	if err != nil {
 		t.Fatalf("Discover() error = %v", err)
 	}
@@ -181,5 +187,131 @@ func TestDiscoverMatchesResolveDerivation(t *testing.T) {
 	}
 	if locations[0].DatabasePath != info.DatabasePath {
 		t.Fatalf("Discover DatabasePath = %q, Resolve DatabasePath = %q", locations[0].DatabasePath, info.DatabasePath)
+	}
+}
+
+// unreadable makes dir unlistable for the rest of the test, and readable again
+// at cleanup so t.TempDir can remove it.
+func unreadable(t *testing.T, dir string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
+	if err := os.Chmod(dir, 0o000); err != nil {
+		t.Fatalf("Chmod(%q) error = %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+}
+
+// A store whose repository sits inside another repository's working tree
+// belongs to that tree's contents, which the walk does not enter: the outer
+// root reports the outer store alone, and naming the inner repository's
+// directory as a root reports the inner one.
+func TestDiscoverDoesNotLookInsideAWorkingTree(t *testing.T) {
+	root := t.TempDir()
+	outer := mkdir(t, filepath.Join(root, "outer"))
+	run(t, outer, "git", "init")
+	addLitStore(t, outer)
+	inner := mkdir(t, filepath.Join(outer, "vendor", "inner"))
+	run(t, inner, "git", "init")
+	addLitStore(t, inner)
+
+	for _, tc := range []struct {
+		root string
+		want string
+	}{
+		{root: root, want: wantStore(t, outer)},
+		{root: inner, want: wantStore(t, inner)},
+	} {
+		found, err := Discover(testEnv(), []string{tc.root})
+		if err != nil {
+			t.Fatalf("Discover(%q) error = %v", tc.root, err)
+		}
+		if len(found.Locations) != 1 || found.Locations[0].StorageDir != tc.want {
+			t.Fatalf("Discover(%q) = %v, want the one store %q", tc.root, found.Locations, tc.want)
+		}
+	}
+}
+
+// The walk never reads a working tree's directories: one inside a working
+// tree that cannot be listed fails nothing, while the same directory outside
+// every working tree fails the scan.
+func TestDiscoverNeverListsAWorkingTreesDirectories(t *testing.T) {
+	root := t.TempDir()
+	repo := mkdir(t, filepath.Join(root, "repo"))
+	run(t, repo, "git", "init")
+	addLitStore(t, repo)
+	unreadable(t, mkdir(t, filepath.Join(repo, "node_modules")))
+
+	found, err := Discover(testEnv(), []string{root})
+	if err != nil {
+		t.Fatalf("Discover() error = %v, want the walk never to list a directory inside a working tree", err)
+	}
+	if len(found.Locations) != 1 {
+		t.Fatalf("Discover() = %v, want the one store", found.Locations)
+	}
+
+	// unlisted sorts after repo, so the walk reaches the tree before it fails.
+	unreadable(t, mkdir(t, filepath.Join(root, "unlisted")))
+	found, err = Discover(testEnv(), []string{root})
+	if err == nil {
+		t.Fatal("Discover() over an unlistable directory outside every working tree returned nil error")
+	}
+	// A failed scan still says what it visited: root, repo's root and
+	// unlisted, and repo's one git query; it found no stores.
+	if found.Directories != 3 || found.WorkingTrees != 1 || found.Locations != nil {
+		t.Fatalf("failed Discover() visited %d directories and %d working trees and found %v, want 3, 1 and none",
+			found.Directories, found.WorkingTrees, found.Locations)
+	}
+}
+
+// Working trees are derived side by side, but the error a scan reports is the
+// first in walk order: a tree's failed derivation before a later tree's, and
+// before the directory the walk stopped at, on every run.
+func TestDiscoverReportsTheFirstErrorInWalkOrder(t *testing.T) {
+	root := t.TempDir()
+	// Each of a and b is a repository whose store database cannot be stat'd,
+	// a derivation error; z, last in walk order, is a directory the walk
+	// cannot list.
+	for _, name := range []string{"a", "b"} {
+		repo := mkdir(t, filepath.Join(root, name))
+		run(t, repo, "git", "init")
+		unreadable(t, mkdir(t, filepath.Join(repo, ".git", "links")))
+	}
+	unreadable(t, mkdir(t, filepath.Join(root, "z")))
+	want := filepath.Join(root, "a")
+
+	for range 20 {
+		_, err := Discover(testEnv(), []string{root})
+		if err == nil {
+			t.Fatal("Discover() returned nil error over two broken stores and an unlistable directory")
+		}
+		if !strings.Contains(err.Error(), "stat store database") || !strings.Contains(err.Error(), want) {
+			t.Fatalf("Discover() error = %v, want a's store database stat, the first in walk order", err)
+		}
+	}
+}
+
+// A Discovery says what the scan visited: every directory outside a working
+// tree plus each working tree's root, and one git query per working tree,
+// whether or not it holds a store.
+func TestDiscoverCountsWhatItVisited(t *testing.T) {
+	root := t.TempDir()
+	withStore := mkdir(t, filepath.Join(root, "withStore"))
+	run(t, withStore, "git", "init")
+	addLitStore(t, withStore)
+	mkdir(t, filepath.Join(withStore, "src", "deep"))
+	gitOnly := mkdir(t, filepath.Join(root, "gitOnly"))
+	run(t, gitOnly, "git", "init")
+	mkdir(t, filepath.Join(root, "plain", "nested"))
+
+	found, err := Discover(testEnv(), []string{root})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	// root, gitOnly, plain, plain/nested, withStore.
+	if found.Directories != 5 || found.WorkingTrees != 2 || len(found.Locations) != 1 {
+		t.Fatalf("Discover() visited %d directories and %d working trees and found %d stores, want 5, 2 and 1",
+			found.Directories, found.WorkingTrees, len(found.Locations))
 	}
 }
