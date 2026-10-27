@@ -964,12 +964,10 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 // TestSyncReconcileCombineRecoversFromTransientFailureMidReplay pins the
 // scratch replay's recovery contract: scratch-branch commits take a SINGLE
 // attempt, so a transient online-GC failure mid-replay must bubble to
-// replayUnderGuard's outer retry, whose next attempt re-enters
-// runOnReconcileScratch on the rotated (default-branch) connection and
-// re-checkouts the scratch branch before rebuilding the whole spine. An
-// inline self-rotating retry here would resume committing on the data branch
-// — the corruption this test exists to catch; had the retried attempt run
-// anywhere but the rebuilt scratch, the linear-descent, spine, contents, and
+// replayUnderGuard's outer retry, whose next attempt re-enters runOnScratch
+// on the rotated connection and re-creates the scratch branches before
+// rebuilding the whole spine. Had the retried attempt run anywhere but the
+// rebuilt scratch, the linear-descent, spine, contents, and
 // clean-state assertions could not all hold. The injection point is the
 // discriminator each subtest carries: the replay's first commit is the lift
 // (committed directly via commitWorkingSetOnce — the earliest point a

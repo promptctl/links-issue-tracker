@@ -580,22 +580,18 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 		if len(reverted.Documents) == 0 {
 			return storage.RevertHeldError{Writes: reverting}
 		}
-		// What the bulk edit left written stands beside any error it returns
-		// (withBatch), so the undo reports it on every outcome. A refusal
-		// before its batch began names no revert point and wrote nothing.
-		// [LAW:nothing-unseen]
-		applied, from, applyErr := s.bulkApply(ctx, "", actor, reverted.Documents)
-		if from == "" {
-			return applyErr
+		// A batch lands whole or not at all (withBatch), so what the undo
+		// put back, and the commits it landed, stand exactly when its bulk
+		// edit landed — beside an error too, when the batch landed and then
+		// could not leave its scratch branch. [LAW:nothing-unseen]
+		applied, landing, err := s.bulkApply(ctx, "", actor, reverted.Documents)
+		if landing.Landed {
+			result.Writes, result.Moves, result.Applied = reverting, reverted.Moves, applied
+			var readErr error
+			result.Landed, readErr = s.commitsAbove(ctx, landing.From)
+			err = errors.Join(err, readErr)
 		}
-		result.Applied = applied
-		landed, landedErr := s.commitsAbove(ctx, from)
-		result.Landed = landed
-		if err := errors.Join(applyErr, landedErr); err != nil {
-			return err
-		}
-		result.Writes, result.Moves = reverting, reverted.Moves
-		return nil
+		return err
 	})
 	s.hear(ctx, heard...)
 	return result, err

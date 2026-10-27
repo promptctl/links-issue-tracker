@@ -19,7 +19,7 @@ func TestDeleteBranchesUnderMatchesThePrefixLiterally(t *testing.T) {
 		}
 	}
 	if err := st.runSyncMutation(ctx, func(ctx context.Context) error {
-		return st.deleteBranchesUnder(ctx, "scratch_a/")
+		return st.deleteBranchesUnder(ctx, "scratch_a/", "")
 	}); err != nil {
 		t.Fatalf("deleteBranchesUnder() error = %v", err)
 	}

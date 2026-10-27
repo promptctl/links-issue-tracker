@@ -3,10 +3,8 @@ package store
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -53,15 +51,15 @@ func TestARefusedImportLeavesTheBranchWhereItStarted(t *testing.T) {
 
 // A refused file returns the zero result, since nothing it wrote stands, and
 // its error is the refusal, classified as the refusal. It records the commit
-// the batch reset to with no reset error, so a refusal at a write reads apart
-// from one the gate made before writing anything.
-func TestARefusedImportRecordsTheCommitItResetTo(t *testing.T) {
+// the file started from, so a refusal at a write reads apart from one the
+// gate made before writing anything.
+func TestARefusedImportRecordsTheCommitItStartedFrom(t *testing.T) {
 	ctx := context.Background()
 	st, epic := openBatchStore(t, ctx)
 	head := headCommit(t, ctx, st)
 	result, err := st.BulkApply(ctx, "test", "ada", refusedFile(epic))
 	if len(result.Created) != 0 {
-		t.Errorf("result = %+v; want the zero result: the create before the refusal was reset away", result)
+		t.Errorf("result = %+v; want the zero result: the create before the refusal never landed", result)
 	}
 	var refused *storage.RefusedBatchError
 	if !errors.As(err, &refused) {
@@ -74,8 +72,8 @@ func TestARefusedImportRecordsTheCommitItResetTo(t *testing.T) {
 		t.Errorf("error text = %q; want the refusal's own %q", err.Error(), refused.Cause.Error())
 	}
 	facts, _ := refused.EventRecord()
-	if facts["import.reset_to"] != head || facts["import.reset_error"] != "" {
-		t.Errorf("EventRecord() = %v; want import.reset_to %s and an empty import.reset_error", facts, head)
+	if facts["import.head"] != head {
+		t.Errorf("EventRecord() = %v; want import.head %s", facts, head)
 	}
 }
 
@@ -95,9 +93,10 @@ func TestABatchLooksForStrandedWrites(t *testing.T) {
 	}
 }
 
-// A batch refused because its caller gave up still resets: the cancellation
-// that refused it cannot also stop its reset.
-func TestABatchRefusedByCancellationStillResets(t *testing.T) {
+// A batch refused because its caller gave up leaves the branch where it
+// started, and the session on it: the cancellation that refused the batch
+// cannot also stop its return from the scratch branch.
+func TestABatchRefusedByCancellationLeavesTheBranchWhereItStarted(t *testing.T) {
 	st, epic := openBatchStore(t, context.Background())
 	head := headCommit(t, context.Background(), st)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,6 +113,7 @@ func TestABatchRefusedByCancellationStillResets(t *testing.T) {
 	if got := headCommit(t, context.Background(), st); got != head {
 		t.Fatalf("head after the cancelled batch = %s; want %s, the head before it", got, head)
 	}
+	assertBatchLeftNoScratch(t, context.Background(), st)
 }
 
 // A write a failed commit left staged is not the batch's to discard: the
@@ -145,50 +145,6 @@ func TestARefusedImportKeepsAStrandedWrite(t *testing.T) {
 	}
 	assertStrandedWritesVersioned(t, ctx, st)
 	assertWorkingSetClean(t, ctx, st)
-}
-
-// A refused batch whose reset fails too says so, and does not report the file
-// as writing nothing: the result is what stays written, the error names every
-// write in it, and the event carries the commit the reset could not reach.
-func TestABatchWhoseResetFailsNamesWhatStaysWritten(t *testing.T) {
-	ctx := context.Background()
-	st, epic := openBatchStore(t, ctx)
-	head := headCommit(t, ctx, st)
-	var heard []string
-	st.ObserveChanges(func(_ storage.Change, issue model.Issue) { heard = append(heard, issue.ID) })
-	written, _, err := withBatch(ctx, st, func(ctx context.Context, result *storage.BulkApplyResult) error {
-		*result = storage.BulkApplyResult{Created: []storage.IDMapping{storage.NewIDMapping("", "test-kept")}, Updated: []string{epic}, EdgesAdded: 2, EdgesRemoved: 1}
-		// A change the batch made: its write stands once the reset fails, so
-		// its observers are owed it.
-		st.notify(ctx, storage.Change{}, model.Issue{ID: epic})
-		// A closed connection fails every statement after it, the reset's
-		// included; what the close itself reports is the pool's, not the
-		// batch's, and this test does not pin it.
-		_ = st.db.Close()
-		return errors.New("injected: refused")
-	})
-	if len(heard) != 1 || heard[0] != epic {
-		t.Errorf("observers heard %v; want the change whose write stands after the failed reset, %s", heard, epic)
-	}
-	var resetFailed *storage.BatchResetFailedError
-	if !errors.As(err, &resetFailed) {
-		t.Fatalf("error = %v; want a *storage.BatchResetFailedError", err)
-	}
-	if resetFailed.Head != head {
-		t.Errorf("Head = %s; want %s, the head before the batch", resetFailed.Head, head)
-	}
-	if len(written.Created) != 1 || len(written.Updated) != 1 {
-		t.Errorf("result = %+v; want what stays written, not the zero result", written)
-	}
-	for _, want := range []string{"injected: refused", head, "1 creates [test-kept]", "2 edges added and 1 removed", "1 updates [" + epic + "]"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q lacks %q", err.Error(), want)
-		}
-	}
-	facts, _ := resetFailed.EventRecord()
-	if facts["import.reset_to"] != head || facts["import.reset_error"] == "" {
-		t.Errorf("EventRecord() = %v; want import.reset_to %s and the reset's error", facts, head)
-	}
 }
 
 // A batch's start is retried past transient GC contention, as every write is:

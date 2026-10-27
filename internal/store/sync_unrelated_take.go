@@ -263,7 +263,7 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 // carries. [LAW:single-enforcer] the cut is ApplyPurges, as in the merge and the
 // restore.
 func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
-	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
+	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// Only local's purge records land, so a loop its hierarchy held is not
 		// part of what lands; the remote head's cut is reported by the spine's
 		// lift.
@@ -317,7 +317,7 @@ func (s *Store) purgesMissingAt(ctx context.Context, commit string) ([]model.Pur
 // advance. [LAW:single-enforcer] one safe-replay, one step builder, one scratch
 // lifecycle, shared with the field-aware path.
 func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
-	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
+	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		local, localCut, err := s.exportAtCommit(ctx, scratch.read, localHead)
 		if err != nil {
 			return err

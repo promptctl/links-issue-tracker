@@ -123,7 +123,7 @@ func (s *Store) publishBound(ctx context.Context, remote storage.RemoteName, b *
 	// (collectBelowTheCut).
 	defer func() {
 		err = errors.Join(err, s.runSyncMutation(ctx, func(ctx context.Context) error {
-			return s.deleteBranchesUnder(ctx, reRootScratchPrefix)
+			return s.deleteBranchesUnder(ctx, reRootScratchPrefix, reRootScratchPrefix+b.Branch)
 		}))
 	}()
 	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, b.Branch)
@@ -347,8 +347,8 @@ func (s *Store) collectBelowTheCut(ctx context.Context) storage.Collection {
 				return err
 			}
 		}
-		for _, prefix := range []string{reconcileScratchPrefix + "-", reRootScratchPrefix} {
-			if err := s.deleteBranchesUnder(ctx, prefix); err != nil {
+		for _, prefix := range scratchPrefixes {
+			if err := s.deleteBranchesUnder(ctx, prefix, ""); err != nil {
 				return err
 			}
 		}

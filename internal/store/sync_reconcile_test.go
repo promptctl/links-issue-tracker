@@ -701,12 +701,16 @@ func TestReconcileScratchCleanupSurvivesCallerCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(bg)
 	defer cancel()
-	err = st.runOnReconcileScratch(ctx, dataBranch, newReconcileScratch(), headCommit(t, bg, st), func() error {
-		cancel()
-		return ctx.Err()
+	head := headCommit(t, bg, st)
+	// A scratch run's caller holds the commit lock, as every reconcile does.
+	err = st.withCommitLock(ctx, func(ctx context.Context) error {
+		return st.runOnScratch(ctx, dataBranch, []string{newReconcileScratch().spine}, head, attemptOnce, func() error {
+			cancel()
+			return ctx.Err()
+		})
 	})
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("runOnReconcileScratch() error = %v; want the body's cancellation", err)
+		t.Fatalf("runOnScratch() error = %v; want the body's cancellation", err)
 	}
 	assertScratchBranchCleanedUp(t, bg, st)
 	if branch, err := activeBranch(bg, st.db); err != nil || branch != dataBranch {

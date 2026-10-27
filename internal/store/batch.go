@@ -3,82 +3,129 @@ package store
 import (
 	"context"
 	"fmt"
+	"os"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// batchResult is the account a batch builds of what it wrote; Written says it
-// in words, for the refusal whose reset failed to name.
-type batchResult interface{ Written() string }
+// batchScratchPrefix names the branch a batch writes on before it lands. A
+// batch's branch lives only inside its commit-lock hold, so one found under
+// this prefix at a batch's start was left by a process killed mid-batch.
+const batchScratchPrefix = "lit-batch/"
 
-// withBatch runs fn as one batch: a refusal at any write fn makes leaves the
-// branch where the batch found it. [LAW:single-enforcer] the one owner of what
-// a refused batch leaves in this engine, and of what it returns; an import
-// file is written through it so a file refused at any write writes nothing,
-// whichever rule refused it.
+// withBatch runs fn as one batch: the branch the session is on (from) moves
+// once, by the whole batch, or not at all. [LAW:single-enforcer] the one owner
+// of what a batch leaves in this engine, and of what it returns; an import
+// file is written through it, so a file refused at any write, or a process
+// killed partway, writes nothing.
+//
+// fn runs on a scratch branch made at from's head (runOnScratch), and every
+// write it makes is its own Dolt commit there. When fn returns, the batch
+// lands: from is reset to the scratch head, a fast-forward, since the batch
+// holds the commit lock throughout and nothing else moves from. The reset is
+// one root update, so a read engine, which reads from without the lock, sees
+// the head before the batch or the head after it, never part of it; and the
+// commits above the head the batch started from are exactly what it wrote, as
+// undo's commitsAbove reads them. A refused batch never lands, so from never
+// moved, and there is nothing to put back. [LAW:no-ambient-temporal-coupling]
 //
 // The whole batch runs under ONE commit-lock hold. The lock is re-entrant, so
-// every write fn makes — each its own Dolt commit — short-circuits its own
-// acquisition, and no other writer, nor the mirror's clone (taken under the
-// same lock), can land between them or see them half-made.
-// [LAW:no-ambient-temporal-coupling] A read engine takes no lock, so a read
-// during the batch can see writes a refusal then resets away; and the reset
-// runs only on fn's error, so a process killed partway leaves what it wrote.
+// every write fn makes short-circuits its own acquisition. A write a previous
+// process staged and never committed is committed first
+// (commitStrandedWrites), so the stranded write stays from's and is never
+// carried onto the batch's branch. A batch's branch that a killed process left
+// is swept at the start of the next batch, and recorded as an orphan; a sweep
+// that cannot list them fails the batch, as any read before it writes does.
 //
-// The revert point is the head commit the batch starts from, which stays
-// reachable as an ancestor of the branch for as long as the batch runs, so
-// there is nothing to create or clean up. A write a previous process staged
-// and never committed is committed first (commitStrandedWrites), so the reset
-// cannot discard work that is not the batch's. On fn's error the branch is
-// hard-reset to the revert point on a context the caller's cancellation cannot
-// reach, so a Ctrl-C that refused the batch cannot also stop its reset.
-//
-// It also returns the revert point: the head the batch's own writes sit on,
-// so the commits above it are exactly what the batch landed, and a stranded
-// write committed first is below it. [LAW:one-source-of-truth]
-//
-// fn builds the batch's result in place, and withBatch returns what of it
-// stands: all of it when the batch lands; the zero result beside a
-// *storage.RefusedBatchError when the reset landed; all of it beside a
-// *storage.BatchResetFailedError that names it when the reset failed. The
-// observers hear the batch's changes (notify queues them) exactly when they
-// stand, on the same two outcomes, once the lock is released, as a lone
-// Apply's observers do. [LAW:no-silent-failure] [LAW:nothing-unseen]
-func withBatch[R batchResult](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, string, error) {
+// It returns what of fn's result stands beside the batch's landing: all of
+// the result when the batch landed, which a landed batch whose scratch
+// cleanup failed returns beside a *storage.LandedBatchError; the zero result beside a
+// *storage.RefusedBatchError when fn refused it, or beside the landing's
+// error when the batch could not land. The observers hear the batch's changes
+// (notify queues them) only when it landed, once the lock is released, as a
+// lone Apply's observers do. [LAW:no-silent-failure] [LAW:nothing-unseen]
+func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, batchLanding, error) {
 	var built, stands R
 	var heard []heardChange
-	var head string
+	var landing batchLanding
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		var from string
+		var orphans []string
 		// Retried as every write is, since nothing is written yet: a re-run
 		// finds the stranded writes already committed and reads the same head.
-		if err := retryTransientGCContention(ctx, func(ctx context.Context) error {
+		if err := s.retryInPlace(ctx, func(ctx context.Context) error {
+			var err error
+			if from, err = activeBranch(ctx, s.db); err != nil {
+				return err
+			}
+			// A batch lands on a branch that holds data, so it refuses a
+			// scratch branch before it writes anything there: a scratch branch
+			// is deleted when its run ends, and the sweep below would delete
+			// another batch's live branch.
+			if slices.ContainsFunc(scratchPrefixes, func(prefix string) bool { return strings.HasPrefix(from, prefix) }) {
+				return fmt.Errorf("refusing to start a batch on %q, a scratch branch", from)
+			}
 			if err := s.commitStrandedWrites(ctx); err != nil {
 				return err
 			}
-			var err error
-			head, err = readDoltHead(ctx, s.db)
+			if landing.From, err = readDoltHead(ctx, s.db); err != nil {
+				return err
+			}
+			orphans, err = s.branchesUnderPrefix(ctx, batchScratchPrefix)
 			return err
-		}, s.reconnect); err != nil {
+		}); err != nil {
 			return fmt.Errorf("batch: %w", err)
 		}
-		cause := fn(context.WithValue(ctx, batchHearingKey{}, &heard), &built)
-		if cause == nil {
-			stands = built
+		// A leftover branch is never from and is never pushed, so a delete
+		// that fails is reported, on the event and here, and the batch goes
+		// on. [LAW:no-silent-failure]
+		if err := s.deleteScratch(ctx, orphans, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: a batch could not delete the branches killed batches left: %v\n", err)
+		}
+		scratch := fmt.Sprintf("%s%d-%d", batchScratchPrefix, os.Getpid(), time.Now().UnixNano())
+		err := s.runOnScratch(ctx, from, []string{scratch}, landing.From, s.retryInPlace, func() error {
+			if cause := fn(context.WithValue(ctx, batchHearingKey{}, &heard), &built); cause != nil {
+				return &storage.RefusedBatchError{Head: landing.From, Cause: cause}
+			}
+			// Only fn moves the batch's branch, so its head is the batch whole.
+			var whole string
+			if err := s.retryInPlace(ctx, func(ctx context.Context) error {
+				var err error
+				whole, err = commitHashOfRef(ctx, s.db, scratch)
+				return err
+			}); err != nil {
+				return fmt.Errorf("batch: read the head of %s: %w", scratch, err)
+			}
+			if err := s.landScratch(ctx, from, whole, s.retryInPlace); err != nil {
+				return fmt.Errorf("batch: land %s on %s: %w", scratch, from, err)
+			}
+			landing.Landed = true
 			return nil
-		}
-		// Retried as every write is: a reset is idempotent, and a contended
-		// one that one reconnect clears is not a store left half-written.
-		resetErr := retryTransientGCContention(context.WithoutCancel(ctx), func(ctx context.Context) error {
-			return resetHardToRef(ctx, s.db, head)
-		}, s.reconnect)
-		if resetErr == nil {
-			// Nothing the batch made stands, so nobody is owed it.
+		})
+		// What stands is whether from moved, not how the run ended: a
+		// landed batch whose scratch cleanup failed still stands whole, and
+		// says so in its error's type.
+		if landing.Landed {
+			stands = built
+			if err != nil {
+				err = &storage.LandedBatchError{Cause: err}
+			}
+		} else {
 			heard = nil
-			return &storage.RefusedBatchError{Head: head, Cause: cause}
 		}
-		stands = built
-		return &storage.BatchResetFailedError{Head: head, Cause: cause, ResetErr: resetErr, Written: built.Written()}
+		return err
 	})
 	s.hear(ctx, heard...)
-	return stands, head, err
+	return stands, landing, err
+}
+
+// batchLanding is where a batch started and whether it landed: From is the
+// head the batch started from, which the commits a landed batch wrote sit
+// directly above, as undo's commitsAbove reads them.
+type batchLanding struct {
+	From   string
+	Landed bool
 }

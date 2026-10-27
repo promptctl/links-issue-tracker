@@ -179,7 +179,7 @@ Constants (`exit.go`):
 the reason `commandErrorReason(err)` returns (`exit.go`), so an error's code is
 decided by the classification order in §1.9. Each `commandReason` is declared
 with its code (`error_output.go`):
-- 1: `bulk_partial_failure`, `command_failed`, `migration_failed`, `remote_unreachable`, `transient_gc_contention`, `workspace_busy`, `workspace_write_blocked`
+- 1: `batch_landed_then_failed`, `bulk_partial_failure`, `command_failed`, `migration_failed`, `remote_unreachable`, `transient_gc_contention`, `workspace_busy`, `workspace_write_blocked`
 - 2: `usage_error`
 - 3: `migration_partially_applied`, `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `schema_shape_refused`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
 - 4: `entity_not_found`, `version_not_found`
@@ -216,48 +216,49 @@ off the failed step's act: `ActRestoreSnapshot` →
 (`typedErrorReason(err, unnamed)`). Every other check runs in
 this order and the first match wins, so an error that wraps several of these
 types gets the reason of the earliest one:
-1. `storage.NotFoundError` → `entity_not_found`
-2. `storage.VersionNotFoundError` and `storage.PlanDigestNotFoundError` → `version_not_found`
-3. `MergeConflictError` → `merge_conflict`
-4. `RestoreOverwriteError` → `restore_would_overwrite`
-5. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → `workspace_schema_ahead`
-6. `SyncFailureError` → `sync_divergence`
-7. `store.RemoteUnreachableError` → `remote_unreachable`
-8. `ownerApprovalRefusalError` → `owner_approval_required`
-9. `storage.ParentCycleError` → `parent_cycle` (also reached through a `CorruptionError` whose `Cause` is one)
-10. `CorruptionError` → `corruption_detected`
-11. `UnknownCommandError` → `unknown_command`
-12. `RetiredCommandError` → `retired_command`
-13. `UsageError` → `usage_error`
-14. any error implementing `model.Refusal` → `validation_refused`
-15. `templateShapeError` → `template_shape_refused`
-16. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
+1. `*storage.LandedBatchError` → `batch_landed_then_failed`
+2. `storage.NotFoundError` → `entity_not_found`
+3. `storage.VersionNotFoundError` and `storage.PlanDigestNotFoundError` → `version_not_found`
+4. `MergeConflictError` → `merge_conflict`
+5. `RestoreOverwriteError` → `restore_would_overwrite`
+6. `model.SchemaAhead` (`*store.UnsupportedSchemaVersionError`, `*store.DowngradeSpanUnsupportedError`, `*store.RemoteSchemaAheadError`, which a remote-schema-ahead `SyncFailureError` unwraps to) → `workspace_schema_ahead`
+7. `SyncFailureError` → `sync_divergence`
+8. `store.RemoteUnreachableError` → `remote_unreachable`
+9. `ownerApprovalRefusalError` → `owner_approval_required`
+10. `storage.ParentCycleError` → `parent_cycle` (also reached through a `CorruptionError` whose `Cause` is one)
+11. `CorruptionError` → `corruption_detected`
+12. `UnknownCommandError` → `unknown_command`
+13. `RetiredCommandError` → `retired_command`
+14. `UsageError` → `usage_error`
+15. any error implementing `model.Refusal` → `validation_refused`
+16. `templateShapeError` → `template_shape_refused`
+17. `model.StateRequestError` → `state_already_holds` when its `Satisfied()`
     is true (for `ContainerActionError`: the epic has at least one child, its
     derived state already equals the requested one, and no child remains
     unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
-17. `Exhausted` → `scope_exhausted`
-18. `Narrowed` → `scope_narrowed`
-19. `NoWork` → `no_ready_work`
-20. `UnsupportedError` → `unsupported_flag`
-21. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-22. `purgeUnconfirmedError` → `purge_unconfirmed`
-23. `OutsideWorkspaceError` → `outside_git_workspace`
-24. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-25. `*store.QuarantineBlockError` → `migration_quarantined`
-26. `workspace.StoredPrefixError` → `stored_prefix_refused`
-27. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 26 catches it first)
-28. `BulkError` → `bulkReason`: the reason every item the run ran classifies
+18. `Exhausted` → `scope_exhausted`
+19. `Narrowed` → `scope_narrowed`
+20. `NoWork` → `no_ready_work`
+21. `UnsupportedError` → `unsupported_flag`
+22. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+23. `purgeUnconfirmedError` → `purge_unconfirmed`
+24. `OutsideWorkspaceError` → `outside_git_workspace`
+25. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+26. `*store.QuarantineBlockError` → `migration_quarantined`
+27. `workspace.StoredPrefixError` → `stored_prefix_refused`
+28. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 27 catches it first)
+29. `BulkError` → `bulkReason`: the reason every item the run ran classifies
     as (by this same classifier) when they all share one — so only when no
     item landed — else `bulk_partial_failure`
-29. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+30. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-30. `errors.Is(err, store.ErrWorkspaceBusy)`,
+31. `errors.Is(err, store.ErrWorkspaceBusy)`,
     `errors.Is(err, workspace.ErrConfigBusy)` or `errors.Is(err, backup.ErrBusy)`
     → `workspace_busy`
-31. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-32. anything else → `command_failed`
+32. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+33. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -293,6 +294,7 @@ empty string means no `remediation:` line is printed:
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
 - `workspace_schema_ahead`: "Do not retry unchanged — this lit is older than the schema it was asked to operate on, this workspace's or the remote's it syncs with, and rerunning the command with the same binary repeats this refusal. The message above names the supported path. \<agent-instructions>Installing a different lit replaces it for every workspace on this machine, and any snapshot rollback the message offers discards data: take such a path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
 - `migration_quarantined`: "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. \<agent-instructions>Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking.\</agent-instructions>"
+- `batch_landed_then_failed`: "Do not run it again — every write it made landed, and running it again writes each one a second time, creating its created issues again. If a later command fails, run `lit doctor` for diagnostics."
 - `bulk_partial_failure`: "Do not re-run the command unchanged — any item it does not list landed, as did any it names as landed, and running it again applies those items again. Each listed item names beside its id the reason its single command answers with; act on each as that reason calls for, and re-run with only the ids that still need it: an item refused by a rule repeats its refusal until what refused it changes, an item whose state already holds needs nothing, and an item that met a fault can be re-run once the fault clears. A run that stopped because stdout refused a landed item's report names the ids it never reached; re-run with only those once stdout can take the output."
 - default: "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 

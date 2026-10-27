@@ -475,7 +475,7 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 	// A leftover scratch branch is inert to a reconcile — never the data
 	// branch, never pushed — so a sweep that fails is reported and the
 	// reconcile goes on. [LAW:no-silent-failure]
-	if err := s.deleteBranchesUnder(ctx, reconcileScratchPrefix+"-"); err != nil {
+	if err := s.deleteBranchesUnder(ctx, reconcileScratchPrefix+"-", ""); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not sweep stale scratch branches: %v\n", err)
 	}
 	scratchBranch := newReconcileScratch()
@@ -498,7 +498,7 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
 func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead, baseCommit string) error {
-	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
+	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// A loop the base held is history: the replay reports the cuts made to
 		// the two heads, whose content is what lands.
 		base, _, err := s.exportAtCommit(ctx, scratch.read, baseCommit)
@@ -516,7 +516,7 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncRe
 // difference from the shared path is the empty base and the labels — so nothing is dropped
 // and no side is picked. [LAW:one-source-of-truth] one merge-and-replay tail, two producers.
 func (s *Store) combineFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
-	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
+	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// [LAW:types-are-the-program] no merge-base is the empty export, which merge.ThreeWay
 		// reads as "both sides changed every field from empty" — exactly the two-way union.
 		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead}, model.Export{}, combineCommitMessage, storage.SyncReconcileCombined)
@@ -683,19 +683,16 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 // replayDeltaOnScratch lands one step as one commit on the reconcile spine
 // branch: stage (one tx applying the delta), then version (one DOLT_COMMIT
 // via commitWorkingSetOnce) — a SINGLE attempt, deliberately without
-// withStampedMutation's self-rotating transient retry. The session's
-// current-branch is per-connection state, and the retry's rotate
-// (Store.reconnect) opens a fresh connection on the DEFAULT branch — so an
-// inline retry mid-replay would resume committing onto the data branch,
-// silently breaking the guarantee that the data branch moves only by the one
-// atomic reset. Instead a transient failure bubbles raw to replayUnderGuard's
-// outer retryTransientGCContention, whose next attempt re-enters
-// runOnReconcileScratch and re-creates BOTH scratch branches as its FIRST op —
-// the whole spine is rebuilt from the fixed anchors on the fresh connection,
-// which also re-seeds the spine writer from a fresh read, so no delta can ever
-// be applied against a predecessor a dead connection believed in.
-// [LAW:no-ambient-temporal-coupling] scratch-session recovery has exactly one
-// owner: the outer scratch-rebuilding retry, never a branch-blind inner one.
+// withStampedMutation's self-rotating transient retry. A transient failure
+// bubbles raw to replayUnderGuard's outer retryTransientGCContention, the
+// replay's one rotation, whose next attempt re-enters runOnScratch and
+// re-creates BOTH scratch branches as its FIRST op — the whole spine is rebuilt
+// from the fixed anchors on the fresh connection, which also re-seeds the
+// spine writer from a fresh read, so no delta can ever be applied against a
+// predecessor a dead connection believed in. An inner retry would rotate a
+// second time inside the outer one's attempt, past the one rotation its budget
+// is sized for. [LAW:no-ambient-temporal-coupling] scratch-session recovery
+// has exactly one owner: the outer scratch-rebuilding retry.
 // [LAW:single-enforcer] the commit lock still wraps it (re-entrant under the
 // reconcile's held lock), and the write body is the same applyExportDelta the
 // ordinary import pipeline bottoms out in.
@@ -745,7 +742,7 @@ type spineWriter struct {
 // a delta into corruption, and one export read is a trivial price for deleting
 // it. [FRAMING:representation] seed from the territory, not from the map.
 func (s *Store) newSpineWriter(ctx context.Context, branch string) (*spineWriter, error) {
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", branch); err != nil {
+	if err := s.checkout(ctx, branch); err != nil {
 		return nil, fmt.Errorf("switch to reconcile spine branch %q: %w", branch, err)
 	}
 	landed, err := s.Export(ctx)
@@ -769,7 +766,7 @@ func (s *Store) newSpineWriter(ctx context.Context, branch string) (*spineWriter
 // the epic a ticket on the other side was filed under, and two sides that each
 // ranked a different pair can merge two rows onto one key. [LAW:single-enforcer]
 func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitStamp) (storage.Landing, error) {
-	if err := execProcedureDiscard(ctx, w.store.db, "DOLT_CHECKOUT", w.branch); err != nil {
+	if err := w.store.checkout(ctx, w.branch); err != nil {
 		return storage.Landing{}, fmt.Errorf("switch to reconcile spine branch %q: %w", w.branch, err)
 	}
 	landed, landing, err := landExport(next)
@@ -875,46 +872,6 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	return nil
 }
 
-// runOnReconcileScratch force-creates this run's scratch branch pair at localHead,
-// runs body on them, and — whatever body returns — returns the session to the data
-// branch and drops both. Cleanup recovers a failed switch-back by
-// rotating the connection; only if THAT also fails is the store left unusable, and
-// then the failure is joined to body's result rather than swallowed. Cleanup runs
-// to the end on a context the caller cannot cancel: the deadline that cut body
-// short must not also strand the store on a scratch branch.
-// [LAW:no-silent-failure] [LAW:no-ambient-temporal-coupling] Every operation body
-// runs happens on a scratch branch, so the data branch never leaves localHead until
-// body advances it with one atomic reset. [LAW:single-enforcer] the scratch lifecycle
-// is written once, shared by the three-way reconcile and the take-one resolver.
-//
-// Creating two branches is two statements, so the cleanup has to be armed
-// BEFORE the first of them rather than after the last. Registered after, a
-// failure creating the second branch would return past the defer and strand the
-// first — a branch this attempt made and nothing in this attempt removes, left
-// for some later reconcile's sweep to notice.
-// [LAW:no-ambient-temporal-coupling] the cleanup covers whatever exists when it
-// runs, so it never depends on how far creation got.
-func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, scratch reconcileScratch, localHead string, body func() error) (err error) {
-	// created names only the branches that exist, so cleanup deletes exactly
-	// those and never warns about one that was never made.
-	var created []string
-	defer func() {
-		if cleanupErr := s.cleanupReconcileScratch(context.WithoutCancel(ctx), dataBranch, created); cleanupErr != nil {
-			err = errors.Join(err, cleanupErr)
-		}
-	}()
-	// -B recreates each branch if a prior retry of this same run left it behind.
-	// Both start at localHead; the spine is immediately reset to the remote head
-	// by the replay, and the read branch is reset per commit read.
-	for _, branch := range []string{scratch.spine, scratch.read} {
-		if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", branch, localHead); err != nil {
-			return fmt.Errorf("create reconcile scratch branch %q: %w", branch, err)
-		}
-		created = append(created, branch)
-	}
-	return body()
-}
-
 // commitReplayAndAdvance is the snapshot-guarded safe-replay every mutating reconcile
 // shares: on the spine branch it adopts remoteHead as the base, LIFTS it to this
 // binary's schema, replays the folded side's provenance steps as individual forward
@@ -952,7 +909,7 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, sc
 // [LAW:no-ambient-temporal-coupling] no observer sees a half-built state; it lives
 // only on the scratch branch.
 func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead, message string, export model.Export, stepper foldStepper, localCut []storage.Unlooped) (replayLanding, error) {
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", scratch.spine); err != nil {
+	if err := s.checkout(ctx, scratch.spine); err != nil {
 		return replayLanding{}, fmt.Errorf("switch to reconcile spine branch %q: %w", scratch.spine, err)
 	}
 	remoteCut, err := s.resetAndLift(ctx, remoteHead)
@@ -1034,12 +991,10 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// Advance the data branch to the finished commit with one atomic reset. This is
 	// the only mutation of the data branch; before it, the data branch is at its
 	// pre-reconcile head, after it, at the complete replayed spine — never an
-	// in-between. [LAW:one-source-of-truth] one authoritative ordering; no per-machine
-	// merge-commit DAG — linear history that fast-forward pushes.
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
-		return replayLanding{}, fmt.Errorf("return to data branch %q: %w", dataBranch, err)
-	}
-	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", replayedCommit); err != nil {
+	// in-between, and the commit it lands is the one counted above. [LAW:one-source-of-truth]
+	// one authoritative ordering; no per-machine merge-commit DAG — linear history that
+	// fast-forward pushes.
+	if err := s.landScratch(ctx, dataBranch, replayedCommit, attemptOnce); err != nil {
 		return replayLanding{}, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
 	}
 	// The data branch now durably holds the result; roll the recovery snapshots off to
@@ -1050,7 +1005,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// to fail the reconcile — the replay already committed, and returning an error here
 	// would report a successful reconcile as failed (and a retry would find it already
 	// resolved). A leftover un-pruned snapshot is inert, exactly like the leftover
-	// scratch branch cleanupReconcileScratch tolerates, so the failure is surfaced to
+	// scratch branch leaveScratch tolerates, so the failure is surfaced to
 	// stderr but not promoted. [LAW:no-silent-failure] loud, but not a false failure
 	// over a durable success.
 	if _, err := s.pruneAutomaticSnapshots(ctx); err != nil {
@@ -1094,65 +1049,6 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 		return 0, fmt.Errorf("count replayed commits %s..%s: %w", exclusiveBase, head, err)
 	}
 	return count, nil
-}
-
-// cleanupReconcileScratch returns the session to the data branch and deletes the
-// scratch branch. The data-branch pointer already holds the durable result before
-// this runs, so the one thing cleanup must still guarantee is that the session is
-// not left on the scratch branch — otherwise a later use of this store would
-// silently read/write the wrong branch. If the switch back fails, the connection
-// IS stranded on scratch, so it is rotated: a fresh connection always opens on the
-// data branch. Only if that rotation ALSO fails is the store genuinely unusable —
-// an unrecoverable state the caller promotes to the reconcile's error rather than
-// tolerating. A failed scratch-branch delete is recoverable (the next reconcile
-// force-recreates the name and it is never pushed), so it is surfaced but not
-// promoted. [LAW:no-silent-failure] recoverable failures recover loudly;
-// unrecoverable ones fail the operation.
-func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string, createdBranches []string) error {
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile could not return to data branch %q (%v); rotating connection to recover\n", dataBranch, err)
-		if reconnectErr := s.reconnect(ctx); reconnectErr != nil {
-			return fmt.Errorf("reconcile left the store on the scratch branch and could not recover: checkout %q failed (%v); connection rotation failed: %w", dataBranch, err, reconnectErr)
-		}
-		// A fresh connection opens on the default branch, but do not rely on that —
-		// check out the data branch explicitly on it and treat a failure as the
-		// unrecoverable case, so the store is provably on the data branch (or the
-		// reconcile errors) rather than assumed to be. The leftover scratch branch is
-		// harmless: the next reconcile's startup sweep drops it and it is never pushed.
-		if recoverErr := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); recoverErr != nil {
-			return fmt.Errorf("reconcile could not restore the data branch %q after rotating the connection: %w", dataBranch, recoverErr)
-		}
-		return nil
-	}
-	for _, branch := range createdBranches {
-		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", branch); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not delete scratch branch %q: %v\n", branch, err)
-		}
-	}
-	return nil
-}
-
-// deleteBranchesUnder deletes every branch whose name begins with prefix: the
-// scratch branches a reconcile or a history bound writes and a killed run
-// abandons. The caller holds the commit lock, so no run that owns one is
-// live and every such branch is an orphan. Every branch it lists is tried,
-// and every failure is returned, joined: what one costs is the caller's to
-// judge, since a reconcile can run beside a leftover branch and the history
-// bound cannot collect under one. [LAW:one-source-of-truth] "under prefix"
-// is refHeadsUnder's literal match, never LIKE's wildcards.
-func (s *Store) deleteBranchesUnder(ctx context.Context, prefix string) error {
-	under, err := refHeadsUnder(ctx, s.db, `SELECT name, hash FROM dolt_branches`, prefix)
-	if err != nil {
-		return err
-	}
-	var errs []error
-	for rest := range under {
-		name := prefix + rest
-		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", name); err != nil {
-			errs = append(errs, fmt.Errorf("delete branch %q: %w", name, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 // resetAndLift hard-resets the (scratch) branch to a commit and then lifts the
@@ -1229,7 +1125,7 @@ func cutParentLoops(ctx context.Context, db *sql.DB) ([]storage.Unlooped, error)
 // [LAW:no-ambient-temporal-coupling] the branch a reset lands on is an argument,
 // not a consequence of call order.
 func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string) (model.Export, []storage.Unlooped, error) {
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", readBranch); err != nil {
+	if err := s.checkout(ctx, readBranch); err != nil {
 		return model.Export{}, nil, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
 	}
 	unlooped, err := s.resetAndLift(ctx, commit)

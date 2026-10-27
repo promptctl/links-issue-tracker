@@ -206,11 +206,12 @@ Results
   stated; and, when the file ranks, the order written, as lit rank set
   reports it.
 
-  A file refused for any reason, in either format, writes nothing, and
-  the error names the document and the rule that refused it. Should
-  putting the workspace back fail too, the error says so and names every
-  write that stays. An import killed partway keeps what it wrote before
-  it was killed.
+  A file is written whole or not at all, in either format. A file refused
+  for any reason writes nothing, and the error names the document and the
+  rule that refused it. An import killed partway writes nothing, so the
+  file can be imported again as it stands. A command that reads the
+  workspace while an import runs sees none of the file until all of it
+  has landed.
 
   A full-database export is a different shape than either format above;
   load one with lit backup restore.

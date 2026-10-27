@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // ErrPushDiverged marks a refused push whose branch and remote each hold
@@ -203,8 +204,8 @@ type SyncReceiveResult struct {
 // StrandedWritesCommit is one commit an engine landed over writes a failed
 // DOLT_COMMIT left in the working set, before anything that would discard
 // them: a sync's read of the freshness that decides whether the branch moves,
-// or a batch's taking of the commit a refusal resets to. Tables counts the
-// tables those writes touched.
+// or a batch's taking of the head its scratch branch starts from. Tables
+// counts the tables those writes touched.
 type StrandedWritesCommit struct {
 	Tables int
 }
@@ -221,6 +222,41 @@ type StrandedWritesReporter interface {
 // list.
 func (c StrandedWritesCommit) EventValue() map[string]any {
 	return map[string]any{"stranded_writes.tables": c.Tables}
+}
+
+// ScratchCause is why a scratch branch was deleted: a sweep found it with no
+// live run behind it, or the run that made it was done with it.
+type ScratchCause string
+
+const (
+	// ScratchOrphan is a scratch branch a sweep found: a run that made it was
+	// killed before deleting it, since the sweep holds the commit lock no
+	// live run can hold.
+	ScratchOrphan ScratchCause = "orphan"
+	// ScratchFinished is a scratch branch the run that made it deleted.
+	ScratchFinished ScratchCause = "finished"
+)
+
+// ScratchDelete is one delete of a throwaway branch a batch, a reconcile or a
+// history bound wrote on: Err is why the branch is still there, nil when it
+// went.
+type ScratchDelete struct {
+	Branch string
+	Cause  ScratchCause
+	Err    error
+}
+
+// ScratchDeleteReporter is the account an engine gives of the scratch branches
+// it deleted since it opened, oldest first, and whether anything looked for
+// one: no deletes is "found none" only when it looked. An engine with no
+// branches makes no scratch, so it never looks. [LAW:nothing-unseen]
+type ScratchDeleteReporter interface {
+	ScratchDeletes() (deletes []ScratchDelete, looked bool)
+}
+
+// EventValue is the delete as one value of the event's scratch.deletes list.
+func (d ScratchDelete) EventValue() map[string]any {
+	return map[string]any{"scratch.branch": d.Branch, "scratch.cause": string(d.Cause), "scratch.error": telemetry.ErrorText(d.Err)}
 }
 
 // SettledLastWrite is one settle's write of its settled.last record: Err is

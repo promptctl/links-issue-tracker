@@ -58,8 +58,8 @@ the code it arrives on:
 | Reason | Code | Failure |
 |--------|------|---------|
 | `command_failed` | 1 | An unclassified fault |
+| `batch_landed_then_failed` | 1 | A file or undo landed whole, then lit could not leave the branch it wrote on; every write stands, so running it again writes each one a second time |
 | `bulk_partial_failure` | 1 | Items of a multi-id command answered differently: some landed and some did not, or those that did not land did not land alike; the message names each unlanded item with its reason |
-| `import_reset_failed` | 1 | An import file was refused partway and putting the workspace back failed too; the message names every write of the file that is still committed |
 | `remote_unreachable` | 1 | The sync remote could not be reached after retries |
 | `workspace_busy` | 1 | Another lit process holds a lock this command needs: the workspace's store, or its `config.json` |
 | `workspace_write_blocked` | 1 | Another process holds the store and did not release it |

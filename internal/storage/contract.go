@@ -220,14 +220,13 @@ type Ranker interface {
 // BulkWriter applies a batch of authored issue documents in one call,
 // resolving the batch's internal references before anything is written.
 //
-// A refused batch writes nothing: a refusal at any write — whichever rule
+// A batch lands whole or not at all. A refusal at any write — whichever rule
 // refused it, judged before the first write or by the write itself — leaves
-// the store as it found it, with no create left behind as a deleted
-// issue and no update, edge or rank key kept. A refused batch returns the zero
-// result beside its error, and observers hear a batch's changes only once it
-// has landed. An engine that cannot put the store back says so in its error
-// and returns what stays written beside it, never the zero result.
-// [LAW:no-silent-failure]
+// the store as it found it, with no create left behind as a deleted issue and
+// no update, edge or rank key kept, and so does a process killed partway; a
+// reader beside a batch sees none of it until all of it lands. A batch that
+// did not land returns the zero result beside its error, and observers hear a
+// batch's changes only once it has landed. [LAW:no-silent-failure]
 type BulkWriter interface {
 	// BulkApply applies a mixed create/update batch, resolving intra-batch
 	// references by LocalID.
@@ -301,6 +300,7 @@ type Store interface {
 	ChangeObserver
 	StampReporter
 	StrandedWritesReporter
+	ScratchDeleteReporter
 
 	// Close releases whatever the engine holds. It is in the contract because
 	// callers must always be able to hand the resource back without knowing

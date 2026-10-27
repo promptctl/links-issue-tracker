@@ -56,17 +56,16 @@ var (
 	// is a run whose items differ — some landed, or the rest did not land
 	// alike — so no single code is true of them all and the per-item reasons
 	// live in the message. [LAW:no-silent-failure]
-	reasonBulkPartialFailure    = commandReason{"bulk_partial_failure", ExitGeneric}
+	reasonBulkPartialFailure = commandReason{"bulk_partial_failure", ExitGeneric}
+	// A batch that landed whole and then failed: its writes stand, so it is
+	// never the default's retry, which would write them all a second time.
+	reasonBatchLandedThenFailed = commandReason{"batch_landed_then_failed", ExitGeneric}
 	reasonCommandFailed         = commandReason{"command_failed", ExitGeneric}
 	reasonMigrationFailed       = commandReason{"migration_failed", ExitGeneric}
 	reasonRemoteUnreachable     = commandReason{"remote_unreachable", ExitGeneric}
 	reasonTransientGcContention = commandReason{"transient_gc_contention", ExitGeneric}
 	reasonWorkspaceBusy         = commandReason{"workspace_busy", ExitGeneric}
 	reasonWorkspaceWriteBlocked = commandReason{"workspace_write_blocked", ExitGeneric}
-	// An import refused partway whose reset failed too: the writes ahead of
-	// the refusal are still committed, so neither the refusal's reason nor a
-	// retry is true of the store.
-	reasonImportResetFailed = commandReason{"import_reset_failed", ExitGeneric}
 
 	reasonUsageError = commandReason{"usage_error", ExitUsage}
 
@@ -162,12 +161,10 @@ func commandErrorReason(err error) commandReason {
 
 // typedErrorReason is the reason err's types name, or unnamed when none does.
 func typedErrorReason(err error, unnamed commandReason) commandReason {
-	// Ahead of every arm its cause could reach: a refusal's reason would say
-	// "change the input and re-run", and a re-run creates the file's creates a
-	// second time over the ones the failed reset left. [LAW:types-are-the-program]
-	var resetFailed *storage.BatchResetFailedError
-	if errors.As(err, &resetFailed) {
-		return reasonImportResetFailed
+	// First: no reason its cause names is true of writes that stand.
+	var landed *storage.LandedBatchError
+	if errors.As(err, &landed) {
+		return reasonBatchLandedThenFailed
 	}
 	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
@@ -597,8 +594,8 @@ func commandErrorRemediation(reason commandReason) string {
 		// the failure was transient. So both are gated the way
 		// workspace_schema_ahead gates its paths.
 		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
-	case reasonImportResetFailed:
-		return "Do not re-run the file unchanged — the writes the message names are still committed, and running the file again creates its created issues a second time. To finish the import, delete the issues it names as created with `lit delete`, or drop their documents from the file, then fix what refused the file and import it again: its other writes are restated as the file states them. To abandon it, put back each write the message names."
+	case reasonBatchLandedThenFailed:
+		return "Do not run it again — every write it made landed, and running it again writes each one a second time, creating its created issues again. If a later command fails, run `lit doctor` for diagnostics."
 	case reasonBulkPartialFailure:
 		// No re-run of the whole command is advised: it applies every landed
 		// item again, an item a rule refused repeats its refusal, and one whose

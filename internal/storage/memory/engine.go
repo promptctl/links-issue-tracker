@@ -237,6 +237,12 @@ func (e *Engine) StrandedWritesCommits() ([]storage.StrandedWritesCommit, bool) 
 	return nil, false
 }
 
+// ScratchDeletes is the account ScratchDeleteReporter asks for: this engine
+// has no branches, so it makes no scratch and never looks.
+func (e *Engine) ScratchDeletes() ([]storage.ScratchDelete, bool) {
+	return nil, false
+}
+
 // stamp is the instant a write planned against family's history takes.
 func (e *Engine) stamp(family map[string]bool) time.Time {
 	var seen []model.IssueEvent

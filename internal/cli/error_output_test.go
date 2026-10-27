@@ -27,12 +27,12 @@ import (
 // equal to the reasons error_output.go declares and to the table in
 // docs/cli-reference.md.
 var reasonCodes = map[string]int{
+	"batch_landed_then_failed":    1,
 	"bulk_partial_failure":        1,
 	"command_failed":              1,
 	"corruption_detected":         7,
 	"entity_not_found":            4,
 	"merge_conflict":              5,
-	"import_reset_failed":         1,
 	"migration_failed":            1,
 	"migration_partially_applied": 3,
 	"migration_quarantined":       3,
@@ -124,6 +124,9 @@ func TestCommandErrorReason(t *testing.T) {
 			}},
 			"bulk_partial_failure",
 		},
+		// A batch that landed and then failed is never its cause's reason:
+		// its writes stand, whatever the cause names.
+		{"landed batch then failed", fmt.Errorf("import: %w", &storage.LandedBatchError{Cause: storage.NotFoundError{Entity: "issue", ID: "lit-abc"}}), "batch_landed_then_failed"},
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
 		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
 		{"version not found", storage.VersionNotFoundError{IssueID: "lit-abc", Field: "description", Number: 4, Held: 3}, "version_not_found"},
@@ -158,8 +161,6 @@ func TestCommandErrorReason(t *testing.T) {
 		// A refused import whose reset failed is classified by what it left,
 		// not by the refusal or the missing id it wraps: a re-run would create
 		// its creates again.
-		{"import refusal whose reset failed", &storage.BatchResetFailedError{Head: "abc", Cause: model.ValidationError{Message: "priority out of range"}, ResetErr: errors.New("connection closed"), Written: "1 creates [lit-1]"}, "import_reset_failed"},
-		{"import miss whose reset failed", &storage.BatchResetFailedError{Head: "abc", Cause: storage.NotFoundError{Entity: "issue", ID: "lit-9"}, ResetErr: errors.New("connection closed"), Written: "1 creates [lit-1]"}, "import_reset_failed"},
 		// Both takeover-gate arms, and one wrapped.
 		{"takeover without --take", takeoverUnconfirmedError{Message: "claimed here: … — this lane is claimed and active; pass --take to confirm the takeover"}, "takeover_unconfirmed"},
 		{"takeover declined", takeoverUnconfirmedError{Message: "takeover declined"}, "takeover_unconfirmed"},
