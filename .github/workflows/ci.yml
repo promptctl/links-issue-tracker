@@ -219,10 +219,30 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # verify: false because the action's own `config verify` fetches the
+      # schema through a 2-second client timeout with no retry, ahead of
+      # linting, so a slow golangci-lint.run would fail the job with nothing
+      # linted. The step after this one is the schema check instead.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.8.0
+          verify: false
+
+      # [LAW:single-enforcer] the one place .golangci.yml is checked against
+      # its schema, so a misspelled key cannot silently switch a rule off.
+      # [LAW:one-source-of-truth] the schema's version is read off the binary
+      # the action installed (it puts it on PATH), so the pin above stays the
+      # only version literal. curl retries the fetch; an outage that outlasts
+      # the retries still fails here, loudly, after linting has reported.
+      - name: .golangci.yml matches golangci-lint's schema
+        run: |
+          set -euo pipefail
+          minor="$(golangci-lint version --short | cut -d. -f1,2)"
+          schema="$RUNNER_TEMP/golangci.v${minor}.jsonschema.json"
+          curl -fsS --retry 5 --retry-all-errors --connect-timeout 10 --max-time 60 \
+            -o "$schema" "https://golangci-lint.run/jsonschema/golangci.v${minor}.jsonschema.json"
+          golangci-lint config verify --schema "$schema"
 
   # lit's cc-candybar plugin rendered by cc-candybar itself. The plugin's
   # segments are Go templates only cc-candybar evaluates, so a broken one
