@@ -76,16 +76,18 @@ func runStores(ctx context.Context, inv Invocation, args []string) error {
 // visited, so a slow scan says whether it was the walk or the stores.
 func discoverStores(ctx context.Context, env environ.Env, roots []string) ([]workspace.Location, error) {
 	found, err := workspace.Discover(env, roots)
+	// [LAW:nothing-unseen] What the scan visited lands whether or not it
+	// failed; a scan that failed has no store count, which is not a count of 0.
+	telemetry.Record(ctx, nil, map[string]int{
+		"discover.directories":   found.Directories,
+		"discover.working_trees": found.WorkingTrees,
+	})
 	if err != nil {
 		// [LAW:no-silent-failure] Wrap at the CLI boundary so the failure names
 		// the command the operator ran, not just the workspace-layer detail.
 		return nil, fmt.Errorf("discover stores: %w", err)
 	}
-	telemetry.Record(ctx, nil, map[string]int{
-		"discover.directories":   found.Directories,
-		"discover.working_trees": found.WorkingTrees,
-		"discover.stores":        len(found.Locations),
-	})
+	telemetry.Record(ctx, nil, map[string]int{"discover.stores": len(found.Locations)})
 	return found.Locations, nil
 }
 

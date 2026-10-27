@@ -194,6 +194,9 @@ func TestDiscoverMatchesResolveDerivation(t *testing.T) {
 // at cleanup so t.TempDir can remove it.
 func unreadable(t *testing.T, dir string) {
 	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory whatever its mode")
+	}
 	if err := os.Chmod(dir, 0o000); err != nil {
 		t.Fatalf("Chmod(%q) error = %v", dir, err)
 	}
@@ -248,9 +251,17 @@ func TestDiscoverNeverListsAWorkingTreesDirectories(t *testing.T) {
 		t.Fatalf("Discover() = %v, want the one store", found.Locations)
 	}
 
-	unreadable(t, mkdir(t, filepath.Join(root, "outside")))
-	if _, err := Discover(testEnv(), []string{root}); err == nil {
+	// unlisted sorts after repo, so the walk reaches the tree before it fails.
+	unreadable(t, mkdir(t, filepath.Join(root, "unlisted")))
+	found, err = Discover(testEnv(), []string{root})
+	if err == nil {
 		t.Fatal("Discover() over an unlistable directory outside every working tree returned nil error")
+	}
+	// A failed scan still says what it visited: root, repo's root and
+	// unlisted, and repo's one git query; it found no stores.
+	if found.Directories != 3 || found.WorkingTrees != 1 || found.Locations != nil {
+		t.Fatalf("failed Discover() visited %d directories and %d working trees and found %v, want 3, 1 and none",
+			found.Directories, found.WorkingTrees, found.Locations)
 	}
 }
 

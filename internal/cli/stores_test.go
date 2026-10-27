@@ -116,7 +116,8 @@ func TestRunStoresRecordsWhatDiscoveryVisited(t *testing.T) {
 }
 
 // TestRunStoresPropagatesDiscoverError pins the error contract: when Discover
-// fails, runStores returns the error rather than printing an empty success. A
+// fails, runStores returns the error rather than printing an empty success, and
+// its event still says what the scan visited, with no store count. A
 // non-existent root makes the filesystem walk fail deterministically, without
 // coupling the test to git-resolution mechanics. [LAW:behavior-not-structure]
 func TestRunStoresPropagatesDiscoverError(t *testing.T) {
@@ -124,12 +125,22 @@ func TestRunStoresPropagatesDiscoverError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	var out bytes.Buffer
-	err := runStores(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), []string{missing})
+	recorder := telemetry.Begin(telemetry.Event{})
+	err := runStores(telemetry.With(context.Background(), recorder), cwdInvocation(&out, &out, nil), []string{missing})
 	if err == nil {
 		t.Fatalf("runStores() returned nil error with output %q; want a surfaced Discover failure", out.String())
 	}
 	if out.Len() != 0 {
 		t.Fatalf("runStores() emitted %q before failing; want no output on the error path", out.String())
+	}
+	ev := recorder.Finish(invocationEnd(time.Now(), err, nil))
+	for _, key := range []string{"discover.directories", "discover.working_trees"} {
+		if got, ok := ev.Counts[key]; !ok || got != 0 {
+			t.Errorf("failed scan's event counts[%q] = %d (recorded %v), want 0 recorded", key, got, ok)
+		}
+	}
+	if got, ok := ev.Counts["discover.stores"]; ok {
+		t.Errorf("failed scan's event counts[discover.stores] = %d, want it absent: a failed scan counted no stores", got)
 	}
 }
 

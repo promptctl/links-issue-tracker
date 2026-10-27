@@ -230,13 +230,13 @@ instead.
 | `counts.stores.temp_table_files_failures` | The stores whose open could not remove all of them. Each gets a `~ <storage dir>: warning: temp table files a dead writer left were not all removed:` line after the table. |
 
 `lit stores` records what its search for stores visited, with or without
-`--counts`.
+`--counts`, and when the search fails, what it visited before it stopped.
 
 | Key | Meaning |
 | --- | --- |
 | `counts.discover.directories` | The directories the search visited: every directory outside a working tree, and each working tree's root. It does not look inside a working tree. |
 | `counts.discover.working_trees` | The working trees it reached, each asked once where its store would be. |
-| `counts.discover.stores` | The distinct stores it found. |
+| `counts.discover.stores` | The distinct stores it found. Absent when the search failed. |
 
 ## What the store a command ran against records
 

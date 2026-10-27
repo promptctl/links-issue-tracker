@@ -17,7 +17,8 @@ import (
 // Discovery is what one scan found and what finding it cost: the stores, the
 // directories the walk visited, and the working trees git was asked about.
 type Discovery struct {
-	// Locations are the distinct stores, sorted by StorageDir.
+	// Locations are the distinct stores, sorted by StorageDir. A scan that
+	// failed found none.
 	Locations []Location
 	// Directories is how many directories the walk visited.
 	Directories int
@@ -42,10 +43,12 @@ type Discovery struct {
 // This is the discovery half of the cross-project seam: it turns roots into the
 // value — a Discovery — that aggregation consumes. It opens no store and reads
 // no ticket data; every Location it returns is openable read-only by its
-// DatabasePath. [LAW:effects-at-boundaries] The filesystem walk and per-repo git
+// DatabasePath. A scan that fails still says what it visited before it stopped,
+// since a failed scan's cost is as much a fact as a finished one's. [LAW:effects-at-boundaries] The filesystem walk and per-repo git
 // queries are the only effects; the result is a plain value.
 func Discover(env environ.Env, roots []string) (Discovery, error) {
 	trees, directories, walkErr := workingTrees(roots)
+	visited := Discovery{Directories: directories, WorkingTrees: len(trees)}
 	// [LAW:single-enforcer] Each tree's store is derived by Locate, the one
 	// place lit asks git where a checkout is; the queries are independent, so
 	// they run side by side, a core each.
@@ -65,14 +68,14 @@ func Discover(env environ.Env, roots []string) (Discovery, error) {
 	byStore := map[string]Location{}
 	for _, f := range found {
 		if f.err != nil {
-			return Discovery{}, f.err
+			return visited, f.err
 		}
 		if f.holdsStore {
 			byStore[f.loc.StorageDir] = f.loc
 		}
 	}
 	if walkErr != nil {
-		return Discovery{}, walkErr
+		return visited, walkErr
 	}
 	locations := make([]Location, 0, len(byStore))
 	for _, loc := range byStore {
@@ -83,7 +86,8 @@ func Discover(env environ.Env, roots []string) (Discovery, error) {
 	sort.Slice(locations, func(i, j int) bool {
 		return locations[i].StorageDir < locations[j].StorageDir
 	})
-	return Discovery{Locations: locations, Directories: directories, WorkingTrees: len(trees)}, nil
+	visited.Locations = locations
+	return visited, nil
 }
 
 // workingTrees walks each root in turn and returns, in walk order, every
