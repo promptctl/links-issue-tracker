@@ -64,15 +64,22 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	command := func(run func(context.Context, io.Writer, *app.App, []string) error, args ...string) func(io.Writer) error {
 		return func(w io.Writer) error { return run(h.ctx, w, h.ap, args) }
 	}
-	check := func(name string, print func(io.Writer) error) {
+	// check runs one listing. held names the planted values it must print held
+	// to their row; with none named, any one planted value will do.
+	check := func(name string, print func(io.Writer) error, held ...string) {
 		t.Helper()
+		if len(held) == 0 {
+			held = []string{quotedBreak + forged}
+		}
 		var out bytes.Buffer
 		if err := print(&out); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		printed := out.String()
-		if !strings.Contains(printed, quotedBreak+forged) {
-			t.Errorf("%s printed no planted value held to its row (want %q in it):\n%s", name, quotedBreak+forged, printed)
+		for _, value := range held {
+			if !strings.Contains(printed, value) {
+				t.Errorf("%s printed no planted value held to its row (want %q in it):\n%s", name, value, printed)
+			}
 		}
 		// No break form splits at an ESC, so a raw one is caught by its presence:
 		// every ESC is a terminal control no listing means to print.
@@ -89,7 +96,7 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 
 	// Asked before anything is in progress, next serves the laned ticket, so
 	// its advice names the planted lane.
-	check("next", command(runNext))
+	check("next", command(runNext), "left"+quotedBreak+forged+" lane")
 	h.applyAction(stale.ID, model.Start{Assignee: "tester"}, "")
 	h.backdateUpdatedAt(stale.ID, 7*time.Hour)
 	for _, listing := range []struct {
