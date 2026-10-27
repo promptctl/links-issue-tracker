@@ -222,7 +222,7 @@ jobs:
       # verify: false because the action's own `config verify` fetches the
       # schema through a 2-second client timeout with no retry, ahead of
       # linting, so a slow golangci-lint.run would fail the job with nothing
-      # linted. The step after this one is the schema check instead.
+      # linted. The step after this one is the schema check instead, offline.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
@@ -231,21 +231,19 @@ jobs:
 
       # [LAW:single-enforcer] the one place .golangci.yml is checked against
       # its schema, so a misspelled key cannot silently switch a rule off.
-      # [LAW:one-source-of-truth] the schema URL is the one a release binary's
-      # own `config verify` builds, keyed on the version read off the binary
-      # the action installed (it puts it on PATH), so the pin above stays the
-      # only version literal. curl retries the fetch; an outage that outlasts
-      # the retries still fails here, loudly. It runs whether or not linting
+      # The schema is golangci-lint.run's golangci.v<minor>.jsonschema.json,
+      # committed beside this workflow so the gate needs no network and cannot
+      # change under an unchanged tree. [LAW:one-source-of-truth] its file is
+      # looked up by the minor of the binary the action installed (it puts it
+      # on PATH), so bumping the pin above without committing that minor's
+      # schema fails here with "no such file or directory". It runs whether or not linting
       # passed, so every run reports the config's verdict.
       - name: .golangci.yml matches golangci-lint's schema
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           minor="$(golangci-lint version --short | cut -d. -f1,2)"
-          schema="$RUNNER_TEMP/golangci.v${minor}.jsonschema.json"
-          curl -fsS --retry 5 --retry-all-errors --connect-timeout 10 --max-time 20 \
-            -o "$schema" "https://golangci-lint.run/jsonschema/golangci.v${minor}.jsonschema.json"
-          golangci-lint config verify --schema "$schema"
+          golangci-lint config verify --schema ".github/golangci.v${minor}.jsonschema.json"
 
   # lit's cc-candybar plugin rendered by cc-candybar itself. The plugin's
   # segments are Go templates only cc-candybar evaluates, so a broken one
