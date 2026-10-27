@@ -113,12 +113,9 @@ func Take(ctx context.Context, storageDir string, keep int, read func() (model.E
 // [LAW:dataflow-not-control-flow]: one temp file that will not go must not
 // cost the set its next snapshot.
 func takeHeld(storageDir string, keep int, read func() (model.Export, error)) (Taken, error) {
-	var taken Taken
 	removed, residueErr := removeResidue(dir(storageDir))
-	taken.ResidueRemoved = removed
 	written, err := write(storageDir, keep, read)
-	taken.Written = written
-	return taken, errors.Join(residueErr, err)
+	return Taken{ResidueRemoved: removed, Written: written}, errors.Join(residueErr, err)
 }
 
 // write reads an export, writes it into the set and prunes the set to keep. A

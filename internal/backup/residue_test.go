@@ -167,7 +167,12 @@ func TestTakeLeavesTheTempFileOfATakeStillWriting(t *testing.T) {
 			return err
 		})
 	}()
-	temp := <-inFlight
+	var temp string
+	select {
+	case temp = <-inFlight:
+	case err := <-written:
+		t.Fatalf("the writing take ended before its temp file was found: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
