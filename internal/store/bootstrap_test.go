@@ -146,6 +146,73 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 	}
 }
 
+// A racer waits out a builder however long the build runs, since a build's
+// length is the machine's load: with the stand-still wait shrunk far below
+// the builder's hold, the racer still takes the lock once the builder lets
+// go, and its wait reports acquired.
+func TestARacerWaitsOutABuilderPastTheStandStillWait(t *testing.T) {
+	// serial: rewrites the package-level coResidentHolderWait.
+	shrinkWait(t, 100*time.Millisecond)
+	root := filepath.Join(t.TempDir(), "dolt")
+	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
+	if err != nil {
+		t.Fatalf("builder acquireBootstrapLock() error = %v", err)
+	}
+	hold := 15 * coResidentHolderWait
+	released := make(chan error, 1)
+	go func() {
+		time.Sleep(hold)
+		released <- builder()
+	}()
+	reports := &heldReports{}
+	racer, err := acquireBootstrapLock(WithLockObserver(context.Background(), reports.observer()), testStderr(), root)
+	if err != nil {
+		t.Fatalf("a racer behind a builder holding for %s failed: %v", hold, err)
+	}
+	if err := errors.Join(racer(), <-released); err != nil {
+		t.Fatalf("release error = %v", err)
+	}
+	wait := lockWaitOn(reports, filepath.Base(bootstrapLockPath(root)))
+	if wait == nil || wait.Outcome != LockWaitAcquired || wait.Waited < 10*coResidentHolderWait {
+		t.Fatalf("the racer's bootstrap wait was reported as %+v, want acquired after waiting most of the builder's %s hold", wait, hold)
+	}
+}
+
+// The caller's context is the one end to a racer's wait: it ends with the
+// context's own error, naming the builder it waited on, and is reported
+// cancelled, never refused as busy.
+func TestARacersContextEndsItsWaitNamingTheBuilder(t *testing.T) {
+	// serial: rewrites the package-level coResidentHolderWait.
+	shrinkWait(t, 100*time.Millisecond)
+	root := filepath.Join(t.TempDir(), "dolt")
+	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
+	if err != nil {
+		t.Fatalf("builder acquireBootstrapLock() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := builder(); err != nil {
+			t.Errorf("builder release error = %v", err)
+		}
+	})
+	reports := &heldReports{}
+	ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 5*coResidentHolderWait)
+	defer cancel()
+	racer, err := acquireBootstrapLock(ctx, testStderr(), root)
+	if err == nil {
+		_ = racer()
+		t.Fatal("a racer took the bootstrap lock beside a live builder")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("racer error = %v, want the context's deadline and not ErrWorkspaceBusy", err)
+	}
+	if !strings.Contains(err.Error(), "(lit init)") {
+		t.Fatalf("racer error %q does not name the builder", err)
+	}
+	if wait := lockWaitOn(reports, filepath.Base(bootstrapLockPath(root))); wait == nil || wait.Outcome != LockWaitCancelled {
+		t.Fatalf("the racer's bootstrap wait was reported as %+v, want cancelled", wait)
+	}
+}
+
 // A builder that died mid-build leaves its partial work behind: a staging
 // root, or, from a lit that built in place, a database directory with no
 // .dolt in it. The next bootstrap holds the lock that proves no builder owns

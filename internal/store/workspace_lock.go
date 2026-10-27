@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -156,16 +157,30 @@ func bootstrapStagingPath(databasePath string) string {
 	return filepath.Join(workspaceStorageDir(databasePath), ".links-bootstrap")
 }
 
-// acquireBootstrapLock takes the bootstrap lock exclusively, waiting out a
-// builder for coResidentHolderWait — a build is two engine opens, well inside
-// it — and naming a holder that outlasts the wait.
+// acquireBootstrapLock takes the bootstrap lock exclusively, waiting for as
+// long as a builder holds it; the caller's context is the only end to the
+// wait, and the wait names the builder after lockWaitNoticeGrace and every
+// lockWaitNoticeInterval after (holdWait).
+//
+// No stand-still bound applies, because the builder announces itself once and
+// then builds, and a build's length is set by the machine's load, which lit
+// does not control: a racer that gave up after coResidentHolderWait failed
+// "workspace busy" behind a builder still working. Waiting is safe because
+// every wait under this lock is bounded — the build is local work on a fresh
+// database (ensureDoltDatabase), and its engines' waits for the staging root's
+// LOCK are bounded by the engine open — so a builder that stands still is
+// wedged in Dolt, or stopped, and a dead one releases the flock in the
+// kernel. A wait added under this lock must stay bounded, or a racer waits
+// on it with no bound. [LAW:no-ambient-temporal-coupling]
 func acquireBootstrapLock(ctx context.Context, stderr io.Writer, doltRootDir string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), bootstrapLockPath(doltRootDir), true, coResidentHolderWait)
-	if errors.Is(err, ErrWorkspaceBusy) {
-		return nil, fmt.Errorf("a lit process is creating this workspace's database; retry after it completes: %w", err)
-	}
-	return release, err
+	return acquireStoreLock(ctx, stderr, workspaceStorageDir(doltRootDir), bootstrapLockPath(doltRootDir), true, waitOutAnyStandStill)
 }
+
+// waitOutAnyStandStill is a stand-still bound no wait reaches: the longest
+// time.Duration, so holdWait's give-up never fires and the wait ends only when
+// the lock is taken or the caller's context ends. A value through the one wait
+// loop, not a mode of it. [LAW:dataflow-not-control-flow]
+const waitOutAnyStandStill = time.Duration(math.MaxInt64)
 
 // SyncPushLockPath returns the single-flight lock path for the background
 // mirror, a sibling of the Dolt directory at
