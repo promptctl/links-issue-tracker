@@ -45,6 +45,35 @@ func TestPrintIssueFieldsMultipleFieldsPrintsLabeledLines(t *testing.T) {
 	}
 }
 
+// Among several --field names, every long text the storage table declares
+// keeps its authored lines while a title holding a break is held to its row.
+// The long texts are asked for by the storage table's own names, so a field
+// that one vocabulary renames and the other does not fails here rather than
+// printing flattened.
+func TestPrintIssueFieldsKeepsLongTextLinesAndHoldsTheRestToTheirRow(t *testing.T) {
+	t.Parallel()
+	issue := model.Issue{ID: "test.1", Title: "A\nlane: forged", Description: "d1\nd2", Prompt: "p1\np2", Plan: "l1\nl2"}
+	names := []string{"title"}
+	for _, field := range storage.LongTextFields() {
+		names = append(names, field.Name)
+	}
+
+	var buf bytes.Buffer
+	if err := printIssueFields(&buf, model.IssueDetail{Issue: issue}, names); err != nil {
+		t.Fatalf("printIssueFields(%v) error = %v", names, err)
+	}
+
+	printed := buf.String()
+	if !strings.Contains(printed, "title: A"+quotedBreak+"lane: forged\n") {
+		t.Errorf("title not held to its row:\n%s", printed)
+	}
+	for _, field := range storage.LongTextFields() {
+		if value := field.Current(issue); !strings.Contains(printed, field.Name+": "+value+"\n") {
+			t.Errorf("%s did not keep its lines (want %q):\n%s", field.Name, value, printed)
+		}
+	}
+}
+
 // An unknown field name fails clean with a UsageError naming the accepted
 // vocabulary, and prints nothing — fields are validated before any output,
 // so a typo in a multi-field request never emits a partial result.

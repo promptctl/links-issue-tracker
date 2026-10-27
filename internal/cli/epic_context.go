@@ -384,7 +384,7 @@ func (x crossEpicEdges) empty() bool {
 // are here)".
 func renderEpicContext(ec EpicContext) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Epic: %s — %s\n", ec.Epic.ID, ec.Epic.Title)
+	fmt.Fprintln(&b, singleLine(fmt.Sprintf("Epic: %s — %s", ec.Epic.ID, ec.Epic.Title)))
 	fmt.Fprintf(&b, "Why: %s\n", firstLine(ec.Epic.Description))
 	b.WriteString("\nChildren:\n")
 	b.WriteString(renderChildren(ec.Children, ec.Focused))
@@ -446,7 +446,7 @@ func renderChildLine(child epicChild, focused bool) string {
 	if focused {
 		prefix, suffix = "  ▶ ", "   (you are here)"
 	}
-	return fmt.Sprintf("%s%-*s %s  %s%s%s\n", prefix, statusMarkerWidth, child.Status.marker(), child.Issue.ID, child.Issue.Title, laneTag(child.Issue.Lane), suffix)
+	return singleLine(fmt.Sprintf("%s%-*s %s  %s%s%s", prefix, statusMarkerWidth, child.Status.marker(), child.Issue.ID, child.Issue.Title, laneTag(child.Issue.Lane), suffix)) + "\n"
 }
 
 // laneTag renders a child's lane as an inline tag so the epic plan shows which

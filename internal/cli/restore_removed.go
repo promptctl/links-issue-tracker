@@ -51,6 +51,6 @@ func writeRemoved(w io.Writer, removed []storage.Removed, snapshot string) error
 	}
 	_, err := fmt.Fprintf(w, "removed %d ticket(s) the workspace held and the file does not; the pre-restore backup %s still holds them:\n%s\n"+
 		"to edit tickets without replacing the workspace: `lit ls --format yaml > f.yaml`, edit f.yaml, `lit import --path f.yaml`\n",
-		len(removed), snapshot, strings.Join(quoteRemote(strings.Join(tickets, "\n")).fenced("  "), "\n"))
+		len(removed), snapshot, strings.Join(quoteRemoteRows(tickets).fenced("  "), "\n"))
 	return err
 }

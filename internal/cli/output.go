@@ -35,7 +35,7 @@ func formatEpicLine(epic *annotation.ParentEpicRef) string {
 	if epic == nil {
 		return ""
 	}
-	return fmt.Sprintf("epic: %s  %s", epic.ID, epic.Title)
+	return singleLine(fmt.Sprintf("epic: %s  %s", epic.ID, epic.Title))
 }
 
 // printEpicLine renders the indented "epic:" context line shown identically
@@ -83,7 +83,7 @@ func printIDListLine(w io.Writer, indent, label string, ids []string) error {
 }
 
 func printIssueSummary(w io.Writer, issue model.Issue) error {
-	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))
+	_, err := fmt.Fprintln(w, singleLine(fmt.Sprintf("%s [%s/%s/%s/%s] %s%s", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))))
 	return err
 }
 
@@ -210,7 +210,7 @@ func printIssueLines(w io.Writer, issues []model.Issue, columns []columnSpec, ce
 func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	issue := detail.Issue
 	archivedAt, deletedAt := model.RetentionTimestamps(issue.Retention())
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, issue.Priority, emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(archivedAt), formatOptionalTime(deletedAt)); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, singleLine(issue.Title), issue.IssueType, issue.Topic, issue.Priority, emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(archivedAt), formatOptionalTime(deletedAt)); err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] Capability presence is the type-encoded
@@ -390,7 +390,8 @@ func sortedIssueFieldNames() []string {
 // a partial result. A single field prints its bare value with no label, so
 // the output round-trips directly into `lit update --description` and
 // similar; multiple fields print as "name: value" lines so a multi-line
-// value stays attributable to its field.
+// value stays attributable to its field, each value but a long text held to
+// its row.
 func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) error {
 	type resolvedField struct {
 		name  string
@@ -409,8 +410,19 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 		_, err := fmt.Fprintln(w, resolved[0].value)
 		return err
 	}
+	// A long text keeps its authored lines, as in show's detail view; every
+	// other value is one row, held to it so a title or lane holding a break
+	// cannot print a line that reads as another field's.
+	long := map[string]bool{}
+	for _, field := range storage.LongTextFields() {
+		long[field.Name] = true
+	}
 	for _, entry := range resolved {
-		if _, err := fmt.Fprintf(w, "%s: %s\n", entry.name, entry.value); err != nil {
+		value := entry.value
+		if !long[entry.name] {
+			value = singleLine(value)
+		}
+		if _, err := fmt.Fprintf(w, "%s: %s\n", entry.name, value); err != nil {
 			return err
 		}
 	}
@@ -644,7 +656,7 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 		// The standing marker is why the group is worth reading at all: the
 		// agent learns where each referenced issue stands inline, without a
 		// second 'lit show' per id.
-		if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", issue.ID, issueStanding(issue), issue.Title); err != nil {
+		if _, err := fmt.Fprintln(w, singleLine(fmt.Sprintf("- %s [%s] %s", issue.ID, issueStanding(issue), issue.Title))); err != nil {
 			return err
 		}
 	}
@@ -725,7 +737,7 @@ func formatIssueColumns(issue model.Issue, columns []columnSpec, delimiter strin
 		// whose derived data wasn't loaded — so no renderer needs a guard.
 		values = append(values, column.render(issue, cells[issue.ID]))
 	}
-	return strings.Join(values, delimiter)
+	return singleLine(strings.Join(values, delimiter))
 }
 
 // blockedLabel renders the blocked indicator as a self-describing token rather

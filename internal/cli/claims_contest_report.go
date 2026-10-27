@@ -35,6 +35,13 @@ func reportContestedLanes(ctx context.Context, env environ.Env, stdout io.Writer
 	if err != nil {
 		return err
 	}
+	return printContestedLanes(stdout, cc, time.Now())
+}
+
+// printContestedLanes is the report's rendering half: one line per contested
+// lane in cc, each held to its row whatever its key holds, and nothing when no
+// lane is contested.
+func printContestedLanes(stdout io.Writer, cc claimContext, now time.Time) error {
 	lanes := contestedLanes(cc.standings)
 	if len(lanes) == 0 {
 		return nil
@@ -42,7 +49,6 @@ func reportContestedLanes(ctx context.Context, env environ.Env, stdout io.Writer
 	if _, err := fmt.Fprintln(stdout, "contested: evidence from more than one checkout just met for these lanes —"); err != nil {
 		return err
 	}
-	now := time.Now()
 	for _, lane := range lanes {
 		line, ok := formatClaimLine(cc, lane, now)
 		if !ok {
@@ -51,7 +57,7 @@ func reportContestedLanes(ctx context.Context, env environ.Env, stdout io.Writer
 			// rather than report it. [LAW:no-silent-failure]
 			return fmt.Errorf("contested lane %s reported no claim line — standings and rendering disagree", lane)
 		}
-		if _, err := fmt.Fprintf(stdout, "  %s: %s\n", lane, line); err != nil {
+		if _, err := fmt.Fprintln(stdout, singleLine(fmt.Sprintf("  %s: %s", lane, line))); err != nil {
 			return err
 		}
 	}

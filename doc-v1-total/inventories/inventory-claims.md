@@ -595,9 +595,10 @@ For the five served cases the announcement is written only when non-empty, then 
 
 `reportContestedLanes(ctx, stdout, ws, syncStore)` (`internal/cli/claims_contest_report.go`):
 - Builds a temporary `&app.App{Workspace: ws, Store: syncStore}` — note: **no `Stream`**, so `cc.self` is the zero Attribution for this call (cf. `internal/cli/claims_context.go`).
+- Then `printContestedLanes(stdout, cc, time.Now())`, the rendering half, with `now` taken once for the whole report:
 - `lanes := contestedLanes(cc.standings)`; if empty, returns nil silently.
 - Header, verbatim: `contested: evidence from more than one checkout just met for these lanes —`.
-- Per lane: `"  %s: %s\n"` with `lane` (via `LaneID.String()`) and `formatClaimLine(cc, lane, now)` where `now = time.Now()` taken once for the whole report.
+- Per lane: `"  %s: %s"` with `lane` (via `LaneID.String()`) and `formatClaimLine(cc, lane, now)`, through `singleLine`, then a newline.
 - `ok == false` from `formatClaimLine` → error `contested lane %s reported no claim line — standings and rendering disagree`.
 
 `contestedLanes(standings)` (`internal/cli/claims_contest_report.go`): every lane whose standing is `claims.Held` with `len(held.Contested) > 0`; returns a non-nil empty slice otherwise; sorted by `strings.Compare(a.String(), b.String())`. Pinned by `TestContestedLanesFiltersAndSorts` (Unclaimed, Stale, and uncontested Held all drop out; survivors sorted) (`internal/cli/claims_contest_report_test.go`) and `TestContestedLanesEmptyForNoContest`.

@@ -259,7 +259,7 @@ func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID, place startPl
 	if !named {
 		object = "it"
 	}
-	advice := fmt.Sprintf("%srun `lit start %s` to claim %s", place.where(), row.ID, object)
+	advice := singleLine(fmt.Sprintf("%srun `lit start %s` to claim %s", place.where(), row.ID, object))
 	if row.State() == model.StateInProgress {
 		return fmt.Sprintf("%s is in progress and nobody holds it — %s", row.ID, advice)
 	}
