@@ -27,6 +27,7 @@ import (
 // equal to the reasons error_output.go declares and to the table in
 // docs/cli-reference.md.
 var reasonCodes = map[string]int{
+	"batch_landed_then_failed":    1,
 	"bulk_partial_failure":        1,
 	"command_failed":              1,
 	"corruption_detected":         7,
@@ -123,6 +124,9 @@ func TestCommandErrorReason(t *testing.T) {
 			}},
 			"bulk_partial_failure",
 		},
+		// A batch that landed and then failed is never its cause's reason:
+		// its writes stand, whatever the cause names.
+		{"landed batch then failed", fmt.Errorf("import: %w", &storage.LandedBatchError{Cause: storage.NotFoundError{Entity: "issue", ID: "lit-abc"}}), "batch_landed_then_failed"},
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
 		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
 		{"version not found", storage.VersionNotFoundError{IssueID: "lit-abc", Field: "description", Number: 4, Held: 3}, "version_not_found"},

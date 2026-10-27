@@ -42,7 +42,7 @@ const batchScratchPrefix = "lit-batch/"
 //
 // It returns what of fn's result stands beside the batch's landing: all of
 // the result when the batch landed, which a landed batch whose scratch
-// cleanup failed returns beside that failure; the zero result beside a
+// cleanup failed returns beside a *storage.LandedBatchError; the zero result beside a
 // *storage.RefusedBatchError when fn refused it, or beside the landing's
 // error when the batch could not land. The observers hear the batch's changes
 // (notify queues them) only when it landed, once the lock is released, as a
@@ -90,16 +90,29 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 			if cause := fn(context.WithValue(ctx, batchHearingKey{}, &heard), &built); cause != nil {
 				return &storage.RefusedBatchError{Head: landing.From, Cause: cause}
 			}
-			if err := s.landScratch(ctx, from, scratch, s.retryInPlace); err != nil {
+			// Only fn moves the batch's branch, so its head is the batch whole.
+			var whole string
+			if err := s.retryInPlace(ctx, func(ctx context.Context) error {
+				var err error
+				whole, err = commitHashOfRef(ctx, s.db, scratch)
+				return err
+			}); err != nil {
+				return fmt.Errorf("batch: read the head of %s: %w", scratch, err)
+			}
+			if err := s.landScratch(ctx, from, whole, s.retryInPlace); err != nil {
 				return fmt.Errorf("batch: land %s on %s: %w", scratch, from, err)
 			}
 			landing.Landed = true
 			return nil
 		})
 		// What stands is whether from moved, not how the run ended: a
-		// landed batch whose scratch cleanup failed still stands whole.
+		// landed batch whose scratch cleanup failed still stands whole, and
+		// says so in its error's type.
 		if landing.Landed {
 			stands = built
+			if err != nil {
+				err = &storage.LandedBatchError{Cause: err}
+			}
 		} else {
 			heard = nil
 		}

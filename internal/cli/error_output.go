@@ -56,7 +56,10 @@ var (
 	// is a run whose items differ — some landed, or the rest did not land
 	// alike — so no single code is true of them all and the per-item reasons
 	// live in the message. [LAW:no-silent-failure]
-	reasonBulkPartialFailure    = commandReason{"bulk_partial_failure", ExitGeneric}
+	reasonBulkPartialFailure = commandReason{"bulk_partial_failure", ExitGeneric}
+	// A batch that landed whole and then failed: its writes stand, so it is
+	// never the default's retry, which would write them all a second time.
+	reasonBatchLandedThenFailed = commandReason{"batch_landed_then_failed", ExitGeneric}
 	reasonCommandFailed         = commandReason{"command_failed", ExitGeneric}
 	reasonMigrationFailed       = commandReason{"migration_failed", ExitGeneric}
 	reasonRemoteUnreachable     = commandReason{"remote_unreachable", ExitGeneric}
@@ -158,6 +161,11 @@ func commandErrorReason(err error) commandReason {
 
 // typedErrorReason is the reason err's types name, or unnamed when none does.
 func typedErrorReason(err error, unnamed commandReason) commandReason {
+	// First: no reason its cause names is true of writes that stand.
+	var landed *storage.LandedBatchError
+	if errors.As(err, &landed) {
+		return reasonBatchLandedThenFailed
+	}
 	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		return reasonEntityNotFound
@@ -586,6 +594,8 @@ func commandErrorRemediation(reason commandReason) string {
 		// the failure was transient. So both are gated the way
 		// workspace_schema_ahead gates its paths.
 		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
+	case reasonBatchLandedThenFailed:
+		return "Do not run it again — every write it made landed, and running it again writes each one a second time, creating its created issues again. If a later command fails, run `lit doctor` for diagnostics."
 	case reasonBulkPartialFailure:
 		// No re-run of the whole command is advised: it applies every landed
 		// item again, an item a rule refused repeats its refusal, and one whose

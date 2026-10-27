@@ -85,28 +85,25 @@ func (s *Store) runOnScratch(ctx context.Context, home string, branches []string
 	return body()
 }
 
-// landScratch moves home to scratch's head with one hard reset, the one move
-// of home a scratch run makes: home holds the head before or the head after,
-// never a part. checkout records home, so a rotation resumes there. It runs on
+// landScratch moves home to commit, a scratch branch's head, with one hard
+// reset, the one move of home a scratch run makes: home holds the head before
+// or the head after, never a part. checkout records home, so a rotation
+// resumes there. It runs on
 // a context the caller cannot cancel: a reset that applied and then read the
 // caller's cancel would report a landed run as not landed.
 // [LAW:single-enforcer] a batch and a reconcile land through it.
 // [LAW:no-ambient-temporal-coupling]
-func (s *Store) landScratch(ctx context.Context, home, scratch string, attempt scratchAttempt) error {
+func (s *Store) landScratch(ctx context.Context, home, commit string, attempt scratchAttempt) error {
 	return attempt(context.WithoutCancel(ctx), func(ctx context.Context) error {
 		if s.landHookForTest != nil {
 			if err := s.landHookForTest(); err != nil {
 				return err
 			}
 		}
-		head, err := commitHashOfRef(ctx, s.db, scratch)
-		if err != nil {
-			return err
-		}
 		if err := s.checkout(ctx, home); err != nil {
 			return fmt.Errorf("switch to %q: %w", home, err)
 		}
-		return resetHardToRef(ctx, s.db, head)
+		return resetHardToRef(ctx, s.db, commit)
 	})
 }
 

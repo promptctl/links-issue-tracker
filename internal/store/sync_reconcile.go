@@ -991,9 +991,10 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// Advance the data branch to the finished commit with one atomic reset. This is
 	// the only mutation of the data branch; before it, the data branch is at its
 	// pre-reconcile head, after it, at the complete replayed spine — never an
-	// in-between. [LAW:one-source-of-truth] one authoritative ordering; no per-machine
-	// merge-commit DAG — linear history that fast-forward pushes.
-	if err := s.landScratch(ctx, dataBranch, scratch.spine, attemptOnce); err != nil {
+	// in-between, and the commit it lands is the one counted above. [LAW:one-source-of-truth]
+	// one authoritative ordering; no per-machine merge-commit DAG — linear history that
+	// fast-forward pushes.
+	if err := s.landScratch(ctx, dataBranch, replayedCommit, attemptOnce); err != nil {
 		return replayLanding{}, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
 	}
 	// The data branch now durably holds the result; roll the recovery snapshots off to

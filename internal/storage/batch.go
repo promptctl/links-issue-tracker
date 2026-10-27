@@ -28,3 +28,19 @@ func (e *RefusedBatchError) EventRecord() (map[string]any, map[string]int) {
 }
 
 var _ model.RecordedError = (*RefusedBatchError)(nil)
+
+// LandedBatchError is a batch that landed whole and then could not leave the
+// branch it wrote on: every write it made stands, so applying it again writes
+// each one a second time. Cause is why it could not leave. Unwrap reaches the
+// cause for diagnosis; a caller classifies the batch by this type first, since
+// no reason of the cause's is true of writes that stand.
+// [LAW:types-are-the-program]
+type LandedBatchError struct {
+	Cause error
+}
+
+func (e *LandedBatchError) Error() string {
+	return "the batch landed whole, then could not leave the branch it wrote on: " + e.Cause.Error()
+}
+
+func (e *LandedBatchError) Unwrap() error { return e.Cause }
