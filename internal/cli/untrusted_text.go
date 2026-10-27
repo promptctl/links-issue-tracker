@@ -134,7 +134,25 @@ func textLines(text string) []string {
 // list. It carries no fence, so it is for values a label already frames — an id
 // under "only on remote:" — never for free-form prose.
 func (q quotedRemote) inline() string {
-	return quotedInlineOpen + strings.Join(q.lines, quotedBreak) + quotedInlineClose
+	return quotedInlineOpen + q.row() + quotedInlineClose
+}
+
+// row is the value on one row: its lines joined by quotedBreak, so a value
+// holding a break cannot start a row of its own.
+func (q quotedRemote) row() string {
+	return strings.Join(q.lines, quotedBreak)
+}
+
+// quoteRemoteRows quotes a list whose values are one row each, so a fenced
+// span of them carries one marked line per value however many lines a value
+// holds — a title holding a break cannot add a line that reads as another
+// entry of the list.
+func quoteRemoteRows(values []string) quotedRemote {
+	rows := make([]string, len(values))
+	for i, value := range values {
+		rows[i] = quoteRemote(value).row()
+	}
+	return quotedRemote{lines: rows}
 }
 
 // fenced renders the value as its own span: a notice naming it data and a marker

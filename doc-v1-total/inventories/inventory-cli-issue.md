@@ -401,8 +401,9 @@ prefix (`cli.go`).
   rendered in **local** time (`output.go`).
 - `printIssueSummary` — the one-line success form used by `new`, `followup`,
   `update`, `rank`, and every transition:
-  `"%s [%s/%s/%s/%s] %s%s\n"` = `id [state/type/topic/priority] title[labels]`
-  (`output.go`). Labels render as `" [a,b]"` or empty (`output.go`).
+  `"%s [%s/%s/%s/%s] %s%s\n"` = `id [state/type/topic/priority] title[labels]`,
+  the row through `singleLine` (`output.go`). Labels render as `" [a,b]"` or
+  empty (`output.go`).
 - `formatIssueState(issue)` = `issue.State()`, then `":" + resolution` when
   the close recorded one (`resolutionSuffix`, shared with `issueStanding`),
   then `"+archived"` or `"+deleted"` when retention says so — never both
@@ -413,7 +414,8 @@ prefix (`cli.go`).
   (`columns.go`). An unknown name is a `UsageError` naming it and the valid
   set; an empty selection gives the default set (`columns.go`).
 - `formatIssueColumns` renders each selected column through its registry entry
-  (`output.go`); the per-column renderers live in `columnRegistry`
+  and passes the joined row through `singleLine`, so no cell can start a row of
+  its own (`output.go`); the per-column renderers live in `columnRegistry`
   (`columns.go`): `priority` uses
   `Priority.String()` (normal/urgent); `assignee` and `labels` render `-` when
   empty; `updated_at`/`created_at` render RFC3339; `parent` renders the parent id
@@ -875,7 +877,7 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
 - No epic context, no parent block, no siblings (`cli.go`).
 
 **Full-detail mode** (`printIssueDetail`, `output.go`), in exact order:
-1. `<id>\n<title>\n\n` then
+1. `<id>\n<title>\n\n`, the title through `singleLine`, then
    `type: …`, `topic: …`, `priority: …`, `labels: …` (comma-space joined, `-` if
    none), `archived: …` (RFC3339 or `-`), `deleted: …` (`output.go`).
 2. If the issue is a **leaf** (`Capabilities().Status != nil`):
@@ -905,7 +907,7 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
    the reviewer through `singleLine`, `<laws>` from `joinLaws` (§2.30). Reviews
    of other plan texts are not printed here.
 8. Group blocks, each rendered as `\n<label>:\n` followed by
-   `- <id> [<standing>] <title>` lines and omitted entirely when empty
+   `- <id> [<standing>] <title>` lines, each through `singleLine`, and omitted entirely when empty
    (`printIssueGroup`, `output.go`), in this order:
    `children` (`output.go`), `blocked_by` (`output.go`),
    `blocks` (`output.go`), `redirect` (single optional target adapted to a
@@ -977,6 +979,8 @@ Children:
 <child lines>
 [Cross-epic dependencies block]
 ```
+- The `Epic:` line and every child line go through `singleLine`
+  (`epic_context.go`).
 - `firstLine` strips whitespace and leading `#` characters (`epic_context.go`).
 - Child line (`renderChildLine`, `epic_context.go`):
   `"    "` gutter (or `"  ▶ "` when focused), the status marker padded to
@@ -1438,7 +1442,7 @@ Use 'lit next' to pick the top workable item to start.
    row above's — its epic id for the epic line, its lane for the claim line —
    and the first row is compared against an empty run, so leading rows with no
    epic print no epic line.
-   - `    epic: <epicID>  <epicTitle>` (`output.go`), or `    epic: none` for a
+   - `    epic: <epicID>  <epicTitle>`, through `singleLine` (`output.go`), or `    epic: none` for a
      row with no epic opening a run (`backlogEpicLine`, `backlog.go`)
    - `    blocked: <reasons joined by "; ">` — only non-dependency blockers,
      rendered as `missing <field>` for `MissingField`, `needs-design` for
@@ -1712,6 +1716,9 @@ lead clause. `object, named := lane.Describe()`, `object = "it"` when not named,
 and `<where>` is `place.where()` (below):
 - ``"<where>run `lit start <id>` to claim <object>"``
 - in progress: ``"<id> is in progress and nobody holds it — <where>run `lit start <id>` to claim <object>"``
+
+The ``run `lit start` `` sentence goes through `singleLine`, since `<object>` can
+name a lane key.
 
 The lead clause says only what the standing proves — routing serves an
 in-progress row from a lane this checkout does not hold only when nobody holds
