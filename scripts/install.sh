@@ -16,7 +16,9 @@ install.sh — install `lit` from one of three sources:
 
   (default)              build from this checkout's source (go build, ldflag-stamped)
   --from-release <tag>   download the published release archive for that tag
-  --latest-release       download the latest published release archive
+  --latest-release       download the latest published release archive; the
+                         GitHub API lookup authenticates with GH_TOKEN or
+                         GITHUB_TOKEN when either is set
 
 All modes write to the same target directory (the dir on $PATH that already
 owns a `lit` if any; otherwise $GOBIN) and run the same stale-binary
@@ -322,11 +324,44 @@ case "$mode" in
             exit 1
         fi
         if [ "$mode" = "latest" ]; then
-            release_tag="$(curl -fsSL "$REPO_LATEST_API" | jq -r .tag_name)"
-            if [ -z "$release_tag" ] || [ "$release_tag" = "null" ]; then
+            # GitHub rate-limits unauthenticated API calls per source address,
+            # and CI runners share addresses, so the feed request carries a
+            # token when one is set: GH_TOKEN, then GITHUB_TOKEN, gh's own
+            # precedence. The header reaches curl on a pipe from the printf
+            # builtin (-H @-): never argv, where ps shows it, and never a
+            # here-string, which bash before 5.1 (macOS's /bin/bash) backs with
+            # a temp file. With no token the pipe carries no bytes.
+            # [LAW:dataflow-not-control-flow] one request, the credential is a
+            # value. [LAW:nothing-unseen] which one won is printed; the token
+            # never is.
+            credentials=none auth_header=
+            for var in GH_TOKEN GITHUB_TOKEN; do
+                if [ -n "${!var:-}" ]; then
+                    credentials=$var auth_header="Authorization: Bearer ${!var}"
+                    break
+                fi
+            done
+            echo "Resolving the latest release from $REPO_LATEST_API (credentials: $credentials) ..."
+            feed="$(printf '%s' "$auth_header" | curl -fsSL -H @- "$REPO_LATEST_API")" || {
+                curl_status=$?
+                echo "error: could not fetch $REPO_LATEST_API (credentials: $credentials)" >&2
+                # 22 is curl's HTTP-error exit: GitHub answered with a status
+                # curl's -S message above names, and only that status says why,
+                # so the way out is offered against it. Any other exit is curl's
+                # own failure (DNS, TLS, network), which its message names alone.
+                case $curl_status:$credentials in
+                    22:none) echo "       if GitHub answered 403, it rate-limited a request that carried no token: set GH_TOKEN or GITHUB_TOKEN; or name the tag with --from-release <tag>" >&2 ;;
+                    22:*) echo "       if GitHub answered 401, it rejected the token in $credentials (expired, or meant for another host): unset or replace it; or name the tag with --from-release <tag>" >&2 ;;
+                esac
+                exit 1
+            }
+            # [LAW:parse-dont-validate] one step turns the feed into a tag or
+            # refuses it: a body that is not JSON, or a tag_name that is
+            # missing, null, or empty, all fail here naming the feed.
+            release_tag="$(jq -er '.tag_name | strings | select(. != "")' <<<"$feed")" || {
                 echo "error: could not resolve latest release tag from $REPO_LATEST_API" >&2
                 exit 1
-            fi
+            }
             echo "Latest release: $release_tag"
         fi
 
