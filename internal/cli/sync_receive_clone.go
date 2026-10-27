@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -57,9 +58,9 @@ func takeReceiveClone(ctx context.Context, ws workspace.Info) (liveClone, error)
 // removeReceiveClone discards the receive's clone. A failure is loud and never
 // fatal: the receive it served is over, and the next receive's sweep collects
 // the tree. [LAW:no-silent-failure]
-func removeReceiveClone(clone liveClone) {
+func removeReceiveClone(stderr io.Writer, clone liveClone) {
 	if err := os.RemoveAll(clone.dir); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive clone not removed (%v); the next receive collects it\n", err)
+		fmt.Fprintf(stderr, "lit: automatic receive clone not removed (%v); the next receive collects it\n", err)
 	}
 }
 
@@ -69,13 +70,13 @@ func removeReceiveClone(clone liveClone) {
 // network; the clone holds the live store's remotes as of the take. The
 // returned error is a could-not-attempt failure (the open, the target); a
 // fetch that ran and failed is receiveFetch.fetchErr.
-func fetchIntoClone(ctx context.Context, env environ.Env, ws workspace.Info, clone liveClone) (fetch receiveFetch, err error) {
+func fetchIntoClone(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone) (fetch receiveFetch, err error) {
 	session, closeClone, err := openSyncSessionAt(ctx, env, clone.databasePath, ws.WorkspaceID)
 	if err != nil {
 		return receiveFetch{}, fmt.Errorf("open sync store on the receive's clone: %w", err)
 	}
 	defer func() { err = errors.Join(err, closeClone()) }()
-	target, err := resolveSyncTarget(ctx, env, session, ws, "")
+	target, err := resolveSyncTarget(ctx, stderr, env, session, ws, "")
 	if err != nil {
 		return receiveFetch{}, err
 	}
@@ -94,10 +95,10 @@ func fetchIntoClone(ctx context.Context, env environ.Env, ws workspace.Info, clo
 // and not failed: the chunks and the ref landed, which is the receive; what is
 // lost is that the live store's next network operation downloads those
 // objects again.
-func landFetch(ctx context.Context, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
+func landFetch(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
 	landed, err := store.LandFetchedHead(ctx, env, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
 	if errors.Is(err, store.ErrRemoteCacheNotLanded) {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive: %v\n", err)
+		fmt.Fprintf(stderr, "lit: automatic receive: %v\n", err)
 		return landed, nil
 	}
 	return landed, err

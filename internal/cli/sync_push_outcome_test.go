@@ -161,9 +161,9 @@ func TestPushOutcomeMarkerRoundtrip(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	want := pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"}
-	recordPushOutcome(ws, want)
+	recordPushOutcome(testStderr(t), ws, want)
 
-	rec, age, ok := lastPushOutcome(ws, time.Now())
+	rec, age, ok := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok {
 		t.Fatal("lastPushOutcome() ok = false after recordPushOutcome")
 	}
@@ -176,8 +176,8 @@ func TestPushOutcomeMarkerRoundtrip(t *testing.T) {
 
 	// A later, healthier attempt overwrites: the marker is the LAST outcome,
 	// not a log — the banner clears the moment a push lands.
-	recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
-	rec, _, ok = lastPushOutcome(ws, time.Now())
+	recordPushOutcome(testStderr(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
+	rec, _, ok = lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok || rec.failed() {
 		t.Fatalf("after a successful push, lastPushOutcome() = %+v ok=%v, want non-failed", rec, ok)
 	}
@@ -189,14 +189,14 @@ func TestPushOutcomeMarkerRoundtrip(t *testing.T) {
 func TestLastPushOutcomeAbsentAndCorrupt(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
-	if _, _, ok := lastPushOutcome(ws, time.Now()); ok {
+	if _, _, ok := lastPushOutcome(testStderr(t), ws, time.Now()); ok {
 		t.Fatal("lastPushOutcome() ok = true on a workspace with no marker")
 	}
 
 	if err := os.WriteFile(pushOutcomeMarkerPath(ws), []byte("{not json"), 0o644); err != nil {
 		t.Fatalf("write corrupt marker: %v", err)
 	}
-	if _, _, ok := lastPushOutcome(ws, time.Now()); ok {
+	if _, _, ok := lastPushOutcome(testStderr(t), ws, time.Now()); ok {
 		t.Fatal("lastPushOutcome() ok = true on a corrupt marker")
 	}
 }
@@ -378,9 +378,9 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 
 	t.Run("failed last push warns", func(t *testing.T) {
 		ws := workspaceWithOrigin(t)
-		recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"})
+		recordPushOutcome(testStderr(t), ws, pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"})
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(ctx, testEnv(), &out, ws, now)
+		printMutationSyncStalenessWarning(ctx, testStderr(t), testEnv(), &out, ws, now)
 		if !strings.Contains(out.String(), "FAILING") || !strings.Contains(out.String(), "connection refused") {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want the failure surfaced", out.String())
 		}
@@ -388,12 +388,12 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 
 	t.Run("healthy workspace prints nothing", func(t *testing.T) {
 		ws := workspaceWithOrigin(t)
-		recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
+		recordPushOutcome(testStderr(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
 		if err := markFetchSuccess(ws, remoteName(t, "origin")); err != nil {
 			t.Fatalf("markFetchSuccess: %v", err)
 		}
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(ctx, testEnv(), &out, ws, now)
+		printMutationSyncStalenessWarning(ctx, testStderr(t), testEnv(), &out, ws, now)
 		if out.Len() != 0 {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want silence", out.String())
 		}
@@ -401,12 +401,12 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 
 	t.Run("stale fetch warns even with pushes healthy", func(t *testing.T) {
 		ws := workspaceWithOrigin(t)
-		recordPushOutcome(ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
+		recordPushOutcome(testStderr(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
 		if err := markFetchSuccess(ws, remoteName(t, "origin")); err != nil {
 			t.Fatalf("markFetchSuccess: %v", err)
 		}
 		var out bytes.Buffer
-		printMutationSyncStalenessWarning(ctx, testEnv(), &out, ws, now.Add(25*time.Hour))
+		printMutationSyncStalenessWarning(ctx, testStderr(t), testEnv(), &out, ws, now.Add(25*time.Hour))
 		if !strings.Contains(out.String(), "last successful fetch from origin") {
 			t.Fatalf("printMutationSyncStalenessWarning() = %q, want the stale-fetch warning naming origin", out.String())
 		}
@@ -418,7 +418,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 func TestDoctorPushHealthDatesTheReplayedVerdict(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
-	recordPushOutcome(ws, pushOutcomeRecord{
+	recordPushOutcome(testStderr(t), ws, pushOutcomeRecord{
 		Decision:   pushDecisionError,
 		Reason:     "remote origin/master is at schema version 5 but this binary supports only up to 4",
 		Remote:     "origin",
@@ -427,7 +427,7 @@ func TestDoctorPushHealthDatesTheReplayedVerdict(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := printPushOutcomeHealth(&out, ws, time.Now(), "0.9.0"); err != nil {
+	if err := printPushOutcomeHealth(testStderr(t), &out, ws, time.Now(), "0.9.0"); err != nil {
 		t.Fatalf("printPushOutcomeHealth: %v", err)
 	}
 	got := out.String()
@@ -451,22 +451,22 @@ func TestDoctorPushHealthDatesTheReplayedVerdict(t *testing.T) {
 func TestRecordedPushFailureIsNotALatch(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
-	recordPushOutcome(ws, pushOutcomeOf(syncPushOutcome{
+	recordPushOutcome(testStderr(t), ws, pushOutcomeOf(syncPushOutcome{
 		remote: remoteName(t, "origin"), branch: "master",
 		pushErr: errors.New("remote origin/master is at schema version 5 but this binary supports only up to 4"),
 	}, nil, "0.7.0"))
 
-	rec, age, known := lastPushOutcome(ws, time.Now())
+	rec, age, known := lastPushOutcome(testStderr(t), ws, time.Now())
 	if lines := syncPushFailureLines(rec, age, known, "0.9.0"); len(lines) != 1 {
 		t.Fatalf("a recorded failure did not warn: %q", lines)
 	}
 
 	// The condition clears and the next attempt lands.
-	recordPushOutcome(ws, pushOutcomeOf(syncPushOutcome{
+	recordPushOutcome(testStderr(t), ws, pushOutcomeOf(syncPushOutcome{
 		remote: remoteName(t, "origin"), branch: "master", skip: syncTargetReady,
 	}, nil, "0.9.0"))
 
-	rec, age, known = lastPushOutcome(ws, time.Now())
+	rec, age, known = lastPushOutcome(testStderr(t), ws, time.Now())
 	if rec.Decision != pushDecisionPushed {
 		t.Fatalf("the later success did not replace the recorded failure: %+v", rec)
 	}

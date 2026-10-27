@@ -215,10 +215,10 @@ func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
 
 	record := map[string]func(workspace.Info){
 		compactTraceCommand: func(ws workspace.Info) {
-			maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{outcome: outcome})
+			maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{outcome: outcome})
 		},
 		syncCompactTraceCommand: func(ws workspace.Info) {
-			recordCompactionSuccess(testEnv(), ws, syncCompactTraceCommand, outcome)
+			recordCompactionSuccess(testStderr(t), testEnv(), ws, syncCompactTraceCommand, outcome)
 		},
 	}
 	for command, recordPass := range record {
@@ -317,7 +317,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 			Ran: true, Depth: storage.GCFull, Detail: "journal 2.0 KiB -> 0 B",
 		}}
 
-		maintainThrough(context.Background(), testEnv(), ws, syncer)
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, syncer)
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -341,7 +341,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 
 		// The zero outcome: nothing was owed, which is the common case on every
 		// mutating command. A trace here would be one row per command forever.
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{})
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{})
 
 		if traces := readSyncTraces(t, ws); len(traces) != 0 {
 			t.Fatalf("traces = %+v, want none — nothing was owed, and recording that would drown the trail", traces)
@@ -353,7 +353,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 		ws := compactWorkspace(t)
 		failure := errors.New("dolt gc: store is read-only")
 
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{err: failure})
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{err: failure})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 || traces[0].Status != "error" {
@@ -371,7 +371,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		maintainThrough(context.Background(), testEnv(), ws,
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws,
 			&compactSyncer{err: errors.New("measure compaction signals: permission denied")})
 
 		traces := readSyncTraces(t, ws)
@@ -390,7 +390,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{Depth: storage.GCFull},
 			err:     errors.New("compact dolt store (full): connection refused"),
 		})
@@ -416,7 +416,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{
 				Ran: true, Depth: storage.GCFull, Detail: "journal 4.0 MiB -> 0 B, old-generation archives 148 -> 2",
 			},
@@ -456,7 +456,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{
 			pruned:    []string{"1-pre-reconcile-1", "2-pre-reconcile-2"},
 			footprint: footprint(100, 50, 200),
 		})
@@ -488,7 +488,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{footprint: footprint(300, 50, 200)})
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{footprint: footprint(300, 50, 200)})
 
 		traces := readSyncTraces(t, ws)
 		if len(traces) != 1 {
@@ -506,7 +506,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{footprint: footprint(100, 50, 200)})
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{footprint: footprint(100, 50, 200)})
 
 		if traces := readSyncTraces(t, ws); len(traces) != 0 {
 			t.Fatalf("traces = %+v, want none — every write command would add one", traces)
@@ -517,7 +517,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 		t.Parallel()
 		ws := compactWorkspace(t)
 
-		maintainThrough(context.Background(), testEnv(), ws, &compactSyncer{
+		maintainThrough(context.Background(), testStderr(t), testEnv(), ws, &compactSyncer{
 			pruned: []string{"1-pre-migrate-1"},
 			err:    errors.New("remove snapshot: permission denied"),
 		})

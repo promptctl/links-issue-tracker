@@ -124,10 +124,12 @@ func TestInitBesideARemoteWhoseURLNamesNoOneRepositoryStartsFresh(t *testing.T) 
 	runGit(t, dir, "remote", "add", "origin", "link/../remote.git")
 	runGit(t, dir, "ls-remote", "origin")
 
-	progress := captureProgress(t)
-	runCLIInDir(t, dir, "init", "--skip-hooks")
-	if !strings.Contains(progress.String(), "lit cannot sync with the git remote (`lit sync remote ls` says why); starting with an empty backlog") {
-		t.Fatalf("init beside origin at link/../remote.git: progress missing the fresh start:\n%s", progress.String())
+	_, progress, err := runCLIInDirSplit(t, dir, "init", "--skip-hooks")
+	if err != nil {
+		t.Fatalf("init beside origin at link/../remote.git error = %v\nstderr:\n%s", err, progress)
+	}
+	if !strings.Contains(progress, "lit cannot sync with the git remote (`lit sync remote ls` says why); starting with an empty backlog") {
+		t.Fatalf("init beside origin at link/../remote.git: progress missing the fresh start:\n%s", progress)
 	}
 }
 

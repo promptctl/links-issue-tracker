@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -68,9 +69,9 @@ func localSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, re
 // The source that decided lands on the command's event as sync.branch_source.
 // [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks
 // consume one canonical branch decision. [LAW:nothing-unseen]
-func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote workspace.SyncableRemote) (string, error) {
+func resolveSyncBranch(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, remote workspace.SyncableRemote) (string, error) {
 	branch, source, err := localSyncBranch(ctx, env, ws, remote.Name(), syncBranchAnswer{source: "advertised", ask: func() (string, error) {
-		return advertiseSyncBranch(ctx, env, ws, remote)
+		return advertiseSyncBranch(ctx, stderr, env, ws, remote)
 	}})
 	if err != nil {
 		return "", fmt.Errorf("resolve sync branch for remote %q: %w", remote.Name(), err)
@@ -90,13 +91,13 @@ func resolveSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, 
 // records a named one for knownSyncBranch. The branch is resolved whether or
 // not the record lands; a lost record only costs read commands their sync
 // banner until the next sync verb writes it.
-func advertiseSyncBranch(ctx context.Context, env environ.Env, ws workspace.Info, remote workspace.SyncableRemote) (string, error) {
+func advertiseSyncBranch(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, remote workspace.SyncableRemote) (string, error) {
 	branch, err := ws.Repository().AdvertisedRemoteHead(ctx, env, remote)
 	if err != nil || branch == "" {
 		return "", err
 	}
 	if err := writeMarkerAtomic(advertisedSyncBranchPath(ws, remote.Name()), []byte(branch+"\n")); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: sync branch record not written: %v\n", err)
+		fmt.Fprintf(stderr, "lit: sync branch record not written: %v\n", err)
 	}
 	return branch, nil
 }

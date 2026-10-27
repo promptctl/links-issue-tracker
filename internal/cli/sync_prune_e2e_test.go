@@ -59,7 +59,7 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 		t.Fatalf("resolve workspace %s: %v", consumer, err)
 	}
 	recorder := telemetry.Begin(telemetry.Event{})
-	receiveOnce(telemetry.With(context.Background(), recorder), testEnv(), ws)
+	receiveOnce(telemetry.With(context.Background(), recorder), testStderr(t), testEnv(), ws)
 
 	var landing *syncTraceRecord
 	for _, record := range readSyncTraceRecords(t, ws) {

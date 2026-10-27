@@ -65,8 +65,8 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
-	defer removeReceiveClone(clone)
-	fetch, err := fetchIntoClone(ctx, testEnv(), ws, clone)
+	defer removeReceiveClone(testStderr(t), clone)
+	fetch, err := fetchIntoClone(ctx, testStderr(t), testEnv(), ws, clone)
 	if err != nil || fetch.fetchErr != nil {
 		t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 	}
@@ -79,7 +79,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 		t.Fatalf("seed received-refs.last: %v", err)
 	}
 
-	outcome := landAndRecord(ctx, testEnv(), ws, clone, fetch, observed)
+	outcome := landAndRecord(ctx, testStderr(t), testEnv(), ws, clone, fetch, observed)
 	if outcome.err != nil || outcome.landed != store.FetchedHeadSuperseded {
 		t.Fatalf("landAndRecord() landed %s, err %v; want superseded by bravo's pull", outcome.landed, outcome.err)
 	}
@@ -91,7 +91,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	if value, _ := outcomes[0].(map[string]any); value["receive.landed"] != "superseded" {
 		t.Fatalf("receive outcome = %v; want receive.landed superseded", value)
 	}
-	if got := readReceivedRefs(ws); string(got) != string(previous) {
+	if got := readReceivedRefs(testStderr(t), ws); string(got) != string(previous) {
 		t.Fatalf("received-refs.last = %q after a superseded landing; want it as it stood, %q", got, previous)
 	}
 	assertLevelWithTheRemote(t, consumer, fetch.target)
@@ -104,7 +104,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	if value, _ := next[0].(map[string]any); value["receive.landed"] != "unchanged" || value["receive.decision"] != "up_to_date" {
 		t.Fatalf("the next receive's outcome = %v; want it to fetch and land the ref bravo's pull left, unchanged and up to date", value)
 	}
-	if got := readReceivedRefs(ws); string(got) == string(previous) {
+	if got := readReceivedRefs(testStderr(t), ws); string(got) == string(previous) {
 		t.Fatalf("received-refs.last still %q after the next receive settled; want the remote's advertisement", got)
 	}
 	assertLevelWithTheRemote(t, consumer, fetch.target)

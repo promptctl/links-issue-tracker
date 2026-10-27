@@ -30,9 +30,7 @@ func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
 	isolateEvents(t)
 	repo, _, stuck := workspaceWhosePruneWillFail(t)
 
-	var out string
-	var err error
-	stderr := captureStderr(t, func() { out, err = runCLIInDirAllowError(t, repo, "export") })
+	out, stderr, err := runCLIInDirSplit(t, repo, "export")
 	if err != nil {
 		t.Fatalf("lit export error = %v, want it to run\noutput:\n%s", err, out)
 	}
@@ -74,9 +72,7 @@ func TestInitsAdoptGateReportsItsOpensMigration(t *testing.T) {
 	isolateEvents(t)
 	repo, _, stuck := workspaceWhosePruneWillFail(t)
 
-	var out string
-	var err error
-	stderr := captureStderr(t, func() { out, err = runCLIInDirAllowError(t, repo, "init") })
+	out, stderr, err := runCLIInDirSplit(t, repo, "init")
 	if err != nil {
 		t.Fatalf("lit init error = %v, want it to run\noutput:\n%s", err, out)
 	}

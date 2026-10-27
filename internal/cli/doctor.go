@@ -176,8 +176,8 @@ func resolveDoctorSyncFreshness(ctx context.Context, env environ.Env, ws workspa
 // The line is a past observation and says so: its age, the provenance clause
 // when the binary has changed since, and `lit sync push`, the command that
 // produces a current verdict. Doctor is read-only, so it cannot re-test a push.
-func printPushOutcomeHealth(w io.Writer, ws workspace.Info, now time.Time, running string) error {
-	rec, age, known := lastPushOutcome(ws, now)
+func printPushOutcomeHealth(stderr io.Writer, w io.Writer, ws workspace.Info, now time.Time, running string) error {
+	rec, age, known := lastPushOutcome(stderr, ws, now)
 	if !known || !rec.failed() {
 		return nil
 	}
@@ -386,7 +386,7 @@ func overCeilingPart(fp storage.Footprint) string {
 
 // printDoctorReport writes the health report to stdout: the workspace identity,
 // the status line and the lines that name its findings, then sync freshness.
-func printDoctorReport(ctx context.Context, stdout io.Writer, ap *app.App, report storage.HealthReport, syncReport doctorSyncReport) error {
+func printDoctorReport(ctx context.Context, stderr io.Writer, stdout io.Writer, ap *app.App, report storage.HealthReport, syncReport doctorSyncReport) error {
 	census, err := readIDPrefixCensus(ctx, ap.Store)
 	if err != nil {
 		return err
@@ -428,7 +428,7 @@ func printDoctorReport(ctx context.Context, stdout io.Writer, ap *app.App, repor
 	if err := printSyncFreshness(stdout, syncReport); err != nil {
 		return err
 	}
-	return printPushOutcomeHealth(stdout, ap.Workspace, time.Now(), runningBinaryVersion())
+	return printPushOutcomeHealth(stderr, stdout, ap.Workspace, time.Now(), runningBinaryVersion(stderr))
 }
 
 // diagnoseThenRepair runs the health check, then such repairs as it is safe to
@@ -530,7 +530,7 @@ func doctorLeaf() appLeaf {
 			}
 		}
 		// Fix progress writes to stderr so stdout carries only the health report.
-		run, err := diagnoseThenRepair(ctx, os.Stderr, repairer, fixes)
+		run, err := diagnoseThenRepair(ctx, inv.Stderr, repairer, fixes)
 		if err != nil {
 			return err
 		}
@@ -552,7 +552,7 @@ func doctorLeaf() appLeaf {
 		// the report short, so neither hides the other. A report that prints in full
 		// exits on the repair: it is the outcome of the command the operator typed,
 		// and it outranks the health exits below as it did when it returned first.
-		if err := printDoctorReport(ctx, inv.Stdout, ap, report, syncReport); err != nil || run.repairErr != nil {
+		if err := printDoctorReport(ctx, inv.Stderr, inv.Stdout, ap, report, syncReport); err != nil || run.repairErr != nil {
 			return errors.Join(run.repairErr, err)
 		}
 		// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
@@ -570,7 +570,7 @@ func doctorLeaf() appLeaf {
 		var syncFailure SyncFailureError
 		if errors.As(exitErr, &syncFailure) {
 			if ev, ok := ownerNotifyEventForFailure(syncFailure.Failure); ok {
-				maybeNotifyOwner(ctx, inv.Env, ap.Workspace, ev)
+				maybeNotifyOwner(ctx, inv.Stderr, inv.Env, ap.Workspace, ev)
 			}
 		}
 		// A workspace that cannot mint is not healthy, so doctor reports the

@@ -108,7 +108,7 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	built := buildWorkerWorkspace(ctx, testEnv(), ws.Location, strings.NewReader(string(payload)))
+	built := buildWorkerWorkspace(ctx, testStderr(t), testEnv(), ws.Location, strings.NewReader(string(payload)))
 	if built.failed != nil {
 		t.Fatalf("buildWorkerWorkspace failed: %v", built.failed)
 	}
@@ -139,7 +139,7 @@ func TestAHandedWorkspaceAsksNothingOfARemovedCheckout(t *testing.T) {
 	runGit(t, root, "worktree", "remove", "--force", worktree)
 
 	ctx := underInvocation(context.Background())
-	built := buildWorkerWorkspace(ctx, testEnv(), loc, strings.NewReader(payload))
+	built := buildWorkerWorkspace(ctx, testStderr(t), testEnv(), loc, strings.NewReader(payload))
 	if built.failed != nil {
 		t.Fatalf("buildWorkerWorkspace after the checkout was removed: %v", built.failed)
 	}
@@ -169,7 +169,7 @@ func TestAMirrorWithAnUnreadableHandoffRecordsAFailedPush(t *testing.T) {
 	if out, err := runCLIInDirWithStdin(t, root, "not a handoff", workerArgv(t, root, backgroundMirrorSubcommand)...); err != nil {
 		t.Fatalf("mirror: %v\n%s", err, out)
 	}
-	rec, _, ok := lastPushOutcome(ws, time.Now())
+	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok || rec.Decision != pushDecisionError || !strings.Contains(rec.Reason, "read the launcher's handoff") {
 		t.Fatalf("push outcome = %+v (recorded %t); want an error naming the handoff", rec, ok)
 	}

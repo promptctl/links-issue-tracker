@@ -71,11 +71,11 @@ type workerWorkspace struct {
 // for the store at loc. A failed build's workspace is the store with no
 // project layer (config.NoProject), so a failure's completion reads the
 // global config alone.
-func buildWorkerWorkspace(ctx context.Context, env environ.Env, loc workspace.Location, stdin io.Reader) workerWorkspace {
+func buildWorkerWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, loc workspace.Location, stdin io.Reader) workerWorkspace {
 	built := handedWorkerWorkspace(env, loc, stdin)
 	// Every worker's event says which project layer it ran with, a failed
 	// build's included. [LAW:nothing-unseen]
-	reportConfigLayers(ctx, env, built.ws.Project)
+	reportConfigLayers(ctx, stderr, env, built.ws.Project)
 	return built
 }
 

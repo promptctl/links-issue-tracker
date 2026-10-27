@@ -79,27 +79,27 @@ func receiveBlockPendingPath(ws workspace.Info) string {
 // twice. [LAW:single-enforcer] The debounce marker has one writer — this owner.
 // A workspace with no git remote has nothing to receive from, so it spawns
 // nothing, the same precondition the mirror's spawn checks.
-func scheduleReceive(ctx context.Context, env environ.Env, ws workspace.Info) {
+func scheduleReceive(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) {
 	if !shouldReceiveNow(ws, time.Now(), receiveDebounceInterval) {
 		return
 	}
 	if err := markReceiveAttempt(ws); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
+		fmt.Fprintf(stderr, "lit: automatic receive debounce marker not written: %v\n", err)
 	}
 	hasRemote, err := workspaceHasGitRemote(ctx, ws)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
-		recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf("check git remotes: %w", err))
+		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf("check git remotes: %w", err))
 		return
 	}
 	if !hasRemote {
 		return
 	}
-	if err := spawnDetachedWorker(ctx, ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(env), os.Getpid()); err != nil {
+	if err := spawnDetachedWorker(ctx, stderr, ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(env), os.Getpid()); err != nil {
 		cause := fmt.Errorf("start the background receive: %w", err)
-		fmt.Fprintf(os.Stderr, "lit: automatic receive not started: %v\n", err)
-		recordReceiveError(ctx, env, ws, storage.RemoteName{}, cause)
+		fmt.Fprintf(stderr, "lit: automatic receive not started: %v\n", err)
+		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, cause)
 	}
 }
 
@@ -130,7 +130,7 @@ func backgroundReceiveLeaf() bareLeaf {
 		start := time.Now()
 		pid := os.Getpid()
 		fmt.Fprintf(inv.Stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
-		mirrorWait := receiveWhenQuiet(ctx, inv.Env, built, parentPID)
+		mirrorWait := receiveWhenQuiet(ctx, inv.Stderr, inv.Env, built, parentPID)
 		// The decision is in the receive's sync trace; this line is the worker's
 		// own lifetime, which the trace does not carry.
 		fmt.Fprintf(inv.Stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
@@ -148,33 +148,33 @@ func backgroundReceiveLeaf() bareLeaf {
 // could-not-attempt failures, so no receive state is written while the
 // spawning command may still be writing its own. [LAW:no-silent-failure]
 // [LAW:no-ambient-temporal-coupling]
-func receiveWhenQuiet(ctx context.Context, env environ.Env, built workerWorkspace, parentPID int) time.Duration {
+func receiveWhenQuiet(ctx context.Context, stderr io.Writer, env environ.Env, built workerWorkspace, parentPID int) time.Duration {
 	ws := built.ws
 	if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 		if ctx.Err() != nil {
-			recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the spawning command to exit: %w", ctx.Err()))
+			recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the spawning command to exit: %w", ctx.Err()))
 			return 0
 		}
-		recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf(
+		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine",
 			parentPID, workerParentWaitTimeout))
 		return 0
 	}
 	if built.failed != nil {
-		recordReceiveError(ctx, env, ws, storage.RemoteName{}, built.failed)
+		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, built.failed)
 		return 0
 	}
 	waited, err := awaitNoLiveMirror(ctx, ws, receiveMirrorWait())
 	if err != nil {
 		if ctx.Err() != nil {
-			recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the mirror: %w", ctx.Err()))
+			recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the mirror: %w", ctx.Err()))
 			return waited
 		}
 		// A mirror that will not finish, or a beacon that cannot be read, costs
 		// the ordering, not the receive: say so and receive anyway.
-		fmt.Fprintf(os.Stderr, "lit: receiving without waiting for the mirror: %v\n", err)
+		fmt.Fprintf(stderr, "lit: receiving without waiting for the mirror: %v\n", err)
 	}
-	receiveOnce(ctx, env, ws)
+	receiveOnce(ctx, stderr, env, ws)
 	return waited
 }
 
@@ -264,7 +264,7 @@ func awaitNoLiveMirror(ctx context.Context, ws workspace.Info, bound time.Durati
 // slow remote cannot keep the worker past store.ReceiveDeadline. A failure is
 // recorded as a trace and never reaches a command's exit code.
 // [LAW:no-silent-failure]
-func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
+func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) {
 	// Every receive says whether it owes a push; one that settles nothing
 	// owes none. [LAW:nothing-unseen]
 	telemetry.Set(ctx, "receive.push_owed", false)
@@ -272,11 +272,11 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
-		recordReceiveError(ctx, env, ws, storage.RemoteName{}, fmt.Errorf("check git remotes: %w", err))
+		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf("check git remotes: %w", err))
 		return
 	}
 	if len(gitRemotes) == 0 {
-		recordReceiveSkip(ctx, env, ws, syncTarget{skip: syncTargetNoRemote})
+		recordReceiveSkip(ctx, stderr, env, ws, syncTarget{skip: syncTargetNoRemote})
 		return
 	}
 
@@ -298,55 +298,55 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 	// here, before the lock and the clone, rather than trace "could not tell"
 	// and fetch. [LAW:no-silent-failure]
 	if refused := (storage.RefusedRemoteError{}); errors.As(askErr, &refused) {
-		recordReceiveError(ctx, env, ws, observed.remote, askErr)
+		recordReceiveError(ctx, stderr, env, ws, observed.remote, askErr)
 		return
 	}
 	if askErr != nil {
 		// "Could not tell" is not "nothing changed": say so, then fetch.
 		// [LAW:no-silent-failure]
-		if err := recordReceiveTrace(env, ws, receiveDecisionRemoteCheckFailed, "error", askErr.Error(),
+		if err := recordReceiveTrace(stderr, env, ws, receiveDecisionRemoteCheckFailed, "error", askErr.Error(),
 			map[string]string{"error": askErr.Error()}); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", err)
+			fmt.Fprintf(stderr, "lit: automatic receive trace not recorded: %v\n", err)
 		}
-	} else if observed.unmoved(readReceivedRefs(ws)) {
-		confirmRemoteUnmoved(ctx, env, ws, observed)
+	} else if observed.unmoved(readReceivedRefs(stderr, ws)) {
+		confirmRemoteUnmoved(ctx, stderr, env, ws, observed)
 		return
 	} else if skip := observed.skip(); skip != syncTargetReady {
-		recordReceiveSkip(ctx, env, ws, syncTarget{remote: observed.remote, skip: skip})
+		recordReceiveSkip(ctx, stderr, env, ws, syncTarget{remote: observed.remote, skip: skip})
 		return
 	}
 
 	release, acquired, err := store.TryAcquireReceiveLock(ws.DatabasePath)
 	if err != nil {
-		recordReceiveError(ctx, env, ws, observed.remote, fmt.Errorf("take the receive lock: %w", err))
+		recordReceiveError(ctx, stderr, env, ws, observed.remote, fmt.Errorf("take the receive lock: %w", err))
 		return
 	}
 	if !acquired {
-		recordReceiveDecided(ctx, env, ws, receiveDecisionLockHeld,
+		recordReceiveDecided(ctx, stderr, env, ws, receiveDecisionLockHeld,
 			"another automatic receive holds the receive lock; it fetches what this one would have",
 			observed.remote, nil)
 		return
 	}
 	defer func() {
 		if err := release(); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: automatic receive lock not released: %v\n", err)
+			fmt.Fprintf(stderr, "lit: automatic receive lock not released: %v\n", err)
 		}
 	}()
-	outcome, err := receiveAndRecord(timeoutCtx, env, ws, observed)
+	outcome, err := receiveAndRecord(timeoutCtx, stderr, env, ws, observed)
 	if err != nil {
 		// Could-not-attempt (the clone, or the clone's own target): record and stop.
-		recordReceiveError(ctx, env, ws, observed.remote, err)
+		recordReceiveError(ctx, stderr, env, ws, observed.remote, err)
 		return
 	}
 	// The store is closed by now: surfacing can run the owner-notify hook,
 	// and nothing waiting on the store should wait on that too.
-	surfaceReceiveOutcome(ctx, env, ws, outcome, time.Now())
+	surfaceReceiveOutcome(ctx, stderr, env, ws, outcome, time.Now())
 	// What the settle left unpushed is owed the push a write's commit is: a
 	// refusal over a peer's commits is recorded diverged on the promise that
 	// this merge reaches the remote. The mirror waits for this worker to exit.
 	access := outcome.access()
 	telemetry.Set(ctx, "receive.push_owed", access.Writes())
-	mirrorAfterReceive(ctx, env, access, ws)
+	mirrorAfterReceive(ctx, stderr, env, access, ws)
 }
 
 // receiveAndRecord is the receive proper, run under the receive lock: clone
@@ -356,43 +356,43 @@ func receiveOnce(ctx context.Context, env environ.Env, ws workspace.Info) {
 // and the settle — none of them on the network. The error
 // is a could-not-attempt failure; a receive that ran and failed is in the
 // outcome, its trace already written.
-func receiveAndRecord(ctx context.Context, env environ.Env, ws workspace.Info, observed remoteAdvertisement) (syncReceiveOutcome, error) {
+func receiveAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, observed remoteAdvertisement) (syncReceiveOutcome, error) {
 	clone, err := takeReceiveClone(ctx, ws)
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
-	defer removeReceiveClone(clone)
-	fetch, err := fetchIntoClone(ctx, env, ws, clone)
+	defer removeReceiveClone(stderr, clone)
+	fetch, err := fetchIntoClone(ctx, stderr, env, ws, clone)
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
-	return landAndRecord(ctx, env, ws, clone, fetch, observed), nil
+	return landAndRecord(ctx, stderr, env, ws, clone, fetch, observed), nil
 }
 
 // landAndRecord is the receive after its fetch: land the fetch on the live
 // store, settle there, and record what that established. Every step from
 // here touches the live store; nothing before it did.
-func landAndRecord(ctx context.Context, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch, observed remoteAdvertisement) syncReceiveOutcome {
-	outcome, closeLive := performSyncReceive(ctx, env, ws, clone, fetch, ownUnsettledRun(ws.DatabasePath))
+func landAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch, observed remoteAdvertisement) syncReceiveOutcome {
+	outcome, closeLive := performSyncReceive(ctx, stderr, env, ws, clone, fetch, ownUnsettledRun(ws.DatabasePath))
 	// The live store stays open through the record below, so its workspace
 	// hold keeps a rotation of the Dolt directory from landing between the
 	// settle and the record that describes it.
 	defer func() {
 		if err := closeLive(); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: automatic receive store not closed cleanly: %v\n", err)
+			fmt.Fprintf(stderr, "lit: automatic receive store not closed cleanly: %v\n", err)
 		}
 	}()
 	// performSyncReceive records its own trace; surface a trace-write failure
 	// rather than drop it. [LAW:no-silent-failure]
 	if outcome.traceErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
+		fmt.Fprintf(stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
 	}
 	// What the receive established is recorded here, after the receive and its
 	// reconcile, by the one owner that also asked: a fetch that landed moves
 	// the fetch-success marker, and a receive that settled cleanly makes the
 	// advertisement observed before the fetch the record the next question is
 	// measured against (sync_receive_ask.go).
-	recordReceived(ws, outcome, observed)
+	recordReceived(stderr, ws, outcome, observed)
 	return outcome
 }
 
@@ -413,22 +413,22 @@ func landAndRecord(ctx context.Context, env environ.Env, ws workspace.Info, clon
 // worker's ctx, not the receive's timeoutCtx: the receive fetch already
 // completed, and its remaining budget must not shorten the notifier's own.
 // [LAW:no-ambient-temporal-coupling]
-func surfaceReceiveOutcome(ctx context.Context, env environ.Env, ws workspace.Info, outcome syncReceiveOutcome, now time.Time) {
+func surfaceReceiveOutcome(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, outcome syncReceiveOutcome, now time.Time) {
 	if failure, ok := outcome.inlineSyncFailure(now); ok {
 		block := failure.blockString()
 		// The worker's own log keeps every block it reached; the pending file
 		// is the copy a command prints.
-		fmt.Fprintln(os.Stderr, block)
+		fmt.Fprintln(stderr, block)
 		if err := writeMarkerAtomic(receiveBlockPendingPath(ws), []byte(block+"\n")); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: sync-failure block not left for the next command: %v\n", err)
+			fmt.Fprintf(stderr, "lit: sync-failure block not left for the next command: %v\n", err)
 		}
 		if ev, evOK := ownerNotifyEventForFailure(failure); evOK {
-			maybeNotifyOwner(ctx, env, ws, ev)
+			maybeNotifyOwner(ctx, stderr, env, ws, ev)
 		}
 		return
 	}
 	if outcome.settledCleanly() {
-		endDivergenceEpisode(ws)
+		endDivergenceEpisode(stderr, ws)
 	}
 }
 
@@ -452,10 +452,10 @@ func receiveBlockProvenance(path string, now time.Time) string {
 // divergence is a new episode, and a sync-failure block still waiting for a
 // command is retired, since the divergence it describes is gone.
 // [LAW:single-enforcer] one ending, whichever surface converged.
-func endDivergenceEpisode(ws workspace.Info) {
-	clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+func endDivergenceEpisode(stderr io.Writer, ws workspace.Info) {
+	clearOwnerNotify(stderr, ws, ownerNotifyDivergenceKinds...)
 	if err := os.Remove(receiveBlockPendingPath(ws)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		fmt.Fprintf(os.Stderr, "lit: stale sync-failure block not retired: %v\n", err)
+		fmt.Fprintf(stderr, "lit: stale sync-failure block not retired: %v\n", err)
 	}
 }
 
@@ -471,18 +471,18 @@ func deliverPendingReceiveBlock(w io.Writer, ws workspace.Info) {
 	claimed := fmt.Sprintf("%s.%d", pending, os.Getpid())
 	if err := os.Rename(pending, claimed); err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "lit: pending sync-failure block not claimed: %v\n", err)
+			fmt.Fprintf(w, "lit: pending sync-failure block not claimed: %v\n", err)
 		}
 		return
 	}
 	block, err := os.ReadFile(claimed)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "lit: pending sync-failure block unreadable: %v\n", err)
+		fmt.Fprintf(w, "lit: pending sync-failure block unreadable: %v\n", err)
 	} else if _, err := w.Write(append([]byte(receiveBlockProvenance(claimed, time.Now())), block...)); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: pending sync-failure block not printed: %v\n", err)
+		fmt.Fprintf(w, "lit: pending sync-failure block not printed: %v\n", err)
 	}
 	if err := os.Remove(claimed); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: printed sync-failure block not removed: %v\n", err)
+		fmt.Fprintf(w, "lit: printed sync-failure block not removed: %v\n", err)
 	}
 }
 
@@ -665,12 +665,12 @@ type reconcileOutcome struct {
 //
 // closeLive closes the live store when the settle opened it and is a no-op
 // otherwise; it is the caller's to run once it has recorded the outcome.
-func performSyncReceive(ctx context.Context, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch, observeRun observeUnsettledRun) (outcome syncReceiveOutcome, closeLive func() error) {
+func performSyncReceive(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch, observeRun observeUnsettledRun) (outcome syncReceiveOutcome, closeLive func() error) {
 	closeLive = func() error { return nil }
 	target := fetch.target
 	if target.skip != syncTargetReady {
 		// A receive that skips its target settles nothing and says which skip.
-		recordReceiveSkip(ctx, env, ws, target)
+		recordReceiveSkip(ctx, stderr, env, ws, target)
 		return syncReceiveOutcome{skip: target.skip, remote: target.remote}, closeLive
 	}
 	remoteName, syncBranch := target.remote, target.branch
@@ -687,7 +687,7 @@ func performSyncReceive(ctx context.Context, env environ.Env, ws workspace.Info,
 	var landed store.LandedFetch
 	if stopped == receiveStepNone {
 		var err error
-		landed, err = landFetch(ctx, env, ws, clone, fetch)
+		landed, err = landFetch(ctx, stderr, env, ws, clone, fetch)
 		stopAt(receiveStepLand, err)
 	}
 	var session syncSession
@@ -733,7 +733,7 @@ func performSyncReceive(ctx context.Context, env environ.Env, ws workspace.Info,
 	outcome.unsettledSince = run.since
 	outcome.unsettledPreviousStop = run.previousStop
 	if run.err != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive's unsettled-run records not read or written: %v\n", run.err)
+		fmt.Fprintf(stderr, "lit: automatic receive's unsettled-run records not read or written: %v\n", run.err)
 	}
 	traceMetadata := map[string]string{
 		"remote":      remoteName.String(),
@@ -765,12 +765,12 @@ func performSyncReceive(ctx context.Context, env environ.Env, ws workspace.Info,
 		traceMetadata["error"] = stepErr.Error()
 		receiveDecision = "error"
 	}
-	outcome.traceErr = recordReceiveTrace(env, ws, receiveDecision, traceStatus, traceReason, traceMetadata)
+	outcome.traceErr = recordReceiveTrace(stderr, env, ws, receiveDecision, traceStatus, traceReason, traceMetadata)
 	// The reconcile runs INLINE on this same engine because embedded Dolt permits
 	// only one read-write engine per path — a worker would collide with the next
 	// foreground command. [LAW:no-ambient-temporal-coupling]
 	if stopped == receiveStepNone && result.State == storage.SyncReceiveDiverged {
-		reconciled, err := performInlineReconcile(ctx, env, session, ws, remoteName, syncBranch)
+		reconciled, err := performInlineReconcile(ctx, stderr, env, session, ws, remoteName, syncBranch)
 		outcome.reconcile = reconciled
 		if err != nil {
 			outcome.stopped, outcome.err = receiveStepReconcile, err
@@ -824,7 +824,7 @@ func reconcileOnce(ctx context.Context, session syncSession, remote storage.Remo
 // prose-pending for the agent surface, never auto-committed by picking a side.
 // [LAW:single-enforcer] One reconcile entrypoint and one trace writer, whether
 // the receive was inline or foreground.
-func performInlineReconcile(ctx context.Context, env environ.Env, session syncSession, ws workspace.Info, remote storage.RemoteName, branch string) (*reconcileOutcome, error) {
+func performInlineReconcile(ctx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, remote storage.RemoteName, branch string) (*reconcileOutcome, error) {
 	result, reconcileErr := reconcileOnce(ctx, session, remote, branch)
 	// "replayed" matches the explicit reconcile/take reporters: the durable
 	// trace carries the provenance-replay count for every outcome, zero
@@ -838,8 +838,8 @@ func performInlineReconcile(ctx context.Context, env environ.Env, session syncSe
 	landingMetadata(traceMetadata, result.Landing)
 	// The receive settles silently on success, so its moves go to the worker's
 	// own log as well as the trace: a ticket moved out of sight is still named.
-	if err := writeLanding(os.Stderr, "the merged backlog", result.Landing); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic reconcile moves not reported: %v\n", err)
+	if err := writeLanding(stderr, "the merged backlog", result.Landing); err != nil {
+		fmt.Fprintf(stderr, "lit: automatic reconcile moves not reported: %v\n", err)
 	}
 	traceStatus := "ok"
 	traceReason := reconcileReasonForState(result.State)
@@ -861,7 +861,7 @@ func performInlineReconcile(ctx context.Context, env environ.Env, session syncSe
 		traceReason,
 		traceMetadata,
 	); traceErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
+		fmt.Fprintf(stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
 	}
 	// The durable, unconditional counterpart — same reasoning as performSyncReceive's:
 	// this reconcile is reached from the automatic receive, which commonly runs with no
@@ -871,7 +871,7 @@ func performInlineReconcile(ctx context.Context, env environ.Env, session syncSe
 	if reconcileErr != nil {
 		reconcileDecision = "error"
 	}
-	recordSyncTraceLogged(env, ws, syncTraceRecord{
+	recordSyncTraceLogged(stderr, env, ws, syncTraceRecord{
 		Command:   "lit sync reconcile",
 		Decision:  reconcileDecision,
 		Status:    traceStatus,
@@ -942,9 +942,9 @@ func receiveReasonForState(state storage.SyncReceiveState) string {
 // receive has no reader for a trace ref, unlike the pre-push hook); the sync
 // trace reports its own. [LAW:single-enforcer] one writer, whatever the
 // receive decided.
-func recordReceiveTrace(env environ.Env, ws workspace.Info, decision, status, reason string, metadata map[string]string) error {
+func recordReceiveTrace(stderr io.Writer, env environ.Env, ws workspace.Info, decision, status, reason string, metadata map[string]string) error {
 	_, traceRecordErr := maybeRecordAutomatedCommandTrace(env, ws, receiveTraceCommand, receiveTraceSideEffect, status, reason, metadata)
-	recordSyncTraceLogged(env, ws, syncTraceRecord{
+	recordSyncTraceLogged(stderr, env, ws, syncTraceRecord{
 		Command:   receiveTraceCommand,
 		Decision:  decision,
 		Status:    status,
@@ -975,29 +975,29 @@ func receiveOutcomeValue(decision string, remote storage.RemoteName, cause error
 // [LAW:nothing-unseen] [LAW:single-enforcer] A trace-write failure is not
 // swallowed — it goes to stderr with the decision beside it.
 // [LAW:no-silent-failure]
-func recordReceiveDecided(ctx context.Context, env environ.Env, ws workspace.Info, decision, reason string, remote storage.RemoteName, cause error) {
+func recordReceiveDecided(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, decision, reason string, remote storage.RemoteName, cause error) {
 	telemetry.Append(ctx, "receive.outcomes", receiveOutcomeValue(decision, remote, cause))
 	status, metadata := "ok", syncTarget{remote: remote}.traceMetadata()
 	if cause != nil {
 		status, metadata = "error", map[string]string{"error": cause.Error()}
 	}
-	if traceErr := recordReceiveTrace(env, ws, decision, status, reason, metadata); traceErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic receive could not record its trace (%v); it decided %s: %s\n", traceErr, decision, reason)
+	if traceErr := recordReceiveTrace(stderr, env, ws, decision, status, reason, metadata); traceErr != nil {
+		fmt.Fprintf(stderr, "lit: automatic receive could not record its trace (%v); it decided %s: %s\n", traceErr, decision, reason)
 	}
 }
 
 // recordReceiveError records a could-not-attempt failure, so an automatic
 // receive that fails is loud out-of-band rather than silent.
 // [LAW:no-silent-failure]
-func recordReceiveError(ctx context.Context, env environ.Env, ws workspace.Info, remote storage.RemoteName, cause error) {
-	recordReceiveDecided(ctx, env, ws, "error", cause.Error(), remote, cause)
+func recordReceiveError(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, remote storage.RemoteName, cause error) {
+	recordReceiveDecided(ctx, stderr, env, ws, "error", cause.Error(), remote, cause)
 }
 
 // recordReceiveSkip records a receive that found nothing to sync against,
 // under the skip's own name, the one resolveSyncTarget gives it.
 // [LAW:one-source-of-truth]
-func recordReceiveSkip(ctx context.Context, env environ.Env, ws workspace.Info, target syncTarget) {
-	recordReceiveDecided(ctx, env, ws, string(target.skip), receiveSkipReason(target.skip), target.remote, nil)
+func recordReceiveSkip(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, target syncTarget) {
+	recordReceiveDecided(ctx, stderr, env, ws, string(target.skip), receiveSkipReason(target.skip), target.remote, nil)
 }
 
 // receiveSkipReason is a skip's sentence in the receive's trace.

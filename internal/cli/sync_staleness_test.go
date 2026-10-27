@@ -161,20 +161,20 @@ func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
 	origin, fork := remoteName(t, "origin"), remoteName(t, "fork")
 	now := time.Now()
 
-	if _, ok := lastFetchSuccessAge(ws, origin, now); ok {
+	if _, ok := lastFetchSuccessAge(testStderr(t), ws, origin, now); ok {
 		t.Fatalf("lastFetchSuccessAge() ok = true before any fetch ever succeeded")
 	}
 	if err := markFetchSuccess(ws, fork); err != nil {
 		t.Fatalf("markFetchSuccess(fork) error = %v", err)
 	}
-	if _, ok := lastFetchSuccessAge(ws, origin, now); ok {
+	if _, ok := lastFetchSuccessAge(testStderr(t), ws, origin, now); ok {
 		t.Fatalf("lastFetchSuccessAge(origin) ok = true after only fork was fetched")
 	}
 
 	if err := markFetchSuccess(ws, origin); err != nil {
 		t.Fatalf("markFetchSuccess(origin) error = %v", err)
 	}
-	age, ok := lastFetchSuccessAge(ws, origin, now.Add(90*time.Minute))
+	age, ok := lastFetchSuccessAge(testStderr(t), ws, origin, now.Add(90*time.Minute))
 	if !ok {
 		t.Fatalf("lastFetchSuccessAge() ok = false after markFetchSuccess")
 	}
@@ -194,13 +194,12 @@ func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
 func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) {
 	ws := workspace.Info{Location: workspace.Location{StorageDir: filepath.Join(t.TempDir(), "storage\x00")}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 
-	stderr := captureStderr(t, func() {
-		if _, ok := lastFetchSuccessAge(ws, remoteName(t, "origin"), time.Now()); ok {
-			t.Errorf("lastFetchSuccessAge() ok = true for an unreadable marker path")
-		}
-	})
-	if !strings.Contains(stderr, "fetch-success marker unreadable") {
-		t.Fatalf("lastFetchSuccessAge() stderr = %q, want it to report the unreadable marker", stderr)
+	var stderr bytes.Buffer
+	if _, ok := lastFetchSuccessAge(&stderr, ws, remoteName(t, "origin"), time.Now()); ok {
+		t.Errorf("lastFetchSuccessAge() ok = true for an unreadable marker path")
+	}
+	if !strings.Contains(stderr.String(), "fetch-success marker unreadable") {
+		t.Fatalf("lastFetchSuccessAge() stderr = %q, want it to report the unreadable marker", stderr.String())
 	}
 }
 
@@ -219,7 +218,7 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), backdated, backdated); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
-	age, ok := lastFetchSuccessAge(ws, origin, time.Now())
+	age, ok := lastFetchSuccessAge(testStderr(t), ws, origin, time.Now())
 	if !ok {
 		t.Fatalf("lastFetchSuccessAge() ok = false for a backdated marker")
 	}
@@ -256,7 +255,7 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := printStalenessWarning(ctx, testEnv(), &buf, ws, st, time.Now()); err != nil {
+	if err := printStalenessWarning(ctx, testStderr(t), testEnv(), &buf, ws, st, time.Now()); err != nil {
 		t.Fatalf("printStalenessWarning() error = %v", err)
 	}
 	if buf.Len() != 0 {

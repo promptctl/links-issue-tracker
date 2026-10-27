@@ -16,7 +16,7 @@ into* one of those, the call and its observable effect are recorded here.
 ### 1.1 Entry point and global argument handling
 
 - `Run(ctx, inv)` is the package entry (`internal/cli/cli.go`); `inv` is the `Invocation` (directory, args, environment, stdin, stdout, stderr) (`internal/cli/invocation.go`).
-  It first refuses an `Invocation` whose `Env` is the zero `Env` (`Env.IsZero`), the one a literal that leaves `Env` out holds, with `the invocation was given no environment`; then it runs `parseGlobalArgs` (`cli.go`), then builds the cobra root
+  It first refuses an `Invocation` whose `Stdin`, `Stdout` or `Stderr` is nil, before opening its event, with an error naming that stream. It then refuses one whose `Env` is the zero `Env` (`Env.IsZero`), the one a literal that leaves `Env` out holds, with `the invocation was given no environment`; then it runs `parseGlobalArgs` (`cli.go`), then builds the cobra root
   (`cli.go`), sets args/out/err, sets `SilenceErrors = true` and
   `SilenceUsage = true` (`cli.go`), and executes.
 - `pflag.ErrHelp` and the internal `errHelpHandled` sentinel are swallowed and
@@ -300,8 +300,8 @@ empty string means no `remediation:` line is printed:
 
 ### 1.10 Progress channel
 
-`progressf(operation, format, args...)` writes `lit: <operation>: <text>\n` to
-`progressOut`, which is `os.Stderr` (`progress.go`).
+`progressf(stderr, operation, format, args...)` writes `lit: <operation>: <text>\n`
+to `stderr`, the stderr its invocation was given (`progress.go`).
 Stdout stays the result channel.
 
 ### 1.11 Identity resolution (assignee / actor)
@@ -358,7 +358,7 @@ breadcrumb (`purge.go`), and neither does `verdict` (`verdict.go`).
 
 ### 1.14 Workflow event dispatch
 
-Every dispatch is `workflows.Dispatch(stdout, os.Stderr, ap.Workspace, occasion)`.
+Every dispatch is `workflows.Dispatch(env, stdout, stderr, ws, o)`, with the invocation's stdout and stderr.
 Occasion builders (`workflow_events.go`):
 - `showTicketOccasion` → `EventShowTicket`, carries IssueID + Labels
 - `backlogOccasion` → `EventShowBacklog`, no IssueID/Labels

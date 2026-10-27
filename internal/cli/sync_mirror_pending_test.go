@@ -87,7 +87,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	claim, releaseAnswer, err := claimMirrorPending(ctx, ws, now)
+	claim, releaseAnswer, err := claimMirrorPending(ctx, testStderr(t), ws, now)
 	if err != nil {
 		t.Fatalf("claimMirrorPending on absent marker: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold mirror beacon as the live answerer: %v", err)
 	}
-	claim, _, err = claimMirrorPending(ctx, ws, now.Add(time.Second))
+	claim, _, err = claimMirrorPending(ctx, testStderr(t), ws, now.Add(time.Second))
 	if err != nil {
 		t.Fatalf("claimMirrorPending under a live holder: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 		t.Fatalf("stat backdated marker: %v", err)
 	}
 	backdatedAt := info.ModTime()
-	claim, _, err = claimMirrorPending(ctx, ws, now.Add(2*time.Second))
+	claim, _, err = claimMirrorPending(ctx, testStderr(t), ws, now.Add(2*time.Second))
 	if err != nil {
 		t.Fatalf("claimMirrorPending on backdated marker under a live holder: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("take exclusive squat: acquired=%v err=%v", acquired, err)
 	}
-	claim, releaseAnswer, err = claimMirrorPending(ctx, ws, now.Add(3*time.Second))
+	claim, releaseAnswer, err = claimMirrorPending(ctx, testStderr(t), ws, now.Add(3*time.Second))
 	if err != nil {
 		t.Fatalf("claimMirrorPending under exclusive squatter: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	}
 
 	reclaimNow := now.Add(4 * time.Second)
-	claim, releaseAnswer, err = claimMirrorPending(ctx, ws, reclaimNow)
+	claim, releaseAnswer, err = claimMirrorPending(ctx, testStderr(t), ws, reclaimNow)
 	if err != nil {
 		t.Fatalf("claimMirrorPending on residue: %v", err)
 	}
@@ -198,14 +198,14 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 func TestClearMirrorPendingIdempotent(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
-	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
+	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	clearMirrorPending(ws)
+	clearMirrorPending(testStderr(t), ws)
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("clear left the marker in place")
 	}
-	clearMirrorPending(ws)
+	clearMirrorPending(testStderr(t), ws)
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("clearing an absent marker resurrected it")
 	}
@@ -247,7 +247,7 @@ func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("an absent marker read as set")
 	}
-	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
+	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	if !mirrorPendingSet(t, ws) {
@@ -271,12 +271,12 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 
-	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
+	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testEnv(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 
@@ -284,7 +284,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 		t.Fatal("a dying mirror left its claim behind for the next claim's probe to recover; code-running endings must release it themselves")
 	}
 
-	rec, _, ok := lastPushOutcome(ws, time.Now())
+	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok {
 		t.Fatal("a pre-attempt mirror failure left no push-outcome marker; the staleness banner cannot see it")
 	}
@@ -311,10 +311,10 @@ func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 
 	cause := fmt.Errorf("open sync store: %w", context.Canceled)
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testEnv(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
-	rec, _, ok := lastPushOutcome(ws, time.Now())
+	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok || rec.Decision != pushDecisionCanceled || rec.failed() {
 		t.Fatalf("a cancelled mirror must record the non-failed canceled decision (ok=%v rec=%+v)", ok, rec)
 	}
@@ -332,15 +332,15 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
-	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
+	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testEnv(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
-	rec, _, ok := lastPushOutcome(ws, time.Now())
+	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok || rec.Decision != pushDecisionWorkspaceBusy || rec.failed() {
 		t.Fatalf("a busy-workspace ending must record the non-failed workspace_busy decision (ok=%v rec=%+v)", ok, rec)
 	}
@@ -375,7 +375,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 		_ = f.Close()
 	}
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testEnv(), ws, cause, stopAnswering); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, stopAnswering); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	payload, err := os.ReadFile(sink)
@@ -395,7 +395,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
-	_, releaseAnswer, err := claimMirrorPending(context.Background(), ws, time.Now())
+	_, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 	if err := os.Chtimes(mirrorPendingMarkerPath(ws), future, future); err != nil {
 		t.Fatalf("future-date marker: %v", err)
 	}
-	claim, _, err := claimMirrorPending(context.Background(), ws, time.Now())
+	claim, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
 	if err != nil {
 		t.Fatalf("claimMirrorPending on future marker: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestRecheckMirrorPending(t *testing.T) {
 		t.Fatalf("absent marker: (again=%v err=%v), want clean done", again, err)
 	}
 
-	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
+	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	again, err = recheckMirrorPending(ws, cycleStart)
@@ -462,7 +462,7 @@ func TestRecheckMirrorPending(t *testing.T) {
 func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	_, releaseAnswer, err := claimMirrorPending(context.Background(), ws, time.Now())
+	_, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
@@ -479,13 +479,13 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 		}
 	}()
 
-	if err := runBackgroundMirror(context.Background(), os.Stderr, ws, nil); err != nil {
+	if err := runBackgroundMirror(context.Background(), testStderr(t), ws, nil); err != nil {
 		t.Fatalf("runBackgroundMirror must be best-effort nil, got %v", err)
 	}
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("a beacon-refused mirror left its claim behind; the next mutation must re-claim at once")
 	}
-	rec, _, ok := lastPushOutcome(ws, time.Now())
+	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
 	if !ok {
 		t.Fatal("a beacon-refused mirror left no push-outcome record")
 	}
@@ -503,19 +503,19 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 func TestRunBackgroundMirrorTeardownReleasesClaim(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
+	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := runBackgroundMirror(ctx, os.Stderr, ws, nil); err != nil {
+	if err := runBackgroundMirror(ctx, testStderr(t), ws, nil); err != nil {
 		t.Fatalf("runBackgroundMirror teardown must be best-effort nil, got %v", err)
 	}
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("teardown left the claim behind; mutations would falsely read as covered")
 	}
-	if _, _, ok := lastPushOutcome(ws, time.Now()); ok {
+	if _, _, ok := lastPushOutcome(testStderr(t), ws, time.Now()); ok {
 		t.Fatal("teardown wrote a push outcome; the last completed attempt's record must stand")
 	}
 }

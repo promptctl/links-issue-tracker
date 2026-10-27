@@ -18,7 +18,7 @@ import (
 func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
 	ws := pushedRepoWithoutRemoteHead(t)
-	got, err := resolveSyncBranch(underInvocation(context.Background()), testEnv(), ws, originRemote(t, ws))
+	got, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), testEnv(), ws, originRemote(t, ws))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
@@ -33,7 +33,7 @@ func TestResolveSyncBranchErrorsWhenRemoteAdvertisesNoDefault(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
 	runGit(t, ws.RootDir, "--git-dir", originRemote(t, ws).URL(), "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
-	_, err := resolveSyncBranch(underInvocation(context.Background()), testEnv(), ws, originRemote(t, ws))
+	_, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), testEnv(), ws, originRemote(t, ws))
 	if err == nil {
 		t.Fatal("expected error when the remote advertises no default branch")
 	}
@@ -52,7 +52,7 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 	ctx, cancel := context.WithCancel(underInvocation(context.Background()))
 	cancel()
 	ws := pushedRepoWithoutRemoteHead(t)
-	_, err := resolveSyncBranch(ctx, testEnv(), ws, originRemote(t, ws))
+	_, err := resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, originRemote(t, ws))
 	if err == nil {
 		t.Fatal("expected error when context is cancelled")
 	}
@@ -73,7 +73,7 @@ func TestKnownSyncBranchReportsWhatTheSyncVerbResolved(t *testing.T) {
 	if _, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin")); err == nil {
 		t.Fatal("knownSyncBranch() before any sync: want the not-known error")
 	}
-	synced, err := resolveSyncBranch(ctx, testEnv(), ws, originRemote(t, ws))
+	synced, err := resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, originRemote(t, ws))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
@@ -118,7 +118,7 @@ func TestResolveSyncBranchSurfacesCancellationMidAsk(t *testing.T) {
 	remote := originRemote(t, ws)
 	ctx, cancel := context.WithTimeout(underInvocation(context.Background()), 300*time.Millisecond)
 	defer cancel()
-	_, err := resolveSyncBranch(ctx, testEnv(), ws, remote)
+	_, err := resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, remote)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want context.DeadlineExceeded in the chain", err)
 	}
@@ -231,7 +231,7 @@ func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
 	}
 	ws := pushedRepoWithoutRemoteHead(t)
 	resolve := func(ctx context.Context) (string, error) {
-		return resolveSyncBranch(ctx, testEnv(), ws, originRemote(t, ws))
+		return resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, originRemote(t, ws))
 	}
 	known := func(ctx context.Context) (string, error) {
 		return knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
@@ -292,12 +292,12 @@ func TestTheSyncBranchOverrideOutranksAnUnreadableRemoteHead(t *testing.T) {
 	runGit(t, ws.RootDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/trunk")
 	remote := originRemote(t, ws)
 	t.Setenv(debugSyncBranchEnvVar, "")
-	if _, err := resolveSyncBranch(underInvocation(context.Background()), testEnv(), ws, remote); err == nil || !strings.Contains(err.Error(), "set-head") {
+	if _, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), testEnv(), ws, remote); err == nil || !strings.Contains(err.Error(), "set-head") {
 		t.Fatalf("resolveSyncBranch() with no override = %v; want the remote HEAD's error naming set-head", err)
 	}
 	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
 	env := testEnv()
-	if got, err := resolveSyncBranch(underInvocation(context.Background()), env, ws, remote); err != nil || got != "debug-branch" {
+	if got, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), env, ws, remote); err != nil || got != "debug-branch" {
 		t.Fatalf("resolveSyncBranch() = %q, %v; want debug-branch", got, err)
 	}
 	if got, err := knownSyncBranch(underInvocation(context.Background()), env, ws, remoteName(t, "origin")); err != nil || got != "debug-branch" {

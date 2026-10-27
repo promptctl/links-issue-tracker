@@ -75,7 +75,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				if err != nil {
 					t.Fatalf("resolve bravo: %v", err)
 				}
-				if rec, _, ok := lastPushOutcome(ws, time.Now()); !ok || rec.Decision != receive.decision {
+				if rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now()); !ok || rec.Decision != receive.decision {
 					t.Fatalf("bravo's push-outcome marker = %+v (ok=%t); want %s", rec, ok, receive.decision)
 				}
 				if trace := lastPushTrace(t, ws); trace.Decision != receive.decision {

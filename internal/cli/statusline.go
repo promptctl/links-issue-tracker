@@ -3,7 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -18,15 +18,15 @@ import (
 // statusline file and puts what the write did on the command's event. A
 // failure is a warning and never the command's failure: the command's own work
 // is already done, and the file is a record of it, not part of it.
-func recordStatusline(ctx context.Context, ws workspace.Info, facts statusline.Facts) {
+func recordStatusline(ctx context.Context, stderr io.Writer, ws workspace.Info, facts statusline.Facts) {
 	out, err := statusline.Write(statusline.LocationOf(ws.RootDir, ws.GitCommonDir), facts, time.Now())
 	recordStatuslineEvent(ctx, out, err)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: statusline file not written: %v\n", err)
+		fmt.Fprintf(stderr, "warning: statusline file not written: %v\n", err)
 		return
 	}
 	if out.Replaced != nil {
-		fmt.Fprintf(os.Stderr, "warning: statusline file held what this lit cannot read, rewritten: %v\n", out.Replaced)
+		fmt.Fprintf(stderr, "warning: statusline file held what this lit cannot read, rewritten: %v\n", out.Replaced)
 	}
 }
 

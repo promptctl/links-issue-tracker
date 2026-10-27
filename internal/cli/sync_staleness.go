@@ -66,11 +66,11 @@ func markFetchSuccess(ws workspace.Info, remote storage.RemoteName) error {
 // silently folded into the same ok=false, so a broken storage dir is
 // diagnosable instead of just reading as a quiet workspace.
 // [LAW:no-silent-failure]
-func lastFetchSuccessAge(ws workspace.Info, remote storage.RemoteName, now time.Time) (age time.Duration, ok bool) {
+func lastFetchSuccessAge(stderr io.Writer, ws workspace.Info, remote storage.RemoteName, now time.Time) (age time.Duration, ok bool) {
 	info, err := os.Stat(fetchSuccessMarkerPath(ws, remote))
 	if err != nil {
 		if !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "lit: fetch-success marker unreadable: %v\n", err)
+			fmt.Fprintf(stderr, "lit: fetch-success marker unreadable: %v\n", err)
 		}
 		return 0, false
 	}
@@ -91,12 +91,12 @@ type remoteFetch struct {
 // banner is best-effort, so an unresolved remote prints no fetch line, as it
 // prints no freshness line; `lit doctor` names why.
 // [LAW:types-are-the-program] a known fetch always names its remote.
-func lastTargetFetch(ctx context.Context, ws workspace.Info, now time.Time) *remoteFetch {
+func lastTargetFetch(ctx context.Context, stderr io.Writer, ws workspace.Info, now time.Time) *remoteFetch {
 	remote, ok, err := workspaceSyncRemote(ctx, ws, "")
 	if err != nil || !ok {
 		return nil
 	}
-	age, ok := lastFetchSuccessAge(ws, remote.Name(), now)
+	age, ok := lastFetchSuccessAge(stderr, ws, remote.Name(), now)
 	if !ok {
 		return nil
 	}
@@ -205,9 +205,9 @@ func oneLineReason(reason string) string {
 // Best-effort throughout: an unresolved or no-remote workspace prints no
 // freshness line rather than aborting the caller, because this banner is supplementary, not
 // itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
-func printStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
+func printStalenessWarning(ctx context.Context, stderr io.Writer, env environ.Env, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, env, ws, st)
-	fetch := lastTargetFetch(ctx, ws, now)
+	fetch := lastTargetFetch(ctx, stderr, ws, now)
 	// Build drift leads the whole banner. It is the deepest of the three: a
 	// binary that predates master can be the reason the sync lines below read
 	// the way they do, so a reader who takes it in first interprets everything
@@ -217,8 +217,8 @@ func printStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws
 	// The push-failure line leads the sync pair: it names the CAUSE (pushes are
 	// failing), which the ahead-count line below only shows the accumulating
 	// effect of.
-	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
-	lines = append(lines, syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())...)
+	rec, pushAge, pushKnown := lastPushOutcome(stderr, ws, now)
+	lines = append(lines, syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion(stderr))...)
 	lines = append(lines, syncStalenessLines(report, fetch)...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
@@ -243,13 +243,13 @@ func printStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws
 // would tell the caller the mutation failed when it succeeded — the exit code
 // stays truthful about the command's own work. [LAW:no-silent-failure] the
 // failure is still loud, on the channel that cannot lie about the mutation.
-func printMutationSyncStalenessWarning(ctx context.Context, env environ.Env, w io.Writer, ws workspace.Info, now time.Time) {
-	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
-	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
-	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, ws, now))...)
+func printMutationSyncStalenessWarning(ctx context.Context, stderr io.Writer, env environ.Env, w io.Writer, ws workspace.Info, now time.Time) {
+	rec, pushAge, pushKnown := lastPushOutcome(stderr, ws, now)
+	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion(stderr))
+	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, stderr, ws, now))...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: staleness banner not written: %v\n", err)
+			fmt.Fprintf(stderr, "lit: staleness banner not written: %v\n", err)
 			return
 		}
 	}

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"io"
-	"os"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -16,8 +15,8 @@ import (
 // event records the occasion and which definitions fired on it, an empty list
 // when none did. [LAW:nothing-unseen] [LAW:single-enforcer] every dispatching
 // command routes here, so none can fire guidance its event does not name.
-func dispatchOccasion(ctx context.Context, env environ.Env, stdout io.Writer, ws workspace.Info, o workflows.Occasion) error {
-	fired, err := workflows.Dispatch(env, stdout, os.Stderr, ws, o)
+func dispatchOccasion(ctx context.Context, stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, o workflows.Occasion) error {
+	fired, err := workflows.Dispatch(env, stdout, stderr, ws, o)
 	ids := make([]string, len(fired))
 	for i, def := range fired {
 		ids[i] = def.ID

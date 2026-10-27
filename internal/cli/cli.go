@@ -38,6 +38,18 @@ import (
 // recording to do itself.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func Run(ctx context.Context, inv Invocation) (err error) {
+	// A missing stream is refused before anything holds it, the invocation's
+	// own record included, rather than at the rare warning or read that would
+	// otherwise panic on it mid-command; such an invocation opens no event, as
+	// it has no stderr to report a failed one on. [LAW:no-silent-failure]
+	switch {
+	case inv.Stdin == nil:
+		return errors.New("the invocation was given no stdin")
+	case inv.Stdout == nil:
+		return errors.New("the invocation was given no stdout")
+	case inv.Stderr == nil:
+		return errors.New("the invocation was given no stderr")
+	}
 	recorder := beginInvocation(time.Now(), inv.Dir)
 	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env, gitSpawnsBefore: inv.Env.GitSpawns()}
 	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
@@ -94,7 +106,7 @@ func dispatch(ctx context.Context, inv Invocation) error {
 	// Recorded here because every command's error returns through this seam;
 	// the mirror never reaches it — its busy errors complete through the
 	// push-outcome seam and it exits 0. [LAW:single-enforcer]
-	recordEngineOpenContentionTrace(ctx, inv.Env, err)
+	recordEngineOpenContentionTrace(ctx, inv.Stderr, inv.Env, err)
 	return err
 }
 
@@ -127,7 +139,7 @@ func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
 			// so the output is always identical to `lit quickstart`.
-			ws, wsErr := resolveWorkspace(cmd.Context(), inv.Env, inv.Dir, workspace.PrefixRequest{})
+			ws, wsErr := resolveWorkspace(cmd.Context(), inv.Stderr, inv.Env, inv.Dir, workspace.PrefixRequest{})
 			// [LAW:dataflow-not-control-flow] Only the "outside git repo" case routes to help;
 			// other failures (getcwd, template load) surface so they remain diagnosable.
 			var outside OutsideWorkspaceError
@@ -167,7 +179,7 @@ func newRootCommand(ctx context.Context, inv Invocation) *cobra.Command {
 }
 
 func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
-	ws, err := resolveWorkspace(ctx, inv.Env, inv.Dir, workspace.PrefixRequest{})
+	ws, err := resolveWorkspace(ctx, inv.Stderr, inv.Env, inv.Dir, workspace.PrefixRequest{})
 	if err != nil {
 		return err
 	}
@@ -187,13 +199,13 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// The engine closes inside runThenMeasure (including on panic), so the close
 	// always precedes the automatic sync below, which needs only the workspace.
 	runErr := runThenMeasure(ctx, ws.DatabasePath, ap.Close, func() error {
-		reportOpenMigration(ctx, storage.OpenMigration(ap.Store))
+		reportOpenMigration(ctx, inv.Stderr, storage.OpenMigration(ap.Store))
 		return run(ctx, ap)
 	})
 	// After the close, so the write happens outside the workspace lock, and
 	// before the error check, because a fact recorded before a failure is still
 	// true: `lit next` reports finding nothing as an error, and that is the fact.
-	recordStatusline(ctx, ws, ap.Statusline)
+	recordStatusline(ctx, inv.Stderr, ws, ap.Statusline)
 	// Beside the statusline for the same two reasons: it needs no engine, and a
 	// clock reading a failed command took was still taken. A write another
 	// process left staged that this command committed, and a scratch branch it
@@ -215,7 +227,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// auto-sync below so the banner reports the last COMPLETED attempt rather
 	// than racing the one about to spawn.
 	if accessMode.Writes() {
-		printMutationSyncStalenessWarning(ctx, inv.Env, inv.Stdout, ws, time.Now())
+		printMutationSyncStalenessWarning(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, time.Now())
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
 	// successful command, AND after that command's engine is closed: the on-change
@@ -224,7 +236,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// a worker's open on the path together, which embedded Dolt forbids. Command
 	// handlers stay unaware of any of this.
 	// [LAW:no-ambient-temporal-coupling]
-	maybeAutoSyncAfterCommand(ctx, inv.Env, accessMode, ws)
+	maybeAutoSyncAfterCommand(ctx, inv.Stderr, inv.Env, accessMode, ws)
 	return nil
 }
 
@@ -234,7 +246,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 // [LAW:single-enforcer] Every command acquires its workspace here, so this is
 // the one translation of ErrNotGitRepo into the typed CLI error and the one
 // place the workspace's config keys are checked.
-func resolveWorkspace(ctx context.Context, env environ.Env, dir WorkingDir, requested workspace.PrefixRequest) (workspace.Info, error) {
+func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, dir WorkingDir, requested workspace.PrefixRequest) (workspace.Info, error) {
 	cwd, err := dir.Path()
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
@@ -247,7 +259,7 @@ func resolveWorkspace(ctx context.Context, env environ.Env, dir WorkingDir, requ
 		}
 		return workspace.Info{}, err
 	}
-	reportConfigLayers(ctx, env, ws.Project)
+	reportConfigLayers(ctx, stderr, env, ws.Project)
 	return ws, nil
 }
 
@@ -360,7 +372,7 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -465,7 +477,7 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, issue); err != nil {
@@ -547,7 +559,7 @@ func runList(ctx context.Context, inv Invocation, surface listSurface, args []st
 			return fmt.Errorf("open store at %q read-only: %w", atDir.path(), markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		return runThenMeasure(ctx, loc.DatabasePath, st.Close, func() error {
-			reportOpenMigration(ctx, storage.OpenMigration(st))
+			reportOpenMigration(ctx, inv.Stderr, storage.OpenMigration(st))
 			// noReadyPolicy, for the reason gatherCrossProjectRollup states at its own
 			// foreign-store call: a Location carries no repo root, so there is no ready
 			// policy to read. It opts out of ONLY the field-presence gate; every
@@ -1254,7 +1266,7 @@ func showLeaf() appLeaf {
 		// into `lit update`; prepending the banner there would corrupt it.
 		// [LAW:dataflow-not-control-flow]
 		if strings.TrimSpace(*fieldsExpr) == "" {
-			if err := printStalenessWarning(ctx, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+			if err := printStalenessWarning(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 				return err
 			}
 		}
@@ -1263,7 +1275,7 @@ func showLeaf() appLeaf {
 			return err
 		}
 		// The agent viewed the ticket's details either way, --field or full view.
-		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
 			return err
 		}
 		// --field is the compact, edit-oriented view: exactly the requested
@@ -1425,7 +1437,7 @@ func updateLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, ticketUpdatedOccasion(applied.Issue)); err != nil {
 			return err
 		}
 		if err := printIssueSummary(inv.Stdout, applied.Issue); err != nil {
@@ -2102,7 +2114,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// injected — `done`'s embedded default is what prints the post-close
 		// capture reminder below.
 		if occasion, fires := transitionOccasion(action, prior, written); fires {
-			if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, occasion); err != nil {
+			if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, occasion); err != nil {
 				return err
 			}
 		}
@@ -2164,7 +2176,7 @@ func commentAddLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := dispatchOccasion(ctx, inv.Env, inv.Stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
+		if err := dispatchOccasion(ctx, inv.Stderr, inv.Env, inv.Stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
 			return err
 		}
 		return printComment(inv.Stdout, comment)

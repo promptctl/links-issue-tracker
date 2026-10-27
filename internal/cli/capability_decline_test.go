@@ -89,7 +89,7 @@ func TestReconcilerForRefusesAnEngineThatDeclinesReconcile(t *testing.T) {
 			t.Parallel()
 			ws := declineWorkspace(t)
 
-			reconciler, err := reconcilerFor(testEnv(), ws, syncSession{engine: syncOnlyEngine{}}, command)
+			reconciler, err := reconcilerFor(testStderr(t), testEnv(), ws, syncSession{engine: syncOnlyEngine{}}, command)
 
 			wantUnsupported(t, err, "reconcile")
 			if reconciler != nil {
@@ -125,7 +125,7 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	t.Parallel()
 	ws := declineWorkspace(t)
 
-	outcome, err := performInlineReconcile(context.Background(), testEnv(), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
+	outcome, err := performInlineReconcile(context.Background(), testStderr(t), testEnv(), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
 
 	wantUnsupported(t, err, "reconcile")
 	for _, settled := range []storage.SyncReconcileState{
@@ -170,7 +170,7 @@ func TestRestoreRefusesAnEngineThatCannotImportBeforeTouchingAnything(t *testing
 	ws := declineWorkspace(t)
 	ap := &app.App{Workspace: ws, Store: syncOnlyEngine{}}
 
-	_, err := restoreFromExportPath(context.Background(), testEnv(), ap, filepath.Join(t.TempDir(), "no-such-export.json"), false)
+	_, err := restoreFromExportPath(context.Background(), testStderr(t), testEnv(), ap, filepath.Join(t.TempDir(), "no-such-export.json"), false)
 
 	wantUnsupported(t, err, "import")
 	snapshots, listErr := backup.List(ws.StorageDir)

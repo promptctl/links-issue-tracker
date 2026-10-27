@@ -17,7 +17,7 @@ func receiveEvent(t *testing.T, ws workspace.Info) (telemetry.Event, map[string]
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testEnv(), ws)
+	receiveOnce(ctx, testStderr(t), testEnv(), ws)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {

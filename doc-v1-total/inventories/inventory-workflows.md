@@ -455,7 +455,7 @@ which sets the facts `workflows.event`, `workflows.entered`, `workflows.exited` 
 - A **trace-write failure never fails Dispatch** — the guidance was already written; the failure
   goes to `errOut` as
   `lit: workflow firing trace could not be recorded (%v); guidance was still injected\n`
-  (`internal/workflows/dispatch.go`). Every CLI call site passes `os.Stderr` as `errOut`.
+  (`internal/workflows/dispatch.go`). Every CLI call site passes its invocation's stderr as `errOut`.
 - Exit codes are unaffected by workflow firing; the general mapping is
   `ExitOK=0, ExitGeneric=1, ExitUsage=2, ExitValidation=3, ExitNotFound=4, ExitConflict=5,
   ExitNoWork=6, ExitCorruption=7` (`internal/cli/exit.go`).

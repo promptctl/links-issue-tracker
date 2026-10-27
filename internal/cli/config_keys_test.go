@@ -30,9 +30,7 @@ func TestUnknownConfigKeysWarnOncePerCommand(t *testing.T) {
 	for _, args := range [][]string{{}, {"backlog"}, {"quickstart"}} {
 		command := strings.Join(append([]string{"lit"}, args...), " ")
 		t.Run(command, func(t *testing.T) {
-			var out string
-			var err error
-			stderr := captureStderr(t, func() { out, err = runCLIInDirAllowError(t, repo, args...) })
+			out, stderr, err := runCLIInDirSplit(t, repo, args...)
 			if err != nil {
 				t.Fatalf("%s error = %v, want it to run\noutput:\n%s", command, err, out)
 			}
@@ -60,7 +58,10 @@ func TestKnownConfigKeysWarnNothing(t *testing.T) {
 	repo := newInitTestRepo(t)
 	writeConfigLayers(t, repo, "required_fields = [\"title\"]\n", "[snapshot]\nretention_budget = 2\n")
 
-	stderr := captureStderr(t, func() { runCLIInDir(t, repo, "backlog") })
+	_, stderr, err := runCLIInDirSplit(t, repo, "backlog")
+	if err != nil {
+		t.Fatalf("lit backlog error = %v\nstderr:\n%s", err, stderr)
+	}
 	if got := warningLines(stderr); len(got) != 0 {
 		t.Errorf("stderr warnings = %q, want none", got)
 	}
@@ -76,7 +77,7 @@ func TestUnparseableConfigLayerWarnsAndHidesNoOtherKey(t *testing.T) {
 	repo := newInitTestRepo(t)
 	globalFile, projectFile := writeConfigLayers(t, repo, "[init]\ninstall_hooks = false\n", "[sync\n")
 
-	stderr := captureStderr(t, func() { _, _ = runCLIInDirAllowError(t, repo, "backlog") })
+	_, stderr, _ := runCLIInDirSplit(t, repo, "backlog")
 	got := warningLines(stderr)
 	if len(got) != 2 ||
 		!strings.HasPrefix(got[0], "warning: config keys were not checked: parse config "+projectFile+":") ||
