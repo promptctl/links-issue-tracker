@@ -933,8 +933,9 @@ Justfile or any workflow in `.github/workflows/`.
      with `::error::go.mod/go.sum are not tidy…`; `grep -q -- "-buildvcs=false" scripts/install.sh`
 ; `bash scripts/install.sh`.
   4. **`lint`**: `golangci/golangci-lint-action@v8` pinned to `version: v2.8.0` with `verify: false`;
-     then `golangci-lint version --short` → `curl -fsS --retry 5 --retry-all-errors` of
-     `golangci.v<major>.<minor>.jsonschema.json` into `$RUNNER_TEMP` → `golangci-lint config verify --schema`.
+     then, under `if: ${{ !cancelled() }}`, `golangci-lint version --short` → `curl -fsS --retry 5 --retry-all-errors` of
+     `raw.githubusercontent.com/golangci/golangci-lint/v<version>/jsonschema/golangci.jsonschema.json` into `$RUNNER_TEMP`
+     → `golangci-lint config verify --schema`.
   5. **`docs`**: setup-python@v5 `3.x`; `pip install mkdocs==1.6.1 mkdocs-material==9.7.6`;
      `mkdocs build --strict`.
   6. **`candybar`**: checkout@v4 → setup-go@v5 → setup-node@v4 (`node-version: '22'`) →

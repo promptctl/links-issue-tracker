@@ -231,17 +231,21 @@ jobs:
 
       # [LAW:single-enforcer] the one place .golangci.yml is checked against
       # its schema, so a misspelled key cannot silently switch a rule off.
-      # [LAW:one-source-of-truth] the schema's version is read off the binary
-      # the action installed (it puts it on PATH), so the pin above stays the
-      # only version literal. curl retries the fetch; an outage that outlasts
-      # the retries still fails here, loudly, after linting has reported.
+      # [LAW:one-source-of-truth] the schema is the one golangci-lint's repo
+      # holds at the installed binary's release tag (the action puts the binary
+      # on PATH), so the pin above stays the only version literal and the
+      # schema cannot move under it - golangci-lint.run's per-minor schema is
+      # republished as later releases land. curl retries the fetch; an outage
+      # that outlasts the retries still fails here, loudly. It runs whether or
+      # not linting passed, so every run reports the config's verdict.
       - name: .golangci.yml matches golangci-lint's schema
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          minor="$(golangci-lint version --short | cut -d. -f1,2)"
-          schema="$RUNNER_TEMP/golangci.v${minor}.jsonschema.json"
-          curl -fsS --retry 5 --retry-all-errors --connect-timeout 10 --max-time 60 \
-            -o "$schema" "https://golangci-lint.run/jsonschema/golangci.v${minor}.jsonschema.json"
+          version="v$(golangci-lint version --short)"
+          schema="$RUNNER_TEMP/golangci.${version}.jsonschema.json"
+          curl -fsS --retry 5 --retry-all-errors --connect-timeout 10 --max-time 20 \
+            -o "$schema" "https://raw.githubusercontent.com/golangci/golangci-lint/${version}/jsonschema/golangci.jsonschema.json"
           golangci-lint config verify --schema "$schema"
 
   # lit's cc-candybar plugin rendered by cc-candybar itself. The plugin's
