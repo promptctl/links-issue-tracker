@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,15 +151,20 @@ func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
 	}
 }
 
-// TestRunLifeboatRecoverMissingMappingFile locks the trust boundary: a path that
-// does not resolve fails loudly before any workspace mutation.
+// TestRunLifeboatRecoverMissingMappingFile locks the trust boundary: a mapping
+// path that cannot be read is an argument to correct, refused as usage in the
+// parse, before the workspace opens: outside any workspace the refusal is the
+// same, and the invocation's event records the usage exit.
 func TestRunLifeboatRecoverMissingMappingFile(t *testing.T) {
-	t.Parallel()
-	ws := seedWorkspace(t)
-	var out bytes.Buffer
-	err := runLifeboatRecover(context.Background(), &out, ws, []string{"--mapping", filepath.Join(t.TempDir(), "absent.json")})
-	if err == nil {
-		t.Fatal("expected an error for a missing mapping file")
+	isolateEvents(t)
+	missing := filepath.Join(t.TempDir(), "absent.json")
+	_, err := runCLIInDirAllowError(t, t.TempDir(), "lifeboat", "recover", "--mapping", missing)
+	var usage UsageError
+	if !errors.As(err, &usage) || !strings.HasPrefix(usage.Message, "read --mapping: open ") {
+		t.Fatalf("recover --mapping <absent> outside any workspace error = %v, want the unreadable-file UsageError", err)
+	}
+	if ev := lastEvent(t); ev.ExitCode != ExitUsage {
+		t.Errorf("event exit_code = %d, want %d", ev.ExitCode, ExitUsage)
 	}
 }
 

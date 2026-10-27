@@ -87,46 +87,51 @@ func backupListLeaf() appLeaf {
 // private flag elsewhere.
 const restoreUsage = "usage: lit backup restore (--latest | --path <export.json>) [--force]"
 
-// resolveRestorePath is the single authority that turns a restore source into a
-// path. The two sources are the only ones there can be: restoreFromExportPath
-// reads any model.Export JSON identically and is blind to whether the file came
-// from `backup create` or the sync engine, so a file's provenance is not a
-// behavioral axis and earns no separate flag. [LAW:no-silent-failure] passing
-// both sources is an explicit error, never a silent precedence between them.
-func resolveRestorePath(ap *app.App, explicitPath string, latest bool) (string, error) {
-	path := strings.TrimSpace(explicitPath)
+// resolveRestoreSource is the single authority that turns a restore source into
+// the export file to restore. The two sources are the only ones there can be:
+// restoreFromExportFile decodes any model.Export JSON identically and is blind
+// to whether the file came from `backup create` or the sync engine, so a file's
+// provenance is not a behavioral axis and earns no separate flag. --path was
+// read in the parse; the latest snapshot is read here, because only the opened
+// workspace knows which one it is. [LAW:no-silent-failure] passing both sources
+// is an explicit error, never a silent precedence between them.
+func resolveRestoreSource(ap *app.App, explicit *inputFile, latest bool) (inputFile, error) {
 	if latest {
-		if path != "" {
-			return "", UsageError{Message: restoreUsage + " — --latest and --path are mutually exclusive"}
+		if explicit != nil {
+			return inputFile{}, UsageError{Message: restoreUsage + " — --latest and --path are mutually exclusive"}
 		}
 		snapshot, err := backup.Latest(ap.Workspace.StorageDir)
 		if err != nil {
-			return "", err
+			return inputFile{}, err
 		}
 		if snapshot == nil {
-			return "", errors.New("no backups available")
+			return inputFile{}, errors.New("no backups available")
 		}
-		return snapshot.Path, nil
+		data, err := os.ReadFile(snapshot.Path)
+		if err != nil {
+			return inputFile{}, fmt.Errorf("read latest backup: %w", err)
+		}
+		return inputFile{path: snapshot.Path, data: data}, nil
 	}
-	if path == "" {
-		return "", UsageError{Message: restoreUsage}
+	if explicit == nil {
+		return inputFile{}, UsageError{Message: restoreUsage}
 	}
-	return path, nil
+	return *explicit, nil
 }
 
 func backupRestoreLeaf() appLeaf {
 	fs := newCobraFlagSet("backup restore")
-	path := registerPath(fs, "path", "Path to an export JSON (backup snapshot or sync file)")
+	path := registerInputFile(fs, "path", "Path to an export JSON (backup snapshot or sync file)")
 	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
 	force := fs.Bool("force", false, "Restore over changes made since the last restore")
 	return appLeaf{fs: fs, positionals: 0, usage: restoreUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		restorePath, err := resolveRestorePath(ap, path.path(), *latest)
+		source, err := resolveRestoreSource(ap, path.input(), *latest)
 		if err != nil {
 			return err
 		}
-		restored, err := restoreFromExportPath(ctx, inv.Stderr, inv.Env, ap, restorePath, *force)
+		restored, err := restoreFromExportFile(ctx, inv.Stderr, inv.Env, ap, source, *force)
 		if err == nil {
-			_, err = fmt.Fprintf(inv.Stdout, "restored %s\n", restorePath)
+			_, err = fmt.Fprintf(inv.Stdout, "restored %s\n", source.path)
 		}
 		// A replace that committed before a later step failed has still removed
 		// and moved what it did, so it is reported whether or not the restore
@@ -151,14 +156,14 @@ type restoreOutcome struct {
 	snapshot    string
 }
 
-// restoreFromExportPath restores the store from the export at path and returns
+// restoreFromExportFile restores the store from the export file and returns
 // the restore's outcome, failed or not. Every restore leaves one sync trace
 // record, failed or not: it records the digest the next restore's guard
 // compares against, and the record carries the verdict and the changes.
 // [LAW:nothing-unseen]
-func restoreFromExportPath(ctx context.Context, stderr io.Writer, env environ.Env, ap *app.App, path string, force bool) (outcome restoreOutcome, err error) {
+func restoreFromExportFile(ctx context.Context, stderr io.Writer, env environ.Env, ap *app.App, source inputFile, force bool) (outcome restoreOutcome, err error) {
 	defer func() {
-		metadata := map[string]string{"path": filepath.Clean(path)}
+		metadata := map[string]string{"path": filepath.Clean(source.path)}
 		// The guard's verdict says why a restore went ahead or was refused; a
 		// restore that failed before the guard ran has none to record.
 		if outcome.guard != "" {
@@ -171,20 +176,19 @@ func restoreFromExportPath(ctx context.Context, stderr io.Writer, env environ.En
 		}
 		recordSyncCommandTrace(stderr, env, ap.Workspace, "lit backup restore", "restored", err, metadata)
 	}()
-	return restoreFromExport(ctx, ap, path, force)
+	return restoreFromExport(ctx, ap, source.data, force)
 }
 
-func restoreFromExport(ctx context.Context, ap *app.App, path string, force bool) (restoreOutcome, error) {
-	restorePath := filepath.Clean(path)
+func restoreFromExport(ctx context.Context, ap *app.App, payload []byte, force bool) (restoreOutcome, error) {
 	var outcome restoreOutcome
 	// [LAW:parse-dont-validate] A restore needs the import capability. It is
-	// asked for before anything is read, written, or backed up, and what comes
-	// back is the interface, so nothing below re-asks.
+	// asked for before the export is decoded or anything is written or backed
+	// up, and what comes back is the interface, so nothing below re-asks.
 	importer, err := storage.Import.Of(ap.Store)
 	if err != nil {
 		return outcome, err
 	}
-	targetExport, _, err := syncfile.Read(restorePath)
+	targetExport, _, err := syncfile.Decode(payload)
 	if err != nil {
 		return outcome, err
 	}

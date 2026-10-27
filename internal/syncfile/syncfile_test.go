@@ -1,6 +1,7 @@
 package syncfile
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,9 +39,13 @@ func TestWriteAndReadAtomicExport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteAtomic() error = %v", err)
 	}
-	readExport, readHash, err := Read(path)
+	payload, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("Read() error = %v", err)
+		t.Fatalf("read %s: %v", path, err)
+	}
+	readExport, readHash, err := Decode(payload)
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
 	}
 	if hash != readHash {
 		t.Fatalf("hash mismatch %q != %q", hash, readHash)

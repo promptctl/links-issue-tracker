@@ -159,18 +159,18 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	}
 }
 
-// Restore asks for import before it reads, writes, or backs up, so that an
+// Restore asks for import before it decodes, writes, or backs up, so that an
 // engine without it cannot strand a restore half-done. The ordering is asserted
-// WITHOUT naming an internal call: the export path handed in does not exist,
-// so a resolve that slipped below syncfile.Read would surface a missing-file
-// error instead of the refusal, and a resolve below the export read would
-// panic on the nil Store. [LAW:behavior-not-structure]
+// WITHOUT naming an internal call: the export handed in is not JSON, so a
+// resolve that slipped below the decode would surface a parse error instead of
+// the refusal, and a resolve below the export read would panic on the nil
+// Store. [LAW:behavior-not-structure]
 func TestRestoreRefusesAnEngineThatCannotImportBeforeTouchingAnything(t *testing.T) {
 	t.Parallel()
 	ws := declineWorkspace(t)
 	ap := &app.App{Workspace: ws, Store: syncOnlyEngine{}}
 
-	_, err := restoreFromExportPath(context.Background(), testStderr(t), testEnv(), ap, filepath.Join(t.TempDir(), "no-such-export.json"), false)
+	_, err := restoreFromExportFile(context.Background(), testStderr(t), testEnv(), ap, inputFile{path: filepath.Join(t.TempDir(), "export.json"), data: []byte("not an export")}, false)
 
 	wantUnsupported(t, err, "import")
 	snapshots, listErr := backup.List(ws.StorageDir)

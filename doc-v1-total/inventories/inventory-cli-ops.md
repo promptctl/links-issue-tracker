@@ -801,14 +801,17 @@ Family usage `usage: lit backup <create|list|restore> ...` (`backup.go`). Access
 | `--latest` | `false` | "Restore latest backup snapshot" | `backup.go` |
 | `--force` | `false` | "Restore over changes made since the last restore" | `backup.go` |
 
-`resolveRestorePath` (`backup.go`):
-- `--latest` with a non-empty `--path` → `UsageError{restoreUsage + " — --latest and --path are mutually exclusive"}` (exit 2).
+- `--path` is an input file (`registerInputFile`, `inputfile.go`): `parseLeaf` reads it before the workspace opens, and an unreadable path is `UsageError{"read --path: <os error>"}` → exit 2.
+
+`resolveRestoreSource` (`backup.go`):
+- `--latest` with `--path` → `UsageError{restoreUsage + " — --latest and --path are mutually exclusive"}` (exit 2).
 - `--latest` with no snapshots → `errors.New("no backups available")` (exit 1).
+- `--latest` reads the newest snapshot; a read error → `read latest backup: %w` (exit 1).
 - Neither source → `UsageError{restoreUsage}` (exit 2).
 
-`restoreFromExportPath` (`backup.go`):
-1. Requires the `storage.Import` capability up front, before any read/write (`backup.go`).
-2. `syncfile.Read(path)`, `ap.Store.Export(ctx)`.
+`restoreFromExportFile` (`backup.go`):
+1. Requires the `storage.Import` capability up front, before the export is decoded or anything is written (`backup.go`).
+2. `syncfile.Decode(data)`, `ap.Store.Export(ctx)`.
 3. **Overwrite refusal** (`guardRestore`, `backup.go`): the verdict is `forced` when `--force` is given (the digest is not read), `unrecorded` when `<StorageDir>/restore.digest` does not exist, else `unchanged` or `changed` as `syncfile.ContentHash` of the current export (canonical `MarshalIndent` + trailing newline with `exported_at` zeroed, lowercase hex) equals or differs from the recorded digest; `changed` returns `RestoreOverwriteError{}` → reason `restore_would_overwrite`, **exit 5**.
 4. Always takes a pre-restore backup through `takeBackup(ctx, ws, backup.Budget, …)` of `localExport`, the state the guard judged, the same helper and event facts as `backup create` (`backup.go`).
 5. `replacement := importer.ReplaceFromExport(ctx, targetExport)` — the tickets it removed (`Removed`, read inside the replace's transaction, so a write that landed after step 2's export is counted too) and, in `Landing`, the parent edges the restore cut because they closed a loop, the tickets it moved into an epic and the tickets it gave a rank key of their own (`04-store-operations.md`).
@@ -875,7 +878,8 @@ Family usage `usage: lit lifeboat <dump|recover> ...` (`lifeboat.go`). Workspace
 | `--mapping` | `""` | "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper" | `lifeboat.go` |
 
 - Any positional → `UsageError{"usage: lit lifeboat recover [--mapping <file>]"}` (`lifeboat.go`).
-- `recoverMapper` (`lifeboat.go`): empty path → `store.DeterministicMapper`; else `os.ReadFile` (error `read mapping <path>: %w`) and `json.Unmarshal` into `store.ShapeMapping` (error `parse mapping <path>: %w`), wrapped as a constant mapper.
+- `--mapping` is an input file (`registerInputFile`, `inputfile.go`): `parseLeaf` reads it before the workspace opens, and an unreadable path is `UsageError{"read --mapping: <os error>"}` → exit 2.
+- `recoverMapper` (`lifeboat.go`): no `--mapping` → `store.DeterministicMapper`; else `json.Unmarshal` into `store.ShapeMapping` (error `parse --mapping %s: %w`), wrapped as a constant mapper.
 - `store.HealWorkspace(ctx, DatabasePath)` runs FIRST, unconditionally — heals a promotion that crashed between renames (`lifeboat.go`).
 - `store.DumpRaw` → `store.Recover(ctx, DatabasePath, dump, mapper, recoverAttempts)` with `recoverAttempts = 1` (`lifeboat.go`, rationale).
 - Three outcomes (`lifeboat.go`):

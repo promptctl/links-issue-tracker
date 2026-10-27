@@ -31,11 +31,8 @@ func WriteAtomic(path string, export model.Export) (string, error) {
 	return hashPayload(payload), nil
 }
 
-func Read(path string) (model.Export, string, error) {
-	payload, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return model.Export{}, "", fmt.Errorf("read sync file: %w", err)
-	}
+// Decode is the export a sync file's bytes hold, and the digest of those bytes.
+func Decode(payload []byte) (model.Export, string, error) {
 	var export model.Export
 	if err := json.Unmarshal(payload, &export); err != nil {
 		return model.Export{}, "", fmt.Errorf("parse sync file: %w", err)

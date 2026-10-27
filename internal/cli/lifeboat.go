@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -42,21 +41,17 @@ const recoverAttempts = 1
 // no --mapping the autonomous DeterministicMapper drives recovery; with one,
 // the operator's authored mapping does. Either way the downstream
 // dump→apply→verify→promote pipeline is identical — only the mapper value
-// differs. The operator mapping is read here (a trust boundary: external file)
-// and decoded into the one ShapeMapping type; its semantic validity is left to
-// Recover's Validate gate, which names any unaccounted-for column so the
-// operator can complete the mapping and re-run.
-func recoverMapper(mappingPath string) (store.Mapper, error) {
-	if mappingPath == "" {
+// differs. The operator mapping (a trust boundary: external file, read in the
+// parse) is decoded here into the one ShapeMapping type; its semantic validity
+// is left to Recover's Validate gate, which names any unaccounted-for column so
+// the operator can complete the mapping and re-run.
+func recoverMapper(file *inputFile) (store.Mapper, error) {
+	if file == nil {
 		return store.DeterministicMapper, nil
 	}
-	data, err := os.ReadFile(mappingPath)
-	if err != nil {
-		return nil, fmt.Errorf("read mapping %s: %w", mappingPath, err)
-	}
 	var mapping store.ShapeMapping
-	if err := json.Unmarshal(data, &mapping); err != nil {
-		return nil, fmt.Errorf("parse mapping %s: %w", mappingPath, err)
+	if err := json.Unmarshal(file.data, &mapping); err != nil {
+		return nil, fmt.Errorf("parse --mapping %s: %w", file.path, err)
 	}
 	return func(store.RawDump, string) (store.ShapeMapping, error) { return mapping, nil }, nil
 }
@@ -75,9 +70,9 @@ func recoverMapper(mappingPath string) (store.Mapper, error) {
 //   - Unconverged   → loud failure with the residual (exit non-zero).
 func lifeboatRecoverLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat recover")
-	mappingPath := registerPath(fs, "mapping", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
+	mapping := registerInputFile(fs, "mapping", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
 	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat recover [--mapping <file>]", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-		mapper, err := recoverMapper(mappingPath.path())
+		mapper, err := recoverMapper(mapping.input())
 		if err != nil {
 			return err
 		}

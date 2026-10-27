@@ -158,9 +158,13 @@ func TestTakeHoldsEachContentOnce(t *testing.T) {
 	if len(list) != 2 || list[0].Path != first.Path {
 		t.Fatalf("List = %+v, want 2 snapshots with %s newest", list, first.Path)
 	}
-	held, _, err := syncfile.Read(first.Path)
+	payload, err := os.ReadFile(first.Path)
 	if err != nil {
 		t.Fatalf("read %s: %v", first.Path, err)
+	}
+	held, _, err := syncfile.Decode(payload)
+	if err != nil {
+		t.Fatalf("decode %s: %v", first.Path, err)
 	}
 	if !held.ExportedAt.Equal(export.ExportedAt) {
 		t.Errorf("snapshot exported_at = %v, want the newer take's %v", held.ExportedAt, export.ExportedAt)

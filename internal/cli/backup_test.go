@@ -17,46 +17,47 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// resolveRestorePath is the single authority `backup restore` resolves its
+// resolveRestoreSource is the single authority `backup restore` resolves its
 // source through; these assert the documented cap of two sources (explicit
 // path, latest backup) and that the degenerate combinations fail loudly rather
 // than picking a silent precedence.
-func TestResolveRestorePathCap(t *testing.T) {
+func TestResolveRestoreSourceCap(t *testing.T) {
 	t.Parallel()
 	t.Run("no source is a usage error", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
-		_, err := resolveRestorePath(ap, "  ", false)
+		_, err := resolveRestoreSource(ap, nil, false)
 		if _, ok := err.(UsageError); !ok {
-			t.Fatalf("resolveRestorePath(no source) error = %v, want UsageError", err)
+			t.Fatalf("resolveRestoreSource(no source) error = %v, want UsageError", err)
 		}
 	})
 
 	t.Run("both sources is a mutual-exclusion error, not silent precedence", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
-		_, err := resolveRestorePath(ap, "/some/export.json", true)
+		_, err := resolveRestoreSource(ap, &inputFile{path: "/some/export.json"}, true)
 		ue, ok := err.(UsageError)
 		if !ok || !strings.Contains(ue.Message, "mutually exclusive") {
-			t.Fatalf("resolveRestorePath(both) error = %v, want mutually-exclusive UsageError", err)
+			t.Fatalf("resolveRestoreSource(both) error = %v, want mutually-exclusive UsageError", err)
 		}
 	})
 
-	t.Run("explicit path passes through trimmed", func(t *testing.T) {
+	t.Run("explicit file passes through as read", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
-		got, err := resolveRestorePath(ap, "  /some/export.json  ", false)
-		if err != nil || got != "/some/export.json" {
-			t.Fatalf("resolveRestorePath(path) = %q, %v; want trimmed path", got, err)
+		explicit := inputFile{path: "/some/export.json", data: []byte("{}")}
+		got, err := resolveRestoreSource(ap, &explicit, false)
+		if err != nil || got.path != explicit.path || string(got.data) != string(explicit.data) {
+			t.Fatalf("resolveRestoreSource(path) = %+v, %v; want %+v", got, err, explicit)
 		}
 	})
 
 	t.Run("latest with no backups fails loudly", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
-		_, err := resolveRestorePath(ap, "", true)
+		_, err := resolveRestoreSource(ap, nil, true)
 		if err == nil || !strings.Contains(err.Error(), "no backups available") {
-			t.Fatalf("resolveRestorePath(latest, empty) error = %v, want no backups available", err)
+			t.Fatalf("resolveRestoreSource(latest, empty) error = %v, want no backups available", err)
 		}
 	})
 
-	t.Run("latest resolves to the newest snapshot path", func(t *testing.T) {
+	t.Run("latest reads the newest snapshot", func(t *testing.T) {
 		dir := t.TempDir()
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: dir}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
@@ -64,11 +65,31 @@ func TestResolveRestorePathCap(t *testing.T) {
 		if err != nil {
 			t.Fatalf("backup.Take() error = %v", err)
 		}
-		got, err := resolveRestorePath(ap, "", true)
-		if err != nil || got != snapshot.Path {
-			t.Fatalf("resolveRestorePath(latest) = %q, %v; want %q", got, err, snapshot.Path)
+		want, err := os.ReadFile(snapshot.Path)
+		if err != nil {
+			t.Fatalf("read snapshot: %v", err)
+		}
+		got, err := resolveRestoreSource(ap, nil, true)
+		if err != nil || got.path != snapshot.Path || string(got.data) != string(want) {
+			t.Fatalf("resolveRestoreSource(latest) = %q (%d bytes), %v; want %q (%d bytes)", got.path, len(got.data), err, snapshot.Path, len(want))
 		}
 	})
+}
+
+// An export that cannot be read is refused as usage in the parse, before the
+// workspace opens, as an import spec is: outside any workspace the refusal is
+// the same, and the invocation's event records the usage exit.
+func TestRestoreRefusesAnUnreadablePathBeforeTheWorkspaceOpens(t *testing.T) {
+	isolateEvents(t)
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	_, err := runCLIInDirAllowError(t, t.TempDir(), "backup", "restore", "--path", missing)
+	var usage UsageError
+	if !errors.As(err, &usage) || !strings.HasPrefix(usage.Message, "read --path: open ") {
+		t.Fatalf("backup restore --path <missing> outside any workspace error = %v, want the unreadable-file UsageError", err)
+	}
+	if ev := lastEvent(t); ev.ExitCode != ExitUsage {
+		t.Errorf("event exit_code = %d, want %d", ev.ExitCode, ExitUsage)
+	}
 }
 
 // guardRestore lets a restore through when it is forced, when no restore has
@@ -232,9 +253,13 @@ func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
 	for _, line := range strings.Split(strings.TrimSpace(runCLIInDir(t, repo, "backup", "list")), "\n") {
 		fields := strings.Fields(line)
 		path := fields[len(fields)-1]
-		export, _, err := syncfile.Read(path)
+		payload, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read %s: %v", path, err)
+		}
+		export, _, err := syncfile.Decode(payload)
+		if err != nil {
+			t.Fatalf("decode %s: %v", path, err)
 		}
 		var titles []string
 		for _, issue := range export.Issues {

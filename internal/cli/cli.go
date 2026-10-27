@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -2249,21 +2248,18 @@ const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> 
 // the file's own extension — not a second flag or mode.
 func importTreeLeaf() appLeaf {
 	fs := newCobraFlagSet("import").Detail(helpText("import"))
-	path := registerPath(fs, "path", "Path to a JSON tree-spec file or a YAML bulk create/update file")
+	spec := registerInputFile(fs, "path", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, usage: importUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		if path.path() == "" {
+		file := spec.input()
+		if file == nil {
 			return UsageError{Message: importUsage}
 		}
-		data, err := os.ReadFile(path.path())
-		if err != nil {
-			return fmt.Errorf("read import spec: %w", err)
-		}
-		switch strings.ToLower(filepath.Ext(path.path())) {
+		switch strings.ToLower(filepath.Ext(file.path)) {
 		case ".yaml", ".yml":
-			return runImportBulk(ctx, inv.Stdout, ap, data, resolveActor(inv.Env))
+			return runImportBulk(ctx, inv.Stdout, ap, file.data, resolveActor(inv.Env))
 		default:
-			return runImportTreeJSON(ctx, inv.Stdout, ap, data, resolveActor(inv.Env))
+			return runImportTreeJSON(ctx, inv.Stdout, ap, file.data, resolveActor(inv.Env))
 		}
 	}}
 }

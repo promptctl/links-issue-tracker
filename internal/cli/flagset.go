@@ -51,6 +51,9 @@ type cobraFlagSet struct {
 	// paths is every path flag registerPath declared here, which parseLeaf
 	// resolves against the invocation's directory.
 	paths []*pathFlag
+	// inputFiles is every input file registerInputFile declared here, which
+	// parseLeaf reads once paths resolve.
+	inputFiles []*inputFileFlag
 }
 
 func newCobraFlagSet(use string) *cobraFlagSet {

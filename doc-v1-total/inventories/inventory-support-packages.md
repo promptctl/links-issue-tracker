@@ -39,9 +39,9 @@ JSON export files on disk, with content hashing.
   `atomicfile.WriteFile` with mode `0o600`, durably; a failure is
   `write sync file: %w`. Returns the
   lowercase hex SHA-256 of the exact payload bytes (`syncfile.go`).
-- `Read(path)` (`syncfile.go`): reads the file, unmarshals into `model.Export`
-  (inheriting the v1→v2 history conversion in `Export.UnmarshalJSON`), returns the
-  export plus the payload's SHA-256. Errors: `"read sync file: %w"`, `"parse sync file: %w"`.
+- `Decode(payload)` (`syncfile.go`): unmarshals into `model.Export` (inheriting the
+  v1→v2 history conversion in `Export.UnmarshalJSON`), returns the export plus the
+  payload's SHA-256. Error: `"parse sync file: %w"`.
 - `ContentHash(export)` (`syncfile.go`): SHA-256 of the export marshalled as
   `WriteAtomic` writes it but with `ExportedAt` zeroed, so it covers what the
   export holds, not when it was taken. Given only store exports: a decoded epic
