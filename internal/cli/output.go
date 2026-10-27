@@ -390,7 +390,8 @@ func sortedIssueFieldNames() []string {
 // a partial result. A single field prints its bare value with no label, so
 // the output round-trips directly into `lit update --description` and
 // similar; multiple fields print as "name: value" lines so a multi-line
-// value stays attributable to its field.
+// value stays attributable to its field, each value but a long text held to
+// its row.
 func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) error {
 	type resolvedField struct {
 		name  string
@@ -409,8 +410,19 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 		_, err := fmt.Fprintln(w, resolved[0].value)
 		return err
 	}
+	// A long text keeps its authored lines; every other value is one row, held
+	// to it so a value holding a break cannot print a line that reads as
+	// another field's.
+	long := map[string]bool{}
+	for _, field := range storage.LongTextFields() {
+		long[field.Name] = true
+	}
 	for _, entry := range resolved {
-		if _, err := fmt.Fprintf(w, "%s: %s\n", entry.name, entry.value); err != nil {
+		value := entry.value
+		if !long[entry.name] {
+			value = singleLine(value)
+		}
+		if _, err := fmt.Fprintf(w, "%s: %s\n", entry.name, value); err != nil {
 			return err
 		}
 	}

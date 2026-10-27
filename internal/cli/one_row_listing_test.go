@@ -46,7 +46,7 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	}
 	plant(epic.ID, "title", "epic\n"+forged+" epic")
 	plant(open.ID, "title", "open\r\n"+forged+" open")
-	plant(open.ID, "lane", "left "+forged+" lane")
+	plant(open.ID, "lane", "left\u2028"+forged+" lane")
 	plant(stale.ID, "title", "stale\u0085"+forged+" stale")
 	plant(upstream.ID, "title", "upstream\v"+forged+" upstream")
 	plant(upstreamEpic.ID, "title", "upstream epic\x1bE"+forged+" upstream epic")
@@ -99,6 +99,7 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 		{"show (leaf)", command(runShow, stale.ID)},
 		{"show (lane)", command(runShow, open.ID)},
 		{"show (epic)", command(runShow, epic.ID)},
+		{"show --field title,lane", command(runShow, open.ID, "--field", "title,lane")},
 		{"orphaned", command(runOrphaned)},
 		{"restore's removed list", func(w io.Writer) error {
 			return writeRemoved(w, []storage.Removed{{IssueID: open.ID, Title: held.Title}, {IssueID: epic.ID, Title: parent.Title}}, "/backups/x.json")

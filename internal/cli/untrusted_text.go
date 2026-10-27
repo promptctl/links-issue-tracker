@@ -98,8 +98,9 @@ func stripInvisibles(line string) string {
 }
 
 // quotedRemote is free text authored on a machine this one does not control,
-// made safe to place inside the agent-instruction envelope. quoteRemote is the
-// only way to mint one and both renderings are methods on it, so raw remote text
+// made safe to place inside the agent-instruction envelope. quoteRemote, and
+// quoteRemoteRows built on it, are the only ways to mint one and every
+// rendering is a method on it, so raw remote text
 // cannot reach an agent's instruction stream by any other path.
 // [LAW:parse-dont-validate] the type is the proof the neutralizing ran.
 type quotedRemote struct{ lines []string }

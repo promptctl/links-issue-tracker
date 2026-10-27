@@ -873,7 +873,9 @@ lines|table") is built from the same map (`cli.go`, `output.go`).
   (`output.go`, sorted list from `sortedIssueFieldNames`,
   `output.go`).
 - Exactly one field → the bare value, no label (`output.go`).
-- Two or more → `name: value` lines, in the requested order (`output.go`).
+- Two or more → `name: value` lines, in the requested order, each value
+  through `singleLine` except a long text field's (`storage.LongTextFields`:
+  `description`, `prompt`, `plan`), which keeps its lines (`output.go`).
 - No epic context, no parent block, no siblings (`cli.go`).
 
 **Full-detail mode** (`printIssueDetail`, `output.go`), in exact order:
