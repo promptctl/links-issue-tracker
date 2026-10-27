@@ -542,6 +542,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "re-check mirror-pending marker: %w", Src: "re-check mirror-pending marker: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "re-run `lit version` to confirm.", Src: "downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.%s\n"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "read existing pre-push hook: %w", Src: "read existing pre-push hook: %w"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "read latest backup: %w", Src: "read latest backup: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "read mirror-pending marker: %w", Src: "read mirror-pending marker: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "read the mirror liveness beacon: %w", Src: "read the mirror liveness beacon: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "read the project config for the worker: %w", Src: "read the project config for the worker: %w"},

@@ -2251,15 +2251,15 @@ func importTreeLeaf() appLeaf {
 	spec := registerInputFile(fs, "path", "Path to a JSON tree-spec file or a YAML bulk create/update file")
 	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, usage: importUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		data, given := spec.contents()
-		if !given {
+		file := spec.input()
+		if file == nil {
 			return UsageError{Message: importUsage}
 		}
-		switch strings.ToLower(filepath.Ext(spec.file.path())) {
+		switch strings.ToLower(filepath.Ext(file.path)) {
 		case ".yaml", ".yml":
-			return runImportBulk(ctx, inv.Stdout, ap, data, resolveActor(inv.Env))
+			return runImportBulk(ctx, inv.Stdout, ap, file.data, resolveActor(inv.Env))
 		default:
-			return runImportTreeJSON(ctx, inv.Stdout, ap, data, resolveActor(inv.Env))
+			return runImportTreeJSON(ctx, inv.Stdout, ap, file.data, resolveActor(inv.Env))
 		}
 	}}
 }

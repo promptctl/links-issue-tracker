@@ -45,12 +45,12 @@ const recoverAttempts = 1
 // parse) is decoded here into the one ShapeMapping type; its semantic validity
 // is left to Recover's Validate gate, which names any unaccounted-for column so
 // the operator can complete the mapping and re-run.
-func recoverMapper(data []byte, given bool) (store.Mapper, error) {
-	if !given {
+func recoverMapper(file *inputFile) (store.Mapper, error) {
+	if file == nil {
 		return store.DeterministicMapper, nil
 	}
 	var mapping store.ShapeMapping
-	if err := json.Unmarshal(data, &mapping); err != nil {
+	if err := json.Unmarshal(file.data, &mapping); err != nil {
 		return nil, fmt.Errorf("parse --mapping: %w", err)
 	}
 	return func(store.RawDump, string) (store.ShapeMapping, error) { return mapping, nil }, nil
@@ -72,7 +72,7 @@ func lifeboatRecoverLeaf() wsLeaf {
 	fs := newCobraFlagSet("lifeboat recover")
 	mapping := registerInputFile(fs, "mapping", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
 	return wsLeaf{fs: fs, positionals: 0, usage: "usage: lit lifeboat recover [--mapping <file>]", work: func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-		mapper, err := recoverMapper(mapping.contents())
+		mapper, err := recoverMapper(mapping.input())
 		if err != nil {
 			return err
 		}

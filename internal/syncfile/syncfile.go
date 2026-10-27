@@ -36,6 +36,12 @@ func Read(path string) (model.Export, string, error) {
 	if err != nil {
 		return model.Export{}, "", fmt.Errorf("read sync file: %w", err)
 	}
+	return Decode(payload)
+}
+
+// Decode is the export a sync file's bytes hold, and the digest of those bytes,
+// for a caller that read the file itself.
+func Decode(payload []byte) (model.Export, string, error) {
 	var export model.Export
 	if err := json.Unmarshal(payload, &export); err != nil {
 		return model.Export{}, "", fmt.Errorf("parse sync file: %w", err)
