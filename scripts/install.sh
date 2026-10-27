@@ -16,7 +16,9 @@ install.sh — install `lit` from one of three sources:
 
   (default)              build from this checkout's source (go build, ldflag-stamped)
   --from-release <tag>   download the published release archive for that tag
-  --latest-release       download the latest published release archive
+  --latest-release       download the latest published release archive; the
+                         GitHub API lookup authenticates with GH_TOKEN or
+                         GITHUB_TOKEN when either is set
 
 All modes write to the same target directory (the dir on $PATH that already
 owns a `lit` if any; otherwise $GOBIN) and run the same stale-binary
@@ -322,7 +324,28 @@ case "$mode" in
             exit 1
         fi
         if [ "$mode" = "latest" ]; then
-            release_tag="$(curl -fsSL "$REPO_LATEST_API" | jq -r .tag_name)"
+            # GitHub rate-limits unauthenticated API calls per source address,
+            # and CI runners share addresses, so the feed request carries a
+            # token when one is set: GH_TOKEN, then GITHUB_TOKEN, gh's own
+            # precedence. The header reaches curl on stdin (-H @-), never on
+            # argv where ps shows it; with no token the stdin is empty and
+            # adds no header. [LAW:dataflow-not-control-flow] one request, the
+            # credential is a value. [LAW:nothing-unseen] which one won is
+            # printed; the token never is.
+            credentials=none auth_header=
+            for var in GH_TOKEN GITHUB_TOKEN; do
+                if [ -n "${!var:-}" ]; then
+                    credentials=$var auth_header="Authorization: Bearer ${!var}"
+                    break
+                fi
+            done
+            echo "Resolving the latest release from $REPO_LATEST_API (credentials: $credentials) ..."
+            feed="$(curl -fsSL -H @- "$REPO_LATEST_API" <<<"$auth_header")" || {
+                echo "error: could not fetch $REPO_LATEST_API (credentials: $credentials)" >&2
+                echo "       GitHub rate-limits requests that carry no token (set GH_TOKEN or GITHUB_TOKEN) and refuses an invalid one; or name the tag with --from-release <tag>" >&2
+                exit 1
+            }
+            release_tag="$(jq -r .tag_name <<<"$feed")"
             if [ -z "$release_tag" ] || [ "$release_tag" = "null" ]; then
                 echo "error: could not resolve latest release tag from $REPO_LATEST_API" >&2
                 exit 1

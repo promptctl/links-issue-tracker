@@ -568,26 +568,32 @@ func mustAbs(t *testing.T, name string) string {
 
 // releaseServer is install.sh's network for one run: a stub curl on PATH that
 // answers a request for any URL ending in /<name> with files/<name> when that
-// file exists and fails it as a 404 otherwise, recording every requested URL.
+// file exists and fails it as a 404 otherwise, recording every requested URL
+// and, as "<url> <header>" lines, every header it was sent on stdin (-H @-).
 // jq is the host's, linked in, because install.sh's release mode reads the
 // manifest with it; nothing else on PATH can hold a lit.
 type releaseServer struct {
-	root, stubBin, files, requests string
+	root, stubBin, files, requests, headers string
 }
 
 func newReleaseServer(t *testing.T) *releaseServer {
 	t.Helper()
 	root := t.TempDir()
-	s := &releaseServer{root: root, stubBin: filepath.Join(root, "stub-bin"), files: filepath.Join(root, "files"), requests: filepath.Join(root, "curl-requests")}
+	s := &releaseServer{root: root, stubBin: filepath.Join(root, "stub-bin"), files: filepath.Join(root, "files"), requests: filepath.Join(root, "curl-requests"), headers: filepath.Join(root, "curl-headers")}
 	for _, dir := range []string{s.stubBin, s.files} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	writeFile(t, filepath.Join(s.stubBin, "curl"), `#!/bin/sh
-out= url=
-while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift;; *://*) url=$1;; esac; shift; done
+out= url= header=
+while [ $# -gt 0 ]; do case $1 in -o) out=$2; shift;; -H) header=$2; shift;; *://*) url=$1;; esac; shift; done
 echo "$url" >>'`+s.requests+`'
+case $header in
+  '') ;;
+  @-) while IFS= read -r line; do [ -z "$line" ] || echo "$url $line" >>'`+s.headers+`'; done ;;
+  *) echo "$url on argv: $header" >>'`+s.headers+`' ;;
+esac
 file='`+s.files+`'/${url##*/}
 [ -f "$file" ] || exit 22
 if [ -n "$out" ]; then cp "$file" "$out"; else cat "$file"; fi
@@ -634,6 +640,104 @@ func (s *releaseServer) install(t *testing.T, env []string, args ...string) (str
 		t.Fatal(readErr)
 	}
 	return string(out), requests, err
+}
+
+// sentHeaders is every header install.sh sent, as "<url> <header>" lines.
+func (s *releaseServer) sentHeaders(t *testing.T) []string {
+	t.Helper()
+	body, err := os.ReadFile(s.headers)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+}
+
+// TestInstallLatestReleaseAuthenticatesTheFeedWithTheTokenGhWouldUse holds
+// --latest-release's one GitHub API call to gh's token precedence: GH_TOKEN,
+// then GITHUB_TOKEN, an empty one counting as unset. The token rides the feed
+// request alone, on stdin rather than argv, and the output names which
+// variable it came from without ever printing it. The run goes on through the
+// manifest to the archive download, so both are seen to go unauthenticated.
+func TestInstallLatestReleaseAuthenticatesTheFeedWithTheTokenGhWouldUse(t *testing.T) {
+	t.Parallel()
+	const (
+		gh      = "token-from-GH_TOKEN-5f3a"
+		actions = "token-from-GITHUB_TOKEN-9c1e"
+		archive = "https://downloads.invalid/lit-linux-amd64.tar.gz"
+	)
+	feed := litrelease.DefaultLatestReleaseURL
+	for _, tc := range []struct {
+		name        string
+		env         []string
+		credentials string
+		token       string
+	}{
+		{"no token", nil, "none", ""},
+		{"GITHUB_TOKEN alone", []string{"GITHUB_TOKEN=" + actions}, "GITHUB_TOKEN", actions},
+		{"GH_TOKEN alone", []string{"GH_TOKEN=" + gh}, "GH_TOKEN", gh},
+		{"GH_TOKEN over GITHUB_TOKEN", []string{"GH_TOKEN=" + gh, "GITHUB_TOKEN=" + actions}, "GH_TOKEN", gh},
+		{"empty GH_TOKEN", []string{"GH_TOKEN=", "GITHUB_TOKEN=" + actions}, "GITHUB_TOKEN", actions},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			server := newReleaseServer(t)
+			server.serve(t, "latest", []byte(`{"tag_name":"v1.2.3"}`))
+			server.serveManifest(t, litrelease.Manifest{Artifacts: []litrelease.Artifact{{Platform: "linux/amd64", URL: archive}}})
+			writeFile(t, filepath.Join(server.stubBin, "uname"), "#!/bin/sh\ncase $1 in -s) echo Linux;; -m) echo x86_64;; esac\n", 0o755)
+			writeFile(t, filepath.Join(server.stubBin, "tar"), "#!/bin/sh\nexit 1\n", 0o755)
+			out, requests, _ := server.install(t, tc.env, "--latest-release")
+
+			manifest := litrelease.DefaultBaseURL + "/v1.2.3/release-manifest.json"
+			if want := []string{feed, manifest, archive}; !slices.Equal(requests, want) {
+				t.Fatalf("requests %q, want %q\n%s", requests, want, out)
+			}
+			var want []string
+			if tc.token != "" {
+				want = []string{feed + " Authorization: Bearer " + tc.token}
+			}
+			if got := server.sentHeaders(t); !slices.Equal(got, want) {
+				t.Errorf("headers sent %q, want %q", got, want)
+			}
+			if wantOut := "(credentials: " + tc.credentials + ")"; !strings.Contains(out, wantOut) {
+				t.Errorf("output lacks %q:\n%s", wantOut, out)
+			}
+			for _, token := range []string{gh, actions} {
+				if strings.Contains(out, token) {
+					t.Errorf("output prints a token:\n%s", out)
+				}
+			}
+		})
+	}
+}
+
+// TestInstallLatestReleaseFeedFailureNamesTheWaysOut: a refused feed request
+// (GitHub's 403 at its rate limit, here the stub's failure) stops the install
+// with an error naming the credentials it was asked with and both ways on.
+func TestInstallLatestReleaseFeedFailureNamesTheWaysOut(t *testing.T) {
+	t.Parallel()
+	const token = "token-from-GH_TOKEN-5f3a"
+	out, requests, err := newReleaseServer(t).install(t, []string{"GH_TOKEN=" + token}, "--latest-release")
+	if err == nil {
+		t.Fatalf("exited 0 through a feed request that failed:\n%s", out)
+	}
+	if want := []string{litrelease.DefaultLatestReleaseURL}; !slices.Equal(requests, want) {
+		t.Errorf("requests %q, want %q", requests, want)
+	}
+	for _, want := range []string{
+		"error: could not fetch " + litrelease.DefaultLatestReleaseURL + " (credentials: GH_TOKEN)",
+		"(set GH_TOKEN or GITHUB_TOKEN)",
+		"--from-release <tag>",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output lacks %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, token) {
+		t.Errorf("output prints the token:\n%s", out)
+	}
 }
 
 // TestInstallFetchesTheReleaseURLsLitUpgradeFetches holds install.sh's release

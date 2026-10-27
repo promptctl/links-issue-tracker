@@ -699,7 +699,10 @@ Three modes, one target-resolution rule (`scripts/install.sh`):
   `GOFLAGS=…-buildvcs=false go build -ldflags "-X <pkg>.Version=… -X <pkg>.Commit=… -X <pkg>.Date=… -X <pkg>.Origin=…" -o "$tmp/$BIN_NAME" ./cmd/lit`.
 - **Release/latest mode**:
   - Requires `curl` and `jq`; `--latest-release` reads `.tag_name` from the
-    GitHub API.
+    GitHub API, sending `Authorization: Bearer <token>` on curl's stdin
+    (`-H @-`) from the first non-empty of `GH_TOKEN`, `GITHUB_TOKEN`, and
+    printing `(credentials: GH_TOKEN|GITHUB_TOKEN|none)`; a failed lookup exits
+    1 with `error: could not fetch <feed> (credentials: …)`.
   - Tag normalization: strip then re-add a leading `v`, then require
     `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$` else
     `error: release tag '<tag>' is not a canonical semver release tag (expected vX.Y.Z)`.
