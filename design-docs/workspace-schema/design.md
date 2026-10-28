@@ -11,6 +11,16 @@ required-field templates"*). Nothing here contradicts those charters; this
 document is the design of their planned consumer. Sections marked **OPEN** are
 decisions a later session must close.
 
+Carried forward 2026-10-27: the hierarchy half of this draft is superseded by
+the hierarchy epic, which fixes three level roles in code with
+names in configuration rather than user-defined types; the fields half
+continues in [custom-fields.md](../custom-fields.md), and the schema's home is
+settled by [workspace-configuration.md](../workspace-configuration.md). Custom
+states, per-type templates and relation legality remain here, undecided.
+Revised 2026-10-28: the storage design follows the
+[event-store design's §migration](../event-store/design.md), and the documents
+above were revised to match the decisions recorded there.
+
 ## The shape in one paragraph
 
 lit's domain model — which ticket types exist, which may contain which, what

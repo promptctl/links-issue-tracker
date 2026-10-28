@@ -47,6 +47,23 @@ see the [README](../README.md) and the [docs](../docs/) site.
   four roles and the wall between them, what may cross each boundary, the
   measured isolation mechanism, and the contamination rule. *Accepted design,
   normative for the licensing epic.*
+- **[workspace-configuration.md](workspace-configuration.md)** — which
+  configuration is workspace truth and which is local preference, and the
+  versioned document, the event store's config stream, the first kind lives
+  in so a store read from outside its repository computes the same answers. Foundation for the four
+  designs below. *Draft / proposal, 2026-10-27.*
+- **[custom-fields.md](custom-fields.md)** — fields declared per hierarchy
+  level with a kind and a required flag, stored as events in the fold, with
+  required meaning required to be pulled. *Draft / proposal, 2026-10-27.*
+- **[grooming.md](grooming.md)** — the `ready-to-pull` label on the queue
+  unit, inherited by its tickets, and `lit groom` as a guidance event that
+  writes nothing. *Draft / proposal, 2026-10-27.*
+- **[workflow-sets.md](workflow-sets.md)** — a `set` key on workflow pieces so
+  shipped guidance is adopted or declined as a unit. *Draft / proposal,
+  2026-10-27.*
+- **[phases-and-rework.md](phases-and-rework.md)** — whether work returned
+  from review is a fifth phase, a derived state, or nothing; recommends
+  derived. *Draft / proposal, 2026-10-27.*
 - **[MINIMAL-LIT-SKETCH-2026-09-29.md](MINIMAL-LIT-SKETCH-2026-09-29.md)** — the
   core value proposition, the smallest lit that still delivers it, and every
   other feature sorted by why it can go, measured before the event-store
