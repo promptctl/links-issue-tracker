@@ -439,6 +439,10 @@ wait their turn.
 ## §migration — five states, four gates
 status: destination
 
+Decisions of 2026-10-28 are recorded in this section: the read-source rule,
+event-only facts, the shortened S1 proof period, retirement by no-op, and the
+freeze on Dolt-shaped additions.
+
 The store advances through five architectural states. Each gate is a
 condition, not a date; a state whose gate hasn't passed is where the system
 rests. The strangler-fig discipline: the Dolt store is the oracle until the
@@ -447,7 +451,7 @@ gates prove the fold against it, on real fleet data, at 10x.
 | State | The system is | Gate to advance | Status |
 |---|---|---|---|
 | S0 seam | CLI depends on a storage interface; Dolt implements it, and a second engine proves it is one | interface carved; behavior unchanged | built (v0.9.0) |
-| S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over sustained real use; budgets pass at 10x | destination |
+| S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over the proof period below; budgets pass at 10x | destination |
 | S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; oracle still clean; budgets re-green at 10x | destination |
 | S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x | destination |
 | S4 exit | Dolt, the vendored driver, reconcile, engine-serialization, mirror-flock machinery are **deleted**; the oracle retires with Dolt | deletions merged; budgets green as CI regression checks; docs' statuses flipped | destination |
@@ -519,6 +523,33 @@ code to straddle both. The gates are the pace: pass a gate, advance; fail a
 gate, fix what failed. Parking is the one move the charter forbids, and S4's
 deletions are part of the campaign's definition of done, not a someday.
 
+**One authoritative read source at every moment: Dolt until the read flip,
+the fold after.** There are never two read paths live at once. Serving
+event-only reads from the fold during S1 while Dolt serves everything else is
+rejected: it is the straddling the previous paragraph warns against, arriving
+early and by choice. The priority is getting to S2 quickly, so S1's proof
+period is shortened to what we would trust behind a flag with Dolt still
+owning writes and the oracle still running. The proof is shortened, not
+skipped.
+
+**Event-only facts, from S2 onward.** Event-only data shapes are allowed, with
+no requirement to backport them to Dolt. Once reads come from the fold, any new
+fact is an event kind plus a fold rule: no Dolt table, no migration. The config
+stream (§security-and-config) already works this way; it is the rule, not an
+exception. Because the fold must be readable first, this starts at S2, not S1.
+Schema-bearing features wait for S2.
+
+**Nothing Dolt-shaped is added before the flip, and nothing slated for
+redesign is grown.** plan_reviews is the first case: findings, reasons and the
+owner override are events, not columns.
+
+**Features retire by no-op, never by dropping the table.** A retired command
+refuses and names its replacement; it never exits zero having done nothing. One
+code-side registry marks retired collections. Sync and reconcile keep carrying
+them so older lits don't break; reads, the oracle and the backfill ignore
+them. Purge still clears them. Retired history ends at S4 unless a feature
+explicitly maps its old rows into events.
+
 ## Rejected alternatives
 
 Recorded so they are not re-proposed from scratch; each was weighed in the
@@ -558,3 +589,22 @@ Recorded so they are not re-proposed from scratch; each was weighed in the
    against the config version in force at the event's causal position, plus
    per-ref causal-position monotonicity so positions cannot be backdated.
    Owned jointly with the access-control write layer.
+7. Chunked read flipping (§migration), for whoever pulls the read-flip work
+   to investigate. Not decided. The idea: S0 shipped `internal/storage` as a
+   contract and the read flip routes reads through it to the fold; instead of
+   one flag that flips every read, group the contract's read methods into four
+   or five coarse chunks (roughly: issues and fields; labels, relations and
+   parents; comments and history; rank; config), each with its own flag. A
+   chunk flips when its reads route to the fold; the oracle keeps comparing
+   every chunk against Dolt until S3; Dolt still owns writes, so a bad flip is
+   a display bug with a one-flag rollback. It would let simple facts like
+   labels and comments flip early while rank stays on Dolt until proven, and
+   event-only features would wait for their own chunk rather than the whole
+   fold. It costs two read sources live during the chunked period, the
+   straddling §migration warns against; it only works if chunks are coarse and
+   the period short, and a command spanning two chunks (`lit show` printing
+   labels from one and history from another) forces those chunks to flip
+   together. Unverified: whether the methods in
+   `internal/storage/contract.go` partition cleanly, or whether reads cross
+   boundaries (a listing filtered by label and ordered by rank, say). If they
+   don't partition, it's one flip.

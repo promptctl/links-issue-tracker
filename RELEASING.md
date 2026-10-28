@@ -45,10 +45,9 @@ change it
 
 ## Cutting a release
 
-A release is cut entirely by CI when a release PR merges to `master`. Releases
-ship **once per epic**, not per ticket: a ticket PR never touches `CHANGELOG.md`
-and cuts nothing on merge. When an epic's tickets are all merged, cut the release
-with a dedicated `chore(release)` PR that writes the release's changelog section
+A release is cut entirely by CI when a release PR merges to `master`. A ticket
+PR never touches `CHANGELOG.md` and cuts nothing on merge. Cut a release with a
+dedicated `chore(release)` PR that writes the release's changelog section
 and flips the design-doc statuses the release makes true, and changes nothing
 else.
 
@@ -108,8 +107,7 @@ ships as written.
    release — all in one run. Watch it with `gh run watch`. No local tag push.
 
 No ticket PR, whatever its type, cuts a release or writes to `CHANGELOG.md`.
-Only the dedicated `chore(release)` PR above, merged at the end of an epic, does
-either.
+Only the dedicated `chore(release)` PR above does either.
 
 ### A tagged section never changes
 

@@ -1,8 +1,13 @@
-## One PR per ticket; one release per epic
+## One PR per ticket
 
-Each ticket lands as its **own** reviewable PR, and merging a ticket PR cuts
-**no** release. A release is cut only when an **epic** is finished, by a
-dedicated `chore(release)` PR.
+Each ticket lands as its **own** reviewable PR. Merging a ticket PR cuts **no**
+release; a release is cut by a dedicated `chore(release)` PR.
+
+## The repo never cites lit tickets
+
+No lit ticket id (`links-foo-abcd.xyz`) appears in any file in this repository:
+code, comments, docs, design docs, templates, skills, CI. Sweeping existing
+citations out is not a priority. Adding any is forbidden.
 
 ## The changelog is written once, at release
 
