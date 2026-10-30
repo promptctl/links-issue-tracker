@@ -84,16 +84,18 @@ exists so that shipping verification later changes policy, not schema.
 `recorded-at` is the writer's clock reading when it minted the event, stored
 as read. It is data, not order (`INV:wall-time-is-data`). Durations read it:
 how long a ticket has been in progress, how long ago it was last touched,
-whether a claim's freshness window has lapsed. Order never reads it. The total
-order above picks the event a question is about, such as the newest refresh or
-the last touch, and that event's `recorded-at` supplies the time, even when a
-concurrent event earlier in the order carries a later one. One rule thus picks
-the event for every question, and a skewed clock can misstate that event's time
-but never which event is meant. Every ordering the current store takes from
-stamps, a claim's latest establishing event and a ticket's phase among them,
-comes from the total order once the fold owns it. Backfilled events keep the
-times the current store stamped, which sit past their writer's clock wherever
-it carried a lane's history forward.
+whether a claim's freshness window has lapsed. Order never reads it. Which
+event superseded which is the total order's question alone: every ordering the
+current store takes from stamps, a claim's latest establishing event and a
+ticket's phase among them, comes from the total order once the fold owns it.
+When a question asks *when*, such as a claim's last refresh or a ticket's last
+touch, its answer is the largest `recorded-at` among the events that qualify.
+The total order cannot answer it, because between concurrent events it is a
+tiebreak, not a sequence in time: a writer that worked offline through many
+events can rank a three-day-old touch after one made today. Backfilled events
+keep the times the current store stamped, which sit past their writer's clock
+wherever it carried a lane's history forward; while such a time runs ahead of
+real time, its events read as fresh and its writer draws the advisory below.
 
 The current store stamps each write just past its lane's history, because
 there stamp order is the order. The total order removes that reason, so a
@@ -299,12 +301,13 @@ answer depends on the present, such as whether a ticket has gone untouched for
 72 hours or whether a claim's window has lapsed, is answered after the fold: a
 read-time evaluation takes the folded state and the reader's `now` as
 arguments, computes the answer, and writes nothing. The fold keeps each
-writer's newest `recorded-at`, and the same evaluation compares those to `now`:
-a writer whose newest event is stamped more than five minutes after `now` is
-surfaced as an advisory naming it. That reports two clocks disagreeing, not which one is wrong, so it
-fires both on readers of a fast writer and on a slow machine reading anyone
-honest. The fold's output stays cacheable because nothing in it depends on when
-it was computed.
+writer's largest `recorded-at`, and the same evaluation compares those to
+`now`. A writer ahead of `now` by more than a tenth of the reader's freshness
+window T is surfaced as an advisory naming that writer and the reader's own checkout, because a
+fast writer and a slow reader look identical from here: on a slow machine
+every active writer appears ahead, and the advisory is the one place that
+machine learns its own clock is behind. The fold's output stays cacheable
+because nothing in it depends on when it was computed.
 
 **Validation is a fold-time engine, not scattered rules.** The config stream
 (§security-and-config) defines what a valid ticket is — today the built-in

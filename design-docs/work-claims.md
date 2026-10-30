@@ -110,9 +110,9 @@ hold:
    from another checkout must not capture an epic. "Latest" is stamp order,
    and a write is stamped past the history of every ticket that can share
    its lane, as the write saw it: a takeover made on a clock that runs
-   behind still outranks the start it took over. Under the event store the
-   fold's total order replaces stamp order here, and writes are no longer
-   stamped past their lane's history (event-store design, §events).
+   behind still outranks the start it took over. Under the event store,
+   ordering and stamping follow event-store design §events instead, which
+   also states how clock skew then reaches leg 3.
 3. **The claim is fresh.** Once established, *any* mutation by S on L's
    tickets refreshes it — ordinary working commentary keeps a claim alive
    through a long stretch on a single ticket. A claim whose last refresh is
