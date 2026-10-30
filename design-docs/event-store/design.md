@@ -81,25 +81,28 @@ structural from v1: before the access-control
 write layer ships, events are self-signed by their checkout identity; the slot
 exists so that shipping verification later changes policy, not schema.
 
-`recorded-at` is the wall-clock time the writer minted the event. It is data,
-not order (`INV:wall-time-is-data`). Durations read it: how long a ticket has
-been in progress, whether a claim's freshness window has lapsed, how long ago a
-ticket was last touched. Order never reads it: "which event is newest" is
-answered by the total order above, so a skewed clock can misstate how long
-something took but cannot change what superseded what. The writer stamps with
-the discipline the Lamport rule applies to counters: `recorded-at` is the later
-of its own clock and the instant just past the newest `recorded-at` among the
-events it has folded. That is a hybrid logical clock, and it keeps wall time
-consistent with causal order along every chain: an event minted in view of
-another is stamped after it. Concurrent events carry whatever times their
-writers' clocks gave them, which is the truth about them. Backfilled history
-keeps the times the current store recorded.
+`recorded-at` is the writer's clock reading when it minted the event, stored
+as read. It is data, not order (`INV:wall-time-is-data`). Durations read it:
+how long a ticket has been in progress, how long ago it was last touched,
+whether a claim's freshness window has lapsed. Order never reads it. The total
+order above picks the event a question is about, such as the newest refresh or
+the last touch, and that event's `recorded-at` supplies the time, even when a
+concurrent event earlier in the order carries a later one. Every ordering the
+current store takes from stamps, a claim's latest establishing event and a
+ticket's phase among them, comes from the total order once the fold owns it.
+Backfilled history keeps the times the current store recorded.
 
-A clock running fast hands its future to every writer that folds its events,
-because the stamping rule carries the newest time forward. The fold cannot see
-this, since seeing it needs the reader's clock. The read-time evaluation in
-§fold, which receives the reader's `now`, surfaces any event stamped after
-`now` as an advisory naming the writer.
+The current store stamps each write just past its lane's history, because
+there stamp order is the order. The total order removes that reason, so a
+writer does not carry folded times forward. If it did, one fast clock would
+hand its future to every writer that folded its events, and every claim they
+refreshed would read as fresh until real time caught up.
+
+Skew still reaches every duration, and claim freshness is a duration that
+decides who holds a lane: a writer whose clock runs more than T slow publishes
+refreshes that every other reader already counts as expired, so its lane looks
+free. Skew cannot reorder events. §fold says how a reader surfaces a clock
+running ahead of its own.
 
 Events carry **intent, not derived state** — the fold owns derivation, and an
 event that embeds a derived value forks truth into two homes:
@@ -290,10 +293,10 @@ input, like any payload field, and never reads the clock. A question whose
 answer depends on the present, such as whether a ticket has gone untouched for
 72 hours or whether a claim's window has lapsed, is answered after the fold: a
 read-time evaluation takes the folded state and the reader's `now` as
-arguments, computes the answer, and writes nothing. Two machines holding the
-same events and reading at the same instant compute the same answer, and the
-fold's output stays cacheable because nothing in it depends on when it was
-computed.
+arguments, computes the answer, and writes nothing. The same evaluation
+surfaces any event stamped after `now` as an advisory naming its writer; that
+reports two clocks disagreeing, not which one is wrong. The fold's output stays
+cacheable because nothing in it depends on when it was computed.
 
 **Validation is a fold-time engine, not scattered rules.** The config stream
 (§security-and-config) defines what a valid ticket is — today the built-in
