@@ -52,7 +52,7 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 | `INV:disposable-cache` | derived local state may always be deleted and refolded; nothing behaves as if the cache were truth |
 | `INV:opaque-envelope` | layers below the CLI boundary treat prose payloads as opaque bytes |
 | `INV:config-versioned` | every event names the config version it was authored under; validation judges it against that version |
-| `INV:wall-time-is-data` | every event carries its writer's wall-clock time; durations read it, order never does, and the fold never reads the clock |
+| `INV:wall-time-is-data` | every event carries a wall-clock time; durations read it, order never does |
 
 ## §events — the event model
 status: destination
@@ -87,10 +87,13 @@ how long a ticket has been in progress, how long ago it was last touched,
 whether a claim's freshness window has lapsed. Order never reads it. The total
 order above picks the event a question is about, such as the newest refresh or
 the last touch, and that event's `recorded-at` supplies the time, even when a
-concurrent event earlier in the order carries a later one. Every ordering the
-current store takes from stamps, a claim's latest establishing event and a
-ticket's phase among them, comes from the total order once the fold owns it.
-Backfilled history keeps the times the current store recorded.
+concurrent event earlier in the order carries a later one. One rule thus picks
+the event for every question, and a skewed clock can misstate that event's time
+but never which event is meant. Every ordering the current store takes from
+stamps, a claim's latest establishing event and a ticket's phase among them,
+comes from the total order once the fold owns it. Backfilled events keep the
+times the current store stamped, which sit past their writer's clock wherever
+it carried a lane's history forward.
 
 The current store stamps each write just past its lane's history, because
 there stamp order is the order. The total order removes that reason, so a
@@ -98,11 +101,13 @@ writer does not carry folded times forward. If it did, one fast clock would
 hand its future to every writer that folded its events, and every claim they
 refreshed would read as fresh until real time caught up.
 
-Skew still reaches every duration, and claim freshness is a duration that
-decides who holds a lane: a writer whose clock runs more than T slow publishes
-refreshes that every other reader already counts as expired, so its lane looks
-free. Skew cannot reorder events. §fold says how a reader surfaces a clock
-running ahead of its own.
+Skew still reaches every duration and can make one negative. Claim freshness
+is a duration that decides who holds a lane, measured against each reader's
+freshness window T (work-claims). A writer whose clock runs slow by more than a
+reader's T publishes refreshes that reader already counts as expired, so a live
+lane looks free; a writer whose clock runs fast keeps a dead lane held for as
+long as its clock is ahead. Skew cannot reorder events. §fold says how a reader
+surfaces it.
 
 Events carry **intent, not derived state** — the fold owns derivation, and an
 event that embeds a derived value forks truth into two homes:
@@ -293,10 +298,13 @@ input, like any payload field, and never reads the clock. A question whose
 answer depends on the present, such as whether a ticket has gone untouched for
 72 hours or whether a claim's window has lapsed, is answered after the fold: a
 read-time evaluation takes the folded state and the reader's `now` as
-arguments, computes the answer, and writes nothing. The same evaluation
-surfaces any event stamped after `now` as an advisory naming its writer; that
-reports two clocks disagreeing, not which one is wrong. The fold's output stays
-cacheable because nothing in it depends on when it was computed.
+arguments, computes the answer, and writes nothing. The fold keeps each
+writer's newest `recorded-at`, and the same evaluation compares those to `now`:
+a writer whose newest event is stamped more than five minutes after `now` is
+surfaced as an advisory naming it. That reports two clocks disagreeing, not which one is wrong, so it
+fires both on readers of a fast writer and on a slow machine reading anyone
+honest. The fold's output stays cacheable because nothing in it depends on when
+it was computed.
 
 **Validation is a fold-time engine, not scattered rules.** The config stream
 (§security-and-config) defines what a valid ticket is — today the built-in
