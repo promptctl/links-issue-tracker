@@ -52,12 +52,14 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 | `INV:disposable-cache` | derived local state may always be deleted and refolded; nothing behaves as if the cache were truth |
 | `INV:opaque-envelope` | layers below the CLI boundary treat prose payloads as opaque bytes |
 | `INV:config-versioned` | every event names the config version it was authored under; validation judges it against that version |
+| `INV:wall-time-is-data` | every event carries its writer's wall-clock time; durations read it, order never does, and the fold never reads the clock |
 
 ## §events — the event model
 status: destination
 
 An event is a small structured record: `(type, schema-version, issue-id,
-payload, attribution, config-ref, causal-position, signature-slot)`.
+payload, attribution, config-ref, causal-position, recorded-at,
+signature-slot)`.
 Attribution is the (stream, workspace, principal) triple — the existing
 work-claims pair plus the principal reference the access-control design
 requires. `config-ref` names the config-stream version in force when the event
@@ -78,6 +80,26 @@ total order without wall clocks. The signature slot is
 structural from v1: before the access-control
 write layer ships, events are self-signed by their checkout identity; the slot
 exists so that shipping verification later changes policy, not schema.
+
+`recorded-at` is the wall-clock time the writer minted the event. It is data,
+not order (`INV:wall-time-is-data`). Durations read it: how long a ticket has
+been in progress, whether a claim's freshness window has lapsed, how long ago a
+ticket was last touched. Order never reads it: "which event is newest" is
+answered by the total order above, so a skewed clock can misstate how long
+something took but cannot change what superseded what. The writer stamps with
+the discipline the Lamport rule applies to counters: `recorded-at` is the later
+of its own clock and the instant just past the newest `recorded-at` among the
+events it has folded. That is a hybrid logical clock, and it keeps wall time
+consistent with causal order along every chain: an event minted in view of
+another is stamped after it. Concurrent events carry whatever times their
+writers' clocks gave them, which is the truth about them. Backfilled history
+keeps the times the current store recorded.
+
+A clock running fast hands its future to every writer that folds its events,
+because the stamping rule carries the newest time forward. The fold cannot see
+this, since seeing it needs the reader's clock. The read-time evaluation in
+§fold, which receives the reader's `now`, surfaces any event stamped after
+`now` as an advisory naming the writer.
 
 Events carry **intent, not derived state** — the fold owns derivation, and an
 event that embeds a derived value forks truth into two homes:
@@ -262,6 +284,16 @@ realities. Determinism is enforced, not hoped: golden-fixture tests pin
 `fold(corpus)` byte-for-byte, and the **fold version** — an explicit constant
 — bumps with any rule change, invalidating snapshots (§cache) so no machine
 mixes two folds' outputs.
+
+**Time enters at the edges.** The fold reads each event's `recorded-at` as
+input, like any payload field, and never reads the clock. A question whose
+answer depends on the present, such as whether a ticket has gone untouched for
+72 hours or whether a claim's window has lapsed, is answered after the fold: a
+read-time evaluation takes the folded state and the reader's `now` as
+arguments, computes the answer, and writes nothing. Two machines holding the
+same events and reading at the same instant compute the same answer, and the
+fold's output stays cacheable because nothing in it depends on when it was
+computed.
 
 **Validation is a fold-time engine, not scattered rules.** The config stream
 (§security-and-config) defines what a valid ticket is — today the built-in
