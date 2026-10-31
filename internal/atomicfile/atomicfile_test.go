@@ -206,3 +206,61 @@ func assertOnlyEntry(t *testing.T, dir, want string) {
 		t.Fatalf("%s holds %v, want only %s", dir, names, want)
 	}
 }
+
+func writeString(s string) func(io.Writer) error {
+	return func(w io.Writer) error {
+		_, err := io.WriteString(w, s)
+		return err
+	}
+}
+
+func TestPublishCreatesTheFileWithItsContentsAndMode(t *testing.T) {
+	for _, durability := range durabilities {
+		dir := t.TempDir()
+		name := filepath.Join(dir, "token")
+		if err := Publish(name, 0o666, durability, writeString("first")); err != nil {
+			t.Fatalf("Publish(%d) = %v", durability, err)
+		}
+		assertFile(t, name, "first", 0o666)
+		assertOnlyEntry(t, dir, "token")
+	}
+}
+
+func TestPublishLeavesAnExistingFileAsItWas(t *testing.T) {
+	for _, durability := range durabilities {
+		dir := t.TempDir()
+		name := filepath.Join(dir, "token")
+		if err := os.WriteFile(name, []byte("incumbent"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := Publish(name, 0o644, durability, writeString("challenger")); err != nil {
+			t.Fatalf("Publish(%d) over an existing file = %v", durability, err)
+		}
+		assertFile(t, name, "incumbent", 0o600)
+		assertOnlyEntry(t, dir, "token")
+	}
+}
+
+func TestAFailedPublishWriteCreatesNothing(t *testing.T) {
+	dir := t.TempDir()
+	cause := errors.New("download failed")
+	err := Publish(filepath.Join(dir, "token"), 0o644, Durable, func(io.Writer) error { return cause })
+	if !errors.Is(err, cause) {
+		t.Fatalf("Publish() = %v; want an error wrapping the write's", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a failed publish left %v", entries)
+	}
+}
+
+func TestPublishIntoAMissingDirectoryIsNotALinkError(t *testing.T) {
+	err := Publish(filepath.Join(t.TempDir(), "absent", "token"), 0o644, Durable, writeString("x"))
+	var linkErr *os.LinkError
+	if err == nil || errors.As(err, &linkErr) {
+		t.Fatalf("Publish() into a missing dir = %v; want an error that is not an *os.LinkError", err)
+	}
+}

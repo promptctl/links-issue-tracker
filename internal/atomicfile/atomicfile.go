@@ -1,10 +1,12 @@
-// Package atomicfile replaces a file's contents atomically: the new contents
-// are written to a temporary sibling and renamed over the target, so a reader
-// sees the old file or the new one, never a torn write.
+// Package atomicfile writes a file's contents atomically: the new contents
+// are written to a temporary sibling and then given the target's name, so a
+// reader sees the old file or the new one, never a torn write. Replace renames
+// over the target; Publish links to it, so it creates the target only where
+// none exists.
 //
-// [LAW:one-source-of-truth] Every file lit replaces this way goes through
-// Replace, so the temp naming, the mode, the fsync and the cleanup on failure
-// are decided once. It imports only the standard library, which is what lets
+// [LAW:one-source-of-truth] Every file lit writes this way goes through
+// Replace or Publish, so the temp naming, the mode, the fsync and the cleanup
+// on failure are decided once. It imports only the standard library, which is what lets
 // the stdlib-only statusline writer share it (.golangci.yml).
 package atomicfile
 
@@ -18,10 +20,10 @@ import (
 	"strings"
 )
 
-// Durability says whether a replacement must survive a crash of the machine,
-// not only of the process. A rename is atomic against other processes either
-// way; without an fsync, a power loss can still leave the new name pointing at
-// contents that never reached the disk. The zero Durability is neither, so one
+// Durability says whether a write must survive a crash of the machine, not
+// only of the process. A rename or a link is atomic against other processes
+// either way; without an fsync, a power loss can still leave the name pointing
+// at contents that never reached the disk. The zero Durability is neither, so one
 // nobody set panics instead of quietly skipping the fsync.
 type Durability int
 
@@ -31,9 +33,9 @@ const (
 	// costs nothing an fsync would be worth.
 	Replaceable Durability = iota + 1
 	// Durable is for a file nothing recomputes: its contents are fsynced
-	// before the rename, so a crash leaves the old file or the whole new one,
-	// and its directory is fsynced after, where the platform can, so the
-	// rename itself survives too.
+	// before it takes the name, so a crash leaves the old state or the whole
+	// new file, and its directory is fsynced after, where the platform can,
+	// so the name itself survives too.
 	Durable
 )
 
@@ -46,7 +48,7 @@ const tempInfix = ".tmp-"
 
 // TempTarget reports the name of the target a file named name is the
 // temporary file of, and whether name is one at all. It is the one parser of
-// the names Replace gives its temporary files, so a directory's owner that
+// the names a write gives its temporary files, so a directory's owner that
 // knows no write into it is running can tell what a killed write left there
 // from everything else in it.
 func TempTarget(name string) (target string, ok bool) {
@@ -63,10 +65,7 @@ func TempTarget(name string) (target string, ok bool) {
 
 // WriteFile replaces name with data, as Replace does.
 func WriteFile(name string, data []byte, perm fs.FileMode, durability Durability) error {
-	return Replace(name, perm, durability, func(w io.Writer) error {
-		_, err := w.Write(data)
-		return err
-	})
+	return Replace(name, perm, durability, writeBytes(data))
 }
 
 // Replace writes name's new contents through write into a temporary sibling,
@@ -79,20 +78,79 @@ func WriteFile(name string, data []byte, perm fs.FileMode, durability Durability
 // be written fails before write does any work (a download, say).
 func Replace(name string, perm fs.FileMode, durability Durability, write func(io.Writer) error) error {
 	syncFile, syncParent := durability.syncs()
-	dir := filepath.Dir(name)
-	// A sibling, on the target's filesystem, so the rename is atomic.
-	tmp, err := os.CreateTemp(dir, filepath.Base(name)+tempInfix+"*")
+	tmp, err := stage(name, perm, syncFile, write)
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+		return err
+	}
+	if err := os.Rename(tmp, name); err != nil {
+		return errors.Join(fmt.Errorf("rename: %w", err), os.Remove(tmp))
+	}
+	syncParent(filepath.Dir(name))
+	return nil
+}
+
+// Publish creates name holding the contents write produces, at mode perm,
+// only if name does not exist: write-once, the way Replace is
+// last-writer-wins. nil means name exists: this call's file, or one that was
+// already there, whatever it holds, left as it was. name's directory must
+// exist.
+//
+// [LAW:single-enforcer] os.Link is what refuses an existing name: a rename
+// would replace it. Linking a completed temporary file, rather than creating
+// name with O_EXCL and filling it, means name is never visible half-written,
+// and a process killed mid-write leaves no name at all. Under Durable the
+// contents are on disk before the link, so a crash cannot leave the name
+// pointing at bytes that never landed.
+//
+// A link the filesystem cannot make comes back as the *os.LinkError os.Link
+// returned, so a caller can name that requirement for the step that has it
+// and no other.
+func Publish(name string, perm fs.FileMode, durability Durability, write func(io.Writer) error) error {
+	syncFile, syncParent := durability.syncs()
+	tmp, err := stage(name, perm, syncFile, write)
+	if err != nil {
+		return err
+	}
+	linkErr := os.Link(tmp, name)
+	if errors.Is(linkErr, fs.ErrExist) {
+		linkErr = nil
+	}
+	if linkErr != nil {
+		return errors.Join(linkErr, os.Remove(tmp))
+	}
+	// [LAW:no-silent-failure] exception: name is settled, so a temporary file
+	// that will not go is no failure of the publish; there is no recovery
+	// action, and what it leaves is litter TempTarget can name.
+	_ = os.Remove(tmp)
+	syncParent(filepath.Dir(name))
+	return nil
+}
+
+// PublishFile creates name holding data, as Publish does.
+func PublishFile(name string, data []byte, perm fs.FileMode, durability Durability) error {
+	return Publish(name, perm, durability, writeBytes(data))
+}
+
+// writeBytes is the write that produces data.
+func writeBytes(data []byte) func(io.Writer) error {
+	return func(w io.Writer) error {
+		_, err := w.Write(data)
+		return err
+	}
+}
+
+// stage writes name's contents through write into a temporary sibling and
+// returns its path; on failure the sibling is gone. A sibling, on the target's
+// filesystem, so a rename or link to name is atomic.
+func stage(name string, perm fs.FileMode, syncFile func(*os.File) error, write func(io.Writer) error) (string, error) {
+	tmp, err := os.CreateTemp(filepath.Dir(name), filepath.Base(name)+tempInfix+"*")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
 	}
 	if err := fill(tmp, perm, syncFile, write); err != nil {
-		return errors.Join(err, os.Remove(tmp.Name()))
+		return "", errors.Join(err, os.Remove(tmp.Name()))
 	}
-	if err := os.Rename(tmp.Name(), name); err != nil {
-		return errors.Join(fmt.Errorf("rename: %w", err), os.Remove(tmp.Name()))
-	}
-	syncParent(dir)
-	return nil
+	return tmp.Name(), nil
 }
 
 // fill writes the temporary file to its final contents and mode and closes
@@ -129,7 +187,7 @@ func (d Durability) syncs() (file func(*os.File) error, dir func(string)) {
 	panic(fmt.Sprintf("atomicfile: illegal Durability %d", d))
 }
 
-// syncDir fsyncs dir, where the platform can, so the rename into it survives a
+// syncDir fsyncs dir, where the platform can, so a name made in it survives a
 // crash too.
 func syncDir(dir string) {
 	// [LAW:no-silent-failure] exception: the directory fsync that makes the

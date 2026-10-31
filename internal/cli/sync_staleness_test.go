@@ -40,7 +40,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		{
 			name:        "unresolved still warns about a stale fetch",
 			report:      doctorSyncReport{Kind: doctorSyncUnresolved, Detail: "boom"},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"sync: last successful fetch from origin was", "lit sync fetch"},
 		},
@@ -49,7 +49,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 		},
 		{
@@ -64,7 +64,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 3,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: freshAge},
+			fetch:       &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"sync:", "3 local change(s) not pushed to origin/master", "as of last fetch", "lit sync push"},
 		},
@@ -73,7 +73,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"sync:", "last successful fetch from origin was", "ago", "at least 24 hours old", "lit sync fetch"},
 		},
@@ -82,7 +82,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 1,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   2,
 			wantSubstrs: []string{"not pushed", "last successful fetch"},
 		},
@@ -91,7 +91,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 			dontWant:  []string{"not pushed"},
 		},
@@ -100,7 +100,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"last successful fetch"},
 			dontWant:    []string{"not pushed"},
@@ -110,7 +110,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Behind: 4,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 		},
 		{
@@ -118,7 +118,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: false,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 		},
 		{
@@ -126,8 +126,26 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: unfetchedStalenessThreshold},
+			fetch:     &remoteFetch{remote: origin, age: unfetchedStalenessThreshold, basis: lastFetchSucceeded},
 			wantLines: 1,
+		},
+		{
+			name: "no success on record past the threshold warns, without claiming one happened",
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
+				Remote: "origin", Branch: "master", Synced: true,
+			}},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: noFetchSucceeded},
+			wantLines:   1,
+			wantSubstrs: []string{"no successful fetch from origin on record", "since lit started tracking it", "lit sync fetch"},
+			dontWant:    []string{"last successful fetch"},
+		},
+		{
+			name: "no success on record under the threshold is silent",
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
+				Remote: "origin", Branch: "master", Synced: true,
+			}},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: noFetchSucceeded},
+			wantLines: 0,
 		},
 	}
 	for _, tc := range cases {
@@ -151,62 +169,98 @@ func TestSyncStalenessLines(t *testing.T) {
 	}
 }
 
-// TestMarkFetchSuccessAndLastFetchSuccessAge pins the marker's round trip: no
-// marker reads as unknown (not zero-age, not infinite-age), a fetch of another
-// remote leaves it unknown, and marking the remote itself makes the age
-// observable and monotonically increasing from that write.
-func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
+// TestFetchRecordRoundTrip pins the record's states: none reads as missing
+// (not zero-age, not infinite-age), a fetch of another remote leaves it
+// missing, starting it reads as no success on record, starting it again keeps
+// its clock, a success replaces it, and a later start leaves the success.
+func TestFetchRecordRoundTrip(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	origin, fork := remoteName(t, "origin"), remoteName(t, "fork")
 	now := time.Now()
 
-	if _, ok := lastFetchSuccessAge(testStderr(t), ws, origin, now); ok {
-		t.Fatalf("lastFetchSuccessAge() ok = true before any fetch ever succeeded")
+	if fetch, missing := readFetchRecord(testStderr(t), ws, origin, now); fetch != nil || !missing {
+		t.Fatalf("readFetchRecord() = %+v, %v before any record; want nil, missing", fetch, missing)
 	}
 	if err := markFetchSuccess(ws, fork); err != nil {
 		t.Fatalf("markFetchSuccess(fork) error = %v", err)
 	}
-	if _, ok := lastFetchSuccessAge(testStderr(t), ws, origin, now); ok {
-		t.Fatalf("lastFetchSuccessAge(origin) ok = true after only fork was fetched")
+	if _, missing := readFetchRecord(testStderr(t), ws, origin, now); !missing {
+		t.Fatalf("readFetchRecord(origin) not missing after only fork was fetched")
+	}
+
+	if err := startFetchRecord(ws, origin); err != nil {
+		t.Fatalf("startFetchRecord() error = %v", err)
+	}
+	started := now.Add(-30 * time.Hour)
+	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), started, started); err != nil {
+		t.Fatal(err)
+	}
+	if err := startFetchRecord(ws, origin); err != nil {
+		t.Fatalf("second startFetchRecord() error = %v", err)
+	}
+	fetch, _ := readFetchRecord(testStderr(t), ws, origin, now)
+	if fetch == nil || fetch.basis != noFetchSucceeded || fetch.age < 29*time.Hour {
+		t.Fatalf("readFetchRecord() after start = %+v; want noFetchSucceeded aged from the first start (~30h)", fetch)
 	}
 
 	if err := markFetchSuccess(ws, origin); err != nil {
 		t.Fatalf("markFetchSuccess(origin) error = %v", err)
 	}
-	age, ok := lastFetchSuccessAge(testStderr(t), ws, origin, now.Add(90*time.Minute))
-	if !ok {
-		t.Fatalf("lastFetchSuccessAge() ok = false after markFetchSuccess")
+	if err := startFetchRecord(ws, origin); err != nil {
+		t.Fatalf("startFetchRecord() after success error = %v", err)
 	}
-	if age < 89*time.Minute || age > 91*time.Minute {
-		t.Fatalf("lastFetchSuccessAge() = %v, want ~90m", age)
+	fetch, _ = readFetchRecord(testStderr(t), ws, origin, now.Add(90*time.Minute))
+	if fetch == nil || fetch.basis != lastFetchSucceeded {
+		t.Fatalf("readFetchRecord() after success = %+v; want lastFetchSucceeded", fetch)
+	}
+	if fetch.age < 89*time.Minute || fetch.age > 91*time.Minute {
+		t.Fatalf("readFetchRecord() age = %v, want ~90m", fetch.age)
 	}
 }
 
-// TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr pins the
-// distinction lastFetchSuccessAge draws between "marker does not exist" (a
-// real, silent domain state) and any other stat error (a real operational
-// failure, surfaced to stderr). A NUL byte in StorageDir makes os.Stat refuse
-// the marker path as an invalid argument: a non-IsNotExist error on every
-// platform and for every user, root included, which a permission fixture is
-// not. A regular file where a directory belongs is not either: Windows
-// reports that path not found.
-func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) {
+// TestReadFetchRecordSurfacesNonNotExistErrorsToStderr pins the distinction
+// readFetchRecord draws between "record does not exist" (a real, silent
+// domain state that starts tracking) and any other open error (a real
+// operational failure, surfaced to stderr, and not missing). A NUL byte in
+// StorageDir makes os.Open refuse the path as an invalid argument: a
+// non-IsNotExist error on every platform and for every user, root included,
+// which a permission fixture is not.
+func TestReadFetchRecordSurfacesNonNotExistErrorsToStderr(t *testing.T) {
 	ws := workspace.Info{Location: workspace.Location{StorageDir: filepath.Join(t.TempDir(), "storage\x00")}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 
 	var stderr bytes.Buffer
-	if _, ok := lastFetchSuccessAge(&stderr, ws, remoteName(t, "origin"), time.Now()); ok {
-		t.Errorf("lastFetchSuccessAge() ok = true for an unreadable marker path")
+	if fetch, missing := readFetchRecord(&stderr, ws, remoteName(t, "origin"), time.Now()); fetch != nil || missing {
+		t.Errorf("readFetchRecord() = %+v, %v for an unreadable path; want nil, not missing", fetch, missing)
 	}
-	if !strings.Contains(stderr.String(), "fetch-success marker unreadable") {
-		t.Fatalf("lastFetchSuccessAge() stderr = %q, want it to report the unreadable marker", stderr.String())
+	if !strings.Contains(stderr.String(), "fetch record for origin unreadable") {
+		t.Fatalf("readFetchRecord() stderr = %q, want it to report the unreadable record", stderr.String())
 	}
 }
 
-// TestMarkFetchSuccessBackdatedMarkerIsStale exercises the marker as
-// syncStalenessLines' resolveSyncStalenessWarning boundary reads it: a marker
-// backdated past the threshold makes lastFetchSuccessAge report a stale age,
-// exactly the input that triggers the "stale fetch" warning line above.
+// TestReadFetchRecordReportsAndKeepsUnknownContent pins that a record holding
+// content this lit never writes — a newer lit's, say — is reported, is not
+// read as either basis, and is not missing, so no record is started over it.
+func TestReadFetchRecordReportsAndKeepsUnknownContent(t *testing.T) {
+	t.Parallel()
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	origin := remoteName(t, "origin")
+	if err := os.WriteFile(fetchSuccessMarkerPath(ws, origin), []byte("v9 something\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	if fetch, missing := readFetchRecord(&stderr, ws, origin, time.Now()); fetch != nil || missing {
+		t.Fatalf("readFetchRecord() = %+v, %v for unknown content; want nil, not missing", fetch, missing)
+	}
+	if !strings.Contains(stderr.String(), "does not know") {
+		t.Fatalf("readFetchRecord() stderr = %q, want it to report the unknown content", stderr.String())
+	}
+}
+
+// TestMarkFetchSuccessBackdatedMarkerIsStale exercises the marker as the
+// banner reads it: a success record backdated past the threshold reads as a
+// stale lastFetchSucceeded age, exactly the input that triggers the "stale
+// fetch" warning line above.
 func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
@@ -218,18 +272,18 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), backdated, backdated); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
-	age, ok := lastFetchSuccessAge(testStderr(t), ws, origin, time.Now())
-	if !ok {
-		t.Fatalf("lastFetchSuccessAge() ok = false for a backdated marker")
+	fetch, _ := readFetchRecord(testStderr(t), ws, origin, time.Now())
+	if fetch == nil || fetch.basis != lastFetchSucceeded {
+		t.Fatalf("readFetchRecord() = %+v for a backdated success; want lastFetchSucceeded", fetch)
 	}
-	if age < unfetchedStalenessThreshold {
-		t.Fatalf("lastFetchSuccessAge() = %v, want >= threshold %v", age, unfetchedStalenessThreshold)
+	if fetch.age < unfetchedStalenessThreshold {
+		t.Fatalf("readFetchRecord() age = %v, want >= threshold %v", fetch.age, unfetchedStalenessThreshold)
 	}
 }
 
 // TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace drives
 // printStalenessWarning's boundary step (resolveDoctorSyncFreshness +
-// lastTargetFetch) against a real git repo with no remote — the common
+// trackTargetFetch) against a real git repo with no remote — the common
 // single-machine case — and confirms it stays silent rather than printing a
 // no-remote warning: this banner is supplementary, not a diagnostic in its
 // own right, matching resolveDoctorSyncFreshness's own no-remote handling.
