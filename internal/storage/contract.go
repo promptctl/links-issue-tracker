@@ -172,10 +172,12 @@ type RelationStore interface {
 	ParentByChild(ctx context.Context) (map[string]string, error)
 
 	// LaneFamily reads what one issue's lane is decided by, at the cost of the
-	// family model.LaneFamily names and not the store's size: every issue of
-	// that family whatever its retention, in tree order among siblings, and
-	// the history they carry. A family member's Changes are the engine's to
-	// omit, because a reader of a lane reads no field an event changed.
+	// family model.LaneFamily names and the live subtree of any epic in it,
+	// whose state is an input to its lane, and not the store's size: every
+	// issue of that family whatever its retention, in tree order among
+	// siblings, and the history they carry. A family member's Changes are the
+	// engine's to omit, because a reader of a lane reads no field an event
+	// changed.
 	//
 	// ParentByChild holds what ParentByChild answers for each family member,
 	// and ParentTypes the type of each parent it names. An id no issue has
@@ -185,7 +187,8 @@ type RelationStore interface {
 	// the refusal claims.NewLane inherits from claims.NewEvidence holds: an
 	// issue this read lost is one the events still name, and a create landing
 	// between the two is an issue with no events yet rather than an event with
-	// no issue.
+	// no issue. The reads share no snapshot, so a sibling reparented or purged
+	// between them can draw that refusal, which the next read does not.
 	LaneFamily(ctx context.Context, issueID string) (claims.Family, error)
 
 	// DependencyOrder reads the blocked-by edges between live issues in tree

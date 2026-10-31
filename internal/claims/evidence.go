@@ -90,7 +90,8 @@ func NewEvidence(issues []model.Issue, parentByChild map[string]string, events [
 	for _, issue := range issues {
 		parentTypes[issue.ID] = issue.IssueType
 	}
-	return partition(issues, parentByChild, parentTypes, events)
+	placed, err := newPartition(issues, parentByChild, parentTypes, events)
+	return Evidence(placed), err
 }
 
 // NewLane is the crossing for a reader of one lane: it partitions issueID's
@@ -98,29 +99,34 @@ func NewEvidence(issues []model.Issue, parentByChild map[string]string, events [
 // keeps the lane issueID landed in. The family reaches past that lane, because
 // a lane key is an editable field and a sibling's parent can be another issue's
 // in restored data, so every other lane the partition holds may be part-read,
-// and it goes no further than here.
+// which is why a partition is not an Evidence.
 //
 // The events come from a read that shares no id list with the issues', so the
 // refusal holds here as it does for NewEvidence: a closed, archived or deleted
 // ticket a read dropped is one the events still name.
 func NewLane(issueID string, family Family) (Lane, error) {
-	partitioned, err := partition(family.Issues, family.ParentByChild, family.ParentTypes, family.Events)
+	placed, err := newPartition(family.Issues, family.ParentByChild, family.ParentTypes, family.Events)
 	if err != nil {
 		return Lane{}, err
 	}
-	lane, known := partitioned.lanes[issueID]
+	lane, known := placed.lanes[issueID]
 	if !known {
 		return Lane{}, fmt.Errorf("claims: issue %s is not among the %d issues of the family read for it", issueID, len(family.Issues))
 	}
-	return partitioned.Lane(lane), nil
+	return placed.lane(lane), nil
 }
 
-// partition places every issue in its lane and every event in the lane of the
-// issue it touched. A parent is its id and type here and nothing else, because
-// model.LaneOf reads no lifecycle.
-func partition(issues []model.Issue, parentByChild map[string]string, parentTypes map[string]model.IssueType, events []model.IssueEvent) (Evidence, error) {
+// partition is what a read placed in lanes, which may be less than the backlog.
+// It has Evidence's fields and none of its methods, so only NewEvidence, handed
+// the whole backlog, can make a derivation's input of one.
+type partition Evidence
+
+// newPartition places every issue in its lane and every event in the lane of
+// the issue it touched. A parent is its id and type here and nothing else,
+// because model.LaneOf reads no lifecycle.
+func newPartition(issues []model.Issue, parentByChild map[string]string, parentTypes map[string]model.IssueType, events []model.IssueEvent) (partition, error) {
 	lanes := make(map[string]model.LaneID, len(issues))
-	ev := Evidence{
+	placed := partition{
 		lanes:   lanes,
 		members: make(map[model.LaneID][]model.Issue),
 		events:  make(map[model.LaneID][]model.IssueEvent),
@@ -130,29 +136,34 @@ func partition(issues []model.Issue, parentByChild map[string]string, parentType
 		if parentID, under := parentByChild[issue.ID]; under {
 			parentType, known := parentTypes[parentID]
 			if !known {
-				return Evidence{}, fmt.Errorf("claims: issue %s sits under %s, which was not supplied: claim derivation places an issue by its parent, so every parent must be supplied", issue.ID, parentID)
+				return partition{}, fmt.Errorf("claims: issue %s sits under %s, which was not supplied: claim derivation places an issue by its parent, so every parent must be supplied", issue.ID, parentID)
 			}
 			parent = &model.Issue{ID: parentID, IssueType: parentType}
 		}
 		lane := model.LaneOf(issue, parent)
 		lanes[issue.ID] = lane
-		ev.members[lane] = append(ev.members[lane], issue)
+		placed.members[lane] = append(placed.members[lane], issue)
 	}
 	for _, event := range events {
 		lane, known := lanes[event.IssueID]
 		if !known {
-			return Evidence{}, fmt.Errorf("claims: event %s belongs to issue %s, which was not among the %d issues supplied: claim derivation needs every issue the events touch, closed ones included", event.ID, event.IssueID, len(issues))
+			return partition{}, fmt.Errorf("claims: event %s belongs to issue %s, which was not among the %d issues supplied: claim derivation needs every issue the events touch, closed ones included", event.ID, event.IssueID, len(issues))
 		}
-		ev.events[lane] = append(ev.events[lane], event)
+		placed.events[lane] = append(placed.events[lane], event)
 	}
 	// One ordering for every lane, imposed once here so that trails' fold —
 	// which takes the LAST write to a checkout's activity as its latest — reads
 	// the data rather than the order a caller happened to read it in.
 	// [LAW:single-enforcer]
-	for lane := range ev.events {
-		slices.SortFunc(ev.events[lane], model.CompareEventRecency)
+	for lane := range placed.events {
+		slices.SortFunc(placed.events[lane], model.CompareEventRecency)
 	}
-	return ev, nil
+	return placed, nil
+}
+
+// lane is the reading of one lane as placed.
+func (p partition) lane(lane model.LaneID) Lane {
+	return Lane{id: lane, members: p.members[lane], events: p.events[lane]}
 }
 
 // Lanes lists every lane the evidence covers, in no particular order.
@@ -188,7 +199,7 @@ type LaneProgress struct {
 // Lane is one lane of this evidence. A lane this evidence never saw has no
 // members and no events — the same total-map-read convention Standings.Of uses.
 func (e Evidence) Lane(lane model.LaneID) Lane {
-	return Lane{id: lane, members: e.members[lane], events: e.events[lane]}
+	return partition(e).lane(lane)
 }
 
 // LaneProgress reports the given lane's progress. A lane this evidence never

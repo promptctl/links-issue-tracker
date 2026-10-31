@@ -62,8 +62,8 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // own, or one whose claim has expired, which is unclaimed — passes with no
 // ceremony: the happy path pays one read of the lane's family and nothing else,
 // exactly as "no confirmation, no warning, no ceremony on the happy path"
-// demands. The read costs the family's size and not the store's, because a
-// start asks about one lane; `next` and `backlog` route across all of them.
+// demands. The read stays off the store's size, because a start asks about one
+// lane; `next` and `backlog` route across all of them.
 //
 // Its result is what the start owes after Apply (transitionSpec.authorize):
 // the takeover line when --take crossed a foreign hold, then the transfer
@@ -110,7 +110,7 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID st
 	telemetry.Set(ctx, "start.lane_held", relation != laneUnclaimed)
 	var takeover string
 	if relation == laneHeldForeign {
-		line, ok := claimLineOf(standing, lane.Progress(), checkouts.addresses, time.Now())
+		line, ok := claimLineOf(standing, lane, checkouts.addresses, time.Now())
 		if !ok {
 			return nil, fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane.ID())
 		}

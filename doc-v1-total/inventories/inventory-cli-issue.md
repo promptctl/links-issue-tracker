@@ -1280,8 +1280,8 @@ transition row runs per id — §2.21):
 
 `startSpec.authorize` → `authorizeStart(ctx, stdout, ap, issueID, prior, *take)`
 (`cli.go`, implementation `claims_takeover.go`):
-1. `GetRelationsByIDs([issueID])` and `model.LaneOf(prior, parent)`.
-2. `gatherClaimContext(ctx, stdout, ap)`.
+1. `LaneFamily(issueID)`, parsed by `claims.NewLane(issueID, family)`.
+2. `gatherCheckouts(env, stdout, ap)`.
 3. `relationOf(standing, self)` (`claims_takeover.go`), the one reading of a
    standing against this checkout, shared with routing:
    - `Held` by self, or anything that is not `Held` (`Unclaimed`, which is also what
@@ -1332,10 +1332,10 @@ including one whose claim has expired, prints nothing. Otherwise
   `"<done>/<total> done"`; empty for a zero LaneProgress
   (`claims_render.go`).
 
-`gatherClaimContext` (`claims_context.go`) reads config, lists **all**
-issues including archived and deleted (`claims_context.go`), fetches all
-relations, lists all events, builds evidence, enumerates
-live checkouts. If checkout enumeration fails it prints to **stdout**:
+`gatherClaimContext` (`claims_context.go`) lists **all** issues including
+archived and deleted (`claims_context.go`), fetches all relations, lists all
+events, builds evidence, reads config, enumerates live checkouts. If checkout
+enumeration fails it prints to **stdout**:
 `"warning: could not enumerate local checkouts (<err>) — claim liveness check and local addresses skipped, freshness alone governs\n"`
 and continues with zero local checkouts (`claims_context.go`).
 

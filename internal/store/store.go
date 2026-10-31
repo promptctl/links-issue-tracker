@@ -2374,10 +2374,10 @@ func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.
 const siblingEdges = `relations own
 		JOIN relations sibling ON sibling.dst_id = own.dst_id AND sibling.type = own.type`
 
-// LaneFamily reads issueID's family at the family's size. Nothing here reads
-// the rank ancestry or lists issues, which is what keeps a start off the
-// store's size, and parents are read for their type alone because hydrating
-// one hydrates its whole subtree.
+// LaneFamily reads issueID's family. Nothing here reads the rank ancestry or
+// lists issues, which is what keeps a start off the store's size, and parents
+// are read for their type alone because hydrating one hydrates its whole
+// subtree.
 func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, error) {
 	events, err := s.laneFamilyHistory(ctx, issueID)
 	if err != nil {
@@ -2415,16 +2415,11 @@ func (s *Store) laneFamilyIDs(ctx context.Context, issueID string) ([]string, er
 	if err != nil {
 		return nil, fmt.Errorf("read lane family of %s: %w", issueID, err)
 	}
-	defer rows.Close()
-	ids := []string{issueID}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan lane family of %s: %w", issueID, err)
-		}
-		ids = append(ids, id)
+	ids, err := scanIDColumn(rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan lane family of %s: %w", issueID, err)
 	}
-	return ids, rows.Err()
+	return append(ids, issueID), nil
 }
 
 // historyFiledUnder reads the events of every issue filed under parentID as

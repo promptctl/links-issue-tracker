@@ -24,12 +24,13 @@ import (
 // the holder to a live worktree THIS machine enumerated; a remote claimant
 // gets the dossier and nothing more. [privacy invariant]
 func formatClaimLine(cc claimContext, lane model.LaneID, now time.Time) (string, bool) {
-	return claimLineOf(cc.standings.Of(lane), cc.evidence.LaneProgress(lane), cc.addresses, now)
+	return claimLineOf(cc.standings.Of(lane), cc.evidence.Lane(lane), cc.addresses, now)
 }
 
 // claimLineOf is formatClaimLine on the values it reads, for a reader holding
-// one lane and no claimContext.
-func claimLineOf(standing claims.Standing, progress claims.LaneProgress, addresses map[model.Attribution]workspace.Checkout, now time.Time) (string, bool) {
+// one lane and no claimContext. An unclaimed lane costs nothing here: a listing
+// asks once a row, so counting a lane's progress waits until it is held.
+func claimLineOf(standing claims.Standing, lane claims.Lane, addresses map[model.Attribution]workspace.Checkout, now time.Time) (string, bool) {
 	held, ok := standing.(claims.Held)
 	if !ok {
 		return "", false
@@ -39,8 +40,8 @@ func claimLineOf(standing claims.Standing, progress claims.LaneProgress, address
 		line += fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(held.Contested), ", "))
 	}
 	parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
-	if fraction := formatLaneProgress(progress); fraction != "" {
-		parts = append(parts, fraction)
+	if progress := formatLaneProgress(lane.Progress()); progress != "" {
+		parts = append(parts, progress)
 	}
 	return strings.Join(parts, " · "), true
 }

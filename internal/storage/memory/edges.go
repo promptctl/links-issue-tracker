@@ -385,20 +385,17 @@ func (e *Engine) LaneFamily(ctx context.Context, issueID string) (claims.Family,
 	for _, parent := range parents {
 		parentTypes[parent] = e.issues[parent].issueType
 	}
-	pos := e.positions()
-	issues := []model.Issue{}
+	recs := []*record{}
 	events := []model.IssueEvent{}
 	for id := range family {
-		rec, ok := e.issues[id]
-		if !ok {
-			continue
-		}
-		issue, err := e.hydrate(rec, pos)
-		if err != nil {
-			return claims.Family{}, err
-		}
-		issues = append(issues, issue)
 		events = append(events, e.eventsFor(id)...)
+		if rec, ok := e.issues[id]; ok {
+			recs = append(recs, rec)
+		}
+	}
+	issues, err := e.hydrateAll(recs, e.positions())
+	if err != nil {
+		return claims.Family{}, err
 	}
 	// An empty ancestry is tree order among siblings, which compare on their
 	// own keys.

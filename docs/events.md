@@ -398,7 +398,7 @@ write has landed.
 
 | Key | Meaning |
 | --- | --- |
-| `start.lane_family_issues` | How many issues the start read to learn who holds the lane: the ticket and everything filed under its parent, closed, archived and deleted included. A start's cost follows this and not the store's size. |
+| `start.lane_family_issues` | How many issues the start read to learn who holds the lane: the ticket and everything filed under its parent, closed, archived and deleted included. A start's cost follows this and not the store's size, plus the live subtree of any epic among them, which this count does not show. |
 | `start.lane_held` | `true` when a checkout held the lane, this one or another; `false` when nobody did, including when the last claim expired. |
 | `start.handover` | `true` when the write moved the ticket's claim from whoever last started it to a new holder: another checkout, or a new assignee on the same one. |
 | `start.transfer_announced` | `true` when the start printed `claim transferred`. That needs a handover and a lane that still named the previous holder, so it is `false` when that claim had expired, the ticket was finished, or a later start elsewhere in the lane had taken over. |
