@@ -66,6 +66,13 @@ func Significant(s string) string {
 	return strings.TrimRight(s, "0")
 }
 
+// Anchor returns what s bounds a gap by: Significant, of what the index holds.
+// Two keys with the same Anchor leave no room or read in the wrong order, so a
+// repair keeps at most one of them where it stands.
+func Anchor(s string) string {
+	return Significant(indexPrefix(s))
+}
+
 // ErrNoRoom reports bounds with nothing to spend between them. A pair with the
 // same significant part, one the other extended by zeros or an empty lower bound
 // meeting an all-zero upper one, holds only further zero-extensions of the lower
@@ -337,24 +344,17 @@ type Window struct {
 	Rows, Whole  int
 }
 
-// leavesStep reports whether the keys a window takes leave a placement past
-// each open end of it. A window in a corner too deep to step out of is spaced
-// and still refuses the next placement, so it is no room at all.
-func leavesStep(window Window, keys []string) bool {
+// leavesStep reports whether keys leave a placement past each end of them. A
+// bound that looks closed can be the row a move is vacating, which opens that
+// end for the next placement, so a window in a corner too deep to step out of
+// is spaced and still refuses it: no room at all.
+func leavesStep(keys []string) bool {
 	if len(keys) == 0 {
 		return true
 	}
-	if window.Upper == "" {
-		if _, err := step(keys[len(keys)-1], 1); err != nil {
-			return false
-		}
-	}
-	if window.Lower == "" {
-		if _, err := step(keys[0], -1); err != nil {
-			return false
-		}
-	}
-	return true
+	_, past := step(keys[len(keys)-1], 1)
+	_, before := step(keys[0], -1)
+	return past == nil && before == nil
 }
 
 // Respace returns the keys the window around trigger takes, in order. The
@@ -372,8 +372,8 @@ func Respace(trigger string, read func(k int) (Window, error)) (keys []string, w
 			return nil, false, err
 		}
 		keys, err := SpacedRanksBetween(window.Lower, window.Upper, window.Rows)
-		if err == nil && !leavesStep(window, keys) {
-			err = fmt.Errorf("%w: no step fits past %d keys spaced to an open end", ErrNoRoom, len(keys))
+		if err == nil && !leavesStep(keys) {
+			err = fmt.Errorf("%w: no step fits past %d spaced keys", ErrNoRoom, len(keys))
 		}
 		reachedEdges := window.Whole > 0
 		if errors.Is(err, ErrNoRoom) && reachedEdges {

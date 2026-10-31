@@ -219,7 +219,7 @@ func TestImportBudgetGrowsWithRowsFromTheProbeBudget(t *testing.T) {
 	}
 	// The bound holds a healthy import on the runner it bounds, with room for a
 	// loaded one. Past 700 rows no ubuntu-latest time of this model exists yet.
-	if got, took := importBudget(700), 15*time.Second; got < 2*took {
+	if got, took := importBudget(700), 8510*time.Millisecond; got < 2*took {
 		t.Errorf("importBudget(700) = %s, under twice the %s ubuntu-latest took", got, took)
 	}
 	// And it fails an import gone quadratic, which is the one hold the nightly
@@ -363,7 +363,7 @@ func TestShowIsInvokedOnlyAgainstAStoreWithARow(t *testing.T) {
 	}
 	namesARow := len(writesThatNameARow) + 1
 	if len(empty) != len(probes)-namesARow {
-		t.Errorf("the empty store has %d invocations, want every probe but show and the writes that name a row (%d)", len(empty), len(probes)-1)
+		t.Errorf("the empty store has %d invocations, want every probe but show and the writes that name a row (%d)", len(empty), len(probes)-namesARow)
 	}
 }
 

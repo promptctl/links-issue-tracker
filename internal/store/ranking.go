@@ -942,12 +942,7 @@ func rankBetweenTx(ctx context.Context, tx *sql.Tx, bounds func() (lower, upper 
 		}
 		between, err = rank.Midpoint(lower, upper)
 	}
-	if err != nil {
-		return "", err
-	}
-	observer := rankObserverFrom(ctx)
-	hear(ctx, func() { observer.Wrote(len(between)) })
-	return between, nil
+	return between, err
 }
 
 // RankAbove moves an issue to rank immediately above the target issue,
@@ -1030,9 +1025,17 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 
 // smoothRanksIfNeededTx re-spaces the window around triggerRank when writing it
 // spent its spot's gaps. An edge key never moves, so a neighbour with nothing
-// past it is not one a respace could move.
+// past it is not one a respace could move, and a key nothing holds any more was
+// already respaced: a repair's later triggers can name one.
 func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	if len(triggerRank) < rank.Ceiling(triggerRank) {
+		return nil
+	}
+	held, err := rankRows(ctx, tx, atRankQuery, triggerRank)
+	if err != nil {
+		return fmt.Errorf("smooth: holders: %w", err)
+	}
+	if len(held) == 0 {
 		return nil
 	}
 	below, err := rankRows(ctx, tx, belowRankQuery, triggerRank, 2)
@@ -1422,8 +1425,12 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		}
 		now := s.clock.Now().Format(time.RFC3339Nano)
 		writes := make([]rankWrite, len(rewrites))
+		moved := 0
 		for i, rewrite := range rewrites {
-			writes[i] = rankWrite{id: rewrite.id, rank: rewrite.newRank, touched: true}
+			writes[i] = rankWrite{id: rewrite.id, rank: rewrite.newRank, touched: !rewrite.respaced}
+			if !rewrite.respaced {
+				moved++
+			}
 		}
 		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
 			return fmt.Errorf("fix rank inversions: %w", err)
@@ -1441,7 +1448,7 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		// Assigned, never accumulated: withStampedMutation may re-run this
 		// function after a transient failure rolls its writes back, and a
 		// running total would count the discarded attempt too.
-		rerankedCount = len(rewrites)
+		rerankedCount = moved
 		return nil
 	}); err != nil {
 		return 0, err

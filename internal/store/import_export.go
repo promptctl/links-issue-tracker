@@ -214,7 +214,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.DuplicateRanks > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix=rank' gives each its own key without changing the order)", report.DuplicateRanks, describeRankCollisions(duplicates)))
 	}
-	// No write leaves a key past rank.MaxLength, so a tie is a key a store
+	// rank mints no key past rank.MaxLength, so a tie is a key a store
 	// inherited: no type can forbid it in data already held, and reads return
 	// its pair in the wrong order with no error. [LAW:no-silent-failure]
 	keys := make([]string, len(order))
@@ -222,7 +222,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		keys[i] = issue.rank
 	}
 	if tied := rank.PrefixTied(keys); tied > 0 {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("rank keys tied on the index prefix: %d (reads return these pairs in the wrong order)", tied))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("rank keys tied on the index prefix: %d (reads return these pairs in the wrong order — 'lit doctor --fix=rank' separates them without changing the order)", tied))
 	}
 	// A blocked-by dependency cycle is work none of which can start, and it
 	// refuses the rank repair as a whole. Surface the members so the operator

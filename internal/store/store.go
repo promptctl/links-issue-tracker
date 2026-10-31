@@ -2624,9 +2624,16 @@ func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlaceme
 	if err != nil {
 		return "", err
 	}
-	return rankBetweenTx(ctx, tx, func() (string, string, error) {
+	key, err := rankBetweenTx(ctx, tx, func() (string, string, error) {
 		return edge.filingBoundsTx(ctx, tx, f)
 	})
+	if err != nil {
+		return "", err
+	}
+	// The create's INSERT is the one key write writeRanksTx does not report.
+	observer := rankObserverFrom(ctx)
+	hear(ctx, func() { observer.Wrote(len(key)) })
+	return key, nil
 }
 
 // issueColumns is the single authoritative ordered projection of the issues

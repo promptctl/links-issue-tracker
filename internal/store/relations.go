@@ -623,19 +623,7 @@ func dependentsOfTx(ctx context.Context, tx *sql.Tx, issueID string) ([]string, 
 	if err != nil {
 		return nil, fmt.Errorf("query dependents of %s: %w", issueID, err)
 	}
-	defer rows.Close()
-	var dependents []string
-	for rows.Next() {
-		var dependent string
-		if err := rows.Scan(&dependent); err != nil {
-			return nil, fmt.Errorf("scan dependent of %s: %w", issueID, err)
-		}
-		dependents = append(dependents, dependent)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("dependent rows of %s: %w", issueID, err)
-	}
-	return dependents, nil
+	return scanIDColumn(rows)
 }
 
 // epicParentPredicate keeps the parent edges whose parent is an epic.

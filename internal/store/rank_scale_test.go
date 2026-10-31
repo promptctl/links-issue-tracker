@@ -610,6 +610,84 @@ func TestDoctorWarnsOnTiedKeysAndNotOnLongOnes(t *testing.T) {
 // A sync landing cannot fail for want of room, which rank_collisions.go promises:
 // a gap with no room inside MaxLength widens, as a respace does, and two clones
 // landing one export must write the same rows.
+// A closed bound that is the row a move vacates opens that end for the next
+// placement, so a respace in a corner leaves a step past it, and the move lands.
+func TestAMoveOutOfADeepCornerFindsRoom(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	corner := strings.Repeat("z", 140)
+	ids := seedKeys(t, ctx, st, []string{corner + "1", corner + "2", corner + "3"})
+	if _, err := st.RankBelow(ctx, ids[2], ids[1]); err != nil {
+		t.Fatalf("RankBelow out of the corner: %v", err)
+	}
+	keys := map[string]string{}
+	rows, err := rankRows(ctx, st.db, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		keys[row.id] = row.rank
+	}
+	if !(keys[ids[0]] < keys[ids[1]] && keys[ids[1]] < keys[ids[2]]) {
+		t.Fatalf("order after the move: %v, want %v", keys, ids)
+	}
+}
+
+// The doctor's warning names this repair: keys tied on the index prefix come
+// out told apart, in the order they stood, on a store whose keys read right.
+func TestARepairSeparatesKeysTiedOnTheIndexPrefix(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	common := strings.Repeat("A", 200)
+	var keys []string
+	for i := 1; i <= 40; i++ {
+		keys = append(keys, fmt.Sprintf("%s%02d", common, i))
+	}
+	ids := seedKeys(t, ctx, st, slices.Concat([]string{"1"}, keys, []string{"z"}))
+	if _, err := st.FixRankInversions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := loadRankOrder(ctx, st.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.SortFunc(stored, compareRankedIssues)
+	got := make([]string, len(stored))
+	repaired := make([]string, len(stored))
+	for i, row := range stored {
+		got[i], repaired[i] = row.id, row.rank
+	}
+	if !slices.Equal(got, ids) {
+		t.Fatalf("repair changed the order: %v, want %v", got, ids)
+	}
+	if tied := rank.PrefixTied(repaired); tied != 0 {
+		t.Fatalf("%d keys still tied on the prefix after the repair", tied)
+	}
+}
+
+// A repair's movers can all fall in one spot, whose first respaces replace the
+// keys the later triggers name. Each respace costs a window, so those must not
+// run one each: 60 rows take a few windows, not 59.
+func TestARepairDoesNotRespaceKeysAlreadyReplaced(t *testing.T) {
+	base := context.Background()
+	st := openIssueStore(t, base)
+	shared := strings.Repeat("A", 60)
+	var keys []string
+	keys = append(keys, "1", "2", shared+"1")
+	for range 60 {
+		keys = append(keys, shared+"5")
+	}
+	keys = append(keys, shared+"9", "y", "z")
+	seedKeys(t, base, st, keys)
+	watch := &rankWatch{}
+	if _, err := st.FixRankInversions(watch.on(base)); err != nil {
+		t.Fatal(err)
+	}
+	if len(watch.respaces) == 0 || len(watch.respaces) > 8 {
+		t.Fatalf("a repair of one spot ran %d respaces, want a few windows' worth", len(watch.respaces))
+	}
+}
+
 func TestRankRewritesWidenPastAGapWithNoRoom(t *testing.T) {
 	shared := strings.Repeat("x", 188)
 	sequence := []placement{
@@ -636,6 +714,9 @@ func TestRankRewritesWidenPastAGapWithNoRoom(t *testing.T) {
 		written[r.id] = r.newRank
 		if len(r.newRank) > rank.MaxLength {
 			t.Fatalf("%s rewritten to %d chars", r.id, len(r.newRank))
+		}
+		if mover := strings.HasPrefix(r.id, "m"); r.respaced == mover {
+			t.Errorf("%s respaced: %t, want the bound the gap gave up to be the one respaced", r.id, r.respaced)
 		}
 	}
 	previous := ""
