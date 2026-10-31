@@ -488,11 +488,11 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 	if dependent == dependency {
 		return model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
-	precedes, err := blocksPrecedes(func(issueID string) ([]string, error) { return dependentsOfTx(ctx, tx, issueID) }, dependent, dependency)
-	if err != nil {
+	var precedes int
+	if err := tx.QueryRowContext(ctx, blocksPrecedesQuery, dependent, dependency).Scan(&precedes); err != nil {
 		return fmt.Errorf("blocked-by cycle check: %w", err)
 	}
-	if precedes {
+	if precedes > 0 {
 		return model.ValidationError{Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
@@ -610,25 +610,25 @@ func parentsOfTx(ctx context.Context, tx *sql.Tx, issueID string) ([]string, err
 	return parents, nil
 }
 
-// liveBlocksEdges is the one query body for the blocked-by edges that count, so
-// the graph the whole-store reads see and the one a walk reads cannot drift apart.
-const liveBlocksEdges = `FROM relations r
+// liveBlocksEdges is the one query body for the blocked-by edges that count,
+// both endpoints live, so the graph the whole-store reads see and the one a
+// cycle check walks cannot drift apart.
+const liveBlocksEdges = `relations r
 		JOIN issues src ON src.id = r.src_id
 		JOIN issues dst ON dst.id = r.dst_id
 		WHERE r.type = 'blocked-by'
 		AND src.deleted_at IS NULL AND dst.deleted_at IS NULL`
 
-const dependentsQuery = `SELECT /*+ JOIN_ORDER(r, src, dst) LOOKUP_JOIN(r, src) LOOKUP_JOIN(src, dst) */ r.src_id ` + liveBlocksEdges + ` AND r.dst_id = ?`
-
-// dependentsOfTx is who a live issue's blocked-by edges hold back, by the rule
-// loadBlocksEdges states: both endpoints live.
-func dependentsOfTx(ctx context.Context, tx *sql.Tx, issueID string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, dependentsQuery, issueID)
-	if err != nil {
-		return nil, fmt.Errorf("query dependents of %s: %w", issueID, err)
-	}
-	return scanIDColumn(rows)
-}
+// blocksPrecedesQuery counts the second id among everything the first holds
+// back, through a chain of blocked-by edges. One recursive read costs what it
+// reaches at about 15us an issue, where a read per issue cost 290us and lost to
+// the whole graph past a few dozen. UNION drops an id it has already reached, so
+// a loop restored data holds ends the recursion. The engine refuses past 10,001
+// rounds, one a link of the longest chain, however wide the graph, so a dep add
+// on a chain that deep fails loudly rather than answering wrong.
+const blocksPrecedesQuery = `WITH RECURSIVE reach(id) AS (
+		SELECT ? UNION SELECT r.src_id FROM reach, ` + liveBlocksEdges + ` AND r.dst_id = reach.id
+	) SELECT COUNT(*) FROM reach WHERE id = ?`
 
 // epicParentPredicate keeps the parent edges whose parent is an epic.
 var epicParentPredicate = fmt.Sprintf("p.issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))

@@ -846,7 +846,11 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, now, createChanges); err != nil {
 				return err
 			}
-			return smoothRanksIfNeededTx(ctx, tx, issue.Rank)
+			if err := smoothRanksIfNeededTx(ctx, tx, issue.Rank); err != nil {
+				return err
+			}
+			// A respace can replace the key that set it off.
+			return tx.QueryRowContext(ctx, `SELECT item_rank FROM issues WHERE id = ?`, issue.ID).Scan(&issue.Rank)
 		})
 	}); err != nil {
 		return model.Issue{}, err

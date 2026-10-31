@@ -417,8 +417,9 @@ INSERT INTO issues(
 8. `writeLabelsTx(ctx, tx, issue.ID, nil, issue.Labels, createdBy, now)` — every label is new, so each is inserted (`store.go`; `internal/store/labels.go`).
 9. Event: `createChanges := []model.FieldChange{}`; for **non-container** types appends `{Field:"status", From:"", To:"open"}`; containers get none (`store.go`). Then `s.recordEvent(ctx, tx, issue.ID, "created", "issue created", "links", createChanges)` (`store.go`) — action `"created"`, reason `"issue created"`, actor `"links"`.
 10. `smoothRanksIfNeededTx(ctx, tx, issue.Rank)` (`store.go`; `internal/store/ranking.go`).
+11. `issue.Rank` is read back from the row, since a respace can replace the key that set it off.
 
-Returns the **in-memory** `issue` value (not a re-read) (`store.go`).
+Returns the **in-memory** `issue` value, its rank re-read and nothing else (`store.go`).
 
 Defaults, restated as a table for every column the create path touches:
 
@@ -2727,16 +2728,16 @@ subject string `fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.ki
 
 `rejectBlocksCycle(ctx, tx, dependent, dependency)` — `internal/store/relations.go`:
 - Self-edge: `dependent == dependency` → `model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}`.
-- `blocksPrecedes(dependents, dependent, dependency)` walks forward from `dependent`, reading each issue's dependents with `dependentsOfTx` on the tx, so the check costs the issues the walk reaches and not the store; read error → `fmt.Errorf("blocked-by cycle check: %w", err)`.
-- `dependentsOfTx(ctx, tx, issueID)` (`relations.go`) states `loadBlocksEdges`'s rule (see §5.9), both endpoints live, for one issue:
+- `blocksPrecedesQuery` with `dependent`, `dependency` counts `dependency` among everything `dependent` holds back, in one recursive read over `liveBlocksEdges`, `loadBlocksEdges`'s rule (see §5.9), both endpoints live, so the check costs the issues it reaches and not the store, and a loop restored data holds ends it (`TestACycleCheckReadsWhatItReachesInOneRead`). The engine refuses past 10,001 rounds, one a link of the longest chain, however wide the graph; read error → `fmt.Errorf("blocked-by cycle check: %w", err)`.
   ```sql
-  SELECT /*+ JOIN_ORDER(r, src, dst) LOOKUP_JOIN(r, src) LOOKUP_JOIN(src, dst) */ r.src_id FROM relations r
-  JOIN issues src ON src.id = r.src_id
-  JOIN issues dst ON dst.id = r.dst_id
-  WHERE r.type = 'blocked-by'
-  AND src.deleted_at IS NULL AND dst.deleted_at IS NULL AND r.dst_id = ?
+  WITH RECURSIVE reach(id) AS (
+    SELECT ? UNION SELECT r.src_id FROM reach, relations r
+    JOIN issues src ON src.id = r.src_id
+    JOIN issues dst ON dst.id = r.dst_id
+    WHERE r.type = 'blocked-by'
+    AND src.deleted_at IS NULL AND dst.deleted_at IS NULL AND r.dst_id = reach.id
+  ) SELECT COUNT(*) FROM reach WHERE id = ?
   ```
-  `liveBlocksEdges` is that query's body from `FROM`, shared with `loadBlocksEdges`, so the graph a walk reads and the one the whole-store reads see cannot drift apart. Errors: `"query dependents of %s: %w"`, and a scan error from `scanIDColumn` as is.
 - A reached `dependency` → `model.ValidationError` with text:
   `"blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"` with args `(dependent, dependency, dependency, dependent)`.
 
@@ -3034,8 +3035,6 @@ ORDER BY r.src_id, r.dst_id
 No rank filter; the ORDER BY exists to make DFS adjacency order — and therefore the reported cycle path — deterministic. Errors: `"query blocked-by edges: %w"`, `"scan blocked-by edge: %w"`, `"blocked-by edges rows: %w"`.
 
 `blocksPrecedenceAdj(edges)` — `internal/store/ranking.go`: adjacency `dependency -> []dependent`.
-
-`blocksPrecedes(dependents, from, to)` — `internal/store/ranking.go`: recursive DFS over the `dependents` func with a `seen` set; returns true as soon as `to` is reached and returns a read error as is. (The `seen` set is populated after the `next == to` check, so a node is compared before being marked.)
 
 `findBlocksCycle(edges)` — `internal/store/ranking.go`: three-color DFS (`white = 0`, `gray = 1`, `black = 2`) over adjacency keys sorted with `sort.Strings`; on hitting a gray node it slices the current stack from that node and appends it again, returning a repeated-endpoint path `a -> b -> … -> a`; returns nil for an acyclic graph.
 

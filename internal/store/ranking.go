@@ -34,8 +34,7 @@ import (
 // quadratic in the store: 32s at 10,740 rows. `EXISTS` and a LOOKUP_JOIN hint
 // inside the subquery are as slow, and EXPLAIN PLAN prints a subquery as text,
 // so no plan shows it. TestFrameColumnStaysLinear is what fails if a rewrite or
-// a Dolt upgrade loses it. The scalar reads a missing parent row as live, where
-// the join did not, and relations_ibfk_2 forbids that row.
+// a Dolt upgrade loses it.
 //
 // A child restored data gives two parents is framed by the lower parent id,
 // the rule storage.RankAncestry lists it by, so a rank move and the listing
@@ -43,7 +42,7 @@ import (
 // [LAW:one-source-of-truth]
 const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
 		WHERE r.src_id = issues.id AND r.type = 'parent-child'
-		AND (SELECT p.deleted_at FROM issues p WHERE p.id = r.dst_id) IS NULL
+		AND (SELECT p.id FROM issues p WHERE p.id = r.dst_id AND p.deleted_at IS NULL) IS NOT NULL
 		ORDER BY r.dst_id LIMIT 1), '')`
 
 // frameRowsQuery selects frame f's ranked rows; the caller appends the order.
@@ -1219,7 +1218,7 @@ func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]storage.DependencyEdg
 	// ORDER BY makes edge iteration — and therefore the adjacency order that
 	// findBlocksCycle's DFS follows — stable across runs and engines, so the
 	// reported cycle path is deterministic.
-	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id `+liveBlocksEdges+` ORDER BY r.src_id, r.dst_id`)
+	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id FROM `+liveBlocksEdges+` ORDER BY r.src_id, r.dst_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query blocked-by edges: %w", err)
 	}
@@ -1245,37 +1244,6 @@ func blocksPrecedenceAdj(edges []storage.DependencyEdge) map[string][]string {
 		adj[e.Dependency] = append(adj[e.Dependency], e.Dependent)
 	}
 	return adj
-}
-
-// blocksPrecedes reports whether `from` already precedes `to` through a chain
-// of blocked-by edges — i.e. existing relations already force `from` to be ranked
-// ahead of `to`. Adding a `to`-precedes-`from` edge on top of that would close
-// a cycle. dependents names who an issue holds back, so the walk reads what it
-// reaches and nothing else in the store.
-func blocksPrecedes(dependents func(string) ([]string, error), from, to string) (bool, error) {
-	seen := make(map[string]struct{})
-	var walk func(string) (bool, error)
-	walk = func(n string) (bool, error) {
-		nexts, err := dependents(n)
-		if err != nil {
-			return false, err
-		}
-		for _, next := range nexts {
-			if next == to {
-				return true, nil
-			}
-			if _, ok := seen[next]; ok {
-				continue
-			}
-			seen[next] = struct{}{}
-			reached, err := walk(next)
-			if err != nil || reached {
-				return reached, err
-			}
-		}
-		return false, nil
-	}
-	return walk(from)
 }
 
 // findBlocksCycle returns one cycle in the blocks precedence graph as an

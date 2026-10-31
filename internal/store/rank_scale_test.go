@@ -297,7 +297,7 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 		args        []any
 	}{
 		{"a container frame's rows", frame + ` ORDER BY issues.item_rank ASC LIMIT 1`, frameArgs},
-		{"a walk's dependents", dependentsQuery, []any{seededRow(23)}},
+		{"a cycle check's reach", blocksPrecedesQuery, []any{seededRow(23), seededRow(53)}},
 		{"a walk's parents", parentEdgesQuery("r.src_id = ?"), []any{seededRow(23)}},
 		{"a climb's epics", parentEdgesQuery("r.src_id = ? AND " + epicParentPredicate), []any{seededRow(23)}},
 	} {
@@ -312,6 +312,30 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 // a Dolt upgrade that loses it is caught here: linear is 4x and a merge join on
 // every row 16x. The top level's edge read walks the index past child rows, and
 // that walk has its own ratio, so its cost has a check and not only its place.
+func TestAParentRowThatIsGoneFramesNothing(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	seedRows(t, ctx, st, 0, 1, false)
+	seedInsert(t, ctx, st, seedIssuesHead, []string{seedTaskRow("test-orphan", "K1")})
+	conn, err := st.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	for _, statement := range []string{`SET FOREIGN_KEY_CHECKS = 0`, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES ` + seedEdge("test-orphan", "test-ghost", model.RelParentChild), `SET FOREIGN_KEY_CHECKS = 1`} {
+		if _, err := conn.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var frame string
+	if err := conn.QueryRowContext(ctx, `SELECT `+frameColumn+` FROM issues WHERE id = 'test-orphan'`).Scan(&frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame != string(storage.TopLevel) {
+		t.Errorf("framed by %q, want the top level ancestorChain reads", frame)
+	}
+}
+
 func TestFrameColumnStaysLinear(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a timing ratio over two seeded stores")
@@ -396,6 +420,47 @@ func TestCycleChecksStayLocal(t *testing.T) {
 	}
 }
 
+// A foundation ticket reaches everything waiting on it, and the second every
+// command gets holds that. A loop restored data holds ends the read.
+func TestACycleCheckReadsWhatItReachesInOneRead(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	const chain = 2000
+	seedRows(t, ctx, st, 0, chain*5+10, false)
+	link := func(i int) string { return seededRow(i*5 + 1) }
+	edges := []string{seedEdge(link(chain+1), link(chain), model.RelBlockedBy)}
+	for i := 1; i < chain; i++ {
+		edges = append(edges, seedEdge(link(i), link(i-1), model.RelBlockedBy))
+	}
+	seedInsert(t, ctx, st, seedRelationsHead, edges)
+	seedCommit(t, ctx, st)
+	check := func(dependent, dependency string) (error, time.Duration) {
+		tx, err := st.db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		began := time.Now()
+		err = rejectBlocksCycle(ctx, tx, dependent, dependency)
+		return err, time.Since(began)
+	}
+	err, took := check(link(0), link(chain-1))
+	var refused model.ValidationError
+	if !errors.As(err, &refused) {
+		t.Fatalf("closing a %d-link chain: %v, want a refusal", chain, err)
+	}
+	if took > time.Second {
+		t.Errorf("a cycle check over %d links took %v, past a second", chain, took)
+	}
+	if err, _ := check(link(chain-1), link(0)); err != nil {
+		t.Errorf("an edge along the chain: %v", err)
+	}
+	seedInsert(t, ctx, st, seedRelationsHead, []string{seedEdge(link(0), link(chain-1), model.RelBlockedBy)})
+	if err, _ := check(link(5), link(chain+1)); err != nil {
+		t.Errorf("an edge beside a loop: %v", err)
+	}
+}
+
 // This store's own keys, on Dolt: every placement stays local, and a burst at one
 // spot stays under the cap.
 func TestALiveStoreRespacesLocally(t *testing.T) {
@@ -437,8 +502,8 @@ func TestALiveStoreRespacesLocally(t *testing.T) {
 	}
 }
 
-// CreateIssue returns the key from before smoothing moved it, so this reads the
-// stored key: a --top create leads its frame at any epic, not only the first.
+// A --top create leads its frame at any epic, not only the first, and says so
+// with the key it holds once the respace it set off is done.
 func TestATopCreateLeadsItsFrameOnAHotSpot(t *testing.T) {
 	if testing.Short() {
 		t.Skip("hundreds of real writes")
@@ -457,6 +522,9 @@ func TestATopCreateLeadsItsFrameOnAHotSpot(t *testing.T) {
 			}
 			var above int
 			key := storedKey(t, base, st, child.ID)
+			if child.Rank != key {
+				t.Fatalf("create %d returned %q, and the row holds %q", i, child.Rank, key)
+			}
 			if err := st.db.QueryRowContext(base, `SELECT COUNT(*) FROM issues i JOIN relations r ON r.src_id = i.id
 				WHERE r.dst_id = ? AND r.type = 'parent-child' AND i.deleted_at IS NULL AND i.item_rank != '' AND i.item_rank < ?`, epic, key).Scan(&above); err != nil {
 				t.Fatal(err)
