@@ -101,7 +101,8 @@ func Replace(name string, perm fs.FileMode, durability Durability, write func(io
 // only if name does not exist: write-once, the way Replace is
 // last-writer-wins. published is false, with no error, when name already
 // existed, whatever it holds; that file is left as it was. name's directory
-// must exist. The temporary file is removed on every path.
+// must exist. The temporary file is removed on every path, and a failure to
+// remove it is returned beside published.
 //
 // [LAW:single-enforcer] os.Link is what refuses an existing name: a rename
 // would replace it. Linking a completed temporary file, rather than creating
@@ -120,21 +121,29 @@ func Publish(name string, perm fs.FileMode, durability Durability, write func(io
 	if err != nil {
 		return false, fmt.Errorf("create temp file: %w", err)
 	}
+	if err := fill(tmp, perm, syncFile, write); err != nil {
+		return false, errors.Join(err, os.Remove(tmp.Name()))
+	}
+	linkErr := os.Link(tmp.Name(), name)
 	// The link gave name its own entry, so the temporary one goes whether
 	// this call published or found name already there.
-	defer os.Remove(tmp.Name())
-	if err := fill(tmp, perm, syncFile, write); err != nil {
-		return false, err
+	removeErr := os.Remove(tmp.Name())
+	if errors.Is(linkErr, fs.ErrExist) {
+		return false, removeErr
 	}
-	err = os.Link(tmp.Name(), name)
-	if errors.Is(err, fs.ErrExist) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
+	if linkErr != nil {
+		return false, errors.Join(linkErr, removeErr)
 	}
 	syncParent(dir)
-	return true, nil
+	return true, removeErr
+}
+
+// PublishFile creates name holding data, as Publish does.
+func PublishFile(name string, data []byte, perm fs.FileMode, durability Durability) (published bool, err error) {
+	return Publish(name, perm, durability, func(w io.Writer) error {
+		_, err := w.Write(data)
+		return err
+	})
 }
 
 // fill writes the temporary file to its final contents and mode and closes

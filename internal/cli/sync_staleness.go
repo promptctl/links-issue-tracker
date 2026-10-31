@@ -47,8 +47,10 @@ const fetchRecordUnconfirmed = "unconfirmed\n"
 type fetchBasis int
 
 const (
-	// lastFetchSucceeded: the age is since the last confirmation.
-	lastFetchSucceeded fetchBasis = iota
+	// lastFetchSucceeded: the age is since the last confirmation. The zero
+	// fetchBasis is neither, so a fetch nobody gave a basis panics in
+	// warningFormat instead of claiming a success.
+	lastFetchSucceeded fetchBasis = iota + 1
 	// noFetchSucceeded: no confirmation is on record; the age is since lit
 	// started tracking the remote.
 	noFetchSucceeded
@@ -73,18 +75,19 @@ func (b fetchBasis) warningFormat() string {
 // unmoved answer, which proves the same thing without the fetch. Each marks
 // the remote it fetched, whichever remote the banner reports on.
 //
-// Replaced by rename, never truncated in place, so every version of the
-// record is its own file and readFetchRecord never pairs one version's
-// modification time with another's content. Replaceable: a crash can lose
-// this success, rolling the record back to what it held before, which only
-// under-reports a confirmation the next fetch makes again.
+// Truncated in place, never renamed over: Windows refuses a rename over a file
+// a reader has open, and readFetchRecord holds the record open. A record's
+// content only ever moves from fetchRecordUnconfirmed to empty, and the reader
+// reads the content before the modification time, so a read racing this write
+// pairs at worst the old content with the new time: no success on record, as
+// of moments ago, which is below any threshold.
 // [LAW:single-enforcer] one marker per remote, every call site writes it the
 // same way. [LAW:dataflow-not-control-flow]
 func markFetchSuccess(ws workspace.Info, remote storage.RemoteName) error {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return fmt.Errorf("ensure storage dir for fetch-success marker: %w", err)
 	}
-	if err := atomicfile.WriteFile(fetchSuccessMarkerPath(ws, remote), nil, 0o644, atomicfile.Replaceable); err != nil {
+	if err := os.WriteFile(fetchSuccessMarkerPath(ws, remote), nil, 0o644); err != nil {
 		return fmt.Errorf("write fetch-success marker: %w", err)
 	}
 	return nil
@@ -99,10 +102,7 @@ func startFetchRecord(ws workspace.Info, remote storage.RemoteName) error {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return err
 	}
-	_, err := atomicfile.Publish(fetchSuccessMarkerPath(ws, remote), 0o644, atomicfile.Durable, func(w io.Writer) error {
-		_, err := io.WriteString(w, fetchRecordUnconfirmed)
-		return err
-	})
+	_, err := atomicfile.PublishFile(fetchSuccessMarkerPath(ws, remote), []byte(fetchRecordUnconfirmed), 0o644, atomicfile.Durable)
 	return err
 }
 
@@ -113,8 +113,8 @@ func startFetchRecord(ws workspace.Info, remote storage.RemoteName) error {
 // fact to act on nor an absence to fill, and a newer lit's record is left for
 // it. [LAW:parse-dont-validate] [LAW:no-silent-failure]
 //
-// The age and the basis are one version's: both come from the one open file,
-// and no writer modifies a record in place.
+// The content is read before the modification time, on the one open file, so
+// the time is never older than the content beside it (markFetchSuccess).
 func readFetchRecord(stderr io.Writer, ws workspace.Info, remote storage.RemoteName, now time.Time) (fetch *remoteFetch, missing bool) {
 	f, err := os.Open(fetchSuccessMarkerPath(ws, remote))
 	if os.IsNotExist(err) {
@@ -125,7 +125,12 @@ func readFetchRecord(stderr io.Writer, ws workspace.Info, remote storage.RemoteN
 		return nil, false
 	}
 	defer f.Close()
-	content, info, err := readOpenRecord(f, len(fetchRecordUnconfirmed)+1)
+	content, err := io.ReadAll(io.LimitReader(f, int64(len(fetchRecordUnconfirmed)+1)))
+	if err != nil {
+		fmt.Fprintf(stderr, "lit: fetch record for %s unreadable: %v\n", remote, err)
+		return nil, false
+	}
+	info, err := f.Stat()
 	if err != nil {
 		fmt.Fprintf(stderr, "lit: fetch record for %s unreadable: %v\n", remote, err)
 		return nil, false
@@ -141,20 +146,6 @@ func readFetchRecord(stderr io.Writer, ws workspace.Info, remote storage.RemoteN
 		return nil, false
 	}
 	return &remoteFetch{remote: remote, age: now.Sub(info.ModTime()), basis: basis}, false
-}
-
-// readOpenRecord reads up to limit bytes of f, then stats f: content first,
-// so the modification time is never older than the content beside it.
-func readOpenRecord(f *os.File, limit int) ([]byte, os.FileInfo, error) {
-	content, err := io.ReadAll(io.LimitReader(f, int64(limit)))
-	if err != nil {
-		return nil, nil, err
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return nil, nil, err
-	}
-	return content, info, nil
 }
 
 // remoteFetch is one remote's fetch record, read: which remote, how long
@@ -326,9 +317,10 @@ func printStalenessWarning(ctx context.Context, stderr io.Writer, env environ.En
 
 // printMutationSyncStalenessWarning is the staleness banner for mutating
 // commands. It runs at the one dispatch seam every mutating command already
-// flows through, after the command's engine has closed, so it reads only
-// storage-dir markers (push outcome, the sync remote's fetch success) and
-// git's remote config: the store-backed ahead
+// flows through, after the command's engine has closed, so it needs no
+// engine: it reads storage-dir markers (push outcome, the sync remote's fetch
+// record, which it starts when none exists) and git's remote config: the
+// store-backed ahead
 // count is both unavailable there and, per syncPushFailureLines' rationale, the
 // wrong predicate for a mutating session anyway. A session that only chains
 // mutations against a failing remote hears about it on its very next command.

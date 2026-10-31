@@ -222,7 +222,7 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	// commands' banner, because per-handler wiring would make every mutating
 	// command remember the call, and one that forgot would miss it. A command
 	// that only mutates hears about failing pushes. [LAW:locality-or-seam]
-	// It runs after the engine close on purpose: it reads only storage-dir
+	// It runs after the engine close on purpose: it touches only storage-dir
 	// markers and git's remote config, needing no engine, and precedes the
 	// auto-sync below so the banner reports the last COMPLETED attempt rather
 	// than racing the one about to spawn.

@@ -40,7 +40,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		{
 			name:        "unresolved still warns about a stale fetch",
 			report:      doctorSyncReport{Kind: doctorSyncUnresolved, Detail: "boom"},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"sync: last successful fetch from origin was", "lit sync fetch"},
 		},
@@ -49,7 +49,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 		},
 		{
@@ -64,7 +64,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 3,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: freshAge},
+			fetch:       &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"sync:", "3 local change(s) not pushed to origin/master", "as of last fetch", "lit sync push"},
 		},
@@ -73,7 +73,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"sync:", "last successful fetch from origin was", "ago", "at least 24 hours old", "lit sync fetch"},
 		},
@@ -82,7 +82,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 1,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   2,
 			wantSubstrs: []string{"not pushed", "last successful fetch"},
 		},
@@ -91,7 +91,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 			dontWant:  []string{"not pushed"},
 		},
@@ -100,7 +100,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
-			fetch:       &remoteFetch{remote: origin, age: staleAge},
+			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: lastFetchSucceeded},
 			wantLines:   1,
 			wantSubstrs: []string{"last successful fetch"},
 			dontWant:    []string{"not pushed"},
@@ -110,7 +110,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Behind: 4,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 		},
 		{
@@ -118,7 +118,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: false,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: freshAge},
+			fetch:     &remoteFetch{remote: origin, age: freshAge, basis: lastFetchSucceeded},
 			wantLines: 0,
 		},
 		{
@@ -126,7 +126,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
-			fetch:     &remoteFetch{remote: origin, age: unfetchedStalenessThreshold},
+			fetch:     &remoteFetch{remote: origin, age: unfetchedStalenessThreshold, basis: lastFetchSucceeded},
 			wantLines: 1,
 		},
 		{

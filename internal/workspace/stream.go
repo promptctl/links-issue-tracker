@@ -5,7 +5,6 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -170,10 +169,7 @@ func publishStreamToken(privateGitDir string) error {
 	// when a person cats it while debugging; parseStreamToken trims it back off.
 	// The token is not a secret and every other file in the git directory is
 	// world-readable, so it is too.
-	_, err = atomicfile.Publish(path, 0o644, atomicfile.Durable, func(w io.Writer) error {
-		_, err := io.WriteString(w, token+"\n")
-		return err
-	})
+	_, err = atomicfile.PublishFile(path, []byte(token+"\n"), 0o644, atomicfile.Durable)
 	var linkErr *os.LinkError
 	if errors.As(err, &linkErr) {
 		// The requirement is stated on EVERY link failure rather than on a

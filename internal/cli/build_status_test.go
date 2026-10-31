@@ -247,9 +247,12 @@ func TestEveryStalenessSurfaceAgreesAtItsBoundary(t *testing.T) {
 	if len(banner) != 1 {
 		t.Fatalf("buildStalenessLines() = %q, want one line at the threshold", banner)
 	}
-	fetch := fetchStalenessLines(&remoteFetch{remote: remoteName(t, "origin"), age: unfetchedStalenessThreshold})
-	if len(fetch) != 1 {
-		t.Fatalf("fetchStalenessLines() = %q, want one line at the threshold", fetch)
+	var fetch [2][]string
+	for i, basis := range []fetchBasis{lastFetchSucceeded, noFetchSucceeded} {
+		fetch[i] = fetchStalenessLines(&remoteFetch{remote: remoteName(t, "origin"), age: unfetchedStalenessThreshold, basis: basis})
+		if len(fetch[i]) != 1 {
+			t.Fatalf("fetchStalenessLines(basis %d) = %q, want one line at the threshold", basis, fetch[i])
+		}
 	}
 	warning := versionStalenessWarning(info, now)
 	if len(warning) != 1 {
@@ -260,7 +263,8 @@ func TestEveryStalenessSurfaceAgreesAtItsBoundary(t *testing.T) {
 		{"buildStalenessLines", banner[0], "7 days", buildRefreshRemedy},
 		{"buildStatusNote", buildStatusNote(info, now), "7 days", buildRefreshRemedy},
 		{"versionStalenessWarning", warning[0], "7 days", buildRefreshRemedy},
-		{"fetchStalenessLines", fetch[0], "24 hours", "lit sync fetch"},
+		{"fetchStalenessLines(lastFetchSucceeded)", fetch[0][0], "24 hours", "lit sync fetch"},
+		{"fetchStalenessLines(noFetchSucceeded)", fetch[1][0], "24 hours", "lit sync fetch"},
 	} {
 		// Matched as the rendered phrase rather than the bare word, so an
 		// unrelated future use of "over" does not redden this.
