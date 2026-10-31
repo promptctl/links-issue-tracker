@@ -55,7 +55,7 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 			}
 		}
 	}
-	storage.RankAncestry{}.Sort(out.Children)
+	storage.SortSiblings(out.Children)
 	return out
 }
 

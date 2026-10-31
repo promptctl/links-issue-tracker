@@ -397,9 +397,7 @@ func (e *Engine) LaneFamily(ctx context.Context, issueID string) (claims.Family,
 	if err != nil {
 		return claims.Family{}, err
 	}
-	// An empty ancestry is tree order among siblings, which compare on their
-	// own keys.
-	storage.RankAncestry{}.Sort(issues)
+	storage.SortSiblings(issues)
 	return claims.Family{Issues: issues, ParentByChild: parents, ParentTypes: parentTypes, Events: sortEvents(events)}, nil
 }
 
@@ -591,8 +589,7 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		}
 		*bucket = append(*bucket, issue)
 	}
-	// Siblings compare on their own keys, the rule IssueRelations states.
-	storage.RankAncestry{}.Sort(out.Children)
+	storage.SortSiblings(out.Children)
 	ancestry.Sort(out.BlockedBy)
 	ancestry.Sort(out.Blocks)
 	return out, nil

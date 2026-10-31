@@ -93,7 +93,8 @@ func TestTheClimbOrdersAsTheWholeReadDoes(t *testing.T) {
 }
 
 // A group of one has nothing to order, so a read of tickets with at most one
-// neighbour on each side reads no ancestry, whatever else it reads.
+// neighbour on each side reads no ancestry, whatever else it reads. Siblings
+// share a frame, so however many a ticket has they read none either.
 func TestAGroupOfOneClimbsNothing(t *testing.T) {
 	var levels, links int
 	ctx := WithRankObserver(context.Background(), RankObserver{
@@ -122,6 +123,20 @@ func TestAGroupOfOneClimbsNothing(t *testing.T) {
 	if levels != 0 || links != 0 {
 		t.Errorf("one blocker climbed %d levels and %d links, want none", levels, links)
 	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "sibling", Topic: "core", Prefix: "test", IssueType: model.TypeTask, ParentID: first[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	levels, links = 0, 0
+	adjacency, err := st.GetIssueAdjacency(ctx, first[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adjacency.Siblings) != 1 {
+		t.Fatalf("Siblings = %v, want the one created", idsOf(adjacency.Siblings))
+	}
+	if levels != 0 || links != 0 {
+		t.Errorf("a ticket with a sibling and one neighbour climbed %d levels and %d links, want none", levels, links)
+	}
 	wire(second[1])
 	if levels != 2 || links != 2 {
 		t.Errorf("two blockers climbed %d levels and %d links, want the two parent edges and the empty level above them", levels, links)
@@ -130,9 +145,9 @@ func TestAGroupOfOneClimbsNothing(t *testing.T) {
 
 // Siblings compare on their own keys, so a child restored data gives a second
 // parent lists among that parent's children by its key, wherever tree order
-// files it. Here tree order would file it under the lower parent, which ranks
-// after the higher one, so it would follow every child of the higher parent;
-// its key puts it first.
+// files it, in Children and Siblings alike. Here tree order would file it under
+// the lower parent, which ranks after the higher one, so it would follow every
+// child of the higher parent; its key puts it first.
 func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -146,6 +161,10 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, kept := lower[1], upper[1]
+	later, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "later", Topic: "core", Prefix: "test", IssueType: model.TypeTask, ParentID: upper[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
 	seedParentEdge(t, ctx, st, child.ID, upper[0].ID)
 	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, "!", child.ID); err != nil {
 		t.Fatal(err)
@@ -154,7 +173,14 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := idsOf(relations[upper[0].ID].Children), []string{child.ID, kept.ID}; !slices.Equal(got, want) {
+	if got, want := idsOf(relations[upper[0].ID].Children), []string{child.ID, kept.ID, later.ID}; !slices.Equal(got, want) {
 		t.Errorf("Children of %s = %v, want %v", upper[0].ID, got, want)
+	}
+	adjacency, err := st.GetIssueAdjacency(ctx, kept.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := idsOf(adjacency.Siblings), []string{child.ID, later.ID}; !slices.Equal(got, want) {
+		t.Errorf("Siblings of %s = %v, want %v", kept.ID, got, want)
 	}
 }

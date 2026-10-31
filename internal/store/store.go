@@ -1082,16 +1082,21 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 	return slices.Compact(selected), restricted, nil
 }
 
-// childIDsOfParents returns the ids of the direct children of the named
-// parents.
-//
-// This is the parent filter's whole implementation. The membership test it
-// carries is over dst_id, which is the leading column of
-// idx_relations_dst_type, so the join is a run of point lookups rather
-// than the correlated subquery an EXISTS form would plan once per outer row.
-func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []string) ([]string, error) {
+// childIDsQuery reads the direct children of the named parents. The membership
+// test it carries is over dst_id, the leading column of idx_relations_dst_type,
+// and the hint keeps the join a run of point lookups there: unhinted it plans as
+// a hash join over the whole table, and an EXISTS form would run a correlated
+// subquery per outer row.
+func childIDsQuery(parentIDs []string) (string, any) {
 	parents, arg := newIDSet(parentIDs).rows("parents")
-	rows, err := s.db.QueryContext(ctx, `SELECT r.src_id FROM `+parents+` JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, arg, string(model.RelParentChild))
+	return `SELECT /*+ JOIN_ORDER(parents, r) LOOKUP_JOIN(parents, r) */ r.src_id FROM ` + parents + ` JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, arg
+}
+
+// childIDsOfParents returns the ids of the direct children of the named
+// parents. This is the parent filter's whole implementation.
+func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []string) ([]string, error) {
+	query, arg := childIDsQuery(parentIDs)
+	rows, err := s.db.QueryContext(ctx, query, arg, string(model.RelParentChild))
 	if err != nil {
 		return nil, fmt.Errorf("list children of parents: %w", err)
 	}
@@ -1274,17 +1279,10 @@ func (s *Store) GetIssueAdjacency(ctx context.Context, id string) (storage.Issue
 	}
 	// Siblings are the parent's other children. The set exists only when the
 	// issue has a parent; an only child yields the empty slice and the renderer
-	// omits the group. [LAW:one-source-of-truth] derived from the same
-	// rank-ordered children query other consumers read, minus self.
+	// omits the group.
 	siblings := []model.Issue{}
 	if structural.Parent != nil {
-		// Every retention state, as the children edge records it: a sibling
-		// archived out of the listing is still the parent's child.
-		parentChildren, err := s.ListIssues(ctx, storage.ListIssuesFilter{
-			ParentIDs:       []string{structural.Parent.ID},
-			IncludeArchived: true,
-			IncludeDeleted:  true,
-		})
+		parentChildren, err := s.childrenOf(ctx, structural.Parent.ID)
 		if err != nil {
 			return storage.IssueAdjacency{}, err
 		}
@@ -1315,6 +1313,24 @@ func (s *Store) GetIssueAdjacency(ctx context.Context, id string) (storage.Issue
 		RedirectTarget: redirectTarget,
 		FollowsUp:      followsUp,
 	}, nil
+}
+
+// childrenOf hydrates parentID's children in sibling order and in every
+// retention state, as the edge records them: a child archived out of a listing
+// is still the parent's child. It reads no ancestry, so a wide parent costs its
+// children and not a climb from each of them.
+func (s *Store) childrenOf(ctx context.Context, parentID string) ([]model.Issue, error) {
+	ids, err := s.childIDsOfParents(ctx, []string{parentID})
+	if err != nil {
+		return nil, err
+	}
+	byID, err := s.getIssuesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	children := slices.Collect(maps.Values(byID))
+	storage.SortSiblings(children)
+	return children, nil
 }
 
 // followUpsOf hydrates every ticket filed as a follow-up of focalID, in tree
@@ -2174,18 +2190,28 @@ func (s *Store) ListIssueIdentities(ctx context.Context) ([]storage.IssueIdentit
 	return identities, rows.Err()
 }
 
-// listRelations returns every relation incident to one issue.
-//
-// The `OR` across two columns is the shape listRelationsForIDs exists to avoid,
-// and it is safe HERE for a reason that does not survive generalisation: both
-// sides are point predicates on one id, so the disjunct set is two and stays
-// two. The landmine is a disjunct set that GROWS with the caller's input — an
-// `IN` list on either side of the same `OR` is what turns the engine's overlap
-// elimination quadratic. Take this as precedent for a second endpoint column,
-// never for a second endpoint LIST. [LAW:carrying-cost]
+// relationsBySrc and relationsByDst read one issue's edges from one endpoint,
+// each a point lookup on that column's index. No index covers both columns, so
+// an `OR` across them walks the primary key at the store's size.
+const (
+	relationsBySrc = `relations WHERE src_id = ?`
+	relationsByDst = `relations WHERE dst_id = ?`
+)
+
+// listRelations returns every relation incident to one issue, of every type,
+// as listRelationsForIDs does for the structural types of many.
 func (s *Store) listRelations(ctx context.Context, issueID string) ([]model.Relation, error) {
-	return queryRelations(ctx, s.db, `relations WHERE src_id = ? OR dst_id = ?`, issueID, issueID)
+	bySrc, err := queryRelations(ctx, s.db, relationsBySrc, issueID)
+	if err != nil {
+		return nil, err
+	}
+	byDst, err := queryRelations(ctx, s.db, relationsByDst, issueID)
+	if err != nil {
+		return nil, err
+	}
+	return mergeRelations(bySrc, byDst), nil
 }
+
 func (s *Store) getMeta(ctx context.Context, tx *sql.Tx, key string) (string, error) {
 	var row *sql.Row
 	if tx != nil {
@@ -2409,9 +2435,7 @@ func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, 
 		return claims.Family{}, err
 	}
 	issues := slices.Collect(maps.Values(issuesByID))
-	// No container's key is read: siblings compare on their own, so an empty
-	// ancestry is tree order among them, and the full one is the store's size.
-	storage.RankAncestry{}.Sort(issues)
+	storage.SortSiblings(issues)
 	return claims.Family{Issues: issues, ParentByChild: parents, ParentTypes: parentTypes, Events: events}, nil
 }
 
