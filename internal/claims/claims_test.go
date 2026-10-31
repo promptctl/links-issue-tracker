@@ -533,6 +533,59 @@ func TestEvidenceRefusesAnUnsuppliedParent(t *testing.T) {
 	}
 }
 
+// familyOf is the reading of T1's lane family: a lane of T1 and T2, and T3 in
+// another lane of the same epic.
+func familyOf(t *testing.T, events []model.IssueEvent) claims.Family {
+	t.Helper()
+	issues, parents := epicOf(t, leaf(t, "T1", "here", model.StateOpen), leaf(t, "T2", "here", model.StateClosed), leaf(t, "T3", "there", model.StateOpen))
+	return claims.Family{
+		Issues:        issues[1:],
+		ParentByChild: parents,
+		ParentTypes:   map[string]model.IssueType{epicID: model.TypeEpic},
+		Events:        events,
+	}
+}
+
+// TestNewLaneKeepsTheLaneItsIssueIsIn: the family reaches past the lane, and the
+// reading stops at it, so a sibling's event moves neither the standing nor the
+// count.
+func TestNewLaneKeepsTheLaneItsIssueIsIn(t *testing.T) {
+	lane, err := claims.NewLane("T1", familyOf(t, []model.IssueEvent{
+		event("e1", "T2", model.ActionDone, ago(time.Hour), streamA),
+		event("e2", "T3", model.ActionStart, ago(time.Minute), streamB),
+	}))
+	if err != nil {
+		t.Fatalf("NewLane() error = %v", err)
+	}
+	if lane.ID() != laneIn(epicID, "here") {
+		t.Errorf("ID() = %v, want the lane T1 is in", lane.ID())
+	}
+	assertStanding(t, lane.Standing(fresh, assumeLive), held(streamA, ago(time.Hour), ago(time.Hour)))
+	if got := lane.Progress().Progress; got != (claims.Progress{Done: 1, Total: 2}) {
+		t.Errorf("Progress() = %+v, want 1 of 2", got)
+	}
+}
+
+// TestNewLaneRefusesWhatNewEvidenceRefuses: an event naming a ticket the issue
+// read lost is the wrong answer the type exists to stop, a lane reading
+// "unclaimed" while somebody holds it. The events of a family come from a read
+// that shares no id list with its issues, so the event is still there to name
+// the loss.
+func TestNewLaneRefusesWhatNewEvidenceRefuses(t *testing.T) {
+	lostTicket := familyOf(t, []model.IssueEvent{event("e1", "T9", model.ActionDone, ago(time.Hour), streamA)})
+	if _, err := claims.NewLane("T1", lostTicket); err == nil {
+		t.Error("NewLane() with an event naming an unsupplied issue = nil error, want a refusal")
+	}
+	lostParent := familyOf(t, nil)
+	lostParent.ParentTypes = nil
+	if _, err := claims.NewLane("T1", lostParent); err == nil {
+		t.Error("NewLane() with no type for a parent = nil error, want a refusal")
+	}
+	if _, err := claims.NewLane("T9", familyOf(t, nil)); err == nil {
+		t.Error("NewLane() for an issue the family does not hold = nil error, want a refusal")
+	}
+}
+
 // TestDeriveIsOrderIndependent: NewEvidence imposes the total order the
 // predicate reads, so a caller handing events over shuffled gets the same claims
 // as one handing them over sorted.

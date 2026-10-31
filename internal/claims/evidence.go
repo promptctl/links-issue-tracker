@@ -38,6 +38,33 @@ type Evidence struct {
 	events  map[model.LaneID][]model.IssueEvent
 }
 
+// Lane is a complete reading of one lane: every issue in it and every event
+// they carry. Standing and progress are questions about one lane, so a reader
+// that asks them of one lane holds this and has no other lane to misread, where
+// an Evidence read short of the backlog would answer Unclaimed for every lane
+// it skipped. Evidence.Lane yields the same value for each lane of the backlog.
+type Lane struct {
+	id      model.LaneID
+	members []model.Issue
+	events  []model.IssueEvent
+}
+
+// Family is the unparsed reading NewLane takes, what storage's LaneFamily
+// returns: the issues model.LaneFamily names, closed, archived and deleted
+// included, what each sits under, and the history they carry. An event needs
+// only its action, attribution and instant here, the whole of what derivation
+// reads.
+//
+// ParentTypes gives each parent ParentByChild names its type and nothing else,
+// because a lane needs only to know whether its parent scopes it, and hydrating
+// a parent costs its whole subtree.
+type Family struct {
+	Issues        []model.Issue
+	ParentByChild map[string]string
+	ParentTypes   map[string]model.IssueType
+	Events        []model.IssueEvent
+}
+
 // NewEvidence partitions issues into lanes and files every event under the lane
 // of the issue it touched. parentByChild maps an issue id to its parent's id; an
 // issue absent from the map is parentless.
@@ -59,10 +86,39 @@ type Evidence struct {
 // comes out. Derive takes only Evidence, so no derivation can run on a partial
 // read, and nothing inland re-checks.
 func NewEvidence(issues []model.Issue, parentByChild map[string]string, events []model.IssueEvent) (Evidence, error) {
-	issuesByID := make(map[string]*model.Issue, len(issues))
-	for i := range issues {
-		issuesByID[issues[i].ID] = &issues[i]
+	parentTypes := make(map[string]model.IssueType, len(issues))
+	for _, issue := range issues {
+		parentTypes[issue.ID] = issue.IssueType
 	}
+	return partition(issues, parentByChild, parentTypes, events)
+}
+
+// NewLane is the crossing for a reader of one lane: it partitions issueID's
+// family exactly as NewEvidence partitions the backlog, refusals included, and
+// keeps the lane issueID landed in. The family reaches past that lane, because
+// a lane key is an editable field and a sibling's parent can be another issue's
+// in restored data, so every other lane the partition holds may be part-read,
+// and it goes no further than here.
+//
+// The events come from a read that shares no id list with the issues', so the
+// refusal holds here as it does for NewEvidence: a closed, archived or deleted
+// ticket a read dropped is one the events still name.
+func NewLane(issueID string, family Family) (Lane, error) {
+	partitioned, err := partition(family.Issues, family.ParentByChild, family.ParentTypes, family.Events)
+	if err != nil {
+		return Lane{}, err
+	}
+	lane, known := partitioned.lanes[issueID]
+	if !known {
+		return Lane{}, fmt.Errorf("claims: issue %s is not among the %d issues of the family read for it", issueID, len(family.Issues))
+	}
+	return partitioned.Lane(lane), nil
+}
+
+// partition places every issue in its lane and every event in the lane of the
+// issue it touched. A parent is its id and type here and nothing else, because
+// model.LaneOf reads no lifecycle.
+func partition(issues []model.Issue, parentByChild map[string]string, parentTypes map[string]model.IssueType, events []model.IssueEvent) (Evidence, error) {
 	lanes := make(map[string]model.LaneID, len(issues))
 	ev := Evidence{
 		lanes:   lanes,
@@ -72,9 +128,11 @@ func NewEvidence(issues []model.Issue, parentByChild map[string]string, events [
 	for _, issue := range issues {
 		var parent *model.Issue
 		if parentID, under := parentByChild[issue.ID]; under {
-			if parent = issuesByID[parentID]; parent == nil {
-				return Evidence{}, fmt.Errorf("claims: issue %s sits under %s, which was not among the %d issues supplied: claim derivation places an issue by its parent, so every parent must be supplied", issue.ID, parentID, len(issues))
+			parentType, known := parentTypes[parentID]
+			if !known {
+				return Evidence{}, fmt.Errorf("claims: issue %s sits under %s, which was not supplied: claim derivation places an issue by its parent, so every parent must be supplied", issue.ID, parentID)
 			}
+			parent = &model.Issue{ID: parentID, IssueType: parentType}
 		}
 		lane := model.LaneOf(issue, parent)
 		lanes[issue.ID] = lane
@@ -127,11 +185,16 @@ type LaneProgress struct {
 	Active *model.Issue
 }
 
+// Lane is one lane of this evidence. A lane this evidence never saw has no
+// members and no events — the same total-map-read convention Standings.Of uses.
+func (e Evidence) Lane(lane model.LaneID) Lane {
+	return Lane{id: lane, members: e.members[lane], events: e.events[lane]}
+}
+
 // LaneProgress reports the given lane's progress. A lane this evidence never
-// saw reports the zero LaneProgress (Total 0), which formats as nothing —
-// the same total-map-read convention Standings.Of uses.
+// saw reports the zero LaneProgress (Total 0), which formats as nothing.
 func (e Evidence) LaneProgress(lane model.LaneID) LaneProgress {
-	return progressOf(e.members[lane])
+	return e.Lane(lane).Progress()
 }
 
 // ScopeProgress reports the progress of every lane inScope admits, counted as
@@ -148,13 +211,33 @@ func (e Evidence) ScopeProgress(inScope func(model.LaneID) bool) Progress {
 	return progressOf(members).Progress
 }
 
-// LaneProgressWith reports the progress of the lane written is in, as this
-// evidence partitioned it, with written counted in place of the version this
-// evidence read. A command that gathered the evidence before its own write
-// learns the progress after it this way, without gathering again; and because
-// written itself is counted, the progress it reports is never the empty lane's.
+// LaneProgressWith is ProgressWith on the lane written is in, as this evidence
+// partitioned it.
 func (e Evidence) LaneProgressWith(written model.Issue) LaneProgress {
-	members := slices.DeleteFunc(slices.Clone(e.members[e.lanes[written.ID]]), func(member model.Issue) bool { return member.ID == written.ID })
+	return e.Lane(e.lanes[written.ID]).ProgressWith(written)
+}
+
+// ID names the lane this reading is of.
+func (l Lane) ID() model.LaneID { return l.id }
+
+// Standing applies the claim predicate to this lane: what Derive answers for
+// it, by the same derivation.
+func (l Lane) Standing(fresh Freshness, local LocalCheckouts) Standing {
+	return standingOf(l.members, l.events, fresh, local)
+}
+
+// Progress reports this lane's progress.
+func (l Lane) Progress() LaneProgress {
+	return progressOf(l.members)
+}
+
+// ProgressWith reports this lane's progress with written counted in place of
+// the version this reading holds. A command that read the lane before its own
+// write learns the progress after it this way, without reading again; and
+// because written itself is counted, the progress it reports is never the empty
+// lane's.
+func (l Lane) ProgressWith(written model.Issue) LaneProgress {
+	members := slices.DeleteFunc(slices.Clone(l.members), func(member model.Issue) bool { return member.ID == written.ID })
 	return progressOf(append(members, written))
 }
 

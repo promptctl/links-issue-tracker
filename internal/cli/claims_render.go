@@ -7,6 +7,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // formatClaimLine renders "who has this and how is it going" for one lane,
@@ -23,17 +24,23 @@ import (
 // the holder to a live worktree THIS machine enumerated; a remote claimant
 // gets the dossier and nothing more. [privacy invariant]
 func formatClaimLine(cc claimContext, lane model.LaneID, now time.Time) (string, bool) {
-	held, ok := cc.standings.Of(lane).(claims.Held)
+	return claimLineOf(cc.standings.Of(lane), cc.evidence.LaneProgress(lane), cc.addresses, now)
+}
+
+// claimLineOf is formatClaimLine on the values it reads, for a reader holding
+// one lane and no claimContext.
+func claimLineOf(standing claims.Standing, progress claims.LaneProgress, addresses map[model.Attribution]workspace.Checkout, now time.Time) (string, bool) {
+	held, ok := standing.(claims.Held)
 	if !ok {
 		return "", false
 	}
-	line := claimPrefix(held.By, cc)
+	line := claimPrefix(held.By, addresses)
 	if len(held.Contested) > 0 {
 		line += fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(held.Contested), ", "))
 	}
 	parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
-	if progress := formatLaneProgress(cc.evidence.LaneProgress(lane)); progress != "" {
-		parts = append(parts, progress)
+	if fraction := formatLaneProgress(progress); fraction != "" {
+		parts = append(parts, fraction)
 	}
 	return strings.Join(parts, " · "), true
 }
@@ -41,8 +48,8 @@ func formatClaimLine(cc claimContext, lane model.LaneID, now time.Time) (string,
 // claimPrefix is the badge half of the claim line: where a listing can walk
 // over to the claimant, or, failing that, the opaque discriminator the
 // shared database actually carries.
-func claimPrefix(by model.Attribution, cc claimContext) string {
-	if checkout, ok := cc.addresses[by]; ok {
+func claimPrefix(by model.Attribution, addresses map[model.Attribution]workspace.Checkout) string {
+	if checkout, ok := addresses[by]; ok {
 		branch := checkout.Branch
 		if branch == "" {
 			branch = "detached HEAD"

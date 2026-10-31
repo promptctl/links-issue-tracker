@@ -51,7 +51,7 @@ func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing
 			facts[key] = value
 		}
 	}
-	if want := map[string]any{"start.lane_held": true, "start.handover": true, "start.transfer_announced": false}; !reflect.DeepEqual(facts, want) {
+	if want := map[string]any{"start.lane_family_issues": float64(2), "start.lane_held": true, "start.handover": true, "start.transfer_announced": false}; !reflect.DeepEqual(facts, want) {
 		t.Fatalf("start event facts = %v, want %v", facts, want)
 	}
 }

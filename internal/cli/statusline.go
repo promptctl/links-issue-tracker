@@ -57,7 +57,7 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 	switch o := outcome.(type) {
 	case ResumedOwnWork:
 		picked = statuslineTicketRef(o.Row.Issue)
-		facts.Record(started(evidence, o.Row.Issue), phaseRead(ticketStateOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))))
+		facts.Record(started(evidence.LaneProgressWith(o.Row.Issue), o.Row.Issue), phaseRead(ticketStateOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
@@ -85,13 +85,12 @@ func statuslineTicketRef(issue model.Issue) *statusline.Ticket {
 	return &ticket
 }
 
-// started is this checkout working on worked, with the progress of the lane it
-// is in as the statusline file records it. The progress is the count the claim
-// line renders, read from the same evidence, so the file and lit backlog agree
-// when the file is written; docs/statusline.md says when it goes stale.
-// [LAW:one-source-of-truth]
-func started(evidence claims.Evidence, worked model.Issue) statusline.Started {
-	progress := evidence.LaneProgressWith(worked)
+// started is this checkout working on worked, with progress, the lane's with
+// worked counted, as the statusline file records it. The progress is the count
+// the claim line renders, read from the same reading, so the file and lit
+// backlog agree when the file is written; docs/statusline.md says when it goes
+// stale. [LAW:one-source-of-truth]
+func started(progress claims.LaneProgress, worked model.Issue) statusline.Started {
 	return statusline.NewStarted(app.StatuslineTicket(worked), statusline.RollupProgress{CompletedCount: progress.Done, TotalCount: progress.Total})
 }
 
