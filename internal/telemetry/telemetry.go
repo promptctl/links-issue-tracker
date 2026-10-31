@@ -254,6 +254,15 @@ func Count(ctx context.Context, key string, n int) {
 	r.ev.Counts[key] = n
 }
 
+// Add adds n to one of the command's counts, for a command that reports a
+// share of it from each of several reads.
+func Add(ctx context.Context, key string, n int) {
+	r := from(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ev.Counts[key] += n
+}
+
 // Max records n as one of the command's counts unless a larger one stands, for
 // a command that reports a size from each of several writes and is asked for
 // the longest.

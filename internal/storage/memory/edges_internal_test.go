@@ -81,3 +81,43 @@ func TestParentByChildTakesTheLowerOfTwoParents(t *testing.T) {
 		}
 	}
 }
+
+// Siblings compare on their own keys in this engine too, so a child two parents
+// claim lists by its key among the children of either, where the Dolt engine's
+// TestChildrenCompareOnTheirOwnKeys pins the same order.
+func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
+	ctx := context.Background()
+	e, err := New("ws", storage.SystemClock)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	mustIssue := func(in storage.CreateIssueInput) model.Issue {
+		t.Helper()
+		in.Topic, in.Prefix = "core", "conf"
+		issue, err := e.CreateIssue(ctx, in)
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", in.Title, err)
+		}
+		return issue
+	}
+	lower := mustIssue(storage.CreateIssueInput{Title: "one", IssueType: model.TypeEpic})
+	upper := mustIssue(storage.CreateIssueInput{Title: "two", IssueType: model.TypeEpic})
+	if upper.ID < lower.ID {
+		lower, upper = upper, lower
+	}
+	if _, err := e.RankToTop(ctx, upper.ID); err != nil {
+		t.Fatalf("RankToTop(%s) error = %v", upper.ID, err)
+	}
+	child := mustIssue(storage.CreateIssueInput{Title: "held", ParentID: lower.ID})
+	kept := mustIssue(storage.CreateIssueInput{Title: "kept", ParentID: upper.ID})
+	e.relations = append(e.relations, model.Relation{SrcID: child.ID, DstID: upper.ID, Type: model.RelParentChild})
+
+	relations, err := e.GetRelationsByIDs(ctx, []string{upper.ID})
+	if err != nil {
+		t.Fatalf("GetRelationsByIDs(%s) error = %v", upper.ID, err)
+	}
+	children := relations[upper.ID].Children
+	if len(children) != 2 || children[0].ID != child.ID || children[1].ID != kept.ID {
+		t.Errorf("Children of %s = %+v, want %s before %s", upper.ID, children, child.ID, kept.ID)
+	}
+}

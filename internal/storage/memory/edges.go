@@ -591,14 +591,15 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		}
 		*bucket = append(*bucket, issue)
 	}
-	ancestry.Sort(out.Children)
+	// Siblings compare on their own keys, the rule IssueRelations states.
+	storage.RankAncestry{}.Sort(out.Children)
 	ancestry.Sort(out.BlockedBy)
 	ancestry.Sort(out.Blocks)
 	return out, nil
 }
 
 // relatedIssues returns the hydrated related-to counterparts of focalID. It is
-// GetIssueDetail's concern alone — no batch consumer wants peer links, which
+// GetIssueAdjacency's concern alone — no batch consumer wants peer links, which
 // is why they stay out of the shared IssueRelations shape.
 func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos map[string]int, ancestry storage.RankAncestry) ([]model.Issue, error) {
 	out := []model.Issue{}

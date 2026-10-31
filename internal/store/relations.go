@@ -19,7 +19,10 @@ import (
 // — shared by single-issue detail loading and batch relation loading so the
 // reading "src blocked-by dst" lives in exactly one place.
 // [LAW:single-enforcer] Relation-direction semantics decided once, here.
-func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue, ancestry storage.RankAncestry) storage.IssueRelations {
+// Children come back in order, because siblings compare on their own keys; the
+// edges that cross frames wait for the caller's sortInTreeOrder, which reads
+// once for every subject.
+func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) storage.IssueRelations {
 	out := storage.IssueRelations{
 		Children:  []model.Issue{},
 		BlockedBy: []model.Issue{},
@@ -52,16 +55,14 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 			}
 		}
 	}
-	ancestry.Sort(out.Children)
-	ancestry.Sort(out.BlockedBy)
-	ancestry.Sort(out.Blocks)
+	storage.RankAncestry{}.Sort(out.Children)
 	return out
 }
 
 // relatedFrom returns the hydrated "related-to" counterparts of focalID. It is
-// GetIssueDetail's concern only — no batch consumer needs related edges, so it
-// stays out of the shared IssueRelations shape.
-func relatedFrom(focalID string, relations []model.Relation, issuesByID map[string]model.Issue, ancestry storage.RankAncestry) []model.Issue {
+// GetIssueAdjacency's concern only — no batch consumer needs related edges, so
+// it stays out of the shared IssueRelations shape.
+func relatedFrom(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) []model.Issue {
 	out := []model.Issue{}
 	for _, rel := range relations {
 		if rel.Type != model.RelRelatedTo {
@@ -75,7 +76,6 @@ func relatedFrom(focalID string, relations []model.Relation, issuesByID map[stri
 			out = append(out, related)
 		}
 	}
-	ancestry.Sort(out)
 	return out
 }
 
@@ -83,7 +83,8 @@ func relatedFrom(focalID string, relations []model.Relation, issuesByID map[stri
 // "children-of-parent-minus-self" derivation. Order is preserved (callers pass
 // already rank-ordered children), so the result needs no resort. A focal issue
 // that is an only child yields an empty slice. This is the single definition of
-// the sibling set, shared by GetIssueDetail and the done/close adjacency view.
+// the sibling set, which GetIssueAdjacency reads for lit show and the done/close
+// view.
 // [LAW:one-source-of-truth] Sibling derivation decided once, here.
 func siblingsOf(focalID string, parentChildren []model.Issue) []model.Issue {
 	out := make([]model.Issue, 0, len(parentChildren))
@@ -96,10 +97,11 @@ func siblingsOf(focalID string, parentChildren []model.Issue) []model.Issue {
 	return out
 }
 
-// GetRelationsByIDs batch-loads the structural relations for every listed id in
-// a fixed number of queries rather than GetIssueDetail-per-id. Subjects that no
-// longer exist are simply absent from the result, mirroring getIssuesByIDs;
-// callers iterating known-present ids never observe the hole.
+// GetRelationsByIDs batch-loads the structural relations for every listed id
+// rather than GetIssueDetail-per-id, in a fixed number of queries plus one a
+// level of the climb sortInTreeOrder makes. Subjects that no longer exist are
+// simply absent from the result, mirroring getIssuesByIDs; callers iterating
+// known-present ids never observe the hole.
 // [LAW:dataflow-not-control-flow] One relations query plus one issue-hydration
 // query feed a pure bucketing pass — the per-subject work is map lookups, not
 // extra round-trips.
@@ -133,19 +135,20 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 	if err != nil {
 		return nil, err
 	}
-	ancestry, err := loadRankAncestry(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
 	out := make(map[string]storage.IssueRelations, len(subjects))
+	crossFrame := make([][]model.Issue, 0, 2*len(subjects))
 	for _, id := range subjects {
 		issue, ok := issuesByID[id]
 		if !ok {
 			continue
 		}
-		rel := bucketRelations(id, bySubject[id], issuesByID, ancestry)
+		rel := bucketRelations(id, bySubject[id], issuesByID)
 		rel.Issue = issue
 		out[id] = rel
+		crossFrame = append(crossFrame, rel.BlockedBy, rel.Blocks)
+	}
+	if err := sortInTreeOrder(ctx, s.db, crossFrame...); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

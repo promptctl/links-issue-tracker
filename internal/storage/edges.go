@@ -121,10 +121,49 @@ type SetParentInput struct {
 // dst", so BlockedBy (the edges out) and Blocks (the edges in) are the two
 // readings of one edge set — is contract, not engine detail: two engines that bucketed an edge
 // differently would disagree about which work is ready.
+//
+// Children, BlockedBy and Blocks are each in tree order, with one exception
+// only restored data can reach: Children compare on their own keys, as siblings
+// do, so a child two parents claim lists among the children of its other parent
+// too, where [RankAncestry] files it under the lower one. `lit doctor` names it.
 type IssueRelations struct {
 	Issue     model.Issue
 	Parent    *model.Issue
 	Children  []model.Issue
 	BlockedBy []model.Issue
 	Blocks    []model.Issue
+}
+
+// IssueAdjacency is what [IssueReader.GetIssueDetail] holds that the issue's own
+// row and edges name, each hydrated. It has no follow-ups because no row of the
+// issue's names them, so holding one proves the read stayed off the issue
+// table's size. [LAW:types-are-the-program]
+type IssueAdjacency struct {
+	IssueRelations
+	Relations      []model.Relation
+	Siblings       []model.Issue
+	Related        []model.Issue
+	RedirectTarget *model.Issue
+	FollowsUp      *model.Issue
+}
+
+// Detail is the whole single-issue view: this adjacency and the rest of the
+// issue's record. [LAW:one-source-of-truth] One assembly for both engines.
+func (a IssueAdjacency) Detail(comments []model.Comment, events []model.IssueEvent, planReviews []model.PlanReview, followUps []model.Issue) model.IssueDetail {
+	return model.IssueDetail{
+		Issue:          a.Issue,
+		Relations:      a.Relations,
+		Comments:       comments,
+		Events:         events,
+		PlanReviews:    planReviews,
+		Children:       a.Children,
+		Siblings:       a.Siblings,
+		BlockedBy:      a.BlockedBy,
+		Blocks:         a.Blocks,
+		Parent:         a.Parent,
+		Related:        a.Related,
+		RedirectTarget: a.RedirectTarget,
+		FollowsUp:      a.FollowsUp,
+		FollowUps:      followUps,
+	}
 }

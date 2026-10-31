@@ -876,19 +876,28 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requireIssues(ctx, filter.ParentIDs); err != nil {
+		return nil, err
+	}
+	// The two caller-supplied id sets collapse onto ONE axis before any row is
+	// read, and that is a decomposition choice rather than an optimisation.
+	// "Which issues are children of these parents" is a question about the
+	// relations table; answering it there instead of as an EXISTS subquery
+	// inside the issue scan leaves this query with a single open-ended id set
+	// to join against. [LAW:decomposition]
+	selected, restricted, err := s.selectedIssueIDs(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
 	// Parsed before the listing query rather than after it, so an unsupported
-	// sort field costs only the ancestry read; the comparator it yields reads
-	// hydrated values, so the ordering itself cannot run until the rows are back
-	// and built. No ORDER BY could stand in for it: a container's state is a
+	// sort field never pays for one; the comparator it yields reads hydrated
+	// values, so the ordering itself cannot run until the rows are back and
+	// built. No ORDER BY could stand in for it: a container's state is a
 	// reading of its children that no column holds — the status FILTER lives
 	// past hydration for the same reason (see filterByState) — and tree order
 	// reads the keys of containers the listing may have filtered out.
 	// [LAW:one-source-of-truth]
-	ancestry, err := loadRankAncestry(ctx, s.db)
-	if err != nil {
-		return nil, err
-	}
-	ordering, err := storage.IssueOrdering(filter.SortBy, ancestry)
+	ordering, err := s.listingOrdering(ctx, filter.SortBy, selected, restricted)
 	if err != nil {
 		return nil, err
 	}
@@ -957,19 +966,6 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 			where = append(where, "EXISTS (SELECT 1 FROM labels l WHERE l.issue_id = i.id AND l.label = ?)")
 			args = append(args, label)
 		}
-	}
-	if err := s.requireIssues(ctx, filter.ParentIDs); err != nil {
-		return nil, err
-	}
-	// The two caller-supplied id sets collapse onto ONE axis before any row is
-	// read, and that is a decomposition choice rather than an optimisation.
-	// "Which issues are children of these parents" is a question about the
-	// relations table; answering it there instead of as an EXISTS subquery
-	// inside the issue scan leaves this query with a single open-ended id set
-	// to join against. [LAW:decomposition]
-	selected, restricted, err := s.selectedIssueIDs(ctx, filter)
-	if err != nil {
-		return nil, err
 	}
 	for _, term := range storage.TrimmedNonEmpty(filter.SearchTerms) {
 		// Five disjuncts, fixed by the five columns a search term reads, and
@@ -1216,11 +1212,7 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 }
 
 func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetail, error) {
-	issue, err := s.GetIssue(ctx, id)
-	if err != nil {
-		return model.IssueDetail{}, err
-	}
-	relations, err := s.listRelations(ctx, id)
+	adjacency, err := s.GetIssueAdjacency(ctx, id)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
@@ -1236,40 +1228,50 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
+	followUps, err := s.followUpsOf(ctx, id)
+	if err != nil {
+		return model.IssueDetail{}, err
+	}
+	return adjacency.Detail(comments, events, planReviews, followUps), nil
+}
+
+// GetIssueAdjacency reads what the issue's row and edges name.
+func (s *Store) GetIssueAdjacency(ctx context.Context, id string) (storage.IssueAdjacency, error) {
+	issue, err := s.GetIssue(ctx, id)
+	if err != nil {
+		return storage.IssueAdjacency{}, err
+	}
+	relations, err := s.listRelations(ctx, id)
+	if err != nil {
+		return storage.IssueAdjacency{}, err
+	}
 
 	// [LAW:single-enforcer] Hydrate every related issue in one query
 	// rather than running N+1 GetIssue calls. The map lets the relation
 	// loop below stay a pure data-flow over already-hydrated rows. The
-	// redirect target joins the same batch — hydrating it costs no extra
-	// query.
+	// redirect target and the ticket this one follows up join the same
+	// batch — hydrating them costs no extra query.
 	relatedIDs := collectRelatedIssueIDs(id, relations)
 	if target := issue.RedirectTargetValue(); target != nil && !slices.Contains(relatedIDs, *target) {
 		relatedIDs = append(relatedIDs, *target)
 	}
-	// The follow-up link in both directions joins the same batch: the ticket
-	// this one follows up, and every ticket filed as a follow-up of this one.
-	followUpIDs, err := s.followUpIDsOf(ctx, id)
-	if err != nil {
-		return model.IssueDetail{}, err
-	}
-	for _, other := range append(followUpIDs, issue.FollowsUp) {
-		if other != "" && !slices.Contains(relatedIDs, other) {
-			relatedIDs = append(relatedIDs, other)
-		}
+	if issue.FollowsUp != "" && !slices.Contains(relatedIDs, issue.FollowsUp) {
+		relatedIDs = append(relatedIDs, issue.FollowsUp)
 	}
 	relatedByID, err := s.getIssuesByIDs(ctx, relatedIDs)
 	if err != nil {
-		return model.IssueDetail{}, err
-	}
-	ancestry, err := loadRankAncestry(ctx, s.db)
-	if err != nil {
-		return model.IssueDetail{}, err
+		return storage.IssueAdjacency{}, err
 	}
 
 	// [LAW:one-source-of-truth] Structural edges (parent/child/blocks) are
 	// bucketed by the same helper the batch accessor uses, so the blocks
-	// convention has one definition. Related is GetIssueDetail's own concern.
-	structural := bucketRelations(id, relations, relatedByID, ancestry)
+	// convention has one definition. Related is this read's own concern.
+	structural := bucketRelations(id, relations, relatedByID)
+	structural.Issue = issue
+	related := relatedFrom(id, relations, relatedByID)
+	if err := sortInTreeOrder(ctx, s.db, structural.BlockedBy, structural.Blocks, related); err != nil {
+		return storage.IssueAdjacency{}, err
+	}
 	// Siblings are the parent's other children. The set exists only when the
 	// issue has a parent; an only child yields the empty slice and the renderer
 	// omits the group. [LAW:one-source-of-truth] derived from the same
@@ -1284,7 +1286,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 			IncludeDeleted:  true,
 		})
 		if err != nil {
-			return model.IssueDetail{}, err
+			return storage.IssueAdjacency{}, err
 		}
 		siblings = siblingsOf(id, parentChildren)
 	}
@@ -1298,38 +1300,44 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 			redirectTarget = &hydrated
 		}
 	}
-	related := relatedFrom(id, relations, relatedByID, ancestry)
-	// Both readings of follows_up hydrate from the row, never from the graph;
-	// a followed-up ticket whose row has vanished hydrates as absent, matching
-	// getIssuesByIDs' hole-skipping contract. [LAW:one-source-of-truth]
+	// The followed-up ticket hydrates from the row, never from the graph; one
+	// whose row has vanished hydrates as absent, matching getIssuesByIDs'
+	// hole-skipping contract. [LAW:one-source-of-truth]
 	var followsUp *model.Issue
 	if hydrated, ok := relatedByID[issue.FollowsUp]; ok {
 		followsUp = &hydrated
 	}
-	followUps := []model.Issue{}
-	for _, other := range followUpIDs {
-		if hydrated, ok := relatedByID[other]; ok {
-			followUps = append(followUps, hydrated)
-		}
-	}
-	ancestry.Sort(followUps)
-	detail := model.IssueDetail{
-		Issue:          issue,
+	return storage.IssueAdjacency{
+		IssueRelations: structural,
 		Relations:      relations,
-		Comments:       comments,
-		Events:         events,
-		PlanReviews:    planReviews,
-		Children:       structural.Children,
 		Siblings:       siblings,
-		BlockedBy:      structural.BlockedBy,
-		Blocks:         structural.Blocks,
-		Parent:         structural.Parent,
 		Related:        related,
 		RedirectTarget: redirectTarget,
 		FollowsUp:      followsUp,
-		FollowUps:      followUps,
+	}, nil
+}
+
+// followUpsOf hydrates every ticket filed as a follow-up of focalID, in tree
+// order, as the reverse reading of follows_up: from the row, never from the
+// graph, a follow-up whose row has vanished hydrating as absent.
+// [LAW:one-source-of-truth]
+func (s *Store) followUpsOf(ctx context.Context, focalID string) ([]model.Issue, error) {
+	ids, err := s.followUpIDsOf(ctx, focalID)
+	if err != nil {
+		return nil, err
 	}
-	return detail, nil
+	byID, err := s.getIssuesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	followUps := make([]model.Issue, 0, len(byID))
+	for _, followUp := range byID {
+		followUps = append(followUps, followUp)
+	}
+	if err := sortInTreeOrder(ctx, s.db, followUps); err != nil {
+		return nil, err
+	}
+	return followUps, nil
 }
 
 // followUpIDsOf returns the ids of every ticket filed as a follow-up of

@@ -130,6 +130,7 @@ func (w *rankWatch) on(ctx context.Context) context.Context {
 	return WithRankObserver(ctx, RankObserver{
 		Wrote:    func(longestKey int) { w.wrote = append(w.wrote, longestKey) },
 		Respaced: func(r Respace) { w.respaces = append(w.respaces, r) },
+		Climbed:  func(int) {},
 	})
 }
 
@@ -292,6 +293,7 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	seedRows(t, ctx, st, 0, 60, true)
 	frame, frameArgs := frameRowsQuery(storage.Frame(seededRow(0)))
+	climb, climbArg := rankClimbQuery([]string{seededRow(23), seededRow(53)})
 	for _, c := range []struct {
 		name, query string
 		args        []any
@@ -300,6 +302,7 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 		{"a cycle check's reach", blocksPrecedesQuery, []any{seededRow(23), seededRow(53)}},
 		{"a walk's parents", parentEdgesQuery("r.src_id = ?"), []any{seededRow(23)}},
 		{"a climb's epics", parentEdgesQuery("r.src_id = ? AND " + epicParentPredicate), []any{seededRow(23)}},
+		{"a level of tree order's climb", climb, []any{climbArg}},
 	} {
 		plan := planOf(t, ctx, st, c.query, c.args...)
 		if !strings.Contains(plan, "LookupJoin") || strings.Contains(plan, "MergeJoin") {

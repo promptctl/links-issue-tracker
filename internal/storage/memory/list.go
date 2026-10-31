@@ -21,6 +21,11 @@ func (e *Engine) ListIssues(ctx context.Context, filter storage.ListIssuesFilter
 }
 
 func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, error) {
+	for _, id := range filter.ParentIDs {
+		if _, err := e.mustRecord(id); err != nil {
+			return nil, err
+		}
+	}
 	pos := e.positions()
 	ancestry := e.rankAncestry(pos)
 	order, err := storage.IssueOrdering(filter.SortBy, ancestry)
@@ -30,11 +35,6 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 	criteria, err := storage.ParseIssueCriteria(filter)
 	if err != nil {
 		return nil, err
-	}
-	for _, id := range filter.ParentIDs {
-		if _, err := e.mustRecord(id); err != nil {
-			return nil, err
-		}
 	}
 	ranked := make([]*record, 0, len(e.order))
 	for _, id := range e.order {
