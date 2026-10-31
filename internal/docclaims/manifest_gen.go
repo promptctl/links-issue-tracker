@@ -1090,7 +1090,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "read git remote cache %s: %w", Src: "read git remote cache %s: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "rebuild candidate from a valid mapping failed: %w", Src: "rebuild candidate from a valid mapping failed: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "relations WHERE src_id = ? AND type = ?", Src: "relations WHERE src_id = ? AND type = ?"},
-	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "relations WHERE src_id = ? OR dst_id = ?", Src: "relations WHERE src_id = ? OR dst_id = ?"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "remote %q is not configured on this store", Src: "remote %q is not configured on this store"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "remove a dead build's leftover: %w", Src: "remove a dead build's leftover: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "remove abandoned mirror %s: %w", Src: "remove abandoned mirror %s: %w"},
