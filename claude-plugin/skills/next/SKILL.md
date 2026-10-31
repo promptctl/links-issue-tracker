@@ -71,7 +71,7 @@ lit tracks tickets, not GitHub PRs, so no lit command will surface one.  Two che
 gh pr list --head "$(git branch --show-current)" --state open --limit 1000
 ```
 
-A PR here is your ticket.  Skip the selection steps and take it to a clean, merged close-out through the review process your instructions define — and where none defines one, by working its review threads by hand.  Once it has merged, finish the ticket the way step 5 of "Working the ticket" finishes one — the phases, then `lit done <id>` — and come back to "Your PRs elsewhere" below.  Step 5 goes on to `lit next`; stop before it, because that list may still hold a PR in flight.  Steps 1 to 4 do not apply: their checks and branch setup are for a ticket whose code is not yet on the trunk.
+A PR here is your ticket, and its id is the one in the branch name.  Skip the selection steps and take it through "Finishing a ticket" below, then go on to "Your PRs elsewhere".  "Working the ticket" does not apply: its checks and branch setup are for a ticket whose code is not yet written.
 
 **Your PRs elsewhere.**
 
@@ -83,11 +83,11 @@ A fresh session sitting on the trunk has no head branch to match, so the branch 
 
 These are candidates, not assignments, and there may be several — every checkout on this machine shares the one `gh` account, so each of them can have left a PR behind here.  Classify the whole list before you act on any of it; an agent that starts merging partway down a list rarely comes back for the tail, and the one it walks past is the one the next session picks up instead of its own work.
 
-For each PR the query returned, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints a claim line under any lane somebody holds right now, and nothing under a lane nobody holds.  A lane another checkout holds is theirs — leave it, say so, and move on.
+For each PR the query returned, take the ticket id from its branch name and check who holds that lane: `lit backlog` prints a claim line under any lane somebody holds right now, and nothing under a lane nobody holds.  A lane another checkout holds is theirs — leave it, say so, and move on.  A lane whose claim line reads `claimed here: <path>` with this checkout's path is this checkout's, and its PRs are yours.
 
 A branch whose name carries no ticket id at all — someone's typo fix, a hand-cut experiment — is not lit-tracked work, so there is no lane to look up and nothing here for you to adopt.  Leave it where it is.
 
-Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, close its PR out and finish its ticket as above.  Work them one at a time, and do not pull new work until the last one is closed out.
+Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping one up means checking its branch out and taking its ticket through "Finishing a ticket" below.  Work them one at a time, down the list you already classified, and do not pull new work until the last one is closed out.
 
 **If nothing is in flight,** proceed to "Pull new work" below.  Open PRs stay relevant after that — an older one may touch the files your new ticket touches — which is why the overlap check is a step in "Working the ticket".
 
@@ -204,7 +204,19 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 4. **State the plan in one paragraph, then start.** What the ticket asks for, how you'll verify it's done (the machine-verifiable criterion), and the first concrete step. Then begin.
 
-5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, `lit phase <id> --to review` when its PR opens, and `lit phase <id> --to merge` when review is done and the merge is under way; then `lit done <id>` once it has merged.  Then run `lit next` from the same checkout: the next ticket it serves is worked there too, on a fresh branch (step 3).  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.  A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.
+5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, and open its PR; from there "Finishing a ticket" below takes it to `lit done`.  Then run `lit next` from the same checkout: the next ticket it serves is worked there too, on a fresh branch (step 3).
+
+## Finishing a ticket
+
+A ticket with an open PR finishes here, whichever way you reached it: step 5 above, or an open PR under "Wrap up work already in flight".
+
+1. **Hold it from this checkout.**  If `lit backlog` prints no `claimed here: <path>` line naming this checkout under the ticket's lane, run `lit start <id>` here first.  A ticket left in progress keeps the phase its work had reached; any other enters `plan`.
+2. **Close its PR out** — clean and merged — through the review process your instructions define, and where none defines one, by working its review threads by hand.  Record each phase when the work reaches it, not afterwards: `lit phase <id> --to review` now if `lit show <id>` puts the ticket short of review, and `lit phase <id> --to merge` when review is done and the merge is under way.
+3. **Run `lit done <id>` once it has merged.**
+
+A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.
+
+Then go back the way you came: step 5 goes on to `lit next`, and an open PR goes back to "Your PRs elsewhere", which may still list one in flight.  Running `lit next` from an open PR's close-out skips that list.
 
 ## When to stop and ask
 
