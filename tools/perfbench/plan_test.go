@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -216,15 +217,15 @@ func TestImportBudgetGrowsWithRowsFromTheProbeBudget(t *testing.T) {
 	if importBudget(590) <= importBudget(118) {
 		t.Error("importBudget does not grow with rows")
 	}
-	// The bound holds every healthy import measured on the runners it bounds,
-	// with room for a loaded one: these are ubuntu-latest's own times.
-	for _, measured := range []struct {
-		rows int
-		took time.Duration
-	}{{700, 15 * time.Second}, {2800, 188 * time.Second}, {10740, 86*time.Minute + 4*time.Second}} {
-		if got := importBudget(measured.rows); got < 2*measured.took {
-			t.Errorf("importBudget(%d) = %s, under twice the %s ubuntu-latest took", measured.rows, got, measured.took)
-		}
+	// The bound holds a healthy import on the runner it bounds, with room for a
+	// loaded one. Past 700 rows no ubuntu-latest time of this model exists yet.
+	if got, took := importBudget(700), 8510*time.Millisecond; got < 2*took {
+		t.Errorf("importBudget(700) = %s, under twice the %s ubuntu-latest took", got, took)
+	}
+	// And it fails an import gone quadratic, which is the one hold the nightly
+	// has on that: 74m33s is master's own 10,740 rows on ubuntu-latest.
+	if got, quadratic := importBudget(10740), 74*time.Minute+33*time.Second; got >= quadratic {
+		t.Errorf("importBudget(10740) = %s, which holds the %s a quadratic import took", got, quadratic)
 	}
 }
 
@@ -360,8 +361,47 @@ func TestShowIsInvokedOnlyAgainstAStoreWithARow(t *testing.T) {
 	if args, ok := empty["show"]; ok {
 		t.Errorf("show has an invocation against the empty store: %v", args)
 	}
-	if len(empty) != len(probes)-1 {
-		t.Errorf("the empty store has %d invocations, want every probe but show (%d)", len(empty), len(probes)-1)
+	namesARow := len(writesThatNameARow) + 1
+	if len(empty) != len(probes)-namesARow {
+		t.Errorf("the empty store has %d invocations, want every probe but show and the writes that name a row (%d)", len(empty), len(probes)-namesARow)
+	}
+}
+
+// writesThatNameARow are the probes in the order they must run: each undoes the
+// one before it, so the next round's write is a real one. Round-robin order is
+// the list's order, so the list is what carries that.
+var writesThatNameARow = []string{"dep add", "dep rm", "start", "done", "rank set", "rank --bottom", "rank --bottom again"}
+
+// Alone, each of these repeats as a refusal or a no-op, the answer-shaped void
+// okCodes exists to refuse in another form, and nothing would say so. Asserted
+// against the rules themselves, so a reordered table fails here.
+func TestEachWriteProbeUndoesTheOneBefore(t *testing.T) {
+	ids := make([]string, 118)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("bench-%d", i)
+	}
+	args := map[string][]string{}
+	var order []string
+	for _, inv := range invocationsFor(probes, generatedStore{ids: ids}) {
+		args[inv.probe.name] = inv.args
+		if slices.Contains(writesThatNameARow, inv.probe.name) {
+			order = append(order, inv.probe.name)
+		}
+	}
+	if !slices.Equal(order, writesThatNameARow) {
+		t.Fatalf("write probes run in order %v, want %v", order, writesThatNameARow)
+	}
+	same := func(a, b string, from int) {
+		t.Helper()
+		if !slices.Equal(args[a][from:], args[b][from:]) {
+			t.Errorf("%q %v and %q %v do not name the same rows", a, args[a], b, args[b])
+		}
+	}
+	same("dep add", "dep rm", 2)
+	same("start", "done", 1)
+	moved := args["rank set"][2:]
+	if got := []string{args["rank --bottom"][1], args["rank --bottom again"][1]}; !slices.Equal(got, moved) {
+		t.Errorf("rank --bottom sends %v back, want the %v rank set moved", got, moved)
 	}
 }
 

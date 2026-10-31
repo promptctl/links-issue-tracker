@@ -49,7 +49,7 @@ const batchScratchPrefix = "lit-batch/"
 // lone Apply's observers do. [LAW:no-silent-failure] [LAW:nothing-unseen]
 func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context, result *R) error) (R, batchLanding, error) {
 	var built, stands R
-	var heard []heardChange
+	var heard []owed
 	var landing batchLanding
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		var from string
@@ -87,7 +87,7 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 		}
 		scratch := fmt.Sprintf("%s%d-%d", batchScratchPrefix, os.Getpid(), time.Now().UnixNano())
 		err := s.runOnScratch(ctx, from, []string{scratch}, landing.From, s.retryInPlace, func() error {
-			if cause := fn(context.WithValue(ctx, batchHearingKey{}, &heard), &built); cause != nil {
+			if cause := fn(context.WithValue(ctx, hearingKey{}, &heard), &built); cause != nil {
 				return &storage.RefusedBatchError{Head: landing.From, Cause: cause}
 			}
 			// Only fn moves the batch's branch, so its head is the batch whole.
@@ -118,7 +118,7 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 		}
 		return err
 	})
-	s.hear(ctx, heard...)
+	hear(ctx, heard...)
 	return stands, landing, err
 }
 

@@ -2,31 +2,30 @@ package rank
 
 import (
 	"errors"
+	"math/big"
+	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 )
 
-func TestInitial(t *testing.T) {
-	r := Initial()
-	if r == "" {
-		t.Fatal("Initial() returned empty string")
-	}
-}
+// openingKey is the midpoint of the whole keyspace, the alphabet's middle.
+const openingKey = "V"
 
 func TestValid(t *testing.T) {
 	cases := []struct {
 		in   string
 		want bool
 	}{
-		{"", false},       // empty is "unranked", not a stored rank
-		{Initial(), true}, // the package's own starting rank
-		{"V", true},       // single alphabet char
-		{"0z", true},      // multi-byte, alphabet bounds
-		{"aZ09", true},    // mixed multi-byte
-		{"-", false},      // outside the alphabet
-		{"V!", false},     // one bad byte among good
-		{" ", false},      // space is not in the alphabet
+		{"", false},        // empty is "unranked", not a stored rank
+		{openingKey, true}, // a workspace's first key
+		{"V", true},        // single alphabet char
+		{"0z", true},       // multi-byte, alphabet bounds
+		{"aZ09", true},     // mixed multi-byte
+		{"-", false},       // outside the alphabet
+		{"V!", false},      // one bad byte among good
+		{" ", false},       // space is not in the alphabet
 		{"hello world", false},
 	}
 	for _, c := range cases {
@@ -37,6 +36,25 @@ func TestValid(t *testing.T) {
 }
 
 // Ranks that pad to the same value share a significant part.
+func TestAnchor(t *testing.T) {
+	long := strings.Repeat("A", MaxLength+1)
+	for _, c := range []struct {
+		name, key, want string
+	}{
+		{"a key whole", "Az0", "Az"},
+		{"a key past the index, to what the index holds", long + "12", long},
+		{"tied keys, to one anchor", long + "34", long},
+		{"all zeros, to nothing", "000", ""},
+		{"unranked, to nothing", "", ""},
+		{"malformed inside the index, to nothing", "A!", ""},
+		{"malformed past the index, to nothing", long + "!", ""},
+	} {
+		if got := Anchor(c.key); got != c.want {
+			t.Errorf("%s: Anchor(%q) = %q, want %q", c.name, c.key, got, c.want)
+		}
+	}
+}
+
 func TestSignificant(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"V", "V"},
@@ -86,25 +104,6 @@ func TestMidpointAdjacentChars(t *testing.T) {
 	}
 	if len(mid) <= 1 {
 		t.Errorf("expected midpoint between adjacent chars to be longer, got %q", mid)
-	}
-}
-
-func TestBefore(t *testing.T) {
-	initial := Initial()
-	b, err := Before(initial)
-	if err != nil {
-		t.Fatalf("Before(%q) error: %v", initial, err)
-	}
-	if b >= initial {
-		t.Errorf("Before(%q) = %q, want result < %q", initial, b, initial)
-	}
-}
-
-func TestAfter(t *testing.T) {
-	initial := Initial()
-	a := After(initial)
-	if a <= initial {
-		t.Errorf("After(%q) = %q, want result > %q", initial, a, initial)
 	}
 }
 
@@ -172,11 +171,11 @@ func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
 }
 
 // Nothing but the empty string, which means unranked, sorts below an all-zero
-// rank, so Before has nothing to return for one.
-func TestBeforeAnAllZeroRankHasNoRoom(t *testing.T) {
+// rank, so a placement above it has nothing to return.
+func TestNothingSortsBelowAnAllZeroRank(t *testing.T) {
 	for _, a := range []string{"0", "000"} {
-		if got, err := Before(a); !errors.Is(err, ErrNoRoom) {
-			t.Errorf("Before(%q) = %q, %v; want ErrNoRoom", a, got, err)
+		if got, err := Midpoint("", a); !errors.Is(err, ErrNoRoom) {
+			t.Errorf("Midpoint(\"\", %q) = %q, %v; want ErrNoRoom", a, got, err)
 		}
 	}
 }
@@ -204,57 +203,59 @@ func TestMidpointEmptyBounds(t *testing.T) {
 	}
 }
 
-func TestSequentialAfter(t *testing.T) {
-	// Create 1000 items by repeatedly calling After — verify strictly increasing.
+func TestSequentialAppends(t *testing.T) {
+	// Create 1000 items past the open end — verify strictly increasing.
 	ranks := make([]string, 1001)
-	ranks[0] = Initial()
+	ranks[0] = openingKey
 	for i := 1; i <= 1000; i++ {
-		ranks[i] = After(ranks[i-1])
+		r, err := Midpoint(ranks[i-1], "")
+		if err != nil {
+			t.Fatalf("Midpoint(%q, \"\") at step %d error: %v", ranks[i-1], i, err)
+		}
+		ranks[i] = r
 		if ranks[i] <= ranks[i-1] {
-			t.Fatalf("After(%q) = %q at step %d, not strictly increasing", ranks[i-1], ranks[i], i)
+			t.Fatalf("Midpoint(%q, \"\") = %q at step %d, not strictly increasing", ranks[i-1], ranks[i], i)
 		}
 	}
 }
 
-func TestSequentialBefore(t *testing.T) {
-	// Create 1000 items by repeatedly calling Before — verify strictly decreasing.
+func TestSequentialPrepends(t *testing.T) {
+	// Create 1000 items past the other open end — verify strictly decreasing.
 	ranks := make([]string, 1001)
-	ranks[0] = Initial()
+	ranks[0] = openingKey
 	for i := 1; i <= 1000; i++ {
-		r, err := Before(ranks[i-1])
+		r, err := Midpoint("", ranks[i-1])
 		if err != nil {
-			t.Fatalf("Before(%q) at step %d error: %v", ranks[i-1], i, err)
+			t.Fatalf("Midpoint(\"\", %q) at step %d error: %v", ranks[i-1], i, err)
 		}
 		ranks[i] = r
 		if ranks[i] >= ranks[i-1] {
-			t.Fatalf("Before(%q) = %q at step %d, not strictly decreasing", ranks[i-1], ranks[i], i)
+			t.Fatalf("Midpoint(\"\", %q) = %q at step %d, not strictly decreasing", ranks[i-1], ranks[i], i)
 		}
 	}
 }
 
 func TestRepeatedMidpointInsertion(t *testing.T) {
-	// Repeatedly insert between the same pair — the stress scenario for string growth.
+	// Repeatedly insert at the bottom of the same gap, the worst case for string
+	// growth: each key sorts between its bounds until the length limit refuses.
 	lo := "A"
 	hi := "B"
-	for i := 0; i < 10000; i++ {
+	for i := 0; ; i++ {
 		mid, err := Midpoint(lo, hi)
+		if errors.Is(err, ErrNoRoom) {
+			if i < 900 {
+				t.Fatalf("step %d: Midpoint(%q, %q) refused long before MaxLength", i, lo, hi)
+			}
+			return
+		}
 		if err != nil {
 			t.Fatalf("step %d: Midpoint(%q, %q) error: %v", i, lo, hi, err)
 		}
-		if mid <= lo || mid >= hi {
-			t.Fatalf("step %d: Midpoint(%q, %q) = %q, ordering violated", i, lo, hi, mid)
+		if mid <= lo || mid >= hi || len(mid) > MaxLength {
+			t.Fatalf("step %d: Midpoint(%q, %q) = %q, ordering or length violated", i, lo, hi, mid)
 		}
-		// Always insert at the bottom of the gap to maximize string growth (worst case).
 		hi = mid
 	}
-	// After 10k insertions, verify string length is bounded.
-	// Worst case: each character position gives log2(62) ≈ 6 bisections,
-	// so 10k insertions → ~1700 chars. This is the pathological case of
-	// always inserting at the same end of a shrinking gap.
-	if len(hi) > 2500 {
-		t.Errorf("after 10k insertions, rank length is %d, expected < 2500", len(hi))
-	}
-	t.Logf("after 10k same-spot insertions: rank length = %d", len(hi))
 }
 
 func TestMidpointMultiCharStrings(t *testing.T) {
@@ -281,9 +282,13 @@ func TestMidpointMultiCharStrings(t *testing.T) {
 func TestBuildSequenceWithMidpoints(t *testing.T) {
 	// Build a sequence: initial, then insert between each adjacent pair.
 	// Simulates rank-above/rank-below operations.
-	ranks := []string{Initial()}
+	ranks := []string{openingKey}
 	for i := 0; i < 5; i++ {
-		ranks = append(ranks, After(ranks[len(ranks)-1]))
+		next, err := Midpoint(ranks[len(ranks)-1], "")
+		if err != nil {
+			t.Fatalf("Midpoint(%q, \"\") error: %v", ranks[len(ranks)-1], err)
+		}
+		ranks = append(ranks, next)
 	}
 	// Now insert between each adjacent pair.
 	var expanded []string
@@ -524,26 +529,197 @@ func TestSpacedRanksBetweenRejectsBoundsWithNoRoom(t *testing.T) {
 	}
 }
 
-// A frame with nothing ranked has two open ends, and the store seeds it with
-// the midpoint of that pair, so that midpoint must be the one Initial names.
-func TestMidpointOfTheWholeKeyspaceIsInitial(t *testing.T) {
+// A workspace with nothing ranked has two open ends, and the store seeds it
+// with the midpoint of that pair.
+func TestMidpointOfTheWholeKeyspaceIsTheOpeningKey(t *testing.T) {
 	t.Parallel()
-	if got, err := Midpoint("", ""); err != nil || got != Initial() {
-		t.Fatalf("Midpoint(\"\", \"\") = %q, %v; want %q", got, err, Initial())
+	if got, err := Midpoint("", ""); err != nil || got != openingKey {
+		t.Fatalf("Midpoint(\"\", \"\") = %q, %v; want %q", got, err, openingKey)
 	}
 }
 
-// The empty string is an unranked row to Before and After, not the open end it
-// is to Midpoint, so neither answers it with the whole keyspace's midpoint.
-func TestBeforeAndAfterRefuseTheEmptyRank(t *testing.T) {
+// A key costs what its bounds' room costs and no more: bisecting past the
+// character where the bounds differ is what grew keys to 648 chars.
+func TestMidpointIsNoLongerThanItsBoundsNeed(t *testing.T) {
 	t.Parallel()
-	if got, err := Before(""); err == nil {
-		t.Fatalf("Before(\"\") = %q, nil; want an error", got)
-	}
-	defer func() {
-		if recover() == nil {
-			t.Fatal("After(\"\") did not panic")
+	rng := rand.New(rand.NewSource(1))
+	word := func() string {
+		out := make([]byte, 1+rng.Intn(12))
+		for i := range out {
+			out[i] = alphabet[rng.Intn(base)]
 		}
-	}()
-	_ = After("")
+		return string(out)
+	}
+	four := big.NewInt(4)
+	for range 20000 {
+		a, b := word(), word()
+		if a > b {
+			a, b = b, a
+		}
+		if Significant(a) == Significant(b) {
+			continue
+		}
+		got, err := Midpoint(a, b)
+		if err != nil {
+			t.Fatalf("Midpoint(%q, %q): %v", a, b, err)
+		}
+		if got <= a || got >= b {
+			t.Fatalf("Midpoint(%q, %q) = %q, not between them", a, b, got)
+		}
+		roomy := 1
+		for ; ; roomy++ {
+			lo, err := stringToInt(a, roomy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hi, err := stringToInt(b, roomy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if new(big.Int).Sub(hi, lo).Cmp(four) >= 0 {
+				break
+			}
+		}
+		if len(got) > roomy {
+			t.Fatalf("Midpoint(%q, %q) = %q, %d chars, and the bounds sit 4 apart at %d", a, b, got, len(got), roomy)
+		}
+	}
+}
+
+func TestAGapOfFourKeepsItsLength(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct{ a, b, want string }{
+		{"aaa0", "aaa4", "aaa2"},
+		{"aaa0", "aaa3", "aaa1U"},
+	} {
+		if got, err := Midpoint(c.a, c.b); err != nil || got != c.want {
+			t.Errorf("Midpoint(%q, %q) = %q, %v; want %q", c.a, c.b, got, err, c.want)
+		}
+	}
+}
+
+// Past MaxLength every primitive says no room, the answer its callers already
+// act on, so no write can leave a key the index prefix would tie.
+func TestNoPrimitiveWritesPastMaxLength(t *testing.T) {
+	t.Parallel()
+	shared := strings.Repeat("a", MaxLength)
+	if got, err := Midpoint(shared+"1", shared+"3"); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("Midpoint inside the limit's last char = %q, %v; want ErrNoRoom", got, err)
+	}
+	if got, err := SpacedRanksBetween(shared+"1", shared+"3", 1); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("SpacedRanksBetween inside the limit's last char = %q, %v; want ErrNoRoom", got, err)
+	}
+	if got, err := Midpoint(strings.Repeat("z", MaxLength), ""); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("a step past z^%d = %q, %v; want ErrNoRoom", MaxLength, got, err)
+	}
+	if got, err := Midpoint("", strings.Repeat("0", MaxLength)+"1"); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("a step below a key past 0^%d = %q, %v; want ErrNoRoom", MaxLength, got, err)
+	}
+}
+
+// A step is one unit at the shortest power-of-two length from 4 that admits one,
+// so appends take no room from the keys they follow, and a corner costs the log
+// of its depth.
+func TestAPlacementPastAnOpenEndSteps(t *testing.T) {
+	t.Parallel()
+	zs := strings.Repeat("z", 20)
+	for _, c := range []struct{ name, a, b, want string }{
+		{"up", "V", "", "V001"},
+		{"up at a key's own length", "V001", "", "V002"},
+		{"up truncates a longer key", "V00123", "", "V002"},
+		{"down", "", "V", "Uzzz"},
+		{"up out of a shallow corner", "zzzz", "", "zzzz0001"},
+		{"down never lands on all zeros", "", "0001", "0000zzzz"},
+		{"up out of this store's corner", zs, "", zs + strings.Repeat("0", 11) + "1"},
+	} {
+		if got, err := Midpoint(c.a, c.b); err != nil || got != c.want {
+			t.Errorf("%s: Midpoint(%q, %q) = %q, %v; want %q", c.name, c.a, c.b, got, err, c.want)
+		}
+	}
+}
+
+func TestCeilingIsDerivedFromTheStep(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name string
+		key  string
+		want int
+	}{
+		{"open keyspace", "V", SmoothingThreshold},
+		{"past a z^20 corner", strings.Repeat("z", 20), 36},
+		{"a corner no step reaches", strings.Repeat("z", 128), MaxLength},
+	} {
+		if got := Ceiling(c.key); got != c.want {
+			t.Errorf("%s: Ceiling = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+func TestCrowdedNeedsTheCeilingAndAMovableShorterNeighbour(t *testing.T) {
+	t.Parallel()
+	atCeiling := "V0000001"
+	for _, c := range []struct {
+		name    string
+		key     string
+		movable []string
+		want    bool
+	}{
+		{"under its ceiling", "V001", []string{"V"}, false},
+		{"at its ceiling, longer than a neighbour", atCeiling, []string{"V0001"}, true},
+		{"at its ceiling, longer than one of two", atCeiling, []string{"V0000002", "V0002"}, true},
+		{"at its ceiling, no shorter neighbour", atCeiling, []string{"V0000002"}, false},
+		{"at its ceiling, nothing a respace could move", atCeiling, nil, false},
+	} {
+		if got := Crowded(c.key, c.movable...); got != c.want {
+			t.Errorf("%s: Crowded(%q, %v) = %t, want %t", c.name, c.key, c.movable, got, c.want)
+		}
+	}
+}
+
+func TestSpacingTakesTheShortestLengthThatFits(t *testing.T) {
+	t.Parallel()
+	// Two chars hold 62^2 values, so 100 keys fit there 16 apart and not in one.
+	keys, err := SpacedRanksBetween("", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, key := range keys {
+		if len(key) != 2 {
+			t.Fatalf("key %d is %q, want 2 chars", i, key)
+		}
+	}
+	// A respace shortens: keys spaced between far bounds forget the bounds' length.
+	long := "A" + strings.Repeat("7", 60)
+	keys, err = SpacedRanksBetween(long, "C", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.IsSorted(keys) || keys[0] <= long || keys[2] >= "C" || len(keys[0]) > 3 {
+		t.Fatalf("spaced %q between a 61-char key and C, want short keys inside the bounds", keys)
+	}
+	if _, err := SpacedRanksBetween("A", "A000", 1); !errors.Is(err, ErrNoRoom) {
+		t.Fatalf("bounds padding to one value: %v, want ErrNoRoom", err)
+	}
+}
+
+func TestPrefixTiedCountsDistinctKeysOnTheIndexPrefix(t *testing.T) {
+	t.Parallel()
+	prefix := strings.Repeat("a", MaxLength+1)
+	for _, c := range []struct {
+		name string
+		keys []string
+		want int
+	}{
+		{"none", []string{"A", "B"}, 0},
+		{"unranked rows are no key", []string{"", "", "A"}, 0},
+		{"a duplicate is not a tie", []string{prefix + "1", prefix + "1"}, 0},
+		{"at the limit keys cannot tie", []string{prefix[:MaxLength], prefix[:MaxLength] + "1", prefix[:MaxLength] + "2"}, 0},
+		{"one pair past the prefix", []string{prefix + "1", prefix + "2"}, 1},
+		{"a run", []string{prefix + "1", prefix + "2", prefix + "3"}, 2},
+		{"a prefix of a longer key", []string{prefix, prefix + "1"}, 1},
+	} {
+		if got := PrefixTied(c.keys); got != c.want {
+			t.Errorf("%s: PrefixTied = %d, want %d", c.name, got, c.want)
+		}
+	}
 }

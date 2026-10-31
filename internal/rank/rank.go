@@ -1,14 +1,16 @@
 // Package rank implements lexicographic fractional indexing for work item ordering.
 //
-// Ranks are strings from a base-62 alphabet (0-9A-Za-z) that support
-// efficient SQL ORDER BY and guarantee midpoint insertion between any
-// two distinct values without rebalancing.
+// Ranks are strings from a base-62 alphabet (0-9A-Za-z) that support efficient
+// SQL ORDER BY. A key is at most MaxLength chars, so distinct keys never tie on
+// the index that streams them. Where a spot has no room left at that length,
+// Respace makes some.
 package rank
 
 import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"strings"
 )
 
@@ -35,20 +37,15 @@ func init() {
 	}
 }
 
-// Initial returns a starting rank for the first item in a fresh workspace.
-func Initial() string {
-	return string(alphabet[base/2]) // "V"
-}
-
 // Valid reports whether s is a well-formed, stored rank value: a non-empty
 // string whose every byte is a member of the ordering alphabet. The empty
 // string is not a stored rank — it denotes "unranked" — so it is not Valid.
 //
 // This predicate is for validating PERSISTED rank values (e.g. checking a
 // rebuilt workspace). It is NOT the input contract of the ordering primitives:
-// Midpoint/Before/After deliberately accept an empty bound as a sentinel
-// ("before/after everything"), so callers must not pre-screen those bounds with
-// Valid. Callers checking a stored rank consult this one definition rather than
+// Midpoint and SpacedRanksBetween deliberately accept an empty bound as a
+// sentinel ("before/after everything"), so callers must not pre-screen those
+// bounds with Valid. Callers checking a stored rank consult this one definition rather than
 // re-deriving the alphabet.
 func Valid(s string) bool {
 	if s == "" {
@@ -69,19 +66,35 @@ func Significant(s string) string {
 	return strings.TrimRight(s, "0")
 }
 
-// ErrNoRoom reports a pair of bounds with the same significant part — one is
-// the other extended by zeros, or an empty lower bound meets an all-zero upper
-// one. The only ranks between such a pair are further zero-extensions of the
-// lower bound, each of which leaves no room beside itself, so the primitives
-// refuse the pair instead of spending that sliver. A caller holding one reads
-// it as "respace these ranks first", never as a bad request.
+// Anchor returns what s bounds a gap by: Significant, of what the index holds,
+// and nothing when s is malformed anywhere, the index's reach or past it. Two
+// keys with the same Anchor leave no room or read in the wrong order, so a
+// repair keeps at most one of them where it stands.
+func Anchor(s string) string {
+	if !Valid(s) {
+		return ""
+	}
+	return Significant(indexPrefix(s))
+}
+
+// ErrNoRoom reports bounds with nothing to spend between them. A pair with the
+// same significant part, one the other extended by zeros or an empty lower bound
+// meeting an all-zero upper one, holds only further zero-extensions of the lower
+// bound, each of which leaves no room beside itself, so the primitives refuse it
+// instead of spending that sliver. Any other pair is refused when its keys would
+// pass MaxLength. A caller holding one reads it as "respace these ranks first",
+// never as a bad request.
 var ErrNoRoom = errors.New("rank: no room between the bounds")
 
-// Midpoint returns a string that sorts strictly between a and b.
+// Midpoint returns a key that sorts strictly between a and b, at the shortest
+// length with room: a gap of 4 or more at length L yields a key of at most L
+// chars, which is what lets a respaced window take the next placement.
 // Precondition: a < b (lexicographic). Returns an error if a >= b, and
-// ErrNoRoom if the bounds share a significant part.
-// An empty a means "before everything" and an empty b "after everything"; both
-// empty is the whole keyspace, whose midpoint is Initial.
+// ErrNoRoom if the bounds share a significant part or leave no room inside
+// MaxLength. An empty a means "before everything" and an empty b "after
+// everything", and past an open end a key steps rather than bisects, so appends
+// and prepends never deepen a corner. Both empty is the whole keyspace, whose
+// midpoint is the first key a workspace holds.
 func Midpoint(a, b string) (string, error) {
 	if a == b && a != "" {
 		return "", errors.New("rank: a and b are equal")
@@ -89,70 +102,38 @@ func Midpoint(a, b string) (string, error) {
 	if a != "" && b != "" && a >= b {
 		return "", errors.New("rank: a must be less than b")
 	}
-	// [LAW:one-source-of-truth] Significant is the definition of room that
-	// SpacedRanksBetween and the store's smoothing already use. The walk below
-	// copies a's characters while they match b's, and on this pair they match all
-	// of b: it then runs past b's end and extends b, returning a string that sorts
-	// above b. An empty b is the open end, not an all-zero bound, so it always has
-	// room.
-	if b != "" && Significant(a) == Significant(b) {
-		return "", fmt.Errorf("%w: %q and %q pad to the same value", ErrNoRoom, a, b)
+	if a != "" && b == "" {
+		return step(a, 1)
 	}
-	// Walk character positions, building the result.
-	var out strings.Builder
-	i := 0
-	for {
-		aChar := 0 // virtual character below the alphabet floor
-		if i < len(a) {
-			aChar = charIndex[a[i]]
-			if aChar < 0 {
-				return "", errors.New("rank: invalid character in a")
-			}
-		}
-		bChar := base // virtual character above the alphabet ceiling
-		if i < len(b) {
-			bChar = charIndex[b[i]]
-			if bChar < 0 {
-				return "", errors.New("rank: invalid character in b")
-			}
-		}
-
-		// If there is room between aChar and bChar at this position, pick the midpoint.
-		if bChar-aChar > 1 {
-			mid := aChar + (bChar-aChar)/2
-			out.WriteByte(alphabet[mid])
-			return out.String(), nil
-		}
-
-		// Characters are adjacent or equal at this position.
-		// Emit the lower character and carry to the next position.
-		// When aChar == bChar we continue scanning deeper.
-		// When bChar == aChar+1 we emit aChar and narrow against b's deeper digits.
-		out.WriteByte(alphabet[aChar])
-		i++
-
-		// After emitting aChar, the effective lower bound for the next position is:
-		// - if i < len(a): a[i] (we must exceed the remaining suffix of a)
-		// - if i >= len(a): 0 (any character will do)
-		// The effective upper bound is:
-		// - if aChar == bChar and i < len(b): b[i] (we must stay below b's suffix)
-		// - if bChar == aChar+1: base (any character works, since we already emitted a
-		//   character smaller than b's character at this position)
-		// This is handled by the next loop iteration naturally.
+	if a == "" && b != "" {
+		return step(b, -1)
 	}
+	keys, err := spacedRanks(1, a, b, 1)
+	if err != nil {
+		return "", err
+	}
+	return keys[0], nil
 }
 
-// SmoothingThreshold is the rank string length that triggers local smoothing.
-// Normal ranks are 1-6 chars; anything beyond this means the local region
-// is getting dense and should be re-spaced.
+// MaxLength is the longest key the package writes: one short of
+// idx_issues_rank's 191-char prefix. Dolt streams ORDER BY item_rank from that
+// index without sorting, so two keys tied on the prefix read in the wrong
+// order with no error. A key shorter than the prefix cannot tie with any other.
+const MaxLength = 190
+
+// SmoothingThreshold is the ceiling of a key in open keyspace, the length past
+// which its spot may be crowded. Ceiling derives every other spot's from it.
 const SmoothingThreshold = 8
 
-// SmoothingWindow is the number of items to re-space during local smoothing.
+// SmoothingWindow is the width a respace starts from, half of it a side.
 const SmoothingWindow = 32
+
+// spacingGap is the units a spaced key keeps from its neighbours.
+const spacingGap = 16
 
 // SpacedRanks returns n evenly-spaced rank strings that span the full keyspace.
 func SpacedRanks(n int) []string {
-	ranks, err := spacedRanks(n, "", "")
+	ranks, err := spacedRanks(n, "", "", spacingGap)
 	if err != nil {
 		// [LAW:one-source-of-truth] empty bounds are the canonical full keyspace; this path must stay valid.
 		panic(fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err))
@@ -173,10 +154,12 @@ func SpacedRanksBetween(lower, upper string, n int) ([]string, error) {
 	if lower != "" && upper != "" && lower >= upper {
 		return nil, errors.New("rank: lower must be less than upper")
 	}
-	return spacedRanks(n, lower, upper)
+	return spacedRanks(n, lower, upper, spacingGap)
 }
 
-func spacedRanks(n int, lower, upper string) ([]string, error) {
+// spacedRanks places n keys between the bounds at the shortest length that keeps
+// minGap units around each, so a respace shortens the keys it touches.
+func spacedRanks(n int, lower, upper string, minGap int64) ([]string, error) {
 	// [LAW:single-enforcer] Size validation lives at the shared spacing boundary so all callers get identical behavior.
 	if n < 0 {
 		return nil, errors.New("rank: n must be non-negative")
@@ -184,15 +167,13 @@ func spacedRanks(n int, lower, upper string) ([]string, error) {
 	if n == 0 {
 		return nil, nil
 	}
-	// Find the minimum string length that fits n items with comfortable spacing.
-	const minGap = 16
+	if upper != "" && Significant(lower) == Significant(upper) {
+		return nil, fmt.Errorf("%w: %q and %q pad to the same value, so no rank sorts between them", ErrNoRoom, lower, upper)
+	}
 	denominator := big.NewInt(int64(n + 1))
 	minGapBig := big.NewInt(minGap)
-	maxLen := len(lower)
-	if len(upper) > maxLen {
-		maxLen = len(upper)
-	}
-	for length := maxLen + 1; ; length++ {
+	// No key fits inside the prefix the bounds share.
+	for length := sharedPrefix(lower, upper) + 1; length <= MaxLength; length++ {
 		lo, err := lowerBoundInt(lower, length)
 		if err != nil {
 			return nil, err
@@ -202,23 +183,13 @@ func spacedRanks(n int, lower, upper string) ([]string, error) {
 			return nil, err
 		}
 		span := new(big.Int).Sub(hi, lo)
-		// [LAW:no-silent-failure] A negative span means lower and upper pad to the
-		// same integer. Since span(L+1) = 62*(span(L)+1) - 1, that stays true at
-		// every greater length, so continuing the search is an unbounded loop
-		// hunting a string that does not exist. Reporting it is the honest answer,
-		// and only this first length can be negative: once the span is
-		// non-negative it grows 62-fold per length, which is what makes the
-		// remaining search for a wide-enough step terminate.
-		if span.Sign() < 0 {
-			return nil, fmt.Errorf("%w: %q and %q pad to the same value, so no rank longer than both sorts between them", ErrNoRoom, lower, upper)
-		}
-		step := new(big.Int).Div(span, denominator)
-		if step.Cmp(minGapBig) < 0 {
+		gap := new(big.Int).Div(span, denominator)
+		if gap.Cmp(minGapBig) < 0 {
 			continue
 		}
 		out := make([]string, n)
 		for i := range out {
-			offset := new(big.Int).Mul(step, big.NewInt(int64(i+1)))
+			offset := new(big.Int).Mul(gap, big.NewInt(int64(i+1)))
 			value := new(big.Int).Add(lo, offset)
 			encoded, err := encodeBase62(value, length)
 			if err != nil {
@@ -228,6 +199,15 @@ func spacedRanks(n int, lower, upper string) ([]string, error) {
 		}
 		return out, nil
 	}
+	return nil, fmt.Errorf("%w: %d ranks between %q and %q would pass %d chars", ErrNoRoom, n, lower, upper, MaxLength)
+}
+
+func sharedPrefix(a, b string) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] {
+		n++
+	}
+	return n
 }
 
 // lowerBoundInt returns the first integer value at the given string length
@@ -260,9 +240,6 @@ func upperBoundInt(s string, length int) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	// An all-zero upper bound yields -1 here, which spacedRanks reads as the
-	// negative span it already reports. [LAW:single-enforcer] one place decides
-	// that a pair of bounds admits nothing, so there is one message to chase.
 	return new(big.Int).Sub(v, bigOne), nil
 }
 
@@ -314,25 +291,125 @@ func encodeBase62(value *big.Int, length int) (string, error) {
 	return string(buf), nil
 }
 
-// Before returns a rank that sorts before the given rank: Midpoint("", a), which
-// fails with ErrNoRoom on an all-zero a, below which only the empty string —
-// "unranked" — sorts. An empty a is an unranked row here, not the open end
-// Midpoint reads it as, so it is refused rather than answered with the midpoint
-// of the whole keyspace.
-func Before(a string) (string, error) {
-	if a == "" {
-		return "", errors.New("rank: Before needs a rank, not the empty string")
+// stepLength is the shortest length a key past an open end is stepped at.
+const stepLength = 4
+
+// step moves s one unit in direction dir, at the shortest power-of-two length
+// from stepLength up at which such a key exists.
+func step(s string, dir int64) (string, error) {
+	if dir < 0 && Significant(s) == "" {
+		return "", fmt.Errorf("%w: nothing sorts below %q but the empty string", ErrNoRoom, s)
 	}
-	return Midpoint("", a)
+	for length := stepLength; length <= MaxLength; length *= 2 {
+		v, err := stringToInt(s, length)
+		if err != nil {
+			return "", err
+		}
+		v.Add(v, big.NewInt(dir))
+		if v.Sign() > 0 && v.Cmp(pow62(length)) < 0 {
+			return encodeBase62(v, length)
+		}
+	}
+	return "", fmt.Errorf("%w: no step from %q fits in %d chars", ErrNoRoom, s, MaxLength)
 }
 
-// After returns a rank that sorts after the given rank: Midpoint(a, "").
-// An empty a is an unranked row here, not an open end, and passing one is a
-// caller bug, so it panics rather than answering with the keyspace's midpoint.
-func After(a string) string {
-	r, err := Midpoint(a, "")
-	if a == "" || err != nil {
-		panic("rank.After called with empty string")
+// Ceiling is how long a key at key's place may grow before smoothing: the
+// length a step from it takes, plus the headroom SmoothingThreshold allows a
+// stepLength key. A place no step reaches has only MaxLength above it.
+func Ceiling(key string) int {
+	return min(max(stepWidth(key, 1), stepWidth(key, -1))+SmoothingThreshold-stepLength, MaxLength)
+}
+
+func stepWidth(key string, dir int64) int {
+	stepped, err := step(key, dir)
+	if err != nil {
+		return MaxLength
 	}
-	return r
+	return len(stepped)
+}
+
+// Crowded reports whether key means its spot's gaps are spent: it reached its
+// ceiling and bisection went deeper than a neighbour a respace could move. An
+// edge key is not one of those: it never moves, so its length says nothing
+// about density here, and a spot with no such neighbour has nothing to respace.
+func Crowded(key string, movable ...string) bool {
+	return len(key) >= Ceiling(key) && slices.ContainsFunc(movable, func(n string) bool { return len(key) > len(n) })
+}
+
+// MaxRespace is the most rows a window widens to for length alone.
+const MaxRespace = 256
+
+// Window is the rows a respace would move at one width: Rows of them between
+// the keys Lower and Upper, each side's bound staying outside. An empty bound
+// is an open end. Whole is every ranked row when neither side has a key left to
+// widen to, and 0 until then.
+type Window struct {
+	Lower, Upper string
+	Rows, Whole  int
+}
+
+// leavesStep reports whether keys leave a placement past each end of them. A
+// bound that looks closed can be the row a move is vacating, which opens that
+// end for the next placement, so a window in a corner too deep to step out of
+// is spaced and still refuses it: no room at all.
+func leavesStep(keys []string) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	_, past := step(keys[len(keys)-1], 1)
+	_, before := step(keys[0], -1)
+	return past == nil && before == nil
+}
+
+// Respace returns the keys the window around trigger takes, in order. The
+// window starts at SmoothingWindow/2 keys a side and doubles while its keys come
+// out at or past the trigger's ceiling, up to MaxRespace, where key length
+// absorbs the density, and past that only while its bounds leave no room. A
+// window with no room between the store's two edges is every row: only then are
+// both sides open, and whole says the keys are for all of them. read returns
+// the window of k keys a side: the store's is SQL, and the loop never sees where
+// the rows live. [LAW:effects-at-boundaries]
+func Respace(trigger string, read func(k int) (Window, error)) (keys []string, whole bool, err error) {
+	for k := SmoothingWindow / 2; ; k *= 2 {
+		window, err := read(k)
+		if err != nil {
+			return nil, false, err
+		}
+		keys, err := SpacedRanksBetween(window.Lower, window.Upper, window.Rows)
+		if err == nil && !leavesStep(keys) {
+			err = fmt.Errorf("%w: no step fits past %d spaced keys", ErrNoRoom, len(keys))
+		}
+		reachedEdges := window.Whole > 0
+		if errors.Is(err, ErrNoRoom) && reachedEdges {
+			keys, err = SpacedRanksBetween("", "", window.Whole)
+			return keys, true, err
+		}
+		switch {
+		case errors.Is(err, ErrNoRoom):
+		case err != nil:
+			return nil, false, err
+		case len(keys) == 0, len(keys[0]) < Ceiling(trigger), 2*k >= MaxRespace, reachedEdges:
+			return keys, false, nil
+		}
+	}
+}
+
+// PrefixTied counts the adjacent keys in sorted that are distinct and equal on
+// their first MaxLength+1 chars, the prefix idx_issues_rank holds. A key this
+// package wrote cannot be one. Dolt reads such a pair in the wrong order with no
+// error, so a store that inherited one has to be told. An unranked row is no
+// key, and an equal pair is not a tie: a duplicate key is a state of its own.
+func PrefixTied(sorted []string) int {
+	tied := 0
+	for i := 1; i < len(sorted); i++ {
+		a, b := sorted[i-1], sorted[i]
+		if a != "" && a != b && indexPrefix(a) == indexPrefix(b) {
+			tied++
+		}
+	}
+	return tied
+}
+
+func indexPrefix(key string) string {
+	return key[:min(len(key), MaxLength+1)]
 }

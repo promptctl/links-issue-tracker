@@ -106,16 +106,15 @@ jobs:
       points: ${{ steps.points.outputs.points }}
     steps:
       # minutes bounds a leg's perfbench run, freeing the runner from a hang
-      # no step budget names. Measured on ubuntu-latest, run 40043414613:
-      # 10x-store took 1h33m (the import 86m, the probes, compaction, history
-      # and storm 7m), so 200 minutes clears the import's own bound (2h55m,
-      # perfbench importBudget) plus the rest, and a hung import is named as
+      # no step budget names. 45 minutes clears the import's own bound (23m29s,
+      # perfbench importBudget) plus the probes, compaction, history and storm,
+      # 7m on ubuntu-latest in run 40043414613, so a hung import is named as
       # one. 10x-fleet took 7m. job is that bound plus the leg's other steps,
       # so a run cut off at its bound fails as a step and the job lives on to
       # upload what it reached.
       - id: points
         run: |
-          points=$(jq -nc '[{name: "10x-store", minutes: 200}, {name: "10x-fleet", minutes: 30}] | map(.job = .minutes + 15)')
+          points=$(jq -nc '[{name: "10x-store", minutes: 45}, {name: "10x-fleet", minutes: 30}] | map(.job = .minutes + 15)')
           echo "points=$points" >> "$GITHUB_OUTPUT"
 
   # One leg per scale point, each on its own runner and disk, so neither waits

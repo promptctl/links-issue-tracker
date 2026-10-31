@@ -40,9 +40,9 @@ type generatedStore struct {
 	// the one record of how many rows this store holds.
 	ids []string
 	// imported is how long `lit import` took to load the rows, the slope of
-	// lit's write path made one figure: one write's cost grows with the
-	// store's size, so this grows faster than the rows do. A copy carries its
-	// source's.
+	// lit's write path made one figure: one write's cost does not grow with the
+	// store's size, so this grows with the rows and a row's cost is its quotient.
+	// A copy carries its source's.
 	imported time.Duration
 }
 
@@ -64,10 +64,9 @@ func (s generatedStore) String() string {
 //
 // WHY COPIES. The generator is deterministic in content (filler is seeded by
 // row), so generating one count N times would produce the same rows N times at
-// N times the import cost: a ten-times fleet is 300 stores, and import cost
-// grows faster than its rows (20s at 700 rows, 146s at 2,800, measured
-// 2026-10-23). A copy is the generator's output, replicated; each copy is then
-// an independent store, written to and counted on its own.
+// N times the import cost: a ten-times fleet is 300 stores, at about 25ms a row
+// each. A copy is the generator's output, replicated; each copy is then an
+// independent store, written to and counted on its own.
 //
 // os.Mkdir, never MkdirAll: an existing directory must fail here rather
 // than be reused. lit init is idempotent and lit import appends, so

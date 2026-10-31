@@ -1026,7 +1026,10 @@ more than 163 direct children).
 
 # 4. `internal/rank`
 
-Package purpose: lexicographic fractional indexing (`rank.go`).
+Package purpose: lexicographic fractional indexing (`rank.go`). A key is at
+most `MaxLength` chars, so distinct keys never tie on the index that streams
+them; where a spot has no room left at that length, `Respace` makes some
+(`rank.go`).
 
 ## 4.1 Alphabet and ordering
 `alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"` —
@@ -1035,15 +1038,20 @@ its index in that string, so **plain byte-wise string comparison matches rank
 order** (digits < uppercase < lowercase, matching ASCII). `charIndex [256]int`
 maps byte → ordinal, `-1` for non-members, built in `init()` (`rank.go`).
 
-`Initial() string` — `rank.go`: `alphabet[base/2]` = `alphabet[31]` = `"V"`.
-
 `Valid(s string) bool` — `rank.go`: false for `""` (empty means
 "unranked", not a stored rank); otherwise true iff every byte is in the
-alphabet. Explicitly NOT the input contract of `Midpoint`/`Before`/`After`,
-which accept an empty bound as a sentinel (`rank.go`). Pinned by
+alphabet. Explicitly NOT the input contract of `Midpoint` and
+`SpacedRanksBetween`, which accept an empty bound as a sentinel (`rank.go`).
+Pinned by
 `TestValid`, `rank_test.go`, with cases: `""`→false, `"V"`→true, `"0z"`→true,
 `"aZ09"`→true, `"-"`→false, `"V!"`→false, `" "`→false, `"hello world"`→false
 (`rank_test.go`).
+
+`Anchor(s string) string` — `rank.go`: `""` when `s` is not `Valid`, anywhere
+in it, and otherwise `Significant` of the first `MaxLength+1` chars, the prefix
+`idx_issues_rank` holds. Two keys with the same `Anchor` leave no room or read
+in the wrong order, so the rank repair keeps at most one of them where it stands
+(`TestAnchor`, `rank_test.go`).
 
 `Significant(s string) string` — `rank.go`: `strings.TrimRight(s, "0")`, the
 part that decides where `s` sorts once padded. Two ranks with the same
@@ -1052,68 +1060,97 @@ significant part leave `SpacedRanksBetween` and `Midpoint` no room between them
 and `"V00"`→`"V"`, `"V0z"`→`"V0z"`, `"100"`→`"1"`, `"0"`→`""`, `""`→`""`.
 
 ## 4.2 `Midpoint(a, b string) (string, error)` — `rank.go`
-Contract: returns a string strictly between `a` and `b`. Either bound may be
-empty: empty `a` = "before everything", empty `b` = "after everything"; both
-empty is the whole keyspace, whose midpoint is `Initial()`'s `"V"`
-(`rank.go`).
+Contract: returns a key strictly between `a` and `b`, at the shortest length
+with room: a gap of 4 or more units at length L yields a key of at most L
+chars, which is what lets a respaced window take the next placement (`rank.go`).
+Either bound may be empty: empty `a` = "before everything", empty `b` = "after
+everything"; both empty is the whole keyspace, whose midpoint is `"V"`, the first
+key a workspace holds (`rank.go`).
 
-Validation:
+Validation, in order:
 - `a == b` with `a` non-empty → error `rank: a and b are equal`
-  (`rank.go`). `Midpoint("", "")` passes this check and the walk returns
-  `"V"`.
+  (`rank.go`). `Midpoint("", "")` passes this check.
 - both non-empty and `a >= b` → error `rank: a must be less than b`
   (`rank.go`).
-- `b` non-empty and `Significant(a) == Significant(b)` → error wrapping
-  `ErrNoRoom` (`errors.New("rank: no room between the bounds")`, `rank.go`):
-  `%w: %q and %q pad to the same value` (`rank.go`). This covers `b`
-  being `a` extended by zeros (`"10"`, `"100"`) and an empty `a` with an
-  all-zero `b`. An empty `b` never matches.
-- an out-of-alphabet byte in `a` → `rank: invalid character in a` (`rank.go`);
-  in `b` → `rank: invalid character in b` (`rank.go`).
 
-Algorithm (`rank.go`), per position `i` from 0:
-- `aChar` = `charIndex[a[i]]` if `i < len(a)`, else the virtual value `0`
-  ("below the alphabet floor") (`rank.go`).
-- `bChar` = `charIndex[b[i]]` if `i < len(b)`, else the virtual value `base = 62`
-  ("above the ceiling") (`rank.go`).
-- If `bChar - aChar > 1`: emit `alphabet[aChar + (bChar-aChar)/2]` and return
-  (`rank.go`).
-- Else (adjacent or equal): emit `alphabet[aChar]` and advance to the next
-  position (`rank.go`), looping unconditionally.
+Dispatch (`rank.go`):
+- `a` non-empty, `b` empty → `step(a, 1)`.
+- `a` empty, `b` non-empty → `step(b, -1)`.
+- Otherwise `spacedRanks(1, a, b, 1)` and its one key: `n = 1`, `minGap = 1`
+  (§4.4), which is where `Midpoint("", "")` returns `"V"`.
 
-Consequences pinned by tests: adjacent characters force a longer result
-(`TestMidpointAdjacentChars`, `rank_test.go`); `Midpoint("B","A")` and
+Past an open end a key steps rather than bisects, so appends and prepends never
+deepen a corner (`rank.go`).
+
+`ErrNoRoom` — `errors.New("rank: no room between the bounds")`, `rank.go`: the
+sentinel every primitive wraps where a key cannot be placed. `Midpoint` wraps it
+for a pair sharing a significant part (`spacedRanks`), a pair with no room
+inside `MaxLength` (`spacedRanks`), and a step that no length admits (`step`). A
+caller holding one reads it as "respace these ranks first", never as a bad
+request (`rank.go`).
+
+`step(s string, dir int64) (string, error)` — `rank.go`: moves `s` one unit in
+direction `dir`, at the shortest power-of-two length from `stepLength` up at
+which such a key exists.
+- `dir < 0` and `Significant(s) == ""` → error wrapping `ErrNoRoom`:
+  `%w: nothing sorts below %q but the empty string` (`rank.go`).
+- For `length` in 4, 8, 16, 32, 64, 128 (doubling from `stepLength` while
+  `length <= MaxLength`): `v = stringToInt(s, length) + dir`, so `s` is
+  right-padded or truncated to `length`. The first `length` with
+  `0 < v < 62^length` returns `encodeBase62(v, length)`, so a step is never all
+  zeros (`rank.go`).
+- No such length → error wrapping `ErrNoRoom`:
+  `%w: no step from %q fits in %d chars` (`rank.go`).
+- An out-of-alphabet byte within `length` → `rank: invalid character in bounds`
+  (`stringToInt`).
+
+Consequences pinned by tests (`rank_test.go`): adjacent characters force a
+longer result (`TestMidpointAdjacentChars`); `Midpoint("B","A")` and
 `Midpoint("A","A")` error (`TestMidpointErrors`); empty-bound behavior
-(`TestMidpointEmptyBounds`); repeated insertion stays strictly ordered
-(`TestRepeatedMidpointInsertion`); multi-char strings
+(`TestMidpointEmptyBounds`); insertion at the bottom of one gap stays strictly
+ordered and inside `MaxLength` until `ErrNoRoom`, which comes no earlier than
+step 900 (`TestRepeatedMidpointInsertion`); multi-char strings
 (`TestMidpointMultiCharStrings`); over every ordered pair of distinct
 strings of up to four characters from `0`, `1`, `y`, `z`, the empty string
 included as either open end, and over the pair of two empty strings,
 `Midpoint` returns `ErrNoRoom` exactly for the pairs sharing a significant part
 and a valid rank strictly between the bounds for every other pair
 (`TestMidpointStaysStrictlyBetweenItsBounds`); `Midpoint("", "")`
-returns `Initial()` (`TestMidpointOfTheWholeKeyspaceIsInitial`).
+returns `"V"` (`TestMidpointOfTheWholeKeyspaceIsTheOpeningKey`);
+`Midpoint("", "0")` and `Midpoint("", "000")` return `ErrNoRoom`
+(`TestNothingSortsBelowAnAllZeroRank`); over 20,000 random pairs the result is
+no longer than the shortest length at which the bounds sit 4 apart
+(`TestMidpointIsNoLongerThanItsBoundsNeed`); `("aaa0","aaa4")` → `aaa2` and
+`("aaa0","aaa3")` → `aaa1U` (`TestAGapOfFourKeepsItsLength`); `("V","")` →
+`V001`, `("V001","")` → `V002`, `("V00123","")` → `V002`, `("","V")` → `Uzzz`,
+`("zzzz","")` → `zzzz0001`, `("","0001")` → `0000zzzz`, and a step past `z` × 20
+is 32 chars (`TestAPlacementPastAnOpenEndSteps`); 1000-step monotonicity past
+each open end (`TestSequentialAppends`, `TestSequentialPrepends`); `Midpoint`
+and `SpacedRanksBetween` between two keys sharing `MaxLength` chars, a step past
+`z` × `MaxLength`, and a step below `0` × `MaxLength` + `1` all return
+`ErrNoRoom` (`TestNoPrimitiveWritesPastMaxLength`).
 
-`Before(a string) (string, error)` — `rank.go`: an empty `a` → error
-`rank: Before needs a rank, not the empty string` (`rank.go`); otherwise
-returns `Midpoint("", a)`, error included, so it fails with `ErrNoRoom` on an
-all-zero `a` (`TestBeforeAnAllZeroRankHasNoRoom`, `rank_test.go`, for `"0"`
-and `"000"`).
-`After(a string) string` — `rank.go`: `Midpoint(a, "")`; **panics**
-`rank.After called with empty string` when `a` is empty or `Midpoint` errors
-(`rank.go`). `TestBeforeAndAfterRefuseTheEmptyRank` (`rank_test.go`)
-requires `Before("")` to return an error and `After("")` to panic. 1000-step
-monotonicity pinned by `TestSequentialAfter` (`rank_test.go`) and `TestSequentialBefore`.
-
-## 4.3 Smoothing constants
-`SmoothingThreshold = 8` — `rank.go`: the rank string length that triggers
-local smoothing; normal ranks are 1–6 chars (`rank.go`).
-`SmoothingWindow = 32` — `rank.go`: number of items re-spaced during local
-smoothing.
+## 4.3 Length and smoothing constants
+`MaxLength = 190` — `rank.go`: the longest key the package writes, one short of
+`idx_issues_rank`'s 191-char prefix. Dolt streams `ORDER BY item_rank` from that
+index without sorting, so two keys tied on the prefix read in the wrong order
+with no error; a key shorter than the prefix cannot tie with any other
+(`rank.go`).
+`SmoothingThreshold = 8` — `rank.go`: the ceiling of a key in open keyspace, the
+length past which its spot may be crowded; `Ceiling` derives every other spot's
+from it.
+`SmoothingWindow = 32` — `rank.go`: the width a respace starts from, half of it
+a side.
+`MaxRespace = 256` — `rank.go`: the most rows a window widens to for length
+alone.
+`spacingGap = 16` — `rank.go`, unexported: the units a spaced key keeps from its
+neighbours.
+`stepLength = 4` — `rank.go`, unexported: the shortest length a key past an open
+end is stepped at.
 
 ## 4.4 Spaced-rank generation
 
-`SpacedRanks(n int) []string` — `rank.go`: `spacedRanks(n, "", "")`
+`SpacedRanks(n int) []string` — `rank.go`: `spacedRanks(n, "", "", spacingGap)`
 across the full keyspace; **panics** `rank: spaced ranks with empty bounds
 failed: %v` on error (pinned for negative n by `TestSpacedRanksPanicsOnNegativeN`,
 `rank_test.go`).
@@ -1121,40 +1158,45 @@ failed: %v` on error (pinned for negative n by `TestSpacedRanksPanicsOnNegativeN
 `SpacedRanksBetween(lower, upper string, n int) ([]string, error)` —
 `rank.go`: both bounds non-empty with
 `lower >= upper` → error `rank: lower must be less than upper`, whatever `n`
-is; otherwise delegates. That guard is not the whole precondition — it admits
-bounds that nothing can sort between, such as `"10"` and `"100"` — and the rest is
-enforced in `spacedRanks` below. Pinned by `TestSpacedRanksBetween`
-(`rank_test.go`), `TestSpacedRanksBetweenEdges`,
+is; otherwise `spacedRanks(n, lower, upper, spacingGap)`. That guard is not the
+whole precondition — it admits bounds that nothing can sort between, such as
+`"10"` and `"100"` — and the rest is enforced in `spacedRanks` below. Pinned by
+`TestSpacedRanksBetween` (`rank_test.go`), `TestSpacedRanksBetweenEdges`,
 `TestSpacedRanksBetweenAllowsFurtherMidpoints`,
 `TestSpacedRanksBetweenLongLowerBound`,
 `TestSpacedRanksBetweenRejectsNegativeN`,
 `TestSpacedRanksBetweenRejectsBoundsWithNoRoom`,
 `TestSpacedRanksBetweenRejectsInvertedBoundsForAnyN`.
 
-`spacedRanks(n int, lower, upper string) ([]string, error)` — `rank.go`:
+`spacedRanks(n int, lower, upper string, minGap int64) ([]string, error)` —
+`rank.go`:
 - `n < 0` → error `rank: n must be non-negative`; `n == 0` →
   `(nil, nil)`.
-- `minGap = 16` (`rank.go`); `denominator = n+1`.
-- Starts at `length = max(len(lower), len(upper)) + 1` and increments until a
-  length works.
+- `upper` non-empty and `Significant(lower) == Significant(upper)` → error
+  wrapping `ErrNoRoom`: `%w: %q and %q pad to the same value, so no rank sorts
+  between them` (`rank.go`). This covers `upper` being `lower` extended by zeros
+  (`"10"`, `"100"`) and an empty `lower` with an all-zero `upper`. An empty
+  `upper` never matches.
+- `denominator = n+1`. Searches `length` from `sharedPrefix(lower, upper) + 1`
+  through `MaxLength`, because no key fits inside the prefix the bounds share.
 - For each candidate length: `lo = lowerBoundInt(lower, length)`,
-  `hi = upperBoundInt(upper, length)`; `span = hi - lo`. A **negative** span →
-  error wrapping `ErrNoRoom`: `%w: %q and %q pad to the same value, so no rank
-  longer than both sorts between them`; `step = span / (n+1)`;
-  if `step < 16` try the next length.
-- The negative-span arm terminates the search rather than continuing it because
-  every emitted string is longer than both bounds, so `lo` and `hi` are the two
-  bounds right-padded with `'0'` and `span(L+1) = 62*(span(L)+1) - 1`. Bounds
-  that pad to the same value give `span = -1`, which maps to `-1` at every
-  greater length; a non-negative span instead grows 62-fold per length, so it is
-  the only case that could not terminate and it is decided at the first length
-  tried. Since `lower < upper` holds by the caller's guard, a negative span is
-  always exactly `-1`.
-- Emits `out[i] = encodeBase62(lo + step*(i+1), length)` for `i` in `[0, n)` —
+  `hi = upperBoundInt(upper, length)`, `span = hi - lo`,
+  `gap = span / (n+1)`; `gap < minGap` tries the next length, which is also what
+  a negative span does.
+- A candidate length can be shorter than a bound, so keys forget the bounds'
+  length and a respace shortens them (`TestSpacingTakesTheShortestLengthThatFits`,
+  `rank_test.go`: 100 keys over the whole keyspace are 2 chars; 3 keys between a
+  61-char key and `"C"` are at most 3).
+- Emits `out[i] = encodeBase62(lo + gap*(i+1), length)` for `i` in `[0, n)` —
   all outputs are the **same fixed width** (pinned by
   `TestSpacedRanksUniformLength`, `rank_test.go`) and strictly increasing
   (`TestSpacedRanksOrdering`), with room for further midpoint insertion
   (`TestSpacedRanksAllowMidpointInsertion`).
+- No length through `MaxLength` has room → error wrapping `ErrNoRoom`:
+  `%w: %d ranks between %q and %q would pass %d chars` (`rank.go`).
+
+`sharedPrefix(a, b string) int` — `rank.go`: the count of leading bytes `a` and
+`b` share.
 
 `lowerBoundInt(s string, length int) (*big.Int, error)` — `rank.go`:
 empty `s` → `0`; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`
@@ -1162,13 +1204,14 @@ empty `s` → `0`; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`
 
 `upperBoundInt(s string, length int) (*big.Int, error)` — `rank.go`:
 empty `s` → `pow62(length)` (absolute maximum); else `stringToInt(s, length) - 1`,
-with no check of its own. An all-zero upper bound yields `-1`, which `spacedRanks`
-reads as the negative span it already reports, so one place decides that a pair of
-bounds admits nothing.
+with no check of its own. `spacedRanks` refuses an all-zero upper bound before
+reading this, on the significant-part check above, and `Midpoint` and
+`SpacedRanksBetween` refuse any lower bound above one.
 
 `stringToInt(s string, length int) (*big.Int, error)` — `rank.go`:
-base-62 accumulate over `length` positions, right-padding with index 0 (`'0'`);
-an out-of-alphabet byte → error `rank: invalid character in bounds`.
+base-62 accumulate over `length` positions, right-padding with index 0 (`'0'`)
+and ignoring anything past `length`; an out-of-alphabet byte within `length` →
+error `rank: invalid character in bounds`.
 
 `pow62(n int) *big.Int` — `rank.go`.
 
@@ -1177,6 +1220,82 @@ negative value → `rank: cannot encode negative value`; remainder outside
 `[0, 62)` → `rank: base62 remainder out of range`; a value that does not fit the
 fixed width (non-zero quotient after `length` digits) →
 `rank: value does not fit fixed-width encoding`.
+
+## 4.5 Ceiling, crowding and the respace loop
+
+`Ceiling(key string) int` — `rank.go`: how long a key at `key`'s place may grow
+before smoothing, `min(max(stepWidth(key, 1), stepWidth(key, -1)) +
+SmoothingThreshold - stepLength, MaxLength)`: the length a step from it takes,
+plus the headroom `SmoothingThreshold` allows a `stepLength` key. Pinned by
+`TestCeilingIsDerivedFromTheStep`, `rank_test.go`: `"V"` → 8, `z` × 20 → 36,
+`z` × 128 → `MaxLength`.
+
+`stepWidth(key string, dir int64) int` — `rank.go`: `len` of `step(key, dir)`,
+`MaxLength` when the step fails, so a place no step reaches has only `MaxLength`
+above it.
+
+`Crowded(key string, movable ...string) bool` — `rank.go`:
+`len(key) >= Ceiling(key)` and `key` is longer than at least one of `movable`.
+Such a key means its spot's gaps are spent: it reached its ceiling and bisection
+went deeper than a neighbour a respace could move. An edge key never moves, so
+the caller leaves it out of `movable`, and a spot with no such neighbour has
+nothing to respace. Pinned by `TestCrowdedNeedsTheCeilingAndAMovableShorterNeighbour`,
+`rank_test.go`.
+
+`type Window struct { Lower, Upper string; Rows, Whole int }` — `rank.go`: the
+rows a respace would move at one width: `Rows` of them between the keys `Lower`
+and `Upper`, each side's bound staying outside. An empty bound is an open end.
+`Whole` is every ranked row when neither side has a key left to widen to, and 0
+until then.
+
+`leavesStep(keys []string) bool` — `rank.go`: whether `keys` leave a placement
+past each end of them: `step` must succeed up from the last key and down from
+the first. No keys → true. A closed bound can be the row a move is vacating,
+which opens that end for the next placement, so a window in a corner too deep to
+step out of is spaced and still refuses it, and counts as no room
+(`TestAMoveOutOfADeepCornerFindsRoom`, `rank_scale_test.go`).
+
+`Respace(trigger string, read func(k int) (Window, error)) (keys []string, whole bool, err error)`
+— `rank.go`: the keys the window around `trigger` takes, in order. `read`
+returns the window of `k` keys a side, so the loop never sees where the rows
+live. From `k = SmoothingWindow/2`, doubling each pass:
+- `read(k)`; an error is returned as is.
+- `SpacedRanksBetween(window.Lower, window.Upper, window.Rows)`; keys that fail
+  `leavesStep` become an error wrapping `ErrNoRoom`:
+  `%w: no step fits past %d spaced keys` (`rank.go`).
+- `ErrNoRoom` with `window.Whole > 0` → `SpacedRanksBetween("", "", window.Whole)`
+  with `whole = true`: the keys are for every ranked row.
+- `ErrNoRoom` otherwise → next pass.
+- Any other error → returned.
+- No keys, keys shorter than `Ceiling(trigger)`, `2*k >= MaxRespace`, or
+  `window.Whole > 0` → the keys, `whole = false`. Otherwise next pass.
+
+So a window doubles while its keys come out at or past the trigger's ceiling, up
+to `MaxRespace` rows, where key length absorbs the density, and past that only
+while its bounds leave no room.
+
+Pinned by `respace_test.go`, whose `keyspace` runs `Respace` over a sorted key
+list with the store's rule for bounds, trigger and window:
+`TestRealisticWorkloadsRespaceLittle` (skipped under `-short`) keeps the worst
+respace to 64 rows across workloads seeded from `testdata/live_keys.txt`;
+`TestSameSpotInsertsStayBounded` (skipped under `-short`) files 20,000 placements
+at each of 13 spots and keeps the worst respace to `MaxRespace` rows, the longest
+written key to 70 chars and the rewrites to 45 rows per insert;
+`TestAWindowPassesTheCapOnlyWhereNoRoomIsInside` seeds 1000 keys sharing 186 chars
+and requires a window past `MaxRespace`;
+`TestARespaceInACornerLeavesRoomForTheNextPlacement` places past `z` × 128 and
+before `0` × 128, at 40 and 2000 rows;
+`TestACloneRacingARespaceIsDisplacedOnlyInsideTheWindow` merges two unsynced
+clones: a row filed inside the window lands no further off than the window is
+wide, and a row filed outside it lands where it was filed.
+
+`PrefixTied(sorted []string) int` — `rank.go`: counts the adjacent keys in
+`sorted` that are distinct and equal on their first `MaxLength+1` chars
+(`indexPrefix`), the prefix `idx_issues_rank` holds. A key this package wrote
+cannot be one. An unranked row is no key, and an equal pair is not a tie. Pinned
+by `TestPrefixTiedCountsDistinctKeysOnTheIndexPrefix`, `rank_test.go`.
+
+`indexPrefix(key string) string` — `rank.go`: `key` cut to `MaxLength+1` chars.
 
 ---
 

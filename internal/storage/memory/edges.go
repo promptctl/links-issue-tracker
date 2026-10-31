@@ -182,7 +182,8 @@ func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) er
 }
 
 // epicTree places each child under its parents that are epics — the Dolt
-// engine's loadEpicTree, rendered over this engine's slices. An edge with
+// engine's epicTreeAbove, rendered over this engine's slices, whole because a
+// read here costs a loop. An edge with
 // either endpoint missing its record is dropped, as that engine's joins on
 // issues drop it.
 func (e *Engine) epicTree() storage.EpicTree {

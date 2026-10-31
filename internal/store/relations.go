@@ -419,7 +419,7 @@ func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 		// constraint set rather than an awkward shape. The same-epic rule is
 		// judged first, as the import gate judges it: an edge inside one epic
 		// that also closes a cycle is refused by the rule that names the fix.
-		tree, err := loadEpicTree(ctx, tx)
+		tree, err := epicTreeAbove(ctx, tx, rel.SrcID, rel.DstID)
 		if err != nil {
 			return fmt.Errorf("blocks hierarchy check: %w", err)
 		}
@@ -488,11 +488,11 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 	if dependent == dependency {
 		return model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
-	edges, err := loadBlocksEdges(ctx, tx)
-	if err != nil {
+	var precedes int
+	if err := tx.QueryRowContext(ctx, blocksPrecedesQuery, dependent, dependency).Scan(&precedes); err != nil {
 		return fmt.Errorf("blocked-by cycle check: %w", err)
 	}
-	if blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency) {
+	if precedes > 0 {
 		return model.ValidationError{Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
@@ -511,15 +511,12 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 // walks up. [LAW:types-are-the-program]
 //
 // The edge runs child -> parent, so the loop closes exactly when parent is
-// already at or below child: walking up from parent reaches child. Reading the
-// edges as a child -> parent map keeps that walk to one step per ancestor.
+// already at or below child: walking up from parent reaches child. Each step
+// reads one issue's parents, so the check costs the ancestors it climbs and not
+// the store.
 func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string) error {
 	if childID == parentID {
 		return model.ValidationError{Message: fmt.Sprintf("parent-child: %s cannot be its own parent", childID)}
-	}
-	parentOf, err := loadParentEdges(ctx, tx)
-	if err != nil {
-		return fmt.Errorf("parent cycle check: %w", err)
 	}
 	// Everything the hierarchy can already climb to from the proposed parent.
 	// The edge runs child -> parent, so it closes a loop exactly when the child
@@ -531,7 +528,10 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	for stack := []string{parentID}; len(stack) > 0; {
 		at := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		parents := parentOf[at]
+		parents, err := parentsOfTx(ctx, tx, at)
+		if err != nil {
+			return fmt.Errorf("parent cycle check: %w", err)
+		}
 		if len(parents) == 0 {
 			continue
 		}
@@ -596,20 +596,63 @@ func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, er
 	return parentOf, nil
 }
 
-// epicParentPredicate keeps the parent edges whose parent is an epic.
-var epicParentPredicate = fmt.Sprintf("p.issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
-
-// loadEpicTree is loadParentEdges narrowed to edges whose parent is an epic,
-// with each child's type: the containment an epic's blockers reach down
-// through, and what storage.RejectBlocksWithinEpic reads.
-func loadEpicTree(ctx context.Context, q rowQueryer) (storage.EpicTree, error) {
-	edges, err := queryParentEdges(ctx, q, epicParentPredicate)
+// parentsOfTx is every parent one issue's stored edges name, by the rule
+// loadParentEdges states: no lifecycle predicate narrows it.
+func parentsOfTx(ctx context.Context, tx *sql.Tx, issueID string) ([]string, error) {
+	edges, err := queryParentEdges(ctx, tx, "r.src_id = ?", issueID)
 	if err != nil {
 		return nil, err
 	}
-	tree := make(storage.EpicTree, len(edges))
-	for _, edge := range edges {
-		tree.Place(edge.child, edge.childType, edge.parent)
+	parents := make([]string, len(edges))
+	for i, edge := range edges {
+		parents[i] = edge.parent
+	}
+	return parents, nil
+}
+
+// liveBlocksEdges is the one query body for the blocked-by edges that count,
+// both endpoints live, so the graph the whole-store reads see and the one a
+// cycle check walks cannot drift apart.
+const liveBlocksEdges = `relations r
+		JOIN issues src ON src.id = r.src_id
+		JOIN issues dst ON dst.id = r.dst_id
+		WHERE r.type = 'blocked-by'
+		AND src.deleted_at IS NULL AND dst.deleted_at IS NULL`
+
+// blocksPrecedesQuery counts the second id among everything the first holds
+// back, through a chain of blocked-by edges. One recursive read costs what it
+// reaches at about 15us an issue, where a read per issue cost 290us and lost to
+// the whole graph past a few dozen. UNION drops an id it has already reached, so
+// a loop restored data holds ends the recursion. The engine refuses past 10,001
+// rounds, one a link of the longest chain, however wide the graph, so a dep add
+// on a chain that deep fails loudly rather than answering wrong.
+const blocksPrecedesQuery = `WITH RECURSIVE reach(id) AS (
+		SELECT ? UNION SELECT r.src_id FROM reach, ` + liveBlocksEdges + ` AND r.dst_id = reach.id
+	) SELECT COUNT(*) FROM reach WHERE id = ?`
+
+// epicParentPredicate keeps the parent edges whose parent is an epic.
+var epicParentPredicate = fmt.Sprintf("p.issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
+
+// epicTreeAbove is the containment above ids: every edge to an epic that a climb
+// from one of them can take, with each child's type. That is all of the tree
+// storage.RejectBlocksWithinEpic reads about two endpoints, and a parent loop
+// ends the climb at the first issue it already placed.
+func epicTreeAbove(ctx context.Context, q rowQueryer, ids ...string) (storage.EpicTree, error) {
+	tree := storage.EpicTree{}
+	for stack := slices.Clone(ids); len(stack) > 0; {
+		at := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, placed := tree[at]; placed {
+			continue
+		}
+		edges, err := queryParentEdges(ctx, q, "r.src_id = ? AND "+epicParentPredicate, at)
+		if err != nil {
+			return nil, err
+		}
+		for _, edge := range edges {
+			tree.Place(edge.child, edge.childType, edge.parent)
+			stack = append(stack, edge.parent)
+		}
 	}
 	return tree, nil
 }
@@ -620,15 +663,19 @@ type parentEdge struct {
 	childType     model.IssueType
 }
 
+func parentEdgesQuery(parentFilter string) string {
+	return `SELECT r.src_id, i.issue_type, r.dst_id FROM relations r
+		JOIN issues i ON i.id = r.src_id
+		JOIN issues p ON p.id = r.dst_id
+		WHERE r.type = 'parent-child' AND ` + parentFilter + `
+		ORDER BY r.src_id, r.dst_id`
+}
+
 // queryParentEdges reads the parent edges parentFilter keeps; `p` is the
 // parent's issues row. [LAW:one-source-of-truth] One query body, so the full
 // and epic-only readings cannot drift apart.
-func queryParentEdges(ctx context.Context, q rowQueryer, parentFilter string) ([]parentEdge, error) {
-	rows, err := q.QueryContext(ctx, `SELECT r.src_id, i.issue_type, r.dst_id FROM relations r
-		JOIN issues i ON i.id = r.src_id
-		JOIN issues p ON p.id = r.dst_id
-		WHERE r.type = 'parent-child' AND `+parentFilter+`
-		ORDER BY r.src_id, r.dst_id`)
+func queryParentEdges(ctx context.Context, q rowQueryer, parentFilter string, args ...any) ([]parentEdge, error) {
+	rows, err := q.QueryContext(ctx, parentEdgesQuery(parentFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query parent edges: %w", err)
 	}

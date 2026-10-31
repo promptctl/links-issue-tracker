@@ -1360,9 +1360,8 @@ func TestReconcileTopicHasNoDefault(t *testing.T) {
 // state contract: if some issues are already ranked and others have
 // item_rank = ”, the rank backfill seeds from MAX(existing rank) so
 // new ranks never collide. Without this seeding, ensureIssueRanks
-// would assign rank.Initial() to the first unranked row, which would
-// duplicate any existing rank.Initial() row and break the strict-
-// ordering invariant rank mutations depend on.
+// would space the unranked rows over the top of the ranked ones, which
+// breaks the strict-ordering invariant rank mutations depend on.
 //
 // [LAW:no-silent-failure] Generated ranks cannot duplicate any
 // existing rank value in the workspace, even in mixed states.

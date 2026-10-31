@@ -203,12 +203,13 @@ func TestMeasureRunsEveryReadBeforeAnyWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("measure() error = %v", err)
 	}
-	if len(samples) != len(probes) {
-		t.Fatalf("measure() returned %d samples, want one per probe (%d)", len(samples), len(probes))
+	measured := invocationsFor(probes, store)
+	if len(samples) != len(measured) {
+		t.Fatalf("measure() returned %d samples, want one per invocation the store admits (%d)", len(samples), len(measured))
 	}
 
 	writeArgs := map[string]bool{}
-	for _, inv := range invocationsFor(probes, store) {
+	for _, inv := range measured {
 		if inv.probe.mutates {
 			writeArgs[strings.Join(inv.args, " ")] = true
 		}
@@ -219,9 +220,9 @@ func TestMeasureRunsEveryReadBeforeAnyWrite(t *testing.T) {
 
 	ran := invocations(t, log)
 	// One unrecorded warm-up per probe, then the recorded repeats.
-	if len(ran) != len(probes)*(repeats+1) {
+	if len(ran) != len(measured)*(repeats+1) {
 		t.Errorf("fake binary ran %d times, want %d (%d probes x (1 warm-up + %d repeats))",
-			len(ran), len(probes)*(repeats+1), len(probes), repeats)
+			len(ran), len(measured)*(repeats+1), len(measured), repeats)
 	}
 	firstWrite := -1
 	for i, line := range ran {

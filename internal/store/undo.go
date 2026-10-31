@@ -560,9 +560,9 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 	var result storage.RevertResult
 	// The undo is a batch around the bulk edit's batch: the observers hear
 	// what stands once this hold is released, not inside it.
-	var heard []heardChange
+	var heard []owed
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
-		ctx = context.WithValue(ctx, batchHearingKey{}, &heard)
+		ctx = context.WithValue(ctx, hearingKey{}, &heard)
 		var named []string
 		for _, delta := range deltas {
 			for _, move := range delta.Moves() {
@@ -593,7 +593,7 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 		}
 		return err
 	})
-	s.hear(ctx, heard...)
+	hear(ctx, heard...)
 	return result, err
 }
 

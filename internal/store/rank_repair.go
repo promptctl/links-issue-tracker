@@ -2,6 +2,7 @@ package store
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -26,9 +27,11 @@ func compareRankedIssues(a, b rankedIssue) int {
 }
 
 // rankRewrite names one issue whose rank must change, and the value to write.
+// A respaced one keeps its place in the order: it only gave a gap room.
 type rankRewrite struct {
-	id      string
-	newRank string
+	id       string
+	newRank  string
+	respaced bool
 }
 
 // blocksCycleError reports a precedence constraint set that no rank order can
@@ -50,7 +53,7 @@ func (e *blocksCycleError) Error() string {
 // them that share a frame and none closes a cycle. held is every other placed
 // issue (splitRankOrder): no listing reads where it stands, so the repair
 // steps around its key instead of reordering it, and writes it only where it
-// shares that key. The writes leave keys ascending along the sorted order, so
+// shares that key or a gap beside it has no room. The writes leave keys ascending along the sorted order, so
 // every frame reads its share of that order back, and each mover is spaced
 // between the keys beside it, so no two issues share a key.
 //
@@ -172,10 +175,11 @@ func stableTopoOrder(order []rankedIssue, edges []storage.DependencyEdge) ([]ran
 
 // placement is one issue in the sequence the writes realize, and whether it
 // keeps its key there: an anchor bounds the gap the movers beside it are
-// spaced into.
+// spaced into, and a respaced one was an anchor until its gap had no room.
 type placement struct {
 	rankedIssue
 	anchored bool
+	respaced bool
 }
 
 // rankRewrites returns the rank writes that realize sequence: every issue that
@@ -200,15 +204,32 @@ func rankRewrites(sequence []placement) ([]rankRewrite, error) {
 		}
 		movers := sequence[start:at]
 		newRanks, err := rank.SpacedRanksBetween(lower, upper, len(movers))
+		if errors.Is(err, rank.ErrNoRoom) {
+			return rankRewrites(withoutBound(sequence, start, at))
+		}
 		if err != nil {
 			return nil, fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)
 		}
 		for i, mover := range movers {
-			rewrites = append(rewrites, rankRewrite{id: mover.id, newRank: newRanks[i]})
+			rewrites = append(rewrites, rankRewrite{id: mover.id, newRank: newRanks[i], respaced: mover.respaced})
 		}
 		lower, start = upper, at+1
 	}
 	return rewrites, nil
+}
+
+// withoutBound is sequence with one anchor bounding the run start..at made a
+// mover: a gap with no room inside rank.MaxLength is not one to space into, so
+// the run widens as a respace's window does. With no anchors left the run is
+// the whole sequence between open ends, which always has room.
+func withoutBound(sequence []placement, start, at int) []placement {
+	wider := slices.Clone(sequence)
+	bound := at
+	if at == len(sequence) {
+		bound = start - 1
+	}
+	wider[bound].anchored, wider[bound].respaced = false, true
+	return wider
 }
 
 // anchorRun anchors, in target, a longest subsequence whose stored ranks
@@ -219,14 +240,16 @@ func rankRewrites(sequence []placement) ([]rankRewrite, error) {
 // rows that did not move.
 //
 // The movers between two anchors are spaced into the gap they bound, and only
-// ranks whose significant parts differ leave one. [LAW:one-source-of-truth]
-// rank.Significant is that definition of room, so anchors are compared by it.
-// An issue whose significant rank is not rank.Valid — unranked, or all zeros —
-// bounds no gap at all, so it is always a mover and gets a real rank.
+// ranks whose rank.Anchor differs leave one and read in order.
+// [LAW:one-source-of-truth] rank.Anchor is that definition of room, so anchors
+// are compared by it, and keys tied on the index prefix come out with one
+// holder and the rest spaced past it. An issue whose anchor is not rank.Valid —
+// unranked, malformed, or all zeros — bounds no gap at all, so it is always a
+// mover and gets a real rank.
 func anchorRun(target []rankedIssue) []placement {
 	keys := make([]string, len(target))
 	for i, item := range target {
-		keys[i] = rank.Significant(item.rank)
+		keys[i] = rank.Anchor(item.rank)
 	}
 	// tails[k] is the index in target of the smallest-keyed issue that ends an
 	// ascending run of length k+1; prev[i] links i back to its predecessor in
@@ -280,13 +303,13 @@ func holdKeys(sequence []placement, held []rankedIssue) []placement {
 	}
 	slices.SortFunc(keyed, compareRankedIssues)
 	merged := make([]placement, 0, len(sequence)+len(keyed))
-	// last is the significant key of the latest anchor merged; every held key
+	// last is the rank.Anchor of the latest anchor merged; every held key
 	// still to merge is at or above it, because each was merged before the
 	// first anchor above it.
 	last, next := "", 0
 	mergeBelow := func(bound func(key string) bool) {
-		for ; next < len(keyed) && bound(rank.Significant(keyed[next].rank)); next++ {
-			key := rank.Significant(keyed[next].rank)
+		for ; next < len(keyed) && bound(rank.Anchor(keyed[next].rank)); next++ {
+			key := rank.Anchor(keyed[next].rank)
 			anchored := rank.Valid(key) && key > last
 			merged = append(merged, placement{rankedIssue: keyed[next], anchored: anchored})
 			if anchored {
@@ -296,7 +319,7 @@ func holdKeys(sequence []placement, held []rankedIssue) []placement {
 	}
 	for _, p := range sequence {
 		if p.anchored {
-			key := rank.Significant(p.rank)
+			key := rank.Anchor(p.rank)
 			mergeBelow(func(k string) bool { return k < key })
 			last = key
 		}
