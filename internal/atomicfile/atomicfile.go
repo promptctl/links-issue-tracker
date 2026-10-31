@@ -1,10 +1,12 @@
-// Package atomicfile replaces a file's contents atomically: the new contents
-// are written to a temporary sibling and renamed over the target, so a reader
-// sees the old file or the new one, never a torn write.
+// Package atomicfile writes a file's contents atomically: the new contents
+// are written to a temporary sibling and then given the target's name, so a
+// reader sees the old file or the new one, never a torn write. Replace renames
+// over the target; Publish links to it, so it creates the target only where
+// none exists.
 //
-// [LAW:one-source-of-truth] Every file lit replaces this way goes through
-// Replace, so the temp naming, the mode, the fsync and the cleanup on failure
-// are decided once. It imports only the standard library, which is what lets
+// [LAW:one-source-of-truth] Every file lit writes this way goes through
+// Replace or Publish, so the temp naming, the mode, the fsync and the cleanup
+// on failure are decided once. It imports only the standard library, which is what lets
 // the stdlib-only statusline writer share it (.golangci.yml).
 package atomicfile
 
@@ -93,6 +95,46 @@ func Replace(name string, perm fs.FileMode, durability Durability, write func(io
 	}
 	syncParent(dir)
 	return nil
+}
+
+// Publish creates name holding the contents write produces, at mode perm,
+// only if name does not exist: write-once, the way Replace is
+// last-writer-wins. published is false, with no error, when name already
+// existed, whatever it holds; that file is left as it was. name's directory
+// must exist. The temporary file is removed on every path.
+//
+// [LAW:single-enforcer] os.Link is what refuses an existing name: a rename
+// would replace it. Linking a completed temporary file, rather than creating
+// name with O_EXCL and filling it, means name is never visible half-written,
+// and a process killed mid-write leaves no name at all. Under Durable the
+// contents are on disk before the link, so a crash cannot leave the name
+// pointing at bytes that never landed.
+//
+// A link the filesystem cannot make comes back as the *os.LinkError os.Link
+// returned, so a caller can name that requirement for the step that has it
+// and no other.
+func Publish(name string, perm fs.FileMode, durability Durability, write func(io.Writer) error) (published bool, err error) {
+	syncFile, syncParent := durability.syncs()
+	dir := filepath.Dir(name)
+	tmp, err := os.CreateTemp(dir, filepath.Base(name)+tempInfix+"*")
+	if err != nil {
+		return false, fmt.Errorf("create temp file: %w", err)
+	}
+	// The link gave name its own entry, so the temporary one goes whether
+	// this call published or found name already there.
+	defer os.Remove(tmp.Name())
+	if err := fill(tmp, perm, syncFile, write); err != nil {
+		return false, err
+	}
+	err = os.Link(tmp.Name(), name)
+	if errors.Is(err, fs.ErrExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	syncParent(dir)
+	return true, nil
 }
 
 // fill writes the temporary file to its final contents and mode and closes

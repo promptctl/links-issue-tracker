@@ -5,9 +5,12 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/atomicfile"
 )
 
 // streamTokenFile is the write-once file holding a checkout's stream id, and it
@@ -139,89 +142,60 @@ func EnsureStream(privateGitDir string) (StreamID, error) {
 // process, and the consequences are not hypothetical: a concurrent command
 // reads the empty file and rejects it as malformed, and a process killed in
 // that window leaves an empty file that can never be replaced, permanently
-// failing every later read AND write for the checkout. So the token is written
-// to a temp file, completed there, and only then given its real name.
+// failing every later read AND write for the checkout. atomicfile.Publish
+// completes the token under a temporary name and only then links it to its
+// real one, Durable so a crash cannot leave the name pointing at contents that
+// never reached the disk.
 //
-// [LAW:single-enforcer] os.Link is what enforces write-once, and it is chosen
-// over os.Rename deliberately: rename would silently REPLACE an existing
-// identity, while link fails with EEXIST and leaves the incumbent alone. An
+// [LAW:single-enforcer] The link is what enforces write-once: it leaves an
+// existing identity alone where a rename would replace it. An
 // already-published token is therefore a successful outcome here, not a
 // failure — it is what every racing caller but one sees.
+//
+// A process killed outright leaves its staged file behind, which is accepted
+// rather than reaped: the reaper would have to delete exactly the file a
+// CONCURRENT first-mutation has staged and is about to link, turning a
+// harmless orphan into a failed command. The read-first path in EnsureStream
+// means this function runs only while a checkout has no identity at all, so
+// the litter is bounded by kills inside one checkout's first mutation, and
+// only the exact token name is ever read, so a leftover staged file cannot be
+// mistaken for an identity.
 func publishStreamToken(privateGitDir string) error {
 	token, err := newStreamToken()
 	if err != nil {
 		return err
 	}
-	// Created in the destination directory because a link cannot cross a
-	// filesystem, and a temp dir elsewhere would put one there.
-	temp, err := os.CreateTemp(privateGitDir, streamTokenFile+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temporary stream id in %q: %w", privateGitDir, err)
-	}
-	tempPath := temp.Name()
-	// Removed whether this call wins or loses the race, and on every error path.
-	// A process killed outright leaves its staged file behind, which is accepted
-	// rather than reaped: the reaper would have to delete exactly the file a
-	// CONCURRENT first-mutation has staged and is about to link, turning a
-	// harmless orphan into a failed command, and an age threshold to avoid that
-	// buys a tunable time constant to clean up files that barely occur. The read
-	// -first path in EnsureStream means this function runs only while a checkout
-	// has no identity at all, so the litter is bounded by kills inside one
-	// checkout's first mutation, in a directory where git leaves index.lock under
-	// the same conditions. Only the exact token name is ever read, so a leftover
-	// staged file cannot be mistaken for an identity.
-	defer os.Remove(tempPath)
-
+	path := filepath.Join(privateGitDir, streamTokenFile)
 	// The token is written with a trailing newline so the file reads correctly
 	// when a person cats it while debugging; parseStreamToken trims it back off.
-	if _, err := temp.WriteString(token + "\n"); err != nil {
-		temp.Close()
-		return fmt.Errorf("write temporary stream id %q: %w", tempPath, err)
-	}
-	// CreateTemp opens at 0600; the token is not a secret and every other file
-	// in the git directory is world-readable, so the mode is set explicitly
-	// rather than left to differ from its neighbors by accident.
-	if err := temp.Chmod(0o644); err != nil {
-		temp.Close()
-		return fmt.Errorf("set mode on temporary stream id %q: %w", tempPath, err)
-	}
-	// Synced before the link so a crash cannot leave the published name pointing
-	// at unwritten bytes. The directory entry is deliberately NOT synced: losing
-	// it to a crash means the token is simply absent and the next mutation mints
-	// one, which is the safe failure, whereas losing the CONTENT would resurrect
-	// exactly the permanently-empty file this design exists to make impossible.
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return fmt.Errorf("sync temporary stream id %q: %w", tempPath, err)
-	}
-	if err := temp.Close(); err != nil {
-		return fmt.Errorf("close temporary stream id %q: %w", tempPath, err)
-	}
-
-	path := filepath.Join(privateGitDir, streamTokenFile)
-	err = os.Link(tempPath, path)
-	if errors.Is(err, os.ErrExist) {
-		return nil
-	}
-	if err != nil {
-		// The requirement is stated on EVERY failure rather than on a matched
-		// errno family, because it is true of every failure: this step needs a
-		// hard link, so naming that is never wrong, while classifying the errno
-		// would be wrong exactly where it matters most. On Windows — which lit
-		// ships a binary for, and where FAT is most likely to be met — Go's
-		// syscall.EPERM and friends are invented values, and a real
+	// The token is not a secret and every other file in the git directory is
+	// world-readable, so it is too.
+	_, err = atomicfile.Publish(path, 0o644, atomicfile.Durable, func(w io.Writer) error {
+		_, err := io.WriteString(w, token+"\n")
+		return err
+	})
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		// The requirement is stated on EVERY link failure rather than on a
+		// matched errno family, because it is true of every one: this step
+		// needs a hard link, so naming that is never wrong, while classifying
+		// the errno would be wrong exactly where it matters most. On Windows —
+		// which lit ships a binary for, and where FAT is most likely to be met
+		// — Go's syscall.EPERM and friends are invented values, and a real
 		// ERROR_NOT_SUPPORTED from CreateHardLink matches none of them
 		// (syscall.Errno.Is maps Win32 codes onto os.ErrExist/ErrPermission/
 		// ErrNotExist and nothing else). A classifier would therefore go quiet
 		// on the one platform whose operator most needs the explanation.
-		// Enumerating per-platform codes we cannot execute here would only move
-		// the gap. [LAW:no-silent-failure]
+		// [LAW:no-silent-failure]
 		//
 		// Not a fallback to a weaker publish: an implementation that is atomic
 		// on some filesystems and racy on others leaves nobody able to say what
 		// guarantee a checkout has, and the racy one is what this path exists to
 		// eliminate.
 		return fmt.Errorf("publish stream id %q: %w; this step requires the checkout's git directory (%s) to support hard links, which is how the identity is installed atomically — a filesystem without them (FAT family, some network mounts) fails here every time", path, err, privateGitDir)
+	}
+	if err != nil {
+		return fmt.Errorf("publish stream id %q: %w", path, err)
 	}
 	return nil
 }

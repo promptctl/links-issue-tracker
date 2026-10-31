@@ -206,3 +206,63 @@ func assertOnlyEntry(t *testing.T, dir, want string) {
 		t.Fatalf("%s holds %v, want only %s", dir, names, want)
 	}
 }
+
+func writeString(s string) func(io.Writer) error {
+	return func(w io.Writer) error {
+		_, err := io.WriteString(w, s)
+		return err
+	}
+}
+
+func TestPublishCreatesTheFileWithItsContentsAndMode(t *testing.T) {
+	for _, durability := range durabilities {
+		dir := t.TempDir()
+		name := filepath.Join(dir, "token")
+		published, err := Publish(name, 0o666, durability, writeString("first"))
+		if err != nil || !published {
+			t.Fatalf("Publish(%d) = %v, %v; want true, nil", durability, published, err)
+		}
+		assertFile(t, name, "first", 0o666)
+		assertOnlyEntry(t, dir, "token")
+	}
+}
+
+func TestPublishLeavesAnExistingFileAsItWas(t *testing.T) {
+	for _, durability := range durabilities {
+		dir := t.TempDir()
+		name := filepath.Join(dir, "token")
+		if err := os.WriteFile(name, []byte("incumbent"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		published, err := Publish(name, 0o644, durability, writeString("challenger"))
+		if err != nil || published {
+			t.Fatalf("Publish(%d) over an existing file = %v, %v; want false, nil", durability, published, err)
+		}
+		assertFile(t, name, "incumbent", 0o600)
+		assertOnlyEntry(t, dir, "token")
+	}
+}
+
+func TestAFailedPublishWriteCreatesNothing(t *testing.T) {
+	dir := t.TempDir()
+	cause := errors.New("download failed")
+	published, err := Publish(filepath.Join(dir, "token"), 0o644, Durable, func(io.Writer) error { return cause })
+	if !errors.Is(err, cause) || published {
+		t.Fatalf("Publish() = %v, %v; want false and an error wrapping the write's", published, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a failed publish left %v", entries)
+	}
+}
+
+func TestPublishIntoAMissingDirectoryIsNotALinkError(t *testing.T) {
+	_, err := Publish(filepath.Join(t.TempDir(), "absent", "token"), 0o644, Durable, writeString("x"))
+	var linkErr *os.LinkError
+	if err == nil || errors.As(err, &linkErr) {
+		t.Fatalf("Publish() into a missing dir = %v; want an error that is not an *os.LinkError", err)
+	}
+}
