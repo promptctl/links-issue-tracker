@@ -86,6 +86,17 @@ func makeChildrenOf(t *testing.T, ctx context.Context, st *Store, epicID string,
 	return issues
 }
 
+// openingKey is the key an empty workspace's first issue is written: the
+// midpoint of the whole keyspace.
+func openingKey(t *testing.T) string {
+	t.Helper()
+	key, err := rank.Midpoint("", "")
+	if err != nil {
+		t.Fatalf("rank.Midpoint of the whole keyspace error = %v", err)
+	}
+	return key
+}
+
 func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.Issue) map[string]string {
 	t.Helper()
 	out := make(map[string]string, len(issues))
@@ -101,9 +112,9 @@ func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.I
 
 func mustBefore(t *testing.T, r string) string {
 	t.Helper()
-	before, err := rank.Before(r)
+	before, err := rank.Midpoint("", r)
 	if err != nil {
-		t.Fatalf("rank.Before(%q) error = %v", r, err)
+		t.Fatalf("rank.Midpoint(\"\", %q) error = %v", r, err)
 	}
 	return before
 }
@@ -952,8 +963,12 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child, default placement) error = %v", err)
 	}
-	if want := rank.After(before[fx.standalone.ID]); trail.Rank != want {
-		t.Errorf("child filed at the bottom has rank %q, want %q = After(the workspace's last key %q)", trail.Rank, want, before[fx.standalone.ID])
+	after, err := rank.Midpoint(before[fx.standalone.ID], "")
+	if err != nil {
+		t.Fatalf("rank.Midpoint(%q, \"\") error = %v", before[fx.standalone.ID], err)
+	}
+	if trail.Rank != after {
+		t.Errorf("child filed at the bottom has rank %q, want %q = a step past the workspace's last key %q", trail.Rank, after, before[fx.standalone.ID])
 	}
 	// Nothing sits outside the workspace's last key, so the room beside it is
 	// the open end — the same answer, reached by the rule the top edge uses
@@ -965,7 +980,7 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 
 // TestCreateAtTopOfAnEmptyFrameTakesADistinctKey covers the case scoping the
 // top edge to the frame creates: the frame's edge reads as absent, both bounds
-// come back open, and the midpoint of the whole keyspace is rank.Initial —
+// come back open, and the midpoint of the whole keyspace is the opening key —
 // which the workspace's first issue is already holding. The rendered order
 // cannot see that either. Two issues sharing a key still list in some order,
 // decided by the id tiebreak, and only the keys say that nothing ranked them.
@@ -978,8 +993,8 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(first) error = %v", err)
 	}
-	if first.Rank != rank.Initial() {
-		t.Fatalf("the first issue in a workspace has rank %q, want the initial rank %q; this case rests on it holding the key an empty-bounds midpoint yields", first.Rank, rank.Initial())
+	if first.Rank != openingKey(t) {
+		t.Fatalf("the first issue in a workspace has rank %q, want the opening key %q; this case rests on it holding the key an empty-bounds midpoint yields", first.Rank, openingKey(t))
 	}
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Childless epic", Topic: "frame", IssueType: "epic"})
 	if err != nil {
@@ -1223,10 +1238,10 @@ func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 // top-level issue while issues inside an epic still hold keys.
 //
 // The fixture reparents the workspace's FIRST issue, the one holding
-// rank.Initial, into an epic. That is what makes the case adversarial: a rank
+// the opening key, into an epic. That is what makes the case adversarial: a rank
 // set that measured its room as though the workspace were empty would be
-// handed rank.Initial, the key that issue still holds. Without the reparent
-// every surviving key is above rank.Initial, the collision cannot happen, and
+// handed the opening key, the key that issue still holds. Without the reparent
+// every surviving key is above the opening key, the collision cannot happen, and
 // the case passes however the keys are chosen.
 func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 	t.Parallel()
@@ -1237,8 +1252,8 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(opener) error = %v", err)
 	}
-	if opener.Rank != rank.Initial() {
-		t.Fatalf("the first issue holds %q, want the opening key %q; this case rests on it holding the key open bounds yield", opener.Rank, rank.Initial())
+	if opener.Rank != openingKey(t) {
+		t.Fatalf("the first issue holds %q, want the opening key %q; this case rests on it holding the key open bounds yield", opener.Rank, openingKey(t))
 	}
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic"})
 	if err != nil {
@@ -1253,8 +1268,8 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: opener.ID, ParentID: epic.ID, CreatedBy: "tester"}); err != nil {
 		t.Fatalf("SetParent(opener under epic) error = %v", err)
 	}
-	if held := currentRanks(t, ctx, st, []model.Issue{opener})[opener.ID]; held != rank.Initial() {
-		t.Fatalf("the reparented opener holds %q, want the opening key %q; reparenting must not rewrite a rank", held, rank.Initial())
+	if held := currentRanks(t, ctx, st, []model.Issue{opener})[opener.ID]; held != openingKey(t) {
+		t.Fatalf("the reparented opener holds %q, want the opening key %q; reparenting must not rewrite a rank", held, openingKey(t))
 	}
 
 	if _, err := st.RankSet(ctx, []string{other.ID, epic.ID}); err != nil {

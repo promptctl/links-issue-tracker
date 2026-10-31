@@ -538,6 +538,27 @@ func TestAReadRefusesAStoredLoopOfEpicsByName(t *testing.T) {
 	}
 }
 
+// A blocked-by check climbs the hierarchy as it reads it, so a loop restored data
+// holds has to end the climb and not hang it, and what sits in the loop still
+// reads as inside it.
+func TestABlockedByCheckClimbsAStoredLoopOfEpics(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	st := openIssueStore(t, ctx)
+	loop := parentChain(t, ctx, st, "E", "F")
+	outside := parentChain(t, ctx, st, "Outside")[0]
+	seedParentEdge(t, ctx, st, loop[0].ID, loop[1].ID)
+
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: loop[1].ID, DstID: outside.ID, Type: model.RelBlockedBy, CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddRelation out of a stored loop error = %v", err)
+	}
+	_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: loop[0].ID, DstID: loop[1].ID, Type: model.RelBlockedBy, CreatedBy: "test"})
+	var refusal model.ValidationError
+	if !errors.As(err, &refusal) || refusal.Message != storage.SameEpicBlocksRejectionMessage {
+		t.Fatalf("AddRelation inside a stored loop error = %v, want the same-epic refusal", err)
+	}
+}
+
 // A restore lands an export as the store's rules stand now, and a loop-free
 // hierarchy is one of them: an export holding a loop of epics lands with one
 // edge of the loop cut, the landing names the cut, and the store reads after.

@@ -254,6 +254,16 @@ func Count(ctx context.Context, key string, n int) {
 	r.ev.Counts[key] = n
 }
 
+// Max records n as one of the command's counts unless a larger one stands, for
+// a command that reports a size from each of several writes and is asked for
+// the longest.
+func Max(ctx context.Context, key string, n int) {
+	r := from(ctx)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ev.Counts[key] = max(r.ev.Counts[key], n)
+}
+
 // Append adds values to the occurrences under key, after every value an
 // earlier Append gave it. An Append of no values still records the empty
 // list, so "none occurred" reads as [] and not as an absent key, which says

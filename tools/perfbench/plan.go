@@ -114,7 +114,7 @@ func invocationsFor(ps []probe, store generatedStore) []invocation {
 }
 
 // probes is the measured surface, in reading order: the two controls first,
-// then the read commands, then the one write.
+// then the read commands, then the writes.
 //
 // THE TWO CONTROLS EARN THEIR PLACE. `version` and `quickstart` never open the
 // store — the epic uses quickstart's 70ms precisely to prove that process
@@ -151,6 +151,52 @@ var probes = []probe{
 	{name: "doctor", argv: fixed("doctor"), okCodes: exits(0)},
 	{name: "workspace", argv: fixed("workspace"), okCodes: exits(0)},
 	{name: "new (write)", argv: fixed(benchWrite("perfbench write probe")...), okCodes: exits(0), mutates: true},
+	// A phase runs round-robin and records no round 0, so a write repeated alone
+	// is not the write: `dep add` finds its edge and exits 6 before the cycle
+	// check, `start` and `rank --bottom` are no-ops, and `rank set` moves its
+	// ids only the first time. So each probe below undoes the one before it, and
+	// every recorded round is the real write: an edge added past the cycle
+	// check, a ticket started through the claim gather, and two epics carried
+	// from the bottom of the top level to its top, rewriting the frame.
+	{name: "dep add", argv: inMidStore(func(m midStore) []string {
+		return []string{"dep", "add", m.dependent, "--blocked-by", m.blocker}
+	}), okCodes: exits(0), mutates: true},
+	{name: "dep rm", argv: inMidStore(func(m midStore) []string {
+		return []string{"dep", "rm", m.dependent, "--blocked-by", m.blocker}
+	}), okCodes: exits(0), mutates: true},
+	{name: "start", argv: inMidStore(func(m midStore) []string { return []string{"start", m.ticket} }), okCodes: exits(0), mutates: true},
+	{name: "done", argv: inMidStore(func(m midStore) []string { return []string{"done", m.ticket} }), okCodes: exits(0), mutates: true},
+	{name: "rank set", argv: inMidStore(func(m midStore) []string {
+		return []string{"rank", "set", m.epic, m.earlierEpic}
+	}), okCodes: exits(0), mutates: true},
+	{name: "rank --bottom", argv: inMidStore(func(m midStore) []string { return []string{"rank", m.epic, "--bottom"} }), okCodes: exits(0), mutates: true},
+	{name: "rank --bottom again", argv: inMidStore(func(m midStore) []string { return []string{"rank", m.earlierEpic, "--bottom"} }), okCodes: exits(0), mutates: true},
+}
+
+// midStore is what the write probes act on, a third of the way into a store's
+// rows: two epics, a ticket, and two tickets no edge joins yet. The generator
+// blocks a task on the one rowsPerEpic before it, so blocker sits one past that.
+type midStore struct {
+	epic, earlierEpic, ticket, dependent, blocker string
+}
+
+// inMidStore is the rule for a write that names rows: it has no invocation on a
+// store too small to hold them, as `show` has none on the empty one.
+func inMidStore(args func(midStore) []string) argvRule {
+	return func(store generatedStore) ([]string, bool) {
+		epic := max(store.rows()/rowsPerEpic/3, 1)
+		row := func(epic, at int) string { return store.ids[epic*rowsPerEpic+at] }
+		if epic*rowsPerEpic+5 >= store.rows() {
+			return nil, false
+		}
+		return args(midStore{
+			epic:        row(epic, 0),
+			earlierEpic: row(epic-1, 0),
+			ticket:      row(epic, 1),
+			dependent:   row(epic, 4),
+			blocker:     row(epic-1, 5),
+		}), true
+	}
 }
 
 // benchWrite is the write perfbench measures, titled by whoever runs it: the
@@ -370,30 +416,21 @@ const runBudget = 2 * time.Minute
 // it exists so an import wedged behind a lock is named as a hang naming the
 // step, and it must therefore hold a healthy import at every size measured.
 //
-// THE MODEL IS QUADRATIC because one write's cost grows with the store's size.
-// Measured 2026-10-23 (darwin/arm64), 2,800 rows imported as four 700-row
-// imports took 18s, 27s, 35s and 52s, against 146s as one: batching changes
-// nothing, and the n-th write costs about writeBase + writePerStoredRow * n,
-// so N rows cost N*writeBase + writePerStoredRow*N^2/2. A per-row allowance
-// fitted at 590 rows (the bound this replaces, 250ms a row) killed a healthy
-// 10,740-row import at 46m45s on ubuntu-latest (run 40037763869). The
-// constants are fitted to ubuntu-latest's own imports, where the PR gate and
-// the nightly lanes run: 700 rows in ~15s (ci.yml perf-budget), 2,800 in 188s
-// (nightly design, run 40037763869) and 10,740 in 86m04s (nightly 10x-store,
-// run 40043414613). The cost steepens past quadratic between the last two, so
-// writePerStoredRow is fitted through the largest, where the bound binds, and
-// the model runs high at the smaller sizes, the safe side for a hang detector.
-// That cost is a limit in its own right, filed as links-scale-dy46.48k; this
-// only keeps the instrument from mistaking it for a hang.
+// THE MODEL IS LINEAR because one write's cost does not grow with the store.
+// It is the nightly's one hold on that: the report's import row gates nothing,
+// so an import gone quadratic again, 74-86m at 10,740 rows on ubuntu-latest, is
+// named here as a hang at about 23m. writeCost is the most a row cost across
+// 1,000, 2,800 and 10,740 rows on darwin/arm64 at load 4-6, 29.0ms, rounded up:
+// it is not ubuntu-latest's, where writes ran about 1.3x as long before this
+// model (193s against 146s at 2,800 rows), so a healthy 10,740 rows should be
+// 6-7m there. The one figure from the runner the test holds is its 700 rows.
 func importBudget(rows int) time.Duration {
-	n := time.Duration(rows)
-	return runBudget + importSlack*(n*writeBase+writePerStoredRow*n*n/2)
+	return runBudget + importSlack*time.Duration(rows)*writeCost
 }
 
 const (
-	writeBase         = 5400 * time.Microsecond
-	writePerStoredRow = 89 * time.Microsecond
-	// importSlack is how many times the modelled cost the bound allows, room
-	// for a runner loaded harder than the one each import was measured on.
-	importSlack = 2
+	writeCost = 30 * time.Millisecond
+	// importSlack is how many times the modelled cost the bound allows: room for
+	// a loaded runner, and for writeCost being another machine's.
+	importSlack = 4
 )

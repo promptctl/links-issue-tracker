@@ -37,9 +37,9 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 func (s *Store) bulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, batchLanding, error) {
 	var applied storage.BulkApplyResult
 	var landing batchLanding
-	var heard []heardChange
+	var heard []owed
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
-		ctx = context.WithValue(ctx, batchHearingKey{}, &heard)
+		ctx = context.WithValue(ctx, hearingKey{}, &heard)
 		now, err := s.currentState(ctx, storage.ReadOutIDs(specs))
 		if err != nil {
 			return fmt.Errorf("bulk: read the issues the file was read out of: %w", err)
@@ -59,7 +59,7 @@ func (s *Store) bulkApply(ctx context.Context, prefix, actor string, specs []sto
 		applied, landing, err = s.writeBulkFile(ctx, prefix, actor, file, merged.Kept)
 		return err
 	})
-	s.hear(ctx, heard...)
+	hear(ctx, heard...)
 	return applied, landing, err
 }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -20,21 +21,46 @@ import (
 // container holds. Every rank neighbor lookup is scoped with it, which is what
 // confines a written rank to the keyspace it will actually be read in.
 //
-// A deleted container frames nothing, so the join drops those rows and an
-// orphan falls back to the top level — the same rule ancestorChain walks by,
-// spelled for the query planner. [LAW:one-source-of-truth] The two must agree
-// about what contains what; this is that rule's SQL rendering, not a second
-// rule. The expression correlates on issues.id, so it belongs only in a query
-// selecting FROM issues.
+// A deleted container frames nothing, so its edge is passed over and an orphan
+// falls back to the top level — the same rule ancestorChain walks by, spelled
+// for the query planner. [LAW:one-source-of-truth] The two must agree about what
+// contains what; this is that rule's SQL rendering, not a second rule. The
+// expression correlates on issues.id, so it belongs only in a query selecting
+// FROM issues.
+//
+// THE SPELLING CARRIES THE SPEED, AND NOTHING ELSE KEEPS IT. Parent liveness is
+// a scalar subquery because Dolt costs that at about 7us a row. A `JOIN issues`
+// here plans as a merge join on every row, so a read scoped by this column is
+// quadratic in the store: 32s at 10,740 rows. `EXISTS` and a LOOKUP_JOIN hint
+// inside the subquery are as slow, and EXPLAIN PLAN prints a subquery as text,
+// so no plan shows it. TestFrameColumnStaysLinear is what fails if a rewrite or
+// a Dolt upgrade loses it. The scalar reads a missing parent row as live, where
+// the join did not, and relations_ibfk_2 forbids that row.
 //
 // A child restored data gives two parents is framed by the lower parent id,
 // the rule storage.RankAncestry lists it by, so a rank move and the listing
 // agree on where it sits until doctor's finding is repaired.
 // [LAW:one-source-of-truth]
 const frameColumn = `COALESCE((SELECT r.dst_id FROM relations r
-		JOIN issues p ON p.id = r.dst_id
-		WHERE r.src_id = issues.id AND r.type = 'parent-child' AND p.deleted_at IS NULL
+		WHERE r.src_id = issues.id AND r.type = 'parent-child'
+		AND (SELECT p.deleted_at FROM issues p WHERE p.id = r.dst_id) IS NULL
 		ORDER BY r.dst_id LIMIT 1), '')`
+
+// frameRowsQuery selects frame f's ranked rows; the caller appends the order.
+// Membership is frameColumn's in every frame. A container's rows are reached
+// from its parent edges, so they cost the frame's size: unhinted the planner
+// merge-joins relations with issues, which costs the store's. The top level has
+// no edges, so its rows are found by walking the keyspace.
+func frameRowsQuery(f storage.Frame) (string, []any) {
+	if f == storage.TopLevel {
+		return fmt.Sprintf(`SELECT issues.id, issues.item_rank FROM issues
+		WHERE issues.deleted_at IS NULL AND issues.item_rank != '' AND %s = ?`, frameColumn), []any{string(f)}
+	}
+	return fmt.Sprintf(`SELECT /*+ JOIN_ORDER(member, issues) LOOKUP_JOIN(member, issues) */ issues.id, issues.item_rank
+		FROM relations member JOIN issues ON issues.id = member.src_id
+		WHERE member.dst_id = ? AND member.type = 'parent-child'
+		AND issues.deleted_at IS NULL AND issues.item_rank != '' AND %s = ?`, frameColumn), []any{string(f), string(f)}
+}
 
 // loadRankAncestry reads every framing edge in the workspace, with the key its
 // parent holds, for a listing to order by tree order. Which edges frame is
@@ -109,6 +135,12 @@ var (
 	}
 )
 
+// outsideQuery reads the two keys nearest an anchor on this edge's far side.
+func (e rankEdge) outsideQuery() string {
+	return fmt.Sprintf(`SELECT id, item_rank FROM issues
+		WHERE deleted_at IS NULL AND item_rank != '' AND %s LIMIT 2`, e.outside)
+}
+
 // roomBesideTx is the pair a new key sits between when it lands beside
 // anchorRank at this edge: the anchor itself, and the nearest key the WHOLE
 // workspace holds on the anchor's far side.
@@ -153,11 +185,14 @@ func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, vaca
 	if anchorRank == "" {
 		return "", "", fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)
 	}
-	query := fmt.Sprintf(`SELECT item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != '' AND id != ? AND %s LIMIT 1`, e.outside)
-	outsideRank, err := nearestRank(ctx, tx, query, vacating, anchorRank)
+	nearest, err := rankRows(ctx, tx, e.outsideQuery(), anchorRank)
 	if err != nil {
 		return "", "", fmt.Errorf("query the key outside the %s: %w", e.name, err)
+	}
+	// vacating holds at most one of the two nearest keys, so the other decides.
+	outsideRank := ""
+	if at := slices.IndexFunc(nearest, func(r rankedIssue) bool { return r.id != vacating }); at >= 0 {
+		outsideRank = nearest[at].rank
 	}
 	lower, upper = e.beside(anchorRank, outsideRank)
 	return lower, upper, nil
@@ -201,8 +236,8 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (low
 	// position then falls back to the far side of the workspace's own last key.
 	//
 	// That read comes back empty only when nothing at all is ranked, which is
-	// the one case where open bounds are true and rank.Midpoint's answer —
-	// rank.Initial, the first key in a workspace — belongs to nobody.
+	// the one case where open bounds are true and rank.Midpoint's answer, the
+	// first key in a workspace, belongs to nobody.
 	// [LAW:no-silent-failure]
 	lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
 	if err != nil {
@@ -220,7 +255,7 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (low
 // A frame with nothing ranked in it offers no sibling to sit beside, and its
 // two ends are one position anyway — but the key written still has to be
 // distinct from every key that exists, and the midpoint of the whole keyspace
-// is not: it is rank.Initial, which the workspace's first issue already holds.
+// is not: it is the key the workspace's first issue already holds.
 // So that case goes to firstInFrameBoundsTx, the same answer rankBeyondTx gives
 // a frame whose edge reads empty, because the two mean the same thing: nothing
 // is ranked here yet. [LAW:one-source-of-truth]
@@ -318,10 +353,9 @@ func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame,
 // ranked in it — a fact about the frame, not a failure, and the one input
 // rankBeyondTx needs to seed a fresh frame.
 func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (holderID, holderRank string, err error) {
-	query := fmt.Sprintf(`SELECT id, item_rank FROM issues
-		WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
-		ORDER BY item_rank %s LIMIT 1`, frameColumn, edge.order)
-	err = tx.QueryRowContext(ctx, query, string(f)).Scan(&holderID, &holderRank)
+	rows, args := frameRowsQuery(f)
+	query := rows + fmt.Sprintf(` ORDER BY issues.item_rank %s LIMIT 1`, edge.order)
+	err = tx.QueryRowContext(ctx, query, args...).Scan(&holderID, &holderRank)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", nil
 	}
@@ -643,9 +677,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// Every representative is a frame-mate by construction, so this is the
 		// whole keyspace the order is read in. Ties fall to id, as they do in
 		// every listing, so a slot's place here is its place on screen.
-		slots, err := rankRows(ctx, tx, fmt.Sprintf(`SELECT id, item_rank FROM issues
-			WHERE deleted_at IS NULL AND item_rank != '' AND %s = ?
-			ORDER BY item_rank ASC, id ASC`, frameColumn), string(f))
+		rows, args := frameRowsQuery(f)
+		slots, err := rankRows(ctx, tx, rows+` ORDER BY issues.item_rank ASC, issues.id ASC`, args...)
 		if err != nil {
 			return storage.RankSetResult{}, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
 		}
@@ -730,10 +763,14 @@ type rankWrite struct {
 func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now string) error {
 	byID := make(map[string]rankWrite, len(writes))
 	ids := make([]string, len(writes))
+	longest := 0
 	for i, w := range writes {
 		byID[w.id] = w
 		ids[i] = w.id
+		longest = max(longest, len(w.rank))
 	}
+	observer := rankObserverFrom(ctx)
+	hear(ctx, func() { observer.Wrote(longest) })
 	stampOf := map[bool]any{true: now, false: nil}
 	for _, chunk := range idChunks(ids) {
 		keys := make([]any, 0, 2*len(chunk))
@@ -881,32 +918,36 @@ func anchorRankTx(ctx context.Context, tx *sql.Tx, anchorID string) (string, err
 
 // rankBetweenTx returns a key strictly between the pair of keys bounds reads.
 //
-// Two keys this store wrote can leave no room between them: spacing writes
-// ranks at whatever length its window needs, so a rank can sit next to itself
-// extended by zeros, and rank.Midpoint refuses that pair with rank.ErrNoRoom.
-// The move asked for is still coherent, so the pair is made room for rather
-// than refused: the ranks around it are respaced, which never leaves a pair
-// sharing a significant part, and the pair is read again, because respacing
-// rewrote both keys. [LAW:no-silent-failure] A second refusal is returned, not
-// retried.
+// Two keys can leave no room between them: a rank can sit next to itself
+// extended by zeros, a pair can have nothing inside rank.MaxLength, and a corner
+// can be too deep to step out of, and rank.Midpoint refuses each with
+// rank.ErrNoRoom. The move asked for is still coherent, so the pair is made room
+// for rather than refused: the ranks around it are respaced, which leaves room
+// by construction, and the pair is read again, because respacing rewrote both
+// keys. [LAW:no-silent-failure] A second refusal is returned, not retried.
 func rankBetweenTx(ctx context.Context, tx *sql.Tx, bounds func() (lower, upper string, err error)) (string, error) {
 	lower, upper, err := bounds()
 	if err != nil {
 		return "", err
 	}
 	between, err := rank.Midpoint(lower, upper)
-	if !errors.Is(err, rank.ErrNoRoom) {
-		return between, err
+	if errors.Is(err, rank.ErrNoRoom) {
+		// The pair sorts adjacent, so the window around either bound holds both,
+		// and an open end refuses only past a corner too deep to step out of.
+		if err := smoothRanksTx(ctx, tx, cmp.Or(upper, lower)); err != nil {
+			return "", fmt.Errorf("make room between %q and %q: %w", lower, upper, err)
+		}
+		if lower, upper, err = bounds(); err != nil {
+			return "", err
+		}
+		between, err = rank.Midpoint(lower, upper)
 	}
-	// ErrNoRoom needs a non-empty upper bound, and the pair sorts adjacent, so
-	// the window around upper holds both.
-	if err := smoothRanksTx(ctx, tx, upper); err != nil {
-		return "", fmt.Errorf("make room between %q and %q: %w", lower, upper, err)
-	}
-	if lower, upper, err = bounds(); err != nil {
+	if err != nil {
 		return "", err
 	}
-	return rank.Midpoint(lower, upper)
+	observer := rankObserverFrom(ctx)
+	hear(ctx, func() { observer.Wrote(len(between)) })
+	return between, nil
 }
 
 // RankAbove moves an issue to rank immediately above the target issue,
@@ -987,112 +1028,115 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 	})
 }
 
-// smoothRanksIfNeededTx checks whether the given rank string has grown past the
-// smoothing threshold and, if so, re-spaces the window around it.
+// smoothRanksIfNeededTx re-spaces the window around triggerRank when writing it
+// spent its spot's gaps. An edge key never moves, so a neighbour with nothing
+// past it is not one a respace could move.
 func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
-	if len(triggerRank) < rank.SmoothingThreshold {
+	if len(triggerRank) < rank.Ceiling(triggerRank) {
+		return nil
+	}
+	below, err := rankRows(ctx, tx, belowRankQuery, triggerRank, 2)
+	if err != nil {
+		return fmt.Errorf("smooth: neighbours below: %w", err)
+	}
+	above, err := rankRows(ctx, tx, aboveRankQuery, triggerRank, 2)
+	if err != nil {
+		return fmt.Errorf("smooth: neighbours above: %w", err)
+	}
+	var movable []string
+	for _, side := range [][]rankedIssue{below, above} {
+		if len(side) == 2 {
+			movable = append(movable, side[0].rank)
+		}
+	}
+	if !rank.Crowded(triggerRank, movable...) {
 		return nil
 	}
 	return smoothRanksTx(ctx, tx, triggerRank)
 }
 
-// smoothRanksTx re-spaces a local window of items around the given rank, at
-// O(SmoothingWindow) cost instead of a full O(n) rebalance.
-// Ranks sharing a significant part — one being the other extended by zeros —
-// pad to the same value and so leave no room between them, and they sort
-// contiguously. The window therefore swallows the whole run its ends sit in, so
-// a run of zero-extensions widens it past SmoothingWindow, and each bound is
-// taken from outside that run: below the run's own least rank, and at or above
-// the least rank sorting past every member of the top run. Bounds picked that
-// way can never share a significant part, so the primitive always has room.
-// The window keeps its order — rows sharing a key in id order, as every
-// listing shows them — and its new ranks are longer than both bounds, so a
-// window bounded by long ranks comes out long. An unranked row is never in it:
-// the empty key sorts below every other, and a respace that swept it up would
-// rank an issue nobody asked to rank.
+const (
+	belowRankQuery = `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank < ? ORDER BY item_rank DESC LIMIT ?`
+	aboveRankQuery = `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?`
+	atRankQuery    = `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = ?`
+)
+
+// rankWindowTx reads the rows within k keys of triggerRank on each side. Each
+// side's farthest key stays outside as the bound, clamped to the first or last
+// key, and rows tied with a bound stay outside with it. A side is open only
+// when the trigger is itself the edge. rows is what the window moves, and every
+// ranked row once neither side has a key left to widen to.
+func rankWindowTx(ctx context.Context, tx *sql.Tx, triggerRank string, k int) (window rank.Window, rows, whole []rankedIssue, err error) {
+	below, err := rankRows(ctx, tx, belowRankQuery, triggerRank, k)
+	if err != nil {
+		return window, nil, nil, fmt.Errorf("smooth: below: %w", err)
+	}
+	above, err := rankRows(ctx, tx, aboveRankQuery, triggerRank, k)
+	if err != nil {
+		return window, nil, nil, fmt.Errorf("smooth: above: %w", err)
+	}
+	rows, err = rankRows(ctx, tx, atRankQuery, triggerRank)
+	if err != nil {
+		return window, nil, nil, fmt.Errorf("smooth: at: %w", err)
+	}
+	if len(below) < k && len(above) < k {
+		whole = slices.Concat(below, rows, above)
+		slices.SortFunc(whole, compareRankedIssues)
+		window.Whole = len(whole)
+	}
+	for _, side := range []struct {
+		rows  []rankedIssue
+		bound *string
+	}{{below, &window.Lower}, {above, &window.Upper}} {
+		if len(side.rows) == 0 {
+			continue
+		}
+		*side.bound = side.rows[len(side.rows)-1].rank
+		rows = append(rows, slices.DeleteFunc(slices.Clone(side.rows), func(r rankedIssue) bool { return r.rank == *side.bound })...)
+	}
+	slices.SortFunc(rows, compareRankedIssues)
+	window.Rows = len(rows)
+	return window, rows, whole, nil
+}
+
+// smoothRanksTx re-spaces the window rank.Respace settles on around triggerRank.
+// The window keeps its order, rows sharing a key in id order as every listing
+// shows them. An unranked row is never in it: the empty key sorts below every
+// other, and a respace that swept it up would rank an issue nobody asked to
+// rank.
 func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
-	half := rank.SmoothingWindow / 2
-
-	// Collect the window: up to half items at or below the trigger, plus
-	// up to half items above it.
-	below, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?`,
-		triggerRank, half)
+	var rows, every []rankedIssue
+	keys, whole, err := rank.Respace(triggerRank, func(k int) (rank.Window, error) {
+		var window rank.Window
+		var err error
+		window, rows, every, err = rankWindowTx(ctx, tx, triggerRank, k)
+		return window, err
+	})
 	if err != nil {
-		return fmt.Errorf("smooth: below: %w", err)
+		return fmt.Errorf("smooth: %w", err)
 	}
-	slices.Reverse(below)
-
-	above, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC, id ASC LIMIT ?`,
-		triggerRank, half)
-	if err != nil {
-		return fmt.Errorf("smooth: above: %w", err)
+	if whole {
+		rows = every
 	}
-	window := slices.Concat(below, above)
-
-	// A lone rank is respaced too: rankBetweenTx makes room past an all-zero
-	// rank that may be the only ranked row, and moving it is the room.
-	if len(window) == 0 {
-		return nil
-	}
-
-	// [LAW:one-source-of-truth] rank.Significant is the definition of room, as in
-	// anchorRun, so the window is widened by it rather than by raw adjacency.
-	// runFloor is the least rank sharing the window's bottom significant part and
-	// runCeiling the least rank sorting above every rank sharing its top one, so
-	// each bound below is addressed directly rather than scanned for.
-	runFloor := rank.Significant(window[0].rank)
-	runCeiling := rank.Significant(window[len(window)-1].rank) + "1"
-
-	lowerRun, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC`,
-		runFloor, window[0].rank)
-	if err != nil {
-		return fmt.Errorf("smooth: lower run: %w", err)
-	}
-	upperRun, err := rankRows(ctx, tx,
-		`SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC, id ASC`,
-		window[len(window)-1].rank, runCeiling)
-	if err != nil {
-		return fmt.Errorf("smooth: upper run: %w", err)
-	}
-	window = slices.Concat(lowerRun, window, upperRun)
-
-	lowerBound, err := nearestRank(ctx, tx,
-		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank < ? ORDER BY item_rank DESC LIMIT 1`,
-		runFloor)
-	if err != nil {
-		return fmt.Errorf("smooth: lower bound: %w", err)
-	}
-	upperBound, err := nearestRank(ctx, tx,
-		`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank >= ? ORDER BY item_rank ASC LIMIT 1`,
-		runCeiling)
-	if err != nil {
-		return fmt.Errorf("smooth: upper bound: %w", err)
-	}
-
-	newRanks, err := rank.SpacedRanksBetween(lowerBound, upperBound, len(window))
-	if err != nil {
-		return fmt.Errorf("smooth: compute ranks: %w", err)
-	}
-
 	// A respace is not an update to anyone, so no write in it is touched.
 	var writes []rankWrite
-	for i, item := range window {
-		if newRanks[i] != item.rank {
-			writes = append(writes, rankWrite{id: item.id, rank: newRanks[i]})
+	for i, item := range rows {
+		if keys[i] != item.rank {
+			writes = append(writes, rankWrite{id: item.id, rank: keys[i]})
 		}
 	}
 	if err := writeRanksTx(ctx, tx, writes, ""); err != nil {
 		return fmt.Errorf("smooth: %w", err)
 	}
+	respace := Respace{Rows: len(rows), Rewritten: len(writes), LongestKey: longestKey(keys), Ceiling: rank.Ceiling(triggerRank)}
+	observer := rankObserverFrom(ctx)
+	hear(ctx, func() { observer.Respaced(respace) })
 	return nil
 }
 
 // rankRows runs a rank query and returns every row it matches, in the order
-// the query asks for. Every caller bounds its own query — by range or by LIMIT
-// — so the rows read stay proportional to the window, never to the backlog.
+// the query asks for. A respace's reads bound themselves by LIMIT and cost the
+// window, and a rank set's reads the frame it reorders.
 func rankRows(ctx context.Context, q rowQueryer, query string, args ...any) ([]rankedIssue, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -1208,24 +1252,30 @@ func blocksPrecedenceAdj(edges []storage.DependencyEdge) map[string][]string {
 // blocksPrecedes reports whether `from` already precedes `to` through a chain
 // of blocked-by edges — i.e. existing relations already force `from` to be ranked
 // ahead of `to`. Adding a `to`-precedes-`from` edge on top of that would close
-// a cycle.
-func blocksPrecedes(adj map[string][]string, from, to string) bool {
+// a cycle. dependents names who an issue holds back, so the walk reads what it
+// reaches and nothing else in the store.
+func blocksPrecedes(dependents func(string) ([]string, error), from, to string) (bool, error) {
 	seen := make(map[string]struct{})
-	var walk func(string) bool
-	walk = func(n string) bool {
-		for _, next := range adj[n] {
+	var walk func(string) (bool, error)
+	walk = func(n string) (bool, error) {
+		nexts, err := dependents(n)
+		if err != nil {
+			return false, err
+		}
+		for _, next := range nexts {
 			if next == to {
-				return true
+				return true, nil
 			}
 			if _, ok := seen[next]; ok {
 				continue
 			}
 			seen[next] = struct{}{}
-			if walk(next) {
-				return true
+			reached, err := walk(next)
+			if err != nil || reached {
+				return reached, err
 			}
 		}
-		return false
+		return false, nil
 	}
 	return walk(from)
 }

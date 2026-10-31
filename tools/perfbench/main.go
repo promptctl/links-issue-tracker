@@ -187,7 +187,7 @@ func measureSize(bin litBinary, workDir string, sz size, env []string, lim limit
 		return result{}, gateError{}, err
 	}
 	store := members[0]
-	// Bytes before probes, because one probe writes: this is the size of
+	// Bytes before probes, because the write probes change it: this is the size of
 	// the store the read timings below describe, and of the fleet beside it.
 	bytes, err := storeBytes(store.databasePath)
 	if err != nil {

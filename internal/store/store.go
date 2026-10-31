@@ -1525,39 +1525,33 @@ func (s *Store) Apply(ctx context.Context, id string, plan storage.ChangePlan) (
 	return applied, nil
 }
 
-// heardChange is one change an observer is owed.
-type heardChange struct {
-	change storage.Change
-	issue  model.Issue
-}
+// owed is something an observer is owed once the write behind it stands.
+type owed func()
 
-// batchHearingKey marks a context running inside withBatch; its value is the
-// queue of changes the batch's observers are owed.
-type batchHearingKey struct{}
+// hearingKey marks a context whose writes may yet not stand; its value is the
+// queue of what their observers are owed.
+type hearingKey struct{}
 
 // notify is the one place a change reaches the observers.
 func (s *Store) notify(ctx context.Context, c storage.Change, issue model.Issue) {
-	s.hear(ctx, heardChange{c, issue})
+	hear(ctx, func() {
+		for _, observe := range s.observers {
+			observe(c, issue)
+		}
+	})
 }
 
-// hear owes the observers heard. Inside a batch it is queued, and the batch
-// delivers the queue only for writes that stand, once its lock is released, so
-// a batch that did not land is heard by nobody and an undo around a batch
-// hands its queue to the undo. [LAW:single-enforcer]
-func (s *Store) hear(ctx context.Context, heard ...heardChange) {
-	if queue, ok := ctx.Value(batchHearingKey{}).(*[]heardChange); ok {
+// hear owes the observers what happened. Inside a mutation's attempt or a batch
+// it is queued, and each hands its queue on only for writes that stand: an
+// attempt once its tx commits, a batch once its lock is released, so a write
+// that did not land is heard by nobody. [LAW:single-enforcer]
+func hear(ctx context.Context, heard ...owed) {
+	if queue, ok := ctx.Value(hearingKey{}).(*[]owed); ok {
 		*queue = append(*queue, heard...)
 		return
 	}
-	s.deliver(heard)
-}
-
-// deliver tells every observer of each change, in order.
-func (s *Store) deliver(heard []heardChange) {
 	for _, h := range heard {
-		for _, observe := range s.observers {
-			observe(h.change, h.issue)
-		}
+		h()
 	}
 }
 

@@ -126,13 +126,15 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 					return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
 				}
 				defer tx.Rollback()
-				if err := fn(ctx, tx); err != nil {
+				var heard []owed
+				if err := fn(context.WithValue(ctx, hearingKey{}, &heard), tx); err != nil {
 					return err
 				}
 				if err := tx.Commit(); err != nil {
 					return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
 				}
 				staged = true
+				hear(ctx, heard...)
 			}
 			return s.commitWorkingSetOnce(ctx, stamp)
 		}, s.reconnect)

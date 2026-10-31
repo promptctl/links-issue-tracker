@@ -2,6 +2,7 @@ package store
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -200,6 +201,9 @@ func rankRewrites(sequence []placement) ([]rankRewrite, error) {
 		}
 		movers := sequence[start:at]
 		newRanks, err := rank.SpacedRanksBetween(lower, upper, len(movers))
+		if errors.Is(err, rank.ErrNoRoom) {
+			return rankRewrites(withoutBound(sequence, start, at))
+		}
 		if err != nil {
 			return nil, fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)
 		}
@@ -209,6 +213,20 @@ func rankRewrites(sequence []placement) ([]rankRewrite, error) {
 		lower, start = upper, at+1
 	}
 	return rewrites, nil
+}
+
+// withoutBound is sequence with one anchor bounding the run start..at made a
+// mover: a gap with no room inside rank.MaxLength is not one to space into, so
+// the run widens as a respace's window does. With no anchors left the run is
+// the whole sequence between open ends, which always has room.
+func withoutBound(sequence []placement, start, at int) []placement {
+	wider := slices.Clone(sequence)
+	bound := at
+	if at == len(sequence) {
+		bound = start - 1
+	}
+	wider[bound].anchored = false
+	return wider
 }
 
 // anchorRun anchors, in target, a longest subsequence whose stored ranks

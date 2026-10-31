@@ -66,17 +66,24 @@ func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 // logrus line on stderr Dolt writes by default. A third puts there the store's
 // lock waits and LOCK holds: every acquisition that found its lock held, and
 // every write engine's hold of Dolt's LOCK with what it told the writers
-// behind it. Each key starts as [] so an invocation that met none says so,
-// not nothing. [LAW:nothing-unseen] [LAW:single-enforcer]
+// behind it. A fourth puts there what a write that stood did to rank keys: each
+// respace, and the longest key written. Each key starts empty so an invocation
+// that met none says so, not nothing. [LAW:nothing-unseen] [LAW:single-enforcer]
 func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
 	event := telemetry.With(ctx, recorder)
 	telemetry.Append(event, "git.cancels")
 	telemetry.Append(event, "dolt.journal_warnings")
 	telemetry.Append(event, "lock.waits")
 	telemetry.Append(event, "lock.holds")
+	telemetry.Append(event, "rank.respaces")
+	telemetry.Max(event, "rank.longest_key", 0)
 	ctx = store.WithLockObserver(event, store.LockObserver{
 		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
 		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
+	})
+	ctx = store.WithRankObserver(ctx, store.RankObserver{
+		Wrote:    func(longestKey int) { telemetry.Max(event, "rank.longest_key", longestKey) },
+		Respaced: func(respace store.Respace) { telemetry.Append(event, "rank.respaces", rankRespaceValue(respace)) },
 	})
 	ctx = nbs.WithJournalWarningObserver(ctx, func(warning nbs.JournalWarning) {
 		telemetry.Append(event, "dolt.journal_warnings", journalWarningValue(warning))
@@ -84,6 +91,16 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
 		telemetry.Append(event, "git.cancels", gitCancelValue(cancelled))
 	})
+}
+
+// rankRespaceValue is one rank.respaces occurrence.
+func rankRespaceValue(r store.Respace) map[string]any {
+	return map[string]any{
+		"rank.respace.rows":        r.Rows,
+		"rank.respace.rewritten":   r.Rewritten,
+		"rank.respace.longest_key": r.LongestKey,
+		"rank.respace.ceiling":     r.Ceiling,
+	}
 }
 
 // lockWaitValue is one lock.waits occurrence.

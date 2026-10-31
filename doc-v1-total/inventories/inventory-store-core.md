@@ -274,9 +274,9 @@ Evidence:
 `withStampedMutation` (`commit_lock.go`) runs, under `withCommitLock`, inside `retryTransientGCContention`:
 1. If `!staged`: `s.db.BeginTx(ctx, nil)` — failure → `fmt.Errorf("begin %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
 2. `defer tx.Rollback()` (`commit_lock.go`);
-3. `fn(ctx, tx)` — its error is returned verbatim (`commit_lock.go`);
+3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — its error is returned verbatim (`commit_lock.go`);
 4. `tx.Commit()` — failure → `fmt.Errorf("commit %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
-5. `staged = true` (`commit_lock.go`);
+5. `staged = true`, then `hear(ctx, heard...)`, so an attempt that rolled back is heard by nobody (`commit_lock.go`);
 6. `s.commitWorkingSetOnce(ctx, stamp)` (`commit_lock.go`).
 
 The `staged` flag is the phase marker: a retry after a successful `tx.Commit` resumes at the DOLT_COMMIT step and does **not** re-run `fn` (`commit_lock.go`).
@@ -445,7 +445,7 @@ Evidence: id shape `^test-renderer-[0-9a-z]{3,8}$` (`store_test.go`); prefix `"R
 
 #### 4.2 Rank placement
 
-`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank, "")`, which pairs it with the nearest rank the **whole workspace** holds on its far side; a create vacates no key, so it passes `""`, which no issue id is, and the read's `id != ?` excludes nothing. A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)`, and `filingBoundsTx` routes the case to `firstInFrameBoundsTx(ctx, tx, f)` instead. For a frame other than `storage.TopLevel` that reads the rank of the issue `f` names — `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, error → `fmt.Errorf("query the rank of frame %q: %w", f, err)` — and a non-empty result returns `bottomEdge.roomBesideTx(ctx, tx, containerRank, "")`, so the frame's first issue lands just past its container's own key. Everything else — the top level, which names no containing issue, and a container carrying no rank of its own — falls through to one shared arm at the end: `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)`, then `("", "")` when that read is empty, otherwise `bottomEdge.roomBesideTx(ctx, tx, lastRank, "")`. That workspace read excludes nothing: it comes back empty only when nothing at all is ranked, the one case where open bounds hold and `rank.Initial()` ("V") is a key no issue holds.
+`nextRankForPlacement(ctx, tx, p storage.RankPlacement, f storage.Frame) (string, error)` (`store.go`): `edgeFor(p)` resolves the end — `storage.RankTop` → `topEdge`; `storage.RankBottom` → `bottomEdge`; anything else → `fmt.Errorf("unknown rank placement: %d", p)` (`internal/store/ranking.go`) — then `rankBetweenTx` returns a key between the bounds `edge.filingBoundsTx(ctx, tx, f)` reads (`internal/store/ranking.go`). `filingBoundsTx` reads that end's filing rank — frame `f`'s leading rank for the top (`frameEdgeRankTx`), the whole workspace's last rank for the bottom (`workspaceEdgeRankTx`) — and hands it to `e.roomBesideTx(ctx, tx, anchorRank, "")`, which pairs it with the nearest rank the **whole workspace** holds on its far side; a create vacates no key, so it passes `""`, which no issue id is, and the read's `id != ?` excludes nothing. A create at the top therefore takes the midpoint between the frame's leading rank and the nearest rank below it anywhere in the workspace; with no rank below it that read comes back `""` and the lower bound is open. An **empty** filing rank — a frame with nothing ranked in it — never reaches that read: `roomBesideTx` refuses an empty anchor outright with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)`, and `filingBoundsTx` routes the case to `firstInFrameBoundsTx(ctx, tx, f)` instead. For a frame other than `storage.TopLevel` that reads the rank of the issue `f` names — `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, error → `fmt.Errorf("query the rank of frame %q: %w", f, err)` — and a non-empty result returns `bottomEdge.roomBesideTx(ctx, tx, containerRank, "")`, so the frame's first issue lands just past its container's own key. Everything else — the top level, which names no containing issue, and a container carrying no rank of its own — falls through to one shared arm at the end: `workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)`, then `("", "")` when that read is empty, otherwise `bottomEdge.roomBesideTx(ctx, tx, lastRank, "")`. That workspace read excludes nothing: it comes back empty only when nothing at all is ranked, the one case where open bounds hold and `"V"` is a key no issue holds.
 
 The **zero value** of `storage.RankPlacement` behaves as bottom/append: consecutive default creates keep authoring order, and an explicit `RankTop` create sorts ahead of them (`store_test.go`).
 
@@ -947,7 +947,6 @@ Called on every write open (`store.go`) and by the bootstrap (`store.go`).
 | `insertRelationTx` / `bucketRelations` / `relatedFrom` / `siblingsOf` | `relations.go` | `store.go` |
 | `smoothRanksIfNeededTx` | `ranking.go` | `store.go` |
 | `deleteCommentTx` | `row_deletes.go` | `store.go` |
-| `rank.Initial/After/Before` | `internal/rank` | `store.go` |
 
 ---
 
@@ -1591,8 +1590,8 @@ label `"backfill legacy issue topics"`.
 - Zero unranked rows → `(false, nil)`.
 - `guard.ensure` error → `"ensureIssueRanks: %w"`.
 - `BeginTx` error → `"ensureIssueRanks: begin tx: %w"`; deferred rollback.
-- Seed: `SELECT MAX(item_rank) FROM issues WHERE item_rank != ''`; error → `"ensureIssueRanks: read max existing rank: %w"`. If a max exists and is non-empty, `current = rank.After(max)`, else `current = rank.Initial()`.
-- Prepared `UPDATE issues SET item_rank = ? WHERE id = ?`; prepare error → `"ensureIssueRanks: prepare: %w"`; per-row exec error → `"ensureIssueRanks: update %s: %w"`; `current = rank.After(current)` after each.
+- Seed: `SELECT MAX(item_rank) FROM issues WHERE item_rank != ''`; error → `"ensureIssueRanks: read max existing rank: %w"`. `rank.SpacedRanksBetween(max, "", len(ids))`, an open keyspace when no key exists; error → `"ensureIssueRanks: space %d rank(s): %w"`.
+- Prepared `UPDATE issues SET item_rank = ? WHERE id = ?`; prepare error → `"ensureIssueRanks: prepare: %w"`; per-row exec error → `"ensureIssueRanks: update %s: %w"`.
 - Commit error → `"ensureIssueRanks: commit tx: %w"`; success `(true, nil)`.
 
 ### 5.9 `resetPrioritiesToNormal`
@@ -2694,7 +2693,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
    - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `issueTypeTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
    - `issueTypeTx` (`relations.go`) is the dst's existence proof and its type in one read (`SELECT issue_type FROM issues WHERE id = ?`, `ErrNoRows` → `storage.NotFoundError{Entity: "issue"}`, other errors → `fmt.Errorf("read issue type: %w", err)`); then `rejectHeldRelationTx` (see Duplicate handling below); then `storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType)` (`internal/storage/containment.go`, shared with the memory engine): for `parent-child` only, `storage.RejectParentThatIsNotAContainer` → `model.ValidationError` for a parent that is not an epic; other types pass.
-   - If type is `blocked-by`: `loadEpicTree` (parent edges whose parent is an epic, each with its child's type; load error → `fmt.Errorf("blocks hierarchy check: %w", err)`) and `storage.RejectBlocksWithinEpic(tree, rel.SrcID, rel.DstID)` — either endpoint inside the other's epic at any depth, climbing only through epic parents, or two distinct non-container issues directly under one epic → `model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}` (`internal/storage/edges.go`; the memory engine calls the same function, pinned by conformance cases `blocks_never_runs_along_the_hierarchy` and `blocks_never_orders_two_leaves_of_one_epic`); then `rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)`, so an edge both inside one epic and closing a cycle gets the same-epic message.
+   - If type is `blocked-by`: `epicTreeAbove(ctx, tx, rel.SrcID, rel.DstID)` (every parent edge to an epic that a climb from either endpoint can take, each with its child's type, one read per issue it places, a parent loop ending the climb at the first issue already placed; load error → `fmt.Errorf("blocks hierarchy check: %w", err)`) and `storage.RejectBlocksWithinEpic(tree, rel.SrcID, rel.DstID)` — either endpoint inside the other's epic at any depth, climbing only through epic parents, or two distinct non-container issues directly under one epic → `model.ValidationError{Message: storage.SameEpicBlocksRejectionMessage}` (`internal/storage/edges.go`; the memory engine calls the same function, pinned by conformance cases `blocks_never_runs_along_the_hierarchy` and `blocks_never_orders_two_leaves_of_one_epic`); then `rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID)`, so an edge both inside one epic and closing a cycle gets the same-epic message.
    - If `rel.Type.SingleValuedFromSrc()` (parent-child only): `setSingleValuedEdgeTx`; otherwise `insertRelationTx`.
 5. Returns the constructed `model.Relation` (with canonical endpoints and the pre-tx timestamp) on success.
 
@@ -2728,8 +2727,17 @@ subject string `fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.ki
 
 `rejectBlocksCycle(ctx, tx, dependent, dependency)` — `internal/store/relations.go`:
 - Self-edge: `dependent == dependency` → `model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}`.
-- Loads every live blocked-by edge with `loadBlocksEdges` (see §5.9); load error → `fmt.Errorf("blocks cycle check: %w", err)`.
-- `blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency)` true → `model.ValidationError` with text:
+- `blocksPrecedes(dependents, dependent, dependency)` walks forward from `dependent`, reading each issue's dependents with `dependentsOfTx` on the tx, so the check costs the issues the walk reaches and not the store; read error → `fmt.Errorf("blocked-by cycle check: %w", err)`.
+- `dependentsOfTx(ctx, tx, issueID)` (`relations.go`) states `loadBlocksEdges`'s rule (see §5.9), both endpoints live, for one issue:
+  ```sql
+  SELECT /*+ JOIN_ORDER(r, src, dst) LOOKUP_JOIN(r, src) LOOKUP_JOIN(src, dst) */ r.src_id FROM relations r
+  JOIN issues src ON src.id = r.src_id
+  JOIN issues dst ON dst.id = r.dst_id
+  WHERE r.dst_id = ? AND r.type = 'blocked-by'
+  AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
+  ```
+  Errors: `"query dependents of %s: %w"`, `"scan dependent of %s: %w"`, `"dependent rows of %s: %w"`.
+- A reached `dependency` → `model.ValidationError` with text:
   `"blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order"` with args `(dependent, dependency, dependency, dependent)`.
 
 Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `internal/store/store_test.go`; `TestAddRelationRejectsTransitiveBlocksCycle` (A→B, B→C, C→A rejected) —; `TestAddRelationRejectsSelfBlock` —.
@@ -2822,43 +2830,45 @@ Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7)
 - `alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"` — `internal/rank/rank.go` (base-62, digits then uppercase then lowercase, so ASCII order equals alphabet order).
 - `base = len(alphabet)` = 62 — `internal/rank/rank.go`.
 - `charIndex [256]int` maps byte→ordinal, `-1` for non-members, initialized in `init()` — `internal/rank/rank.go`.
+- `MaxLength = 190` — `internal/rank/rank.go`.
 - `SmoothingThreshold = 8` — `internal/rank/rank.go`.
 - `SmoothingWindow = 32` — `internal/rank/rank.go`.
-- `minGap = 16` (local const inside `spacedRanks`) — `internal/rank/rank.go`.
+- `MaxRespace = 256` — `internal/rank/rank.go`.
+- `spacingGap = 16` — `internal/rank/rank.go`.
+- `stepLength = 4` — `internal/rank/rank.go`.
 - The empty string is the "unranked" sentinel: `Valid("")` is false — `internal/rank/rank.go`. Every rank query in the store excludes `item_rank != ''`.
 
-`Initial()` returns `string(alphabet[base/2])` = `"V"` — `internal/rank/rank.go`.
+`Valid(s)` — `internal/rank/rank.go`: false for empty; false if any byte is not in the alphabet; documented as a check for *persisted* values only, explicitly not the input contract of Midpoint and SpacedRanksBetween, which accept an empty bound as a sentinel.
 
-`Valid(s)` — `internal/rank/rank.go`: false for empty; false if any byte is not in the alphabet; documented as a check for *persisted* values only, explicitly not the input contract of Midpoint/Before/After which accept an empty bound as a sentinel.
-
-### 5.2 Midpoint / Before / After
+### 5.2 Midpoint and step
 
 `Midpoint(a, b)` — `internal/rank/rank.go`:
 - `a == b` with `a` non-empty → `errors.New("rank: a and b are equal")`; `Midpoint("", "")` is not refused.
 - both non-empty and `a >= b` → `errors.New("rank: a must be less than b")`.
-- `b` non-empty and `rank.Significant(a) == rank.Significant(b)` → `fmt.Errorf("%w: %q and %q pad to the same value", ErrNoRoom, a, b)`, where `ErrNoRoom = errors.New("rank: no room between the bounds")`. This refuses `b` being `a` extended by zeros (`"10"`, `"100"`) and an empty `a` with an all-zero `b`.
-- Walks positions: missing/short `a` contributes virtual char index 0 ("below the floor"), missing/short `b` contributes virtual index `base` ("above the ceiling"). An out-of-alphabet byte gives `errors.New("rank: invalid character in a")` or `"rank: invalid character in b"`.
-- If `bChar - aChar > 1`, emits `alphabet[aChar + (bChar-aChar)/2]` and returns.
-- Otherwise emits `alphabet[aChar]` and advances a position, growing the string by one char per adjacent/equal position.
-- Empty `a` means "before everything"; empty `b` means "after everything"; both empty is the whole keyspace, whose midpoint is `Initial()`'s `"V"`.
+- `b` empty and `a` not → `step(a, 1)`; `a` empty and `b` not → `step(b, -1)`, so past an open end a key steps rather than bisects and appends and prepends never deepen a corner.
+- Otherwise `spacedRanks(1, a, b, 1)`, the spacing search at a gap of 1. Both empty is the whole keyspace, whose midpoint is `"V"`, the first key a workspace holds.
 
-`Before(a)` refuses an empty `a` with `errors.New("rank: Before needs a rank, not the empty string")`; otherwise it returns `Midpoint("", a)` and its error, so an all-zero `a` fails with `ErrNoRoom` — `internal/rank/rank.go`.
-`After(a)` = `Midpoint(a, "")`, panicking `"rank.After called with empty string"` when `a` is empty or `Midpoint` errors — `internal/rank/rank.go`.
+`ErrNoRoom = errors.New("rank: no room between the bounds")` is what a caller reads as "respace these ranks first".
+
+`step(s, dir)` — `internal/rank/rank.go`: the key one unit from `s`, at the shortest power-of-two length from `stepLength` at which such a key exists and is not all zeros. An all-zero `s` stepped down → `fmt.Errorf("%w: nothing sorts below %q but the empty string", ErrNoRoom, s)`; nothing inside `MaxLength` → `fmt.Errorf("%w: no step from %q fits in %d chars", ErrNoRoom, s, MaxLength)`.
+
+`Ceiling(key)`, `Crowded(key, movable...)`, `Respace(trigger, read)` and `PrefixTied(sorted)` are in `inventory-model.md` §4.5.
 
 ### 5.3 Spaced ranks (used by smoothing)
 
-`SpacedRanks(n)` — `internal/rank/rank.go`: `spacedRanks(n, "", "")`; panics `fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err)` if that ever errors.
+`SpacedRanks(n)` — `internal/rank/rank.go`: `spacedRanks(n, "", "", spacingGap)`; panics `fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err)` if that ever errors.
 
-`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go`: both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks`. That guard admits bounds nothing can sort between (`"10"` and `"100"`); `spacedRanks` enforces the rest.
+`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go`: both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks` at `spacingGap`. That guard admits bounds nothing can sort between (`"10"` and `"100"`); `spacedRanks` enforces the rest.
 
-`spacedRanks(n, lower, upper)` — `internal/rank/rank.go`:
+`spacedRanks(n, lower, upper, minGap)` — `internal/rank/rank.go`:
 - `n < 0` → `errors.New("rank: n must be non-negative")`; `n == 0` → `(nil, nil)`.
-- Starting at `length = max(len(lower), len(upper)) + 1`, increments length until the integer span between the bounds divided by `n+1` is at least `minGap` (16).
-- A **negative** span ends the search instead of skipping the length: `fmt.Errorf("%w: %q and %q pad to the same value, so no rank longer than both sorts between them", ErrNoRoom, lower, upper)`. Every candidate is longer than both bounds, so `span(L+1) = 62*(span(L)+1) - 1`; a negative span stays negative at every greater length, while a non-negative one grows 62-fold, so this is the only case that would not terminate.
-- Emits `n` values at `lo + step*(i+1)` encoded fixed-width via `encodeBase62`. All returned ranks share one length.
+- `upper` non-empty and `Significant(lower) == Significant(upper)` → `fmt.Errorf("%w: %q and %q pad to the same value, so no rank sorts between them", ErrNoRoom, lower, upper)`.
+- Starting at `length = sharedPrefix(lower, upper) + 1`, increments length through `MaxLength` until the integer span between the bounds divided by `n+1` is at least `minGap`.
+- Emits `n` values at `lo + gap*(i+1)` encoded fixed-width via `encodeBase62`. All returned ranks share one length, the shortest that fits.
+- No length has room → `fmt.Errorf("%w: %d ranks between %q and %q would pass %d chars", ErrNoRoom, n, lower, upper, MaxLength)`.
 - `lowerBoundInt(s, length)` —: empty → 0; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`.
-- `upperBoundInt(s, length)` —: empty → `pow62(length)`; else `stringToInt(s,length) - 1`, unchecked; an all-zero bound yields `-1`, which the negative-span arm above reports.
-- `stringToInt` —: base-62 accumulation, right-padded with index 0; invalid byte → `errors.New("rank: invalid character in bounds")`.
+- `upperBoundInt(s, length)` —: empty → `pow62(length)`; else `stringToInt(s,length) - 1`.
+- `stringToInt` —: base-62 accumulation, right-padded with index 0, reading no further than `length`; invalid byte → `errors.New("rank: invalid character in bounds")`.
 - `encodeBase62(value, length)` —: negative → `errors.New("rank: cannot encode negative value")`; remainder out of `[0,62)` → `errors.New("rank: base62 remainder out of range")`; leftover quotient → `errors.New("rank: value does not fit fixed-width encoding")`.
 
 ### 5.4 Rank at creation
@@ -2914,21 +2924,21 @@ Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unc
 **RankAbove(issueID, targetID)** — `internal/store/ranking.go`:
 - `resolveRankPair` first (all its errors propagate).
 - In `withMutation(ctx, "rank above", …)`, the new rank comes from `rankBetweenTx`, whose `bounds` closure reads the anchor's rank through `anchorRankTx` and then returns `topEdge.roomBesideTx(ctx, tx, anchorRank, move.MovedID)`. The closure's error → `fmt.Errorf("rank-above: %w", err)`.
-- `roomBesideTx` splices the edge's `outside` fragment into one shared statement:
+- `roomBesideTx` splices the edge's `outside` fragment into one shared statement, `outsideQuery`:
   ```sql
-  SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id != ? AND item_rank < ? ORDER BY item_rank DESC LIMIT 1
+  SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank < ? ORDER BY item_rank DESC LIMIT 2
   ```
-  bound `(move.MovedID, anchorRank)` and read through `nearestRank`; `item_rank < ? ORDER BY item_rank DESC` is `topEdge.outside`. Error → `fmt.Errorf("query the key outside the %s: %w", e.name, err)`, with `e.name` `"top"`, which the `rank-above: %w` wrap prefixes. The read is **not** scoped to the pair's frame — it searches the whole workspace. The frame's say in the move is choosing the anchor, which `rankPairTx` already did. The `id != ?` exclusion is the moving issue, which leaves the key it is about to vacate out of its own bounds, and `item_rank != ''` keeps unranked rows out.
-- `topEdge.beside` orders the pair `(outsideRank, anchorRank)`, so the key found is the lower bound and the anchor the upper. Selecting nothing reads as `""` (`nearestRank`), which happens only when nothing in the whole workspace but the moving issue sorts before the anchor; the lower bound is then open and the new rank is `rank.Midpoint("", anchorRank)`.
+  bound `(anchorRank)` and read through `rankRows`; `item_rank < ? ORDER BY item_rank DESC` is `topEdge.outside`. Error → `fmt.Errorf("query the key outside the %s: %w", e.name, err)`, with `e.name` `"top"`, which the `rank-above: %w` wrap prefixes. The read is **not** scoped to the pair's frame — it searches the whole workspace. The frame's say in the move is choosing the anchor, which `rankPairTx` already did. The nearest of the two rows that is not `move.MovedID` is the key outside: the moving issue holds at most one of the two, which leaves the key it is about to vacate out of its own bounds with the same read every time, and `item_rank != ''` keeps unranked rows out.
+- `topEdge.beside` orders the pair `(outsideRank, anchorRank)`, so the key found is the lower bound and the anchor the upper. No such row reads as `""`, which happens only when nothing in the whole workspace but the moving issue sorts before the anchor; the lower bound is then open and the new rank is `rank.Midpoint("", anchorRank)`.
 - The anchor's rank is read through `anchorRankTx` (`internal/store/ranking.go`): `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, so only a live, ranked anchor returns a row. No row → `fmt.Errorf("cannot rank against %s: it was deleted while the move was being applied, or it has no rank", anchorID)`, which `bounds` and `rankBetweenTx` return unwrapped, so the `rank-above: %w` wrap prefixes it. An unranked or deleted anchor therefore fails the move.
 - `writeRankTx(ctx, tx, move.MovedID, newRank, now)` with `now` from `s.clock`; after `requireLiveTx` it writes the key and the timestamp through `writeRanksTx` with one touched `rankWrite`, the same batched statement rank set runs, so the `deleted_at IS NULL` predicate on the key write lives in one place.
 - `smoothRanksIfNeededTx(ctx, tx, newRank)`. Returns the `RankMove` regardless of which id the caller named.
 
 **RankBelow(issueID, targetID)** — `internal/store/ranking.go`: mirror image — the `bounds` closure returns `bottomEdge.roomBesideTx(ctx, tx, anchorRank, move.MovedID)`, whose `outside` fragment is `item_rank > ? ORDER BY item_rank ASC` and whose `e.name` is `"bottom"`; `bottomEdge.beside` orders the pair `(anchorRank, outsideRank)`, so the anchor is the lower bound and the key found the upper. The closure's error → `fmt.Errorf("rank-below: %w", err)`; the write is the same `writeRankTx` and the smoothing the same `smoothRanksIfNeededTx`. This read is likewise unscoped to the frame, so it reads `""` only when nothing in the whole workspace sorts after the anchor, and the new rank is then `rank.Midpoint(anchorRank, "")`. The anchor's rank is read through the same `anchorRankTx`, so an unranked or deleted anchor fails the move with `"rank-below: cannot rank against %s: it was deleted while the move was being applied, or it has no rank"`.
 
-`rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go`: reads the pair through `bounds()` and returns `rank.Midpoint(lower, upper)` unless it fails with `rank.ErrNoRoom`. On `ErrNoRoom` it runs `smoothRanksTx(ctx, tx, upper)`, which respaces the smoothing window around `upper` with no length threshold; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)`. It then reads the pair through `bounds()` again and returns the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried. The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`) and the neighbor (`nearestRank`) on every call, so the second read sees the respaced ranks.
+`rankBetweenTx(ctx, tx, bounds)` — `internal/store/ranking.go`: reads the pair through `bounds()` and takes `rank.Midpoint(lower, upper)`. On `rank.ErrNoRoom` it runs `smoothRanksTx(ctx, tx, cmp.Or(upper, lower))`, which respaces the window around `upper`, or `lower` where the upper end is open, with no length check; error → `fmt.Errorf("make room between %q and %q: %w", lower, upper, err)`. It then reads the pair through `bounds()` again and takes the second `rank.Midpoint` result, error included; a second `ErrNoRoom` is not retried. A key it returns is owed to the `RankObserver` as `Wrote(len(key))`. The `bounds` functions of `RankAbove` and `RankBelow` read the anchor's rank (`anchorRankTx`) and the neighbor (`roomBesideTx`) on every call, so the second read sees the respaced ranks.
 
-`rankEdge.rankBeyondTx(ctx, tx, f, vacating, readEdge)` — `internal/store/ranking.go`: the key past a frame's edge. Its body is one `rankBetweenTx` call, whose `bounds` reads the edge's rank through `readEdge()` on every call and returns a `readEdge` error as is. A non-empty rank goes to `e.roomBesideTx(ctx, tx, edgeRank, vacating)`, which runs `SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id != ? AND <e.outside> LIMIT 1` bound `(vacating, edgeRank)` — `item_rank < ? ORDER BY item_rank DESC` for `topEdge`, `item_rank > ? ORDER BY item_rank ASC` for `bottomEdge` — and orders the pair through the edge's `beside`: `topEdge` gives `(outsideRank, edgeRank)` and `bottomEdge` gives `(edgeRank, outsideRank)`, the two values `edgeFor` returns. `vacating` is the id of the issue being moved, so the key it is about to vacate is left out of its own bounds; a write that moves nothing passes `""`, which no issue id is. A failed read is wrapped `fmt.Errorf("query the key outside the %s: %w", e.name, err)`. Nothing on the far side reads as `""`, the open bound. A pair at either end that pads to the same value gets room made the same way a relative move's pair does, and because the edge is not read ahead of `rankBetweenTx` the second read sees the respaced ranks. An **empty** edge rank takes the other arm: `bounds` returns `firstInFrameBoundsTx(ctx, tx, f)`, which lands the key just past the rank of the issue `f` names through `bottomEdge.roomBesideTx(ctx, tx, containerRank, "")`. A frame naming no ranked issue — `storage.TopLevel`, which names no containing issue, or a container carrying no rank — takes the shared arm at the end instead: the workspace's last rank, and `("", "")` only when that read is empty, where `rank.Midpoint("", "")` is `rank.Initial()`'s `"V"` (`internal/rank/rank.go`). That workspace read excludes nothing, so it is empty only when nothing at all is ranked. The empty rank never reaches `roomBesideTx`, which refuses an empty anchor with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)`. Its one caller is `placeBeyondTx`, passing `f` and `issueID`, reading the frame's edge holder through `frameEdgeHolderTx` and wrapping the error `fmt.Errorf("rank to %s: %w", e.name, err)`.
+`rankEdge.rankBeyondTx(ctx, tx, f, vacating, readEdge)` — `internal/store/ranking.go`: the key past a frame's edge. Its body is one `rankBetweenTx` call, whose `bounds` reads the edge's rank through `readEdge()` on every call and returns a `readEdge` error as is. A non-empty rank goes to `e.roomBesideTx(ctx, tx, edgeRank, vacating)`, which runs `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND <e.outside> LIMIT 2` bound `(edgeRank)`, takes the nearest row whose id is not `vacating` — `item_rank < ? ORDER BY item_rank DESC` for `topEdge`, `item_rank > ? ORDER BY item_rank ASC` for `bottomEdge` — and orders the pair through the edge's `beside`: `topEdge` gives `(outsideRank, edgeRank)` and `bottomEdge` gives `(edgeRank, outsideRank)`, the two values `edgeFor` returns. `vacating` is the id of the issue being moved, so the key it is about to vacate is left out of its own bounds; a write that moves nothing passes `""`, which no issue id is. A failed read is wrapped `fmt.Errorf("query the key outside the %s: %w", e.name, err)`. Nothing on the far side reads as `""`, the open bound. A pair at either end that pads to the same value gets room made the same way a relative move's pair does, and because the edge is not read ahead of `rankBetweenTx` the second read sees the respaced ranks. An **empty** edge rank takes the other arm: `bounds` returns `firstInFrameBoundsTx(ctx, tx, f)`, which lands the key just past the rank of the issue `f` names through `bottomEdge.roomBesideTx(ctx, tx, containerRank, "")`. A frame naming no ranked issue — `storage.TopLevel`, which names no containing issue, or a container carrying no rank — takes the shared arm at the end instead: the workspace's last rank, and `("", "")` only when that read is empty, where `rank.Midpoint("", "")` is `"V"` (`internal/rank/rank.go`). That workspace read excludes nothing, so it is empty only when nothing at all is ranked. The empty rank never reaches `roomBesideTx`, which refuses an empty anchor with `fmt.Errorf("no room beside the %s of this frame: the key it was read from is empty", e.name)`. Its one caller is `placeBeyondTx`, passing `f` and `issueID`, reading the frame's edge holder through `frameEdgeHolderTx` and wrapping the error `fmt.Errorf("rank to %s: %w", e.name, err)`.
 
 Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - Standalone above an epic child anchors to the epic; epic and all children keep their exact rank strings; standalone ends above the epic.
@@ -2958,40 +2968,30 @@ Tests: absolute top ordering — `internal/store/store_test.go`; duplicates reje
 ### 5.7 Smoothing (rebalancing)
 
 `smoothRanksIfNeededTx(ctx, tx, triggerRank)` — `internal/store/ranking.go`:
-1. Trigger: `len(triggerRank) < rank.SmoothingThreshold` (8) → no-op; otherwise it calls `smoothRanksTx(ctx, tx, triggerRank)` (`internal/store/ranking.go`), which performs steps 2-10 and has no threshold of its own. So smoothing through this function fires only once a rank string reaches 8 characters; `rankBetweenTx` calls `smoothRanksTx` directly.
-2. `half := rank.SmoothingWindow / 2` = 16.
-3. Below half:
-   ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank <= ? ORDER BY item_rank DESC, id DESC LIMIT ?
-   ```
-   bound `(triggerRank, half)`; error → `"smooth: below: %w"`. The rows come back descending and are reversed to ascending.
-4. Above half:
-   ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC, id ASC LIMIT ?
-   ```
-   bound `(triggerRank, half)`; error → `"smooth: above: %w"`. The two halves concatenate into the window.
-5. Empty window → no-op; a window of one entry is respaced like any other.
-6. The run bounds are computed from the window's own ends rather than scanned for: `runFloor` is `rank.Significant(window[0].rank)`, the least rank sharing the bottom end's significant part; `runCeiling` is `rank.Significant(window[len-1].rank) + "1"`, the least rank sorting above every rank sharing the top end's. Ranks sharing a significant part sort contiguously, so these two values delimit exactly the runs the window's ends sit in.
-7. Two bounded range queries pick up the rest of each run:
-   ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank >= ? AND item_rank < ? ORDER BY item_rank ASC, id ASC
-   ```
-   bound `(runFloor, window[0].rank)`, error → `"smooth: lower run: %w"`; and
-   ```sql
-   SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? AND item_rank < ? ORDER BY item_rank ASC, id ASC
-   ```
-   bound `(window[len-1].rank, runCeiling)`, error → `"smooth: upper run: %w"`. Both already ascend, so they concatenate around the window in order. Both ranges are bounded on each side, so a run costs the rows it holds rather than a scan of the sorted set.
-8. The bounds themselves, one row each: the greatest rank below `runFloor` (`ORDER BY item_rank DESC LIMIT 1`), error → `"smooth: lower bound: %w"`; and the least rank at or above `runCeiling` (`ORDER BY item_rank ASC LIMIT 1`), error → `"smooth: upper bound: %w"`. A side with no such row leaves the bound `""` (meaning open-ended).
-9. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)`. The two bounds cannot pad to the same value — the one pair that primitive rejects (`internal/rank/rank.go`) is unreachable from here. `lowerBound` sorts below `runFloor`, so it cannot share the bottom end's significant part; and were the two bounds to share one with each other, every rank between them would belong to that single run, while `window[0]` lies between them with a different significant part.
-10. Each window entry whose new rank differs from the old is written through `writeRanksTx` as an untouched `rankWrite`, so `updated_at` is **not** changed; error → `fmt.Errorf("smooth: %w", err)`. Neither window read admits an unranked row (`item_rank != ''`), so a respace never ranks an issue.
+1. `len(triggerRank) < rank.Ceiling(triggerRank)` → no-op, with no read.
+2. The two keys on each side, through the window queries below at `LIMIT 2`; errors → `"smooth: neighbours below: %w"`, `"smooth: neighbours above: %w"`. A side holding two rows has a neighbour a respace could move, its nearer row. A side holding fewer has its neighbour at the workspace's edge, which never moves.
+3. `rank.Crowded(triggerRank, movable...)` false → no-op; otherwise `smoothRanksTx(ctx, tx, triggerRank)`, which has no length check of its own. `rankBetweenTx` calls `smoothRanksTx` directly.
 
-An all-zero rank at the bottom end takes the same path with no special case: its `rank.Significant` is `""`, so `runFloor` is `""`; `item_rank < ''` matches nothing and leaves `lowerBound` the open end, which is correct, while `item_rank != '' AND item_rank >= '' AND item_rank < window[0].rank` is exactly the all-zero ranks below the window, everything ranked that sorts below an all-zero rank being itself all-zero.
+The window queries stream from `idx_issues_rank`, an `id` tiebreak being what would make Dolt sort:
+```sql
+-- belowRankQuery
+SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND item_rank < ? ORDER BY item_rank DESC LIMIT ?
+-- aboveRankQuery
+SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT ?
+-- atRankQuery
+SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = ?
+```
 
-`rankRows(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer` (`*sql.DB` or `*sql.Tx`): runs a rank query and returns every row it matches, in the order the query asks for. Every caller bounds its own query — by range or by `LIMIT` — so the rows read stay proportional to the window rather than to the backlog.
+`rankWindowTx(ctx, tx, triggerRank, k)` — `internal/store/ranking.go`: the rows within `k` keys of `triggerRank` on each side, as a `rank.Window`, the rows it moves, and every ranked row once neither side has a key left to widen to. Each side's farthest key stays outside as the bound, clamped to the first or last key, and rows tied with a bound stay outside with it. A side is open only when the trigger is itself the edge. Errors → `"smooth: below: %w"`, `"smooth: above: %w"`, `"smooth: at: %w"`. Rows sort by `compareRankedIssues`.
+
+`smoothRanksTx(ctx, tx, triggerRank)` — `internal/store/ranking.go`:
+1. `rank.Respace(triggerRank, read)`, with `read` calling `rankWindowTx`; error → `fmt.Errorf("smooth: %w", err)`. A `whole` result takes every ranked row in place of the window's.
+2. Each row whose new key differs from the old is written through `writeRanksTx` as an untouched `rankWrite`, so `updated_at` is **not** changed; error → `fmt.Errorf("smooth: %w", err)`. No window read admits an unranked row, so a respace never ranks an issue.
+3. The respace is owed to the `RankObserver` as a `Respace{Rows, Rewritten, LongestKey, Ceiling}`.
+
+`rankRows(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer` (`*sql.DB` or `*sql.Tx`): runs a rank query and returns every row it matches, in the order the query asks for. A respace's reads bound themselves by `LIMIT` and cost the window, and a rank set's reads the frame it reorders.
 
 `nearestRank(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer`: returns the single rank a `LIMIT 1` query selects, mapping `sql.ErrNoRows` to `""`, the open end of the keyspace.
-
-[LAW:one-source-of-truth] `rank.Significant` is the one definition of room here, the same one `anchorRun` compares anchors by: ranks sharing a significant part leave nothing between them, so a bound sharing the window's would leave the window nowhere to go.
 
 Smoothing is invoked from `RankToTop`, `RankToBottom`, `RankSet` (when it places a named issue that holds no key, through `placeBeyondTx`), `RankAbove`, `RankBelow`, `rankBetweenTx` (with no length threshold, when a placement's pair of bounds has no room), and `FixRankInversions` (once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
 
@@ -3034,7 +3034,7 @@ No rank filter; the ORDER BY exists to make DFS adjacency order — and therefor
 
 `blocksPrecedenceAdj(edges)` — `internal/store/ranking.go`: adjacency `dependency -> []dependent`.
 
-`blocksPrecedes(adj, from, to)` — `internal/store/ranking.go`: recursive DFS with a `seen` set; returns true as soon as `to` is reached. (The `seen` set is populated after the `next == to` check, so a node is compared before being marked.)
+`blocksPrecedes(dependents, from, to)` — `internal/store/ranking.go`: recursive DFS over the `dependents` func with a `seen` set; returns true as soon as `to` is reached and returns a read error as is. (The `seen` set is populated after the `next == to` check, so a node is compared before being marked.)
 
 `findBlocksCycle(edges)` — `internal/store/ranking.go`: three-color DFS (`white = 0`, `gray = 1`, `black = 2`) over adjacency keys sorted with `sort.Strings`; on hitting a gray node it slices the current stack from that node and appends it again, returning a repeated-endpoint path `a -> b -> … -> a`; returns nil for an acyclic graph.
 
@@ -3050,7 +3050,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `stableTopoOrder(order, edges)` — `internal/store/rank_repair.go`: Kahn's algorithm over `projectEdges`, with the ready set held ascending by position in `order` (`slices.Insert` at `sort.SearchInts`), so each step emits the issue that stood earliest in the backlog among those whose dependencies are all placed. An issue falls behind one that stood after it only while it waits on a dependency, so an order that already satisfies every edge comes back unchanged. Ordering by position rather than by id is what keeps the tiebreak off id spelling. When Kahn stalls (`len(sorted) < len(order)`) it returns `&blocksCycleError{path: findBlocksCycle(constraints)}` rather than the partial sequence.
 
-`rankRewrites(sequence []placement)` — `internal/store/rank_repair.go`: walks `sequence` as runs of movers delimited by the placements marked `anchored`, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a sequence with no anchors at all — needs no special case. Error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)`.
+`rankRewrites(sequence []placement)` — `internal/store/rank_repair.go`: walks `sequence` as runs of movers delimited by the placements marked `anchored`, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a sequence with no anchors at all — needs no special case. A run with no room inside `rank.MaxLength` widens: `withoutBound(sequence, start, at)` makes the anchor bounding it a mover, the upper one, or the lower at the open end, and the rewrite starts over, so a landing or repair is not stopped by a gap. With no anchors left the run is the whole sequence between open ends, which always has room, and the walk stays pure, so two clones landing one export write the same rows (`TestRankRewritesWidenPastAGapWithNoRoom`). Any other error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)`.
 
 `anchorRun(target []rankedIssue) []placement` — `internal/store/rank_repair.go`: marks `anchored` a longest subsequence of `target` strictly increasing by `rank.Significant` of the stored rank, by patience sort (`keys` computed once, `tails` + `prev`, `sort.Search` over `tails`). The repair does not write issues in the run, so they keep their place and their `updated_at`, and the rewrite count is the count of issues the new order actually moved; smoothing may still re-space their rank strings (see `FixRankInversions`). Movers are spaced into the gap two anchors bound, and two ranks with the same significant part (`"V"` and `"V0"`) leave none, so an anchor's significant rank must sort strictly above the one before it. It must also satisfy `rank.Valid`, which the empty significant rank of an unranked or all-zero issue does not; those issues are therefore always movers, which hands them a real rank on the way past.
 
@@ -3619,6 +3619,7 @@ Usage strings: `restoreUsage = "usage: lit backup restore (--latest | --path <ex
 - `dependencies := storage.NewDependencyOrder(ancestry, live)`; `RankInversions = len(invertedEdges(order, dependencies, live))`; warning `"rank inversions: %d (dependencies ranked below dependents)"`.
 - `Interleaved = dependencies.Interleaved()`; per group, warning `"interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges"` with the members joined by `", "`.
 - `duplicates := rankCollisions(order)`; `DuplicateRanks = len(duplicates)`; warning `"duplicate rank keys: %d (%s; each key's holders list by id instead of by rank — 'lit doctor --fix=rank' gives each its own key without changing the order)"` with `describeRankCollisions(duplicates)`.
+- `rank.PrefixTied` over `order`'s keys above 0 → warning `"rank keys tied on the index prefix: %d (reads return these pairs in the wrong order)"`. No write leaves a key past `rank.MaxLength`, so a tie is a key a store inherited.
 - `blocksCycle(order, live)` non-empty → `DependencyCycle`; warning `"blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)"` with members joined by `" -> "`.
 
 `FixIntegrity` (`import_export.go`) always runs the repair under `withMutation(ctx, "fix integrity", …)` — Dolt commit message literal **`fix integrity`** — executing exactly three statements:
@@ -3862,7 +3863,7 @@ Note the create branch does **not** require `LocalID` (unlike ImportTree), and d
 4. **The edges** (`import_bulk.go`): one `s.withMutation(ctx, "bulk edges", …)` running `file.WriteEdges(createdIDs, edgeWriterTx{…})` (`internal/storage/bulk.go`) into the `storage.EdgeStep` `edges`, recorded by `result.RecordEdges(edges)`. `WriteEdges` takes every edge set the file states, in this order: each update document's parent (a set of zero or one), each create's `blocked_by`, each update document's `blocked_by`. For each set it reads `Edges` — `requireIssueExistsTx` first, so a set on an id naming no issue is a not-found error, then the set's `relations` rows of that type — resolves its targets with `storage.ResolveRef` against the ids its creates were minted under, and removes, raw (`deleteRelationRowTx`), every edge the set drops; a set with nothing to drop or add is held. Only then does it `Add` (`addRelationTx`) every edge any set introduces, in set order, so the cycle, same-epic and containment rules judge the graph the file ends with, with the hierarchy written before any `blocked-by` edge. The transaction lands whole or not at all; an error → `"bulk: %s of %s -> %q: %w"` (`parent` or `blocked_by`; the document as its quoted id or `doc %d`; the target as the file states it).
 5. **The ordering**, when `file.RankedIDs(createdIDs)` is non-empty (`import_bulk.go`): one `s.RankSet(ctx, ranked)` into `result.Ranked`. Failure → `"bulk: rank: %w"`.
 6. **Updates last**, over `file.Updates` (`import_bulk.go`): `s.Apply(ctx, update.ID, storage.Change{Actor: actor, Fields: update.Patch})`. Failure → `"bulk: update %q: %w"`. On success append `issue.ID` to `result.Updated`.
-7. Inside a batch `notify` queues each change on the context (`batchHearingKey`); `withBatch` delivers the queue once the lock is released only when the batch landed, and drops it otherwise, so a refused file is heard by nobody.
+7. Inside a batch `notify` queues each change on the context (`hearingKey`), as a closure the `owed` queue holds beside what a `RankObserver` is owed; `withBatch` delivers the queue once the lock is released only when the batch landed, and drops it otherwise, so a refused file is heard by nobody.
 
 `storage.ResolveRef(ref, minted)` (`internal/storage/bulk.go`): a map hit returns the real id; **a miss returns `ref` unchanged**, to be validated downstream by `CreateIssue`/`AddRelation` as a real pre-existing issue id.
 
@@ -4054,7 +4055,8 @@ The concrete checks whose text can appear as a `health` finding, in `Doctor`'s e
 5. **Parent conflicts.** `loadRankAncestry(ctx, s.db)` (`import_export.go`); each child more than one framing edge claims (`ancestry.Conflicts()`) appends **error** `%s has %d parents (%s); it lists under %s, the lowest id, until one remains — ...` (`internal/storage/rank.go`). The checks below still run.
 6. **Rank inversions.** Computed in Go: `s.liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db)` and `loadBlocksEdges(ctx, s.db)` load once for this check and the next two (`import_export.go`); each error → `rank checks: %w`. `dependencies := storage.NewDependencyOrder(ancestry, liveEdges(edges, liveIDs))`; `RankInversions = len(invertedEdges(order, dependencies, liveEdges(edges, liveIDs)))` (`import_export.go`); if > 0, **warning** `rank inversions: %d (dependencies ranked below dependents)` (`import_export.go`). `Interleaved = dependencies.Interleaved()`, and each group appends **warning** `interleaved: <members joined by ", "> — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges` (`import_export.go`) — both ignored by verify.
 7. **Duplicate rank keys.** `rankCollisions(order)` over the same order, every non-deleted issue (`import_export.go`); `DuplicateRanks` is its length, and if > 0, **warning** `duplicate rank keys: %d (<"key" shared by a, b; …>; each key's holders list by id instead of by rank — 'lit doctor --fix=rank' gives each its own key without changing the order)` (`import_export.go`) — ignored by verify.
-8. **Blocked-by dependency cycle.** `blocksCycle(order, liveEdges(edges, liveIDs))` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
+8. **Tied rank keys.** `rank.PrefixTied` over the same order's keys; above 0, **warning** `rank keys tied on the index prefix: %d (reads return these pairs in the wrong order)`.
+9. **Blocked-by dependency cycle.** `blocksCycle(order, liveEdges(edges, liveIDs))` over the same load (`import_export.go`). If non-empty, sets `DependencyCycle` and appends **warning** `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)` with members joined by `" -> "` (`import_export.go`) — ignored by verify.
 
 Net effect: only checks 1 and 2 (constraint violations, foreign-key violations) can ever fail the verify health half.
 
@@ -5145,9 +5147,9 @@ type commitStamp struct {
 
 1. If not yet staged: `s.db.BeginTx(ctx, nil)` — error wrapped `begin %s tx: %w` with the message (`commit_lock.go`).
 2. `defer tx.Rollback()` (`commit_lock.go`).
-3. `fn(ctx, tx)` — error returned unwrapped (`commit_lock.go`).
+3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — error returned unwrapped (`commit_lock.go`).
 4. `tx.Commit()` — error wrapped `commit %s tx: %w` (`commit_lock.go`).
-5. `staged = true` (`commit_lock.go`).
+5. `staged = true`, then `hear(ctx, heard...)` hands the queue on (`commit_lock.go`).
 6. `s.commitWorkingSetOnce(ctx, stamp)` (`commit_lock.go`).
 
 The `staged` flag is the resume point: once `tx.Commit()` has succeeded, a retry resumes **at versioning** and never re-runs `fn` (`commit_lock.go`). The lock is acquired and released exactly once (`commit_lock.go`).

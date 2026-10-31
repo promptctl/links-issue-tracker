@@ -1079,8 +1079,8 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	// mid-loop failure (context cancel, transient DB error, partial
 	// commit) would otherwise leave the first N rows with ranks
 	// r1..rN, and the next Open would re-query the unranked set and
-	// start over from rank.Initial() — colliding with the existing
-	// r1..rN and breaking the fractional-indexing invariant. BeginTx
+	// space them over the top of the existing r1..rN, breaking the
+	// fractional-indexing invariant. BeginTx
 	// + Commit-or-Rollback ensures the next Open sees either all
 	// rows ranked or none of them; the loop can safely restart.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1088,8 +1088,8 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 		return false, fmt.Errorf("ensureIssueRanks: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	// [LAW:no-silent-failure] Seed `current` from the max existing
-	// non-empty rank (or rank.Initial() if there are no ranked rows
+	// [LAW:no-silent-failure] Space the keys past the max existing
+	// non-empty rank (an open keyspace if there are no ranked rows
 	// yet), so the assigned sequence cannot collide with any rank
 	// already in the workspace. The mixed-state case — some rows
 	// ranked, others empty — could otherwise produce duplicate ranks
@@ -1100,9 +1100,9 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	).Scan(&maxExistingRank); err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: read max existing rank: %w", err)
 	}
-	current := rank.Initial()
-	if maxExistingRank.Valid && maxExistingRank.String != "" {
-		current = rank.After(maxExistingRank.String)
+	keys, err := rank.SpacedRanksBetween(maxExistingRank.String, "", len(ids))
+	if err != nil {
+		return false, fmt.Errorf("ensureIssueRanks: space %d rank(s): %w", len(ids), err)
 	}
 	// [LAW:single-enforcer] Each unranked row needs a distinct,
 	// sequential rank string, so a single-statement UPDATE cannot
@@ -1116,11 +1116,10 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 		return false, fmt.Errorf("ensureIssueRanks: prepare: %w", err)
 	}
 	defer stmt.Close()
-	for _, id := range ids {
-		if _, err := stmt.ExecContext(ctx, current, id); err != nil {
+	for i, id := range ids {
+		if _, err := stmt.ExecContext(ctx, keys[i], id); err != nil {
 			return false, fmt.Errorf("ensureIssueRanks: update %s: %w", id, err)
 		}
-		current = rank.After(current)
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: commit tx: %w", err)
