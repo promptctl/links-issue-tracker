@@ -16,7 +16,8 @@ the hierarchy epic, which fixes three level roles in code with
 names in configuration rather than user-defined types; the fields half
 continues in [custom-fields.md](../custom-fields.md), and the schema's home is
 settled by [workspace-configuration.md](../workspace-configuration.md). Custom
-states, per-type templates and relation legality remain here, undecided.
+states continue in [custom-columns.md](../custom-columns.md); per-type
+templates and relation legality remain here, undecided.
 Revised 2026-10-28: the storage design follows the
 [event-store design's §migration](../event-store/design.md), and the documents
 above were revised to match the decisions recorded there.
