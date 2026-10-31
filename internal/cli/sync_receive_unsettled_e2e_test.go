@@ -61,7 +61,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	}
 	sink := filepath.Join(t.TempDir(), "notifications")
 	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
-	if err := os.Remove(fetchSuccessMarkerPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(fetchRecordPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clear the fetch-success marker: %v", err)
 	}
 	oneOutcome := func(outcomes []any) map[string]any {
@@ -107,7 +107,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	if stops := receiveTraceStops(t, ws); len(stops) != 1 || stops[0] != "land" {
 		t.Fatalf("receive traces' stopped = %q; want the one receive's landing stop", stops)
 	}
-	if _, err := os.Stat(fetchSuccessMarkerPath(ws, remoteName(t, "origin"))); err != nil {
+	if _, err := os.Stat(fetchRecordPath(ws, remoteName(t, "origin"))); err != nil {
 		t.Fatalf("a fetch that worked did not move the fetch-success marker: %v", err)
 	}
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !os.IsNotExist(err) {

@@ -50,7 +50,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	// "left alone".
 	fetchedBefore := time.Now().Add(-time.Hour)
 	origin := remoteName(t, "origin")
-	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), fetchedBefore, fetchedBefore); err != nil {
+	if err := os.Chtimes(fetchRecordPath(ws, origin), fetchedBefore, fetchedBefore); err != nil {
 		t.Fatalf("age fetch-success marker error = %v", err)
 	}
 	receiveNow(t, consumer)
@@ -61,7 +61,7 @@ func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
 	if unmoved.Metadata["remote"] != "origin" {
 		t.Fatalf("unmoved receive metadata remote = %q, want origin", unmoved.Metadata["remote"])
 	}
-	if !markerModTime(t, fetchSuccessMarkerPath(ws, origin)).After(fetchedBefore) {
+	if !markerModTime(t, fetchRecordPath(ws, origin)).After(fetchedBefore) {
 		t.Fatalf("fetch-success marker did not move across an unmoved answer")
 	}
 
@@ -246,7 +246,7 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 			if got := readReceivedRefs(testStderr(t), ws); string(got) != string(tc.wantRecord) {
 				t.Fatalf("record = %q, want %q", got, tc.wantRecord)
 			}
-			_, err := os.Stat(fetchSuccessMarkerPath(ws, observed.remote))
+			_, err := os.Stat(fetchRecordPath(ws, observed.remote))
 			if gotFetchOK := err == nil; gotFetchOK != tc.wantFetchOK {
 				t.Fatalf("fetch-success marker written = %v, want %v (stat: %v)", gotFetchOK, tc.wantFetchOK, err)
 			}

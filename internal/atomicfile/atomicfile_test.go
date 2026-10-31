@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -254,6 +255,21 @@ func TestAFailedPublishWriteCreatesNothing(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("a failed publish left %v", entries)
+	}
+}
+
+func TestAFailedLinkComesBackAsALinkError(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a directory mode that refuses its owner")
+	}
+	dir := t.TempDir()
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	err := Publish(filepath.Join(dir, "token"), 0o644, Durable, func(io.Writer) error {
+		return os.Chmod(dir, 0o555)
+	})
+	var linkErr *os.LinkError
+	if !errors.As(err, &linkErr) {
+		t.Fatalf("Publish() = %v; want an *os.LinkError", err)
 	}
 }
 

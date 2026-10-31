@@ -23,7 +23,7 @@ import (
 // for in-progress issue staleness.
 const unfetchedStalenessThreshold = 24 * time.Hour
 
-// fetchSuccessMarkerPath is a remote's fetch record: its modification time
+// fetchRecordPath is a remote's fetch record: its modification time
 // is the moment since which local knowledge of that remote has gone
 // unconfirmed, and its content says what that moment was (fetchBasis). Empty,
 // it was a confirmation — a fetch of that remote succeeded, or it advertised
@@ -34,7 +34,7 @@ const unfetchedStalenessThreshold = 24 * time.Hour
 // even to a remote that is failing every fetch). One file per remote, because
 // a fetch is a fact about the remote it fetched: a fetch of another remote
 // says nothing about the one the banner reports on. [LAW:one-source-of-truth]
-func fetchSuccessMarkerPath(ws workspace.Info, remote storage.RemoteName) string {
+func fetchRecordPath(ws workspace.Info, remote storage.RemoteName) string {
 	return perRemotePath(ws, "fetched", remote)
 }
 
@@ -63,7 +63,7 @@ func (b fetchBasis) warningFormat() string {
 	case lastFetchSucceeded:
 		return "sync: last successful fetch from %s was %s ago (%s) — run 'lit sync fetch'"
 	case noFetchSucceeded:
-		return "sync: no successful fetch from %s on record in the %s since lit started tracking it (%s) — run 'lit sync fetch'"
+		return "sync: no successful fetch from %s on record; lit started tracking it %s ago (%s) — run 'lit sync fetch'"
 	}
 	panic(fmt.Sprintf("illegal fetchBasis %d", b))
 }
@@ -71,25 +71,27 @@ func (b fetchBasis) warningFormat() string {
 // markFetchSuccess records "local knowledge of remote is current as of now".
 // Callers are every real DOLT_FETCH call site that returned no error — the
 // explicit `lit sync fetch`/`lit sync pull`, the reconcile command's
-// pre-reconcile fetch, the automatic receive — and the automatic receive's
-// unmoved and no-lit-data answers, which prove the same thing without the
-// fetch. Each marks
+// pre-reconcile fetch, the automatic receive — and every answer that proves
+// the same thing without the fetch: the remote is unmoved, or holds nothing to
+// bring. Each marks
 // the remote it fetched, whichever remote the banner reports on.
 //
 // Truncated in place, never renamed over: Windows refuses a rename over a file
 // a reader has open, and readFetchRecord holds the record open. The reader
 // reads the content before the modification time, so a read racing this write
 // pairs at worst the old content with the new time, below any threshold.
+// A record that cannot be written is reported, not returned: no caller's work
+// depends on it. [LAW:no-silent-failure]
 // [LAW:single-enforcer] one marker per remote, every call site writes it the
 // same way. [LAW:dataflow-not-control-flow]
-func markFetchSuccess(ws workspace.Info, remote storage.RemoteName) error {
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		return fmt.Errorf("ensure storage dir for fetch-success marker: %w", err)
+func markFetchSuccess(stderr io.Writer, ws workspace.Info, remote storage.RemoteName) {
+	err := os.MkdirAll(ws.StorageDir, 0o755)
+	if err == nil {
+		err = os.WriteFile(fetchRecordPath(ws, remote), nil, 0o644)
 	}
-	if err := os.WriteFile(fetchSuccessMarkerPath(ws, remote), nil, 0o644); err != nil {
-		return fmt.Errorf("write fetch-success marker: %w", err)
+	if err != nil {
+		fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	return nil
 }
 
 // startFetchRecord starts tracking remote: it publishes the record that says
@@ -101,7 +103,7 @@ func startFetchRecord(ws workspace.Info, remote storage.RemoteName) error {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return err
 	}
-	return atomicfile.PublishFile(fetchSuccessMarkerPath(ws, remote), []byte(fetchRecordUnconfirmed), 0o644, atomicfile.Durable)
+	return atomicfile.PublishFile(fetchRecordPath(ws, remote), []byte(fetchRecordUnconfirmed), 0o644, atomicfile.Durable)
 }
 
 // readFetchRecord parses remote's fetch record. missing is true, with a nil
@@ -111,24 +113,18 @@ func startFetchRecord(ws workspace.Info, remote storage.RemoteName) error {
 // fact to act on nor an absence to fill.
 // [LAW:parse-dont-validate] [LAW:no-silent-failure]
 //
-// The content is read before the modification time, on the one open file, so
-// the time is never older than the content beside it (markFetchSuccess).
+// The content is read before the modification time, so the time is never
+// older than the content beside it (markFetchSuccess).
 func readFetchRecord(stderr io.Writer, ws workspace.Info, remote storage.RemoteName, now time.Time) (fetch *remoteFetch, missing bool) {
-	f, err := os.Open(fetchSuccessMarkerPath(ws, remote))
+	path := fetchRecordPath(ws, remote)
+	content, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, true
 	}
-	if err != nil {
-		fmt.Fprintf(stderr, "lit: fetch record for %s unreadable: %v\n", remote, err)
-		return nil, false
+	var info os.FileInfo
+	if err == nil {
+		info, err = os.Stat(path)
 	}
-	defer f.Close()
-	content, err := io.ReadAll(io.LimitReader(f, int64(len(fetchRecordUnconfirmed)+1)))
-	if err != nil {
-		fmt.Fprintf(stderr, "lit: fetch record for %s unreadable: %v\n", remote, err)
-		return nil, false
-	}
-	info, err := f.Stat()
 	if err != nil {
 		fmt.Fprintf(stderr, "lit: fetch record for %s unreadable: %v\n", remote, err)
 		return nil, false
@@ -163,8 +159,8 @@ type remoteFetch struct {
 // or nothing tries it at all, warns once the threshold passes, while a
 // workspace lit has only just met gets the whole threshold first — time for
 // automatic receive to run. One writer for every way into "no success on
-// record" — a fresh clone, a renamed or re-pointed remote, an upgrade from
-// the single legacy marker — because each is a sync remote this read finds no
+// record" — a fresh clone, a renamed remote, a re-pointed upstream, an upgrade
+// from the single legacy marker — because each is a sync remote this read finds no
 // record for. [LAW:single-enforcer]
 //
 // nil also when there is no such remote to read: no remote configured, or

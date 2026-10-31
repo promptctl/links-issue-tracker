@@ -136,7 +136,7 @@ func TestSyncStalenessLines(t *testing.T) {
 			}},
 			fetch:       &remoteFetch{remote: origin, age: staleAge, basis: noFetchSucceeded},
 			wantLines:   1,
-			wantSubstrs: []string{"no successful fetch from origin on record", "since lit started tracking it", "lit sync fetch"},
+			wantSubstrs: []string{"no successful fetch from origin on record", "lit started tracking it", "lit sync fetch"},
 			dontWant:    []string{"last successful fetch"},
 		},
 		{
@@ -182,9 +182,7 @@ func TestFetchRecordRoundTrip(t *testing.T) {
 	if fetch, missing := readFetchRecord(testStderr(t), ws, origin, now); fetch != nil || !missing {
 		t.Fatalf("readFetchRecord() = %+v, %v before any record; want nil, missing", fetch, missing)
 	}
-	if err := markFetchSuccess(ws, fork); err != nil {
-		t.Fatalf("markFetchSuccess(fork) error = %v", err)
-	}
+	markFetchSuccess(testStderr(t), ws, fork)
 	if _, missing := readFetchRecord(testStderr(t), ws, origin, now); !missing {
 		t.Fatalf("readFetchRecord(origin) not missing after only fork was fetched")
 	}
@@ -193,7 +191,7 @@ func TestFetchRecordRoundTrip(t *testing.T) {
 		t.Fatalf("startFetchRecord() error = %v", err)
 	}
 	started := now.Add(-30 * time.Hour)
-	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), started, started); err != nil {
+	if err := os.Chtimes(fetchRecordPath(ws, origin), started, started); err != nil {
 		t.Fatal(err)
 	}
 	if err := startFetchRecord(ws, origin); err != nil {
@@ -204,9 +202,7 @@ func TestFetchRecordRoundTrip(t *testing.T) {
 		t.Fatalf("readFetchRecord() after start = %+v; want noFetchSucceeded aged from the first start (~30h)", fetch)
 	}
 
-	if err := markFetchSuccess(ws, origin); err != nil {
-		t.Fatalf("markFetchSuccess(origin) error = %v", err)
-	}
+	markFetchSuccess(testStderr(t), ws, origin)
 	if err := startFetchRecord(ws, origin); err != nil {
 		t.Fatalf("startFetchRecord() after success error = %v", err)
 	}
@@ -245,7 +241,7 @@ func TestReadFetchRecordReportsAndKeepsUnknownContent(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	origin := remoteName(t, "origin")
-	if err := os.WriteFile(fetchSuccessMarkerPath(ws, origin), []byte("v9 something\n"), 0o644); err != nil {
+	if err := os.WriteFile(fetchRecordPath(ws, origin), []byte("v9 something\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var stderr bytes.Buffer
@@ -265,11 +261,9 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	origin := remoteName(t, "origin")
-	if err := markFetchSuccess(ws, origin); err != nil {
-		t.Fatalf("markFetchSuccess() error = %v", err)
-	}
+	markFetchSuccess(testStderr(t), ws, origin)
 	backdated := time.Now().Add(-30 * time.Hour)
-	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), backdated, backdated); err != nil {
+	if err := os.Chtimes(fetchRecordPath(ws, origin), backdated, backdated); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
 	fetch, _ := readFetchRecord(testStderr(t), ws, origin, time.Now())
@@ -300,11 +294,9 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 	// sync remote there is nothing to fetch, so no fetch line, whatever is on
 	// disk.
 	origin := remoteName(t, "origin")
-	if err := markFetchSuccess(ws, origin); err != nil {
-		t.Fatalf("markFetchSuccess() error = %v", err)
-	}
+	markFetchSuccess(testStderr(t), ws, origin)
 	backdated := time.Now().Add(-30 * time.Hour)
-	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), backdated, backdated); err != nil {
+	if err := os.Chtimes(fetchRecordPath(ws, origin), backdated, backdated); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
 
@@ -324,9 +316,9 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 func TestFetchSuccessMarkerPathLivesUnderStorageDir(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: "/tmp/some-workspace/.lit"}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
-	got := fetchSuccessMarkerPath(ws, remoteName(t, "origin"))
+	got := fetchRecordPath(ws, remoteName(t, "origin"))
 	want := filepath.Join("/tmp/some-workspace/.lit", "fetched.origin")
 	if got != want {
-		t.Fatalf("fetchSuccessMarkerPath() = %q, want %q", got, want)
+		t.Fatalf("fetchRecordPath() = %q, want %q", got, want)
 	}
 }

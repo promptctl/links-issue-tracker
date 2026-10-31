@@ -389,9 +389,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 	t.Run("healthy workspace prints nothing", func(t *testing.T) {
 		ws := workspaceWithOrigin(t)
 		recordPushOutcome(testStderr(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
-		if err := markFetchSuccess(ws, remoteName(t, "origin")); err != nil {
-			t.Fatalf("markFetchSuccess: %v", err)
-		}
+		markFetchSuccess(testStderr(t), ws, remoteName(t, "origin"))
 		var out bytes.Buffer
 		printMutationSyncStalenessWarning(ctx, testStderr(t), testEnv(), &out, ws, now)
 		if out.Len() != 0 {
@@ -402,9 +400,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 	t.Run("stale fetch warns even with pushes healthy", func(t *testing.T) {
 		ws := workspaceWithOrigin(t)
 		recordPushOutcome(testStderr(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
-		if err := markFetchSuccess(ws, remoteName(t, "origin")); err != nil {
-			t.Fatalf("markFetchSuccess: %v", err)
-		}
+		markFetchSuccess(testStderr(t), ws, remoteName(t, "origin"))
 		var out bytes.Buffer
 		printMutationSyncStalenessWarning(ctx, testStderr(t), testEnv(), &out, ws, now.Add(25*time.Hour))
 		if !strings.Contains(out.String(), "last successful fetch from origin") {

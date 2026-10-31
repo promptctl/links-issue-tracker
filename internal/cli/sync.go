@@ -272,6 +272,16 @@ func syncFetchLeaf() syncLeaf {
 			return err
 		}
 		remoteName := syncable.Name()
+		empty, err := remoteEmpty(ctx, inv.Stderr, inv.Env, ws, syncable)
+		if err != nil {
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync fetch", "error", err, map[string]string{"remote": remoteName.String()})
+			return err
+		}
+		if empty {
+			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync fetch", string(syncTargetRemoteEmpty), nil, map[string]string{"remote": remoteName.String()})
+			_, err := fmt.Fprintln(inv.Stdout, firstPushSkipMessage)
+			return err
+		}
 		err = fetchAndFollow(ctx, inv.Stderr, inv.Env, session, ws, remoteName)
 		recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync fetch", "fetched", err, map[string]string{"remote": remoteName.String()})
 		if err != nil {
@@ -298,9 +308,7 @@ func fetchAndFollow(ctx context.Context, stderr io.Writer, env environ.Env, sess
 	if err := session.syncer.SyncFetch(ctx, remote); err != nil {
 		return err
 	}
-	if err := markFetchSuccess(ws, remote); err != nil {
-		fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
-	}
+	markFetchSuccess(stderr, ws, remote)
 	syncRemote, branch, ok, err := freshnessSyncTarget(ctx, env, ws)
 	// Only a branch nothing here names, or a remote lit cannot sync with,
 	// skips the follow; a record that would name the branch but cannot be
@@ -358,9 +366,7 @@ func syncPullLeaf() syncLeaf {
 		// SyncPull succeeding means its internal SyncReceive fetched the remote
 		// successfully (the fetch is the first step of every outcome branch below),
 		// so this is a real "we talked to the remote" moment regardless of state.
-		if err := markFetchSuccess(ws, remoteName); err != nil {
-			fmt.Fprintf(inv.Stderr, "lit: fetch-success marker not written: %v\n", err)
-		}
+		markFetchSuccess(inv.Stderr, ws, remoteName)
 		pullTraceMetadata["state"] = string(result.State)
 		pullTraceMetadata["base"] = string(result.Base)
 		// The pull's decision and the base it settled from land on the event,
@@ -957,11 +963,11 @@ func resolveSyncTarget(ctx context.Context, stderr io.Writer, env environ.Env, s
 		return syncTarget{skip: syncTargetNoRemote}, nil
 	}
 	remoteName := syncable.Name()
-	hasRefs, refsErr := ws.Repository().RemoteHasRefs(ctx, env, syncable)
-	if refsErr != nil {
-		return syncTarget{remote: remoteName}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+	empty, err := remoteEmpty(ctx, stderr, env, ws, syncable)
+	if err != nil {
+		return syncTarget{remote: remoteName}, err
 	}
-	if !hasRefs {
+	if empty {
 		return syncTarget{remote: remoteName, skip: syncTargetRemoteEmpty}, nil
 	}
 	branch, err := resolveSyncBranch(ctx, stderr, env, ws, syncable)
@@ -969,6 +975,19 @@ func resolveSyncTarget(ctx context.Context, stderr io.Writer, env environ.Env, s
 		return syncTarget{remote: remoteName}, err
 	}
 	return syncTarget{remote: remoteName, branch: branch}, nil
+}
+
+// remoteEmpty asks whether remote advertises no refs at all. That answer
+// confirms its fetch record: a fetch would have brought nothing.
+func remoteEmpty(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, remote workspace.SyncableRemote) (bool, error) {
+	hasRefs, err := ws.Repository().RemoteHasRefs(ctx, env, remote)
+	if err != nil {
+		return false, fmt.Errorf("check remote refs %q: %w", remote.Name(), err)
+	}
+	if !hasRefs {
+		markFetchSuccess(stderr, ws, remote.Name())
+	}
+	return !hasRefs, nil
 }
 
 // syncPullOutcome is the result of one pull attempt, independent of CLI

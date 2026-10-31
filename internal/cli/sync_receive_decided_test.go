@@ -149,3 +149,18 @@ func TestAReceiveSaysWhetherItsRemoteAnswered(t *testing.T) {
 		t.Fatalf("receive.outcomes value = %v; want the fetch that followed to fail with its error", value)
 	}
 }
+
+// A remote holding code but no lit data answers the receive's question, and
+// that answer confirms the record lit started: it is not a failing remote.
+func TestAReceiveOfARemoteWithNoLitDataConfirmsIt(t *testing.T) {
+	t.Parallel()
+	ws := receiveWorkspace(t, []string{"refs/heads/main"}, "origin")
+	origin := remoteName(t, "origin")
+	if err := startFetchRecord(ws, origin); err != nil {
+		t.Fatal(err)
+	}
+	decidedReceive(t, ws)
+	if fetch, _ := readFetchRecord(testStderr(t), ws, origin, time.Now()); fetch == nil || fetch.basis != lastFetchSucceeded {
+		t.Fatalf("record after the receive = %+v; want lastFetchSucceeded", fetch)
+	}
+}
