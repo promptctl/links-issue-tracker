@@ -36,8 +36,8 @@ func (f Freshness) Covers(t time.Time) bool {
 // value, LocalCheckouts is a value, and Standings is a value.
 func Derive(evidence Evidence, fresh Freshness, local LocalCheckouts) Standings {
 	standings := make(Standings, len(evidence.members))
-	for lane, members := range evidence.members {
-		standings[lane] = standingOf(members, evidence.events[lane], fresh, local)
+	for lane := range evidence.members {
+		standings[lane] = evidence.Lane(lane).Standing(fresh, local)
 	}
 	return standings
 }

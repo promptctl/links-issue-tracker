@@ -219,7 +219,7 @@ func (f Freshness) Covers(t time.Time) bool { return !t.Before(f.Now.Add(-f.Wind
 - `window <= 0` → `config: claims.freshness_window must be positive, got %s` (`internal/config/config.go`).
 - The reason for string parsing: viper weak-decoding a bare `72` would land as 72 **nanoseconds**, positive and passing validation, expiring every claim instantly (`internal/config/config.go`).
 
-**Where `Now` comes from at runtime**: `claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}` in `gatherClaimContext` (`internal/cli/claims_context.go`).
+**Where `Now` comes from at runtime**: `claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}` in `gatherCheckouts` (`internal/cli/claims_context.go`).
 
 E2E manipulation of the window: a test writes `.lit/config.toml` containing `[claims]\nfreshness_window = "1ms"\n` and sleeps 50 ms (`internal/cli/claims_takeover_e2e_test.go`).
 
@@ -410,11 +410,11 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 `type claimContext struct { standings claims.Standings; evidence claims.Evidence; self model.Attribution; addresses map[model.Attribution]workspace.Checkout }` (`internal/cli/claims_context.go`). `addresses` never reaches the shared database and lives only for the process's lifetime (`internal/cli/claims_context.go`).
 
 `gatherClaimContext(ctx, stdout, ap)` (`internal/cli/claims_context.go`), in order:
-1. `config.Load(pathspec.New(ap.Workspace.RootDir))`.
-2. `ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **both flags set**, because a lane's establishing event can sit on a deleted or archived issue; with the zero-value filter, a repository with even one deleted issue that ever carried an event made `NewEvidence` fail outright on every `next` and `backlog`.
-3. `ap.Store.GetRelationsByIDs(ctx, ids)` → `parents[issue.ID] = relations[issue.ID].Parent`.
-4. `ap.Store.ListAllEvents(ctx)`.
-5. `claims.NewEvidence(allIssues, parents, events)`.
+1. `ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})` — **both flags set**, because a lane's establishing event can sit on a deleted or archived issue; with the zero-value filter, a repository with even one deleted issue that ever carried an event made `NewEvidence` fail outright on every `next` and `backlog`.
+2. `ap.Store.GetRelationsByIDs(ctx, ids)` → `parents[issue.ID] = relations[issue.ID].Parent`.
+3. `ap.Store.ListAllEvents(ctx)`.
+4. `claims.NewEvidence(allIssues, parents, events)`.
+5. `config.Load(pathspec.New(ap.Workspace.RootDir))`. This step, the next, and the `fresh` of step 7 are `gatherCheckouts`.
 6. `workspace.LiveCheckouts(ap.Workspace.RootDir)`:
    - **On error**: prints to stdout, verbatim, `warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n`, and leaves `local` as the zero `claims.LocalCheckouts` and `addresses` nil. A failure to print the warning aborts the whole gather.
    - **On success**: `local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, app.LiveCheckoutsOf(checkouts))` and `addresses = addressesByAttribution(ap.Workspace.WorkspaceID, checkouts)`.
@@ -423,7 +423,7 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 The token projection is `app.LiveCheckoutsOf`, the same function `(*App).LocalCheckouts` uses (`internal/cli/claims_context.go`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go`).
 
-Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal/cli/workable.go`), `authorizeStart` (`internal/cli/claims_takeover.go`), `reportContestedLanes` (`internal/cli/claims_contest_report.go`).
+Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal/cli/workable.go`), `reportContestedLanes` (`internal/cli/claims_contest_report.go`). `authorizeStart` shares only its tail, `gatherCheckouts`, because a start reads one lane.
 
 ---
 
@@ -446,12 +446,12 @@ The `self.Present()` half is load-bearing, not a redundant guard: a checkout wit
 There is no row for an expired claim. The derivation returns `Unclaimed` the moment the window closes (unless the holder's worktree is locked), so `relationOf` never learns a claim existed. The `laneRelation` constants are at `internal/cli/claims_takeover.go`. Pinned by `TestRelationOf` (`internal/cli/claims_takeover_test.go`).
 
 **`authorizeStart(ctx, stdout, ap, issueID, prior, start, take) (afterApply, error)`** (`internal/cli/claims_takeover.go`):
-1. `ap.Store.GetRelationsByIDs(ctx, []string{issueID})` → `lane := model.LaneOf(prior, relations[issueID].Parent)`.
-2. `gatherClaimContext`.
-3. `relationOf(standing, cc.self)` over `standing := cc.standings.Of(lane)`; `start.lane_held` is set on the invocation's event to whether the relation is anything but `laneUnclaimed`, then `laneHeldForeign` → `confirmFreshTakeover` runs and its error aborts the start.
+1. `ap.Store.LaneFamily(ctx, issueID)`, whose size `start.lane_family_issues` records, parsed by `claims.NewLane(issueID, family)` into the `claims.Lane` the ticket is in. `NewLane` shares `partition` with `NewEvidence`, refusals included.
+2. `gatherCheckouts`.
+3. `relationOf(standing, ownAttribution(ap))` over `standing := lane.Standing(checkouts.fresh, checkouts.local)`; `start.lane_held` is set on the invocation's event to whether the relation is anything but `laneUnclaimed`, then `laneHeldForeign` → `confirmFreshTakeover` runs and its error aborts the start.
 4. Returns the `afterApply` `transitionLeaf` calls with the written ticket and the `Handover` `Apply` reported (`transitionSpec.authorize`, `internal/cli/cli.go`): its notice is the takeover line `confirmFreshTakeover` returned (empty unless `--take` crossed a foreign hold) followed by `transferNotice(standing, handover)`, and it sets `start.handover` and `start.transfer_announced` (whether the transfer notice is non-empty) on the event. `lit phase`'s hook (`authorizePhase`) sets `phase.*` facts and returns `""`; `lit done`'s (`authorizeDone`) sets `done.plan_standing`, and on an approved plan `done.plan_digest` and `done.plan_review`, and returns a warning naming what the plan lacks, or `""` when it is approved; every other transition's (`noAuthorize`) returns `""`. An unclaimed lane, this checkout's own lane when nothing changed hands, and a lane whose claim has expired all pass with no output.
 
-**`confirmFreshTakeover(stdout, cc, lane, take)`** (`internal/cli/claims_takeover.go`). It renders the claim line with `formatClaimLine(cc, lane, time.Now())`; `ok == false` → error `claims: %v is held by another checkout but has no claim line to show`, since the caller reaches here only for a `Held` standing.
+**`confirmFreshTakeover(stdin, stdout, line, take)`** (`internal/cli/claims_takeover.go`). `authorizeStart` renders `line` with `claimLineOf(standing.(claims.Held), lane, checkouts.addresses, time.Now())`, since it reaches here only for a `Held` standing.
 - `take == true`, at a terminal or not → returns `"<claim line> — taking over (--take)\n"` and proceeds; the start prints it as part of its notice after `Apply`, so a start that fails at `Apply` prints none. It is read before the terminal is.
 - **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses) and no `--take` → **refusal**: `takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}`.
 - **Interactive** and no `--take`: calls `askYesNo(stdin, stdout, line+"\ntake over this lane?")` with the invocation's stdin, which prints `"%s [y/N] "` — so `"<claim line>\ntake over this lane? [y/N] "` — and reads a line from that stdin one byte at a time, up to `\n` or EOF, so a later prompt in the same run reads the next line. A read error other than `io.EOF` → `fmt.Errorf("read confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `takeoverUnconfirmedError{Message: "takeover declined"}`. `askYesNo` is shared with the `lit purge` confirmation (`internal/cli/purge.go`).

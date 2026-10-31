@@ -60,9 +60,10 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // the lane right now, enforces the deliberate act the design demands before a
 // live claim may be overridden. Every other lane — unclaimed, this checkout's
 // own, or one whose claim has expired, which is unclaimed — passes with no
-// ceremony: the happy path pays one extra evidence gather and nothing else,
+// ceremony: the happy path pays one read of the lane's family and nothing else,
 // exactly as "no confirmation, no warning, no ceremony on the happy path"
-// demands.
+// demands. The read stays off the store's size, because a start asks about one
+// lane; `next` and `backlog` route across all of them.
 //
 // Its result is what the start owes after Apply (transitionSpec.authorize):
 // the takeover line when --take crossed a foreign hold, then the transfer
@@ -72,8 +73,8 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // progress, and the phase the start left the ticket in. A handover from anyone
 // the lane does not name — nobody holds it, or somebody else does — goes
 // unannounced, and the gate is the one read that knows the lane's standing. The count is that same
-// evidence with the written ticket in place of the one read, so it costs no
-// second gather, and a start that reopens a closed ticket counts it as no
+// reading with the written ticket in place of the one read, so it costs no
+// second read, and a start that reopens a closed ticket counts it as no
 // longer done.
 // [LAW:one-source-of-truth]
 //
@@ -89,23 +90,29 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID st
 	if _, err := prior.Apply(start); err != nil {
 		return nil, err
 	}
-	relations, err := ap.Store.GetRelationsByIDs(ctx, []string{issueID})
+	family, err := ap.Store.LaneFamily(ctx, issueID)
 	if err != nil {
 		return nil, err
 	}
-	lane := model.LaneOf(prior, relations[issueID].Parent)
-	cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
+	telemetry.Set(ctx, "start.lane_family_issues", len(family.Issues))
+	lane, err := claims.NewLane(issueID, family)
 	if err != nil {
 		return nil, err
 	}
-	standing := cc.standings.Of(lane)
-	relation := relationOf(standing, cc.self)
+	checkouts, err := gatherCheckouts(inv.Env, inv.Stdout, ap)
+	if err != nil {
+		return nil, err
+	}
+	standing := lane.Standing(checkouts.fresh, checkouts.local)
+	relation := relationOf(standing, ownAttribution(ap))
 	// Recorded before the gate, so a refused takeover's event still says whose
 	// lane it met.
 	telemetry.Set(ctx, "start.lane_held", relation != laneUnclaimed)
 	var takeover string
 	if relation == laneHeldForeign {
-		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, cc, lane, take); err != nil {
+		// relationOf answers laneHeldForeign for a Held standing and nothing else.
+		line := claimLineOf(standing.(claims.Held), lane, checkouts.addresses, time.Now())
+		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, take); err != nil {
 			return nil, err
 		}
 	}
@@ -113,7 +120,7 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID st
 		transfer := transferNotice(standing, handover)
 		telemetry.Set(ctx, "start.handover", handover != nil)
 		telemetry.Set(ctx, "start.transfer_announced", transfer != "")
-		return takeover + transfer, statusline.Facts{started(cc.evidence, written.issue), phaseRead(written)}
+		return takeover + transfer, statusline.Facts{started(lane.ProgressWith(written.issue), written.issue), phaseRead(written)}
 	}, nil
 }
 
@@ -131,16 +138,9 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID st
 // already uses, so a captured-stdout test never blocks on a stdin read it did
 // not ask for.
 //
-// The claim line is the dossier formatClaimLine already builds for every
-// other claim-aware surface (`next`, `backlog`), reused rather than re-derived.
-// It fails loudly rather than proceeding without naming the holder: the caller
-// reaches here only for a Held standing, which formatClaimLine always renders,
-// so ok=false means the two have gone out of sync. [LAW:no-silent-failure]
-func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, cc claimContext, lane model.LaneID, take bool) (announcement string, err error) {
-	line, ok := formatClaimLine(cc, lane, time.Now())
-	if !ok {
-		return "", fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane)
-	}
+// line is the dossier claimLineOf builds for every claim-aware surface
+// (`next`, `backlog`), reused rather than re-derived.
+func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, line string, take bool) (announcement string, err error) {
 	if take {
 		return line + " — taking over (--take)\n", nil
 	}

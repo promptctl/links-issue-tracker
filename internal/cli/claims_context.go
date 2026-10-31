@@ -39,13 +39,33 @@ type claimContext struct {
 // evidence and local liveness — the store/filesystem boundary claim-aware
 // rendering and routing both sit behind. [LAW:effects-at-boundaries]
 func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, ap *app.App) (claimContext, error) {
-	cfg, err := config.Load(env, ap.Workspace.Project)
-	if err != nil {
-		return claimContext{}, err
-	}
 	evidence, err := readEvidence(ctx, ap)
 	if err != nil {
 		return claimContext{}, err
+	}
+	checkouts, err := gatherCheckouts(env, stdout, ap)
+	if err != nil {
+		return claimContext{}, err
+	}
+	standings := claims.Derive(evidence, checkouts.fresh, checkouts.local)
+	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: checkouts.addresses}, nil
+}
+
+// checkoutFacts is what a derivation reads besides the evidence, and what a
+// claim line needs to name a holder this machine can address: the clock against
+// the configured window, and this machine's own checkouts.
+type checkoutFacts struct {
+	fresh     claims.Freshness
+	local     claims.LocalCheckouts
+	addresses map[model.Attribution]workspace.Checkout
+}
+
+// gatherCheckouts reads those facts, the half of a claim's reading that a read
+// of one lane and a read of the backlog share.
+func gatherCheckouts(env environ.Env, stdout io.Writer, ap *app.App) (checkoutFacts, error) {
+	cfg, err := config.Load(env, ap.Workspace.Project)
+	if err != nil {
+		return checkoutFacts{}, err
 	}
 
 	// [LAW:no-silent-failure] This machine cannot prove which of its own
@@ -59,7 +79,7 @@ func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, 
 	checkouts, err := workspace.LiveCheckouts(env, ap.Workspace)
 	if err != nil {
 		if _, printErr := fmt.Fprintf(stdout, "warning: could not enumerate local checkouts (%v) — claim liveness check and local addresses skipped, freshness alone governs\n", err); printErr != nil {
-			return claimContext{}, printErr
+			return checkoutFacts{}, printErr
 		}
 	} else {
 		local = claims.NewLocalCheckouts(ap.Workspace.WorkspaceID, app.LiveCheckoutsOf(checkouts))
@@ -67,8 +87,7 @@ func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, 
 	}
 
 	fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}
-	standings := claims.Derive(evidence, fresh, local)
-	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: addresses}, nil
+	return checkoutFacts{fresh: fresh, local: local, addresses: addresses}, nil
 }
 
 // readEvidence reads the claim evidence out of the store: every issue, the

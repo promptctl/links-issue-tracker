@@ -156,7 +156,7 @@ var probes = []probe{
 	// check, `start` and `rank --bottom` are no-ops, and `rank set` moves its
 	// ids only the first time. So each probe below undoes the one before it, and
 	// every recorded round is the real write: an edge added past the cycle
-	// check, a ticket started through the claim gather, and two epics carried
+	// check, a ticket started through the takeover gate, and two epics carried
 	// from the bottom of the top level to its top, rewriting the frame.
 	{name: "dep add", argv: inMidStore(func(m midStore) []string {
 		return []string{"dep", "add", m.dependent, "--blocked-by", m.blocker}

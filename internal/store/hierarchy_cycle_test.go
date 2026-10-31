@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 )
 
 // parentChain builds issues linked child -> parent in the order given, so
@@ -593,6 +594,39 @@ func TestRestoreCutsALoopTheExportHolds(t *testing.T) {
 	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
 		t.Errorf("ListIssues() after the restore error = %v, want the store readable", err)
 	}
+}
+
+// A lane read through LaneFamily agrees with the whole store over a child two
+// parents claim. The child's lane is the lower parent's, so the started child
+// is in the family of a sibling under the higher parent and must not hold that
+// sibling's lane.
+func TestALaneFamilyPlacesAChildWithTwoParentsByTheLowerOne(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epics := []string{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
+	lower, higher := min(epics[0], epics[1]), max(epics[0], epics[1])
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "child", Topic: "hier", ParentID: lower})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "sibling", Topic: "hier", ParentID: higher})
+	if err != nil {
+		t.Fatalf("CreateIssue(sibling) error = %v", err)
+	}
+	seedParentEdge(t, ctx, st, child.ID, higher)
+	st.AttributeTo("the-childs-checkout")
+	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply(%s, Start) error = %v", child.ID, err)
+	}
+
+	family, err := st.LaneFamily(ctx, sibling.ID)
+	if err != nil {
+		t.Fatalf("LaneFamily(%s) error = %v", sibling.ID, err)
+	}
+	if !slices.ContainsFunc(family.Issues, func(issue model.Issue) bool { return issue.ID == child.ID }) {
+		t.Fatalf("family of %s = %v, want it to hold the child filed under both parents", sibling.ID, issueIDs(family.Issues))
+	}
+	storagetest.RequireLaneFamiliesMatchTheBacklog(t, ctx, st)
 }
 
 // A child two parents claim is a fault in the data, and every reader still

@@ -211,6 +211,8 @@ var cases = []engineCase{
 	{"relations_roundtrip", relationsRoundtrip},
 	{"relations_batch_buckets_edges", relationsBatchBucketsEdges},
 	{"parent_by_child_maps_every_child", parentByChildMapsEveryChild},
+	{"a_lane_family_is_the_issue_and_what_is_filed_beside_it", aLaneFamilyIsTheIssueAndWhatIsFiledBesideIt},
+	{"a_lane_family_reads_what_the_backlog_reads", aLaneFamilyReadsWhatTheBacklogReads},
 	{"rank_inversions_read_tree_order", rankInversionsReadTreeOrder},
 	{"interleaved_epics_hold_no_rank_inversion", interleavedEpicsHoldNoRankInversion},
 	{"parent_wiring", parentWiring},

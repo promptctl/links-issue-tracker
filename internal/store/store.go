@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -2358,8 +2359,7 @@ func queryComments(ctx context.Context, q rowQueryer, from string, args ...any) 
 // the hinted read takes 1.2ms, as it does with nothing outside the family. queryEvents parses each stamp into its instant, so the stamp
 // never trusts the varchar's spelling.
 func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, issueEventsQuery+` UNION ALL `+bareEvents(`JOIN_ORDER(own, sibling, e) LOOKUP_JOIN(own, sibling) LOOKUP_JOIN(sibling, e)`, `relations own
-		JOIN relations sibling ON sibling.dst_id = own.dst_id AND sibling.type = own.type
+	events, err := s.queryEvents(ctx, issueEventsQuery+` UNION ALL `+bareEvents(`JOIN_ORDER(own, sibling, e) LOOKUP_JOIN(own, sibling) LOOKUP_JOIN(sibling, e)`, siblingEdges+`
 		JOIN issue_events e ON e.issue_id = sibling.src_id
 		WHERE own.src_id = ? AND own.type = ? AND sibling.src_id <> ?`),
 		issueID, issueID, string(model.RelParentChild), issueID)
@@ -2367,6 +2367,59 @@ func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.
 		return nil, fmt.Errorf("read lane family history of %s: %w", issueID, err)
 	}
 	return events, nil
+}
+
+// siblingEdges walks from an issue's parent edges, own, to every edge under
+// the same parent, sibling: the join that states model.LaneFamily.
+const siblingEdges = `relations own
+		JOIN relations sibling ON sibling.dst_id = own.dst_id AND sibling.type = own.type`
+
+// LaneFamily reads issueID's family. Nothing here reads the rank ancestry or
+// lists issues, which is what keeps a start off the store's size, and parents
+// are read for their type alone because hydrating one hydrates its whole
+// subtree.
+func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, error) {
+	events, err := s.laneFamilyHistory(ctx, issueID)
+	if err != nil {
+		return claims.Family{}, err
+	}
+	ids, err := s.laneFamilyIDs(ctx, issueID)
+	if err != nil {
+		return claims.Family{}, err
+	}
+	named, arg := newIDSet(ids).rows("family")
+	parents, err := s.queryParentByChild(ctx, named+` JOIN relations r ON r.src_id = family.id`, arg)
+	if err != nil {
+		return claims.Family{}, fmt.Errorf("read lane family parents of %s: %w", issueID, err)
+	}
+	parentTypes, err := s.issueTypesByIDs(ctx, slices.Collect(maps.Values(parents)))
+	if err != nil {
+		return claims.Family{}, err
+	}
+	issuesByID, err := s.getIssuesByIDs(ctx, ids)
+	if err != nil {
+		return claims.Family{}, err
+	}
+	issues := slices.Collect(maps.Values(issuesByID))
+	// No container's key is read: siblings compare on their own, so an empty
+	// ancestry is tree order among them, and the full one is the store's size.
+	storage.RankAncestry{}.Sort(issues)
+	return claims.Family{Issues: issues, ParentByChild: parents, ParentTypes: parentTypes, Events: events}, nil
+}
+
+// laneFamilyIDs is the id of every issue in issueID's lane family. It reads
+// relations and nothing else, so no issue's retention can reach it.
+func (s *Store) laneFamilyIDs(ctx context.Context, issueID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT /*+ JOIN_ORDER(own, sibling) LOOKUP_JOIN(own, sibling) */ sibling.src_id FROM `+siblingEdges+`
+		WHERE own.src_id = ? AND own.type = ?`, issueID, string(model.RelParentChild))
+	if err != nil {
+		return nil, fmt.Errorf("read lane family of %s: %w", issueID, err)
+	}
+	ids, err := scanIDColumn(rows)
+	if err != nil {
+		return nil, fmt.Errorf("scan lane family of %s: %w", issueID, err)
+	}
+	return append(ids, issueID), nil
 }
 
 // historyFiledUnder reads the events of every issue filed under parentID as

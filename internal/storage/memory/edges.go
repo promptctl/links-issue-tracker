@@ -3,12 +3,14 @@ package memory
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -355,14 +357,50 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 func (e *Engine) ParentByChild(ctx context.Context) (map[string]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	return e.parentByChild(), nil
+}
 
+// parentByChild is ParentByChild for callers already holding e.mu.
+func (e *Engine) parentByChild() map[string]string {
 	out := map[string]string{}
 	for _, rel := range e.relations {
 		if held, ok := out[rel.SrcID]; rel.Type == model.RelParentChild && (!ok || rel.DstID < held) {
 			out[rel.SrcID] = rel.DstID
 		}
 	}
-	return out, nil
+	return out
+}
+
+// LaneFamily reads the family model.LaneFamily names, retention ignored. This
+// engine holds every event in full, so it has no Changes to save by omitting
+// them.
+func (e *Engine) LaneFamily(ctx context.Context, issueID string) (claims.Family, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	family := model.LaneFamily(issueID, e.relations)
+	parents := e.parentByChild()
+	maps.DeleteFunc(parents, func(child, _ string) bool { return !family[child] })
+	parentTypes := map[string]model.IssueType{}
+	for _, parent := range parents {
+		parentTypes[parent] = e.issues[parent].issueType
+	}
+	recs := []*record{}
+	events := []model.IssueEvent{}
+	for id := range family {
+		events = append(events, e.eventsFor(id)...)
+		if rec, ok := e.issues[id]; ok {
+			recs = append(recs, rec)
+		}
+	}
+	issues, err := e.hydrateAll(recs, e.positions())
+	if err != nil {
+		return claims.Family{}, err
+	}
+	// An empty ancestry is tree order among siblings, which compare on their
+	// own keys.
+	storage.RankAncestry{}.Sort(issues)
+	return claims.Family{Issues: issues, ParentByChild: parents, ParentTypes: parentTypes, Events: sortEvents(events)}, nil
 }
 
 func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (model.Relation, error) {
