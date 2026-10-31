@@ -71,7 +71,7 @@ lit tracks tickets, not GitHub PRs, so no lit command will surface one.  Two che
 gh pr list --head "$(git branch --show-current)" --state open --limit 1000
 ```
 
-A PR here is your ticket.  Skip the selection steps and take it to a clean, merged close-out through the review process your instructions define — and where none defines one, by working its review threads by hand.  Then pick up the working steps under "Working the ticket".
+A PR here is your ticket.  Skip the selection steps and take it to a clean, merged close-out through the review process your instructions define — and where none defines one, by working its review threads by hand.  Once it has merged, finish the ticket the way step 5 of "Working the ticket" finishes one — the phases, then `lit done <id>` — and come back to "Your PRs elsewhere" below.  Step 5 goes on to `lit next`; stop before it, because that list may still hold a PR in flight.  Steps 1 to 4 do not apply: their checks and branch setup are for a ticket whose code is not yet on the trunk.
 
 **Your PRs elsewhere.**
 
@@ -87,7 +87,7 @@ For each PR the query returned, take the ticket id from its branch name and chec
 
 A branch whose name carries no ticket id at all — someone's typo fix, a hand-cut experiment — is not lit-tracked work, so there is no lane to look up and nothing here for you to adopt.  Leave it where it is.
 
-Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, close its PR out as above, then the working steps under "Working the ticket".  Work them one at a time, and do not pull new work until the last one is closed out.
+Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, close its PR out and finish its ticket as above.  Work them one at a time, and do not pull new work until the last one is closed out.
 
 **If nothing is in flight,** proceed to "Pull new work" below.  Open PRs stay relevant after that — an older one may touch the files your new ticket touches — which is why the overlap check is a step in "Working the ticket".
 
@@ -124,7 +124,7 @@ Those are the routes.  Do not go looking for a third in `lit backlog` or `lit or
 
 ## Working the ticket
 
-However you arrived at a ticket — uncommitted work, an open PR, an orphan, or `lit next` — work it through these steps:
+However you arrived at a ticket — uncommitted work, an orphan, or `lit next` — work it through these steps:
 
 1. **Read the ticket fully.** Title, description, acceptance criteria, comments, linked PRs, linked tickets. If the ticket references a spec, doc, or prior PR, read that too. You are about to author code that claims to satisfy this ticket — earn the right to claim it.
 
@@ -159,7 +159,7 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 3. **Set up the workspace.**
 
-   - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work or an open PR.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
+   - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
 
    - **Otherwise, branch from an up-to-date trunk** — not from wherever HEAD happens to be sitting.  Finishing a ticket leaves you standing on its branch, and `git checkout -b` from there silently forks the new ticket off unmerged work: the PR opens carrying the previous ticket's diff on top of its own, and it cannot be reviewed or merged on its own.  Fetch the trunk first; the branch is cut from it below:
 
