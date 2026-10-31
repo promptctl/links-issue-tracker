@@ -23,9 +23,10 @@ skew the event-store design already surfaces as an advisory.
 
 ## What exists
 
-A ticket's status is one of `open`, `in_progress` and `closed`, a sealed sum in
-`internal/model/lifecycle/status_states.go` that a database check constraint
-repeats (`internal/store/schema_reconcile.go`). Inside `in_progress`, a phase
+A leaf ticket's status is one of `open`, `in_progress` and `closed`, a sealed
+sum in `internal/model/lifecycle/status_states.go` that a database check
+constraint repeats (`internal/store/schema_reconcile.go`). An epic stores no
+status; its state derives from its children. Inside `in_progress`, a phase
 (`plan`, `impl`, `review`, `merge`) is read back as the newest event that set
 one (`internal/model/phase.go`), so lit already shows a board with six
 positions on two axes. Readiness, the orphaned annotation and lane claims are
@@ -87,17 +88,22 @@ in draft".
   copied onto merge and deploy.
 - **Entry rules hold a ticket at the door until they pass.** A ticket dragged
   to doing while a blocker is open waits in backlog, and on the first read
-  after the blocker closes it is in doing. Nothing has to drag it again.
+  after the blocker closes it is in doing. Nothing has to drag it again. Once
+  the ticket is in, the drag is spent: a stay rule that sends it out is not
+  undone by the drag, and only a new drag brings it back. This example
+  follows the first answer to decision 2.
 - **Staying matters only when it differs from entering.** A column with no
   stay rule keeps a ticket only while its entry rules still hold, and rules
   are re-checked on every read, so if someone deletes the AC, backlog's entry
   rule settles the ticket back into draft with no extra rule. A stay rule
-  replaces that test once the ticket is in, for the case where staying is
-  easier than getting in. Doing's entry rule places a ticket in backlog while
+  that places tickets replaces that test once the ticket is in, for the case
+  where staying is easier than getting in; a label rule never does. Doing's entry rule places a ticket in backlog while
   any blocker is open, and its stay rule places it there after 72 hours with
   no update. A reopened blocker then leaves the ticket in doing, while a
-  ticket nobody touches falls back to backlog. That
-  fallback is today's orphaned annotation turned into a move.
+  ticket nobody touches falls back to backlog. That fallback is the signal
+  today's orphaned annotation gives, turned into a move. The annotation's own
+  test is stricter, six hours without an update and nobody holding the lane
+  (`internal/cli/ready_state.go`), and a default rule would read both.
 
 ### A drag is a fact
 
@@ -151,8 +157,10 @@ The owner's framing: reading the board calls `tick`. It is not a command anyone
 runs, and its output is never saved. The owner asked what there would be to
 save, and the answer is nothing. Position is a function of the facts, the
 configuration and the clock, so a saved copy is a second source for something
-already computable. A cache is allowed for speed, invalidated when facts
-change, and is never the source of truth.
+already computable. A cache is allowed for speed and is never the source of
+truth. The fold's cache is invalidated when facts change; a cache of tick's
+output also takes `now`, so it expires at the next moment a time-based rule
+would give a different answer.
 
 ```
 state = fold(events)               // deterministic, cacheable, same bytes everywhere
@@ -173,9 +181,10 @@ nothing into a store it only reads.
 
 - **Status and phase become one board.** The default configuration would
   reproduce today's behavior with columns `open`, `plan`, `impl`, `review`,
-  `merge` and `closed`, and their rules, plus a column for an in-progress
-  epic, which has no phase today (`internal/model/phase.go`). This is a
-  proposal; the owner has not ruled on it.
+  `merge` and `closed`, and their rules. An epic has no status or phase of
+  its own today (`internal/model/phase.go`), so its column comes from rules
+  that read its children's columns, the dependency decisions 1 and 5 cover.
+  This is a proposal; the owner has not ruled on it.
 - **The workspace-schema draft's `Machine`** (states, an initial state, and
   transitions with guards) gives way to rules over a computed position. Its
   guards survive as rule conditions.
@@ -222,16 +231,16 @@ S2 or later, beside custom fields.
    trinity keeps epic rollup and hiding finished work simple. Free groups are
    more flexible, but each of those behaviors then needs its own
    configuration.
-2. **When a drag and the rules disagree, which wins?** One answer is that
-   rules always win: a ticket dragged to review with no PR settles in impl,
-   labeled with why, and a drag is evidence, never an override. The proposal
-   is that the newest fact wins. A later drag overrides earlier evidence, and
-   later evidence overrides an earlier drag, so position stays a function of
-   the facts. "Newest" means later in the event store's total order, never
-   the later wall-clock time, so a fast clock cannot win the comparison. A
-   condition with no event behind it, an absence such as "no PR" or a lapse
-   such as "no update in 72h", has nothing to compare, so under the proposal
-   it needs a ruling of its own.
+2. **When a drag and the rules disagree, which wins?** Recommended: rules
+   win. A ticket dragged to review with no PR settles in impl, labeled with
+   why, and a drag is evidence, never an override; the worked example
+   assumes this. The alternative is that the newest fact wins, so a later
+   drag overrides earlier evidence and later evidence overrides an earlier
+   drag. It has two costs. A condition with no event behind it, an absence
+   such as "no PR" or a lapse such as "no update in 72h", has nothing to
+   compare. And "newest" would have to mean later in the event store's total
+   order, which between concurrent events can rank a writer who worked
+   offline for days ahead of today's evidence.
 3. **Does tick apply the current configuration to every ticket?** Validation in
    the event-store design judges each event against the configuration it was
    written under. For the board, the expected answer is the current
@@ -247,6 +256,8 @@ S2 or later, beside custom fields.
    placement revisits a column within one read stops at the first column it
    reached, and a ticket on a loop through other tickets is placed without
    reading the positions on the loop; either way it is labeled with the
-   loop. Two implementations that choose
-   differently give two boards from the same facts, so this is fixed before
-   tick is built.
+   loop. The history replay that entry rules need is part of the same
+   question: which past moments it visits, and which `now` each one uses,
+   given that recorded times are not monotonic across writers. Two
+   implementations that choose differently give two boards from the same
+   facts, so this is fixed before tick is built.
