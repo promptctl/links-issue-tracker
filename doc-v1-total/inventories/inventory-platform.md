@@ -932,7 +932,9 @@ Justfile or any workflow in `.github/workflows/`.
   3. **`verify`**: `go mod tidy` then `git diff --exit-code go.mod go.sum`, failing
      with `::error::go.mod/go.sum are not tidy…`; `grep -q -- "-buildvcs=false" scripts/install.sh`
 ; `bash scripts/install.sh`.
-  4. **`lint`**: `golangci/golangci-lint-action@v8` pinned to `version: v2.8.0`.
+  4. **`lint`**: `golangci/golangci-lint-action@v8` pinned to `version: v2.8.0` with `verify: false`;
+     then, under `if: ${{ !cancelled() }}`, `golangci-lint version --short` → `golangci-lint config verify --schema`
+     against the committed `.github/golangci.v<major>.<minor>.jsonschema.json` (no network).
   5. **`docs`**: setup-python@v5 `3.x`; `pip install mkdocs==1.6.1 mkdocs-material==9.7.6`;
      `mkdocs build --strict`.
   6. **`candybar`**: checkout@v4 → setup-go@v5 → setup-node@v4 (`node-version: '22'`) →
