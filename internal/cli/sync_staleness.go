@@ -27,7 +27,7 @@ const unfetchedStalenessThreshold = 24 * time.Hour
 // is the moment since which local knowledge of that remote has gone
 // unconfirmed, and its content says what that moment was (fetchBasis). Empty,
 // it was a confirmation — a fetch of that remote succeeded, or it advertised
-// the same refs the last successful receive already brought in
+// no lit data or the same refs the last successful receive already brought in
 // (sync_receive_ask.go). Holding fetchRecordUnconfirmed, no confirmation has
 // been recorded here since lit started tracking the remote. Distinct from
 // receiveMarkerPath, which marks an attempt (so its debounce still applies
@@ -72,15 +72,14 @@ func (b fetchBasis) warningFormat() string {
 // Callers are every real DOLT_FETCH call site that returned no error — the
 // explicit `lit sync fetch`/`lit sync pull`, the reconcile command's
 // pre-reconcile fetch, the automatic receive — and the automatic receive's
-// unmoved answer, which proves the same thing without the fetch. Each marks
+// unmoved and no-lit-data answers, which prove the same thing without the
+// fetch. Each marks
 // the remote it fetched, whichever remote the banner reports on.
 //
 // Truncated in place, never renamed over: Windows refuses a rename over a file
-// a reader has open, and readFetchRecord holds the record open. A record's
-// content only ever moves from fetchRecordUnconfirmed to empty, and the reader
+// a reader has open, and readFetchRecord holds the record open. The reader
 // reads the content before the modification time, so a read racing this write
-// pairs at worst the old content with the new time: no success on record, as
-// of moments ago, which is below any threshold.
+// pairs at worst the old content with the new time, below any threshold.
 // [LAW:single-enforcer] one marker per remote, every call site writes it the
 // same way. [LAW:dataflow-not-control-flow]
 func markFetchSuccess(ws workspace.Info, remote storage.RemoteName) error {
@@ -102,16 +101,15 @@ func startFetchRecord(ws workspace.Info, remote storage.RemoteName) error {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return err
 	}
-	_, err := atomicfile.PublishFile(fetchSuccessMarkerPath(ws, remote), []byte(fetchRecordUnconfirmed), 0o644, atomicfile.Durable)
-	return err
+	return atomicfile.PublishFile(fetchSuccessMarkerPath(ws, remote), []byte(fetchRecordUnconfirmed), 0o644, atomicfile.Durable)
 }
 
 // readFetchRecord parses remote's fetch record. missing is true, with a nil
 // fetch, only when no record exists: lit has not started tracking remote. A
 // record that cannot be read, or holds content no lit this one knows wrote,
 // is reported to stderr and reads as nil and not missing: it is neither a
-// fact to act on nor an absence to fill, and a newer lit's record is left for
-// it. [LAW:parse-dont-validate] [LAW:no-silent-failure]
+// fact to act on nor an absence to fill.
+// [LAW:parse-dont-validate] [LAW:no-silent-failure]
 //
 // The content is read before the modification time, on the one open file, so
 // the time is never older than the content beside it (markFetchSuccess).
@@ -157,7 +155,7 @@ type remoteFetch struct {
 	basis  fetchBasis
 }
 
-// lastTargetFetch reads the fetch record of the remote lit syncs with
+// trackTargetFetch reads the fetch record of the remote lit syncs with
 // (workspaceSyncRemote), the one both staleness banners warn about, and is
 // where lit starts tracking that remote: finding no record, it publishes the
 // record that starts the clock and reports nil for this read. So a remote no
@@ -175,7 +173,7 @@ type remoteFetch struct {
 // `lit doctor` names why. A record that cannot be started is reported, and
 // the next read tries again. [LAW:no-silent-failure]
 // [LAW:types-are-the-program] a known fetch always names its remote.
-func lastTargetFetch(ctx context.Context, stderr io.Writer, ws workspace.Info, now time.Time) *remoteFetch {
+func trackTargetFetch(ctx context.Context, stderr io.Writer, ws workspace.Info, now time.Time) *remoteFetch {
 	remote, ok, err := workspaceSyncRemote(ctx, ws, "")
 	if err != nil || !ok {
 		return nil
@@ -294,7 +292,7 @@ func oneLineReason(reason string) string {
 // itself a diagnostic. [LAW:no-silent-failure] [LAW:effects-at-boundaries]
 func printStalenessWarning(ctx context.Context, stderr io.Writer, env environ.Env, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, env, ws, st)
-	fetch := lastTargetFetch(ctx, stderr, ws, now)
+	fetch := trackTargetFetch(ctx, stderr, ws, now)
 	// Build drift leads the whole banner. It is the deepest of the three: a
 	// binary that predates master can be the reason the sync lines below read
 	// the way they do, so a reader who takes it in first interprets everything
@@ -334,7 +332,7 @@ func printStalenessWarning(ctx context.Context, stderr io.Writer, env environ.En
 func printMutationSyncStalenessWarning(ctx context.Context, stderr io.Writer, env environ.Env, w io.Writer, ws workspace.Info, now time.Time) {
 	rec, pushAge, pushKnown := lastPushOutcome(stderr, ws, now)
 	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion(stderr))
-	lines = append(lines, fetchStalenessLines(lastTargetFetch(ctx, stderr, ws, now))...)
+	lines = append(lines, fetchStalenessLines(trackTargetFetch(ctx, stderr, ws, now))...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			fmt.Fprintf(stderr, "lit: staleness banner not written: %v\n", err)

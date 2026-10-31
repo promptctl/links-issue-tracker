@@ -240,7 +240,7 @@ func TestReadFetchRecordSurfacesNonNotExistErrorsToStderr(t *testing.T) {
 
 // TestReadFetchRecordReportsAndKeepsUnknownContent pins that a record holding
 // content this lit never writes — a newer lit's, say — is reported, is not
-// read as either basis, and is not missing, so nothing overwrites it.
+// read as either basis, and is not missing, so no record is started over it.
 func TestReadFetchRecordReportsAndKeepsUnknownContent(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
@@ -283,7 +283,7 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 
 // TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace drives
 // printStalenessWarning's boundary step (resolveDoctorSyncFreshness +
-// lastTargetFetch) against a real git repo with no remote — the common
+// trackTargetFetch) against a real git repo with no remote — the common
 // single-machine case — and confirms it stays silent rather than printing a
 // no-remote warning: this banner is supplementary, not a diagnostic in its
 // own right, matching resolveDoctorSyncFreshness's own no-remote handling.

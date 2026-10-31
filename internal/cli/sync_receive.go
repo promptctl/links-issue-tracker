@@ -994,9 +994,15 @@ func recordReceiveError(ctx context.Context, stderr io.Writer, env environ.Env, 
 }
 
 // recordReceiveSkip records a receive that found nothing to sync against,
-// under the skip's own name, the one resolveSyncTarget gives it.
-// [LAW:one-source-of-truth]
+// under the skip's own name, the one resolveSyncTarget gives it. A remote that
+// answered with no lit data is confirmed, as an unmoved one is: a fetch would
+// have brought nothing. [LAW:one-source-of-truth]
 func recordReceiveSkip(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, target syncTarget) {
+	if target.skip == syncTargetRemoteEmpty {
+		if err := markFetchSuccess(ws, target.remote); err != nil {
+			fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
+		}
+	}
 	recordReceiveDecided(ctx, stderr, env, ws, string(target.skip), receiveSkipReason(target.skip), target.remote, nil)
 }
 

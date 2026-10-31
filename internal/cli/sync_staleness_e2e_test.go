@@ -234,3 +234,39 @@ func TestBacklogWarnsOnceAFailingSyncRemoteHasNoSuccessOnRecordPastTheThreshold(
 		t.Fatalf("`lit backlog` claimed a successful fetch that never happened:\n%s", out)
 	}
 }
+
+// TestAReceiveThatFindsNoLitDataConfirmsTheRemote pins that a reachable remote
+// holding no lit data is not a failing one: the receive has nothing to fetch,
+// and its answer confirms the record lit started, so `lit backlog` stays quiet.
+func TestAReceiveThatFindsNoLitDataConfirmsTheRemote(t *testing.T) {
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	dir := filepath.Join(base, "solo")
+	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "solo")
+	runGit(t, dir, "config", "user.email", "solo@example.com")
+	runGit(t, dir, "config", "user.name", "solo")
+	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
+
+	t.Setenv(DisableAutoSyncEnvVar, "1")
+	runCLIInDir(t, dir, "init", "--skip-hooks")
+
+	ws, err := workspace.Resolve(testEnv(), dir)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	origin := remoteName(t, "origin")
+	runCLIInDir(t, dir, "backlog")
+	started := time.Now().Add(-30 * time.Hour)
+	if err := os.Chtimes(fetchSuccessMarkerPath(ws, origin), started, started); err != nil {
+		t.Fatalf("os.Chtimes() error = %v", err)
+	}
+
+	receiveOnce(underInvocation(context.Background()), testStderr(t), testEnv(), ws)
+
+	if fetch, _ := readFetchRecord(testStderr(t), ws, origin, time.Now()); fetch == nil || fetch.basis != lastFetchSucceeded {
+		t.Fatalf("record after a receive of an empty remote = %+v; want lastFetchSucceeded", fetch)
+	}
+	if out := runCLIInDir(t, dir, "backlog"); strings.Contains(out, "fetch from origin") {
+		t.Fatalf("`lit backlog` warned about a remote that answered with no lit data:\n%s", out)
+	}
+}
