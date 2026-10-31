@@ -50,7 +50,7 @@ see the [README](../README.md) and the [docs](../docs/) site.
 - **[workspace-configuration.md](workspace-configuration.md)** — which
   configuration is workspace truth and which is local preference, and the
   versioned document, the event store's config stream, the first kind lives
-  in so a store read from outside its repository computes the same answers. Foundation for the four
+  in so a store read from outside its repository computes the same answers. Foundation for the five
   designs below. *Draft / proposal, 2026-10-27.*
 - **[custom-fields.md](custom-fields.md)** — fields declared per hierarchy
   level with a kind and a required flag, stored as events in the fold, with
