@@ -71,7 +71,7 @@ lit tracks tickets, not GitHub PRs, so no lit command will surface one.  Two che
 gh pr list --head "$(git branch --show-current)" --state open --limit 1000
 ```
 
-A PR here is your ticket.  Skip the selection steps and take it to a clean, merged close-out through the review process your instructions define — and where none defines one, by working its review threads by hand.  Then pick up the working steps under "Working the ticket".
+A PR here is your ticket, and its id is the one in the branch name; a branch whose name carries none is not lit-tracked, and its PR is left where it is, as "Your PRs elsewhere" leaves one.  Skip the selection steps and take the ticket through "Finishing a ticket" below.  "Working the ticket" does not apply: its checks and branch setup are for a ticket whose code is not yet written.
 
 **Your PRs elsewhere.**
 
@@ -87,7 +87,7 @@ For each PR the query returned, take the ticket id from its branch name and chec
 
 A branch whose name carries no ticket id at all — someone's typo fix, a hand-cut experiment — is not lit-tracked work, so there is no lane to look up and nothing here for you to adopt.  Leave it where it is.
 
-Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and wrapping up means the same thing it meant above: check that branch out, treat its ticket as the one you now hold, close its PR out as above, then the working steps under "Working the ticket".  Work them one at a time, and do not pull new work until the last one is closed out.
+Every lane nobody holds is yours to wrap up — an expired claim is no claim, so a lane whose holder went quiet six hours ago prints no claim line and is one of these — and so is a lane whose claim line is `claimed here: <path>` with this checkout's own path.  Wrapping one up means taking its ticket through "Finishing a ticket" below.  Work them one at a time, down the list you already classified, and do not pull new work until the last one is closed out.
 
 **If nothing is in flight,** proceed to "Pull new work" below.  Open PRs stay relevant after that — an older one may touch the files your new ticket touches — which is why the overlap check is a step in "Working the ticket".
 
@@ -101,7 +101,7 @@ Run `lit next` first, always.  It is the routing decision itself, not a suggesti
 
 So reach for it only when `lit next` has nothing left to give, and read which of its empty-handed answers you got — they are not interchangeable, and each opens with its own words, quoted below.
 
-- **Bare `no ready work`** — nothing is queued at all.  An orphan is now the right pull: it is the most advanced work in the repo and somebody has to finish it.  `lit start <id>` takes it, with no prompt and no ceremony: nobody holds the lane, so there is no claim to transfer.  Check that lane for unmerged branches or PRs before building on it — lit knows nothing about git or the forge, and the ticket's history (`lit show`) is where its previous holder's trail is.  The orphan you take is your ticket — skip ahead to "Working the ticket".
+- **Bare `no ready work`** — nothing is queued at all.  An orphan is now the right pull: it is the most advanced work in the repo and somebody has to finish it.  `lit start <id>` takes it, with no prompt and no ceremony: nobody holds the lane, so there is no claim to transfer.  Check that lane for unmerged branches or PRs before building on it — lit knows nothing about git or the forge, and the ticket's history (`lit show`) is where its previous holder's trail is.  The orphan you take is your ticket — if its lane has an open PR, take it through "Finishing a ticket"; otherwise skip ahead to "Working the ticket".
 
 - **`no ready work — the backlog is not empty, but nothing in it is startable here`**, naming ids.  Work exists; none of it is yours to take.  `lit orphaned` will not rescue this, and not by luck: each row in that message carries a note saying why this checkout cannot start it, and `lit orphaned` reads only a row's own clock, so a quiet row whose lane somebody still holds appears on both lists, and pulling it from the second lands you on a lane you may not take.  Report what `lit next` named and stop.  Taking a lane another checkout holds fresh is `lit start --take`, a deliberate takeover the user directs — never your way around an empty-handed `next`.
 
@@ -124,7 +124,7 @@ Those are the routes.  Do not go looking for a third in `lit backlog` or `lit or
 
 ## Working the ticket
 
-However you arrived at a ticket — uncommitted work, an open PR, an orphan, or `lit next` — work it through these steps:
+However you arrived at a ticket — uncommitted work, an orphan, or `lit next` — work it through these steps:
 
 1. **Read the ticket fully.** Title, description, acceptance criteria, comments, linked PRs, linked tickets. If the ticket references a spec, doc, or prior PR, read that too. You are about to author code that claims to satisfy this ticket — earn the right to claim it.
 
@@ -159,7 +159,7 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 3. **Set up the workspace.**
 
-   - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work or an open PR.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
+   - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
 
    - **Otherwise, branch from an up-to-date trunk** — not from wherever HEAD happens to be sitting.  Finishing a ticket leaves you standing on its branch, and `git checkout -b` from there silently forks the new ticket off unmerged work: the PR opens carrying the previous ticket's diff on top of its own, and it cannot be reviewed or merged on its own.  Fetch the trunk first; the branch is cut from it below:
 
@@ -204,7 +204,19 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
 4. **State the plan in one paragraph, then start.** What the ticket asks for, how you'll verify it's done (the machine-verifiable criterion), and the first concrete step. Then begin.
 
-5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, `lit phase <id> --to review` when its PR opens, and `lit phase <id> --to merge` when review is done and the merge is under way; then `lit done <id>` once it has merged.  Then run `lit next` from the same checkout: the next ticket it serves is worked there too, on a fresh branch (step 3).  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.  A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.
+5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, and open its PR, or push to it if its branch already has one open; from there "Finishing a ticket" below takes it to `lit done`, and on to the next ticket.
+
+## Finishing a ticket
+
+A ticket with an open PR finishes here, whichever way you reached it: step 5 above, a PR under "Open PRs", or an orphan whose lane has one.
+
+1. **Hold it from this checkout.**  Read the claim line under the ticket's lane in `lit backlog`.  A claim line naming anything but this checkout's path is another checkout's, and the ticket is theirs: leave it, say so, and take the way out below.  Otherwise run `lit start <id>` here, and check its PR's branch out.  `lit start` is safe to repeat: a ticket already in progress keeps the phase its work had reached, and any other enters `plan`.
+2. **Close its PR out** — clean and merged — through the review process your instructions define, and where none defines one, by working its review threads by hand.  Unless you wrote its code in "Working the ticket", read the ticket fully first, as step 1 there asks: the PR is reviewed against its acceptance criteria, and one that meets only part of them, or rests on a ticket that is not done, is not ready to merge.  Record each phase when the work reaches it, not afterwards: `lit phase <id> --to review` now if `lit show <id>` puts the ticket short of review, and `lit phase <id> --to merge` when review is done and the merge is under way.
+3. **Run `lit done <id>` once it has merged.**
+
+A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.
+
+Then take the way out that matches the way in.  A PR found under "Open PRs" — this branch's own, or one from "Your PRs elsewhere" — goes back to the "Your PRs elsewhere" list, which may still hold one in flight; running `lit next` from there skips the rest of it.  Every other route runs `lit next` from this checkout, and the next ticket it serves is worked here too, on a fresh branch (step 3).
 
 ## When to stop and ask
 
