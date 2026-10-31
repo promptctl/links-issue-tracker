@@ -216,7 +216,7 @@ A ticket with an open PR finishes here, whichever way you reached it: step 5 abo
 
 A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.
 
-Then take the way out that matches the way in.  A PR under "Open PRs" goes back to "Your PRs elsewhere", which may still list one in flight; running `lit next` from there skips that list.  Every other route runs `lit next` from this checkout, and the next ticket it serves is worked here too, on a fresh branch (step 3).
+Then take the way out that matches the way in.  A PR found under "Open PRs" — this branch's own, or one from "Your PRs elsewhere" — goes back to the "Your PRs elsewhere" list, which may still hold one in flight; running `lit next` from there skips the rest of it.  Every other route runs `lit next` from this checkout, and the next ticket it serves is worked here too, on a fresh branch (step 3).
 
 ## When to stop and ask
 
