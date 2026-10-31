@@ -15,11 +15,15 @@ Carried forward 2026-10-27: the hierarchy half of this draft is superseded by
 the hierarchy epic, which fixes three level roles in code with
 names in configuration rather than user-defined types; the fields half
 continues in [custom-fields.md](../custom-fields.md), and the schema's home is
-settled by [workspace-configuration.md](../workspace-configuration.md). Custom
-states, per-type templates and relation legality remain here, undecided.
+settled by [workspace-configuration.md](../workspace-configuration.md).
+Per-type templates and relation legality remain here, undecided.
 Revised 2026-10-28: the storage design follows the
 [event-store design's §migration](../event-store/design.md), and the documents
 above were revised to match the decisions recorded there.
+Carried forward 2026-10-30: custom states continue in
+[custom-columns.md](../custom-columns.md), which replaces the `Machine` below
+with rules over a computed position; read the states sections here as
+history.
 
 ## The shape in one paragraph
 

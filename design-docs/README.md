@@ -50,7 +50,7 @@ see the [README](../README.md) and the [docs](../docs/) site.
 - **[workspace-configuration.md](workspace-configuration.md)** — which
   configuration is workspace truth and which is local preference, and the
   versioned document, the event store's config stream, the first kind lives
-  in so a store read from outside its repository computes the same answers. Foundation for the four
+  in so a store read from outside its repository computes the same answers. Foundation for the five
   designs below. *Draft / proposal, 2026-10-27.*
 - **[custom-fields.md](custom-fields.md)** — fields declared per hierarchy
   level with a kind and a required flag, stored as events in the fold, with
@@ -64,6 +64,10 @@ see the [README](../README.md) and the [docs](../docs/) site.
 - **[phases-and-rework.md](phases-and-rework.md)** — whether work returned
   from review is a fifth phase, a derived state, or nothing; recommends
   derived. *Draft / proposal, 2026-10-27.*
+- **[custom-columns.md](custom-columns.md)** — columns that mean nothing to
+  the code, one condition-to-action rule type, and a ticket's column computed
+  from the facts on every read with nothing stored. *Draft / proposal,
+  2026-10-30.*
 - **[MINIMAL-LIT-SKETCH-2026-09-29.md](MINIMAL-LIT-SKETCH-2026-09-29.md)** — the
   core value proposition, the smallest lit that still delivers it, and every
   other feature sorted by why it can go, measured before the event-store
