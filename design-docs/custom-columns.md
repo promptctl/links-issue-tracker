@@ -46,7 +46,7 @@ it, or sitting in it. A label and a move differ only in the action.
 ```toml
 [[rule]]
 when = "missing description or AC"
-in = "backlog"
+entering = "backlog"
 then = { place = "draft" }
 
 [[rule]]
@@ -73,23 +73,30 @@ time.
 ### The worked example
 
 Take a board of `draft → backlog → doing`, where backlog requires a name, a
-description and acceptance criteria.
+description and acceptance criteria. Each rule names the failure and where it
+sends the ticket, so "backlog requires AC" is written as "missing AC, place
+in draft".
 
 - **A ticket missing AC needs a home.** That home is draft, a first column with
-  no rule, so every ticket has somewhere to sit.
+  no rule, so every ticket has somewhere to sit. A ticket sits in the first
+  column in configuration order until a drag or a rule puts it elsewhere.
 - **Backlog needs no exit criterion of its own.** On a straight board, "leave
   backlog" and "enter doing" are one check on one move, so doing's entry rule
   is enough. An exit rule earns its place when a column has several forward
   destinations: "approval recorded" goes on review's exit once instead of being
   copied onto merge and deploy.
+- **Entry rules hold a ticket at the door until they pass.** A ticket dragged
+  to doing while a blocker is open waits in backlog, and on the first read
+  after the blocker closes it is in doing. Nothing has to drag it again.
 - **Staying matters only when it differs from entering.** A column with no
   stay rule keeps a ticket only while its entry rules still hold, and rules
-  are re-checked on every read, so if someone deletes the AC, the ticket
-  settles back into draft with no extra rule. A stay rule replaces that test,
-  for the case where staying is easier than getting in. Doing's entry rule
-  might be "all blockers closed", judged when the ticket entered, and its stay
-  rule "updated in the last 72 hours". A reopened blocker then leaves the
-  ticket in doing, while a ticket nobody touches falls back to backlog. That
+  are re-checked on every read, so if someone deletes the AC, backlog's entry
+  rule settles the ticket back into draft with no extra rule. A stay rule
+  replaces that test once the ticket is in, for the case where staying is
+  easier than getting in. Doing's entry rule places a ticket in backlog while
+  any blocker is open, and its stay rule places it there after 72 hours with
+  no update. A reopened blocker then leaves the ticket in doing, while a
+  ticket nobody touches falls back to backlog. That
   fallback is today's orphaned annotation turned into a move.
 
 ### A drag is a fact
@@ -127,16 +134,16 @@ Two constraints keep the board settling:
 1. **Rules never write facts.** People and agents write facts; rules compute
    where a ticket sits, which labels it shows and what guidance it prints. A
    label a rule shows is computed like a position and kept apart from the
-   labels people write, so a rule cannot mint something other rules read as
-   a fact.
+   labels people write, so another rule reads it as computed output, the
+   way it reads a position, never as a fact.
 2. **Rule reads must not loop.** A rule may read another ticket's computed
    position or label, as "blockers closed" reads where each blocker sits. If
-   A's column depends on B's and B's on A's, there is no answer. Loading the
-   configuration refuses rules that can bounce one ticket between columns,
-   such as "in draft, place backlog" beside "in backlog, place draft". A loop
-   through other tickets depends on the graph, not the configuration, since
-   two tickets can block each other, so tick has to find it at read time;
-   what the board shows then is decision 5.
+   A's column depends on B's and B's on A's, there is no answer. Whether
+   rules loop depends on which conditions can hold together and on the
+   graph, since two tickets can block each other, so the configuration alone
+   cannot settle it. Tick finds a loop at read time, whether it bounces one
+   ticket between columns or runs through other tickets; what the board
+   shows then is decision 5.
 
 ## Tick runs inside every read, and nothing is saved
 
@@ -188,10 +195,11 @@ nothing into a store it only reads.
 Position stops being a command. `lit move`, or a drag, records a fact that
 rules read, and how far it can overrule them is decision 2. Every condition must be
 something lit can see, so "PR merged" counts only once something records it as
-an event. Rules that react to a move rather than a resting place need history.
-"Blockers closed when it entered doing" requires finding when it entered,
-which means replaying tick over past moments. That is deterministic, but it
-costs more than evaluating the present. With positions computed, "why is this
+an event. Entry rules need history: whether a ticket is still at doing's door
+or already in doing depends on whether its entry rules passed since the drag,
+which means replaying tick over past moments. That is deterministic, but a
+read pays it for every ticket shown and every ticket their rules read, so the
+cache the previous section allows is what makes it affordable. With positions computed, "why is this
 ticket in backlog?" becomes the common question, so a `lit why <id>` that
 prints each rule that placed the ticket and the facts it read is worth
 building alongside.
@@ -221,19 +229,24 @@ S2 or later, beside custom fields.
    later evidence overrides an earlier drag, so position stays a function of
    the facts. "Newest" means later in the event store's total order, never
    the later wall-clock time, so a fast clock cannot win the comparison. A
-   condition that is an absence, such as "no PR", has no event to compare,
-   so under the proposal it needs a ruling of its own.
+   condition with no event behind it, an absence such as "no PR" or a lapse
+   such as "no update in 72h", has nothing to compare, so under the proposal
+   it needs a ruling of its own.
 3. **Does tick apply the current configuration to every ticket?** Validation in
    the event-store design judges each event against the configuration it was
    written under. For the board, the expected answer is the current
-   configuration, so editing a rule re-settles every ticket. That is a
-   different choice from validation's and should be made deliberately.
+   configuration, so editing a rule re-settles every ticket. Replay then
+   recomputes when each ticket passed an entry rule too, so an edit can move
+   tickets whose events never changed. That is a different choice from
+   validation's and should be made deliberately.
 4. **Do phases become columns?** Recommended yes, as above.
 5. **How does tick resolve rules that compete?** Two place rules can match one
    ticket, a placement can break the destination column's own rules, and
-   tickets can block each other. Recommended: the first matching rule in
-   configuration order wins, placement repeats until nothing moves, and a
-   ticket on a loop through other tickets is placed without reading the
-   positions on the loop, labeled with the loop. Two implementations that choose
+   rules can loop. Recommended: the first matching rule in configuration
+   order wins, and placement repeats until nothing moves. A ticket whose
+   placement revisits a column within one read stops at the first column it
+   reached, and a ticket on a loop through other tickets is placed without
+   reading the positions on the loop; either way it is labeled with the
+   loop. Two implementations that choose
    differently give two boards from the same facts, so this is fixed before
    tick is built.
