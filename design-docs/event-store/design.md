@@ -52,12 +52,14 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 | `INV:disposable-cache` | derived local state may always be deleted and refolded; nothing behaves as if the cache were truth |
 | `INV:opaque-envelope` | layers below the CLI boundary treat prose payloads as opaque bytes |
 | `INV:config-versioned` | every event names the config version it was authored under; validation judges it against that version |
+| `INV:wall-time-is-data` | every event carries a wall-clock time; durations read it, order never does |
 
 ## §events — the event model
 status: destination
 
 An event is a small structured record: `(type, schema-version, issue-id,
-payload, attribution, config-ref, causal-position, signature-slot)`.
+payload, attribution, config-ref, causal-position, recorded-at,
+signature-slot)`.
 Attribution is the (stream, workspace, principal) triple — the existing
 work-claims pair plus the principal reference the access-control design
 requires. `config-ref` names the config-stream version in force when the event
@@ -78,6 +80,36 @@ total order without wall clocks. The signature slot is
 structural from v1: before the access-control
 write layer ships, events are self-signed by their checkout identity; the slot
 exists so that shipping verification later changes policy, not schema.
+
+`recorded-at` is the writer's clock reading when it minted the event, stored
+as read. It is data, not order (`INV:wall-time-is-data`). Durations read it:
+how long a ticket has been in progress, how long ago it was last touched,
+whether a claim's freshness window has lapsed. Order never reads it. Which
+event superseded which is the total order's question alone: every ordering the
+current store takes from stamps, a claim's latest establishing event and a
+ticket's phase among them, comes from the total order once the fold owns it.
+When a question asks *when*, such as a claim's last refresh or a ticket's last
+touch, its answer is the largest `recorded-at` among the events that qualify.
+The total order cannot answer it, because between concurrent events it is a
+tiebreak, not a sequence in time: a writer that worked offline through many
+events can rank a three-day-old touch after one made today. Backfilled events
+keep the times the current store stamped, which sit past their writer's clock
+wherever it carried a lane's history forward; while such a time runs ahead of
+real time, its events read as fresh and its writer draws the advisory below.
+
+The current store stamps each write just past its lane's history, because
+there stamp order is the order. The total order removes that reason, so a
+writer does not carry folded times forward. If it did, one fast clock would
+hand its future to every writer that folded its events, and every claim they
+refreshed would read as fresh until real time caught up.
+
+Skew still reaches every duration and can make one negative. Claim freshness
+is a duration that decides who holds a lane, measured against each reader's
+freshness window T (work-claims). A writer whose clock runs slow by more than a
+reader's T publishes refreshes that reader already counts as expired, so a live
+lane looks free; a writer whose clock runs fast keeps a dead lane held for as
+long as its clock is ahead. Skew cannot reorder events. §fold says how a reader
+surfaces it.
 
 Events carry **intent, not derived state** — the fold owns derivation, and an
 event that embeds a derived value forks truth into two homes:
@@ -262,6 +294,20 @@ realities. Determinism is enforced, not hoped: golden-fixture tests pin
 `fold(corpus)` byte-for-byte, and the **fold version** — an explicit constant
 — bumps with any rule change, invalidating snapshots (§cache) so no machine
 mixes two folds' outputs.
+
+**Time enters at the edges.** The fold reads each event's `recorded-at` as
+input, like any payload field, and never reads the clock. A question whose
+answer depends on the present, such as whether a ticket has gone untouched for
+72 hours or whether a claim's window has lapsed, is answered after the fold: a
+read-time evaluation takes the folded state and the reader's `now` as
+arguments, computes the answer, and writes nothing. The fold keeps each
+writer's largest `recorded-at`, and the same evaluation compares those to
+`now`. A writer ahead of `now` by more than a tenth of the reader's freshness
+window T is surfaced as an advisory naming that writer and the reader's own checkout, because a
+fast writer and a slow reader look identical from here: on a slow machine
+every active writer appears ahead, and the advisory is the one place that
+machine learns its own clock is behind. The fold's output stays cacheable
+because nothing in it depends on when it was computed.
 
 **Validation is a fold-time engine, not scattered rules.** The config stream
 (§security-and-config) defines what a valid ticket is — today the built-in
