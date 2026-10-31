@@ -312,6 +312,11 @@ func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws work
 		confirmRemoteUnmoved(ctx, stderr, env, ws, observed)
 		return
 	} else if skip := observed.skip(); skip != syncTargetReady {
+		// No lit data proves what an unmoved answer proves: a fetch would
+		// have brought nothing.
+		if skip == syncTargetRemoteEmpty {
+			markFetchSuccess(stderr, ws, observed.remote)
+		}
 		recordReceiveSkip(ctx, stderr, env, ws, syncTarget{remote: observed.remote, skip: skip})
 		return
 	}

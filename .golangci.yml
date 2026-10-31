@@ -52,7 +52,7 @@ linters:
           allow:
             - $gostd
             - github.com/promptctl/links-issue-tracker/internal/atomicfile$
-        # [LAW:one-way-deps] every package that replaces a file atomically
+        # [LAW:one-way-deps] every package that replaces or publishes a file atomically
         # shares this one writer, the stdlib-only statusline writer included,
         # so it sits below all of them and imports only the standard library.
         atomicfile-stdlib-only:

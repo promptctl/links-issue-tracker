@@ -628,8 +628,6 @@ func freshReconcileTarget(ctx context.Context, stderr io.Writer, env environ.Env
 	if err := session.syncer.SyncFetch(ctx, target.remote); err != nil {
 		return storage.RemoteName{}, "", false, fmt.Errorf("fetch %q before reconcile: %w", target.remote, err)
 	}
-	if err := markFetchSuccess(ws, target.remote); err != nil {
-		fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
-	}
+	markFetchSuccess(stderr, ws, target.remote)
 	return target.remote, target.branch, true, nil
 }

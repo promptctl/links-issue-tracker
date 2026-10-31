@@ -265,7 +265,7 @@ func pushOutcomeProvenance(rec pushOutcomeRecord, running string) string {
 
 // lastPushOutcome reads the marker. ok is false when no push has ever been
 // attempted on this workspace — absence is a real, distinct state, mirroring
-// lastFetchSuccessAge. Any other failure (unreadable file, corrupt JSON) is a
+// readFetchRecord. Any other failure (unreadable file, corrupt JSON) is a
 // real operational fault, surfaced to stderr rather than folded into the same
 // quiet ok=false. [LAW:no-silent-failure] at reads what
 // [LAW:one-source-of-truth] the file's own mtime records: when the attempt

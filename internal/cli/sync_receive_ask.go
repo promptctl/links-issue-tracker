@@ -241,9 +241,7 @@ func recordPushedAdvertisement(stderr io.Writer, ws workspace.Info, proven remot
 // decide; the caller runs this after every fetch path.
 func recordReceived(stderr io.Writer, ws workspace.Info, outcome syncReceiveOutcome, observed remoteAdvertisement) {
 	if outcome.fetched() {
-		if err := markFetchSuccess(ws, outcome.remote); err != nil {
-			fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
-		}
+		markFetchSuccess(stderr, ws, outcome.remote)
 	}
 	payload := observed.record()
 	if outcome.settledCleanly() && outcome.landed.LandsTheFetch() && payload != nil {
@@ -259,9 +257,7 @@ func recordReceived(stderr io.Writer, ws workspace.Info, outcome syncReceiveOutc
 // ran and what it decided — a skipped fetch is a decision, not silence.
 // [LAW:no-silent-failure]
 func confirmRemoteUnmoved(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, observed remoteAdvertisement) {
-	if err := markFetchSuccess(ws, observed.remote); err != nil {
-		fmt.Fprintf(stderr, "lit: fetch-success marker not written: %v\n", err)
-	}
+	markFetchSuccess(stderr, ws, observed.remote)
 	recordReceiveDecided(ctx, stderr, env, ws, receiveDecisionRemoteUnmoved,
 		"automatic receive found the remote unmoved since the last receive; nothing fetched",
 		observed.remote, nil)
