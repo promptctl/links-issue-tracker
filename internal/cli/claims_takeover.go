@@ -110,10 +110,8 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID st
 	telemetry.Set(ctx, "start.lane_held", relation != laneUnclaimed)
 	var takeover string
 	if relation == laneHeldForeign {
-		line, ok := claimLineOf(standing, lane, checkouts.addresses, time.Now())
-		if !ok {
-			return nil, fmt.Errorf("claims: %v is held by another checkout but has no claim line to show", lane.ID())
-		}
+		// relationOf answers laneHeldForeign for a Held standing and nothing else.
+		line := claimLineOf(standing.(claims.Held), lane, checkouts.addresses, time.Now())
 		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, take); err != nil {
 			return nil, err
 		}
@@ -141,10 +139,7 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID st
 // not ask for.
 //
 // line is the dossier claimLineOf builds for every claim-aware surface
-// (`next`, `backlog`), reused rather than re-derived. The caller fails loudly
-// rather than proceeding without naming the holder: it comes here only for a
-// Held standing, which claimLineOf always renders, so no line means the two
-// have gone out of sync. [LAW:no-silent-failure]
+// (`next`, `backlog`), reused rather than re-derived.
 func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, line string, take bool) (announcement string, err error) {
 	if take {
 		return line + " — taking over (--take)\n", nil

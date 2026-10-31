@@ -83,8 +83,9 @@ type Family struct {
 //
 // [LAW:parse-dont-validate] This is the one crossing: loose slices go in, and an
 // Evidence — which by its existence proves every event's issue was supplied —
-// comes out. Derive takes only Evidence, so no derivation can run on a partial
-// read, and nothing inland re-checks.
+// comes out. Derive takes only Evidence, so it cannot run on a partial read, and
+// nothing inland re-checks. The one other way to a standing is a Lane, which
+// NewLane proves whole for its one lane.
 func NewEvidence(issues []model.Issue, parentByChild map[string]string, events []model.IssueEvent) (Evidence, error) {
 	parentTypes := make(map[string]model.IssueType, len(issues))
 	for _, issue := range issues {
@@ -103,7 +104,9 @@ func NewEvidence(issues []model.Issue, parentByChild map[string]string, events [
 //
 // The events come from a read that shares no id list with the issues', so the
 // refusal holds here as it does for NewEvidence: a closed, archived or deleted
-// ticket a read dropped is one the events still name.
+// ticket a read dropped is one the events still name. Both reads do walk one
+// join, so the refusal cannot see that walk fall short; the conformance case
+// holding every lane to the whole-store Derive does.
 func NewLane(issueID string, family Family) (Lane, error) {
 	placed, err := newPartition(family.Issues, family.ParentByChild, family.ParentTypes, family.Events)
 	if err != nil {
