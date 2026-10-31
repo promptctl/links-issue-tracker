@@ -3,9 +3,9 @@ package store
 import "context"
 
 // Respace is one window a smoothing respace rewrote, and what it cost: the rows
-// it moved and the length of the keys it left. A window past rank.MaxRespace is
-// one with no room inside the cap, and keys at or past Ceiling are the density
-// the cap left to key length.
+// it moved and the length of the keys it left. A window past rank.MaxRespace
+// had no room inside the cap or rows sharing the trigger's key, and keys at or
+// past Ceiling are the density the cap left to key length.
 type Respace struct {
 	Rows       int
 	Rewritten  int

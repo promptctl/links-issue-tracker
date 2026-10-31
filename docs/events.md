@@ -316,7 +316,7 @@ finds.
 
 | Key | Meaning |
 | --- | --- |
-| `rank.respace.rows` | How many rows it took. A window stops at 256 rows unless no room exists inside the key limit, so a figure above 256 means that and nothing else. |
+| `rank.respace.rows` | How many rows it took. A window stops at 256 rows, plus any rows sharing the key that set it off, unless no room exists inside the key limit. |
 | `rank.respace.rewritten` | How many of those rows took a new key. |
 | `rank.respace.longest_key` | The longest key it left. |
 | `rank.respace.ceiling` | How long the key that set it off may grow before its spot counts as crowded. A `longest_key` at or past this is density the window left to key length. |

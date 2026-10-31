@@ -610,11 +610,15 @@ func parentsOfTx(ctx context.Context, tx *sql.Tx, issueID string) ([]string, err
 	return parents, nil
 }
 
-const dependentsQuery = `SELECT /*+ JOIN_ORDER(r, src, dst) LOOKUP_JOIN(r, src) LOOKUP_JOIN(src, dst) */ r.src_id FROM relations r
+// liveBlocksEdges is the one query body for the blocked-by edges that count, so
+// the graph the whole-store reads see and the one a walk reads cannot drift apart.
+const liveBlocksEdges = `FROM relations r
 		JOIN issues src ON src.id = r.src_id
 		JOIN issues dst ON dst.id = r.dst_id
-		WHERE r.dst_id = ? AND r.type = 'blocked-by'
+		WHERE r.type = 'blocked-by'
 		AND src.deleted_at IS NULL AND dst.deleted_at IS NULL`
+
+const dependentsQuery = `SELECT /*+ JOIN_ORDER(r, src, dst) LOOKUP_JOIN(r, src) LOOKUP_JOIN(src, dst) */ r.src_id ` + liveBlocksEdges + ` AND r.dst_id = ?`
 
 // dependentsOfTx is who a live issue's blocked-by edges hold back, by the rule
 // loadBlocksEdges states: both endpoints live.

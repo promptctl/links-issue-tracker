@@ -66,10 +66,14 @@ func Significant(s string) string {
 	return strings.TrimRight(s, "0")
 }
 
-// Anchor returns what s bounds a gap by: Significant, of what the index holds.
-// Two keys with the same Anchor leave no room or read in the wrong order, so a
+// Anchor returns what s bounds a gap by: Significant, of what the index holds,
+// and nothing when s is malformed anywhere, the index's reach or past it. Two
+// keys with the same Anchor leave no room or read in the wrong order, so a
 // repair keeps at most one of them where it stands.
 func Anchor(s string) string {
+	if !Valid(s) {
+		return ""
+	}
 	return Significant(indexPrefix(s))
 }
 

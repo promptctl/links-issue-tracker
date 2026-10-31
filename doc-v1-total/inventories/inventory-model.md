@@ -1047,6 +1047,12 @@ Pinned by
 `"aZ09"`→true, `"-"`→false, `"V!"`→false, `" "`→false, `"hello world"`→false
 (`rank_test.go`).
 
+`Anchor(s string) string` — `rank.go`: `""` when `s` is not `Valid`, anywhere
+in it, and otherwise `Significant` of the first `MaxLength+1` chars, the prefix
+`idx_issues_rank` holds. Two keys with the same `Anchor` leave no room or read
+in the wrong order, so the rank repair keeps at most one of them where it stands
+(`TestAnchor`, `rank_test.go`).
+
 `Significant(s string) string` — `rank.go`: `strings.TrimRight(s, "0")`, the
 part that decides where `s` sorts once padded. Two ranks with the same
 significant part leave `SpacedRanksBetween` and `Midpoint` no room between them
@@ -1242,11 +1248,12 @@ and `Upper`, each side's bound staying outside. An empty bound is an open end.
 `Whole` is every ranked row when neither side has a key left to widen to, and 0
 until then.
 
-`leavesStep(window Window, keys []string) bool` — `rank.go`: whether `keys`
-leave a placement past each open end of `window`: `step` must succeed up from
-the last key when `Upper` is empty and down from the first when `Lower` is
-empty. No keys → true. A window in a corner too deep to step out of is spaced
-and still refuses the next placement, so it counts as no room.
+`leavesStep(keys []string) bool` — `rank.go`: whether `keys` leave a placement
+past each end of them: `step` must succeed up from the last key and down from
+the first. No keys → true. A closed bound can be the row a move is vacating,
+which opens that end for the next placement, so a window in a corner too deep to
+step out of is spaced and still refuses it, and counts as no room
+(`TestAMoveOutOfADeepCornerFindsRoom`, `rank_scale_test.go`).
 
 `Respace(trigger string, read func(k int) (Window, error)) (keys []string, whole bool, err error)`
 — `rank.go`: the keys the window around `trigger` takes, in order. `read`
@@ -1255,7 +1262,7 @@ live. From `k = SmoothingWindow/2`, doubling each pass:
 - `read(k)`; an error is returned as is.
 - `SpacedRanksBetween(window.Lower, window.Upper, window.Rows)`; keys that fail
   `leavesStep` become an error wrapping `ErrNoRoom`:
-  `%w: no step fits past %d keys spaced to an open end` (`rank.go`).
+  `%w: no step fits past %d spaced keys` (`rank.go`).
 - `ErrNoRoom` with `window.Whole > 0` → `SpacedRanksBetween("", "", window.Whole)`
   with `whole = true`: the keys are for every ranked row.
 - `ErrNoRoom` otherwise → next pass.

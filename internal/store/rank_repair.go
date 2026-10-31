@@ -244,8 +244,8 @@ func withoutBound(sequence []placement, start, at int) []placement {
 // [LAW:one-source-of-truth] rank.Anchor is that definition of room, so anchors
 // are compared by it, and keys tied on the index prefix come out with one
 // holder and the rest spaced past it. An issue whose anchor is not rank.Valid —
-// unranked, or all zeros — bounds no gap at all, so it is always a mover and
-// gets a real rank.
+// unranked, malformed, or all zeros — bounds no gap at all, so it is always a
+// mover and gets a real rank.
 func anchorRun(target []rankedIssue) []placement {
 	keys := make([]string, len(target))
 	for i, item := range target {

@@ -36,6 +36,25 @@ func TestValid(t *testing.T) {
 }
 
 // Ranks that pad to the same value share a significant part.
+func TestAnchor(t *testing.T) {
+	long := strings.Repeat("A", MaxLength+1)
+	for _, c := range []struct {
+		name, key, want string
+	}{
+		{"a key whole", "Az0", "Az"},
+		{"a key past the index, to what the index holds", long + "12", long},
+		{"tied keys, to one anchor", long + "34", long},
+		{"all zeros, to nothing", "000", ""},
+		{"unranked, to nothing", "", ""},
+		{"malformed inside the index, to nothing", "A!", ""},
+		{"malformed past the index, to nothing", long + "!", ""},
+	} {
+		if got := Anchor(c.key); got != c.want {
+			t.Errorf("%s: Anchor(%q) = %q, want %q", c.name, c.key, got, c.want)
+		}
+	}
+}
+
 func TestSignificant(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"V", "V"},
