@@ -12,8 +12,9 @@ import (
 //
 // The instant is [model.NextEventInstant] over the newest instant in the
 // history the write was planned against: the clock's reading, unless that
-// history already holds an event at or past it. Both engines embed one, so the rule and the account of
-// it have one home whichever engine wrote. [LAW:single-enforcer]
+// history already holds an event at or past it. Both engines embed one, so the
+// rule and the account of it have one home whichever engine wrote.
+// [LAW:single-enforcer]
 //
 // It is the engine's own state behind this API, guarded because a store may
 // be written from more than one goroutine. [LAW:no-shared-mutable-globals]

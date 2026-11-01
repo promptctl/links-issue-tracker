@@ -42,14 +42,14 @@ func CompareEventRecency(a, b IssueEvent) int {
 // NextEventInstant is the instant an event written at now takes when newest is
 // the newest instant in the history it was written against: now, unless newest
 // is at or after it, and then the instant just past newest. No history is the
-// zero time, which is before every clock. It is a hybrid logical clock: the wall clock, held back from ever running behind the
-// history a write observed. CompareEventRecency orders by the stamp, so a clone
-// whose clock runs behind would otherwise write an event that sorts before
-// history it already synced and planned against, and the phase and the lane
-// holder would both be read off the older event. The nanosecond step also
-// parts a write from an event stamped at the same instant, which the id
-// tie-break orders arbitrarily. [LAW:single-enforcer] the one statement of the
-// rule both engines stamp by.
+// zero time, which is before every clock in use. It is a hybrid logical clock:
+// the wall clock, held back from ever running behind the history a write
+// observed. CompareEventRecency orders by the stamp, so a clone whose clock runs
+// behind would otherwise write an event that sorts before history it already
+// synced and planned against, and the phase and the lane holder would both be
+// read off the older event. The nanosecond step also parts a write from an
+// event stamped at the same instant, which the id tie-break orders arbitrarily.
+// [LAW:single-enforcer] the one statement of the rule both engines stamp by.
 func NextEventInstant(now, newest time.Time) time.Time {
 	if newest.Before(now) {
 		return now

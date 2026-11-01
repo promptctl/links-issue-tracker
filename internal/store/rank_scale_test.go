@@ -295,17 +295,21 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 	frame, frameArgs := frameRowsQuery(storage.Frame(seededRow(0)))
 	climb, climbArg := rankClimbQuery([]string{seededRow(23), seededRow(53)})
 	children, childrenArg := childIDsQuery([]string{seededRow(0)})
+	family, familyArgs, err := st.laneFamilyEvents(ctx, "e.created_at", seededRow(23))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
 		name, query string
 		args        []any
 	}{
 		{"a container frame's rows", frame + ` ORDER BY issues.item_rank ASC LIMIT 1`, frameArgs},
 		{"a cycle check's reach", blocksPrecedesQuery, []any{seededRow(23), seededRow(53)}},
-		{"a walk's parents", parentEdgesQuery("r.src_id = ?"), []any{seededRow(23)}},
 		{"a climb's epics", parentEdgesQuery("r.src_id = ? AND " + epicParentPredicate), []any{seededRow(23)}},
 		{"a level of tree order's climb", climb, []any{climbArg}},
 		{"a parent's children", children, []any{childrenArg, string(model.RelParentChild)}},
 		{"the events filed under a parent", filedUnderEvents("e.created_at"), []any{seededRow(0), string(model.RelParentChild)}},
+		{"the events of a lane family", family, familyArgs},
 	} {
 		plan := planOf(t, ctx, st, c.query, c.args...)
 		if !strings.Contains(plan, "LookupJoin") || strings.Contains(plan, "MergeJoin") {
@@ -338,22 +342,29 @@ func TestAParentRowThatIsGoneFramesNothing(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	seedRows(t, ctx, st, 0, 1, false)
 	seedInsert(t, ctx, st, seedIssuesHead, []string{seedTaskRow("test-orphan", "K1")})
+	seedGoneParentEdge(t, ctx, st, "test-orphan", "test-ghost")
+	var frame string
+	if err := st.db.QueryRowContext(ctx, `SELECT `+frameColumn+` FROM issues WHERE id = 'test-orphan'`).Scan(&frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame != string(storage.TopLevel) {
+		t.Errorf("framed by %q, want the top level ancestorChain reads", frame)
+	}
+}
+
+// seedGoneParentEdge files childID under parentID, an issue with no row, which
+// the foreign key refuses to any write that leaves its checks on.
+func seedGoneParentEdge(t *testing.T, ctx context.Context, st *Store, childID, parentID string) {
+	t.Helper()
 	conn, err := st.db.Conn(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	for _, statement := range []string{`SET FOREIGN_KEY_CHECKS = 0`, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES ` + seedEdge("test-orphan", "test-ghost", model.RelParentChild), `SET FOREIGN_KEY_CHECKS = 1`} {
+	for _, statement := range []string{`SET FOREIGN_KEY_CHECKS = 0`, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES ` + seedEdge(childID, parentID, model.RelParentChild), `SET FOREIGN_KEY_CHECKS = 1`} {
 		if _, err := conn.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)
 		}
-	}
-	var frame string
-	if err := conn.QueryRowContext(ctx, `SELECT `+frameColumn+` FROM issues WHERE id = 'test-orphan'`).Scan(&frame); err != nil {
-		t.Fatal(err)
-	}
-	if frame != string(storage.TopLevel) {
-		t.Errorf("framed by %q, want the top level ancestorChain reads", frame)
 	}
 }
 

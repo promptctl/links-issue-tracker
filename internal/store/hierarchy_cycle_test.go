@@ -684,6 +684,44 @@ func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
 	}
 }
 
+// A family is the edges, as model.LaneFamily reads them, so two children of a
+// parent whose row is gone are still one family: a write to one is stamped past
+// the other, and its lane reads both.
+func TestAParentRowThatIsGoneStillMakesAFamily(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	ids := []string{parentChain(t, ctx, st, "held back")[0].ID, parentChain(t, ctx, st, "ahead")[0].ID}
+	for _, id := range ids {
+		seedGoneParentEdge(t, ctx, st, id, "test-ghost")
+	}
+
+	ahead := time.Now().UTC().Add(time.Hour)
+	title := "edited"
+	st.clock = func() time.Time { return ahead }
+	if _, err := st.Apply(ctx, ids[1], storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply(%s, title) error = %v", ids[1], err)
+	}
+	st.clock = func() time.Time { return ahead.Add(-time.Hour) }
+	if _, err := st.Apply(ctx, ids[0], storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply(%s, title) error = %v", ids[0], err)
+	}
+	events, err := st.ListEvents(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("ListEvents(%s) error = %v", ids[0], err)
+	}
+	if got := events[len(events)-1].CreatedAt; !got.After(ahead) {
+		t.Errorf("the edit stamped %s, want past its sibling's %s", got, ahead)
+	}
+
+	family, err := st.LaneFamily(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("LaneFamily(%s) error = %v", ids[0], err)
+	}
+	if len(family.Issues) != len(ids) {
+		t.Errorf("LaneFamily(%s) holds %d issues, want %d", ids[0], len(family.Issues), len(ids))
+	}
+}
+
 // A child two parents claim is a fault in the data, and every reader still
 // answers over it — the listing, the export behind backup and sync, `lit show`
 // — because the readers are not where it is enforced. Tree order and the frame

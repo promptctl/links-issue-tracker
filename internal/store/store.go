@@ -1613,14 +1613,10 @@ func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (
 		if hook := s.planReadsHookForTest; hook != nil {
 			hook()
 		}
-		// The issue's own events decide its holder and its phase, and the lane
-		// family's newest instant decides the stamp, its own events among them.
-		// Both reads are under this hold, so the write is stamped past exactly
-		// the history it was planned against.
-		history, err := s.ListEvents(ctx, current.ID)
-		if err != nil {
-			return err
-		}
+		// The lane family's newest instant decides the stamp, the issue's own
+		// events among it, and an action reads those events whole for the holder
+		// and phase they decide. Both reads are under this hold, so the write is
+		// stamped past exactly the history it was planned against.
 		newest, err := s.newestInLaneFamily(ctx, current.ID)
 		if err != nil {
 			return err
@@ -1640,6 +1636,10 @@ func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (
 		var lw lifecycleWrite
 		var handover *claims.Handover
 		if c.Action != nil {
+			history, err := s.ListEvents(ctx, current.ID)
+			if err != nil {
+				return err
+			}
 			lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)
 			if err != nil {
 				return err
