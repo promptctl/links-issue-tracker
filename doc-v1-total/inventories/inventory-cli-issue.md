@@ -678,7 +678,7 @@ else ready.
 - Refusal: blank `--on` or blank `--title` (after trim) →
   `UsageError{"usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <normal|urgent>] [--assignee <user>] [--labels <csv>] [--top]"}`
   → exit 2 (`cli.go`).
-- Reads the `--on` ticket via `GetIssueDetail(onID)`; a missing ticket is not-found → exit 4
+- Reads the `--on` ticket via `GetRelationsByIDs([onID])`; a missing ticket is not-found → exit 4
   (`cli.go`).
 - Defaults derived from the `--on` ticket: blank `--topic` inherits its `Topic`
   (`cli.go`); blank `--description` becomes
@@ -1213,7 +1213,7 @@ transition row runs per id — §2.21):
 7. Write the transfer notice string, then `printIssueSummary`
    (`cli.go`).
 8. If the action is a `StatusAction` whose `Target() == model.StateClosed`
-   (i.e. `done` and `close`), re-read `GetIssueDetail` and print the close
+   (i.e. `done` and `close`), re-read `GetIssueAdjacency` and print the close
    adjacency block (`cli.go`) — §2.12.
 9. Breadcrumb per `transitionBreadcrumbTopics` (`cli.go`).
 
@@ -1341,7 +1341,7 @@ and continues with zero local checkouts (`claims_context.go`).
 
 ### 2.12 Close/done adjacency block
 
-`printCloseAdjacency(w, detail)` (`output.go`), printed after the summary
+`printCloseAdjacency(w, adjacency)` (`output.go`), printed after the summary
 line for `done` and `close`, each group omitted when empty:
 - `\nparent:\n- <id> [<state>] <title>` (`output.go`)
 - `\nsiblings:` — only the `InPlay()` siblings (`output.go`)

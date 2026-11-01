@@ -33,14 +33,6 @@ func storedOrderKeys(t *testing.T, ctx context.Context, st *Store) []model.Issue
 	return issues
 }
 
-func idsOf(issues []model.Issue) []string {
-	ids := make([]string, len(issues))
-	for i, issue := range issues {
-		ids[i] = issue.ID
-	}
-	return ids
-}
-
 // The climb and the whole read are one answer about the rows a climb was asked
 // about, over every fault restored data can hold: a parent loop, a child two
 // parents claim, and a deleted parent, which frames nothing. A seed holding a
@@ -72,18 +64,18 @@ func TestTheClimbOrdersAsTheWholeReadDoes(t *testing.T) {
 		{loop[0], chain[3]},
 		{gone[1], chain[3]},
 	} {
-		climbed, err := loadRankAncestryAbove(ctx, st.db, idsOf(seed))
+		climbed, err := loadRankAncestryAbove(ctx, st.db, issueIDs(seed))
 		if err != nil {
 			t.Fatal(err)
 		}
 		byClimb, byWhole := slices.Clone(seed), slices.Clone(seed)
 		climbed.Sort(byClimb)
 		whole.Sort(byWhole)
-		if !slices.Equal(idsOf(byClimb), idsOf(byWhole)) {
-			t.Errorf("climbing from %v orders %v, want the whole read's %v", idsOf(seed), idsOf(byClimb), idsOf(byWhole))
+		if !slices.Equal(issueIDs(byClimb), issueIDs(byWhole)) {
+			t.Errorf("climbing from %v orders %v, want the whole read's %v", issueIDs(seed), issueIDs(byClimb), issueIDs(byWhole))
 		}
 	}
-	all, err := loadRankAncestryAbove(ctx, st.db, idsOf(stored))
+	all, err := loadRankAncestryAbove(ctx, st.db, issueIDs(stored))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +124,7 @@ func TestAGroupOfOneClimbsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(adjacency.Siblings) != 1 {
-		t.Fatalf("Siblings = %v, want the one created", idsOf(adjacency.Siblings))
+		t.Fatalf("Siblings = %v, want the one created", issueIDs(adjacency.Siblings))
 	}
 	if levels != 0 || links != 0 {
 		t.Errorf("a ticket with a sibling and one neighbour climbed %d levels and %d links, want none", levels, links)
@@ -173,14 +165,14 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := idsOf(relations[upper[0].ID].Children), []string{child.ID, kept.ID, later.ID}; !slices.Equal(got, want) {
+	if got, want := issueIDs(relations[upper[0].ID].Children), []string{child.ID, kept.ID, later.ID}; !slices.Equal(got, want) {
 		t.Errorf("Children of %s = %v, want %v", upper[0].ID, got, want)
 	}
 	adjacency, err := st.GetIssueAdjacency(ctx, kept.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := idsOf(adjacency.Siblings), []string{child.ID, later.ID}; !slices.Equal(got, want) {
+	if got, want := issueIDs(adjacency.Siblings), []string{child.ID, later.ID}; !slices.Equal(got, want) {
 		t.Errorf("Siblings of %s = %v, want %v", kept.ID, got, want)
 	}
 }

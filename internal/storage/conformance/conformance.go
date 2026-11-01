@@ -186,7 +186,7 @@ var cases = []engineCase{
 	{"list_orders_timestamps_by_instant_not_spelling", listOrdersTimestampsByInstant},
 	{"events_are_totally_ordered", eventsAreTotallyOrdered},
 	{"relations_and_comments_are_totally_ordered", relationsAndCommentsAreTotallyOrdered},
-	{"adjacency_holds_what_the_detail_holds", adjacencyHoldsWhatTheDetailHolds},
+	{"adjacency_holds_what_its_edges_name", adjacencyHoldsWhatItsEdgesName},
 	{"tree_order_reads_containers_a_row_does_not_show", treeOrderReadsContainersARowDoesNotShow},
 	{"rank_intents_reorder", rankIntentsReorder},
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},

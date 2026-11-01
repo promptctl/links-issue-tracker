@@ -9,16 +9,17 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// adjacencyHoldsWhatTheDetailHolds pins the two single-issue reads to one
-// answer: every group GetIssueAdjacency carries is GetIssueDetail's, for a leaf
-// with every kind of neighbour and for the epic above it. A missing id is the
-// detail's NotFound and not an empty neighbourhood.
-func adjacencyHoldsWhatTheDetailHolds(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
+// adjacencyHoldsWhatItsEdgesName pins what GetIssueAdjacency reads, for a leaf
+// with every kind of neighbour and for the epic above it, each group by the
+// issues the fixture put there, and that GetIssueDetail carries those groups
+// unchanged. A missing id is the detail's NotFound and not an empty
+// neighbourhood.
+func adjacencyHoldsWhatItsEdgesName(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "elsewhere", Topic: "core", IssueType: model.TypeEpic})
 	origin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "origin", Topic: "core", ParentID: epic.ID})
 	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID, FollowsUp: origin.ID})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a follow-up of the subject", Topic: "core", ParentID: epic.ID, FollowsUp: subject.ID})
+	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a follow-up of the subject", Topic: "core", ParentID: epic.ID, FollowsUp: subject.ID})
 	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "canonical", Topic: "core", ParentID: elsewhere.ID})
 	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: elsewhere.ID})
 	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core", ParentID: elsewhere.ID})
@@ -68,14 +69,37 @@ func adjacencyHoldsWhatTheDetailHolds(t *testing.T, ctx context.Context, st stor
 			}
 		}
 	}
-	// The fixture reaches every group, or the comparison above proves nothing.
+	adjacency, err := st.GetIssueAdjacency(ctx, subject.ID)
+	if err != nil {
+		t.Fatalf("GetIssueAdjacency(%s): %v", subject.ID, err)
+	}
+	assertIssueIDs(t, "the subject's siblings", adjacency.Siblings, []string{origin.ID, followUp.ID})
+	assertIssueIDs(t, "the subject's blockers", adjacency.BlockedBy, []string{blocker.ID})
+	assertIssueIDs(t, "the subject's dependents", adjacency.Blocks, []string{dependent.ID})
+	assertIssueIDs(t, "the subject's related", adjacency.Related, []string{peer.ID})
+	for _, one := range []struct {
+		name string
+		got  *model.Issue
+		want string
+	}{
+		{"Parent", adjacency.Parent, epic.ID},
+		{"RedirectTarget", adjacency.RedirectTarget, canonical.ID},
+		{"FollowsUp", adjacency.FollowsUp, origin.ID},
+	} {
+		if one.got == nil || one.got.ID != one.want {
+			t.Errorf("the subject's %s = %+v, want %s", one.name, one.got, one.want)
+		}
+	}
+	above, err := st.GetIssueAdjacency(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssueAdjacency(%s): %v", epic.ID, err)
+	}
+	assertIssueIDs(t, "the epic's children", above.Children, []string{origin.ID, subject.ID, followUp.ID})
 	detail, err := st.GetIssueDetail(ctx, subject.ID)
 	if err != nil {
 		t.Fatalf("GetIssueDetail(%s): %v", subject.ID, err)
 	}
-	if detail.Parent == nil || len(detail.Siblings) == 0 || len(detail.BlockedBy) == 0 || len(detail.Blocks) == 0 || len(detail.Related) == 0 || detail.RedirectTarget == nil || detail.FollowsUp == nil || len(detail.FollowUps) == 0 {
-		t.Errorf("the subject's detail = %+v, want every group populated", detail)
-	}
+	assertIssueIDs(t, "the subject's follow-ups", detail.FollowUps, []string{followUp.ID})
 
 	_, err = st.GetIssueAdjacency(ctx, "no-such-issue")
 	assertNotFound(t, err, "issue", "GetIssueAdjacency")
@@ -120,4 +144,26 @@ func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, 
 		t.Fatalf("GetRelationsByIDs: %v", err)
 	}
 	assertIssueIDs(t, "a ticket's blockers", relations[subject.ID].BlockedBy, []string{secondLeaf.ID, firstLeaf.ID})
+
+	hub := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "hub", Topic: "core", ParentID: third.ID})
+	for _, leaf := range []model.Issue{firstLeaf, secondLeaf} {
+		for _, edge := range []storage.AddRelationInput{
+			{SrcID: leaf.ID, DstID: hub.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},
+			{SrcID: hub.ID, DstID: leaf.ID, Type: model.RelRelatedTo, CreatedBy: "ada"},
+		} {
+			if _, err := st.AddRelation(ctx, edge); err != nil {
+				t.Fatalf("AddRelation(%+v): %v", edge, err)
+			}
+		}
+	}
+	adjacency, err := st.GetIssueAdjacency(ctx, subject.ID)
+	if err != nil {
+		t.Fatalf("GetIssueAdjacency(%s): %v", subject.ID, err)
+	}
+	assertIssueIDs(t, "one ticket's blockers", adjacency.BlockedBy, []string{secondLeaf.ID, firstLeaf.ID})
+	if adjacency, err = st.GetIssueAdjacency(ctx, hub.ID); err != nil {
+		t.Fatalf("GetIssueAdjacency(%s): %v", hub.ID, err)
+	}
+	assertIssueIDs(t, "one ticket's dependents", adjacency.Blocks, []string{secondLeaf.ID, firstLeaf.ID})
+	assertIssueIDs(t, "one ticket's related", adjacency.Related, []string{secondLeaf.ID, firstLeaf.ID})
 }

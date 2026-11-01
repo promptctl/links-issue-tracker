@@ -38,7 +38,12 @@ General contract: every method is a pure read from the caller's view; two identi
 
 **`GetIssueDetail(ctx, id string) (model.IssueDetail, error)`** — `internal/storage/contract.go`
 - Returns the issue plus its comments, history, and structural edges — the full single-issue view (`internal/storage/contract.go`).
-- Callers needing only edges for many issues use `GetRelationsByIDs` instead (`internal/storage/contract.go`).
+- Reads the issues table whole for `FollowUps`, about 2.3us a row, since no index holds `follows_up` (`internal/storage/contract.go`).
+- Callers needing only edges for many issues use `GetRelationsByIDs` instead, and one needing the neighbours of one uses `GetIssueAdjacency` (`internal/storage/contract.go`).
+
+**`GetIssueAdjacency(ctx, id string) (IssueAdjacency, error)`** — `internal/storage/contract.go`
+- Returns what `GetIssueDetail` holds that the issue's own row and edges name, at the cost of that neighbourhood and not the store's size (`internal/storage/contract.go`).
+- A missing id returns `NotFoundError` (`internal/storage/contract.go`).
 
 **`ListIssues(ctx, filter ListIssuesFilter) ([]model.Issue, error)`** — `internal/storage/contract.go`
 - Ordered by `SortBy`, then — always, as the final key — by id ascending (`internal/storage/contract.go`).
@@ -756,9 +761,11 @@ Order of checks is stated as contract: the parent must be resolved before the co
 - `Events` — `eventsFor(id)`, sorted (created_at, id)
 - `PlanReviews` — `planReviewsFor(id)`, the issue's reviews through `clonePlanReviews`: each a copy with its own `Laws` slice, sorted by `storage.PlanReviewOrdering` (`created_at` instant, then id) (`internal/storage/memory/plan_review.go`)
 - `Children`, `BlockedBy`, `Blocks`, `Parent` — from `bucketRelations`
-- `Siblings` — the parent's other children (same rank-ordered child set, minus self); an only child yields the empty group
+- `Siblings` — the parent's other children (the child set in position order, minus self); an only child yields the empty group
 - `Related` — `relatedIssues`
 - `RedirectTarget` — hydrated from the issue's own close payload (`issue.RedirectTargetValue()`), **never** from the relations graph; nil if the target record is absent
+
+**`GetIssueAdjacency`** (`internal/storage/memory/issues.go`) — the same read without the comments, events, plan reviews and follow-ups, which `GetIssueDetail` adds to it through `IssueAdjacency.Detail` (`internal/storage/edges.go`).
 
 **`ListTopics`** (`internal/storage/memory/issues.go`) — iterates `issues`; skips records whose retention is `model.Deleted` and records with an empty topic; dedupes; `slices.Sort`. **Deletion removes an issue's topic from the vocabulary; archival does not**.
 
@@ -967,9 +974,9 @@ The engine has no label method; the label verbs are `Apply` plans (§1.6), and `
 | `Type == RelParentChild && SrcID == focalID` | `Parent` (pointer) | `DstID` |
 | anything else (e.g. `RelRelatedTo`) | skipped | — |
 - An edge whose counterpart record has vanished is simply not in the result.
-- `Children`, `BlockedBy`, `Blocks` are each sorted by `ancestry.Sort` (tree order); the returned struct initializes them to non-nil empty slices.
+- `Children` are sorted by `storage.SortSiblings`, on their own keys; `BlockedBy` and `Blocks` by `ancestry.Sort` (tree order); the returned struct initializes them to non-nil empty slices.
 
-**`relatedIssues`** — `RelRelatedTo` counterparts only (the other end of the edge), hydrated, sorted by `ancestry.Sort`. It is `GetIssueDetail`'s concern alone; peer links stay out of the shared `IssueRelations` shape.
+**`relatedIssues`** — `RelRelatedTo` counterparts only (the other end of the edge), hydrated, sorted by `ancestry.Sort`. It is `GetIssueAdjacency`'s concern alone; peer links stay out of the shared `IssueRelations` shape.
 
 
 ### 2.12 Rank (`internal/storage/memory/rank.go`)

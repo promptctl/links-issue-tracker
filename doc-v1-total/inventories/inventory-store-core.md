@@ -2789,7 +2789,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - `s.listRelations(ctx, issueID)`; with no `types` the full incident set is returned.
 - Otherwise filters in Go against a set of wanted types; order is preserved from `listRelations`.
 
-`Store.listRelations` — `internal/store/store.go`: `queryRelations` over `relationsBySrc` and `relationsByDst` (`relations.go`), merged by `mergeRelations`; in `storage.RelationOrdering`; returns an empty non-nil slice.
+`Store.listRelations` — `internal/store/store.go`: `queryRelations` (`relations.go`) over `relationsBySrc` and `relationsByDst`, merged by `mergeRelations`; in `storage.RelationOrdering`; returns an empty non-nil slice.
 
 ### 4.10 Batch relations
 
