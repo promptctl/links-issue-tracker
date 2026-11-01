@@ -104,9 +104,10 @@ func NewEvidence(issues []model.Issue, parentByChild map[string]string, events [
 //
 // The events come from a read that shares no id list with the issues', so the
 // refusal holds here as it does for NewEvidence: a closed, archived or deleted
-// ticket a read dropped is one the events still name. Both reads do walk one
-// join, so the refusal cannot see that walk fall short; the conformance case
-// holding every lane to the whole-store Derive does.
+// ticket a read dropped is one the events still name. Both reads do start from
+// one statement of the family's parents, so the refusal cannot see that read
+// fall short; the conformance case holding every lane to the whole-store Derive
+// does.
 func NewLane(issueID string, family Family) (Lane, error) {
 	placed, err := newPartition(family.Issues, family.ParentByChild, family.ParentTypes, family.Events)
 	if err != nil {

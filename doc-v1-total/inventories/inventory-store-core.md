@@ -659,10 +659,10 @@ The `c.field ASC` sort is deliberate so two reads of an unchanged event compare 
 `store.go`, the single execution path for issue-record changes. Every step below runs under ONE `withCommitLock` hold, so no write lands between the plan's reads and its write; the reads run on `s.db` before the mutation's tx opens (the pool has one connection):
 1. `current, err := s.GetIssue(ctx, id)` — a not-found id fails here; then `c, err := plan.PlanChange(current)` decides the change on it, and a plan's refusal returns before any write (`store.go`).
 2. `planReadsHookForTest` fires here if set (`store.go`).
-3. `history := s.ListEvents(ctx, current.ID)`; `newest := s.newestInLaneFamily(ctx, current.ID)`; `at := s.stamps.Stamp(s.clock, newest)` (`store.go`).
+3. `newest := s.newestInLaneFamily(ctx, current.ID)`; `at := s.stamps.Stamp(s.clock, newest)` (`store.go`).
 4. `actor := storage.Actor(c.Actor)` — trimmed; empty → `"unknown"` (`store.go`).
 5. `baseline := current` (`store.go`).
-6. If `c.Action != nil`: `lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
+6. If `c.Action != nil`: `history := s.ListEvents(ctx, current.ID)`, then `lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
 7. `fw, err := planFieldUpdate(baseline, c.Fields, actor)` — a validation error returns before any write; `hasFields := len(fw.changes) > 0` (`store.go`).
 8. `needsActionWrite := lw != nil && !lw.isNoop()` (`store.go`).
 9. If `needsActionWrite || hasFields`: one `withMutation(ctx, "apply update"...)`, re-entrant on the hold, running `lw.applyTx` then `s.applyFieldsTx`, both in the **same** tx and therefore one Dolt commit (`store.go`).

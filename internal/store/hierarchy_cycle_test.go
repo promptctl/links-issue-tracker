@@ -686,7 +686,7 @@ func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
 
 // A family is the edges, as model.LaneFamily reads them, so two children of a
 // parent whose row is gone are still one family: a write to one is stamped past
-// the other, and its lane reads both.
+// the other, and the family read holds both.
 func TestAParentRowThatIsGoneStillMakesAFamily(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)

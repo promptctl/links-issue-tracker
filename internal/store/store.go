@@ -2398,7 +2398,7 @@ func queryComments(ctx context.Context, q rowQueryer, from string, args ...any) 
 func (s *Store) laneFamilyEvents(ctx context.Context, columns, issueID string) (string, []any, error) {
 	parents, err := parentsOfIssue(ctx, s.db, issueID)
 	if err != nil {
-		return "", nil, fmt.Errorf("read the parents of %s: %w", issueID, err)
+		return "", nil, err
 	}
 	selection := `SELECT ` + columns + ` FROM issue_events e WHERE e.issue_id = ?`
 	args := []any{issueID}
@@ -2525,7 +2525,7 @@ func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, 
 func (s *Store) laneFamilyIDs(ctx context.Context, issueID string) ([]string, error) {
 	parents, err := parentsOfIssue(ctx, s.db, issueID)
 	if err != nil {
-		return nil, fmt.Errorf("read the parents of %s: %w", issueID, err)
+		return nil, err
 	}
 	ids, err := s.childIDsOfParents(ctx, parents)
 	if err != nil {
