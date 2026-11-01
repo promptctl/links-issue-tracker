@@ -123,7 +123,7 @@ type orderEdge struct {
 //
 // A population with no members has exactly one position, and it is zero.
 // Absorbing that here is what lets place assign unconditionally, the way
-// rankBeyondTx absorbs the empty frame for the SQL engine. The alternative —
+// ranksBeyondTx absorbs the empty frame for the SQL engine. The alternative —
 // answering it in the caller, before the dispatch — would mean the first issue
 // created in a workspace never reaches the dispatch at all, so it accepts any
 // placement whatsoever while the second issue with the same placement is
@@ -305,8 +305,8 @@ func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
 	//
 	// The frame's slots are rewritten in place rather than detached and
 	// reinserted: the positions the frame already occupies stay exactly where
-	// they are and only their occupants are permuted, as storage.RankSetOrder
-	// defines, so nothing outside the frame moves and the frame keeps its place
+	// they are and only their occupants are permuted, as rankSetOrder defines,
+	// so nothing outside the frame moves and the frame keeps its place
 	// even when the representatives are all of it.
 	f := e.frameOf(reps[0])
 	slots := e.frameMateIndexes(f, "")
@@ -314,7 +314,7 @@ func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
 	for i, slot := range slots {
 		occupants[i] = e.order[slot]
 	}
-	ordered, err := storage.RankSetOrder(f, occupants, reps)
+	ordered, err := rankSetOrder(f, occupants, reps)
 	if err != nil {
 		return storage.RankSetResult{}, err
 	}
@@ -322,6 +322,33 @@ func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
 		e.order[slot] = ordered[i]
 	}
 	return storage.RankSetResult{Resolutions: resolutions, Frame: f}, nil
+}
+
+// rankSetOrder is the new occupant of each of occupants' slots: the
+// representatives first, in the order named, then every other member of the
+// frame in the order it already held. The positions stay where they are, so the
+// set permutes the frame and moves nothing outside it, and asked twice leaves
+// exactly what it left once.
+//
+// Every representative must be one of the occupants. One that is not — deleted,
+// unranked, or outside the frame — would make the result longer than the frame,
+// and writing the part that fits would drop a live sibling from the order, so
+// the whole request is refused instead. [LAW:no-silent-failure]
+func rankSetOrder(f storage.Frame, occupants, reps []string) ([]string, error) {
+	named := make(map[string]struct{}, len(reps))
+	for _, rep := range reps {
+		named[rep] = struct{}{}
+	}
+	ordered := slices.Clone(reps)
+	for _, id := range occupants {
+		if _, isRep := named[id]; !isRep {
+			ordered = append(ordered, id)
+		}
+	}
+	if len(ordered) != len(occupants) {
+		return nil, fmt.Errorf("rank set: %d issues resolved into %s but the frame holds %d ranked — refusing to rewrite a partial order", len(ordered), f, len(occupants))
+	}
+	return ordered, nil
 }
 
 // detach lifts an id out of the order, leaving the rest of the sequence

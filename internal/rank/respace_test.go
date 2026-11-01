@@ -103,7 +103,7 @@ func (k *keyspace) insert(t *testing.T, i int) (window int) {
 		return lower, upper
 	}
 	lower, upper := bounds()
-	key, err := Midpoint(lower, upper)
+	key, err := midpoint(lower, upper)
 	if errors.Is(err, ErrNoRoom) {
 		trigger := upper
 		if trigger == "" {
@@ -113,7 +113,7 @@ func (k *keyspace) insert(t *testing.T, i int) (window int) {
 		window = rows
 		k.rewritten += changed
 		lower, upper = bounds()
-		key, err = Midpoint(lower, upper)
+		key, err = midpoint(lower, upper)
 	}
 	if err != nil {
 		t.Fatalf("insert %d at %d: %v", k.inserts, i, err)

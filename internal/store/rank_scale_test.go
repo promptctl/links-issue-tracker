@@ -268,10 +268,12 @@ func TestRankReadsPlanAsAnIndexWalk(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	seedRows(t, ctx, st, 0, 60, false)
+	head, headArgs := frameRowsQuery(storage.TopLevel)
 	for _, c := range []struct {
 		name, query string
 		args        []any
 	}{
+		{"a top-level head", head + ` ORDER BY issues.item_rank ASC LIMIT ?`, append(headArgs, 3)},
 		{"below", belowRankQuery, []any{"K000030", 16}},
 		{"above", aboveRankQuery, []any{"K000030", 16}},
 		{"at", atRankQuery, []any{"K000030"}},
@@ -663,7 +665,7 @@ func TestBottomAppendsDoNoRespaceAtTenTimesTheStore(t *testing.T) {
 	keys := make([]string, 10540)
 	last := ""
 	for i := range keys {
-		key, err := rank.Midpoint(last, "")
+		key, err := midpoint(last, "")
 		if err != nil {
 			t.Fatal(err)
 		}

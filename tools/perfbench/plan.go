@@ -157,7 +157,7 @@ var probes = []probe{
 	// ids only the first time. So each probe below undoes the one before it, and
 	// every recorded round is the real write: an edge added past the cycle
 	// check, a ticket started through the takeover gate, and two epics carried
-	// from the bottom of the top level to its top, rewriting the frame.
+	// from the bottom of the top level to its top.
 	{name: "dep add", argv: inMidStore(func(m midStore) []string {
 		return []string{"dep", "add", m.dependent, "--blocked-by", m.blocker}
 	}), okCodes: exits(0), mutates: true},

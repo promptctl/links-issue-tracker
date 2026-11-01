@@ -71,6 +71,15 @@ func TestSignificant(t *testing.T) {
 	}
 }
 
+// midpoint is the one key Between places between a and b.
+func midpoint(a, b string) (string, error) {
+	keys, err := Between(a, b, 1)
+	if err != nil {
+		return "", err
+	}
+	return keys[0], nil
+}
+
 func TestMidpointBasic(t *testing.T) {
 	tests := []struct {
 		a, b string
@@ -82,25 +91,25 @@ func TestMidpointBasic(t *testing.T) {
 		{"aaa", "aac"},
 	}
 	for _, tt := range tests {
-		mid, err := Midpoint(tt.a, tt.b)
+		mid, err := midpoint(tt.a, tt.b)
 		if err != nil {
-			t.Errorf("Midpoint(%q, %q) error: %v", tt.a, tt.b, err)
+			t.Errorf("midpoint(%q, %q) error: %v", tt.a, tt.b, err)
 			continue
 		}
 		if mid <= tt.a || mid >= tt.b {
-			t.Errorf("Midpoint(%q, %q) = %q, want %q < result < %q", tt.a, tt.b, mid, tt.a, tt.b)
+			t.Errorf("midpoint(%q, %q) = %q, want %q < result < %q", tt.a, tt.b, mid, tt.a, tt.b)
 		}
 	}
 }
 
 func TestMidpointAdjacentChars(t *testing.T) {
 	// Adjacent characters in alphabet: must extend to next position.
-	mid, err := Midpoint("A", "B")
+	mid, err := midpoint("A", "B")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mid <= "A" || mid >= "B" {
-		t.Errorf("Midpoint(A, B) = %q, want A < result < B", mid)
+		t.Errorf("midpoint(A, B) = %q, want A < result < B", mid)
 	}
 	if len(mid) <= 1 {
 		t.Errorf("expected midpoint between adjacent chars to be longer, got %q", mid)
@@ -108,11 +117,11 @@ func TestMidpointAdjacentChars(t *testing.T) {
 }
 
 func TestMidpointErrors(t *testing.T) {
-	_, err := Midpoint("B", "A")
+	_, err := midpoint("B", "A")
 	if err == nil {
 		t.Error("expected error for a >= b")
 	}
-	_, err = Midpoint("A", "A")
+	_, err = midpoint("A", "A")
 	if err == nil {
 		t.Error("expected error for a == b")
 	}
@@ -124,7 +133,7 @@ func TestMidpointErrors(t *testing.T) {
 // prefix of the other, one the other extended by zeros, an all-zero bound. The
 // empty string plays both open ends.
 //
-// Midpoint must refuse exactly the pairs sharing a significant part, with
+// Between must refuse exactly the pairs sharing a significant part, with
 // ErrNoRoom, and on every other pair return a valid rank strictly between the
 // bounds.
 func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
@@ -147,18 +156,18 @@ func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
 				continue
 			}
 			pairs++
-			got, err := Midpoint(a, b)
+			got, err := midpoint(a, b)
 			if b != "" && Significant(a) == Significant(b) {
 				if !errors.Is(err, ErrNoRoom) {
-					t.Fatalf("Midpoint(%q, %q) = %q, %v; want ErrNoRoom: the bounds pad to the same value", a, b, got, err)
+					t.Fatalf("midpoint(%q, %q) = %q, %v; want ErrNoRoom: the bounds pad to the same value", a, b, got, err)
 				}
 				continue
 			}
 			if err != nil {
-				t.Fatalf("Midpoint(%q, %q) error: %v; the bounds have room", a, b, err)
+				t.Fatalf("midpoint(%q, %q) error: %v; the bounds have room", a, b, err)
 			}
 			if !Valid(got) || got <= a || (b != "" && got >= b) {
-				t.Fatalf("Midpoint(%q, %q) = %q, want a valid rank strictly between them", a, b, got)
+				t.Fatalf("midpoint(%q, %q) = %q, want a valid rank strictly between them", a, b, got)
 			}
 		}
 	}
@@ -174,32 +183,95 @@ func TestMidpointStaysStrictlyBetweenItsBounds(t *testing.T) {
 // rank, so a placement above it has nothing to return.
 func TestNothingSortsBelowAnAllZeroRank(t *testing.T) {
 	for _, a := range []string{"0", "000"} {
-		if got, err := Midpoint("", a); !errors.Is(err, ErrNoRoom) {
-			t.Errorf("Midpoint(\"\", %q) = %q, %v; want ErrNoRoom", a, got, err)
+		if got, err := midpoint("", a); !errors.Is(err, ErrNoRoom) {
+			t.Errorf("midpoint(\"\", %q) = %q, %v; want ErrNoRoom", a, got, err)
 		}
+	}
+}
+
+func TestBetween(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		lower, upper string
+		n            int
+	}{
+		{"none", "A", "B", 0},
+		{"none past an open end", "", "V", 0},
+		{"one", "A", "z", 1},
+		{"closed", "A", "z", 500},
+		{"closed and tight", "V000", "V001", 40},
+		{"below everything", "", "V", 3},
+		{"above everything", "V", "", 3},
+		{"the whole keyspace", "", "", 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keys, err := Between(tc.lower, tc.upper, tc.n)
+			if err != nil {
+				t.Fatalf("Between(%q, %q, %d) error = %v", tc.lower, tc.upper, tc.n, err)
+			}
+			if len(keys) != tc.n {
+				t.Fatalf("Between(%q, %q, %d) = %d keys, want %d", tc.lower, tc.upper, tc.n, len(keys), tc.n)
+			}
+			previous := tc.lower
+			for _, key := range keys {
+				if key <= previous {
+					t.Fatalf("Between(%q, %q, %d) = %v: %q does not sort past %q", tc.lower, tc.upper, tc.n, keys, key, previous)
+				}
+				previous = key
+			}
+			if tc.upper != "" && previous >= tc.upper {
+				t.Fatalf("Between(%q, %q, %d) = %v: %q does not sort below the upper bound", tc.lower, tc.upper, tc.n, keys, previous)
+			}
+		})
+	}
+}
+
+// A set placed past an open end over and over is what a backlog's head sees. It
+// has to stay as short as one key placed there does: spacing against the open
+// end would deepen the keys every round.
+func TestBetweenAnOpenEndStaysFlat(t *testing.T) {
+	upper := "V"
+	for round := range 200 {
+		keys, err := Between("", upper, 3)
+		if err != nil {
+			t.Fatalf("round %d: Between(\"\", %q, 3) error = %v", round, upper, err)
+		}
+		if len(keys[0]) > stepLength {
+			t.Fatalf("round %d: Between(\"\", %q, 3) = %v; a step past an open end stays at %d chars", round, upper, keys, stepLength)
+		}
+		upper = keys[0]
+	}
+}
+
+func TestBetweenRefusesBoundsThatLeaveNoRoom(t *testing.T) {
+	if _, err := Between("A", "A0", 2); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("Between over a pair padding to one value error = %v, want ErrNoRoom", err)
+	}
+	if _, err := Between("B", "A", 2); err == nil {
+		t.Error("Between over inverted bounds succeeded; want an error")
 	}
 }
 
 func TestMidpointEmptyBounds(t *testing.T) {
 	// Empty a = before everything.
-	mid, err := Midpoint("", "V")
+	mid, err := midpoint("", "V")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mid >= "V" {
-		t.Errorf("Midpoint('', 'V') = %q, want < V", mid)
+		t.Errorf("midpoint('', 'V') = %q, want < V", mid)
 	}
 	if mid == "" {
-		t.Error("Midpoint('', 'V') returned empty string")
+		t.Error("midpoint('', 'V') returned empty string")
 	}
 
 	// Empty b = after everything.
-	mid, err = Midpoint("V", "")
+	mid, err = midpoint("V", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if mid <= "V" {
-		t.Errorf("Midpoint('V', '') = %q, want > V", mid)
+		t.Errorf("midpoint('V', '') = %q, want > V", mid)
 	}
 }
 
@@ -208,13 +280,13 @@ func TestSequentialAppends(t *testing.T) {
 	ranks := make([]string, 1001)
 	ranks[0] = openingKey
 	for i := 1; i <= 1000; i++ {
-		r, err := Midpoint(ranks[i-1], "")
+		r, err := midpoint(ranks[i-1], "")
 		if err != nil {
-			t.Fatalf("Midpoint(%q, \"\") at step %d error: %v", ranks[i-1], i, err)
+			t.Fatalf("midpoint(%q, \"\") at step %d error: %v", ranks[i-1], i, err)
 		}
 		ranks[i] = r
 		if ranks[i] <= ranks[i-1] {
-			t.Fatalf("Midpoint(%q, \"\") = %q at step %d, not strictly increasing", ranks[i-1], ranks[i], i)
+			t.Fatalf("midpoint(%q, \"\") = %q at step %d, not strictly increasing", ranks[i-1], ranks[i], i)
 		}
 	}
 }
@@ -224,13 +296,13 @@ func TestSequentialPrepends(t *testing.T) {
 	ranks := make([]string, 1001)
 	ranks[0] = openingKey
 	for i := 1; i <= 1000; i++ {
-		r, err := Midpoint("", ranks[i-1])
+		r, err := midpoint("", ranks[i-1])
 		if err != nil {
-			t.Fatalf("Midpoint(\"\", %q) at step %d error: %v", ranks[i-1], i, err)
+			t.Fatalf("midpoint(\"\", %q) at step %d error: %v", ranks[i-1], i, err)
 		}
 		ranks[i] = r
 		if ranks[i] >= ranks[i-1] {
-			t.Fatalf("Midpoint(\"\", %q) = %q at step %d, not strictly decreasing", ranks[i-1], ranks[i], i)
+			t.Fatalf("midpoint(\"\", %q) = %q at step %d, not strictly decreasing", ranks[i-1], ranks[i], i)
 		}
 	}
 }
@@ -241,18 +313,18 @@ func TestRepeatedMidpointInsertion(t *testing.T) {
 	lo := "A"
 	hi := "B"
 	for i := 0; ; i++ {
-		mid, err := Midpoint(lo, hi)
+		mid, err := midpoint(lo, hi)
 		if errors.Is(err, ErrNoRoom) {
 			if i < 900 {
-				t.Fatalf("step %d: Midpoint(%q, %q) refused long before MaxLength", i, lo, hi)
+				t.Fatalf("step %d: midpoint(%q, %q) refused long before MaxLength", i, lo, hi)
 			}
 			return
 		}
 		if err != nil {
-			t.Fatalf("step %d: Midpoint(%q, %q) error: %v", i, lo, hi, err)
+			t.Fatalf("step %d: midpoint(%q, %q) error: %v", i, lo, hi, err)
 		}
 		if mid <= lo || mid >= hi || len(mid) > MaxLength {
-			t.Fatalf("step %d: Midpoint(%q, %q) = %q, ordering or length violated", i, lo, hi, mid)
+			t.Fatalf("step %d: midpoint(%q, %q) = %q, ordering or length violated", i, lo, hi, mid)
 		}
 		hi = mid
 	}
@@ -268,13 +340,13 @@ func TestMidpointMultiCharStrings(t *testing.T) {
 		{"abc", "abd"},
 	}
 	for _, tt := range tests {
-		mid, err := Midpoint(tt.a, tt.b)
+		mid, err := midpoint(tt.a, tt.b)
 		if err != nil {
-			t.Errorf("Midpoint(%q, %q) error: %v", tt.a, tt.b, err)
+			t.Errorf("midpoint(%q, %q) error: %v", tt.a, tt.b, err)
 			continue
 		}
 		if mid <= tt.a || mid >= tt.b {
-			t.Errorf("Midpoint(%q, %q) = %q, ordering violated", tt.a, tt.b, mid)
+			t.Errorf("midpoint(%q, %q) = %q, ordering violated", tt.a, tt.b, mid)
 		}
 	}
 }
@@ -284,9 +356,9 @@ func TestBuildSequenceWithMidpoints(t *testing.T) {
 	// Simulates rank-above/rank-below operations.
 	ranks := []string{openingKey}
 	for i := 0; i < 5; i++ {
-		next, err := Midpoint(ranks[len(ranks)-1], "")
+		next, err := midpoint(ranks[len(ranks)-1], "")
 		if err != nil {
-			t.Fatalf("Midpoint(%q, \"\") error: %v", ranks[len(ranks)-1], err)
+			t.Fatalf("midpoint(%q, \"\") error: %v", ranks[len(ranks)-1], err)
 		}
 		ranks = append(ranks, next)
 	}
@@ -294,9 +366,9 @@ func TestBuildSequenceWithMidpoints(t *testing.T) {
 	var expanded []string
 	expanded = append(expanded, ranks[0])
 	for i := 1; i < len(ranks); i++ {
-		mid, err := Midpoint(ranks[i-1], ranks[i])
+		mid, err := midpoint(ranks[i-1], ranks[i])
 		if err != nil {
-			t.Fatalf("Midpoint(%q, %q) error: %v", ranks[i-1], ranks[i], err)
+			t.Fatalf("midpoint(%q, %q) error: %v", ranks[i-1], ranks[i], err)
 		}
 		expanded = append(expanded, mid, ranks[i])
 	}
@@ -337,12 +409,12 @@ func TestSpacedRanksAllowMidpointInsertion(t *testing.T) {
 	// After rebalancing, we should be able to insert between every adjacent pair.
 	ranks := SpacedRanks(100)
 	for i := 1; i < len(ranks); i++ {
-		mid, err := Midpoint(ranks[i-1], ranks[i])
+		mid, err := midpoint(ranks[i-1], ranks[i])
 		if err != nil {
-			t.Fatalf("Midpoint(%q, %q) after rebalance: %v", ranks[i-1], ranks[i], err)
+			t.Fatalf("midpoint(%q, %q) after rebalance: %v", ranks[i-1], ranks[i], err)
 		}
 		if mid <= ranks[i-1] || mid >= ranks[i] {
-			t.Fatalf("Midpoint(%q, %q) = %q, ordering violated", ranks[i-1], ranks[i], mid)
+			t.Fatalf("midpoint(%q, %q) = %q, ordering violated", ranks[i-1], ranks[i], mid)
 		}
 	}
 }
@@ -418,18 +490,18 @@ func TestSpacedRanksBetweenAllowsFurtherMidpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Insert between C and ranks[0].
-	mid, err := Midpoint("C", ranks[0])
+	mid, err := midpoint("C", ranks[0])
 	if err != nil {
-		t.Fatalf("Midpoint(C, %q): %v", ranks[0], err)
+		t.Fatalf("midpoint(C, %q): %v", ranks[0], err)
 	}
 	if mid <= "C" || mid >= ranks[0] {
 		t.Fatalf("boundary midpoint failed: %q", mid)
 	}
 	// Insert between each adjacent pair.
 	for i := 1; i < len(ranks); i++ {
-		mid, err := Midpoint(ranks[i-1], ranks[i])
+		mid, err := midpoint(ranks[i-1], ranks[i])
 		if err != nil {
-			t.Fatalf("Midpoint(%q, %q): %v", ranks[i-1], ranks[i], err)
+			t.Fatalf("midpoint(%q, %q): %v", ranks[i-1], ranks[i], err)
 		}
 		if mid <= ranks[i-1] || mid >= ranks[i] {
 			t.Fatalf("midpoint ordering violated")
@@ -533,8 +605,8 @@ func TestSpacedRanksBetweenRejectsBoundsWithNoRoom(t *testing.T) {
 // with the midpoint of that pair.
 func TestMidpointOfTheWholeKeyspaceIsTheOpeningKey(t *testing.T) {
 	t.Parallel()
-	if got, err := Midpoint("", ""); err != nil || got != openingKey {
-		t.Fatalf("Midpoint(\"\", \"\") = %q, %v; want %q", got, err, openingKey)
+	if got, err := midpoint("", ""); err != nil || got != openingKey {
+		t.Fatalf("midpoint(\"\", \"\") = %q, %v; want %q", got, err, openingKey)
 	}
 }
 
@@ -559,12 +631,12 @@ func TestMidpointIsNoLongerThanItsBoundsNeed(t *testing.T) {
 		if Significant(a) == Significant(b) {
 			continue
 		}
-		got, err := Midpoint(a, b)
+		got, err := midpoint(a, b)
 		if err != nil {
-			t.Fatalf("Midpoint(%q, %q): %v", a, b, err)
+			t.Fatalf("midpoint(%q, %q): %v", a, b, err)
 		}
 		if got <= a || got >= b {
-			t.Fatalf("Midpoint(%q, %q) = %q, not between them", a, b, got)
+			t.Fatalf("midpoint(%q, %q) = %q, not between them", a, b, got)
 		}
 		roomy := 1
 		for ; ; roomy++ {
@@ -581,7 +653,7 @@ func TestMidpointIsNoLongerThanItsBoundsNeed(t *testing.T) {
 			}
 		}
 		if len(got) > roomy {
-			t.Fatalf("Midpoint(%q, %q) = %q, %d chars, and the bounds sit 4 apart at %d", a, b, got, len(got), roomy)
+			t.Fatalf("midpoint(%q, %q) = %q, %d chars, and the bounds sit 4 apart at %d", a, b, got, len(got), roomy)
 		}
 	}
 }
@@ -592,8 +664,8 @@ func TestAGapOfFourKeepsItsLength(t *testing.T) {
 		{"aaa0", "aaa4", "aaa2"},
 		{"aaa0", "aaa3", "aaa1U"},
 	} {
-		if got, err := Midpoint(c.a, c.b); err != nil || got != c.want {
-			t.Errorf("Midpoint(%q, %q) = %q, %v; want %q", c.a, c.b, got, err, c.want)
+		if got, err := midpoint(c.a, c.b); err != nil || got != c.want {
+			t.Errorf("midpoint(%q, %q) = %q, %v; want %q", c.a, c.b, got, err, c.want)
 		}
 	}
 }
@@ -603,16 +675,16 @@ func TestAGapOfFourKeepsItsLength(t *testing.T) {
 func TestNoPrimitiveWritesPastMaxLength(t *testing.T) {
 	t.Parallel()
 	shared := strings.Repeat("a", MaxLength)
-	if got, err := Midpoint(shared+"1", shared+"3"); !errors.Is(err, ErrNoRoom) {
-		t.Errorf("Midpoint inside the limit's last char = %q, %v; want ErrNoRoom", got, err)
+	if got, err := midpoint(shared+"1", shared+"3"); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("midpoint inside the limit's last char = %q, %v; want ErrNoRoom", got, err)
 	}
 	if got, err := SpacedRanksBetween(shared+"1", shared+"3", 1); !errors.Is(err, ErrNoRoom) {
 		t.Errorf("SpacedRanksBetween inside the limit's last char = %q, %v; want ErrNoRoom", got, err)
 	}
-	if got, err := Midpoint(strings.Repeat("z", MaxLength), ""); !errors.Is(err, ErrNoRoom) {
+	if got, err := midpoint(strings.Repeat("z", MaxLength), ""); !errors.Is(err, ErrNoRoom) {
 		t.Errorf("a step past z^%d = %q, %v; want ErrNoRoom", MaxLength, got, err)
 	}
-	if got, err := Midpoint("", strings.Repeat("0", MaxLength)+"1"); !errors.Is(err, ErrNoRoom) {
+	if got, err := midpoint("", strings.Repeat("0", MaxLength)+"1"); !errors.Is(err, ErrNoRoom) {
 		t.Errorf("a step below a key past 0^%d = %q, %v; want ErrNoRoom", MaxLength, got, err)
 	}
 }
@@ -632,8 +704,8 @@ func TestAPlacementPastAnOpenEndSteps(t *testing.T) {
 		{"down never lands on all zeros", "", "0001", "0000zzzz"},
 		{"up out of this store's corner", zs, "", zs + strings.Repeat("0", 11) + "1"},
 	} {
-		if got, err := Midpoint(c.a, c.b); err != nil || got != c.want {
-			t.Errorf("%s: Midpoint(%q, %q) = %q, %v; want %q", c.name, c.a, c.b, got, err, c.want)
+		if got, err := midpoint(c.a, c.b); err != nil || got != c.want {
+			t.Errorf("%s: midpoint(%q, %q) = %q, %v; want %q", c.name, c.a, c.b, got, err, c.want)
 		}
 	}
 }

@@ -43,7 +43,7 @@ func init() {
 //
 // This predicate is for validating PERSISTED rank values (e.g. checking a
 // rebuilt workspace). It is NOT the input contract of the ordering primitives:
-// Midpoint and SpacedRanksBetween deliberately accept an empty bound as a
+// Between and SpacedRanksBetween deliberately accept an empty bound as a
 // sentinel ("before/after everything"), so callers must not pre-screen those
 // bounds with Valid. Callers checking a stored rank consult this one definition rather than
 // re-deriving the alphabet.
@@ -61,7 +61,7 @@ func Valid(s string) bool {
 
 // Significant returns s without its trailing zeros: the part that decides where
 // s sorts once padded. Two ranks with the same significant part leave
-// SpacedRanksBetween and Midpoint no room between them.
+// SpacedRanksBetween and Between no room between them.
 func Significant(s string) string {
 	return strings.TrimRight(s, "0")
 }
@@ -86,33 +86,47 @@ func Anchor(s string) string {
 // never as a bad request.
 var ErrNoRoom = errors.New("rank: no room between the bounds")
 
-// Midpoint returns a key that sorts strictly between a and b, at the shortest
+// Between returns n ascending keys strictly between a and b, at the shortest
 // length with room: a gap of 4 or more at length L yields a key of at most L
 // chars, which is what lets a respaced window take the next placement.
 // Precondition: a < b (lexicographic). Returns an error if a >= b, and
 // ErrNoRoom if the bounds share a significant part or leave no room inside
 // MaxLength. An empty a means "before everything" and an empty b "after
-// everything", and past an open end a key steps rather than bisects, so appends
-// and prepends never deepen a corner. Both empty is the whole keyspace, whose
-// midpoint is the first key a workspace holds.
-func Midpoint(a, b string) (string, error) {
+// everything", and past an open end keys step rather than bisect, so appends
+// and prepends never deepen a corner and a set placed there repeatedly stays as
+// short as a single key would. Closed bounds divide their room evenly. Both empty
+// is the whole keyspace, whose midpoint is the first key a workspace holds. n of
+// 0 is no keys.
+func Between(a, b string, n int) ([]string, error) {
 	if a == b && a != "" {
-		return "", errors.New("rank: a and b are equal")
+		return nil, errors.New("rank: a and b are equal")
 	}
 	if a != "" && b != "" && a >= b {
-		return "", errors.New("rank: a must be less than b")
+		return nil, errors.New("rank: a must be less than b")
 	}
 	if a != "" && b == "" {
-		return step(a, 1)
+		return steps(a, 1, n)
 	}
 	if a == "" && b != "" {
-		return step(b, -1)
+		keys, err := steps(b, -1, n)
+		slices.Reverse(keys)
+		return keys, err
 	}
-	keys, err := spacedRanks(1, a, b, 1)
-	if err != nil {
-		return "", err
+	return spacedRanks(n, a, b, 1)
+}
+
+// steps returns n keys, each one step in direction dir from the one before it,
+// the first from s.
+func steps(s string, dir int64, n int) ([]string, error) {
+	keys := make([]string, n)
+	for i := range keys {
+		next, err := step(s, dir)
+		if err != nil {
+			return nil, err
+		}
+		keys[i], s = next, next
 	}
-	return keys[0], nil
+	return keys, nil
 }
 
 // MaxLength is the longest key the package writes: one short of
