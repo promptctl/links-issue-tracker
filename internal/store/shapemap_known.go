@@ -64,15 +64,22 @@ func mapTable(table RawTable) (TableMapping, bool) {
 
 // simpleEmitter builds the one Always emitter a recognized domain table needs:
 // each column maps onto its domain field with that field's canonical transform.
-// An unrecognized column declines the whole dump — a domain table carrying a
-// column outside the vocabulary is the novel-shape case the operator path owns.
+// A column with no target drops when classifyDrop can say why. Any other
+// declines the whole dump — a domain table carrying a column outside the
+// vocabulary is the novel-shape case the operator path owns.
 func simpleEmitter(table RawTable, rules map[string]TargetKey) (TableMapping, bool) {
 	fields := map[string]FieldSource{}
+	drops := map[string]Dropped{}
 	var coll collection
 	for _, col := range table.Columns {
 		target, known := rules[col]
 		if !known {
-			return TableMapping{}, false
+			provenance, reason := classifyDrop(table.Name, col)
+			if provenance != DropIntended {
+				return TableMapping{}, false
+			}
+			drops[col] = Dropped{Provenance: provenance, Reason: reason}
+			continue
 		}
 		tf := targetRegistry[target]
 		coll = tf.coll
@@ -81,6 +88,7 @@ func simpleEmitter(table RawTable, rules map[string]TargetKey) (TableMapping, bo
 	return TableMapping{
 		Table:    table.Name,
 		Emitters: []Emitter{{Collection: coll, When: Always{}, Fields: fields}},
+		Drops:    drops,
 	}, true
 }
 
@@ -277,16 +285,25 @@ var bookkeepingTables = map[string]string{
 	"meta":                 "schema metadata table — no domain field",
 }
 
+// derivedColumns are the generated columns a dump carries: the engine computes
+// them from their row, so a rebuilt store has them again and none is data.
+var derivedColumns = map[ColumnRef]string{
+	{Table: "issues", Column: "is_top_level_id"}: "generated from id by the engine — no domain field",
+}
+
 // classifyDrop decides why a source column has no domain target, distinguishing
 // the silent-pass case (intended) from the surface-to-human case (unexplained)
 // from migration history. [LAW:single-enforcer] One definition of "why was this
 // dropped" serves every mapper and the operator path alike.
 //
 // A column is an intended drop when its table is bookkeeping (no domain field by
-// design) or when a numbered migration explicitly removed it; otherwise the drop
-// is unexplained.
+// design), when the engine derives it, or when a numbered migration explicitly
+// removed it; otherwise the drop is unexplained.
 func classifyDrop(table, column string) (DropProvenance, string) {
 	if reason, ok := bookkeepingTables[table]; ok {
+		return DropIntended, reason
+	}
+	if reason, ok := derivedColumns[ColumnRef{Table: table, Column: column}]; ok {
 		return DropIntended, reason
 	}
 	if file, ok := migrationDroppedCols[ColumnRef{Table: table, Column: column}]; ok {
@@ -332,8 +349,8 @@ func parseDroppedColumns(sqlText string) []ColumnRef {
 // that removed it. It is scanned once from the embedded goose corpus. The
 // pre-goose renames (prompt→agent_prompt, assignee→actor) are not drops — the
 // values survive under a new name, so the correspondence table maps them. A
-// genuine future DROP COLUMN migration is the only way a domain column becomes an
-// intended drop.
+// genuine future DROP COLUMN migration is the only way a domain column holding
+// data becomes an intended drop.
 var migrationDroppedCols = scanMigrationDrops()
 
 func scanMigrationDrops() map[ColumnRef]string {

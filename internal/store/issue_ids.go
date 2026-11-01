@@ -75,6 +75,10 @@ func countChildren(ctx context.Context, tx *sql.Tx, parentID string) (int, error
 	return count, nil
 }
 
+// topLevelIDCount reads the index on is_top_level_id, so a create's cost does
+// not grow with the store. Telling these ids apart by their dot scans issues.
+const topLevelIDCount = `SELECT COUNT(*) FROM issues WHERE is_top_level_id = 1`
+
 // countTopLevelIssues counts the ids in the workspace's top-level space.
 // [LAW:dataflow-not-control-flow] Adaptive length is a pure function of the
 // population. The prefix never gates the count: every issue in a workspace
@@ -83,7 +87,7 @@ func countChildren(ctx context.Context, tx *sql.Tx, parentID string) (int, error
 // prefixes is conservative (slightly longer hashes) and never wrong.
 func countTopLevelIssues(ctx context.Context, tx *sql.Tx) (int, error) {
 	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?`, "%.%").Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, topLevelIDCount).Scan(&count); err != nil {
 		return 0, fmt.Errorf("count top-level issues: %w", err)
 	}
 	return count, nil
