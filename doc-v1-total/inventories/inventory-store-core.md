@@ -199,11 +199,12 @@ Behavioral evidence:
 
 `store.go`:
 1. `root := filepath.Clean(doltRootDir)` (`store.go`).
-2. `acquireBootstrapLock(ctx, root)`: `acquireStoreLock` exclusive on `.links-bootstrap.lock` beside the dolt root, no stand-still bound (`waitOutAnyStandStill`): it waits for as long as a builder holds the lock, and only the caller's context ends the wait, with `<ctx err> waiting for <lock>, <holders>` (`workspace_lock.go`). Released by a deferred call whose error is `errors.Join`ed into the named return (`store.go`).
-3. Under the lock: if `dirExists(filepath.Join(root, "links", ".dolt"))` → returns `(storage.BootstrapNone, nil)` (`store.go`).
-4. `discardDeadBuilds(staging, root/links)` with `staging` = `.links-bootstrap` beside the dolt root (`workspace_lock.go`): `os.Lstat` each — present → `storage.BootstrapBuiltOverDeadBuild` and `os.RemoveAll` (`remove a dead build's leftover: %w`); another stat error → `stat a build's path for a dead build's leftover: %w`; none present → `storage.BootstrapBuilt`. Then `buildDoltRoot`: `os.MkdirAll(staging, 0o755)` (`create bootstrap staging root: %w`); first pool `openDoltPool(staging, workspaceID, "", engineWrite)` closed inside a closure before the next open, running `CREATE DATABASE IF NOT EXISTS links` (failure → `create dolt database: %w`, then `wrapEngineOpenContention`); second pool `openDoltPool(staging, workspaceID, "links", engineWrite)`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go`).
-5. `installDoltRoot(staging, root)`: `forgetReceivedRefs(root)`; then `os.Rename(staging, root)` when `dirExists(root)` is false, else `os.Rename(staging/links, root/links)` (`install bootstrapped database: %w`); then `os.RemoveAll(staging)` (`remove emptied bootstrap staging root: %w`) (`store.go`).
-6. A `discardDeadBuilds` failure is returned as is; a `buildDoltRoot` or step-5 failure is `errors.Join`ed with `os.RemoveAll(staging)`. Returns `discardDeadBuilds`' `storage.Bootstrap`.
+2. With no bootstrap lock, under the caller's shared workspace lock: `doltDatabaseExists(root)` runs `os.Lstat` on `root/links`, then `root/links/.dolt`. Both real directories → returns `(storage.BootstrapNone, nil)`; nothing at either → `buildDatabaseOnce`, steps 3–7; another stat error → `check for a database: %w`; anything else, a symlink included → `check for a database: %s is not a directory` (`store.go`).
+3. `acquireBootstrapLock(ctx, root)`: `acquireStoreLock` exclusive on `.links-bootstrap.lock` beside the dolt root, no stand-still bound (`waitOutAnyStandStill`): it waits for as long as a builder holds the lock, and only the caller's context ends the wait, with `<ctx err> waiting for <lock>, <holders>` (`workspace_lock.go`). Released by a deferred call whose error is `errors.Join`ed into the named return (`store.go`).
+4. Under the lock: `doltDatabaseExists(root)` again; present → returns `(storage.BootstrapNone, nil)`, a failure → that error (`store.go`).
+5. `discardDeadBuilds(staging, root/links)` with `staging` = `.links-bootstrap` beside the dolt root (`workspace_lock.go`): `os.Lstat` each — present → `storage.BootstrapBuiltOverDeadBuild` and `os.RemoveAll` (`remove a dead build's leftover: %w`); another stat error → `stat a build's path for a dead build's leftover: %w`; none present → `storage.BootstrapBuilt`. Then `buildDoltRoot`: `os.MkdirAll(staging, 0o755)` (`create bootstrap staging root: %w`); first pool `openDoltPool(staging, workspaceID, "", engineWrite)` closed inside a closure before the next open, running `CREATE DATABASE IF NOT EXISTS links` (failure → `create dolt database: %w`, then `wrapEngineOpenContention`); second pool `openDoltPool(staging, workspaceID, "links", engineWrite)`, then `ensureMasterDefaultBranch` wrapped in `wrapEngineOpenContention` (`store.go`).
+6. `installDoltRoot(staging, root)`: `forgetReceivedRefs(root)`; then `os.Rename(staging, root)` when `dirExists(root)` is false, else `os.Rename(staging/links, root/links)` (`install bootstrapped database: %w`); then `os.RemoveAll(staging)` (`remove emptied bootstrap staging root: %w`) (`store.go`).
+7. A `discardDeadBuilds` failure is returned as is; a `buildDoltRoot` or step-6 failure is `errors.Join`ed with `os.RemoveAll(staging)`. Returns `discardDeadBuilds`' `storage.Bootstrap`.
 
 The two pools run strictly sequentially — the explicit close of the first is the ordering owner (`store.go`).
 
@@ -4510,7 +4511,7 @@ The `storage.Migrated` is what the read open did to the stored shape; it is the 
 Ordered:
 1. `validateDoltRootDir(doltRootDir)`; error returns `(false, {}, err)` (`adopt.go`).
 2. `requireNoPendingAdopt(cleanRoot)`: if the error `errors.Is(err, errAdoptPending)` → returns `(false, {}, nil)` — residue is "nothing to lose" **without opening it**; any other (I/O) error → `(false, {}, err)` (`adopt.go`).
-3. `if !dirExists(filepath.Join(cleanRoot, doltDatabaseName))` → `(false, {}, nil)`; **does not create the store** (`adopt.go`).
+3. `doltDatabaseExists(cleanRoot)` (`store.go`): no database → `(false, {}, nil)`; **does not create the store**; its error → `(false, {}, err)` (`adopt.go`).
 4. `OpenForRead(ctx, cleanRoot, workspaceID)`, `defer s.Close()` (`adopt.go`).
 5. `s.LocalIssueCount(ctx)` (defined `internal/store/sync.go`); returns `(count > 0, s.Migrated(), err)` (`adopt.go`).
 

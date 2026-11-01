@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/store/nbs"
 	embedded "github.com/dolthub/driver"
 
@@ -422,7 +423,7 @@ func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
 // serialized against a concurrent adopt's destructive window — an unlocked
 // CREATE could land between an adopt's discard and clone, or be destroyed by
 // it. Racing bootstraps serialize on the bootstrap lock inside
-// ensureDoltDatabase, whose holder builds on a path nobody else opens.
+// buildDatabaseOnce, whose holder builds on a path nobody else opens.
 // Open and OpenSync do NOT call this: they
 // already hold the workspace lock and call ensureDoltDatabase directly, so
 // the lock is never re-entered.
@@ -3218,25 +3219,63 @@ func nullableStringPtr(value *string) any {
 // ensureDoltDatabase makes the workspace's database exist. A database comes
 // into existence in one step: it is built in a staging root beside the Dolt
 // root and renamed into place (installDoltRoot), so every reader of "is there
-// a database" — this function, OpenForRead's initialized check, LocalHasTickets'
-// directory check — sees either none or a complete one, never a database
+// a database" — this function, OpenForRead's initialized check, LocalHasTickets
+// — sees either none or a complete one, never a database
 // another process is still laying down. [LAW:one-source-of-truth] the path's
 // existence is the one map of the database's, and the rename keeps it true.
 //
-// The bootstrap lock owns the decision to build: its holder alone answers
-// "absent, so I build", so two first opens racing on a fresh workspace build
-// once — the second waits, then finds the first's database. The answer is
-// read under the lock on every call, not before it, because a check made
-// before the wait is a decision about a database another process may be
-// installing. [LAW:no-ambient-temporal-coupling] An existing database needs
-// nothing more: branch normalization runs on each write open's own engine
-// (Open/OpenSync call ensureMasterDefaultBranch), which also covers databases
-// that arrive pre-made, like an adopt's clone, so the two bootstrap engines
-// are paid for only by the call that builds. [LAW:carrying-cost]
+// A database found here needs no bootstrap lock, so an open of an existing
+// store never queues on the one that guards building. Finding it cannot go
+// stale: every caller holds the workspace lock shared, which keeps out every
+// rotator of the directory, and a builder removes only a database directory
+// with no .dolt (discardDeadBuilds). Finding none can, so that answer is
+// decided under the bootstrap lock (buildDatabaseOnce).
+// [LAW:no-ambient-temporal-coupling] An existing database needs nothing more:
+// branch normalization runs on each write open's own engine (Open/OpenSync
+// call ensureMasterDefaultBranch), which also covers databases that arrive
+// pre-made, like an adopt's clone, so the two bootstrap engines are paid for
+// only by the call that builds. [LAW:carrying-cost]
 //
 // Reports what this call did to make the database exist.
-func ensureDoltDatabase(ctx context.Context, stderr io.Writer, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
+func ensureDoltDatabase(ctx context.Context, stderr io.Writer, doltRootDir string, workspaceID string) (storage.Bootstrap, error) {
 	root := filepath.Clean(doltRootDir)
+	exists, err := doltDatabaseExists(root)
+	if err != nil || exists {
+		return storage.BootstrapNone, err
+	}
+	return buildDatabaseOnce(ctx, stderr, root, workspaceID)
+}
+
+// doltDatabaseExists answers "is there a database": a real .dolt directory in a
+// real database directory. [LAW:one-source-of-truth] "No" is what licenses
+// discarding the database directory (discardDeadBuilds), so it is said only
+// where nothing stands on that path, and Lstat reads what stands there, never
+// what a symlink points at, which can leave with a volume. Whatever else stands
+// there fails, naming it. [LAW:no-silent-failure] One Lstat per step also keeps
+// the unlocked read true while a builder's rename lands beside it.
+func doltDatabaseExists(root string) (bool, error) {
+	database := filepath.Join(root, doltDatabaseName)
+	for _, path := range []string{database, filepath.Join(database, dbfactory.DoltDir)} {
+		switch info, err := os.Lstat(path); {
+		case errors.Is(err, os.ErrNotExist):
+			return false, nil
+		case err != nil:
+			return false, fmt.Errorf("check for a database: %w", err)
+		case !info.IsDir():
+			return false, fmt.Errorf("check for a database: %s is not a directory", path)
+		}
+	}
+	return true, nil
+}
+
+// buildDatabaseOnce builds the database a caller found absent. The bootstrap
+// lock owns the decision to build: its holder alone answers "absent, so I
+// build", so two first opens racing on a fresh workspace build once — the
+// second waits, then finds the first's database. The answer is read again
+// under the lock because the caller's, made before the wait, is a decision
+// about a database another process may be installing.
+// [LAW:no-ambient-temporal-coupling]
+func buildDatabaseOnce(ctx context.Context, stderr io.Writer, root string, workspaceID string) (_ storage.Bootstrap, err error) {
 	release, err := acquireBootstrapLock(ctx, stderr, root)
 	if err != nil {
 		return storage.BootstrapNone, err
@@ -3246,8 +3285,9 @@ func ensureDoltDatabase(ctx context.Context, stderr io.Writer, doltRootDir strin
 			err = errors.Join(err, relErr)
 		}
 	}()
-	if dirExists(filepath.Join(root, doltDatabaseName, ".dolt")) {
-		return storage.BootstrapNone, nil
+	exists, err := doltDatabaseExists(root)
+	if err != nil || exists {
+		return storage.BootstrapNone, err
 	}
 	staging := bootstrapStagingPath(root)
 	bootstrap, err := discardDeadBuilds(staging, filepath.Join(root, doltDatabaseName))

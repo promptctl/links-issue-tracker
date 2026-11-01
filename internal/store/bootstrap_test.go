@@ -213,6 +213,61 @@ func TestARacersContextEndsItsWaitNamingTheBuilder(t *testing.T) {
 	}
 }
 
+// An open of a store that already exists is not deciding to build, so a
+// builder's hold on the bootstrap lock is nothing to it: with the lock held
+// throughout, each open completes and reports no wait on it. The deadline
+// turns an open that queued behind the holder into a failure, not a hang.
+func TestAnExistingStoresOpensPassABootstrapLockHolder(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if _, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id"); err != nil {
+		t.Fatalf("EnsureDatabase() = %v", err)
+	}
+	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
+	if err != nil {
+		t.Fatalf("builder acquireBootstrapLock() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := builder(); err != nil {
+			t.Errorf("builder release error = %v", err)
+		}
+	})
+	for name, open := range map[string]func(context.Context) error{
+		"EnsureDatabase": func(ctx context.Context) error {
+			bootstrap, err := EnsureDatabase(ctx, testStderr(), root, "test-workspace-id")
+			if err == nil && bootstrap != storage.BootstrapNone {
+				return fmt.Errorf("bootstrap = %v, want %v", bootstrap, storage.BootstrapNone)
+			}
+			return err
+		},
+		"Open": func(ctx context.Context) error {
+			st, err := Open(ctx, testEnv(), testStderr(), root, "test-workspace-id")
+			if err != nil {
+				return err
+			}
+			return st.Close()
+		},
+		"OpenSync": func(ctx context.Context) error {
+			st, err := OpenSync(ctx, testEnv(), testStderr(), root, "test-workspace-id")
+			if err != nil {
+				return err
+			}
+			return st.Close()
+		},
+	} {
+		reports := &heldReports{}
+		ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 30*time.Second)
+		err := open(ctx)
+		cancel()
+		if err != nil {
+			t.Errorf("%s with the bootstrap lock held = %v", name, err)
+		}
+		if wait := lockWaitOn(reports, filepath.Base(bootstrapLockPath(root))); wait != nil {
+			t.Errorf("%s waited on the bootstrap lock: %+v", name, wait)
+		}
+	}
+}
+
 // A builder that died mid-build leaves its partial work behind: a staging
 // root, or, from a lit that built in place, a database directory with no
 // .dolt in it. The next bootstrap holds the lock that proves no builder owns
@@ -244,6 +299,82 @@ func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
 		if err := st.Close(); err != nil {
 			t.Fatalf("Close() = %v", err)
 		}
+	}
+}
+
+// Only a database's confirmed absence licenses discarding what stands in its
+// place, so a thing at its path that is neither nothing nor a real directory
+// stays where it is, whether a symlink points anywhere or not, and whoever
+// found it fails naming it rather than deep inside the engine.
+func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
+	t.Parallel()
+	dangling := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Symlink(filepath.Join(t.TempDir(), "unmounted"), path); err != nil {
+			t.Fatalf("Symlink() = %v", err)
+		}
+	}
+	live := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Symlink(t.TempDir(), path); err != nil {
+			t.Fatalf("Symlink() = %v", err)
+		}
+	}
+	file := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("not a database"), 0o644); err != nil {
+			t.Fatalf("WriteFile() = %v", err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		place func(*testing.T, string)
+		under string
+	}{
+		"a database directory that points nowhere": {place: dangling},
+		"a database directory that points away":    {place: live},
+		"a file at the database directory":         {place: file},
+		"a .dolt that points nowhere":              {place: dangling, under: ".dolt"},
+		"a file at .dolt":                          {place: file, under: ".dolt"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := filepath.Join(t.TempDir(), "dolt")
+			database := filepath.Join(root, doltDatabaseName)
+			standing := database
+			parent := root
+			if tc.under != "" {
+				standing = filepath.Join(database, tc.under)
+				parent = database
+			}
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.Fatalf("MkdirAll() = %v", err)
+			}
+			tc.place(t, standing)
+			for open, run := range map[string]func() error{
+				"EnsureDatabase": func() error {
+					_, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
+					return err
+				},
+				"Open": func() error {
+					st, err := Open(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
+					if err != nil {
+						return err
+					}
+					return st.Close()
+				},
+				"LocalHasTickets": func() error {
+					_, _, err := LocalHasTickets(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
+					return err
+				},
+			} {
+				if err := run(); err == nil || !strings.Contains(err.Error(), "check for a database") || !strings.Contains(err.Error(), standing) {
+					t.Errorf("%s = %v; want an error naming %s", open, err, standing)
+				}
+			}
+			if _, err := os.Lstat(standing); err != nil {
+				t.Fatalf("lstat %s after the opens = %v; want it untouched", standing, err)
+			}
+		})
 	}
 }
 
