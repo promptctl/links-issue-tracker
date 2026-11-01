@@ -1040,7 +1040,7 @@ maps byte → ordinal, `-1` for non-members, built in `init()` (`rank.go`).
 
 `Valid(s string) bool` — `rank.go`: false for `""` (empty means
 "unranked", not a stored rank); otherwise true iff every byte is in the
-alphabet. Explicitly NOT the input contract of `Midpoint` and
+alphabet. Explicitly NOT the input contract of `Between` and
 `SpacedRanksBetween`, which accept an empty bound as a sentinel (`rank.go`).
 Pinned by
 `TestValid`, `rank_test.go`, with cases: `""`→false, `"V"`→true, `"0z"`→true,
@@ -1055,35 +1055,38 @@ in the wrong order, so the rank repair keeps at most one of them where it stands
 
 `Significant(s string) string` — `rank.go`: `strings.TrimRight(s, "0")`, the
 part that decides where `s` sorts once padded. Two ranks with the same
-significant part leave `SpacedRanksBetween` and `Midpoint` no room between them
+significant part leave `SpacedRanksBetween` and `Between` no room between them
 (`rank.go`). Pinned by `TestSignificant`, `rank_test.go`: `"V"`, `"V0"`
 and `"V00"`→`"V"`, `"V0z"`→`"V0z"`, `"100"`→`"1"`, `"0"`→`""`, `""`→`""`.
 
-## 4.2 `Midpoint(a, b string) (string, error)` — `rank.go`
-Contract: returns a key strictly between `a` and `b`, at the shortest length
-with room: a gap of 4 or more units at length L yields a key of at most L
-chars, which is what lets a respaced window take the next placement (`rank.go`).
-Either bound may be empty: empty `a` = "before everything", empty `b` = "after
-everything"; both empty is the whole keyspace, whose midpoint is `"V"`, the first
-key a workspace holds (`rank.go`).
+## 4.2 `Between(a, b string, n int) ([]string, error)` — `rank.go`
+Contract: returns `n` ascending keys strictly between `a` and `b`, at the
+shortest length with room: a gap of 4 or more units at length L yields a key of
+at most L chars, which is what lets a respaced window take the next placement
+(`rank.go`). Either bound may be empty: empty `a` = "before everything", empty
+`b` = "after everything"; both empty is the whole keyspace, whose midpoint is
+`"V"`, the first key a workspace holds (`rank.go`). `n` of 0 is no keys.
 
 Validation, in order:
 - `a == b` with `a` non-empty → error `rank: a and b are equal`
-  (`rank.go`). `Midpoint("", "")` passes this check.
+  (`rank.go`). `Between("", "", 1)` passes this check.
 - both non-empty and `a >= b` → error `rank: a must be less than b`
   (`rank.go`).
 
 Dispatch (`rank.go`):
-- `a` non-empty, `b` empty → `step(a, 1)`.
-- `a` empty, `b` non-empty → `step(b, -1)`.
-- Otherwise `spacedRanks(1, a, b, 1)` and its one key: `n = 1`, `minGap = 1`
-  (§4.4), which is where `Midpoint("", "")` returns `"V"`.
+- `a` non-empty, `b` empty → `n` calls of `step` with `dir = 1`, each from the
+  key before it, the first from `a`.
+- `a` empty, `b` non-empty → the same from `b` with `dir = -1`, reversed so the
+  keys ascend.
+- Otherwise `spacedRanks(n, a, b, 1)`: `minGap = 1` (§4.4), which is where
+  `Between("", "", 1)` returns `"V"`.
 
-Past an open end a key steps rather than bisects, so appends and prepends never
-deepen a corner (`rank.go`).
+Past an open end keys step rather than bisect, so appends and prepends never
+deepen a corner, and a set placed there repeatedly stays as short as a single key
+would (`rank.go`).
 
 `ErrNoRoom` — `errors.New("rank: no room between the bounds")`, `rank.go`: the
-sentinel every primitive wraps where a key cannot be placed. `Midpoint` wraps it
+sentinel every primitive wraps where a key cannot be placed. `Between` wraps it
 for a pair sharing a significant part (`spacedRanks`), a pair with no room
 inside `MaxLength` (`spacedRanks`), and a step that no length admits (`step`). A
 caller holding one reads it as "respace these ranks first", never as a bad
@@ -1105,19 +1108,19 @@ which such a key exists.
   (`stringToInt`).
 
 Consequences pinned by tests (`rank_test.go`): adjacent characters force a
-longer result (`TestMidpointAdjacentChars`); `Midpoint("B","A")` and
-`Midpoint("A","A")` error (`TestMidpointErrors`); empty-bound behavior
+longer result (`TestMidpointAdjacentChars`); `Between("B", "A", 1)` and
+`Between("A", "A", 1)` error (`TestMidpointErrors`); empty-bound behavior
 (`TestMidpointEmptyBounds`); insertion at the bottom of one gap stays strictly
 ordered and inside `MaxLength` until `ErrNoRoom`, which comes no earlier than
 step 900 (`TestRepeatedMidpointInsertion`); multi-char strings
 (`TestMidpointMultiCharStrings`); over every ordered pair of distinct
 strings of up to four characters from `0`, `1`, `y`, `z`, the empty string
 included as either open end, and over the pair of two empty strings,
-`Midpoint` returns `ErrNoRoom` exactly for the pairs sharing a significant part
+`Between` returns `ErrNoRoom` exactly for the pairs sharing a significant part
 and a valid rank strictly between the bounds for every other pair
-(`TestMidpointStaysStrictlyBetweenItsBounds`); `Midpoint("", "")`
+(`TestMidpointStaysStrictlyBetweenItsBounds`); `Between("", "", 1)`
 returns `"V"` (`TestMidpointOfTheWholeKeyspaceIsTheOpeningKey`);
-`Midpoint("", "0")` and `Midpoint("", "000")` return `ErrNoRoom`
+`Between("", "0", 1)` and `Between("", "000", 1)` return `ErrNoRoom`
 (`TestNothingSortsBelowAnAllZeroRank`); over 20,000 random pairs the result is
 no longer than the shortest length at which the bounds sit 4 apart
 (`TestMidpointIsNoLongerThanItsBoundsNeed`); `("aaa0","aaa4")` → `aaa2` and
@@ -1125,7 +1128,7 @@ no longer than the shortest length at which the bounds sit 4 apart
 `V001`, `("V001","")` → `V002`, `("V00123","")` → `V002`, `("","V")` → `Uzzz`,
 `("zzzz","")` → `zzzz0001`, `("","0001")` → `0000zzzz`, and a step past `z` × 20
 is 32 chars (`TestAPlacementPastAnOpenEndSteps`); 1000-step monotonicity past
-each open end (`TestSequentialAppends`, `TestSequentialPrepends`); `Midpoint`
+each open end (`TestSequentialAppends`, `TestSequentialPrepends`); `Between`
 and `SpacedRanksBetween` between two keys sharing `MaxLength` chars, a step past
 `z` × `MaxLength`, and a step below `0` × `MaxLength` + `1` all return
 `ErrNoRoom` (`TestNoPrimitiveWritesPastMaxLength`).
@@ -1205,7 +1208,7 @@ empty `s` → `0`; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`
 `upperBoundInt(s string, length int) (*big.Int, error)` — `rank.go`:
 empty `s` → `pow62(length)` (absolute maximum); else `stringToInt(s, length) - 1`,
 with no check of its own. `spacedRanks` refuses an all-zero upper bound before
-reading this, on the significant-part check above, and `Midpoint` and
+reading this, on the significant-part check above, and `Between` and
 `SpacedRanksBetween` refuse any lower bound above one.
 
 `stringToInt(s string, length int) (*big.Int, error)` — `rank.go`:

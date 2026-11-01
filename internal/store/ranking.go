@@ -250,8 +250,8 @@ func (e rankEdge) outsideQuery() string {
 // one order shared by every frame. Scoping this read to the frame too would
 // answer the second question with the first one's scope: it would call a span
 // empty when a top-level issue or another epic's child is sitting in it, and
-// rank.Midpoint, asked for the middle of a range that is not empty, returns a
-// key another issue is already holding. Bounding the key by its real neighbor
+// rank.Between, asked to divide a range that is not empty, returns a key another
+// issue is already holding. Bounding the key by its real neighbor
 // is what makes a duplicate unrepresentable rather than checked for afterwards.
 // [LAW:types-are-the-program]
 //
@@ -334,7 +334,7 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (low
 	// position then falls back to the far side of the workspace's own last key.
 	//
 	// That read comes back empty only when nothing at all is ranked, which is
-	// the one case where open bounds are true and rank.Midpoint's answer, the
+	// the one case where open bounds are true and rank.Between's answer, the
 	// first key in a workspace, belongs to nobody.
 	// [LAW:no-silent-failure]
 	lastRank, err := workspaceEdgeRankTx(ctx, tx, storage.TopLevel, bottomEdge)
@@ -729,7 +729,8 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 // the order written is always frame-coherent and nothing inside any epic is
 // reordered.
 //
-// Only named issues are written, so the cost is the set's and not the frame's:
+// Past a respace that makes room, only named issues are written, so the cost is
+// the set's and not the frame's:
 // the frame's head is read, the keys of the named issues that already lead it
 // are handed round, and every other named issue takes a key past the frame's
 // top, placed once for the whole set. An issue the set passes keeps its key, and
@@ -1272,8 +1273,8 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 }
 
 // rankRows runs a rank query and returns every row it matches, in the order
-// the query asks for. Every read bounds itself by LIMIT: a respace's costs the
-// window, and a rank set's the head of the frame it reorders.
+// the query asks for. A respace's reads cost the window it respaces, and a rank
+// set's the head of the frame it reorders.
 func rankRows(ctx context.Context, q rowQueryer, query string, args ...any) ([]rankedIssue, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {

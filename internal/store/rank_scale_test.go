@@ -665,7 +665,7 @@ func TestBottomAppendsDoNoRespaceAtTenTimesTheStore(t *testing.T) {
 	keys := make([]string, 10540)
 	last := ""
 	for i := range keys {
-		key, err := rank.Midpoint(last, "")
+		key, err := midpoint(last, "")
 		if err != nil {
 			t.Fatal(err)
 		}

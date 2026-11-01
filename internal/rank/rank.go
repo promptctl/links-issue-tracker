@@ -43,7 +43,7 @@ func init() {
 //
 // This predicate is for validating PERSISTED rank values (e.g. checking a
 // rebuilt workspace). It is NOT the input contract of the ordering primitives:
-// Midpoint and SpacedRanksBetween deliberately accept an empty bound as a
+// Between and SpacedRanksBetween deliberately accept an empty bound as a
 // sentinel ("before/after everything"), so callers must not pre-screen those
 // bounds with Valid. Callers checking a stored rank consult this one definition rather than
 // re-deriving the alphabet.
@@ -61,7 +61,7 @@ func Valid(s string) bool {
 
 // Significant returns s without its trailing zeros: the part that decides where
 // s sorts once padded. Two ranks with the same significant part leave
-// SpacedRanksBetween and Midpoint no room between them.
+// SpacedRanksBetween and Between no room between them.
 func Significant(s string) string {
 	return strings.TrimRight(s, "0")
 }
@@ -86,27 +86,17 @@ func Anchor(s string) string {
 // never as a bad request.
 var ErrNoRoom = errors.New("rank: no room between the bounds")
 
-// Midpoint returns a key that sorts strictly between a and b, at the shortest
+// Between returns n ascending keys strictly between a and b, at the shortest
 // length with room: a gap of 4 or more at length L yields a key of at most L
 // chars, which is what lets a respaced window take the next placement.
 // Precondition: a < b (lexicographic). Returns an error if a >= b, and
 // ErrNoRoom if the bounds share a significant part or leave no room inside
 // MaxLength. An empty a means "before everything" and an empty b "after
-// everything", and past an open end a key steps rather than bisects, so appends
-// and prepends never deepen a corner. Both empty is the whole keyspace, whose
-// midpoint is the first key a workspace holds.
-func Midpoint(a, b string) (string, error) {
-	keys, err := Between(a, b, 1)
-	if err != nil {
-		return "", err
-	}
-	return keys[0], nil
-}
-
-// Between returns n ascending keys strictly between a and b, on Midpoint's
-// terms: past an open end they step away from the closed bound, so a set placed
-// there repeatedly stays as short as a single key would, and otherwise they
-// divide the room evenly. n of 0 is no keys.
+// everything", and past an open end keys step rather than bisect, so appends
+// and prepends never deepen a corner and a set placed there repeatedly stays as
+// short as a single key would. Closed bounds divide their room evenly. Both empty
+// is the whole keyspace, whose midpoint is the first key a workspace holds. n of
+// 0 is no keys.
 func Between(a, b string, n int) ([]string, error) {
 	if a == b && a != "" {
 		return nil, errors.New("rank: a and b are equal")

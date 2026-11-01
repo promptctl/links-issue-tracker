@@ -90,9 +90,9 @@ func makeChildrenOf(t *testing.T, ctx context.Context, st *Store, epicID string,
 // midpoint of the whole keyspace.
 func openingKey(t *testing.T) string {
 	t.Helper()
-	key, err := rank.Midpoint("", "")
+	key, err := midpoint("", "")
 	if err != nil {
-		t.Fatalf("rank.Midpoint of the whole keyspace error = %v", err)
+		t.Fatalf("midpoint of the whole keyspace error = %v", err)
 	}
 	return key
 }
@@ -112,9 +112,9 @@ func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.I
 
 func mustBefore(t *testing.T, r string) string {
 	t.Helper()
-	before, err := rank.Midpoint("", r)
+	before, err := midpoint("", r)
 	if err != nil {
-		t.Fatalf("rank.Midpoint(\"\", %q) error = %v", r, err)
+		t.Fatalf("midpoint(\"\", %q) error = %v", r, err)
 	}
 	return before
 }
@@ -155,9 +155,9 @@ func mustBottomOf(t *testing.T, ranks map[string]string, anchor string) string {
 
 func mustBetween(t *testing.T, lower, upper string) string {
 	t.Helper()
-	between, err := rank.Midpoint(lower, upper)
+	between, err := midpoint(lower, upper)
 	if err != nil {
-		t.Fatalf("rank.Midpoint(%q, %q) error = %v", lower, upper, err)
+		t.Fatalf("midpoint(%q, %q) error = %v", lower, upper, err)
 	}
 	return between
 }
@@ -251,8 +251,8 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 					t.Fatalf("plant rank %q for %s: %v", r, id, err)
 				}
 			}
-			if _, err := rank.Midpoint(tc.upper, tc.lower); !errors.Is(err, rank.ErrNoRoom) {
-				t.Fatalf("rank.Midpoint(%q, %q) error = %v, want ErrNoRoom; this case no longer plants a pair without room", tc.upper, tc.lower, err)
+			if _, err := midpoint(tc.upper, tc.lower); !errors.Is(err, rank.ErrNoRoom) {
+				t.Fatalf("midpoint(%q, %q) error = %v, want ErrNoRoom; this case no longer plants a pair without room", tc.upper, tc.lower, err)
 			}
 
 			order := tc.place(t, ctx, st, ids)
@@ -963,9 +963,9 @@ func TestCreateAtTopDrawsItsKeyFromItsOwnFrame(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child, default placement) error = %v", err)
 	}
-	after, err := rank.Midpoint(before[fx.standalone.ID], "")
+	after, err := midpoint(before[fx.standalone.ID], "")
 	if err != nil {
-		t.Fatalf("rank.Midpoint(%q, \"\") error = %v", before[fx.standalone.ID], err)
+		t.Fatalf("midpoint(%q, \"\") error = %v", before[fx.standalone.ID], err)
 	}
 	if trail.Rank != after {
 		t.Errorf("child filed at the bottom has rank %q, want %q = a step past the workspace's last key %q", trail.Rank, after, before[fx.standalone.ID])
@@ -1643,6 +1643,15 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 			}
 		})
 	}
+}
+
+// midpoint is the one key rank.Between places between a and b.
+func midpoint(a, b string) (string, error) {
+	keys, err := rank.Between(a, b, 1)
+	if err != nil {
+		return "", err
+	}
+	return keys[0], nil
 }
 
 // plantKeys hands each issue a key directly, as an import can, sharing one if
