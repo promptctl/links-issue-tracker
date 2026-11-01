@@ -20,6 +20,19 @@ import (
 // parameters instead of reading process globals.
 // [LAW:no-shared-mutable-globals] the process cwd/env is exactly such a global.
 
+// suiteStallDeadline is the deadline this suite runs the mirror's hold and the
+// automatic receive under. Both shipped figures sit close enough to the local
+// work these tests really do that a busy machine reaches them: the hold is a
+// clone, and a receive that follows a re-root measures 4.5s against its 15s. So
+// a test with no interest in either would take its verdict from the load.
+// [LAW:no-ambient-temporal-coupling] The push deadline stays as shipped: a whole
+// mirror cycle against these tests' file remotes measures 3.3s against its 40s.
+// A minute is still a stall detector: over ten times that work, and far below
+// go test's timeout, so a hung hold or receive fails its own test and leaves
+// the package's other verdicts standing. A test about either deadline installs
+// its own figure.
+const suiteStallDeadline = time.Minute
+
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
 // would spawn the on-change push mirror (via os.Executable(), which under
@@ -40,25 +53,13 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
-	liftSyncDeadlinesOutOfPlay()
+	store.MirrorHoldBudget, store.ReceiveDeadline = suiteStallDeadline, suiteStallDeadline
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
 	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cli-config-")
 	code := dirtemplate.Run(m, storeTemplate)
 	_ = os.RemoveAll(stateHome)
 	_ = os.RemoveAll(configHome)
 	os.Exit(code)
-}
-
-// liftSyncDeadlinesOutOfPlay sets the automatic sync's wall-clock deadlines so
-// long that none fires in this suite. Each is a stall detector sized for
-// production, so a test whose subject is not the deadline would otherwise take
-// its verdict from how busy the machine is. [LAW:no-ambient-temporal-coupling]
-// A test about a deadline installs its own figure. Here and not around one
-// test, because some tests run the receive's body under t.Parallel, where
-// nothing may assign these. A detached worker takes TestMain's branch ahead of
-// this, so its own deadlines still end it.
-func liftSyncDeadlinesOutOfPlay() {
-	store.MirrorHoldBudget, store.MirrorPushDeadline, store.ReceiveDeadline = time.Hour, time.Hour, time.Hour
 }
 
 // isolateXDGHome points the XDG base directory key names at a fresh directory

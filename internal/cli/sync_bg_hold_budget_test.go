@@ -460,7 +460,7 @@ exec %q "$@"
 
 // shrinkMirrorPushDeadline installs the wedged run's push deadline for the
 // test's duration — margin over the healthy cycle measured on this machine —
-// so a wedged push cuts in seconds, and restores the figure it replaced at
+// so a wedged push cuts in seconds, and restores the production figure at
 // cleanup.
 //
 // It is the one home of that derivation, and handing the installed deadline
@@ -521,15 +521,15 @@ const wedgeDeadlineMargin = 2
 func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time.Duration, ...string) (*lockedBuffer, error)) time.Duration {
 	t.Helper()
 	started := time.Now()
-	// The sample's hung bound is the deadline in force, not a figure of this
-	// test's choosing. [LAW:one-source-of-truth]
+	// The sample runs under the production deadline, so its hung bound is that
+	// deadline's, not a figure of this test's choosing. [LAW:one-source-of-truth]
 	out, err := runInProcess(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
 	healthyCycle := time.Since(started)
 	if err != nil {
 		t.Fatalf("unwedged mirror cycle failed, so there is no healthy cost to size the wedged run against: %v\noutput:\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "attempted=true push_deadline_cut=false") {
-		t.Fatalf("the sample cycle was cut or never attempted, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
+		t.Fatalf("the sample cycle was cut or never attempted under the production deadline, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
 	}
 	ws, err := workspace.Resolve(testEnv(), root)
 	if err != nil {
@@ -616,10 +616,10 @@ func assertPushEndedWithinItsCeiling(t *testing.T, wedgedAt, cycleEnded time.Tim
 // than "40s", would otherwise truncate the framing away silently and leave the
 // banner saying only that a budget was exceeded.
 //
-// The duration cases are the enumeration this needs: the value in force, and
-// a value in minutes, which Go renders as "1h40m0s" — more than twice the runes
-// of the production "40s". Not parallel: it mutates store.MirrorPushDeadline
-// and store.MirrorHoldBudget.
+// The duration cases are the enumeration this needs: a value as short as the
+// shipped "1s", and a value in minutes, which Go renders as "1h40m0s" — more
+// than twice the runes of the shipped "40s". Not parallel: it mutates
+// store.MirrorPushDeadline and store.MirrorHoldBudget.
 func TestDeadlineCutFramingSurvivesTheBanner(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -632,7 +632,7 @@ func TestDeadlineCutFramingSurvivesTheBanner(t *testing.T) {
 		{"hold budget, record step", &store.MirrorHoldBudget, func() error { return holdBudgetCutExplanation("recording the pushed head") }, "before blaming the disk"},
 	}
 	for _, tc := range cases {
-		for _, value := range []time.Duration{*tc.knob, 100 * time.Minute} {
+		for _, value := range []time.Duration{time.Second, 100 * time.Minute} {
 			func() {
 				restore := *tc.knob
 				*tc.knob = value

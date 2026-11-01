@@ -3602,8 +3602,7 @@ var MirrorHoldBudget = mirrorHoldBudget
 // transport cannot wedge the single-flight mirror forever.
 // TestMirrorPushDeadlineExceedsObservedPushCost pins its relation to the
 // measured push. A package variable so the deadline regression test can
-// shrink it without sleeping through the production one, and a test whose
-// subject is not the deadline lifts it out of play.
+// shrink it without sleeping through the production one.
 var MirrorPushDeadline = mirrorPushDeadline
 
 // ReceiveDeadline bounds the automatic receive — the remote check and the

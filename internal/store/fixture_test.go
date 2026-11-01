@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -73,6 +74,12 @@ func buildStoreTemplate(dir string) error {
 }
 
 func TestMain(m *testing.M) {
+	// A hold on a local store is the work the budget is sized against, so a
+	// busy machine reaches the shipped figure, and a test with no interest in
+	// the budget would take its verdict from the load. A minute still fails a
+	// hung hold in its own test. A test about the budget installs its own
+	// figure. [LAW:no-ambient-temporal-coupling]
+	MirrorHoldBudget = time.Minute
 	os.Exit(dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate))
 }
 
