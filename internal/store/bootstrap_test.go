@@ -302,6 +302,53 @@ func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
 	}
 }
 
+// Only a database's confirmed absence licenses discarding what stands in its
+// place. A .dolt that points nowhere is still a .dolt, so its directory is left
+// alone; a path that cannot be read at all fails the bootstrap, and is left
+// alone too.
+func TestBootstrapDiscardsNothingWhenTheDatabaseIsNotConfirmedAbsent(t *testing.T) {
+	t.Parallel()
+	t.Run("a .dolt that points nowhere", func(t *testing.T) {
+		t.Parallel()
+		root := filepath.Join(t.TempDir(), "dolt")
+		database := filepath.Join(root, doltDatabaseName)
+		if err := os.MkdirAll(database, 0o755); err != nil {
+			t.Fatalf("MkdirAll() = %v", err)
+		}
+		if err := os.Symlink(filepath.Join(t.TempDir(), "unmounted"), filepath.Join(database, ".dolt")); err != nil {
+			t.Fatalf("Symlink() = %v", err)
+		}
+		kept := filepath.Join(database, "kept")
+		if err := os.WriteFile(kept, []byte("still here"), 0o644); err != nil {
+			t.Fatalf("WriteFile() = %v", err)
+		}
+		bootstrap, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
+		if err != nil || bootstrap != storage.BootstrapNone {
+			t.Fatalf("EnsureDatabase() = %v, %v; want %v", bootstrap, err, storage.BootstrapNone)
+		}
+		if _, err := os.Stat(kept); err != nil {
+			t.Fatalf("stat %s after the bootstrap = %v; want it untouched", kept, err)
+		}
+	})
+	t.Run("a path that cannot be read", func(t *testing.T) {
+		t.Parallel()
+		root := filepath.Join(t.TempDir(), "dolt")
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("MkdirAll() = %v", err)
+		}
+		notADirectory := filepath.Join(root, doltDatabaseName)
+		if err := os.WriteFile(notADirectory, []byte("still here"), 0o644); err != nil {
+			t.Fatalf("WriteFile() = %v", err)
+		}
+		if _, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id"); err == nil {
+			t.Fatal("EnsureDatabase() over an unreadable path = nil, want an error")
+		}
+		if got, err := os.ReadFile(notADirectory); err != nil || string(got) != "still here" {
+			t.Fatalf("%s after the bootstrap = %q, %v; want it untouched", notADirectory, got, err)
+		}
+	})
+}
+
 // A root directory that is already there but holds no database, empty or
 // holding other files, gets the database built into it, and the files it
 // held are still there after.

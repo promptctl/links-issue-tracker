@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/store/nbs"
 	embedded "github.com/dolthub/driver"
 
@@ -422,7 +423,7 @@ func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
 // serialized against a concurrent adopt's destructive window — an unlocked
 // CREATE could land between an adopt's discard and clone, or be destroyed by
 // it. Racing bootstraps serialize on the bootstrap lock inside
-// ensureDoltDatabase, whose holder builds on a path nobody else opens.
+// buildDatabaseOnce, whose holder builds on a path nobody else opens.
 // Open and OpenSync do NOT call this: they
 // already hold the workspace lock and call ensureDoltDatabase directly, so
 // the lock is never re-entered.
@@ -3223,12 +3224,12 @@ func nullableStringPtr(value *string) any {
 // another process is still laying down. [LAW:one-source-of-truth] the path's
 // existence is the one map of the database's, and the rename keeps it true.
 //
-// A database found here needs no lock, so an open of an existing store never
-// queues on the one that guards building. Finding it cannot go stale: every
-// caller holds the workspace lock shared, which keeps out restore and adopt,
-// the only writers that move a database, and a builder removes only a
-// database directory with no .dolt (discardDeadBuilds). Finding none can, so
-// that answer is decided under the lock (buildDatabaseOnce).
+// A database found here needs no bootstrap lock, so an open of an existing
+// store never queues on the one that guards building. Finding it cannot go
+// stale: every caller holds the workspace lock shared, which keeps out every
+// rotator of the directory, and a builder removes only a database directory
+// with no .dolt (discardDeadBuilds). Finding none can, so that answer is
+// decided under the bootstrap lock (buildDatabaseOnce).
 // [LAW:no-ambient-temporal-coupling] An existing database needs nothing more:
 // branch normalization runs on each write open's own engine (Open/OpenSync
 // call ensureMasterDefaultBranch), which also covers databases that arrive
@@ -3238,16 +3239,27 @@ func nullableStringPtr(value *string) any {
 // Reports what this call did to make the database exist.
 func ensureDoltDatabase(ctx context.Context, stderr io.Writer, doltRootDir string, workspaceID string) (storage.Bootstrap, error) {
 	root := filepath.Clean(doltRootDir)
-	if doltDatabaseExists(root) {
-		return storage.BootstrapNone, nil
+	exists, err := doltDatabaseExists(root)
+	if err != nil || exists {
+		return storage.BootstrapNone, err
 	}
 	return buildDatabaseOnce(ctx, stderr, root, workspaceID)
 }
 
 // doltDatabaseExists answers "is there a database" for a write-capable open:
-// the .dolt directory is the database. [LAW:one-source-of-truth]
-func doltDatabaseExists(root string) bool {
-	return dirExists(filepath.Join(root, doltDatabaseName, ".dolt"))
+// whatever stands at .dolt is the database. [LAW:one-source-of-truth] "No" is
+// what licenses discarding the database directory (discardDeadBuilds), so it
+// is said only of a confirmed absence, and a path that cannot be read fails
+// instead. [LAW:no-silent-failure]
+func doltDatabaseExists(root string) (bool, error) {
+	switch _, err := os.Lstat(filepath.Join(root, doltDatabaseName, dbfactory.DoltDir)); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	default:
+		return false, fmt.Errorf("check for a database: %w", err)
+	}
 }
 
 // buildDatabaseOnce builds the database a caller found absent. The bootstrap
@@ -3267,8 +3279,9 @@ func buildDatabaseOnce(ctx context.Context, stderr io.Writer, root string, works
 			err = errors.Join(err, relErr)
 		}
 	}()
-	if doltDatabaseExists(root) {
-		return storage.BootstrapNone, nil
+	exists, err := doltDatabaseExists(root)
+	if err != nil || exists {
+		return storage.BootstrapNone, err
 	}
 	staging := bootstrapStagingPath(root)
 	bootstrap, err := discardDeadBuilds(staging, filepath.Join(root, doltDatabaseName))
