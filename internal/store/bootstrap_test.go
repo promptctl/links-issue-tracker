@@ -303,14 +303,20 @@ func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
 }
 
 // Only a database's confirmed absence licenses discarding what stands in its
-// place, so a thing at its path that is neither nothing nor a directory, a
-// symlink that points nowhere included, stays where it is, and the open that
+// place, so a thing at its path that is neither nothing nor a real directory
+// stays where it is, whether a symlink points anywhere or not, and whoever
 // found it fails naming it rather than deep inside the engine.
 func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
 	t.Parallel()
 	dangling := func(t *testing.T, path string) {
 		t.Helper()
 		if err := os.Symlink(filepath.Join(t.TempDir(), "unmounted"), path); err != nil {
+			t.Fatalf("Symlink() = %v", err)
+		}
+	}
+	live := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Symlink(t.TempDir(), path); err != nil {
 			t.Fatalf("Symlink() = %v", err)
 		}
 	}
@@ -325,6 +331,7 @@ func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
 		under string
 	}{
 		"a database directory that points nowhere": {place: dangling},
+		"a database directory that points away":    {place: live},
 		"a file at the database directory":         {place: file},
 		"a .dolt that points nowhere":              {place: dangling, under: ".dolt"},
 		"a file at .dolt":                          {place: file, under: ".dolt"},
@@ -355,6 +362,10 @@ func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
 					}
 					return st.Close()
 				},
+				"LocalHasTickets": func() error {
+					_, _, err := LocalHasTickets(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
+					return err
+				},
 			} {
 				if err := run(); err == nil || !strings.Contains(err.Error(), "check for a database") || !strings.Contains(err.Error(), standing) {
 					t.Errorf("%s = %v; want an error naming %s", open, err, standing)
@@ -364,28 +375,6 @@ func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
 				t.Fatalf("lstat %s after the opens = %v; want it untouched", standing, err)
 			}
 		})
-	}
-}
-
-// A store reached through a symlink opens as it always has: the link stands
-// for the directory it points at, so an existing database is found, and the
-// link is not mistaken for anything to discard.
-func TestAnOpenFollowsASymlinkToAnExistingDatabase(t *testing.T) {
-	t.Parallel()
-	elsewhere := filepath.Join(t.TempDir(), "dolt")
-	if _, err := EnsureDatabase(context.Background(), testStderr(), elsewhere, "test-workspace-id"); err != nil {
-		t.Fatalf("EnsureDatabase() = %v", err)
-	}
-	root := filepath.Join(t.TempDir(), "dolt")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatalf("MkdirAll() = %v", err)
-	}
-	if err := os.Symlink(filepath.Join(elsewhere, doltDatabaseName), filepath.Join(root, doltDatabaseName)); err != nil {
-		t.Fatalf("Symlink() = %v", err)
-	}
-	bootstrap, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
-	if err != nil || bootstrap != storage.BootstrapNone {
-		t.Fatalf("EnsureDatabase() through a symlink = %v, %v; want %v", bootstrap, err, storage.BootstrapNone)
 	}
 }
 

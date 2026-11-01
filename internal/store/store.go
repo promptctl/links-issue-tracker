@@ -3219,8 +3219,8 @@ func nullableStringPtr(value *string) any {
 // ensureDoltDatabase makes the workspace's database exist. A database comes
 // into existence in one step: it is built in a staging root beside the Dolt
 // root and renamed into place (installDoltRoot), so every reader of "is there
-// a database" — this function, OpenForRead's initialized check, LocalHasTickets'
-// directory check — sees either none or a complete one, never a database
+// a database" — this function, OpenForRead's initialized check, LocalHasTickets
+// — sees either none or a complete one, never a database
 // another process is still laying down. [LAW:one-source-of-truth] the path's
 // existence is the one map of the database's, and the rename keeps it true.
 //
@@ -3246,25 +3246,22 @@ func ensureDoltDatabase(ctx context.Context, stderr io.Writer, doltRootDir strin
 	return buildDatabaseOnce(ctx, stderr, root, workspaceID)
 }
 
-// doltDatabaseExists answers "is there a database" for a write-capable open:
-// a .dolt directory in the database directory. [LAW:one-source-of-truth] "No"
-// is what licenses discarding the database directory (discardDeadBuilds), so
-// it is said only where nothing stands on that path; Lstat tells that from a
-// symlink that points nowhere, which Stat reports the same way. Whatever else
-// stands there fails the open, naming it. [LAW:no-silent-failure]
+// doltDatabaseExists answers "is there a database": a real .dolt directory in a
+// real database directory. [LAW:one-source-of-truth] "No" is what licenses
+// discarding the database directory (discardDeadBuilds), so it is said only
+// where nothing stands on that path, and Lstat reads what stands there, never
+// what a symlink points at, which can leave with a volume. Whatever else stands
+// there fails, naming it. [LAW:no-silent-failure] One Lstat per step also keeps
+// the unlocked read true while a builder's rename lands beside it.
 func doltDatabaseExists(root string) (bool, error) {
 	database := filepath.Join(root, doltDatabaseName)
 	for _, path := range []string{database, filepath.Join(database, dbfactory.DoltDir)} {
-		info, err := os.Stat(path)
-		if errors.Is(err, os.ErrNotExist) {
-			if _, lstatErr := os.Lstat(path); errors.Is(lstatErr, os.ErrNotExist) {
-				return false, nil
-			}
-		}
-		if err != nil {
+		switch info, err := os.Lstat(path); {
+		case errors.Is(err, os.ErrNotExist):
+			return false, nil
+		case err != nil:
 			return false, fmt.Errorf("check for a database: %w", err)
-		}
-		if !info.IsDir() {
+		case !info.IsDir():
 			return false, fmt.Errorf("check for a database: %s is not a directory", path)
 		}
 	}

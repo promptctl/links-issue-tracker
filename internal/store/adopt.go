@@ -168,8 +168,9 @@ func LocalHasTickets(ctx context.Context, env environ.Env, stderr io.Writer, dol
 		}
 		return false, storage.Migrated{}, err
 	}
-	if !dirExists(filepath.Join(cleanRoot, doltDatabaseName)) {
-		return false, storage.Migrated{}, nil
+	exists, err := doltDatabaseExists(cleanRoot)
+	if err != nil || !exists {
+		return false, storage.Migrated{}, err
 	}
 	s, err := OpenForRead(ctx, env, stderr, cleanRoot, workspaceID)
 	if err != nil {
