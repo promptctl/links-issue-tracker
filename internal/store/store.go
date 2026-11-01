@@ -195,6 +195,11 @@ type Store struct {
 	// as above.
 	commitWorkingSetHookForTest func() error
 
+	// mutationLandedHookForTest, if non-nil, fires in attemptMutation between
+	// the DOLT_COMMIT and the end of its transaction. Production callers leave
+	// it nil.
+	mutationLandedHookForTest func()
+
 	// landHookForTest, if non-nil, fires at the top of every attempt of a
 	// scratch run's landing (landScratch), and its error, if any, stands in
 	// for that attempt failing. Production callers leave it nil; the batch

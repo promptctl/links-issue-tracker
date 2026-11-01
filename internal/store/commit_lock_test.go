@@ -239,6 +239,83 @@ func TestADoltCommitThatFailsLeavesNothing(t *testing.T) {
 	}
 }
 
+// TestACancelAfterTheCommitLandsIsNotAFailure pins that a write which stands is
+// reported as standing: an error here would invite the operator to run a
+// mutation that already landed a second time.
+func TestACancelAfterTheCommitLandsIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	st := openIssueStore(t, context.Background())
+
+	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st.mutationLandedHookForTest = cancel
+	heard := false
+	err = st.withMutation(ctx, "landed", func(ctx context.Context, tx *sql.Tx) error {
+		hear(ctx, func() { heard = true })
+		_, err := tx.ExecContext(ctx, `UPDATE issues SET title = 'after' WHERE id = ?`, epic.ID)
+		return err
+	})
+	st.mutationLandedHookForTest = nil
+	if err != nil {
+		t.Fatalf("withMutation() cancelled after its commit landed error = %v, want nil", err)
+	}
+	if !heard {
+		t.Fatal("the observers were not told of a write that stands")
+	}
+
+	got, err := st.GetIssue(context.Background(), epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != "after" {
+		t.Fatalf("title = %q, want the landed write", got.Title)
+	}
+}
+
+// TestAWriteLeavesTheManifestAlone pins what the fork's patch 18 gives lit (see
+// FORKS.md), so a repin that loses it fails here rather than as slow writes in a
+// slow-flush window: a root commit reaches the journal alone, and neither the
+// open nor the close around it rewrites the manifest.
+func TestAWriteLeavesTheManifestAlone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := migratedDoltDir(t)
+
+	writeOnce := func(title string) {
+		t.Helper()
+		st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "sync", IssueType: "epic"}); err != nil {
+			t.Fatalf("CreateIssue() error = %v", err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}
+	manifest := filepath.Join(nomsDir(dir), "manifest")
+
+	writeOnce("first")
+	before, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	writeOnce("second")
+	after, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("a write rewrote the manifest:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
 // TestAMutationLeavesItsConnectionInAutocommit pins the session a landed mutation
 // hands back: a statement on the one pooled connection commits by itself, so it
 // reaches a fresh connection. A session still inside an explicit transaction

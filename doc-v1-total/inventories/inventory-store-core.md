@@ -276,7 +276,7 @@ Evidence:
 2. `defer tx.Rollback()` (`commit_lock.go`);
 3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — its error is returned verbatim (`commit_lock.go`);
 4. `s.commitWorkingSetOnce(ctx, tx, stamp)`, on `fn`'s transaction, so the writes, the branch head and the working set land in one root update and one journal flush (`commit_lock.go`);
-5. `tx.Commit()`, which ends the transaction the DOLT_COMMIT left empty and writes nothing — failure → `fmt.Errorf("commit %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
+5. `tx.Commit()`, which ends the transaction the DOLT_COMMIT left empty and writes nothing — the write stands by now, so a failure prints to stderr (`lit: %s landed, and ending its transaction failed (nothing to redo): %v`) and the attempt still succeeds (`commit_lock.go`);
 6. `hear(ctx, heard...)`, so an attempt that rolled back is heard by nobody (`commit_lock.go`).
 
 A failed attempt rolls back, so a retry **re-runs `fn`** on the state it first read (`commit_lock.go`).
@@ -3484,7 +3484,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 ### 2.6 Where a delta is committed
 
-`replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): under `withCommitLock`, one `attemptMutation` whose body is `applyExportDelta`. Deliberately a **single attempt** with no self-rotating transient retry (`sync_reconcile.go`); errors bubble to the outer scratch-rebuilding retry. Error texts: `"begin %s tx: %w"` and `"commit %s tx: %w"` with `stamp.Message` interpolated (`sync_reconcile.go`).
+`replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): under `withCommitLock`, one `attemptMutation` whose body is `applyExportDelta`. Deliberately a **single attempt** with no self-rotating transient retry (`sync_reconcile.go`); errors bubble to the outer scratch-rebuilding retry. Error text: `"begin %s tx: %w"` with `stamp.Message` interpolated (`commit_lock.go`).
 
 `spineWriter.land` does `s.checkout(<spine branch>)` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `landed, landing, err := landExport(next)` (an error returned as is), then `replayDeltaOnScratch(ctx, diffExports(w.landed, landed), stamp)`, then advances `w.landed = landed` only on success and returns `landing` (`sync_reconcile.go`).
 
@@ -5165,7 +5165,7 @@ type commitStamp struct {
 2. `defer tx.Rollback()` (`commit_lock.go`).
 3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — error returned unwrapped (`commit_lock.go`).
 4. `s.commitWorkingSetOnce(ctx, tx, stamp)`, on `fn`'s transaction (`commit_lock.go`).
-5. `tx.Commit()`, ending the transaction the DOLT_COMMIT left empty — error wrapped `commit %s tx: %w` (`commit_lock.go`).
+5. `tx.Commit()`, ending the transaction the DOLT_COMMIT left empty — a failure prints to stderr and the attempt still succeeds, since the write stands (`commit_lock.go`).
 6. `hear(ctx, heard...)` hands the queue on (`commit_lock.go`).
 
 A failed attempt rolls back, so a retry **re-runs `fn`** on the state it first read (`commit_lock.go`). The lock is acquired and released exactly once (`commit_lock.go`).

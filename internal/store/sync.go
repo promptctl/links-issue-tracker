@@ -640,6 +640,8 @@ func (s *Store) freshnessOverEveryWrite(ctx context.Context, remote storage.Remo
 
 // commitStrandedWrites versions the writes a failed DOLT_COMMIT left staged,
 // as the next mutation would version them, and records the commit it landed.
+// A mutation commits inside its transaction and leaves none, so these come from
+// a store an older lit wrote, a migration, or a reconcile's schema lift.
 // Anything about to hard-reset the branch runs it first, so the reset never
 // discards a write that is not its own. [LAW:single-enforcer] the one place a
 // stranded write is committed. [LAW:no-silent-failure] [LAW:nothing-unseen]

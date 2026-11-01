@@ -296,7 +296,7 @@ Report type at `/Users/bmf/code/links-issue-tracker/internal/storage/sync.go`.
 
 `commitWorkingSet(ctx, message)` (`commit_lock.go`) = commit lock + transient retry around `commitWorkingSetOnce`.
 
-`withStampedMutation` (`commit_lock.go`) runs the **whole** `BeginTx → fn → tx.Commit → commitWorkingSetOnce` sequence inside the retry, with an explicit two-phase resume marker `staged bool`: once `tx.Commit()` succeeds, `staged=true` and a retry resumes **at versioning only**, never re-running `fn` (`commit_lock.go`). `withMutation` (`commit_lock.go`) is the message-only spelling.
+`withStampedMutation` (`commit_lock.go`) runs the **whole** `attemptMutation`, `BeginTx → fn → commitWorkingSetOnce → tx.Commit`, inside the retry: `DOLT_COMMIT` runs on `fn`'s transaction, so a failed attempt rolls back and a retry **re-runs `fn`** on the state it first read (`commit_lock.go`). `withMutation` (`commit_lock.go`) is the message-only spelling.
 
 ---
 
@@ -629,7 +629,7 @@ Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit
 
 `land(ctx, next, stamp) (storage.Landing, error)` (`sync_reconcile.go`): unconditional `s.checkout(w.branch)` first, then `landed, landing, err := landExport(next)` (`rank_collisions.go`: `storage.BreakParentCycles`, then `storage.HomeStranded`, then `separateRankCollisions`; `01-data-model.md`, `04-store-operations.md`), a separation error returned as is, then `replayDeltaOnScratch(diffExports(w.landed, landed), stamp)`; `w.landed = landed` **only on success**, and `landing` is returned. Every sync write lands here, so no landing commits a parent loop, a ticket outside an epic or a rank key two issues hold. Test evidence: `TestALandingThatCutsAMergedParentCycleStrandsNothing` (`internal/storage/rehome_test.go`); `TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide` (`rehome_test.go`); `TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike` (`rank_collisions_test.go`).
 
-`replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): inside `withCommitLock` (re-entrant): one `attemptMutation` (`commit_lock.go`) whose body is `applyExportDelta(ctx, tx, delta)`. **A single attempt, deliberately without the self-rotating transient retry** — an inner retry would rotate a second time inside the outer retry's attempt, past the one rotation its budget is sized for (`sync_reconcile.go`). A transient failure bubbles to `replayUnderGuard`'s outer retry, the replay's one rotation, whose next attempt re-creates both scratch branches as its first op and rebuilds the whole spine from the fixed anchors. Errors: `"begin %s tx: %w"`, `"commit %s tx: %w"`. Test evidence: `TestSyncReconcileCombineRecoversFromTransientFailureMidReplay` (`sync_unrelated_test.go`).
+`replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): inside `withCommitLock` (re-entrant): one `attemptMutation` (`commit_lock.go`) whose body is `applyExportDelta(ctx, tx, delta)`. **A single attempt, deliberately without the self-rotating transient retry** — an inner retry would rotate a second time inside the outer retry's attempt, past the one rotation its budget is sized for (`sync_reconcile.go`). A transient failure bubbles to `replayUnderGuard`'s outer retry, the replay's one rotation, whose next attempt re-creates both scratch branches as its first op and rebuilds the whole spine from the fixed anchors. Error: `"begin %s tx: %w"`. Test evidence: `TestSyncReconcileCombineRecoversFromTransientFailureMidReplay` (`sync_unrelated_test.go`).
 
 ### 5.16 `commitReplayAndAdvance` — the safe replay, step by step
 

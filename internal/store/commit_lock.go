@@ -115,9 +115,12 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 // tx.Commit then ends a transaction the DOLT_COMMIT left empty: it writes
 // nothing, and it clears the session's explicit-transaction state, which the
 // store's one pooled connection would otherwise carry into every later
-// statement. No retry can follow a commit that landed, since a GC waits on the
-// held commit lock and an empty COMMIT updates no manifest, so neither transient
-// failure can reach it.
+// statement. The write stands by then, so nothing past that point fails the
+// attempt, by the rule SettleCommitLockRelease states: a failure would invite a
+// retry of a mutation that landed. A ctx cancelled here is the likely one:
+// database/sql refuses the Commit and rolls the empty transaction back, which
+// clears the session just the same. [LAW:no-silent-failure] loud, but not a
+// false failure.
 func (s *Store) attemptMutation(ctx context.Context, stamp commitStamp, fn func(ctx context.Context, tx *sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -131,8 +134,11 @@ func (s *Store) attemptMutation(ctx context.Context, stamp commitStamp, fn func(
 	if err := s.commitWorkingSetOnce(ctx, tx, stamp); err != nil {
 		return err
 	}
+	if s.mutationLandedHookForTest != nil {
+		s.mutationLandedHookForTest()
+	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
+		fmt.Fprintf(s.stderr, "lit: %s landed, and ending its transaction failed (nothing to redo): %v\n", stamp.Message, err)
 	}
 	hear(ctx, heard...)
 	return nil
