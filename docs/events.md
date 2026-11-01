@@ -309,8 +309,8 @@ nothing.
 
 `rank.longest_key`, in `counts`, is the longest key the command wrote, in
 characters, and `0` when it wrote none. A key lit mints stops at 190 characters;
-a key a store inherited can be longer, and a `rank set` hands round the keys it
-finds.
+a key a store inherited can be longer, and a `rank set` hands round the keys of
+the issues leading the frame.
 
 `rank.respaces` has one entry for each respace.
 

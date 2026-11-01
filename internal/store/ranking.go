@@ -413,24 +413,21 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 	}
 }
 
-// rankBeyondTx is the key just past a frame's edge, whose key readEdge reads.
+// ranksBeyondTx is n keys just past a frame's edge, in key order.
 //
 // The bounds come from roomBesideTx, the same read a create at this edge and a
 // relative move both measure their room with, so no two of them can hold
 // different notions of how much room sits beside a key. [LAW:single-enforcer]
 //
-// The edge is read only inside rankBetweenTx, never ahead of it. A placement
+// The edge is read only inside ranksBetweenTx, never ahead of it. A placement
 // with room costs one read, and one that has to make room costs one more, taken
-// after the respace has rewritten the edge.
-//
-// The edge is read through a function rather than passed as a key because the
-// key past it is placed by rankBetweenTx, which rewrites the edge's key when it
-// has to make room. [LAW:single-enforcer] Every placement against stored keys
-// goes through that one function, so an edge whose key leaves no room past it
-// is made room for exactly as a relative move's neighbors are.
-func (e rankEdge) rankBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, vacating string, readEdge func() (string, error)) (string, error) {
-	return rankBetweenTx(ctx, tx, func() (string, string, error) {
-		edgeRank, err := readEdge()
+// after the respace has rewritten the edge: [LAW:single-enforcer] every
+// placement against stored keys goes through that one function, so an edge
+// whose key leaves no room past it is made room for exactly as a relative
+// move's neighbors are.
+func (e rankEdge) ranksBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, n int, vacating string) ([]string, error) {
+	return ranksBetweenTx(ctx, tx, n, func() (string, string, error) {
+		edgeRank, err := frameEdgeRankTx(ctx, tx, f, e)
 		if err != nil {
 			return "", "", err
 		}
@@ -461,6 +458,21 @@ func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge ra
 		return "", "", fmt.Errorf("query %s of frame %q: %w", edge.name, f, err)
 	}
 	return holderID, holderRank, nil
+}
+
+// frameHeadTx reads the first n rows of a frame, in the order a listing shows
+// them. A top-level head costs the keys it walks past to reach n top-level rows,
+// not the frame: `ORDER BY issues.id` as well would plan a sort of every row, and
+// a tie already arrives in primary-key order, which the Go sort only confirms.
+// TestRankSetReadsATieInIDOrder is what fails if a tie stops arriving that way.
+func frameHeadTx(ctx context.Context, tx *sql.Tx, f storage.Frame, n int) ([]rankedIssue, error) {
+	rows, args := frameRowsQuery(f)
+	head, err := rankRows(ctx, tx, rows+` ORDER BY issues.item_rank ASC LIMIT ?`, append(args, n)...)
+	if err != nil {
+		return nil, fmt.Errorf("read the first %d keys of frame %q: %w", n, f, err)
+	}
+	slices.SortFunc(head, compareRankedIssues)
+	return head, nil
 }
 
 // frameOfTx names the frame an issue's own rank lives in: its container, or the
@@ -665,25 +677,15 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 		if !end.Moved {
 			return end, nil
 		}
-		return end, edge.placeBeyondTx(ctx, tx, f, issueID, s.clock.Now().Format(time.RFC3339Nano))
+		keys, err := edge.ranksBeyondTx(ctx, tx, f, 1, issueID)
+		if err != nil {
+			return storage.RankEnd{}, fmt.Errorf("rank to %s: %w", edge.name, err)
+		}
+		if err := writeRankTx(ctx, tx, issueID, keys[0], s.clock.Now().Format(time.RFC3339Nano)); err != nil {
+			return storage.RankEnd{}, err
+		}
+		return end, smoothRanksIfNeededTx(ctx, tx, keys[0])
 	})
-}
-
-// placeBeyondTx writes an issue a key past its frame's edge. It is the whole of
-// a move to one end, shared with rank set, which places a named issue that
-// holds no key yet at its frame's bottom this way before permuting the frame.
-func (e rankEdge) placeBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, issueID, now string) error {
-	newRank, err := e.rankBeyondTx(ctx, tx, f, issueID, func() (string, error) {
-		_, edgeRank, err := frameEdgeHolderTx(ctx, tx, f, e)
-		return edgeRank, err
-	})
-	if err != nil {
-		return fmt.Errorf("rank to %s: %w", e.name, err)
-	}
-	if err := writeRankTx(ctx, tx, issueID, newRank, now); err != nil {
-		return err
-	}
-	return smoothRanksIfNeededTx(ctx, tx, newRank)
 }
 
 // resolveRankSet maps the named IDs onto the frame-comparable representatives
@@ -725,11 +727,14 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 // becomes topmost, ids[1] ranks just below, etc. IDs are first resolved to
 // their frame-comparable representatives (a child's stand-in is its epic), so
 // the order written is always frame-coherent and nothing inside any epic is
-// reordered. The stack is written by permuting the keys the frame already
-// holds (see storage.RankSetOrder), never by minting new ones: setting an
-// order among one epic's children leads that epic's children and moves nothing
-// outside it. Atomic — every assignment commits together or none does.
-// Validates IDs exist and rejects duplicates before any write.
+// reordered.
+//
+// Only named issues are written, so the cost is the set's and not the frame's:
+// the frame's head is read, the keys of the named issues that already lead it
+// are handed round, and every other named issue takes a key past the frame's
+// top, placed once for the whole set. An issue the set passes keeps its key, and
+// with it its order among the unnamed. Atomic — every assignment commits together
+// or none does. Validates IDs exist and rejects duplicates before any write.
 // [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
 // transaction so partial-application states cannot occur.
 func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResult, error) {
@@ -752,92 +757,96 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		if err != nil {
 			return storage.RankSetResult{}, err
 		}
+		result := storage.RankSetResult{Resolutions: resolutions, Frame: f}
 		ranked := make([]string, len(resolutions))
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
 		}
-		now := s.clock.Now().Format(time.RFC3339Nano)
-		// A named issue can hold no key yet — an import writes a row unranked
-		// when its source had none — and then it has no slot for the
-		// permutation to hand anyone. It first joins the bottom of its frame,
-		// exactly as rank to bottom would place it, and the permutation then
-		// leads the frame with it like any other named issue.
-		unranked, err := unrankedAmongTx(ctx, tx, ranked)
+		// One row past the set is the most it takes to reach an unnamed issue.
+		head, err := frameHeadTx(ctx, tx, f, len(ranked)+1)
 		if err != nil {
 			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		for _, id := range unranked {
-			if err := bottomEdge.placeBeyondTx(ctx, tx, f, id, now); err != nil {
-				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
-			}
+		// An order that has arrived writes nothing: its issues stand where they
+		// were asked to, and a stamp would say otherwise.
+		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id string) bool { return row.id == id }) {
+			return result, nil
 		}
-		// The frame's own keys, lowest first, are the slots the new order fills.
-		// Every representative is a frame-mate by construction, so this is the
-		// whole keyspace the order is read in. Ties fall to id, as they do in
-		// every listing, so a slot's place here is its place on screen.
-		rows, args := frameRowsQuery(f)
-		slots, err := rankRows(ctx, tx, rows+` ORDER BY issues.item_rank ASC, issues.id ASC`, args...)
+		position := make(map[string]int, len(head))
+		for i, row := range head {
+			position[row.id] = i
+		}
+		run := rankSetLeadingRun(head, ranked)
+		minted, err := topEdge.ranksBeyondTx(ctx, tx, f, len(ranked)-len(run), "")
 		if err != nil {
-			return storage.RankSetResult{}, fmt.Errorf("rank set: read the keys of frame %q: %w", f, err)
+			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		occupants := make([]string, len(slots))
-		for i, slot := range slots {
-			occupants[i] = slot.id
-		}
-		ordered, err := storage.RankSetOrder(f, occupants, ranked)
+		// Making room rewrites keys and keeps the order, so the run is still the
+		// frame's first rows and only its keys have to be read again.
+		run, err = frameHeadTx(ctx, tx, f, len(run))
 		if err != nil {
-			return storage.RankSetResult{}, err
+			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		// Two slots on one key keep sharing it, because a permutation hands keys
-		// round unchanged, and a listing orders the pair by id. Where that id
-		// order is the reverse of the one asked for, no permutation can write
-		// the request, and reporting success would leave the order unchanged.
-		// The pair is named instead, with the move that gives them keys of
-		// their own. [LAW:no-silent-failure]
+		held := make(map[string]string, len(run))
+		slots := slices.Clone(minted)
+		for _, row := range run {
+			held[row.id] = row.rank
+			slots = append(slots, row.rank)
+		}
+		// Two slots on one key keep sharing it, because a key is handed round
+		// unchanged, and a listing orders the pair by id. Where that id order is
+		// the reverse of the one asked for, the slots cannot write the request,
+		// and reporting success would leave the order unchanged. The pair is
+		// named instead, with the move that gives them keys of their own.
+		// [LAW:no-silent-failure]
 		for i := 1; i < len(slots); i++ {
-			if slots[i].rank == slots[i-1].rank && ordered[i] < ordered[i-1] {
+			if slots[i] == slots[i-1] && ranked[i] < ranked[i-1] {
 				return storage.RankSetResult{}, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
-					ordered[i-1], ordered[i], slots[i].rank, ordered[i-1], ordered[i], ordered[i-1], ordered[i])}
+					ranked[i-1], ranked[i], slots[i], ranked[i-1], ranked[i], ranked[i-1], ranked[i])}
 			}
 		}
-		// Each slot's key passes to its new occupant, which is how a permutation
-		// is spelled in keys: the set of keys the frame holds is the same before
-		// and after, so none can collide and none can escape the frame. A slot
-		// whose occupant stays put is already right and is not written, which is
-		// what makes a repeat of an order that has arrived write nothing at all.
-		//
-		// Only a named issue that actually moved is stamped as updated. The
-		// frame-mates a stack displaces keep their order among themselves, the
-		// way a respace keeps it, and stamping them would reset the clock that
-		// says how long an unnamed ticket has sat untouched. The representatives
-		// fill the first len(ranked) slots, so the index says which is which.
+		// Each named issue takes its slot's key. Which of them moved is one
+		// question with one answer, its place in the frame before and after: a
+		// key handed round can leave an issue where it stood, and an issue can
+		// move on the key it already held. Only a moved issue is stamped, because
+		// updated_at says how long a ticket has sat untouched.
+		// [LAW:single-enforcer]
 		var writes []rankWrite
-		for i, slot := range slots {
-			if ordered[i] == slot.id {
-				continue
+		now := s.clock.Now().Format(time.RFC3339Nano)
+		for i, id := range ranked {
+			stood, inHead := position[id]
+			moved := !inHead || stood != i
+			if moved || slots[i] != held[id] {
+				writes = append(writes, rankWrite{id: id, rank: slots[i], touched: moved})
 			}
-			writes = append(writes, rankWrite{id: ordered[i], rank: slot.rank, touched: i < len(ranked)})
 		}
 		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
 			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		return storage.RankSetResult{Resolutions: resolutions, Frame: f}, nil
+		for _, key := range minted {
+			if err := smoothRanksIfNeededTx(ctx, tx, key); err != nil {
+				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
+			}
+		}
+		return result, nil
 	})
 }
 
-// unrankedAmongTx is which of the given issues are live and hold no key.
-func unrankedAmongTx(ctx context.Context, tx *sql.Tx, ids []string) ([]string, error) {
-	named, arg := newIDSet(ids).rows("named")
-	rows, err := rankRows(ctx, tx, `SELECT i.id, i.item_rank FROM `+named+` JOIN issues i ON i.id = named.id
-		WHERE i.deleted_at IS NULL AND i.item_rank = ''`, arg)
-	if err != nil {
-		return nil, fmt.Errorf("read which of %d issues hold no key: %w", len(ids), err)
+// rankSetLeadingRun is the rows of a frame's head whose keys a rank set can hand
+// round: those ahead of its first unnamed row and below that row's key. A key an
+// unnamed issue also holds cannot pass to another named issue, because a listing
+// breaks the tie by id and the id might sort past the unnamed one.
+func rankSetLeadingRun(head []rankedIssue, ranked []string) []rankedIssue {
+	named := make(map[string]struct{}, len(ranked))
+	for _, id := range ranked {
+		named[id] = struct{}{}
 	}
-	var unranked []string
-	for _, row := range rows {
-		unranked = append(unranked, row.id)
+	for i, row := range head {
+		if _, isNamed := named[row.id]; !isNamed {
+			return slices.DeleteFunc(slices.Clone(head[:i]), func(leader rankedIssue) bool { return leader.rank == row.rank })
+		}
 	}
-	return unranked, nil
+	return head
 }
 
 // rankWrite is one issue's new key, and whether the write is an update to that
@@ -1015,30 +1024,40 @@ func anchorRankTx(ctx context.Context, tx *sql.Tx, anchorID string) (string, err
 }
 
 // rankBetweenTx returns a key strictly between the pair of keys bounds reads.
+func rankBetweenTx(ctx context.Context, tx *sql.Tx, bounds func() (lower, upper string, err error)) (string, error) {
+	keys, err := ranksBetweenTx(ctx, tx, 1, bounds)
+	if err != nil {
+		return "", err
+	}
+	return keys[0], nil
+}
+
+// ranksBetweenTx returns n ascending keys strictly between the pair of keys
+// bounds reads.
 //
 // Two keys can leave no room between them: a rank can sit next to itself
 // extended by zeros, a pair can have nothing inside rank.MaxLength, and a corner
-// can be too deep to step out of, and rank.Midpoint refuses each with
+// can be too deep to step out of, and rank.Between refuses each with
 // rank.ErrNoRoom. The move asked for is still coherent, so the pair is made room
 // for rather than refused: the ranks around it are respaced, which leaves room
 // by construction, and the pair is read again, because respacing rewrote both
 // keys. [LAW:no-silent-failure] A second refusal is returned, not retried.
-func rankBetweenTx(ctx context.Context, tx *sql.Tx, bounds func() (lower, upper string, err error)) (string, error) {
+func ranksBetweenTx(ctx context.Context, tx *sql.Tx, n int, bounds func() (lower, upper string, err error)) ([]string, error) {
 	lower, upper, err := bounds()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	between, err := rank.Midpoint(lower, upper)
+	between, err := rank.Between(lower, upper, n)
 	if errors.Is(err, rank.ErrNoRoom) {
 		// The pair sorts adjacent, so the window around either bound holds both,
 		// and an open end refuses only past a corner too deep to step out of.
 		if err := smoothRanksTx(ctx, tx, cmp.Or(upper, lower)); err != nil {
-			return "", fmt.Errorf("make room between %q and %q: %w", lower, upper, err)
+			return nil, fmt.Errorf("make room between %q and %q: %w", lower, upper, err)
 		}
 		if lower, upper, err = bounds(); err != nil {
-			return "", err
+			return nil, err
 		}
-		between, err = rank.Midpoint(lower, upper)
+		between, err = rank.Between(lower, upper, n)
 	}
 	return between, err
 }

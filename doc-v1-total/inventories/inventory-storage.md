@@ -996,7 +996,7 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Builds an ancestor chain per id (missing id → `NotFoundError` from `ancestorChain`).
 - `storage.FrameRepresentatives(chains)`; error wrapped as `fmt.Errorf("rank set: %w", err)`.
 - `storage.RankSetResolutions(ids, reps)` (`internal/storage/rank.go`, shared with the Dolt store) pairs each id with its representative. **Two named ids collapsing onto one representative is refused** with a `model.ValidationError`: `"rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead"`.
-- Rewrites the frame's own slots in place with `storage.RankSetOrder` — the representatives first, in the order named, then every other frame-mate in its current order; nothing outside the frame moves (`internal/storage/rank.go`).
+- Rewrites the frame's own slots in place with `rankSetOrder` — the representatives first, in the order named, then every other frame-mate in its current order; nothing outside the frame moves (`internal/storage/memory/rank.go`).
 - Returns one `RankSetResolution{NamedID, RankedID}` per input, in input order.
 
 **`detach`** — `slices.DeleteFunc` on id equality.

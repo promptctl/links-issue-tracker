@@ -96,23 +96,47 @@ var ErrNoRoom = errors.New("rank: no room between the bounds")
 // and prepends never deepen a corner. Both empty is the whole keyspace, whose
 // midpoint is the first key a workspace holds.
 func Midpoint(a, b string) (string, error) {
-	if a == b && a != "" {
-		return "", errors.New("rank: a and b are equal")
-	}
-	if a != "" && b != "" && a >= b {
-		return "", errors.New("rank: a must be less than b")
-	}
-	if a != "" && b == "" {
-		return step(a, 1)
-	}
-	if a == "" && b != "" {
-		return step(b, -1)
-	}
-	keys, err := spacedRanks(1, a, b, 1)
+	keys, err := Between(a, b, 1)
 	if err != nil {
 		return "", err
 	}
 	return keys[0], nil
+}
+
+// Between returns n ascending keys strictly between a and b, on Midpoint's
+// terms: past an open end they step away from the closed bound, so a set placed
+// there repeatedly stays as short as a single key would, and otherwise they
+// divide the room evenly. n of 0 is no keys.
+func Between(a, b string, n int) ([]string, error) {
+	if a == b && a != "" {
+		return nil, errors.New("rank: a and b are equal")
+	}
+	if a != "" && b != "" && a >= b {
+		return nil, errors.New("rank: a must be less than b")
+	}
+	if a != "" && b == "" {
+		return steps(a, 1, n)
+	}
+	if a == "" && b != "" {
+		keys, err := steps(b, -1, n)
+		slices.Reverse(keys)
+		return keys, err
+	}
+	return spacedRanks(n, a, b, 1)
+}
+
+// steps returns n keys, each one step in direction dir from the one before it,
+// the first from s.
+func steps(s string, dir int64, n int) ([]string, error) {
+	keys := make([]string, n)
+	for i := range keys {
+		next, err := step(s, dir)
+		if err != nil {
+			return nil, err
+		}
+		keys[i], s = next, next
+	}
+	return keys, nil
 }
 
 // MaxLength is the longest key the package writes: one short of

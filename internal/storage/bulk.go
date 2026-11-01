@@ -150,8 +150,8 @@ func (r *BulkApplyResult) RecordEdges(step EdgeStep) {
 //
 // Ranked is the file's ordering: every document that states `rank: top`, in
 // document order. An engine hands it to its RankSet whole, so a file orders
-// issues exactly as `lit rank set` does — one transaction, keys permuted and
-// none minted, and an order that has already landed writes nothing.
+// issues exactly as `lit rank set` does — one transaction, and an order that has
+// already landed writes nothing.
 // [LAW:single-enforcer]
 //
 // Reparents are the update documents that state a parent, and BlockedBy those

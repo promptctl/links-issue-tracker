@@ -180,6 +180,69 @@ func TestNothingSortsBelowAnAllZeroRank(t *testing.T) {
 	}
 }
 
+func TestBetween(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		lower, upper string
+		n            int
+	}{
+		{"none", "A", "B", 0},
+		{"none past an open end", "", "V", 0},
+		{"one", "A", "z", 1},
+		{"closed", "A", "z", 500},
+		{"closed and tight", "V000", "V001", 40},
+		{"below everything", "", "V", 3},
+		{"above everything", "V", "", 3},
+		{"the whole keyspace", "", "", 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			keys, err := Between(tc.lower, tc.upper, tc.n)
+			if err != nil {
+				t.Fatalf("Between(%q, %q, %d) error = %v", tc.lower, tc.upper, tc.n, err)
+			}
+			if len(keys) != tc.n {
+				t.Fatalf("Between(%q, %q, %d) = %d keys, want %d", tc.lower, tc.upper, tc.n, len(keys), tc.n)
+			}
+			previous := tc.lower
+			for _, key := range keys {
+				if key <= previous {
+					t.Fatalf("Between(%q, %q, %d) = %v: %q does not sort past %q", tc.lower, tc.upper, tc.n, keys, key, previous)
+				}
+				previous = key
+			}
+			if tc.upper != "" && previous >= tc.upper {
+				t.Fatalf("Between(%q, %q, %d) = %v: %q does not sort below the upper bound", tc.lower, tc.upper, tc.n, keys, previous)
+			}
+		})
+	}
+}
+
+// A set placed past an open end over and over is what a backlog's head sees. It
+// has to stay as short as one key placed there does: spacing against the open
+// end would deepen the keys every round.
+func TestBetweenAnOpenEndStaysFlat(t *testing.T) {
+	upper := "V"
+	for round := range 200 {
+		keys, err := Between("", upper, 3)
+		if err != nil {
+			t.Fatalf("round %d: Between(\"\", %q, 3) error = %v", round, upper, err)
+		}
+		if len(keys[0]) > stepLength {
+			t.Fatalf("round %d: Between(\"\", %q, 3) = %v; a step past an open end stays at %d chars", round, upper, keys, stepLength)
+		}
+		upper = keys[0]
+	}
+}
+
+func TestBetweenRefusesBoundsThatLeaveNoRoom(t *testing.T) {
+	if _, err := Between("A", "A0", 2); !errors.Is(err, ErrNoRoom) {
+		t.Errorf("Between over a pair padding to one value error = %v, want ErrNoRoom", err)
+	}
+	if _, err := Between("B", "A", 2); err == nil {
+		t.Error("Between over inverted bounds succeeded; want an error")
+	}
+}
+
 func TestMidpointEmptyBounds(t *testing.T) {
 	// Empty a = before everything.
 	mid, err := Midpoint("", "V")

@@ -200,6 +200,7 @@ var cases = []engineCase{
 	{"rank_set_imposes_order", rankSetImposesOrder},
 	{"rank_set_stays_inside_its_frame", rankSetStaysInsideItsFrame},
 	{"rank_set_over_a_whole_frame_permutes_its_keys", rankSetOverAWholeFramePermutesItsKeys},
+	{"rank_set_from_mid_frame_leads_it", rankSetFromMidFrameLeadsIt},
 	{"rank_verbs_refuse_a_deleted_issue", rankVerbsRefuseADeletedIssue},
 	{"a_container_lists_before_everything_inside_it", aContainerListsBeforeEverythingInsideIt},
 	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
@@ -2109,6 +2110,46 @@ func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st
 	slices.Sort(keysAfter)
 	if !slices.Equal(keysBefore, keysAfter) {
 		t.Errorf("the epic's children hold keys %v after rank set, want the keys %v they held before, reordered", keysAfter, keysBefore)
+	}
+}
+
+// rankSetFromMidFrameLeadsIt pins the contract where the engines' mechanisms
+// differ most: the SQL engine gives the named issues keys past the frame's top
+// and leaves the rest, and the memory engine permutes the frame's positions. Two
+// issues from the middle of the top level, whose children sit between them,
+// lead it in the order named, the rest keep their order, nothing inside an epic
+// moves, and asking again changes nothing.
+func rankSetFromMidFrameLeadsIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", IssueType: model.TypeEpic})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: second.ID})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "third", Topic: "core", IssueType: model.TypeEpic})
+	inner := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "inner", Topic: "core", ParentID: third.ID})
+	fourth := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "fourth", Topic: "core", IssueType: model.TypeEpic})
+	childKey, innerKey := mustGet(t, ctx, st, child.ID).Rank, mustGet(t, ctx, st, inner.ID).Rank
+
+	named := []string{third.ID, second.ID}
+	if _, err := st.RankSet(ctx, named); err != nil {
+		t.Fatalf("RankSet error = %v", err)
+	}
+	assertOrder(t, ctx, st, "after a set from mid-frame", third.ID, inner.ID, second.ID, child.ID, first.ID, fourth.ID)
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertDistinctRanks(t, listed)
+	if after := mustGet(t, ctx, st, child.ID).Rank; after != childKey {
+		t.Errorf("rank set among top-level issues moved a child: rank %q -> %q", childKey, after)
+	}
+	if after := mustGet(t, ctx, st, inner.ID).Rank; after != innerKey {
+		t.Errorf("rank set among top-level issues moved a child: rank %q -> %q", innerKey, after)
+	}
+
+	settled := ranksByID(listed)
+	if _, err := st.RankSet(ctx, named); err != nil {
+		t.Fatalf("RankSet repeated error = %v", err)
+	}
+	for id, key := range ranksByID(mustList(t, ctx, st, storage.ListIssuesFilter{})) {
+		if key != settled[id] {
+			t.Errorf("a repeat of an order that has arrived moved %s: rank %q -> %q", id, settled[id], key)
+		}
 	}
 }
 

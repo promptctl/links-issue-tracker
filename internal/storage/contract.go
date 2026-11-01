@@ -242,7 +242,11 @@ type Ranker interface {
 	RankToBottom(ctx context.Context, issueID string) (RankEnd, error)
 
 	// RankSet imposes a total order on the named issues at once, returning
-	// which representative each name resolved to.
+	// which representative each name resolved to. It leaves their frame with
+	// the representatives first, in the order named, then every other member
+	// in the order it held; nothing outside the frame moves, and a repeat of an
+	// order that has arrived changes nothing. The conformance suite is what
+	// holds both engines to this.
 	RankSet(ctx context.Context, ids []string) (RankSetResult, error)
 }
 
