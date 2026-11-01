@@ -1578,10 +1578,9 @@ func TestRankSetStampsByPlaceAndNotByKey(t *testing.T) {
 }
 
 // TestRankSetOverIssuesSharingAKey pins what a rank set does with two issues
-// on one key, as imported keys can be. A permutation leaves them sharing it,
-// and a listing breaks the tie by id: an order that agrees with the ids is
-// written, and one that reverses them is refused by name with nothing changed,
-// rather than reported as done while the listing shows the old order.
+// on one key, as imported keys can be, when it names one directly above the
+// other. A listing breaks the tie by id: an order that agrees with the ids has
+// arrived, and one that reverses them is refused by name with nothing changed.
 func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1683,6 +1682,104 @@ func TestRankSetNeverHandsOnAKeyAnUnnamedIssueShares(t *testing.T) {
 	}
 }
 
+// TestRankSetMintsPastATieItCannotHandRound covers sets whose order a tie does not
+// stand in the way of. Issues that share a key leave it behind and take minted
+// ones, so nothing lands on a key beside an issue that never held it, and the run
+// stops at the tie, so the rows it keeps are still the frame's first.
+func TestRankSetMintsPastATieItCannotHandRound(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		keys  []string
+		named []int
+		want  []int
+	}{
+		{name: "a joiner would land on a leader's tied key", keys: []string{"M", "M", "N", "Z"}, named: []int{0, 3, 1}, want: []int{0, 3, 1, 2}},
+		{name: "the tie follows a leader that keeps its key", keys: []string{"L", "M", "M", "Z"}, named: []int{0, 3, 1, 2}, want: []int{0, 3, 1, 2}},
+		{name: "the tie stands below the places the set fills", keys: []string{"M", "M", "L"}, named: []int{1, 0}, want: []int{1, 0, 2}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			st := openIssueStore(t, ctx)
+
+			ids := makeTopLevelIssues(t, ctx, st, len(tc.keys), "row %d")
+			slices.Sort(ids)
+			planted := make(map[string]string, len(ids))
+			for i, id := range ids {
+				planted[id] = tc.keys[i]
+			}
+			plantKeys(t, ctx, st, planted)
+
+			named := make([]string, len(tc.named))
+			for i, index := range tc.named {
+				named[i] = ids[index]
+			}
+			want := make([]string, len(tc.want))
+			for i, index := range tc.want {
+				want[i] = ids[index]
+			}
+			if _, err := st.RankSet(ctx, named); err != nil {
+				t.Fatalf("RankSet(%v) error = %v", named, err)
+			}
+			after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
+			if err != nil {
+				t.Fatalf("ListIssues() error = %v", err)
+			}
+			if got := issueIDs(after); !slices.Equal(got, want) {
+				t.Fatalf("order after RankSet(%v) = %v, want %v", named, got, want)
+			}
+			held := make(map[string]string, len(after))
+			for _, issue := range after {
+				if mate, taken := held[issue.Rank]; taken && slices.Contains(named, issue.ID) {
+					t.Fatalf("%s took the key %q %s holds", issue.ID, issue.Rank, mate)
+				}
+				held[issue.Rank] = issue.ID
+			}
+		})
+	}
+}
+
+// TestRankSetRefusalNamesTheMoveThatClearsIt runs the move a refused tie names,
+// and the same set then has nothing to refuse.
+func TestRankSetRefusalNamesTheMoveThatClearsIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
+	slices.Sort(ids)
+	low, high, other := ids[0], ids[1], ids[2]
+	plantKeys(t, ctx, st, map[string]string{low: "M", high: "M", other: "T"})
+
+	if _, err := st.RankSet(ctx, []string{high, low}); err == nil {
+		t.Fatal("RankSet error = nil, want a refusal of the tie")
+	}
+	if _, err := st.RankAbove(ctx, high, low); err != nil {
+		t.Fatalf("RankAbove() error = %v", err)
+	}
+	if _, err := st.RankSet(ctx, []string{high, low}); err != nil {
+		t.Fatalf("RankSet after the move the refusal named: %v", err)
+	}
+}
+
+// TestRankSetNamesAKeyItCannotPlaceBeside plants a malformed key at the head of
+// the frame. A placement cannot be made beside it, and the error has to say which
+// key stopped it, because the issue that holds it is not one the set named.
+func TestRankSetNamesAKeyItCannotPlaceBeside(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
+	plantKeys(t, ctx, st, map[string]string{ids[0]: "M-1"})
+
+	_, err := st.RankSet(ctx, []string{ids[1], ids[2]})
+	if err == nil || !strings.Contains(err.Error(), `"M-1"`) {
+		t.Fatalf("RankSet error = %v, want one naming the key %q", err, "M-1")
+	}
+}
+
 // TestRankSetOfAnOrderThatHasArrivedOnATieWritesNothing names the issue a tie
 // already lists first. Its key is one an unnamed issue shares, so a set moving
 // anything would give it a new one, and this set has nothing to move.
@@ -1757,8 +1854,8 @@ func TestRankSetReadsATieInIDOrder(t *testing.T) {
 
 // TestRankSetPlacesANamedIssueThatHoldsNoKey pins that an unranked issue can be
 // named in a rank set. An import writes a row unranked when its source had
-// none, so the permutation has no slot for it to take; it joins its frame
-// first, and the set then orders it with the rest.
+// none, so it has no key to hand round; it takes a minted one like any other
+// issue that joins the head.
 func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

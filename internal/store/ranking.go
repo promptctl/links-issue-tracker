@@ -354,7 +354,7 @@ func firstInFrameBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (low
 // two ends are one position anyway — but the key written still has to be
 // distinct from every key that exists, and the midpoint of the whole keyspace
 // is not: it is the key the workspace's first issue already holds.
-// So that case goes to firstInFrameBoundsTx, the same answer rankBeyondTx gives
+// So that case goes to firstInFrameBoundsTx, the same answer ranksBeyondTx gives
 // a frame whose edge reads empty, because the two mean the same thing: nothing
 // is ranked here yet. [LAW:one-source-of-truth]
 func (e rankEdge) filingBoundsTx(ctx context.Context, tx *sql.Tx, f storage.Frame) (lower, upper string, err error) {
@@ -446,7 +446,7 @@ func (e rankEdge) ranksBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame
 // frameEdgeHolderTx names the issue holding one end of a frame's rank order
 // and the rank it holds there. Both come back empty when the frame has nothing
 // ranked in it — a fact about the frame, not a failure, and the one input
-// rankBeyondTx needs to seed a fresh frame.
+// ranksBeyondTx needs to seed a fresh frame.
 func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (holderID, holderRank string, err error) {
 	rows, args := frameRowsQuery(f)
 	query := rows + fmt.Sprintf(` ORDER BY issues.item_rank %s LIMIT 1`, edge.order)
@@ -772,6 +772,9 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id string) bool { return row.id == id }) {
 			return result, nil
 		}
+		if err := refuseReversedTie(head[:min(len(ranked), len(head))], ranked); err != nil {
+			return storage.RankSetResult{}, err
+		}
 		position := make(map[string]int, len(head))
 		for i, row := range head {
 			position[row.id] = i
@@ -792,18 +795,6 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		for _, row := range run {
 			held[row.id] = row.rank
 			slots = append(slots, row.rank)
-		}
-		// Two slots on one key keep sharing it, because a key is handed round
-		// unchanged, and a listing orders the pair by id. Where that id order is
-		// the reverse of the one asked for, the slots cannot write the request,
-		// and reporting success would leave the order unchanged. The pair is
-		// named instead, with the move that gives them keys of their own.
-		// [LAW:no-silent-failure]
-		for i := 1; i < len(slots); i++ {
-			if slots[i] == slots[i-1] && ranked[i] < ranked[i-1] {
-				return storage.RankSetResult{}, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
-					ranked[i-1], ranked[i], slots[i], ranked[i-1], ranked[i], ranked[i-1], ranked[i])}
-			}
 		}
 		// Each named issue takes its slot's key. Which of them moved is one
 		// question with one answer, its place in the frame before and after: a
@@ -832,25 +823,48 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 	})
 }
 
+// refuseReversedTie refuses an order that sets one of the issues standing in the
+// places it fills directly above an issue sharing its key, against their ids. A
+// listing breaks that tie by id. A minted key could write the pair, but a tie is
+// parted on purpose: the error names it with the move that gives each issue a key
+// of its own, and nothing is written. [LAW:no-silent-failure]
+func refuseReversedTie(places []rankedIssue, ranked []string) error {
+	held := make(map[string]string, len(places))
+	for _, row := range places {
+		held[row.id] = row.rank
+	}
+	for i := 1; i < len(ranked); i++ {
+		above, below := ranked[i-1], ranked[i]
+		if key, stands := held[above]; stands && held[below] == key && below < above {
+			return model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
+				above, below, key, above, below, above, below)}
+		}
+	}
+	return nil
+}
+
 // rankSetLeadingRun is the rows of a frame's head whose keys a rank set can hand
-// round: those ahead of its first unnamed row and below that row's key. A key an
-// unnamed issue also holds cannot pass to another named issue, because a listing
-// breaks the tie by id and the id might sort past the unnamed one.
+// round: those ahead of its first unnamed row, up to the first key two rows
+// share. A shared key cannot pass to another issue, because a listing breaks the
+// tie by id and the id might sort the wrong way. It stops rather than skips, so
+// the run stays the frame's first rows.
 func rankSetLeadingRun(head []rankedIssue, ranked []string) []rankedIssue {
 	named := make(map[string]struct{}, len(ranked))
 	for _, id := range ranked {
 		named[id] = struct{}{}
 	}
 	for i, row := range head {
-		if _, isNamed := named[row.id]; !isNamed {
-			return slices.DeleteFunc(slices.Clone(head[:i]), func(leader rankedIssue) bool { return leader.rank == row.rank })
+		_, isNamed := named[row.id]
+		if !isNamed || (i+1 < len(head) && head[i+1].rank == row.rank) {
+			return head[:i]
 		}
 	}
 	return head
 }
 
 // rankWrite is one issue's new key, and whether the write is an update to that
-// issue — which a named issue's move is and a displaced frame-mate's is not.
+// issue — which a named issue's move is and a key rewritten under an issue that
+// stays put is not.
 type rankWrite struct {
 	id, rank string
 	touched  bool
@@ -859,7 +873,7 @@ type rankWrite struct {
 // writeRanksTx hands each issue the key its write names, one statement per id
 // chunk (see idChunks for why this write chunks where reads join).
 //
-// A rank set can displace every member of a large frame, so the keys are
+// A respace or a large rank set rewrites many keys at once, so the keys are
 // written as a chunked CASE rather than a statement per issue: the cost of the
 // write grows by round trips per chunk, never per row. updated_at rides in the
 // same statement: a touched issue takes now, and an untouched one is handed
@@ -1059,7 +1073,10 @@ func ranksBetweenTx(ctx context.Context, tx *sql.Tx, n int, bounds func() (lower
 		}
 		between, err = rank.Between(lower, upper, n)
 	}
-	return between, err
+	if err != nil {
+		return nil, fmt.Errorf("place %d keys between %q and %q: %w", n, lower, upper, err)
+	}
+	return between, nil
 }
 
 // RankAbove moves an issue to rank immediately above the target issue,
@@ -1255,8 +1272,8 @@ func smoothRanksTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 }
 
 // rankRows runs a rank query and returns every row it matches, in the order
-// the query asks for. A respace's reads bound themselves by LIMIT and cost the
-// window, and a rank set's reads the frame it reorders.
+// the query asks for. Every read bounds itself by LIMIT: a respace's costs the
+// window, and a rank set's the head of the frame it reorders.
 func rankRows(ctx context.Context, q rowQueryer, query string, args ...any) ([]rankedIssue, error) {
 	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
