@@ -534,19 +534,24 @@ Errors: `"load issues by id: %w"`, `"scan loaded issue: %w"`, `"iterate loaded i
 #### 5.6 `GetIssueDetail(ctx, id) (model.IssueDetail, error)`
 
 `store.go`, in order:
+1. `GetIssueAdjacency(ctx, id)`, below.
+2. `listComments(ctx, id)` (`store.go`).
+3. `ListEvents(ctx, id)` (`store.go`).
+4. `ListPlanReviews(ctx, id)` — the issue's plan reviews, oldest first by the parsed `created_at` instant, then id (`storage.PlanReviewOrdering`, applied in Go) (`internal/store/plan_review.go`).
+5. `followUpsOf(ctx, id)` (`store.go`): `followUpIDsOf`, the `follows_up` scan, then `getIssuesByIDs`, then `sortInTreeOrder`.
+6. `adjacency.Detail(comments, events, planReviews, followUps)` assembles `model.IssueDetail` (`internal/storage/edges.go`).
+
+`GetIssueAdjacency(ctx, id) (storage.IssueAdjacency, error)`, `store.go`, in order:
 1. `GetIssue(ctx, id)` (`store.go`).
 2. `listRelations(ctx, id)` (`store.go`).
-3. `listComments(ctx, id)` (`store.go`).
-4. `ListEvents(ctx, id)` (`store.go`).
-5. `queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", id)` — the issue's plan reviews, oldest first by the parsed `created_at` instant, then id (`storage.PlanReviewOrdering`, applied in Go) (`internal/store/plan_review.go`).
-6. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
-7. If `issue.RedirectTargetValue()` is non-nil and not already in the list, it is appended (`store.go`).
-8. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate — then `loadRankAncestry(ctx, s.db)`, the tree order the relation groups sort in (`store.go`).
-9. `bucketRelations(id, relations, relatedByID, ancestry)` → `structural` with `Parent`, `Children`, `BlockedBy`, `Blocks` (`store.go`; `internal/store/relations.go`).
-10. If `structural.Parent != nil`: `ListIssues(ctx, ListIssuesFilter{ParentIDs: [structural.Parent.ID], IncludeArchived: true, IncludeDeleted: true})` — the parent's children in every retention state, rank order then id — then `siblingsOf(id, parentChildren)`; otherwise `siblings := []model.Issue{}` (`store.go`).
-11. `redirectTarget` is set only if the target id is present in `relatedByID`; a vanished target hydrates as absent (`store.go`).
-12. `related := relatedFrom(id, relations, relatedByID, ancestry)` (`store.go`).
-13. Assembles `model.IssueDetail{Issue, Relations, Comments, Events, PlanReviews, Children, Siblings, BlockedBy, Blocks, Parent, Related, RedirectTarget}` (`store.go`).
+3. `collectRelatedIssueIDs(id, relations)` (`store.go`; defined `store.go`) — distinct counterparties of both `SrcID` and `DstID`, excluding `""` and the focal id, in first-seen order.
+4. If `issue.RedirectTargetValue()` or `issue.FollowsUp` is set and not already in the list, it is appended (`store.go`).
+5. `getIssuesByIDs(ctx, relatedIDs)` — one batch hydrate (`store.go`).
+6. `bucketRelations(id, relations, relatedByID)` → `structural` with `Parent`, `BlockedBy`, `Blocks`, and `Children` in sibling order (`internal/store/relations.go`).
+7. `related := relatedFrom(id, relations, relatedByID)` (`internal/store/relations.go`).
+8. `sortInTreeOrder(ctx, s.db, structural.BlockedBy, structural.Blocks, related)` (`internal/store/ranking.go`), which reads the ancestry only of groups holding two or more issues.
+9. If `structural.Parent != nil`: `childrenOf(ctx, structural.Parent.ID)` — `childIDsOfParents`, then `getIssuesByIDs`, then `storage.SortSiblings`, so the parent's children in every retention state on their own keys — then `siblingsOf(id, parentChildren)`; otherwise the empty slice (`store.go`).
+10. `redirectTarget` and `followsUp` are set only if the id is present in `relatedByID`; a vanished target hydrates as absent (`store.go`).
 
 Evidence: `BlockedBy`, `Blocks`, `Children`, `Related` all come back in rank order (`store_test.go`); relation counterparties are fully hydrated including container progress and label slices (`store_test.go`); siblings are the parent's other children in rank order excluding self, and empty for parentless issues and only children (`store_test.go`); the redirect target is exposed via `detail.RedirectTarget` with **no** `related-to` edge written (`store_test.go`).
 
@@ -576,7 +581,7 @@ Clauses are joined with `" AND "` (`store.go`).
 
 **Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go`, defined `store.go`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
 
-Ordering is not SQL. `loadRankAncestry(ctx, s.db)` (`ranking.go`) runs first: `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.deleted_at IS NULL ORDER BY r.src_id, r.dst_id` — `frameColumn`'s rule for every issue at once — scanned into `storage.ParentLink`s and handed to `storage.NewRankAncestry`; a query or scan error is returned. Then `storage.IssueOrdering(filter.SortBy, ancestry)` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the listing query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs only the ancestry read; it yields a comparator over hydrated issues:
+Ordering is not SQL. `listingOrdering(ctx, filter.SortBy, selected, restricted)` (`ranking.go`) runs after `requireIssues` and `selectedIssueIDs`. A listing restricted to known rows reads the framing edges above them through `loadRankAncestryAbove`, one query a level; any other reads them all through `loadRankAncestry`: `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.deleted_at IS NULL` — `frameColumn`'s rule for every issue at once. Either way the rows are scanned into `storage.ParentLink`s and handed to `storage.NewRankAncestry`; a query or scan error is returned. Then `storage.IssueOrdering(filter.SortBy, ancestry)` (`internal/storage/ordering.go`, called from `ranking.go`) is parsed before the listing query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs those reads and not the listing query; it yields a comparator over hydrated issues:
 - no specs → `rank`;
 - sort keys (`sortKeys(ancestry)`, `internal/storage/ordering.go`, the table both engines share): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank` (`ancestry.Compare` — tree order), `type`, `topic`, `assignee`, `created_at`, `updated_at`;
 - `Desc` negates a key's comparator;
@@ -612,7 +617,7 @@ failure → `fmt.Errorf("list issue identities: %w", err)`. Returns `[]storage.I
 
 `queryRelations(ctx, q, from, args...)` (`relations.go`) is every read that returns relation rows: it writes `SELECT src_id, dst_id, type, created_at, created_by FROM ` and appends the caller's `from` (the FROM clause onward), scans by position, parses `created_at` via `scanTime`, and sorts in Go by `storage.RelationOrdering` (the instant, then `src_id`, `dst_id`, `type`) — never in SQL, `created_at` being a varchar. Error → `fmt.Errorf("list relations: %w", err)`. `q` is a `rowQueryer`, so the bulk transaction's `edgeWriterTx.Edges` reads through it too (`relations WHERE src_id = ? AND type = ?`, wrapped `"%s relations of %s: %w"`, `import_bulk.go`).
 
-`listRelations(ctx, issueID)` (`store.go`): `queryRelations(ctx, s.db, "relations WHERE src_id = ? OR dst_id = ?", issueID, issueID)`.
+`listRelations(ctx, issueID)` (`store.go`): `queryRelations` over `relationsBySrc` and `relationsByDst`, one query per endpoint column, then `mergeRelations`.
 
 `queryComments(ctx, q, from, args...)` (`store.go`) is the same for comments: `SELECT id, issue_id, body, created_at, created_by FROM ` + `from`, sorted by `storage.CommentOrdering` (the instant, then `id`); error → `"list comments: %w"`.
 
@@ -2784,7 +2789,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 - `s.listRelations(ctx, issueID)`; with no `types` the full incident set is returned.
 - Otherwise filters in Go against a set of wanted types; order is preserved from `listRelations`.
 
-`Store.listRelations` — `internal/store/store.go`: `queryRelations` over `relations WHERE src_id = ? OR dst_id = ?` (`relations.go`); in `storage.RelationOrdering`; returns an empty non-nil slice.
+`Store.listRelations` — `internal/store/store.go`: `queryRelations` (`relations.go`) over `relationsBySrc` and `relationsByDst`, merged by `mergeRelations`; in `storage.RelationOrdering`; returns an empty non-nil slice.
 
 ### 4.10 Batch relations
 
@@ -2808,15 +2813,15 @@ via `fmt.Sprintf` for the FROM clause onward, read through `queryRelations` (`re
 - Builds a `subjectSet` and a `needed` set seeded with the subjects; every relation endpoint is added to `needed`.
 - Buckets rows per subject; a row whose src and dst are both the same subject is added once (`rel.DstID != rel.SrcID` guard).
 - Hydrates `s.getIssuesByIDs(ctx, mapKeys(needed))` (`mapKeys`, unspecified order).
-- Loads `loadRankAncestry(ctx, s.db)` once for every subject's groups.
-- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID, ancestry)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
+- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
+- `sortInTreeOrder(ctx, s.db, ...)` over every subject's `BlockedBy` and `Blocks`, one climb however many subjects, and none when no group holds two or more.
 - `TestGetRelationsByIDsMatchesIssueDetail` asserts parity with `GetIssueDetail` for Children/BlockedBy/Blocks/Parent, absence of a nonexistent subject, epic children in rank order, and the BlockedBy/Blocks orientation — `internal/store/relations_batch_test.go`.
 
 ### 4.11 Listing by parent
 
 Children are read through `Store.ListIssues` with `filter.ParentIDs` set (§5.7); there is no separate children query.
 - `requireIssues(ctx, filter.ParentIDs)` runs before the parents are resolved — `internal/store/store.go`, defined. Empty ids → no query at all. Otherwise one query, the ids joined as an `idSet` against `issues`; query error → `fmt.Errorf("check issues exist: %w", err)`. Its answer is a found-set, the only thing the verdict reads. Walking the caller's own ids in the order given, the first one absent from that set → `storage.NotFoundError{Entity: "issue", ID: id}`, so a repeated id is still named once. The query reads existence only, so a soft-deleted or archived parent passes.
-- Parent clause: there is none. `selectedIssueIDs` (`internal/store/store.go`) resolves the parents through `childIDsOfParents`, which runs one `SELECT r.src_id FROM <idSet> parents JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, and folds the result into the id filter — intersecting it with `filter.IDs` when both are set. Only direct children match, and several parent ids union together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is the `storage.IssueOrdering` comparator over `sortKeys`, applied in Go after hydration (rank ascending, then id, when no `SortBy`).
+- Parent clause: there is none. `selectedIssueIDs` (`internal/store/store.go`) resolves the parents through `childIDsOfParents`, which runs one `SELECT /*+ JOIN_ORDER(parents, r) LOOKUP_JOIN(parents, r) */ r.src_id FROM <idSet> parents JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, and folds the result into the id filter — intersecting it with `filter.IDs` when both are set. Only direct children match, and several parent ids union together. The child rows go through the listing's other clauses, so `archived_at IS NULL` and `deleted_at IS NULL` apply unless `IncludeArchived`/`IncludeDeleted` is set, and ordering is the `storage.IssueOrdering` comparator over `sortKeys`, applied in Go after hydration (rank ascending, then id, when no `SortBy`).
 - `TestStoreListByParentDefaultsToRankOrder` — two children wired by `SetParent` list in rank order — `internal/store/store_test.go`.
 - `TestListByParentReturnsEpicChildrenWithDerivedLifecycle` — a sub-epic listed under its root carries container progress derived from its closed leaf (closed 1, total 1) — `internal/store/store_test.go`.
 

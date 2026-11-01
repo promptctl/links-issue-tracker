@@ -67,8 +67,10 @@ func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 // lock waits and LOCK holds: every acquisition that found its lock held, and
 // every write engine's hold of Dolt's LOCK with what it told the writers
 // behind it. A fourth puts there what a write that stood did to rank keys: each
-// respace, and the longest key written. Each key starts empty so an invocation
-// that met none says so, not nothing. [LAW:nothing-unseen] [LAW:single-enforcer]
+// respace, and the longest key written, and what reads paid to learn tree order:
+// the queries of parent edges they ran and the edges those returned. Each key
+// starts empty so an invocation that met none says so, not nothing.
+// [LAW:nothing-unseen] [LAW:single-enforcer]
 func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
 	event := telemetry.With(ctx, recorder)
 	telemetry.Append(event, "git.cancels")
@@ -77,6 +79,8 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	telemetry.Append(event, "lock.holds")
 	telemetry.Append(event, "rank.respaces")
 	telemetry.Max(event, "rank.longest_key", 0)
+	telemetry.Count(event, "rank.ancestry_levels", 0)
+	telemetry.Count(event, "rank.ancestry_links", 0)
 	ctx = store.WithLockObserver(event, store.LockObserver{
 		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
 		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
@@ -84,6 +88,10 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	ctx = store.WithRankObserver(ctx, store.RankObserver{
 		Wrote:    func(longestKey int) { telemetry.Max(event, "rank.longest_key", longestKey) },
 		Respaced: func(respace store.Respace) { telemetry.Append(event, "rank.respaces", rankRespaceValue(respace)) },
+		ReadParentEdges: func(links int) {
+			telemetry.Add(event, "rank.ancestry_levels", 1)
+			telemetry.Add(event, "rank.ancestry_links", links)
+		},
 	})
 	ctx = nbs.WithJournalWarningObserver(ctx, func(warning nbs.JournalWarning) {
 		telemetry.Append(event, "dolt.journal_warnings", journalWarningValue(warning))

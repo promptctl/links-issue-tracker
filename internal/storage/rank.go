@@ -243,6 +243,13 @@ func (a RankAncestry) Sort(issues []model.Issue) {
 	slices.SortFunc(issues, a.Compare)
 }
 
+// SortSiblings puts children of one parent in order. Siblings share a frame, so
+// they compare on their own keys and no ancestor's key is read: the empty
+// ancestry is tree order among them.
+func SortSiblings(issues []model.Issue) {
+	RankAncestry{}.Sort(issues)
+}
+
 // FrameRepresentatives maps each ancestor chain (self first, root last) onto
 // its representative in the chains' comparable frame. Rank meaning is
 // frame-local: an issue's rank is only ever compared against its frame-mates

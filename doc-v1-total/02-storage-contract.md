@@ -11,7 +11,7 @@ Dependency and vocabulary rules: engine → contract → model, never back; no t
 
 | Role | Methods |
 |---|---|
-| `IssueReader` | `GetIssue`, `GetIssueDetail`, `ListIssues`, `ListTopics`, `ListIssueIdentities`, `ListAllEvents`, `ListEvents`, `LocalIssueCount` |
+| `IssueReader` | `GetIssue`, `GetIssueDetail`, `GetIssueAdjacency`, `ListIssues`, `ListTopics`, `ListIssueIdentities`, `ListAllEvents`, `ListEvents`, `LocalIssueCount` |
 | `IssueWriter` | `CreateIssue`, `Apply`, `Purge` |
 | `CommentStore` | `AddComment`, `DeleteComment` |
 | `PlanReviewStore` | `AddPlanReview` |
@@ -102,7 +102,7 @@ Behaviors that define the reference semantics (each mirrored by Dolt unless note
 
 **Comments/labels/relations** (`memory/edges.go`): comment body required after trim; **adding a comment records no history event**. Labels are written only through `Apply`: adding a held label records nothing; removing an absent one is `NotFoundError`; a label a write did not add or remove keeps its row's authorship and timestamp. Relations: endpoints canonicalized per type; duplicate edge refused; `parent-child` is single-valued from the child, so `SetParent` replaces in one act; a parent-child edge onto a parent that is not an epic refused, through `SetParent` and `AddRelation` alike (`storage.RejectParentThatIsNotAContainer`); `RemoveRelation` of a leaf's last parent edge refused (`storage.RejectDetachingParentEdge`), judged after a missing edge is reported missing; `ClearParent` refuses a leaf (`storage.RejectDetachingALeaf`) before it looks for an edge, and answers a container with no parent with `RelationAbsentError`; self-parent and self-related refused; **`blocked-by` cycles are rejected** with a DFS reachability check (a rank order honoring every blocked-by edge exists exactly when there is no cycle). Bucketing (`BlockedBy`/`Blocks`/`Children`/`Parent`) is the single reading of the edge set; `related-to` counterparts appear only in `GetIssueDetail.Related`.
 
-**Detail assembly** (`memory/issues.go`): `GetIssueDetail` returns relations (`storage.RelationOrdering`), comments (`storage.CommentOrdering`), events (`created_at, id` order), plan reviews (`created_at` instant then id, `storage.PlanReviewOrdering` in `internal/storage/ordering.go`, each a copy with its own `Laws` slice, `clonePlanReviews` in `memory/plan_review.go`), children/blocked-by/blocks (rank order), siblings (parent's other children), related, and `RedirectTarget` hydrated from the issue's own close payload — never from the relations graph.
+**Detail assembly** (`memory/issues.go`): `GetIssueDetail` returns relations (`storage.RelationOrdering`), comments (`storage.CommentOrdering`), events (`created_at, id` order), plan reviews (`created_at` instant then id, `storage.PlanReviewOrdering` in `internal/storage/ordering.go`, each a copy with its own `Laws` slice, `clonePlanReviews` in `memory/plan_review.go`), children (sibling order), blocked-by/blocks (rank order), siblings (parent's other children, sibling order), related, and `RedirectTarget` hydrated from the issue's own close payload — never from the relations graph.
 
 **Epic visibility rule** (`memory/engine.go`): a live container derives state from its *live* children only — archiving a child removes it from the epic's progress. A container that is itself archived/deleted keeps its whole child set, so its reading freezes at what it was.
 

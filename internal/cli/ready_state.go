@@ -126,7 +126,7 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 }
 
 // fetchIssueRelations batch-loads the structural relations for every listed
-// issue in a fixed number of queries.
+// issue, at the cost GetRelationsByIDs states.
 // [LAW:single-enforcer] One pre-pass is the single source of per-row relation
 // data for the ready pipeline; both annotation and enrichment read from it.
 // [LAW:one-source-of-truth] Uses the same store accessor the epic view does, so
@@ -152,6 +152,23 @@ func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.I
 		}
 	}
 	return relations, nil
+}
+
+// issueRelationsOf reads one issue's relations. GetRelationsByIDs omits subjects
+// that don't exist; a caller naming one issue means it to resolve, so its
+// absence is a NotFound, not a zero-value render.
+// [LAW:no-defensive-null-guards] This fails loudly at the store boundary rather
+// than skipping silently.
+func issueRelationsOf(ctx context.Context, st storage.Store, id string) (storage.IssueRelations, error) {
+	relations, err := st.GetRelationsByIDs(ctx, []string{id})
+	if err != nil {
+		return storage.IssueRelations{}, err
+	}
+	rel, ok := relations[id]
+	if !ok {
+		return storage.IssueRelations{}, storage.NotFoundError{Entity: "issue", ID: id}
+	}
+	return rel, nil
 }
 
 // newBlockerAnnotator returns an annotator that checks open dependency blockers

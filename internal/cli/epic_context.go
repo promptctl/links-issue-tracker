@@ -167,17 +167,9 @@ func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatu
 // cross-epic edge collection, so there is one resolved source per issue rather
 // than a separate fetch per concern.
 func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []string, epicID, focusedChildID string) (EpicContext, error) {
-	epicRels, err := st.GetRelationsByIDs(ctx, []string{epicID})
+	epic, err := issueRelationsOf(ctx, st, epicID)
 	if err != nil {
 		return EpicContext{}, err
-	}
-	// GetRelationsByIDs omits subjects that don't exist; the epic is the subject
-	// and must resolve, so its absence is a NotFound, not a zero-value render.
-	// [LAW:no-defensive-null-guards] This fails loudly at the store boundary
-	// rather than skipping silently.
-	epic, ok := epicRels[epicID]
-	if !ok {
-		return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: epicID}
 	}
 	internal := epicMemberIDs(epic.Issue.ID, epic.Children)
 	// The children go through the SAME annotator set `lit next` and `lit backlog`
@@ -191,7 +183,7 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 	// The plan is never narrowed to a focus path — it is the epic's own child
 	// list, and a partial plan would still read as the whole one — so it asks
 	// for no focus walk at all.
-	annotated, err := annotateIssues(ctx, st, requiredFields, epic.Children, epicRels)
+	annotated, err := annotateIssues(ctx, st, requiredFields, epic.Children, map[string]storage.IssueRelations{epicID: epic})
 	if err != nil {
 		return EpicContext{}, err
 	}

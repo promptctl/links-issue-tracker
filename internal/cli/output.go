@@ -847,23 +847,23 @@ func liveIssues(issues []model.Issue) []model.Issue {
 // [LAW:one-source-of-truth] Reuses lit show's group renderer and its
 // now-unblocked-dependents derivation rather than minting a second
 // representation of the same graph.
-func printCloseAdjacency(w io.Writer, detail model.IssueDetail) error {
-	if err := printIssueGroup(w, "parent", optionalGroup(detail.Parent)); err != nil {
+func printCloseAdjacency(w io.Writer, adjacency storage.IssueAdjacency) error {
+	if err := printIssueGroup(w, "parent", optionalGroup(adjacency.Parent)); err != nil {
 		return err
 	}
-	if err := printIssueGroup(w, "siblings", liveIssues(detail.Siblings)); err != nil {
+	if err := printIssueGroup(w, "siblings", liveIssues(adjacency.Siblings)); err != nil {
 		return err
 	}
 	// Surface the redirect at the close moment too: closing as duplicate/
 	// superseded, the freshest fact is where the work went. Same store-shaped
-	// IssueDetail, same omit-when-empty group as lit show.
-	if err := printIssueGroup(w, "redirect", optionalGroup(detail.RedirectTarget)); err != nil {
+	// neighbours, same omit-when-empty group as lit show.
+	if err := printIssueGroup(w, "redirect", optionalGroup(adjacency.RedirectTarget)); err != nil {
 		return err
 	}
-	if err := printIssueGroup(w, "related", detail.Related); err != nil {
+	if err := printIssueGroup(w, "related", adjacency.Related); err != nil {
 		return err
 	}
-	if ids := openUnblockIDs(detail.Blocks); len(ids) > 0 {
+	if ids := openUnblockIDs(adjacency.Blocks); len(ids) > 0 {
 		if _, err := fmt.Fprintf(w, "\nunblocks: %s\n", strings.Join(ids, ", ")); err != nil {
 			return err
 		}

@@ -424,9 +424,9 @@ func followupLeaf() appLeaf {
 		if onID == "" || titleValue == "" {
 			return UsageError{Message: usage}
 		}
-		// The detail, not the bare issue: the follow-up's parent is the
+		// The relations, not the bare issue: the follow-up's parent is the
 		// followed-up ticket's parent, which only the hierarchy knows.
-		origin, err := ap.Store.GetIssueDetail(ctx, onID)
+		origin, err := issueRelationsOf(ctx, ap.Store, onID)
 		if err != nil {
 			return err
 		}
@@ -2130,11 +2130,11 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 		// (done and close both target Closed), not a re-enumerated action list here,
 		// so a future closing action inherits this block for free.
 		if statusAction, ok := action.(model.StatusAction); ok && statusAction.Target() == model.StateClosed {
-			detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+			adjacency, err := ap.Store.GetIssueAdjacency(ctx, issueID)
 			if err != nil {
 				return err
 			}
-			if err := printCloseAdjacency(inv.Stdout, detail); err != nil {
+			if err := printCloseAdjacency(inv.Stdout, adjacency); err != nil {
 				return err
 			}
 		}

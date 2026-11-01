@@ -397,9 +397,7 @@ func (e *Engine) LaneFamily(ctx context.Context, issueID string) (claims.Family,
 	if err != nil {
 		return claims.Family{}, err
 	}
-	// An empty ancestry is tree order among siblings, which compare on their
-	// own keys.
-	storage.RankAncestry{}.Sort(issues)
+	storage.SortSiblings(issues)
 	return claims.Family{Issues: issues, ParentByChild: parents, ParentTypes: parentTypes, Events: sortEvents(events)}, nil
 }
 
@@ -591,14 +589,14 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		}
 		*bucket = append(*bucket, issue)
 	}
-	ancestry.Sort(out.Children)
+	storage.SortSiblings(out.Children)
 	ancestry.Sort(out.BlockedBy)
 	ancestry.Sort(out.Blocks)
 	return out, nil
 }
 
 // relatedIssues returns the hydrated related-to counterparts of focalID. It is
-// GetIssueDetail's concern alone — no batch consumer wants peer links, which
+// GetIssueAdjacency's concern alone — no batch consumer wants peer links, which
 // is why they stay out of the shared IssueRelations shape.
 func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos map[string]int, ancestry storage.RankAncestry) ([]model.Issue, error) {
 	out := []model.Issue{}

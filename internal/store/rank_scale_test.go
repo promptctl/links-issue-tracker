@@ -128,8 +128,9 @@ type rankWatch struct {
 
 func (w *rankWatch) on(ctx context.Context) context.Context {
 	return WithRankObserver(ctx, RankObserver{
-		Wrote:    func(longestKey int) { w.wrote = append(w.wrote, longestKey) },
-		Respaced: func(r Respace) { w.respaces = append(w.respaces, r) },
+		Wrote:           func(longestKey int) { w.wrote = append(w.wrote, longestKey) },
+		Respaced:        func(r Respace) { w.respaces = append(w.respaces, r) },
+		ReadParentEdges: func(int) {},
 	})
 }
 
@@ -292,6 +293,8 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	seedRows(t, ctx, st, 0, 60, true)
 	frame, frameArgs := frameRowsQuery(storage.Frame(seededRow(0)))
+	climb, climbArg := rankClimbQuery([]string{seededRow(23), seededRow(53)})
+	children, childrenArg := childIDsQuery([]string{seededRow(0)})
 	for _, c := range []struct {
 		name, query string
 		args        []any
@@ -300,10 +303,27 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 		{"a cycle check's reach", blocksPrecedesQuery, []any{seededRow(23), seededRow(53)}},
 		{"a walk's parents", parentEdgesQuery("r.src_id = ?"), []any{seededRow(23)}},
 		{"a climb's epics", parentEdgesQuery("r.src_id = ? AND " + epicParentPredicate), []any{seededRow(23)}},
+		{"a level of tree order's climb", climb, []any{climbArg}},
+		{"a parent's children", children, []any{childrenArg, string(model.RelParentChild)}},
 	} {
 		plan := planOf(t, ctx, st, c.query, c.args...)
 		if !strings.Contains(plan, "LookupJoin") || strings.Contains(plan, "MergeJoin") {
 			t.Errorf("%s plans as\n%s\nwant a LookupJoin and no MergeJoin", c.name, plan)
+		}
+	}
+}
+
+// One issue's edges read from each endpoint as a point range on the index's
+// leading column. Anything wider there is a walk of the table.
+func TestOneIssuesEdgesPlanAsPointLookups(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	seedRows(t, ctx, st, 0, 60, true)
+	id := seededRow(23)
+	for _, from := range []string{relationsBySrc, relationsByDst} {
+		plan := planOf(t, ctx, st, `SELECT src_id, dst_id, type, created_at, created_by FROM `+from, id)
+		if !strings.Contains(plan, "filters: [{["+id+", "+id+"]") {
+			t.Errorf("%s plans as\n%s\nwant a point range on the leading column", from, plan)
 		}
 	}
 }

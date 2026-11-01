@@ -14,21 +14,24 @@ type Respace struct {
 }
 
 // RankObserver is told about the rank keys a write that stands wrote: the
-// longest key of each write, and each respace. The store reports these as
+// longest key of each write, and each respace. It is told too what tree order
+// cost a read: each query of parent edges, by the edges it returned, which is
+// one a level for a climb and one for the whole read. The store reports these as
 // values and never records them itself, as with LockObserver.
 // [LAW:effects-at-boundaries]
 type RankObserver struct {
-	Wrote    func(longestKey int)
-	Respaced func(Respace)
+	Wrote           func(longestKey int)
+	Respaced        func(Respace)
+	ReadParentEdges func(links int)
 }
 
 type rankObserverKey struct{}
 
-// WithRankObserver returns ctx carrying observer. Both funcs must be set: a nil
+// WithRankObserver returns ctx carrying observer. Every func must be set: a nil
 // one panics here, where it was installed, rather than inside a write.
 func WithRankObserver(ctx context.Context, observer RankObserver) context.Context {
-	if observer.Wrote == nil || observer.Respaced == nil {
-		panic("store.WithRankObserver: both Wrote and Respaced must be set")
+	if observer.Wrote == nil || observer.Respaced == nil || observer.ReadParentEdges == nil {
+		panic("store.WithRankObserver: Wrote, Respaced and ReadParentEdges must all be set")
 	}
 	return context.WithValue(ctx, rankObserverKey{}, observer)
 }
@@ -39,7 +42,7 @@ func rankObserverFrom(ctx context.Context) RankObserver {
 	if observer, ok := ctx.Value(rankObserverKey{}).(RankObserver); ok {
 		return observer
 	}
-	return RankObserver{Wrote: func(int) {}, Respaced: func(Respace) {}}
+	return RankObserver{Wrote: func(int) {}, Respaced: func(Respace) {}, ReadParentEdges: func(int) {}}
 }
 
 func longestKey(keys []string) int {

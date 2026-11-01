@@ -61,31 +61,130 @@ func frameRowsQuery(f storage.Frame) (string, []any) {
 		AND issues.deleted_at IS NULL AND issues.item_rank != '' AND %s = ?`, frameColumn), []any{string(f), string(f)}
 }
 
-// loadRankAncestry reads every framing edge in the workspace, with the key its
-// parent holds, for a listing to order by tree order. Which edges frame is
-// frameColumn's rule — a parent that is not deleted — asked of every issue at
+// rankLinksQuery reads the framing edges of from, a FROM clause that binds
+// relations as r, with the key each parent holds. Which edges frame is
+// frameColumn's rule — a parent that is not deleted — asked of every edge at
 // once instead of one. [LAW:one-source-of-truth]
-func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, error) {
-	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r
+func rankLinksQuery(hint, from string) string {
+	return `SELECT ` + hint + ` r.src_id, r.dst_id, p.item_rank FROM ` + from + `
 		JOIN issues p ON p.id = r.dst_id
-		WHERE r.type = 'parent-child' AND p.deleted_at IS NULL
-		ORDER BY r.src_id, r.dst_id`)
+		WHERE r.type = 'parent-child' AND p.deleted_at IS NULL`
+}
+
+func queryRankLinks(ctx context.Context, q rowQueryer, query string, args ...any) ([]storage.ParentLink, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
-		return storage.RankAncestry{}, fmt.Errorf("query rank ancestry: %w", err)
+		return nil, fmt.Errorf("query rank ancestry: %w", err)
 	}
 	defer rows.Close()
 	var links []storage.ParentLink
 	for rows.Next() {
 		var link storage.ParentLink
 		if err := rows.Scan(&link.ChildID, &link.ParentID, &link.ParentRank); err != nil {
-			return storage.RankAncestry{}, fmt.Errorf("scan rank ancestry: %w", err)
+			return nil, fmt.Errorf("scan rank ancestry: %w", err)
 		}
 		links = append(links, link)
 	}
 	if err := rows.Err(); err != nil {
-		return storage.RankAncestry{}, fmt.Errorf("rank ancestry rows: %w", err)
+		return nil, fmt.Errorf("rank ancestry rows: %w", err)
+	}
+	return links, nil
+}
+
+// loadRankAncestry reads every framing edge in the workspace, for a reader that
+// orders or judges the whole hierarchy. A caller that knows its rows pays for
+// them instead, through sortInTreeOrder or listingOrdering.
+func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, error) {
+	links, err := queryRankLinks(ctx, q, rankLinksQuery("", "relations r"))
+	if err != nil {
+		return storage.RankAncestry{}, err
+	}
+	rankObserverFrom(ctx).ReadParentEdges(len(links))
+	return storage.NewRankAncestry(links), nil
+}
+
+// rankClimbQuery reads the framing edges of frontier. The hint keeps it a run of
+// point lookups: unhinted the planner can merge-join relations with issues,
+// which costs the store's size and looks fine on a small store.
+func rankClimbQuery(frontier []string) (string, any) {
+	set, arg := newIDSet(frontier).rows("frontier")
+	return rankLinksQuery(`/*+ JOIN_ORDER(frontier, r, p) LOOKUP_JOIN(frontier, r) LOOKUP_JOIN(r, p) */`, set+` JOIN relations r ON r.src_id = frontier.id`), arg
+}
+
+// loadRankAncestryAbove reads the framing edges above ids, one level of parents
+// a query, at about 6us an edge against the whole read's 1us a row. reached
+// holds ids from the start, so a loop restored data carries ends the climb and
+// no edge is read twice, which NewRankAncestry would call a second parent.
+//
+// What comes back places ids and what contains them and nothing else: any other
+// issue reads as top level, and its Conflicts are only what the climb met. So it
+// stays inside the functions below, which are handed the rows it covers.
+func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (storage.RankAncestry, error) {
+	reached := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		reached[id] = true
+	}
+	observer := rankObserverFrom(ctx)
+	var links []storage.ParentLink
+	for frontier := ids; len(frontier) > 0; {
+		query, arg := rankClimbQuery(frontier)
+		level, err := queryRankLinks(ctx, q, query, arg)
+		if err != nil {
+			return storage.RankAncestry{}, err
+		}
+		observer.ReadParentEdges(len(level))
+		links = append(links, level...)
+		frontier = nil
+		for _, link := range level {
+			if !reached[link.ParentID] {
+				reached[link.ParentID] = true
+				frontier = append(frontier, link.ParentID)
+			}
+		}
 	}
 	return storage.NewRankAncestry(links), nil
+}
+
+// sortInTreeOrder puts each group in tree order, reading the ancestry of the
+// rows that need one. A group of one has nothing to order, so the cost is the
+// issues with two or more neighbours on one side, and no query at all when none
+// has.
+func sortInTreeOrder(ctx context.Context, q rowQueryer, groups ...[]model.Issue) error {
+	var seed []string
+	for _, group := range groups {
+		if len(group) > 1 {
+			for _, issue := range group {
+				seed = append(seed, issue.ID)
+			}
+		}
+	}
+	ancestry, err := loadRankAncestryAbove(ctx, q, seed)
+	if err != nil {
+		return err
+	}
+	for _, group := range groups {
+		ancestry.Sort(group)
+	}
+	return nil
+}
+
+// listingOrdering is the comparison a listing sorts by, for the rows selected
+// names. A listing not restricted to known rows has none to climb from until
+// its query has run, and the listing that reaches most of the store pays less
+// for the whole read than for a climb from every row, so it reads every framing
+// edge.
+func (s *Store) listingOrdering(ctx context.Context, specs []storage.SortSpec, selected []string, restricted bool) (func(a, b model.Issue) int, error) {
+	var ancestry storage.RankAncestry
+	var err error
+	if restricted {
+		ancestry, err = loadRankAncestryAbove(ctx, s.db, selected)
+	} else {
+		ancestry, err = loadRankAncestry(ctx, s.db)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return storage.IssueOrdering(specs, ancestry)
 }
 
 // rankEdge is one end of a frame's keyspace as the query and the key algebra

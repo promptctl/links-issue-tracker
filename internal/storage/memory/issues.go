@@ -285,20 +285,48 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	issue, err := e.getIssue(id)
+	adjacency, err := e.adjacency(id)
 	if err != nil {
 		return model.IssueDetail{}, err
+	}
+	pos := e.positions()
+	followUps := []model.Issue{}
+	for _, rec := range e.issues {
+		if rec.followsUp != id {
+			continue
+		}
+		hydrated, err := e.hydrate(rec, pos)
+		if err != nil {
+			return model.IssueDetail{}, err
+		}
+		followUps = append(followUps, hydrated)
+	}
+	e.rankAncestry(pos).Sort(followUps)
+	return adjacency.Detail(e.commentsFor(id), e.eventsFor(id), e.planReviewsFor(id), followUps), nil
+}
+
+func (e *Engine) GetIssueAdjacency(ctx context.Context, id string) (storage.IssueAdjacency, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.adjacency(id)
+}
+
+func (e *Engine) adjacency(id string) (storage.IssueAdjacency, error) {
+	issue, err := e.getIssue(id)
+	if err != nil {
+		return storage.IssueAdjacency{}, err
 	}
 	pos := e.positions()
 	ancestry := e.rankAncestry(pos)
 	relations := e.incidentRelations(id)
 	structural, err := e.bucketRelations(id, relations, pos, ancestry)
 	if err != nil {
-		return model.IssueDetail{}, err
+		return storage.IssueAdjacency{}, err
 	}
+	structural.Issue = issue
 	related, err := e.relatedIssues(id, relations, pos, ancestry)
 	if err != nil {
-		return model.IssueDetail{}, err
+		return storage.IssueAdjacency{}, err
 	}
 	// Siblings are the parent's other children — derived from the same
 	// rank-ordered child set every other consumer reads, minus self, so an
@@ -307,7 +335,7 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 	if structural.Parent != nil {
 		children, err := e.hydrateAll(e.childRecords(structural.Parent.ID, pos), pos)
 		if err != nil {
-			return model.IssueDetail{}, err
+			return storage.IssueAdjacency{}, err
 		}
 		for _, child := range children {
 			if child.ID != id {
@@ -323,49 +351,28 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 		if rec, ok := e.issues[*target]; ok {
 			hydrated, err := e.hydrate(rec, pos)
 			if err != nil {
-				return model.IssueDetail{}, err
+				return storage.IssueAdjacency{}, err
 			}
 			redirectTarget = &hydrated
 		}
 	}
-	// Both readings of follows_up hydrate from the record, never from the
-	// graph; a followed-up ticket whose record is gone hydrates as absent.
-	// [LAW:one-source-of-truth]
+	// The followed-up ticket hydrates from the record, never from the graph;
+	// one whose record is gone hydrates as absent. [LAW:one-source-of-truth]
 	var followsUp *model.Issue
 	if rec, ok := e.issues[issue.FollowsUp]; ok {
 		hydrated, err := e.hydrate(rec, pos)
 		if err != nil {
-			return model.IssueDetail{}, err
+			return storage.IssueAdjacency{}, err
 		}
 		followsUp = &hydrated
 	}
-	followUps := []model.Issue{}
-	for _, rec := range e.issues {
-		if rec.followsUp != id {
-			continue
-		}
-		hydrated, err := e.hydrate(rec, pos)
-		if err != nil {
-			return model.IssueDetail{}, err
-		}
-		followUps = append(followUps, hydrated)
-	}
-	ancestry.Sort(followUps)
-	return model.IssueDetail{
-		Issue:          issue,
+	return storage.IssueAdjacency{
+		IssueRelations: structural,
 		Relations:      relations,
-		Comments:       e.commentsFor(id),
-		Events:         e.eventsFor(id),
-		PlanReviews:    e.planReviewsFor(id),
-		Children:       structural.Children,
 		Siblings:       siblings,
-		BlockedBy:      structural.BlockedBy,
-		Blocks:         structural.Blocks,
-		Parent:         structural.Parent,
 		Related:        related,
 		RedirectTarget: redirectTarget,
 		FollowsUp:      followsUp,
-		FollowUps:      followUps,
 	}, nil
 }
 

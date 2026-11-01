@@ -20,11 +20,19 @@ type IssueReader interface {
 	GetIssue(ctx context.Context, id string) (model.Issue, error)
 
 	// GetIssueDetail returns the issue together with its comments, history, and
-	// structural edges — the single-issue view, paid for in full. Callers that
-	// need only the edges for many issues use GetRelationsByIDs instead. Its
-	// relations come in [RelationOrdering] and its comments in
+	// structural edges — the single-issue view, paid for in full, which includes
+	// reading the issues table whole for its FollowUps, about 2.3us a row, since
+	// no index holds follows_up.
+	// Callers that need only the edges for many issues use GetRelationsByIDs
+	// instead, and one that needs the neighbours of one uses GetIssueAdjacency.
+	// Its relations come in [RelationOrdering] and its comments in
 	// [CommentOrdering].
 	GetIssueDetail(ctx context.Context, id string) (model.IssueDetail, error)
+
+	// GetIssueAdjacency returns what GetIssueDetail holds that the issue's own
+	// row and edges name, at the cost of that neighbourhood and not the store's
+	// size. A missing id is NotFoundError.
+	GetIssueAdjacency(ctx context.Context, id string) (IssueAdjacency, error)
 
 	// ListIssues returns the issues the filter selects, ordered by SortBy and
 	// then — always, as the last key — by id ascending. With no SortBy the
