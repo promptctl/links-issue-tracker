@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // Parallelism convention for this package: a test calls t.Parallel() exactly
@@ -18,6 +20,20 @@ import (
 // parameters instead of reading process globals.
 // [LAW:no-shared-mutable-globals] the process cwd/env is exactly such a global.
 
+// suiteStallDeadline is the deadline this suite runs the mirror's hold and the
+// automatic receive under, in this process and in the detached workers it
+// spawns. Both shipped figures sit close enough to the local work these tests
+// really do that a busy machine reaches them: the hold bounds a clone, and a
+// receive that follows a re-root measures about a third of its deadline. So a
+// test with no interest in either would take its verdict from the load.
+// [LAW:no-ambient-temporal-coupling] The push deadline stays as shipped: a whole
+// mirror cycle against these tests' file remotes measures about a twelfth of it.
+// A minute is still a stall detector: over ten times that work, and far below
+// go test's timeout, so a hang ends inside the test that met it and the
+// package's other verdicts stand. A test about either deadline installs its own
+// figure.
+const suiteStallDeadline = time.Minute
+
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
 // would spawn the on-change push mirror (via os.Executable(), which under
@@ -26,6 +42,7 @@ import (
 // by tests that run the receive worker's body in-process (receiveNow), so
 // disabling it package-wide loses no coverage.
 func TestMain(m *testing.M) {
+	store.MirrorHoldBudget, store.ReceiveDeadline = suiteStallDeadline, suiteStallDeadline
 	// A detached worker spawns os.Executable(), which here is this test binary.
 	// Run as that worker rather than as a second copy of the whole suite; the
 	// suite's tests call the receive body directly and never mean to spawn one.

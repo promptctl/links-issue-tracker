@@ -616,10 +616,10 @@ func assertPushEndedWithinItsCeiling(t *testing.T, wedgedAt, cycleEnded time.Tim
 // than "40s", would otherwise truncate the framing away silently and leave the
 // banner saying only that a budget was exceeded.
 //
-// The duration cases are the enumeration this needs: the production values,
-// and a value in minutes, which Go renders as "1h40m0s" — more than twice the
-// runes. Not parallel: it mutates store.MirrorPushDeadline and
-// store.MirrorHoldBudget.
+// The duration cases are the enumeration this needs: a value as short as the
+// shipped "1s", and a value in minutes, which Go renders as "1h40m0s" — more
+// than twice the runes of the shipped "40s". Not parallel: it mutates
+// store.MirrorPushDeadline and store.MirrorHoldBudget.
 func TestDeadlineCutFramingSurvivesTheBanner(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -632,7 +632,7 @@ func TestDeadlineCutFramingSurvivesTheBanner(t *testing.T) {
 		{"hold budget, record step", &store.MirrorHoldBudget, func() error { return holdBudgetCutExplanation("recording the pushed head") }, "before blaming the disk"},
 	}
 	for _, tc := range cases {
-		for _, value := range []time.Duration{*tc.knob, 100 * time.Minute} {
+		for _, value := range []time.Duration{time.Second, 100 * time.Minute} {
 			func() {
 				restore := *tc.knob
 				*tc.knob = value

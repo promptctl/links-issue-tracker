@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -73,6 +74,11 @@ func buildStoreTemplate(dir string) error {
 }
 
 func TestMain(m *testing.M) {
+	// These deadlines bound local holds here, the work a busy machine slows, so
+	// a test with no interest in them would take its verdict from the load. A
+	// minute still cuts a hung hold inside the test that met it. A test about a
+	// deadline installs its own figure. [LAW:no-ambient-temporal-coupling]
+	MirrorHoldBudget, ReceiveDeadline = time.Minute, time.Minute
 	os.Exit(dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate))
 }
 
