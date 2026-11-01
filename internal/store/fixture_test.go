@@ -74,12 +74,11 @@ func buildStoreTemplate(dir string) error {
 }
 
 func TestMain(m *testing.M) {
-	// A hold on a local store is the work the budget is sized against, so a
-	// busy machine reaches the shipped figure, and a test with no interest in
-	// the budget would take its verdict from the load. A minute still fails a
-	// hung hold in its own test. A test about the budget installs its own
-	// figure. [LAW:no-ambient-temporal-coupling]
-	MirrorHoldBudget = time.Minute
+	// These deadlines bound local holds here, the work a busy machine slows, so
+	// a test with no interest in them would take its verdict from the load. A
+	// minute still cuts a hung hold inside the test that met it. A test about a
+	// deadline installs its own figure. [LAW:no-ambient-temporal-coupling]
+	MirrorHoldBudget, ReceiveDeadline = time.Minute, time.Minute
 	os.Exit(dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate))
 }
 
