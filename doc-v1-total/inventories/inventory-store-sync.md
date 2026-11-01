@@ -1638,9 +1638,9 @@ sha256 `285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e`.
 
 ### 12.6g `00012_is_top_level_id.sql`
 
-sha256 `8d84c903101c1d49dc5a884f0ff445416aa086296b5f19dbf7e9a92daeeb99b1`.
+sha256 `d3da761e9fd183b55b98a0acc0acce02861112e2fe5eb52305322a4b49f12f84`.
 
-**Up** — two statements, both bare: `ALTER TABLE issues ADD COLUMN is_top_level_id TINYINT AS (IF(id LIKE '%.%', 0, 1)) STORED;` and `CREATE INDEX idx_issues_is_top_level_id ON issues (is_top_level_id);`. Declares no minimum writer schema.
+**Up** — two statements, both bare: `ALTER TABLE issues ADD COLUMN is_top_level_id TINYINT AS (IF(id LIKE '%.%', 0, 1)) STORED NOT NULL;` and `CREATE INDEX idx_issues_is_top_level_id ON issues (is_top_level_id);`. Declares no minimum writer schema. Test: `TestIsTopLevelIDMigrationBackfill` (`internal/store/migration_is_top_level_id_backfill_test.go`) runs Up over rows seeded at v11 and compares the indexed count with the count by the id's shape.
 
 **Down** — `DROP INDEX idx_issues_is_top_level_id ON issues;` then `ALTER TABLE issues DROP COLUMN is_top_level_id;` (no `IF EXISTS`). No data is lost: the column is generated from `id`.
 
@@ -1716,7 +1716,7 @@ Each runs as a subtest; mismatch is `t.Errorf("hasDownSection() = %v, want %v\nb
 
 Types: `pinnedMigration{file, sha256 string}`; `migrationFile{version int64; name, sha256 string}`; `reuseKind int` with, in iota order, `kindContentChanged`=0 (a pinned version's bytes no longer match its pin), `kindRenamed`=1 (content matches, filename changed), `kindUnpinned`=2 (an on-disk non-baseline version has no pin), `kindDeleted`=3 (a pinned version is gone from disk); `reuseFinding{kind; version int64; pinned pinnedMigration; onDisk migrationFile}`.
 
-The literal pins, `pinnedVersionContent` — all ten verified against the on-disk sha256s:
+The literal pins, `pinnedVersionContent` — all eleven verified against the on-disk sha256s:
 ```go
 2: {file: "00002_add_lane.sql",              sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
 3: {file: "00003_add_resolution.sql",        sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
@@ -1728,7 +1728,7 @@ The literal pins, `pinnedVersionContent` — all ten verified against the on-dis
 9: {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
 10: {file: "00010_history_can_be_re_rooted.sql", sha256: "1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec"},
 11: {file: "00011_plans_and_plan_reviews.sql", sha256: "285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e"},
-12: {file: "00012_is_top_level_id.sql", sha256: "8d84c903101c1d49dc5a884f0ff445416aa086296b5f19dbf7e9a92daeeb99b1"},
+12: {file: "00012_is_top_level_id.sql", sha256: "d3da761e9fd183b55b98a0acc0acce02861112e2fe5eb52305322a4b49f12f84"},
 ```
 Version 1 is deliberately absent — `baseline_frozen_test.go` is its content enforcer.
 

@@ -1194,7 +1194,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issue_events DROP COLUMN stream_id;", Src: "internal/store/migrations/00005_add_event_attribution.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issue_events DROP COLUMN workspace_id;", Src: "internal/store/migrations/00005_add_event_attribution.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issues ADD COLUMN follows_up VARCHAR(191) NULL;", Src: "internal/store/migrations/00006_add_follows_up.sql"},
-	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issues ADD COLUMN is_top_level_id TINYINT AS (IF(id LIKE '%.%', 0, 1)) STORED;", Src: "internal/store/migrations/00012_is_top_level_id.sql"},
+	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issues ADD COLUMN is_top_level_id TINYINT AS (IF(id LIKE '%.%', 0, 1)) STORED NOT NULL;", Src: "internal/store/migrations/00012_is_top_level_id.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issues ADD COLUMN lane text NOT NULL DEFAULT '';", Src: "internal/store/migrations/00002_add_lane.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issues ADD COLUMN redirect_target VARCHAR(191) NULL;", Src: "internal/store/migrations/00004_add_redirect_target.sql"},
 	{Doc: "doc-v1-total/inventories/inventory-store-sync.md", Text: "ALTER TABLE issues ADD COLUMN resolution VARCHAR(32) NULL;", Src: "internal/store/migrations/00003_add_resolution.sql"},

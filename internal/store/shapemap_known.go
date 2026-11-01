@@ -64,9 +64,11 @@ func mapTable(table RawTable) (TableMapping, bool) {
 
 // simpleEmitter builds the one Always emitter a recognized domain table needs:
 // each column maps onto its domain field with that field's canonical transform.
-// A column with no target drops when classifyDrop can say why. Any other
-// declines the whole dump — a domain table carrying a column outside the
-// vocabulary is the novel-shape case the operator path owns.
+// A derived column drops, since it holds nothing a rebuilt store lacks. Any other
+// column with no target declines the whole dump — a domain table carrying a
+// column outside the vocabulary is the novel-shape case the operator path owns.
+// That covers a column a migration removed: a dump older than the migration
+// still holds its values, and a rebuild from the dump never runs the migration.
 func simpleEmitter(table RawTable, rules map[string]TargetKey) (TableMapping, bool) {
 	fields := map[string]FieldSource{}
 	drops := map[string]Dropped{}
@@ -74,10 +76,10 @@ func simpleEmitter(table RawTable, rules map[string]TargetKey) (TableMapping, bo
 	for _, col := range table.Columns {
 		target, known := rules[col]
 		if !known {
-			provenance, reason := classifyDrop(table.Name, col)
-			if provenance != DropIntended {
+			if _, derived := derivedColumns[ColumnRef{Table: table.Name, Column: col}]; !derived {
 				return TableMapping{}, false
 			}
+			provenance, reason := classifyDrop(table.Name, col)
 			drops[col] = Dropped{Provenance: provenance, Reason: reason}
 			continue
 		}

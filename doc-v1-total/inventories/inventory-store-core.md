@@ -1051,7 +1051,7 @@ CREATE TABLE `issues` (
   `redirect_target` varchar(191),
   `follows_up` varchar(191),
   `work_plan` text NOT NULL DEFAULT '',
-  `is_top_level_id` tinyint GENERATED ALWAYS AS (if(`id` LIKE '%.%',0,1)) STORED,
+  `is_top_level_id` tinyint NOT NULL GENERATED ALWAYS AS (if(`id` LIKE '%.%',0,1)) STORED,
   PRIMARY KEY (`id`),
   KEY `idx_issues_is_top_level_id` (`is_top_level_id`),
   KEY `idx_issues_rank` (`item_rank`(191)),
@@ -1088,7 +1088,7 @@ Column-by-column provenance and declared form:
 | `redirect_target` | `VARCHAR(191)` | NULL | none | `00004_add_redirect_target.sql` |
 | `follows_up` | `VARCHAR(191)` | NULL | none | `00006_add_follows_up.sql` |
 | `work_plan` | `text` | NOT NULL | `''` | `00011_plans_and_plan_reviews.sql` |
-| `is_top_level_id` | `tinyint`, STORED, generated from `id` | NULL | generated | `00012_is_top_level_id.sql` |
+| `is_top_level_id` | `tinyint`, STORED, generated from `id` | NOT NULL | generated | `00012_is_top_level_id.sql` |
 
 - PRIMARY KEY: `(id)` — declared inline as `PRIMARY KEY` on the column (`00001_baseline.sql`).
 - No UNIQUE constraints.
@@ -2133,7 +2133,7 @@ On `fs.ReadDir` or `ReadFile` failure, the package `panic`s: `"scan migration dr
 4. Else `simpleEmitter(table, rules)`.
 
 `simpleEmitter(table, rules)` — shapemap_known.go:
-- Iterates `table.Columns` in order. A column not in `rules` goes to `classifyDrop`: `DropIntended` records it in `Drops` with its reason and moves on; anything else returns `(TableMapping{}, false)` — the whole table (and via DeterministicMap, the whole dump) declines.
+- Iterates `table.Columns` in order. A column not in `rules` must be in `derivedColumns`: `classifyDrop` then gives the `Dropped` recorded in `Drops`, and the loop moves on. Any other returns `(TableMapping{}, false)` — the whole table (and via DeterministicMap, the whole dump) declines. That covers a column in `migrationDroppedCols`: a dump older than the migration still holds its values, and a rebuild from the dump never runs it.
 - `tf := targetRegistry[target]`; `coll = tf.coll` (reassigned per column — last column wins, but all rules for one table point at one collection); `fields[tf.field] = FromColumn{Column: col, Transform: tf.canonical}`.
 - Returns one `TableMapping{Table: table.Name, Emitters: []Emitter{{Collection: coll, When: Always{}, Fields: fields}}, Drops: drops}`.
 - Two source columns aliasing the same target field (e.g. `prompt` and `agent_prompt`) collapse into one map entry; the loser column ends up referenced by nobody and Validate then fails on totality — the decline path pinned by `TestRejectsAmbiguousAlias` (shapemap_test.go).
@@ -2492,6 +2492,7 @@ Note `aheadColumnMapping()` uses `identity` on `issue_events.action/reason/actor
 - `TestDeterministicMapDeclinesThinRequiredTargets`: declines `issues` missing `id`/`title` (columns `description,status,priority,issue_type,closed_at,created_at,updated_at`) and `issue_events` missing `reason`/`actor` (columns `id,issue_id,action,created_at`).
 - `TestValidateRejectsRowArityMismatch`: 9 columns, an 8-cell row → error contains `cells, want`.
 - `TestClassifyDropDistinguishesProvenance`: `classifyDrop("goose_db_version","version_id")` → `DropIntended` with a non-empty reason; `classifyDrop("issues","a_column_no_migration_ever_made")` → `DropUnexplained`.
+- `TestDeterministicMapDeclinesAColumnAMigrationRemoved`: with `issues.moved_by_a_migration` in `migrationDroppedCols`, a complete `issues` dump declines; the same dump carrying `is_top_level_id` instead maps, and records it as `DropIntended`.
 - `TestParseDroppedColumnsReadsMigrationHistory`: from ``"ALTER TABLE issues DROP COLUMN legacy_field;\nALTER TABLE `relations` DROP COLUMN IF EXISTS `old_col`;\nALTER TABLE issues DROP COLUMN a, DROP COLUMN b;"`` the results must include `{issues,legacy_field}`, `{relations,old_col}`, `{issues,a}`, `{issues,b}`.
 - `TestGooseUpSectionExcludesDownDrops`: an Up-`ADD`/Down-`DROP` migration yields zero refs; an Up-`DROP legacy`/Down-`ADD` migration yields exactly `[{issues, legacy}]`.
 - `TestDeterministicMapCleanAhead`: a real v1 workspace (epic + child task + solo task, one comment, one label, one `Start` transition) is dumped with `DumpRaw`, mapped, validated, applied, and `ReplaceFromExport`ed into a fresh store; `Doctor` must report `IntegrityCheck == "ok"` with zero errors (`mustClean`, 289-294), every original issue id must survive, and the epic's status must round-trip as `""` (NULL), i.e. `epic.StatusValue() == ""`. The solo task carries lane `solo`, plan `"solo plan"`, and one `fail` review of plan version 1 citing `one-source-of-truth`; after map+apply and again after the rebuild, the solo issue keeps its lane and plan, and the export holds exactly that review, which `Judges("solo plan")`.

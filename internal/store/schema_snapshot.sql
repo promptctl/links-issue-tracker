@@ -69,7 +69,7 @@ CREATE TABLE `issues` (
   `redirect_target` varchar(191),
   `follows_up` varchar(191),
   `work_plan` text NOT NULL DEFAULT '',
-  `is_top_level_id` tinyint GENERATED ALWAYS AS (if(`id` LIKE '%.%',0,1)) STORED,
+  `is_top_level_id` tinyint NOT NULL GENERATED ALWAYS AS (if(`id` LIKE '%.%',0,1)) STORED,
   PRIMARY KEY (`id`),
   KEY `idx_issues_is_top_level_id` (`is_top_level_id`),
   KEY `idx_issues_rank` (`item_rank`(191)),

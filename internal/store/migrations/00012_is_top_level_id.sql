@@ -7,7 +7,7 @@
 -- engine derives it from id and no writer holds it. The index lets a create size
 -- its id without scanning issues. STORED, because a VIRTUAL column makes every
 -- plain scan of issues compute it.
-ALTER TABLE issues ADD COLUMN is_top_level_id TINYINT AS (IF(id LIKE '%.%', 0, 1)) STORED;
+ALTER TABLE issues ADD COLUMN is_top_level_id TINYINT AS (IF(id LIKE '%.%', 0, 1)) STORED NOT NULL;
 -- +goose StatementEnd
 -- +goose StatementBegin
 CREATE INDEX idx_issues_is_top_level_id ON issues (is_top_level_id);
