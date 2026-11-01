@@ -22,8 +22,9 @@ const Rows = 2_800
 const (
 	// measuredCompactedBytes is the design-size store's compacted bytes. It is
 	// a generated store's, whose rank keys are short. A store written before
-	// keys stopped growing keeps the long ones, which only a respace at a
-	// crowded spot rewrites, and costs more per row than this.
+	// keys stopped growing keeps each long key until a re-rank or a respace
+	// replaces it, so it costs more per row than this and the ceiling holds
+	// fewer of its rows.
 	measuredCompactedBytes int64 = 114_610_000
 	// measuredCommitBytes is the design-size store's bytes/commit. It sits 7-20%
 	// over the 2026-11-01 runs, which fell with no cause found, so a re-run
