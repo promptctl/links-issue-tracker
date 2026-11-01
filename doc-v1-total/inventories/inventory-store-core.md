@@ -984,7 +984,7 @@ There are exactly four producers of DDL that reaches a live workspace:
 | Producer | File | Cited at |
 |---|---|---|
 | goose baseline migration (v1) | `internal/store/migrations/00001_baseline.sql` | `internal/store/migrations/00001_baseline.sql` |
-| goose numbered migrations v2–v11 | `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql` | `internal/store/migrations/00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql` |
+| goose numbered migrations v2–v12 | `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`, `00012_is_top_level_id.sql` | `internal/store/migrations/00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`, `00012_is_top_level_id.sql` |
 | pre-goose reconcile (`reconcileToBaseline`) | `internal/store/schema_reconcile.go` | `internal/store/schema_reconcile.go` |
 | quarantine bootstrap (`ensureQuarantineTable`) | `internal/store/migration_runner.go` | `internal/store/migration_runner.go` |
 
@@ -1001,11 +1001,11 @@ Registry constants:
 - Baseline version is `1` (`internal/store/migrations/bounds.go`).
 - HEAD version is derived at runtime as the max numeric filename prefix in the
   embedded registry (`internal/store/migrations/bounds.go`); with the
-  eleven files present, HEAD = 11.
+  twelve files present, HEAD = 12.
 
 ---
 
-## 2. THE CONVERGED SCHEMA (v1 + v2..v11), table by table
+## 2. THE CONVERGED SCHEMA (v1 + v2..v12), table by table
 
 The authoritative post-migration shape is the byte-compared golden file
 `internal/store/schema_snapshot.sql`, which is the verbatim
@@ -1051,7 +1051,9 @@ CREATE TABLE `issues` (
   `redirect_target` varchar(191),
   `follows_up` varchar(191),
   `work_plan` text NOT NULL DEFAULT '',
+  `is_top_level_id` tinyint NOT NULL GENERATED ALWAYS AS (if(`id` LIKE '%.%',0,1)) STORED,
   PRIMARY KEY (`id`),
+  KEY `idx_issues_is_top_level_id` (`is_top_level_id`),
   KEY `idx_issues_rank` (`item_rank`(191)),
   KEY `idx_issues_status_priority` (`status`,`priority`,`updated_at`),
   CONSTRAINT `issues_status_check` CHECK ((((`issue_type` IN ('epic')) AND `status` IS NULL) OR (((NOT((`issue_type` IN ('epic')))) AND (NOT(`status` IS NULL))) AND (`status` IN ('open', 'in_progress', 'closed'))))),
@@ -1086,12 +1088,14 @@ Column-by-column provenance and declared form:
 | `redirect_target` | `VARCHAR(191)` | NULL | none | `00004_add_redirect_target.sql` |
 | `follows_up` | `VARCHAR(191)` | NULL | none | `00006_add_follows_up.sql` |
 | `work_plan` | `text` | NOT NULL | `''` | `00011_plans_and_plan_reviews.sql` |
+| `is_top_level_id` | `tinyint`, STORED, generated from `id` | NOT NULL | generated | `00012_is_top_level_id.sql` |
 
 - PRIMARY KEY: `(id)` — declared inline as `PRIMARY KEY` on the column (`00001_baseline.sql`).
 - No UNIQUE constraints.
 - Secondary indexes:
   - `idx_issues_status_priority (status, priority, updated_at)` — `00001_baseline.sql`, also created by reconcile at `internal/store/schema_reconcile.go`.
   - `idx_issues_rank (item_rank(191))` — prefix index of length 191 on a `TEXT` column — `00001_baseline.sql`, also `internal/store/schema_reconcile.go`.
+  - `idx_issues_is_top_level_id (is_top_level_id)` — `00012_is_top_level_id.sql`.
 - No FOREIGN KEYs on `issues`. `redirect_target` deliberately has **no** FK to `issues(id)` (`00004_add_redirect_target.sql`), and neither has `follows_up` (`00006_add_follows_up.sql`).
 - CHECK constraints (five, all explicitly named so `SHOW CREATE TABLE` is deterministic — `00001_baseline.sql`):
   - `issues_status_check` — `00001_baseline.sql`; the identical clause is generated in Go at `internal/store/schema_reconcile.go` and installed by `ensureStatusConstraint` at `internal/store/schema_reconcile.go`.
@@ -1839,6 +1843,7 @@ goose_db_version` and commits. `assertReachedBaseline` asserts
 - v9 Down: `DROP TABLE purges` (`00009_purges.sql`); the LOSS CONTRACT comment: purged issues stay gone, but the store no longer knows which ids were purged, so a sync can bring one back and minting can reissue one.
 - v10 Down: `SELECT 1;` (`00010_history_can_be_re_rooted.sql`); the LOSS CONTRACT comment: the `producer_binary_version` row the Up deleted is not restored.
 - v11 Down: `DROP TABLE plan_reviews` then `ALTER TABLE issues DROP COLUMN work_plan` (`00011_plans_and_plan_reviews.sql`); the LOSS CONTRACT comment: every plan and every plan review is dropped, so a store stepped back below this version holds no record that a ticket was planned or that a plan passed review; operators who need them must restore from a pre-downgrade dbsnapshot.
+- v12 Down: `DROP INDEX idx_issues_is_top_level_id ON issues` then `ALTER TABLE issues DROP COLUMN is_top_level_id` (`00012_is_top_level_id.sql`). No data is lost: the column is generated from `id`.
 - v1 Down: `DROP TABLE IF EXISTS` for `issue_event_changes`, `issue_events`, `labels`, `comments`, `relations`, `issues`, `meta` — in that FK-safe order (`00001_baseline.sql`).
 
 v4 Up also performs data mutations that change `relations` content: a backfill
@@ -2090,6 +2095,12 @@ Because `simpleEmitter` reads `tf.canonical`, the effective transform per recogn
 | `migration_quarantine` | `"migration quarantine ledger — schema bookkeeping, no domain field"` |
 | `meta` | `"schema metadata table — no domain field"` |
 
+`var derivedColumns = map[ColumnRef]string` (shapemap_known.go), the generated columns a dump carries:
+
+| column | reason string |
+|---|---|
+| `issues.is_top_level_id` | `"generated from id by the engine — no domain field"` |
+
 #### 3.3 `legacyIssueHistoryColumns` (the fan-out gate, defined in schema_reconcile.go)
 
 `[]string{"id", "issue_id", "action", "reason", "from_status", "to_status", "created_at", "created_by"}`.
@@ -2122,17 +2133,18 @@ On `fs.ReadDir` or `ReadFile` failure, the package `panic`s: `"scan migration dr
 4. Else `simpleEmitter(table, rules)`.
 
 `simpleEmitter(table, rules)` — shapemap_known.go:
-- Iterates `table.Columns` in order; any column not in `rules` returns `(TableMapping{}, false)` — the whole table (and via DeterministicMap, the whole dump) declines (72-74).
+- Iterates `table.Columns` in order. A column not in `rules` must be in `derivedColumns`: `classifyDrop` then gives the `Dropped` recorded in `Drops`, and the loop moves on. Any other returns `(TableMapping{}, false)` — the whole table (and via DeterministicMap, the whole dump) declines. That covers a column in `migrationDroppedCols`: a dump older than the migration still holds its values, and a rebuild from the dump never runs it.
 - `tf := targetRegistry[target]`; `coll = tf.coll` (reassigned per column — last column wins, but all rules for one table point at one collection); `fields[tf.field] = FromColumn{Column: col, Transform: tf.canonical}`.
-- Returns one `TableMapping{Table: table.Name, Emitters: []Emitter{{Collection: coll, When: Always{}, Fields: fields}}}` with `Drops` nil (81-84).
+- Returns one `TableMapping{Table: table.Name, Emitters: []Emitter{{Collection: coll, When: Always{}, Fields: fields}}, Drops: drops}`.
 - Two source columns aliasing the same target field (e.g. `prompt` and `agent_prompt`) collapse into one map entry; the loser column ends up referenced by nobody and Validate then fails on totality — the decline path pinned by `TestRejectsAmbiguousAlias` (shapemap_test.go).
 
 `dropAllColumns(table)` — shapemap_known.go: for every column, `classifyDrop(table.Name, col)` and store `Dropped{Provenance, Reason}`; returns `TableMapping{Table, Drops}` with no emitters.
 
 `classifyDrop(table, column) (DropProvenance, string)` — shapemap_known.go, in order:
 1. `bookkeepingTables[table]` hit → `(DropIntended, <that table's reason string>)`.
-2. `migrationDroppedCols[ColumnRef{table, column}]` hit → `(DropIntended, "removed by migration "+file)`.
-3. Otherwise → `(DropUnexplained, "")`.
+2. `derivedColumns[ColumnRef{table, column}]` hit → `(DropIntended, <that column's reason string>)`.
+3. `migrationDroppedCols[ColumnRef{table, column}]` hit → `(DropIntended, "removed by migration "+file)`.
+4. Otherwise → `(DropUnexplained, "")`.
 
 `issueHistoryFanOut(table)` — shapemap_known.go. See §7.
 
@@ -2480,6 +2492,7 @@ Note `aheadColumnMapping()` uses `identity` on `issue_events.action/reason/actor
 - `TestDeterministicMapDeclinesThinRequiredTargets`: declines `issues` missing `id`/`title` (columns `description,status,priority,issue_type,closed_at,created_at,updated_at`) and `issue_events` missing `reason`/`actor` (columns `id,issue_id,action,created_at`).
 - `TestValidateRejectsRowArityMismatch`: 9 columns, an 8-cell row → error contains `cells, want`.
 - `TestClassifyDropDistinguishesProvenance`: `classifyDrop("goose_db_version","version_id")` → `DropIntended` with a non-empty reason; `classifyDrop("issues","a_column_no_migration_ever_made")` → `DropUnexplained`.
+- `TestDeterministicMapDeclinesAColumnAMigrationRemoved`: with `issues.moved_by_a_migration` in `migrationDroppedCols`, a complete `issues` dump declines; the same dump carrying `is_top_level_id` instead maps, and records it as `DropIntended`.
 - `TestParseDroppedColumnsReadsMigrationHistory`: from ``"ALTER TABLE issues DROP COLUMN legacy_field;\nALTER TABLE `relations` DROP COLUMN IF EXISTS `old_col`;\nALTER TABLE issues DROP COLUMN a, DROP COLUMN b;"`` the results must include `{issues,legacy_field}`, `{relations,old_col}`, `{issues,a}`, `{issues,b}`.
 - `TestGooseUpSectionExcludesDownDrops`: an Up-`ADD`/Down-`DROP` migration yields zero refs; an Up-`DROP legacy`/Down-`ADD` migration yields exactly `[{issues, legacy}]`.
 - `TestDeterministicMapCleanAhead`: a real v1 workspace (epic + child task + solo task, one comment, one label, one `Start` transition) is dumped with `DumpRaw`, mapped, validated, applied, and `ReplaceFromExport`ed into a fresh store; `Doctor` must report `IntegrityCheck == "ok"` with zero errors (`mustClean`, 289-294), every original issue id must survive, and the epic's status must round-trip as `""` (NULL), i.e. `epic.StatusValue() == ""`. The solo task carries lane `solo`, plan `"solo plan"`, and one `fail` review of plan version 1 citing `one-source-of-truth`; after map+apply and again after the rebuild, the solo issue keeps its lane and plan, and the export holds exactly that review, which `Judges("solo plan")`.
@@ -2575,7 +2588,7 @@ The `internal/issueid` constants are specified in `inventory-model.md` §3.1, wi
 
 Every ID is a namespace followed by a base-36 hash. `idSpace` (`internal/store/issue_ids.go`, §2.5) picks the namespace: `issueid.TopLevelNamespace(prefix, topic)` for an issue with no parent, giving `<prefix>-<topic>-<hash>`, and `issueid.ChildNamespace(parentID)` for a child, giving `<parentID>.<hash>`. Grandchildren nest (`<parentID>.<hash>.<hash>`) because a child's own ID is the namespace of its children.
 
-"Top-level" is defined in SQL as an id with no dot: `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?` with argument `"%.%"` — `internal/store/issue_ids.go`.
+"Top-level" is defined in SQL as an id with no dot: the generated column `is_top_level_id` (`00012_is_top_level_id.sql`), read as `SELECT COUNT(*) FROM issues WHERE is_top_level_id = 1` — `internal/store/issue_ids.go`.
 
 ### 2.3 Slug normalization (prefix and topic)
 
@@ -2591,7 +2604,7 @@ The length a namespace starts minting at is `ComputeAdaptiveLength(population)` 
 
 `idSpace` — `internal/store/issue_ids.go`: returns the namespace a new issue mints into and that namespace's population. `strings.TrimSpace(parentID) == ""` → `issueid.TopLevelNamespace(prefix, topic)` with `countTopLevelIssues`; otherwise `issueid.ChildNamespace(parentID)` with `countChildren`. A count error is returned as-is; no default length stands in for it.
 
-`countTopLevelIssues` — `internal/store/issue_ids.go`: `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?` with `"%.%"`. Counts across all prefixes and includes soft-deleted/archived rows (no `deleted_at` filter). Error → `fmt.Errorf("count top-level issues: %w", err)`.
+`countTopLevelIssues` — `internal/store/issue_ids.go`: `SELECT COUNT(*) FROM issues WHERE is_top_level_id = 1`, an index read. Counts across all prefixes and includes soft-deleted/archived rows (no `deleted_at` filter). Error → `fmt.Errorf("count top-level issues: %w", err)`.
 
 `countChildren` — `internal/store/issue_ids.go`: `SELECT COUNT(*) FROM relations WHERE dst_id = ? AND type = 'parent-child'` — the parent's direct children, read from the relations table; error → `fmt.Errorf("count children of %s: %w", parentID, err)`.
 

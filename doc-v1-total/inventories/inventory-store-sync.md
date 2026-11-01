@@ -1412,17 +1412,17 @@ Base: `/Users/bmf/code/links-issue-tracker/internal/store/migrations/`.
 
 ### 12.1 Registry-wide conventions
 
-**Directive syntax.** All eleven `.sql` files are goose migrations delimited by SQL line comments:
-- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`).
-- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`).
+**Directive syntax.** All twelve `.sql` files are goose migrations delimited by SQL line comments:
+- `-- +goose Up` begins the up section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`, `00012_is_top_level_id.sql`).
+- `-- +goose Down` begins the down section (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`, `00012_is_top_level_id.sql`).
 - `-- +goose StatementBegin` / `-- +goose StatementEnd` wrap each individual statement (e.g. `00001_baseline.sql`, `00005_add_event_attribution.sql`). **Every executable statement in every file, in both sections, is inside exactly one such pair** — there are no bare statements (`00001_baseline.sql`, `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00007_every_ticket_inside_a_container.sql`, `00008_blocked_by_edge.sql`, `00009_purges.sql`, `00010_history_can_be_re_rooted.sql`, `00011_plans_and_plan_reviews.sql`).
 
-**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00011_plans_and_plan_reviews.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `ParseRegistry` (`bounds.go`) both read only `*.sql` entries.
+**Naming/numbering.** `<NNNNN>_<name>.sql`, 5-digit zero-padded, `00001_baseline.sql` … `00012_is_top_level_id.sql`; the accept-shape is enforced by `bounds.go`. `embed.go` states subsequent migrations append with strictly ascending versions and that only SQL migrations are wired — the embed (`//go:embed *.sql`) and `ParseRegistry` (`bounds.go`) both read only `*.sql` entries.
 
 **Idempotency, per statement.**
 - **Up sections: no DDL is guarded.** Every `CREATE TABLE` is bare, no `IF NOT EXISTS` (`00001_baseline.sql`, `00009_purges.sql`, `00011_plans_and_plan_reviews.sql`), and so is the one `CREATE TEMPORARY TABLE` (`00006_add_follows_up.sql`). Every `CREATE INDEX` is bare (`00001_baseline.sql`). Every `ALTER TABLE ... ADD COLUMN` is bare (`00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql`, `00006_add_follows_up.sql`, `00011_plans_and_plan_reviews.sql`). Every `ADD CONSTRAINT` is bare (`00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00008_blocked_by_edge.sql`). Two migrations guard data instead: `00006_add_follows_up.sql` moves no child onto an edge it already holds, and `00007_every_ticket_inside_a_container.sql` mints the unfiled epic only when no row holds its id and writes no edge a child already holds.
 - **`00001_baseline.sql` down section: every statement uses `IF EXISTS`** — all seven `DROP TABLE IF EXISTS` (`00001_baseline.sql`).
-- **Down sections of 00002–00011: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`; `00006_add_follows_up.sql`; `00007_every_ticket_inside_a_container.sql`; `00008_blocked_by_edge.sql`; `00009_purges.sql`; `00010_history_can_be_re_rooted.sql`; `00011_plans_and_plan_reviews.sql`).
+- **Down sections of 00002–00012: no `IF EXISTS` on any statement** (`00002_add_lane.sql`; `00003_add_resolution.sql`; `00004_add_redirect_target.sql`; `00005_add_event_attribution.sql`; `00006_add_follows_up.sql`; `00007_every_ticket_inside_a_container.sql`; `00008_blocked_by_edge.sql`; `00009_purges.sql`; `00010_history_can_be_re_rooted.sql`; `00011_plans_and_plan_reviews.sql`; `00012_is_top_level_id.sql`).
 - The one insert-conflict tolerance in the registry is `INSERT IGNORE INTO relations(...)` in the 00004 down section (`00004_add_redirect_target.sql`).
 
 ### 12.2 `00001_baseline.sql`
@@ -1636,6 +1636,14 @@ sha256 `285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e`.
 
 **Down** — `DROP TABLE plan_reviews;` then `ALTER TABLE issues DROP COLUMN work_plan;` (no `IF EXISTS`). LOSS CONTRACT: this Down drops every plan and every plan review; a store stepped back below this version holds no record that a ticket was planned or that a plan passed review; operators who need them must restore from a pre-downgrade dbsnapshot.
 
+### 12.6g `00012_is_top_level_id.sql`
+
+sha256 `d3da761e9fd183b55b98a0acc0acce02861112e2fe5eb52305322a4b49f12f84`.
+
+**Up** — two statements, both bare: `ALTER TABLE issues ADD COLUMN is_top_level_id TINYINT AS (IF(id LIKE '%.%', 0, 1)) STORED NOT NULL;` and `CREATE INDEX idx_issues_is_top_level_id ON issues (is_top_level_id);`. Declares no minimum writer schema. Test: `TestIsTopLevelIDMigrationBackfill` (`internal/store/migration_is_top_level_id_backfill_test.go`) runs Up over rows seeded at v11 and compares the indexed count with the count by the id's shape.
+
+**Down** — `DROP INDEX idx_issues_is_top_level_id ON issues;` then `ALTER TABLE issues DROP COLUMN is_top_level_id;` (no `IF EXISTS`). No data is lost: the column is generated from `id`.
+
 ### 12.7 `embed.go`
 
 Package `migrations` (`embed.go`), imports `"embed"`. Embed directive `//go:embed *.sql` on `var FS embed.FS`. The glob is `*.sql` only — non-`.sql` files in the directory are not embedded. `FS` is the only exported symbol in the file, described as "the embedded goose migration registry… the one source the runner reads from; nothing applies schema outside this set". The package doc records that only SQL migrations are wired and that adding a Go migration would require registering it with goose and widening the embed pattern.
@@ -1708,7 +1716,7 @@ Each runs as a subtest; mismatch is `t.Errorf("hasDownSection() = %v, want %v\nb
 
 Types: `pinnedMigration{file, sha256 string}`; `migrationFile{version int64; name, sha256 string}`; `reuseKind int` with, in iota order, `kindContentChanged`=0 (a pinned version's bytes no longer match its pin), `kindRenamed`=1 (content matches, filename changed), `kindUnpinned`=2 (an on-disk non-baseline version has no pin), `kindDeleted`=3 (a pinned version is gone from disk); `reuseFinding{kind; version int64; pinned pinnedMigration; onDisk migrationFile}`.
 
-The literal pins, `pinnedVersionContent` — all ten verified against the on-disk sha256s:
+The literal pins, `pinnedVersionContent` — all eleven verified against the on-disk sha256s:
 ```go
 2: {file: "00002_add_lane.sql",              sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
 3: {file: "00003_add_resolution.sql",        sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
@@ -1720,6 +1728,7 @@ The literal pins, `pinnedVersionContent` — all ten verified against the on-dis
 9: {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
 10: {file: "00010_history_can_be_re_rooted.sql", sha256: "1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec"},
 11: {file: "00011_plans_and_plan_reviews.sql", sha256: "285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e"},
+12: {file: "00012_is_top_level_id.sql", sha256: "d3da761e9fd183b55b98a0acc0acce02861112e2fe5eb52305322a4b49f12f84"},
 ```
 Version 1 is deliberately absent — `baseline_frozen_test.go` is its content enforcer.
 

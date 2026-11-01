@@ -243,6 +243,31 @@ func TestClassifyDropDistinguishesProvenance(t *testing.T) {
 	}
 }
 
+// A column a migration removed still holds its values in a dump older than the
+// migration, and a rebuild from the dump never runs it, so the mapper declines
+// to the operator path. Only a column the engine derives drops on its own. This
+// mutates migrationDroppedCols, so it cannot run in parallel.
+func TestDeterministicMapDeclinesAColumnAMigrationRemoved(t *testing.T) {
+	removed := ColumnRef{Table: "issues", Column: "moved_by_a_migration"}
+	migrationDroppedCols[removed] = "00099_moved.sql"
+	t.Cleanup(func() { delete(migrationDroppedCols, removed) })
+
+	base := []string{"id", "title", "description", "status", "priority", "issue_type", "closed_at", "created_at", "updated_at"}
+	row := []any{"i1", "T", "", "open", int64(0), "task", nil, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"}
+	table := func(extra string) RawDump {
+		return RawDump{WorkspaceID: "w", Tables: []RawTable{{Name: "issues", Columns: append(slices.Clone(base), extra), Rows: [][]any{append(slices.Clone(row), int64(1))}}}}
+	}
+
+	if mapping, ok := DeterministicMap(table("is_top_level_id")); !ok {
+		t.Fatal("DeterministicMap declined a dump whose only extra column is derived")
+	} else if drops := mapping.Tables[0].Drops; drops["is_top_level_id"].Provenance != DropIntended {
+		t.Fatalf("derived column drops = %+v, want an intended drop", drops)
+	}
+	if _, ok := DeterministicMap(table(removed.Column)); ok {
+		t.Fatal("DeterministicMap dropped a column a migration removed, want a decline")
+	}
+}
+
 func TestParseDroppedColumnsReadsMigrationHistory(t *testing.T) {
 	t.Parallel()
 	sqlText := "ALTER TABLE issues DROP COLUMN legacy_field;\n" +

@@ -131,9 +131,9 @@ type Dropped struct {
 type DropProvenance string
 
 const (
-	// DropIntended: the target baseline has no place for this column on purpose
-	// — a migration removed it, or it is bookkeeping with no domain
-	// representation by design. Mapping it to nothing is correct.
+	// DropIntended: the target has no place for this column's values on purpose
+	// — a migration removed it, the engine derives it, or it is bookkeeping with
+	// no domain representation by design. Mapping it to nothing is correct.
 	DropIntended DropProvenance = "intended"
 	// DropUnexplained: no target and no recorded reason. The genuine
 	// surface-to-human case.
