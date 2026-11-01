@@ -31,7 +31,7 @@ Two `Open`s on one root serialize: the second blocks until the first `Close`. Af
 
 ### One mutation, one commit
 
-Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`): under the commit lock and the transient-GC retry, `BeginTx` → `fn` → `tx.Commit` → `DOLT_COMMIT('-Am', <message>)`. The `-A` stages everything; there is no separate add step and no `--skip-empty` — a "nothing to commit" error is absorbed as success (`commit_lock.go`). A retry after a successful `tx.Commit` resumes at the DOLT_COMMIT step without re-running `fn` (the `staged` flag, `commit_lock.go`). A commit stamp may also carry `--allow-empty`, `--date` (RFC3339 UTC), and `--author`; ordinary store mutations pass only the message. A combined transition+field update is exactly one Dolt commit.
+Every mutation routes through `withMutation(ctx, message, fn)` (`commit_lock.go`): under the commit lock and the transient-GC retry, `BeginTx` → `fn` → `DOLT_COMMIT('-Am', <message>)` on `fn`'s transaction → `tx.Commit`, one root update and one journal flush. The `-A` stages everything; there is no separate add step and no `--skip-empty` — a "nothing to commit" error is absorbed as success (`commit_lock.go`). A failed attempt rolls back, so a retry re-runs `fn` on the state it first read (`commit_lock.go`). A commit stamp may also carry `--allow-empty`, `--date` (RFC3339 UTC), and `--author`; ordinary store mutations pass only the message. A combined transition+field update is exactly one Dolt commit.
 
 **Dolt commit identity** derives entirely from the workspace id: author name = workspace id with `@`→`_` (blank → `links`), email = `<name>@links.local` (`store.go`).
 

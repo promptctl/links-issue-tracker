@@ -162,7 +162,7 @@ Behavioral evidence:
 - Migration is idempotent across opens: a second `Open` leaves HEAD where the first put it (`store_test.go`, HEAD read in process).
 - `Open` preserves an existing `meta.schema_version` value (`store_test.go`).
 - A second `Close` of a write store returns nil and writes no notice: the holder record is retired once (`store_test.go`).
-- After a SIGKILL delivered inside `commitWorkingSetOnce`, a fresh-process `Open` on the same path succeeds, the commit lock is free, and the killed mutation's staged write is visible (`process_kill_test.go`).
+- After a SIGKILL delivered inside `commitWorkingSetOnce`, a fresh-process `Open` on the same path succeeds, the commit lock is free, and none of the killed mutation's write is visible (`process_kill_test.go`).
 - After a SIGKILL inside a goose migration step, `Open` still completes and the schema is usable (`process_kill_test.go`).
 - Opening a read-only (frozen) directory fails and mutates nothing (`fixture_residue_test.go`).
 
@@ -271,15 +271,15 @@ Evidence:
 
 `func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx context.Context, tx *sql.Tx) error) error` (`commit_lock.go`) delegates to `withStampedMutation(ctx, commitStamp{Message: message}, fn)`.
 
-`withStampedMutation` (`commit_lock.go`) runs, under `withCommitLock`, inside `retryTransientGCContention`:
-1. If `!staged`: `s.db.BeginTx(ctx, nil)` — failure → `fmt.Errorf("begin %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
+`withStampedMutation` (`commit_lock.go`) runs `attemptMutation` under `withCommitLock`, inside `retryTransientGCContention`:
+1. `s.db.BeginTx(ctx, nil)` — failure → `fmt.Errorf("begin %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
 2. `defer tx.Rollback()` (`commit_lock.go`);
 3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — its error is returned verbatim (`commit_lock.go`);
-4. `tx.Commit()` — failure → `fmt.Errorf("commit %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
-5. `staged = true`, then `hear(ctx, heard...)`, so an attempt that rolled back is heard by nobody (`commit_lock.go`);
-6. `s.commitWorkingSetOnce(ctx, stamp)` (`commit_lock.go`).
+4. `s.commitWorkingSetOnce(ctx, tx, stamp)`, on `fn`'s transaction, so the writes, the branch head and the working set land in one root update and one journal flush (`commit_lock.go`);
+5. `tx.Commit()`, which ends the transaction the DOLT_COMMIT left empty and writes nothing — failure → `fmt.Errorf("commit %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
+6. `hear(ctx, heard...)`, so an attempt that rolled back is heard by nobody (`commit_lock.go`).
 
-The `staged` flag is the phase marker: a retry after a successful `tx.Commit` resumes at the DOLT_COMMIT step and does **not** re-run `fn` (`commit_lock.go`).
+A failed attempt rolls back, so a retry **re-runs `fn`** on the state it first read (`commit_lock.go`).
 
 `commitStamp` (`commit_lock.go`) fields: `Message string`, `Date time.Time` (rendered as `--date` RFC3339 UTC; second granularity), `Author string` (rendered `--author`), `AllowEmpty bool`. `store.go` mutations always use the zero-beyond-Message form.
 
@@ -309,7 +309,7 @@ There is **no `--skip-empty`** flag anywhere; "nothing to commit" is absorbed by
 
 Each is used verbatim as the Dolt commit message (`commit_lock.go`) and inside tx error text (`commit_lock.go`).
 
-`commitWorkingSet(ctx, message)` (`commit_lock.go`) is the standalone version: `withCommitLock` → `retryTransientGCContention` → `commitWorkingSetOnce(commitStamp{Message: message})`. Exercised at `store_test.go`.
+`commitWorkingSet(ctx, message)` (`commit_lock.go`) is the standalone version: `withCommitLock` → `retryTransientGCContention` → `commitWorkingSetOnce(ctx, s.db, commitStamp{Message: message})`. Exercised at `store_test.go`.
 
 Test evidence for one-commit-per-mutation: a combined transition+field `Apply` adds exactly **1** row to `dolt_log()` (`update_atomicity_test.go`, count query at `update_atomicity_test.go`).
 
@@ -3484,7 +3484,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 ### 2.6 Where a delta is committed
 
-`replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): under `withCommitLock`, `BeginTx` → `applyExportDelta` → `tx.Commit()` → `commitWorkingSetOnce(ctx, stamp)`. Deliberately a **single attempt** with no self-rotating transient retry (`sync_reconcile.go`); errors bubble to the outer scratch-rebuilding retry. Error texts: `"begin %s tx: %w"` and `"commit %s tx: %w"` with `stamp.Message` interpolated (`sync_reconcile.go`).
+`replayDeltaOnScratch(ctx, delta, stamp)` (`sync_reconcile.go`): under `withCommitLock`, one `attemptMutation` whose body is `applyExportDelta`. Deliberately a **single attempt** with no self-rotating transient retry (`sync_reconcile.go`); errors bubble to the outer scratch-rebuilding retry. Error texts: `"begin %s tx: %w"` and `"commit %s tx: %w"` with `stamp.Message` interpolated (`sync_reconcile.go`).
 
 `spineWriter.land` does `s.checkout(<spine branch>)` first, unconditionally (`sync_reconcile.go`, error `"switch to reconcile spine branch %q: %w"`), then `landed, landing, err := landExport(next)` (an error returned as is), then `replayDeltaOnScratch(ctx, diffExports(w.landed, landed), stamp)`, then advances `w.landed = landed` only on success and returns `landing` (`sync_reconcile.go`).
 
@@ -3510,7 +3510,7 @@ Delete error text: `execDelete` wraps as `"delete %s: %w"` and `"delete %s: rows
 
 ### 3.1 Entry point and transaction
 
-`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) (storage.Replacement, error)` (`import_export.go`) is the restore. It runs under `withStampedMutation` with `commitStamp{Message: "replace from export"}` — the Dolt commit message for a restore is the literal string **`replace from export`** — i.e. under the commit lock, inside one `sql.Tx`, followed by `commitWorkingSetOnce`, with the transient-GC retry wrapping the whole staging+versioning unit (`commit_lock.go`). So it **is transactional** at the SQL level and **does commit** a Dolt commit. Inside the transaction it reads every held ticket's id, title and created_at (`heldTicketsTx`, id order) before the clear, and returns a `storage.Replacement` of `removedBy(held, landed)` — each held ticket with no landed row under its id or one born at another instant — and the `storage.Landing` `landExport` computed, assigned on every attempt so a retried mutation returns the committing attempt's; on error it returns the zero `storage.Replacement`.
+`func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) (storage.Replacement, error)` (`import_export.go`) is the restore. It runs under `withStampedMutation` with `commitStamp{Message: "replace from export"}` — the Dolt commit message for a restore is the literal string **`replace from export`** — i.e. under the commit lock, inside one `sql.Tx` that `commitWorkingSetOnce` commits, with the transient-GC retry wrapping the whole attempt (`commit_lock.go`). So it **is transactional** at the SQL level and **does commit** a Dolt commit. Inside the transaction it reads every held ticket's id, title and created_at (`heldTicketsTx`, id order) before the clear, and returns a `storage.Replacement` of `removedBy(held, landed)` — each held ticket with no landed row under its id or one born at another instant — and the `storage.Landing` `landExport` computed, assigned on every attempt so a retried mutation returns the committing attempt's; on error it returns the zero `storage.Replacement`.
 
 `func (s *Store) rebuildFromExport(ctx context.Context, export model.Export, stamp commitStamp) error` (`import_export.go`) is the same transaction under the caller's stamp without `landExport`: `RebuildCandidate` writes the recovery candidate through it with `commitStamp{Message: "replace from export"}`, so the verify gate's row counts and id set compare against the dump, and tests plant states through it.
 
@@ -3646,7 +3646,7 @@ UPDATE relations SET src_id = dst_id, dst_id = src_id WHERE type='related-to' AN
 ```
 then returns `s.Doctor(ctx)`. A mutation failure returns `storage.HealthReport{}` plus the error.
 
-`internal/store/import_export_test.go` holds the one test over this repair. `TestFixIntegrityStampsItsCommitLabel` (`t.Parallel()`) creates a single issue and then seeds a self-referential `related-to` row through `st.db` directly (`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'related-to', ?, 'seed')`, both endpoints that issue's id) because `AddRelation` refuses a self-targeting `related-to` (`internal/store/relations.go`, `"related-to cannot target itself"`), so only a path bypassing that guard leaves the row this repair deletes. The seed is committed on its own (`st.commitWorkingSetOnce(ctx, commitStamp{Message: "seed self related-to"})`) before `st.FixIntegrity(ctx)` runs. Three things are pinned after it: `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id = dst_id` is 0; `commit_hash` from `dolt_log('HEAD')` differs from the pre-repair read (both via helper `headCommitHash`); and that commit's message from `dolt_log('HEAD')` equals `fix integrity`, the literal at `import_export.go`. The HEAD-moved assertion is what makes the message assertion mean anything: `withMutation` builds `commitStamp{Message: message}` and nothing else (`internal/store/commit_lock.go`), so with `AllowEmpty` unset a repair that produces no diff lands no commit and HEAD still carries the message of whatever preceded it — committing the seed first is what makes the repair a real diff, since otherwise the seed's insert and the repair's delete cancel inside one working set and the message assertion reads a commit the repair never wrote.
+`internal/store/import_export_test.go` holds the one test over this repair. `TestFixIntegrityStampsItsCommitLabel` (`t.Parallel()`) creates a single issue and then seeds a self-referential `related-to` row through `st.db` directly (`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'related-to', ?, 'seed')`, both endpoints that issue's id) because `AddRelation` refuses a self-targeting `related-to` (`internal/store/relations.go`, `"related-to cannot target itself"`), so only a path bypassing that guard leaves the row this repair deletes. The seed is committed on its own (`st.commitWorkingSetOnce(ctx, st.db, commitStamp{Message: "seed self related-to"})`) before `st.FixIntegrity(ctx)` runs. Three things are pinned after it: `SELECT COUNT(*) FROM relations WHERE type='related-to' AND src_id = dst_id` is 0; `commit_hash` from `dolt_log('HEAD')` differs from the pre-repair read (both via helper `headCommitHash`); and that commit's message from `dolt_log('HEAD')` equals `fix integrity`, the literal at `import_export.go`. The HEAD-moved assertion is what makes the message assertion mean anything: `withMutation` builds `commitStamp{Message: message}` and nothing else (`internal/store/commit_lock.go`), so with `AllowEmpty` unset a repair that produces no diff lands no commit and HEAD still carries the message of whatever preceded it — committing the seed first is what makes the repair a real diff, since otherwise the seed's insert and the repair's delete cancel inside one working set and the message assertion reads a commit the repair never wrote.
 
 ---
 
@@ -5159,20 +5159,20 @@ type commitStamp struct {
 
 `commit_lock.go` — `withMutation(ctx, message, fn)` = `withStampedMutation(ctx, commitStamp{Message: message}, fn)`.
 
-`commit_lock.go` — `withStampedMutation` runs, under one held commit lock, inside `retryTransientGCContention`:
+`commit_lock.go` — `withStampedMutation` runs `attemptMutation`, under one held commit lock, inside `retryTransientGCContention`:
 
-1. If not yet staged: `s.db.BeginTx(ctx, nil)` — error wrapped `begin %s tx: %w` with the message (`commit_lock.go`).
+1. `s.db.BeginTx(ctx, nil)` — error wrapped `begin %s tx: %w` with the message (`commit_lock.go`).
 2. `defer tx.Rollback()` (`commit_lock.go`).
 3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — error returned unwrapped (`commit_lock.go`).
-4. `tx.Commit()` — error wrapped `commit %s tx: %w` (`commit_lock.go`).
-5. `staged = true`, then `hear(ctx, heard...)` hands the queue on (`commit_lock.go`).
-6. `s.commitWorkingSetOnce(ctx, stamp)` (`commit_lock.go`).
+4. `s.commitWorkingSetOnce(ctx, tx, stamp)`, on `fn`'s transaction (`commit_lock.go`).
+5. `tx.Commit()`, ending the transaction the DOLT_COMMIT left empty — error wrapped `commit %s tx: %w` (`commit_lock.go`).
+6. `hear(ctx, heard...)` hands the queue on (`commit_lock.go`).
 
-The `staged` flag is the resume point: once `tx.Commit()` has succeeded, a retry resumes **at versioning** and never re-runs `fn` (`commit_lock.go`). The lock is acquired and released exactly once (`commit_lock.go`).
+A failed attempt rolls back, so a retry **re-runs `fn`** on the state it first read (`commit_lock.go`). The lock is acquired and released exactly once (`commit_lock.go`).
 
 #### 5.3 `commitWorkingSet`
 
-`commit_lock.go` — `commitWorkingSet(ctx, message)` takes the commit lock and runs `commitWorkingSetOnce(ctx, commitStamp{Message: message})` under `retryTransientGCContention`.
+`commit_lock.go` — `commitWorkingSet(ctx, message)` takes the commit lock and runs `commitWorkingSetOnce(ctx, s.db, commitStamp{Message: message})` under `retryTransientGCContention`.
 
 #### 5.4 `commitWorkingSetOnce` — the single Dolt-commit boundary
 

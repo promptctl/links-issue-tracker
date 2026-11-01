@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -193,6 +194,77 @@ func TestATransientCommitFailureRerunsTheMutationOnce(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("LocalIssueCount() = %d, want exactly 2 (the epic and the one task) — more means a write outlived the failed commit", count)
+	}
+}
+
+// TestADoltCommitThatFailsLeavesNothing pins the atomic step against Dolt itself
+// refusing the commit, inside the CALL: the write is gone, the working set is
+// clean, and the connection still commits.
+func TestADoltCommitThatFailsLeavesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+
+	refused := commitStamp{Message: "refused", Author: "not a name and email"}
+	err = st.withStampedMutation(ctx, refused, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE issues SET title = 'after' WHERE id = ?`, epic.ID)
+		return err
+	})
+	if err == nil {
+		t.Fatal("withStampedMutation() with a malformed author returned nil; want DOLT_COMMIT's refusal")
+	}
+
+	got, err := st.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != "before" {
+		t.Fatalf("title = %q after a refused commit, want the write rolled back", got.Title)
+	}
+	var dirty int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_status`).Scan(&dirty); err != nil {
+		t.Fatalf("read dolt_status: %v", err)
+	}
+	if dirty != 0 {
+		t.Fatalf("dolt_status holds %d row(s) after a refused commit, want a clean working set", dirty)
+	}
+
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "next write", Topic: "sync", IssueType: "epic"}); err != nil {
+		t.Fatalf("CreateIssue() after a refused commit error = %v", err)
+	}
+}
+
+// TestAMutationLeavesItsConnectionInAutocommit pins the session a landed mutation
+// hands back: a statement on the one pooled connection commits by itself, so it
+// reaches a fresh connection. A session still inside an explicit transaction
+// would hold it back in its own memory and drop it at the rotation.
+func TestAMutationLeavesItsConnectionInAutocommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET title = 'after' WHERE id = ?`, epic.ID); err != nil {
+		t.Fatalf("raw update: %v", err)
+	}
+	if err := st.withCommitLock(ctx, st.reconnect); err != nil {
+		t.Fatalf("reconnect() error = %v", err)
+	}
+
+	got, err := st.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != "after" {
+		t.Fatalf("title = %q on a fresh connection, want the autocommitted write", got.Title)
 	}
 }
 

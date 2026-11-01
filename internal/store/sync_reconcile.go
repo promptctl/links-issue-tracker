@@ -681,8 +681,7 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 }
 
 // replayDeltaOnScratch lands one step as one commit on the reconcile spine
-// branch: stage (one tx applying the delta), then version (one DOLT_COMMIT
-// via commitWorkingSetOnce) — a SINGLE attempt, deliberately without
+// branch — a SINGLE attemptMutation, deliberately without
 // withStampedMutation's self-rotating transient retry. A transient failure
 // bubbles raw to replayUnderGuard's outer retryTransientGCContention, the
 // replay's one rotation, whose next attempt re-enters runOnScratch and
@@ -698,18 +697,9 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 // ordinary import pipeline bottoms out in.
 func (s *Store) replayDeltaOnScratch(ctx context.Context, delta exportDelta, stamp commitStamp) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
-		}
-		defer tx.Rollback()
-		if err := applyExportDelta(ctx, tx, delta); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
-		}
-		return s.commitWorkingSetOnce(ctx, s.db, stamp)
+		return s.attemptMutation(ctx, stamp, func(ctx context.Context, tx *sql.Tx) error {
+			return applyExportDelta(ctx, tx, delta)
+		})
 	})
 }
 

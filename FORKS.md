@@ -621,7 +621,7 @@ transaction, a plain write issues exactly that one flush.
 
 **Retire it when** upstream stops writing the manifest for a root-only change,
 and the `require` line moves past that change. Dropping it without that puts
-four flushes back on every write command.
+five flushes back on every write command.
 
 ### promptctl/go-mysql-server
 

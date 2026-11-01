@@ -97,32 +97,45 @@ func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx co
 // are all owned at their respective single boundaries; withStampedMutation
 // composes them rather than duplicating any of them.
 //
-// The whole BeginTx→fn→commitWorkingSetOnce sequence is inside
-// retryTransientGCContention because it is one atomic step: DOLT_COMMIT runs in
-// fn's transaction, so the writes, the branch head and the working set land in
-// a single root update, and one journal flush makes them durable. A failure
-// before that update rolls fn's writes back, so a retry re-runs fn on the state
-// it first read. Past it the session holds an empty transaction, which the
-// deferred Rollback ends.
+// The whole attempt (attemptMutation) is inside retryTransientGCContention
+// because it is one atomic step: a failure before its commit lands rolls fn's
+// writes back, so a retry re-runs fn on the state it first read.
 func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn func(ctx context.Context, tx *sql.Tx) error) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
-			tx, err := s.db.BeginTx(ctx, nil)
-			if err != nil {
-				return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
-			}
-			defer tx.Rollback()
-			var heard []owed
-			if err := fn(context.WithValue(ctx, hearingKey{}, &heard), tx); err != nil {
-				return err
-			}
-			if err := s.commitWorkingSetOnce(ctx, tx, stamp); err != nil {
-				return err
-			}
-			hear(ctx, heard...)
-			return nil
+			return s.attemptMutation(ctx, stamp, fn)
 		}, s.reconnect)
 	})
+}
+
+// attemptMutation runs fn and its DOLT_COMMIT in one transaction, so the
+// writes, the branch head and the working set land in a single root update and
+// one journal flush makes them durable. The caller holds the commit lock.
+//
+// tx.Commit then ends a transaction the DOLT_COMMIT left empty: it writes
+// nothing, and it clears the session's explicit-transaction state, which the
+// store's one pooled connection would otherwise carry into every later
+// statement. No retry can follow a commit that landed, since a GC waits on the
+// held commit lock and an empty COMMIT updates no manifest, so neither transient
+// failure can reach it.
+func (s *Store) attemptMutation(ctx context.Context, stamp commitStamp, fn func(ctx context.Context, tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
+	}
+	defer tx.Rollback()
+	var heard []owed
+	if err := fn(context.WithValue(ctx, hearingKey{}, &heard), tx); err != nil {
+		return err
+	}
+	if err := s.commitWorkingSetOnce(ctx, tx, stamp); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
+	}
+	hear(ctx, heard...)
+	return nil
 }
 
 // rotationCloseReserve is what the retry sets aside for the one part of a

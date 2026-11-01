@@ -25,9 +25,9 @@ const killHelperDirEnvVar = "LIT_STORE_KILL_HELPER_DIR"
 
 // TestHelperKillMidCommit is not a real test — it is re-executed as a
 // separate OS process by TestMidMutationProcessKillRecovers. It installs the
-// commitWorkingSetHookForTest injection point (commit_lock.go) to fire
-// exactly where a real crash matters: after fn's writes are in the transaction
-// but before DOLT_COMMIT lands them. SIGKILL there is unblockable and immediate, so
+// commitWorkingSetHookForTest injection point (commit_lock.go) to fire after
+// fn's writes are in the transaction and before DOLT_COMMIT is called, so they
+// exist in this process alone. SIGKILL there is unblockable and immediate, so
 // the process dies inside the hook — CreateIssue never returns, and no
 // deferred cleanup (commit lock release included) runs, exactly the shape a
 // genuine crash leaves behind.
