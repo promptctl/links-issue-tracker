@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261026151207-013ddc8d50c0` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261101135334-0797d28291f6` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -588,6 +588,45 @@ waiting behind it. `TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking` in
 takes and releases LOCK, and the `require` line moves past that change.
 Dropping it without that leaves lit announcing a hold only after the open
 returns, so writers behind a slow open fail on contention again.
+
+#### Patch 18 — a root commit reaches the journal alone, and a clean open writes nothing
+
+`go/store/nbs/journal.go`, `go/store/nbs/journal_writer.go`,
+`go/store/nbs/journal_read_only_test.go`, plus
+`go/store/nbs/journal_root_test.go` (a new file, not upstream's).
+
+The journal is the source of truth for the root, and every open reads it from
+there, so a manifest write that carries only a root is a checkpoint nothing
+reads. It cost four of the seven full flushes one `lit new` issued, and on
+macOS, where a drive's cache flush falls to 230-310ms for seconds at a time,
+those flushes put a single write past a second.
+
+- `trueUpBackingManifest` returns before its write when the journal holds a
+  root. A rootless journal keeps the write: `ChunkJournal.ParseIfExists` forwards
+  to the manifest while the root is empty, and that write keeps the two in
+  agreement.
+- `ChunkJournal.Close` writes the manifest only when it is missing or names a
+  different table set. `Update`'s and `UpdateGCGen`'s manifest writes are
+  untouched, so conjoin and GC record the root and sync before anything they
+  delete.
+- `repairJournal` truncates and syncs only when there is a tail to cut, and
+  syncs before it saves an index record, so the journal stays ahead of the index.
+
+Two consequences to keep in mind. The manifest's root stands behind the journal
+in normal running, where upstream leaves it there only after a crash, so read a
+root through the journal, never out of the manifest. A read-only store that
+opened before its journal existed does read the manifest's, and keeps it across
+a rebase; lit's engines never rebase. And a writable open no longer syncs a tail
+a killed writer left, so a root whose commit never returned can be read at that
+open and still be lost to a power cut before the next commit syncs it.
+
+Durability is unchanged: a commit still returns after a full sync of the
+journal. With `withStampedMutation` running `DOLT_COMMIT` in the mutation's own
+transaction, a plain write issues exactly that one flush.
+
+**Retire it when** upstream stops writing the manifest for a root-only change,
+and the `require` line moves past that change. Dropping it without that puts
+five flushes back on every write command.
 
 ### promptctl/go-mysql-server
 

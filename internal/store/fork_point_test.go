@@ -562,8 +562,9 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 	}
 }
 
-// strandWrite edits the ticket's title on root with DOLT_COMMIT failing, so
-// the write stays staged in the working set with no commit over it.
+// strandWrite edits the ticket's title on root below any mutation, so the write
+// stands in the working set with no commit over it, as one a store carries from
+// a commit that failed after it landed there.
 func strandWrite(t *testing.T, ctx context.Context, root, ticket string) {
 	t.Helper()
 	strandTitle(t, ctx, root, ticket, strandedTitle)
@@ -573,11 +574,9 @@ func strandWrite(t *testing.T, ctx context.Context, root, ticket string) {
 func strandTitle(t *testing.T, ctx context.Context, root, ticket, title string) {
 	t.Helper()
 	st := openSyncOrFatal(t, ctx, root)
-	st.commitWorkingSetHookForTest = func() error { return errors.New("injected: DOLT_COMMIT failed") }
-	if _, err := st.Apply(ctx, ticket, storage.Change{Fields: storage.UpdateIssueInput{Title: strptr(title)}}); err == nil {
-		t.Fatalf("Apply() with DOLT_COMMIT failing returned nil; want the failure")
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET title = ? WHERE id = ?`, title, ticket); err != nil {
+		t.Fatalf("strand a write: %v", err)
 	}
-	st.commitWorkingSetHookForTest = nil
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close(stranded write) error = %v", err)
 	}

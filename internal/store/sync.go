@@ -626,8 +626,8 @@ const strandedWritesCommitMessage = "commit writes a failed commit left staged"
 
 // freshnessOverEveryWrite is the freshness that decides whether the branch
 // moves. Freshness counts commits, and landing on the remote head or on a
-// reconcile's replay resets the working set, so writes a failed DOLT_COMMIT
-// left staged are versioned first (commitStrandedWrites). Then the freshness
+// reconcile's replay resets the working set, so stranded writes are versioned
+// first (commitStrandedWrites). Then the freshness
 // counts every local write: a stranded write is a local commit, and the branch
 // is diverged, not behind. [LAW:single-enforcer] The settle and the reconcile
 // plan both read it.
@@ -638,8 +638,10 @@ func (s *Store) freshnessOverEveryWrite(ctx context.Context, remote storage.Remo
 	return s.SyncFreshness(ctx, remote, branch)
 }
 
-// commitStrandedWrites versions the writes a failed DOLT_COMMIT left staged,
-// as the next mutation would version them, and records the commit it landed.
+// commitStrandedWrites versions writes that stand in the working set with no
+// commit over them, and records the commit it landed. A mutation commits inside
+// its transaction and leaves none, so they come from a store an older lit wrote,
+// or from a migration or a reconcile's schema lift whose DOLT_COMMIT failed.
 // Anything about to hard-reset the branch runs it first, so the reset never
 // discards a write that is not its own. [LAW:single-enforcer] the one place a
 // stranded write is committed. [LAW:no-silent-failure] [LAW:nothing-unseen]
@@ -649,7 +651,7 @@ func (s *Store) commitStrandedWrites(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT table_name) FROM dolt_status`).Scan(&tables); err != nil {
 		return fmt.Errorf("read the working set: %w", err)
 	}
-	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
+	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
 		return err
 	}
 	if tables > 0 {

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -149,15 +151,14 @@ func TestSettleCommitLockRelease(t *testing.T) {
 	}
 }
 
-// TestWithMutationResumesAtVersioningAfterStagedCommit pins withMutation's
-// phase resume: when the staging transaction has committed and only the
-// versioning step (DOLT_COMMIT) fails transiently, the retry must re-run
-// versioning alone. Re-running the mutation body against its own staged
-// writes would double-apply it — for CreateIssue, the in-tx collision check
-// would find the staged row and mint a SECOND issue under a higher nonce —
-// so the discriminating assertion is that exactly one issue exists afterward
-// beyond the epic it is filed into.
-func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
+// TestATransientCommitFailureRerunsTheMutationOnce pins that a mutation and its
+// commit are one atomic step: when DOLT_COMMIT fails transiently the mutation's
+// writes roll back and the retry re-runs the body on the state it first read.
+// A write that outlived the failure would meet its own row on the retry — for
+// CreateIssue, the in-tx collision check would mint a SECOND issue under a
+// higher nonce — so the discriminating assertion is that exactly one issue
+// exists afterward beyond the epic it is filed into.
+func TestATransientCommitFailureRerunsTheMutationOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -176,7 +177,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		return nil
 	}
 
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a versioning retry", Topic: "sync", ParentID: epic.ID})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a commit retry", Topic: "sync", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -184,7 +185,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		t.Fatalf("CreateIssue() returned an empty id")
 	}
 	if fires < 2 {
-		t.Fatalf("versioning step ran %d time(s); want the transient failure to have forced a retry", fires)
+		t.Fatalf("the commit ran %d time(s); want the transient failure to have forced a retry", fires)
 	}
 	st.commitWorkingSetHookForTest = nil
 
@@ -193,7 +194,160 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		t.Fatalf("LocalIssueCount() error = %v", err)
 	}
 	if count != 2 {
-		t.Fatalf("LocalIssueCount() = %d, want exactly 2 (the epic and the one task) — more means the retry re-ran the staged mutation body", count)
+		t.Fatalf("LocalIssueCount() = %d, want exactly 2 (the epic and the one task) — more means a write outlived the failed commit", count)
+	}
+}
+
+// TestADoltCommitThatFailsLeavesNothing pins the atomic step against Dolt itself
+// refusing the commit, inside the CALL: the write is gone, the working set is
+// clean, and the connection still commits.
+func TestADoltCommitThatFailsLeavesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+
+	refused := commitStamp{Message: "refused", Author: "not a name and email"}
+	err = st.withStampedMutation(ctx, refused, func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `UPDATE issues SET title = 'after' WHERE id = ?`, epic.ID)
+		return err
+	})
+	if err == nil {
+		t.Fatal("withStampedMutation() with a malformed author returned nil; want DOLT_COMMIT's refusal")
+	}
+
+	got, err := st.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != "before" {
+		t.Fatalf("title = %q after a refused commit, want the write rolled back", got.Title)
+	}
+	var dirty int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_status`).Scan(&dirty); err != nil {
+		t.Fatalf("read dolt_status: %v", err)
+	}
+	if dirty != 0 {
+		t.Fatalf("dolt_status holds %d row(s) after a refused commit, want a clean working set", dirty)
+	}
+
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "next write", Topic: "sync", IssueType: "epic"}); err != nil {
+		t.Fatalf("CreateIssue() after a refused commit error = %v", err)
+	}
+}
+
+// TestACancelDuringACommitIsNotAFailure pins that a write which stands is
+// reported as standing: the commit runs out, the observers hear it, and the
+// answer reads what landed. An error here would invite the operator to run a
+// mutation that already landed a second time.
+func TestACancelDuringACommitIsNotAFailure(t *testing.T) {
+	t.Parallel()
+	st := openIssueStore(t, context.Background())
+
+	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	heard := false
+	st.ObserveChanges(func(storage.Change, model.Issue) { heard = true })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st.commitWorkingSetHookForTest = func() error {
+		cancel()
+		return nil
+	}
+	after := "after"
+	applied, err := st.Apply(ctx, epic.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &after}})
+	st.commitWorkingSetHookForTest = nil
+	if err != nil {
+		t.Fatalf("Apply() cancelled during its commit error = %v, want nil", err)
+	}
+	if applied.Issue.Title != after {
+		t.Fatalf("Apply() answered title %q, want the landed write", applied.Issue.Title)
+	}
+	if !heard {
+		t.Fatal("the observers were not told of a write that stands")
+	}
+
+	got, err := st.GetIssue(context.Background(), epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != after {
+		t.Fatalf("title = %q, want the landed write", got.Title)
+	}
+}
+
+// TestAWriteLeavesTheManifestAlone pins what the fork's patch 18 gives lit (see
+// FORKS.md), so a repin that loses it fails here rather than as slow writes in a
+// slow-flush window: a root commit reaches the journal alone, and neither the
+// open nor the close around it rewrites the manifest.
+func TestAWriteLeavesTheManifestAlone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	dir := migratedDoltDir(t)
+
+	writeOnce := func(title string) {
+		t.Helper()
+		st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "sync", IssueType: "epic"}); err != nil {
+			t.Fatalf("CreateIssue() error = %v", err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}
+	manifest := filepath.Join(nomsDir(dir), "manifest")
+
+	writeOnce("first")
+	before, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	writeOnce("second")
+	after, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("a write rewrote the manifest:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// TestAMutationLeavesItsConnectionInAutocommit pins the session a landed mutation
+// hands back: a statement on the one pooled connection commits by itself, so it
+// reaches a fresh connection. A session still inside an explicit transaction
+// would hold it back in its own memory and drop it at the rotation.
+func TestAMutationLeavesItsConnectionInAutocommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx, `UPDATE issues SET title = 'after' WHERE id = ?`, epic.ID); err != nil {
+		t.Fatalf("raw update: %v", err)
+	}
+	if err := st.withCommitLock(ctx, st.reconnect); err != nil {
+		t.Fatalf("reconnect() error = %v", err)
+	}
+
+	got, err := st.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != "after" {
+		t.Fatalf("title = %q on a fresh connection, want the autocommitted write", got.Title)
 	}
 }
 
@@ -216,7 +370,7 @@ func TestCommitWorkingSetOnceRendersStamp(t *testing.T) {
 		Author:     "prov-author <prov@example.test>",
 		AllowEmpty: true,
 	}
-	if err := st.commitWorkingSetOnce(ctx, stamp); err != nil {
+	if err := st.commitWorkingSetOnce(ctx, st.db, stamp); err != nil {
 		t.Fatalf("commitWorkingSetOnce(stamp) error = %v", err)
 	}
 

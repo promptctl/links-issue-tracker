@@ -190,11 +190,9 @@ type Store struct {
 	planReadsHookForTest func()
 
 	// commitWorkingSetHookForTest, if non-nil, fires at the top of every
-	// commitWorkingSetOnce — the versioning (DOLT_COMMIT) step — and its error,
-	// if any, stands in for that step failing. Production callers leave it nil;
-	// the withMutation phase-resume test uses it to fail versioning transiently
-	// exactly once, proving a retry resumes at versioning instead of re-running
-	// the staged mutation body. Same per-Store seam rationale as above.
+	// commitWorkingSetOnce and its error, if any, stands in for DOLT_COMMIT
+	// failing. Production callers leave it nil. Same per-Store seam rationale
+	// as above.
 	commitWorkingSetHookForTest func() error
 
 	// landHookForTest, if non-nil, fires at the top of every attempt of a
@@ -1677,7 +1675,9 @@ func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (
 				return err
 			}
 		}
-		issue, err := s.GetIssue(ctx, id)
+		// What the write landed is the answer, so the caller's cancel cannot
+		// turn a write that stands into a failure.
+		issue, err := s.GetIssue(context.WithoutCancel(ctx), id)
 		if err != nil {
 			return err
 		}

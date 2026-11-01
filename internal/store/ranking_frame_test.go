@@ -755,11 +755,10 @@ func TestMutationValueYieldsTheZeroValueWhenTheMutationFails(t *testing.T) {
 	// The closure failing is the easy half, and on its own it proves nothing: a
 	// closure that returns an error never reaches the assignment, so the result
 	// is zero whether or not anything zeroes it. The case that needs the guard
-	// is the closure SUCCEEDING and the commit after it failing — withMutation
-	// runs tx.Commit and the working-set commit once fn has already returned its
-	// value. Cancelling the context from inside the closure stages exactly that:
-	// the value is computed and assigned, then the commit it was computed for
-	// cannot land.
+	// is the closure SUCCEEDING and the commit after it not landing — withMutation
+	// commits once fn has already returned its value. Cancelling the context from
+	// inside the closure stages exactly that: the value is computed and assigned,
+	// then the commit it was computed for never starts.
 	cancelCtx, cancel := context.WithCancel(ctx)
 	got, err := mutationValue(cancelCtx, st, "mutation-value-commit-failure-test", func(ctx context.Context, tx *sql.Tx) (storage.RankEnd, error) {
 		cancel()

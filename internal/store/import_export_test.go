@@ -34,7 +34,7 @@ func TestFixIntegrityStampsItsCommitLabel(t *testing.T) {
 	}
 	// Committed before the repair runs, or the seed and its deletion cancel out
 	// in one working set and the repair has no diff to commit.
-	if err := st.commitWorkingSetOnce(ctx, commitStamp{Message: "seed self related-to"}); err != nil {
+	if err := st.commitWorkingSetOnce(ctx, st.db, commitStamp{Message: "seed self related-to"}); err != nil {
 		t.Fatalf("commit seeded row error = %v", err)
 	}
 
