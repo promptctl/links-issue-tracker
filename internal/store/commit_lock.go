@@ -112,17 +112,21 @@ func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn f
 // writes, the branch head and the working set land in a single root update and
 // one journal flush makes them durable. The caller holds the commit lock.
 //
+// The transaction and its commit run on a context the caller cannot cancel, as
+// landScratch does: a commit that applied and then read the caller's cancel
+// would report a landed write as not landed, and running it again would apply it
+// twice. So a cancel stops the attempt up to the commit, through fn's statements
+// and the check before it, and past that the commit runs out.
+//
 // tx.Commit then ends a transaction the DOLT_COMMIT left empty: it writes
 // nothing, and it clears the session's explicit-transaction state, which the
 // store's one pooled connection would otherwise carry into every later
-// statement. The write stands by then, so nothing past that point fails the
-// attempt, by the rule SettleCommitLockRelease states: a failure would invite a
-// retry of a mutation that landed. A ctx cancelled here is the likely one:
-// database/sql refuses the Commit and rolls the empty transaction back, which
-// clears the session just the same. [LAW:no-silent-failure] loud, but not a
-// false failure.
+// statement. The commit step has finished by then, so a failure here is settled
+// the way SettleCommitLockRelease settles one. [LAW:no-silent-failure] loud, but
+// not a false failure.
 func (s *Store) attemptMutation(ctx context.Context, stamp commitStamp, fn func(ctx context.Context, tx *sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	landing := context.WithoutCancel(ctx)
+	tx, err := s.db.BeginTx(landing, nil)
 	if err != nil {
 		return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
 	}
@@ -131,14 +135,14 @@ func (s *Store) attemptMutation(ctx context.Context, stamp commitStamp, fn func(
 	if err := fn(context.WithValue(ctx, hearingKey{}, &heard), tx); err != nil {
 		return err
 	}
-	if err := s.commitWorkingSetOnce(ctx, tx, stamp); err != nil {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.mutationLandedHookForTest != nil {
-		s.mutationLandedHookForTest()
+	if err := s.commitWorkingSetOnce(landing, tx, stamp); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
-		fmt.Fprintf(s.stderr, "lit: %s landed, and ending its transaction failed (nothing to redo): %v\n", stamp.Message, err)
+		fmt.Fprintf(s.stderr, "lit: %s: ending its transaction failed after its commit (nothing to redo): %v\n", stamp.Message, err)
 	}
 	hear(ctx, heard...)
 	return nil

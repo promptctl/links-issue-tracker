@@ -1051,7 +1051,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "lit snapshots restore", Src: "usage: lit snapshots restore <name>"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "lit snapshots restore <name>", Src: "usage: lit snapshots restore <name>"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "lit sync compact", Src: "lit sync compact"},
-	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "lit: %s landed, and ending its transaction failed (nothing to redo): %v", Src: "lit: %s landed, and ending its transaction failed (nothing to redo): %v\n"},
+	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "lit: %s: ending its transaction failed after its commit (nothing to redo): %v", Src: "lit: %s: ending its transaction failed after its commit (nothing to redo): %v\n"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "load export into candidate: %w", Src: "load export into candidate: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "mapping dispositions table %q more than once", Src: "mapping dispositions table %q more than once"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "mapping is malformed: %s", Src: "mapping is malformed: %s"},

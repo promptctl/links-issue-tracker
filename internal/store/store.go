@@ -195,11 +195,6 @@ type Store struct {
 	// as above.
 	commitWorkingSetHookForTest func() error
 
-	// mutationLandedHookForTest, if non-nil, fires in attemptMutation between
-	// the DOLT_COMMIT and the end of its transaction. Production callers leave
-	// it nil.
-	mutationLandedHookForTest func()
-
 	// landHookForTest, if non-nil, fires at the top of every attempt of a
 	// scratch run's landing (landScratch), and its error, if any, stands in
 	// for that attempt failing. Production callers leave it nil; the batch
@@ -1680,7 +1675,9 @@ func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (
 				return err
 			}
 		}
-		issue, err := s.GetIssue(ctx, id)
+		// What the write landed is the answer, so the caller's cancel cannot
+		// turn a write that stands into a failure.
+		issue, err := s.GetIssue(context.WithoutCancel(ctx), id)
 		if err != nil {
 			return err
 		}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -239,10 +240,11 @@ func TestADoltCommitThatFailsLeavesNothing(t *testing.T) {
 	}
 }
 
-// TestACancelAfterTheCommitLandsIsNotAFailure pins that a write which stands is
-// reported as standing: an error here would invite the operator to run a
+// TestACancelDuringACommitIsNotAFailure pins that a write which stands is
+// reported as standing: the commit runs out, the observers hear it, and the
+// answer reads what landed. An error here would invite the operator to run a
 // mutation that already landed a second time.
-func TestACancelAfterTheCommitLandsIsNotAFailure(t *testing.T) {
+func TestACancelDuringACommitIsNotAFailure(t *testing.T) {
 	t.Parallel()
 	st := openIssueStore(t, context.Background())
 
@@ -250,19 +252,23 @@ func TestACancelAfterTheCommitLandsIsNotAFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
+	heard := false
+	st.ObserveChanges(func(storage.Change, model.Issue) { heard = true })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	st.mutationLandedHookForTest = cancel
-	heard := false
-	err = st.withMutation(ctx, "landed", func(ctx context.Context, tx *sql.Tx) error {
-		hear(ctx, func() { heard = true })
-		_, err := tx.ExecContext(ctx, `UPDATE issues SET title = 'after' WHERE id = ?`, epic.ID)
-		return err
-	})
-	st.mutationLandedHookForTest = nil
+	st.commitWorkingSetHookForTest = func() error {
+		cancel()
+		return nil
+	}
+	after := "after"
+	applied, err := st.Apply(ctx, epic.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &after}})
+	st.commitWorkingSetHookForTest = nil
 	if err != nil {
-		t.Fatalf("withMutation() cancelled after its commit landed error = %v, want nil", err)
+		t.Fatalf("Apply() cancelled during its commit error = %v, want nil", err)
+	}
+	if applied.Issue.Title != after {
+		t.Fatalf("Apply() answered title %q, want the landed write", applied.Issue.Title)
 	}
 	if !heard {
 		t.Fatal("the observers were not told of a write that stands")
@@ -272,7 +278,7 @@ func TestACancelAfterTheCommitLandsIsNotAFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if got.Title != "after" {
+	if got.Title != after {
 		t.Fatalf("title = %q, want the landed write", got.Title)
 	}
 }

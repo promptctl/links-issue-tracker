@@ -272,11 +272,11 @@ Evidence:
 `func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx context.Context, tx *sql.Tx) error) error` (`commit_lock.go`) delegates to `withStampedMutation(ctx, commitStamp{Message: message}, fn)`.
 
 `withStampedMutation` (`commit_lock.go`) runs `attemptMutation` under `withCommitLock`, inside `retryTransientGCContention`:
-1. `s.db.BeginTx(ctx, nil)` — failure → `fmt.Errorf("begin %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
+1. `s.db.BeginTx(landing, nil)`, where `landing` is `context.WithoutCancel(ctx)`, so a commit that applied cannot read the caller's cancel and report a landed write as not landed — failure → `fmt.Errorf("begin %s tx: %w", stamp.Message, err)` (`commit_lock.go`);
 2. `defer tx.Rollback()` (`commit_lock.go`);
 3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — its error is returned verbatim (`commit_lock.go`);
-4. `s.commitWorkingSetOnce(ctx, tx, stamp)`, on `fn`'s transaction, so the writes, the branch head and the working set land in one root update and one journal flush (`commit_lock.go`);
-5. `tx.Commit()`, which ends the transaction the DOLT_COMMIT left empty and writes nothing — the write stands by now, so a failure prints to stderr (`lit: %s landed, and ending its transaction failed (nothing to redo): %v`) and the attempt still succeeds (`commit_lock.go`);
+4. `ctx.Err()`, the last point a cancel stops the attempt, then `s.commitWorkingSetOnce(landing, tx, stamp)`, on `fn`'s transaction, so the writes, the branch head and the working set land in one root update and one journal flush (`commit_lock.go`);
+5. `tx.Commit()`, which ends the transaction the DOLT_COMMIT left empty and writes nothing — the commit step has finished, so a failure prints to stderr (`lit: %s: ending its transaction failed after its commit (nothing to redo): %v`) and the attempt still succeeds (`commit_lock.go`);
 6. `hear(ctx, heard...)`, so an attempt that rolled back is heard by nobody (`commit_lock.go`).
 
 A failed attempt rolls back, so a retry **re-runs `fn`** on the state it first read (`commit_lock.go`).
@@ -3746,7 +3746,7 @@ Test `TestImportTreeRejectsCycle` (`import_tree_test.go`) uses `a blocked_by b`,
 
 `withBatch(ctx, s, fn)` (`batch.go`), generic over the result `R`, shared by ImportTree and BulkApply, is the one owner of a batch's atomicity: the branch the session is on (`from`) moves once, by the whole batch, or not at all.
 1. It runs under **one** commit-lock hold (`withCommitLock`); the lock is context-reentrant, so every `CreateIssue`/`Apply`/`RankSet`/edge mutation inside short-circuits its own acquisition, and no other writer — nor the mirror's clone, copied under the same lock — lands between the batch's commits or sees them half-made.
-2. Inside one `retryTransientGCContention`: `commitStrandedWrites(ctx)` (`sync.go`) first versions any write a failed `DOLT_COMMIT` left staged, under `strandedWritesCommitMessage`, recording a `storage.StrandedWritesCommit`, so a stranded write stays `from`'s and is never carried onto the batch's branch; then `activeBranch` reads `from` and `readDoltHead` the head the batch starts from. The CLI reports these on every command's event as `stranded_writes.commits` (`storage.StrandedWrites`). Failure → `"batch: %w"`.
+2. Inside one `retryTransientGCContention`: `commitStrandedWrites(ctx)` (`sync.go`) first versions any stranded write, under `strandedWritesCommitMessage`, recording a `storage.StrandedWritesCommit`, so a stranded write stays `from`'s and is never carried onto the batch's branch; then `activeBranch` reads `from` and `readDoltHead` the head the batch starts from. The CLI reports these on every command's event as `stranded_writes.commits` (`storage.StrandedWrites`). Failure → `"batch: %w"`.
 3. A `from` under `batchScratchPrefix` (`"lit-batch/"`) is refused: `"batch: refusing to start a batch on %q, another batch's branch"`.
 4. `deleteBranchesUnder(ctx, "lit-batch/", "")` (`scratch_branch.go`) sweeps every branch a batch killed mid-run left, each recorded as an `orphan` `storage.ScratchDelete`; a failure prints `"lit: a batch could not sweep the branches killed batches left: %v"` to stderr and the batch goes on.
 5. `runOnScratch(ctx, from, ["lit-batch/<pid>-<unixnano>"], head, body)` (`scratch_branch.go`): `fn` runs on that scratch branch, made at the head, and every write it makes is its own Dolt commit there. On `fn`'s error the body returns `*storage.RefusedBatchError{Head, Cause}`: its text is the refusal's and `Unwrap` reaches it, so callers classify it as the refusal; its `EventRecord` puts `import.head` (the commit the file started from, which `from` still holds) on the event. `from` never moved, so there is nothing to put back.
@@ -5136,7 +5136,11 @@ if err != nil { return nil, wrapCommitLockContention(err) }
 - `commit_lock_test.go` `TestAcquireCommitLockIgnoresDeadResidue`.
 - `commit_lock_test.go` `TestWrapCommitLockContention`.
 - `commit_lock_test.go` `TestSettleCommitLockRelease`.
-- `commit_lock_test.go` `TestWithMutationResumesAtVersioningAfterStagedCommit`.
+- `commit_lock_test.go` `TestATransientCommitFailureRerunsTheMutationOnce`.
+- `commit_lock_test.go` `TestADoltCommitThatFailsLeavesNothing`.
+- `commit_lock_test.go` `TestACancelDuringACommitIsNotAFailure`.
+- `commit_lock_test.go` `TestAWriteLeavesTheManifestAlone`.
+- `commit_lock_test.go` `TestAMutationLeavesItsConnectionInAutocommit`.
 - `commit_lock_test.go` `TestCommitWorkingSetOnceRendersStamp` — see §5.4.
 
 ---
@@ -5161,11 +5165,11 @@ type commitStamp struct {
 
 `commit_lock.go` — `withStampedMutation` runs `attemptMutation`, under one held commit lock, inside `retryTransientGCContention`:
 
-1. `s.db.BeginTx(ctx, nil)` — error wrapped `begin %s tx: %w` with the message (`commit_lock.go`).
+1. `s.db.BeginTx(landing, nil)`, on `context.WithoutCancel(ctx)` — error wrapped `begin %s tx: %w` with the message (`commit_lock.go`).
 2. `defer tx.Rollback()` (`commit_lock.go`).
 3. `fn(ctx, tx)`, with `ctx` carrying this attempt's own `hearingKey` queue — error returned unwrapped (`commit_lock.go`).
-4. `s.commitWorkingSetOnce(ctx, tx, stamp)`, on `fn`'s transaction (`commit_lock.go`).
-5. `tx.Commit()`, ending the transaction the DOLT_COMMIT left empty — a failure prints to stderr and the attempt still succeeds, since the write stands (`commit_lock.go`).
+4. `ctx.Err()`, then `s.commitWorkingSetOnce(landing, tx, stamp)`, on `fn`'s transaction (`commit_lock.go`).
+5. `tx.Commit()`, ending the transaction the DOLT_COMMIT left empty — a failure prints to stderr and the attempt still succeeds (`commit_lock.go`).
 6. `hear(ctx, heard...)` hands the queue on (`commit_lock.go`).
 
 A failed attempt rolls back, so a retry **re-runs `fn`** on the state it first read (`commit_lock.go`). The lock is acquired and released exactly once (`commit_lock.go`).
