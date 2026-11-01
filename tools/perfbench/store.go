@@ -386,13 +386,12 @@ const idTokenPercent = 40
 // is simply not the row being modelled. The mix above is calibrated to that
 // measurement rather than chosen: it lands at 1.83x.
 //
-// How much this moves the reported bytes is less than the measurement can
-// resolve. 590 descriptions are 0.77 MB of a ~23.5 MB store, so their
-// compressibility bounds about 3% of the total, and the 590-row figure varies
-// between 23.1 and 23.8 MB across runs regardless. The filler is a FIDELITY
-// measure — the fixture is the thing it claims to model — not a lever on the
-// numbers, and that 3% bound is also why a size ceiling belongs on structure
-// rather than on what users type.
+// How much this moves the reported bytes is small. 590 descriptions are 0.77 MB
+// of a ~15.5 MB store, so their compressibility bounds about 5% of the total,
+// and the 590-row figure varies between 15.4 and 15.7 MB across runs regardless.
+// The filler is a FIDELITY measure — the fixture is the thing it claims to
+// model — not a lever on the numbers, and that 5% bound is also why a size
+// ceiling belongs on structure rather than on what users type.
 //
 // Deterministic, so two runs of the same size generate byte-identical rows and
 // a change in reported store bytes is a change in lit, never in the fixture.

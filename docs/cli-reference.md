@@ -1138,7 +1138,7 @@ A `footprint:` line gives the store's size on disk against its size ceiling, the
 each part:
 
 ```text
-footprint: 412.3 MiB of a 2.1 GiB ceiling; chunk store 180.2 MiB, temp table files 0 B, automatic snapshots 220.1 MiB, user snapshots 12.0 MiB, remote cache 95.4 MiB (outside the ceiling)
+footprint: 412.3 MiB of a 2.0 GiB ceiling; chunk store 180.2 MiB, temp table files 0 B, automatic snapshots 220.1 MiB, user snapshots 12.0 MiB, remote cache 95.4 MiB (outside the ceiling)
 ```
 
 The ceiling counts every part but the remote cache, whose size follows the

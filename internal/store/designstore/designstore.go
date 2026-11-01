@@ -22,24 +22,25 @@ const Rows = 2_800
 const (
 	// measuredCompactedBytes is the design-size store's compacted bytes. It is
 	// a generated store's, whose rank keys are short. A store written before
-	// keys stopped growing holds long ones until a write respaces them, and
-	// costs more per row than this.
+	// keys stopped growing keeps the long ones, which only a respace at a
+	// crowded spot rewrites, and costs more per row than this.
 	measuredCompactedBytes int64 = 114_610_000
-	// measuredCommitBytes is the design-size store's bytes/commit.
+	// measuredCommitBytes is the design-size store's bytes/commit. It sits 7-20%
+	// over the 2026-11-01 runs, which fell with no cause found, so a re-run
+	// reads under it and the rule below keeps it.
 	measuredCommitBytes int64 = 29_850
 )
 
 // HeadroomPercent is how far past its measurement each figure may grow while
 // the ceiling still holds a design-size store. Five design-size runs on
 // 2026-11-01 spread 4.2% per store (114.24-119.04 MB) and 12.0% per commit
-// (24.80-27.77 KB), and the commit figure above sits 11.3% over the 2026-10-21
-// one (26.82 KB). 25% clears that noise and that drift twice over, and a store
-// a quarter heavier per row or per commit is a regression worth a ticket. A
-// figure past its allowance is answered by that ticket, never by raising the
-// allowance, and re-measuring into the figures above raises it as surely as
-// raising this does: either turns the nightly lane green with the alarm
-// disconnected. The figures move only with the ticket that found why a
-// design-size store's cost moved.
+// (24.80-27.77 KB). 25% clears that noise twice over, and a store a quarter
+// heavier per row or per commit is a regression worth a ticket. A figure past
+// its allowance is answered by that ticket, never by raising the allowance,
+// and re-measuring into the figures above raises it as surely as raising this
+// does: either turns the nightly lane green with the alarm disconnected. The
+// figures move only with the ticket that found why a design-size store's cost
+// moved.
 const HeadroomPercent = 25
 
 // The allowances are the figures the ceiling is derived from, and the most a
