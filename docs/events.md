@@ -46,7 +46,7 @@ lines here for reading:
   "exit_code": 0,
   "sink": "file",
   "sink_rotation": "none",
-  "counts": {"git.lit_spawns": 5, "next.rows_gathered": 1, "rank.ancestry_levels": 0, "rank.ancestry_links": 0, "rank.longest_key": 0, "statusline.bytes": 199},
+  "counts": {"git.lit_spawns": 5, "next.rows_gathered": 1, "rank.ancestry_levels": 2, "rank.ancestry_links": 84, "rank.longest_key": 0, "statusline.bytes": 199},
   "facts": {
     "next.outcome": "served_from_new_lane",
     "next.picked": "app-auth-082.oa5",
@@ -321,9 +321,9 @@ finds.
 | `rank.respace.longest_key` | The longest key it left. |
 | `rank.respace.ceiling` | How long the key that set it off may grow before its spot counts as crowded. A `longest_key` at or past this is density the window left to key length. |
 
-A read that lists a ticket's blockers, dependents or related tickets, or lists tickets it already knows, reads the parents above them to put them in order. A group of one needs no order, so a read of tickets with at most one of each reads none.
+A read that lists a ticket's blockers, dependents, related tickets or follow-ups, or lists tickets it already knows, reads the parents above them to put them in order, one query a level, ending on the level that finds no more parents. A group of one needs no order, so a read of tickets with at most one of each reads none. A listing not bound to known tickets reads every parent edge in one query, and so do `lit doctor` and what orders the whole queue.
 
-`rank.ancestry_levels`, in `counts`, is how many levels of parents the command read, one query each, and `0` when it read none. `rank.ancestry_links` is the parent edges those levels returned. Together they are that read's cost, which grows with the tickets ordered and not with the store.
+`rank.ancestry_levels`, in `counts`, is how many of those queries the command ran, and `0` when it ran none. `rank.ancestry_links` is the parent edges they returned. Together they are what tree order cost the command: a climb grows with the tickets ordered, and a query that returns every parent edge grows with the store.
 
 ## What checking the config records
 

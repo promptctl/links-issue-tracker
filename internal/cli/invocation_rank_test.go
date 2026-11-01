@@ -50,20 +50,22 @@ func TestAWriteSaysWhatItDidToRankKeys(t *testing.T) {
 	t.Fatal("80 placements at one spot never respaced")
 }
 
-// What tree order cost a read is on its event, added across the levels it
-// climbed, and a command that climbed nothing says 0, not nothing.
+// What tree order cost a read is on its event, added across its queries, a
+// command that read no parents says 0, not nothing, and a read of every parent
+// edge is on the event like a climb, because it is the read that grows with the
+// store.
 func TestAReadSaysWhatTreeOrderCostIt(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	first := newEpicInDir(t, repo, "First")
 	second := newEpicInDir(t, repo, "Second")
 	third := newEpicInDir(t, repo, "Third")
-	runCLIInDir(t, repo, "backlog")
+	runCLIInDir(t, repo, "quickstart")
 	ev := lastEvent(t)
 	levels, counted := ev.Counts["rank.ancestry_levels"]
 	links, linked := ev.Counts["rank.ancestry_links"]
 	if !counted || levels != 0 || !linked || links != 0 {
-		t.Fatalf("lit backlog counts = %v, want rank.ancestry_levels 0 and rank.ancestry_links 0", ev.Counts)
+		t.Fatalf("lit quickstart counts = %v, want rank.ancestry_levels 0 and rank.ancestry_links 0", ev.Counts)
 	}
 
 	leaf := func(parent, title string) string {
@@ -74,9 +76,14 @@ func TestAReadSaysWhatTreeOrderCostIt(t *testing.T) {
 	for _, parent := range []string{first, second} {
 		runCLIInDir(t, repo, "dep", "add", subject, "--blocked-by", leaf(parent, "blocker"))
 	}
-	runCLIInDir(t, repo, "show", subject)
+	runCLIInDir(t, repo, "close", subject, "--resolution", "wontfix", "--reason", "measured")
 	ev = lastEvent(t)
-	if ev.Counts["rank.ancestry_levels"] < 2 || ev.Counts["rank.ancestry_links"] < 2 {
-		t.Errorf("lit show counts = %v, want the levels and the edges its two blockers climbed, added up", ev.Counts)
+	if ev.Counts["rank.ancestry_levels"] != 2 || ev.Counts["rank.ancestry_links"] != 2 {
+		t.Errorf("lit close counts = %v, want the two levels and two edges its blockers climbed and no whole read", ev.Counts)
+	}
+	runCLIInDir(t, repo, "backlog")
+	ev = lastEvent(t)
+	if ev.Counts["rank.ancestry_levels"] < 1 || ev.Counts["rank.ancestry_links"] < 3 {
+		t.Errorf("lit backlog counts = %v, want the whole read and at least the three parent edges", ev.Counts)
 	}
 }

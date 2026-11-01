@@ -100,7 +100,7 @@ func TestAGroupOfOneClimbsNothing(t *testing.T) {
 	ctx := WithRankObserver(context.Background(), RankObserver{
 		Wrote:    func(int) {},
 		Respaced: func(Respace) {},
-		Climbed: func(n int) {
+		ReadParentEdges: func(n int) {
 			levels++
 			links += n
 		},

@@ -102,9 +102,8 @@ func siblingsOf(focalID string, parentChildren []model.Issue) []model.Issue {
 // level of the climb sortInTreeOrder makes. Subjects that no longer exist are
 // simply absent from the result, mirroring getIssuesByIDs; callers iterating
 // known-present ids never observe the hole.
-// [LAW:dataflow-not-control-flow] One relations query plus one issue-hydration
-// query feed a pure bucketing pass — the per-subject work is map lookups, not
-// extra round-trips.
+// [LAW:dataflow-not-control-flow] Those queries feed a pure bucketing pass — the
+// per-subject work is map lookups, not extra round-trips.
 func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
 	subjects := dedupeStrings(ids)
 	if len(subjects) == 0 {

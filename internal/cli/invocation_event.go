@@ -68,8 +68,8 @@ func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 // every write engine's hold of Dolt's LOCK with what it told the writers
 // behind it. A fourth puts there what a write that stood did to rank keys: each
 // respace, and the longest key written, and what reads paid to learn tree order:
-// the levels of parents they climbed and the edges those read. Each key starts
-// empty so an invocation that met none says so, not nothing.
+// the queries of parent edges they ran and the edges those returned. Each key
+// starts empty so an invocation that met none says so, not nothing.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
 	event := telemetry.With(ctx, recorder)
@@ -88,7 +88,7 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	ctx = store.WithRankObserver(ctx, store.RankObserver{
 		Wrote:    func(longestKey int) { telemetry.Max(event, "rank.longest_key", longestKey) },
 		Respaced: func(respace store.Respace) { telemetry.Append(event, "rank.respaces", rankRespaceValue(respace)) },
-		Climbed: func(links int) {
+		ReadParentEdges: func(links int) {
 			telemetry.Add(event, "rank.ancestry_levels", 1)
 			telemetry.Add(event, "rank.ancestry_links", links)
 		},

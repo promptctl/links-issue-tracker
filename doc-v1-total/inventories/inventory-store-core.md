@@ -581,7 +581,7 @@ Clauses are joined with `" AND "` (`store.go`).
 
 **Status and resolution are NOT filtered in SQL.** `parseStatusFilter(filter.Statuses)` (`store.go`, defined `store.go`) only maps each raw value through `model.DefaultOpen(string(raw))` and never errors; the actual filtering happens post-hydration.
 
-Ordering is not SQL. `loadRankAncestry(ctx, s.db)` (`ranking.go`) runs first: `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.deleted_at IS NULL ORDER BY r.src_id, r.dst_id` — `frameColumn`'s rule for every issue at once — scanned into `storage.ParentLink`s and handed to `storage.NewRankAncestry`; a query or scan error is returned. Then `storage.IssueOrdering(filter.SortBy, ancestry)` (`internal/storage/ordering.go`, called from `store.go`) is parsed before the listing query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs only the ancestry read; it yields a comparator over hydrated issues:
+Ordering is not SQL. `listingOrdering(ctx, filter.SortBy, selected, restricted)` (`ranking.go`) runs after `requireIssues` and `selectedIssueIDs`. A listing restricted to known rows reads the framing edges above them through `loadRankAncestryAbove`, one query a level; any other reads them all through `loadRankAncestry`: `SELECT r.src_id, r.dst_id, p.item_rank FROM relations r JOIN issues p ON p.id = r.dst_id WHERE r.type = 'parent-child' AND p.deleted_at IS NULL` — `frameColumn`'s rule for every issue at once. Either way the rows are scanned into `storage.ParentLink`s and handed to `storage.NewRankAncestry`; a query or scan error is returned. Then `storage.IssueOrdering(filter.SortBy, ancestry)` (`internal/storage/ordering.go`, called from `ranking.go`) is parsed before the listing query, so an unsupported sort field (`model.ValidationError{Message: fmt.Sprintf("unsupported sort field %q", spec.Field)}`) costs those reads and not the listing query; it yields a comparator over hydrated issues:
 - no specs → `rank`;
 - sort keys (`sortKeys(ancestry)`, `internal/storage/ordering.go`, the table both engines share): `id`, `title`, `status` (compares the derived `State()`), `priority`, `rank` (`ancestry.Compare` — tree order), `type`, `topic`, `assignee`, `created_at`, `updated_at`;
 - `Desc` negates a key's comparator;
@@ -2813,8 +2813,8 @@ via `fmt.Sprintf` for the FROM clause onward, read through `queryRelations` (`re
 - Builds a `subjectSet` and a `needed` set seeded with the subjects; every relation endpoint is added to `needed`.
 - Buckets rows per subject; a row whose src and dst are both the same subject is added once (`rel.DstID != rel.SrcID` guard).
 - Hydrates `s.getIssuesByIDs(ctx, mapKeys(needed))` (`mapKeys`, unspecified order).
-- Loads `loadRankAncestry(ctx, s.db)` once for every subject's groups.
-- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID, ancestry)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
+- For each subject present in `issuesByID`, produces `bucketRelations(id, bySubject[id], issuesByID)` with `.Issue` set; subjects that no longer exist are simply omitted from the result map.
+- `sortInTreeOrder(ctx, s.db, ...)` over every subject's `BlockedBy` and `Blocks`, one climb however many subjects, and none when no group holds two or more.
 - `TestGetRelationsByIDsMatchesIssueDetail` asserts parity with `GetIssueDetail` for Children/BlockedBy/Blocks/Parent, absence of a nonexistent subject, epic children in rank order, and the BlockedBy/Blocks orientation — `internal/store/relations_batch_test.go`.
 
 ### 4.11 Listing by parent

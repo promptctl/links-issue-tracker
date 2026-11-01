@@ -128,9 +128,9 @@ type rankWatch struct {
 
 func (w *rankWatch) on(ctx context.Context) context.Context {
 	return WithRankObserver(ctx, RankObserver{
-		Wrote:    func(longestKey int) { w.wrote = append(w.wrote, longestKey) },
-		Respaced: func(r Respace) { w.respaces = append(w.respaces, r) },
-		Climbed:  func(int) {},
+		Wrote:           func(longestKey int) { w.wrote = append(w.wrote, longestKey) },
+		Respaced:        func(r Respace) { w.respaces = append(w.respaces, r) },
+		ReadParentEdges: func(int) {},
 	})
 }
 

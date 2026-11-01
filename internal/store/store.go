@@ -1324,11 +1324,10 @@ func (s *Store) childrenOf(ctx context.Context, parentID string) ([]model.Issue,
 	if err != nil {
 		return nil, err
 	}
-	byID, err := s.getIssuesByIDs(ctx, ids)
+	children, err := s.hydratedIssues(ctx, ids)
 	if err != nil {
 		return nil, err
 	}
-	children := slices.Collect(maps.Values(byID))
 	storage.SortSiblings(children)
 	return children, nil
 }
@@ -1342,13 +1341,9 @@ func (s *Store) followUpsOf(ctx context.Context, focalID string) ([]model.Issue,
 	if err != nil {
 		return nil, err
 	}
-	byID, err := s.getIssuesByIDs(ctx, ids)
+	followUps, err := s.hydratedIssues(ctx, ids)
 	if err != nil {
 		return nil, err
-	}
-	followUps := make([]model.Issue, 0, len(byID))
-	for _, followUp := range byID {
-		followUps = append(followUps, followUp)
 	}
 	if err := sortInTreeOrder(ctx, s.db, followUps); err != nil {
 		return nil, err
@@ -1411,6 +1406,16 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 		out[issue.ID] = issue
 	}
 	return out, nil
+}
+
+// hydratedIssues is getIssuesByIDs' rows as a list for the caller to order, empty
+// and never nil when none exist.
+func (s *Store) hydratedIssues(ctx context.Context, ids []string) ([]model.Issue, error) {
+	byID, err := s.getIssuesByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	return slices.AppendSeq(make([]model.Issue, 0, len(byID)), maps.Values(byID)), nil
 }
 
 // issueTypesByIDs reads each id's issue_type as a column, keyed by id, with
@@ -2430,11 +2435,10 @@ func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, 
 	if err != nil {
 		return claims.Family{}, err
 	}
-	issuesByID, err := s.getIssuesByIDs(ctx, ids)
+	issues, err := s.hydratedIssues(ctx, ids)
 	if err != nil {
 		return claims.Family{}, err
 	}
-	issues := slices.Collect(maps.Values(issuesByID))
 	storage.SortSiblings(issues)
 	return claims.Family{Issues: issues, ParentByChild: parents, ParentTypes: parentTypes, Events: events}, nil
 }

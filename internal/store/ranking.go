@@ -99,6 +99,7 @@ func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, 
 	if err != nil {
 		return storage.RankAncestry{}, err
 	}
+	rankObserverFrom(ctx).ReadParentEdges(len(links))
 	return storage.NewRankAncestry(links), nil
 }
 
@@ -131,7 +132,7 @@ func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (sto
 		if err != nil {
 			return storage.RankAncestry{}, err
 		}
-		observer.Climbed(len(level))
+		observer.ReadParentEdges(len(level))
 		links = append(links, level...)
 		frontier = nil
 		for _, link := range level {
@@ -168,8 +169,10 @@ func sortInTreeOrder(ctx context.Context, q rowQueryer, groups ...[]model.Issue)
 }
 
 // listingOrdering is the comparison a listing sorts by, for the rows selected
-// names. A listing not restricted to known rows reads every framing edge,
-// because tree order reads the keys of containers it may have filtered out.
+// names. A listing not restricted to known rows has none to climb from until
+// its query has run, and the listing that reaches most of the store pays less
+// for the whole read than for a climb from every row, so it reads every framing
+// edge.
 func (s *Store) listingOrdering(ctx context.Context, specs []storage.SortSpec, selected []string, restricted bool) (func(a, b model.Issue) int, error) {
 	var ancestry storage.RankAncestry
 	var err error
