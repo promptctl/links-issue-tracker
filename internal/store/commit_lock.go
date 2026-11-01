@@ -87,7 +87,7 @@ func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx co
 }
 
 // withStampedMutation runs a mutation under a held commit lock. It begins a
-// tx, invokes fn, commits the tx, and runs the working-set commit — all as ONE
+// tx, invokes fn, and commits the tx as a Dolt commit — all as ONE
 // retried unit (re-entrant: the lock is already held, so acquireCommitLock
 // short-circuits). The lock is acquired and released exactly once.
 //
@@ -97,46 +97,30 @@ func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx co
 // are all owned at their respective single boundaries; withStampedMutation
 // composes them rather than duplicating any of them.
 //
-// The whole BeginTx→fn→tx.Commit→commitWorkingSetOnce sequence is inside
-// retryTransientGCContention, not just the final DOLT_COMMIT step: tx.Commit()
-// — the plain SQL transaction commit that lands fn's writes into Dolt's
-// working set, distinct from the later DOLT_COMMIT that versions them —
-// touches the same manifest and is just as exposed to transient online-GC
-// contention.
-//
-// The unit is two phases with an owned resume point, not one blind re-run:
-// staging (BeginTx→fn→tx.Commit) and versioning (DOLT_COMMIT). While staging
-// fails, retrying it whole is safe — fn only writes through the tx it's given,
-// and the deferred Rollback discards the failed attempt. But once tx.Commit
-// has SUCCEEDED, fn's writes are durably staged in the working set (they
-// survive a connection rotation), so a retry provoked by a transient failure
-// in the versioning step must resume AT versioning: re-running fn would apply
-// the mutation a second time on top of its own staged writes (CreateIssue's
-// collision check, for one, would mint a duplicate issue under a higher
-// nonce). The staged flag is the phase marker each attempt resumes from.
-// [LAW:no-ambient-temporal-coupling] the phase is explicit owned state, not an
-// assumption about which step happened to fail.
+// The whole BeginTx→fn→commitWorkingSetOnce sequence is inside
+// retryTransientGCContention because it is one atomic step: DOLT_COMMIT runs in
+// fn's transaction, so the writes, the branch head and the working set land in
+// a single root update, and one journal flush makes them durable. A failure
+// before that update rolls fn's writes back, so a retry re-runs fn on the state
+// it first read. Past it the session holds an empty transaction, which the
+// deferred Rollback ends.
 func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn func(ctx context.Context, tx *sql.Tx) error) error {
-	staged := false
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
-			if !staged {
-				tx, err := s.db.BeginTx(ctx, nil)
-				if err != nil {
-					return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
-				}
-				defer tx.Rollback()
-				var heard []owed
-				if err := fn(context.WithValue(ctx, hearingKey{}, &heard), tx); err != nil {
-					return err
-				}
-				if err := tx.Commit(); err != nil {
-					return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
-				}
-				staged = true
-				hear(ctx, heard...)
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
 			}
-			return s.commitWorkingSetOnce(ctx, stamp)
+			defer tx.Rollback()
+			var heard []owed
+			if err := fn(context.WithValue(ctx, hearingKey{}, &heard), tx); err != nil {
+				return err
+			}
+			if err := s.commitWorkingSetOnce(ctx, tx, stamp); err != nil {
+				return err
+			}
+			hear(ctx, heard...)
+			return nil
 		}, s.reconnect)
 	})
 }
@@ -326,7 +310,7 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 	// [LAW:one-source-of-truth] A process-shared commit lock at this boundary is the canonical writer serialization mechanism.
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
-			return s.commitWorkingSetOnce(ctx, commitStamp{Message: message})
+			return s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: message})
 		}, s.reconnect)
 	})
 }
@@ -339,7 +323,7 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 // provenance replay leans on exactly this to drop folded commits whose
 // projection changed nothing). [LAW:single-enforcer] One trim+default rule and
 // one flag rendering for Dolt commits.
-func (s *Store) commitWorkingSetOnce(ctx context.Context, stamp commitStamp) error {
+func (s *Store) commitWorkingSetOnce(ctx context.Context, q rowQueryer, stamp commitStamp) error {
 	if s.commitWorkingSetHookForTest != nil {
 		if err := s.commitWorkingSetHookForTest(); err != nil {
 			return err
@@ -364,7 +348,7 @@ func (s *Store) commitWorkingSetOnce(ctx context.Context, stamp commitStamp) err
 	// [LAW:single-enforcer] buildProcedureCall owns the CALL-with-N-placeholders
 	// spelling; this renders no second copy of it.
 	var commitHash string
-	err := s.db.QueryRowContext(ctx, buildProcedureCall("DOLT_COMMIT", len(args)), args...).Scan(&commitHash)
+	err := q.QueryRowContext(ctx, buildProcedureCall("DOLT_COMMIT", len(args)), args...).Scan(&commitHash)
 	if err == nil {
 		return nil
 	}

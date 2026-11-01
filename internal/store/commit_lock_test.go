@@ -149,15 +149,14 @@ func TestSettleCommitLockRelease(t *testing.T) {
 	}
 }
 
-// TestWithMutationResumesAtVersioningAfterStagedCommit pins withMutation's
-// phase resume: when the staging transaction has committed and only the
-// versioning step (DOLT_COMMIT) fails transiently, the retry must re-run
-// versioning alone. Re-running the mutation body against its own staged
-// writes would double-apply it — for CreateIssue, the in-tx collision check
-// would find the staged row and mint a SECOND issue under a higher nonce —
-// so the discriminating assertion is that exactly one issue exists afterward
-// beyond the epic it is filed into.
-func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
+// TestATransientCommitFailureRerunsTheMutationOnce pins that a mutation and its
+// commit are one atomic step: when DOLT_COMMIT fails transiently the mutation's
+// writes roll back and the retry re-runs the body on the state it first read.
+// A write that outlived the failure would meet its own row on the retry — for
+// CreateIssue, the in-tx collision check would mint a SECOND issue under a
+// higher nonce — so the discriminating assertion is that exactly one issue
+// exists afterward beyond the epic it is filed into.
+func TestATransientCommitFailureRerunsTheMutationOnce(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -176,7 +175,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		return nil
 	}
 
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a versioning retry", Topic: "sync", ParentID: epic.ID})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a commit retry", Topic: "sync", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -184,7 +183,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		t.Fatalf("CreateIssue() returned an empty id")
 	}
 	if fires < 2 {
-		t.Fatalf("versioning step ran %d time(s); want the transient failure to have forced a retry", fires)
+		t.Fatalf("the commit ran %d time(s); want the transient failure to have forced a retry", fires)
 	}
 	st.commitWorkingSetHookForTest = nil
 
@@ -193,7 +192,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		t.Fatalf("LocalIssueCount() error = %v", err)
 	}
 	if count != 2 {
-		t.Fatalf("LocalIssueCount() = %d, want exactly 2 (the epic and the one task) — more means the retry re-ran the staged mutation body", count)
+		t.Fatalf("LocalIssueCount() = %d, want exactly 2 (the epic and the one task) — more means a write outlived the failed commit", count)
 	}
 }
 
@@ -216,7 +215,7 @@ func TestCommitWorkingSetOnceRendersStamp(t *testing.T) {
 		Author:     "prov-author <prov@example.test>",
 		AllowEmpty: true,
 	}
-	if err := st.commitWorkingSetOnce(ctx, stamp); err != nil {
+	if err := st.commitWorkingSetOnce(ctx, st.db, stamp); err != nil {
 		t.Fatalf("commitWorkingSetOnce(stamp) error = %v", err)
 	}
 

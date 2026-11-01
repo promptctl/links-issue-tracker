@@ -649,7 +649,7 @@ func (s *Store) commitStrandedWrites(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT table_name) FROM dolt_status`).Scan(&tables); err != nil {
 		return fmt.Errorf("read the working set: %w", err)
 	}
-	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
+	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
 		return err
 	}
 	if tables > 0 {

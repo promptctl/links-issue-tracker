@@ -1110,7 +1110,7 @@ func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 	if err := st.reconnect(ctx); err != nil {
 		t.Fatalf("reconnect() error = %v", err)
 	}
-	if err := st.commitWorkingSetOnce(ctx, commitStamp{Message: "commit staged probe after reconnect"}); err != nil {
+	if err := st.commitWorkingSetOnce(ctx, st.db, commitStamp{Message: "commit staged probe after reconnect"}); err != nil {
 		t.Fatalf("commitWorkingSetOnce() after reconnect error = %v", err)
 	}
 	if err := st.Close(); err != nil {

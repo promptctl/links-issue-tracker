@@ -709,7 +709,7 @@ func (s *Store) replayDeltaOnScratch(ctx context.Context, delta exportDelta, sta
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
 		}
-		return s.commitWorkingSetOnce(ctx, stamp)
+		return s.commitWorkingSetOnce(ctx, s.db, stamp)
 	})
 }
 
@@ -924,7 +924,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// single-attempt commitWorkingSetOnce for the same reason every commit
 	// below goes through replayDeltaOnScratch: a self-rotating retry would
 	// resume on the data branch (see replayDeltaOnScratch).
-	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: reconcileLiftCommitMessage}); err != nil {
+	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: reconcileLiftCommitMessage}); err != nil {
 		return replayLanding{}, fmt.Errorf("commit schema lift of %q: %w", remoteHead, err)
 	}
 	liftedBase, err := readDoltHead(ctx, s.db)

@@ -282,8 +282,8 @@ func holdForRefWrite(ctx context.Context, stderr io.Writer, root string, access 
 		return err
 	}
 	defer func() {
-		// The record retires first, then Close releases Dolt's LOCK and
-		// flushes the manifest; a failure in either is the caller's to hear.
+		// The record retires first, then Close releases Dolt's LOCK; a
+		// failure in either is the caller's to hear.
 		// The hold ends after the close, which Dolt's Released has usually
 		// already ended. [LAW:no-silent-failure]
 		recordErr := releaseRecord()

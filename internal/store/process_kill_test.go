@@ -26,9 +26,8 @@ const killHelperDirEnvVar = "LIT_STORE_KILL_HELPER_DIR"
 // TestHelperKillMidCommit is not a real test — it is re-executed as a
 // separate OS process by TestMidMutationProcessKillRecovers. It installs the
 // commitWorkingSetHookForTest injection point (commit_lock.go) to fire
-// exactly where a real crash matters: after fn's writes are durably staged
-// (tx.Commit succeeded, per withStampedMutation's staged flag) but before
-// DOLT_COMMIT versions them. SIGKILL there is unblockable and immediate, so
+// exactly where a real crash matters: after fn's writes are in the transaction
+// but before DOLT_COMMIT lands them. SIGKILL there is unblockable and immediate, so
 // the process dies inside the hook — CreateIssue never returns, and no
 // deferred cleanup (commit lock release included) runs, exactly the shape a
 // genuine crash leaves behind.
@@ -62,8 +61,8 @@ func TestHelperKillMidCommit(t *testing.T) {
 }
 
 // TestMidMutationProcessKillRecovers pins withMutation's crash recovery: a
-// real SIGKILL delivered while a mutation is staged-but-not-yet-versioned must
-// not wedge the store. The existing panic-injection tests in
+// real SIGKILL delivered while a mutation is in flight must neither wedge the
+// store nor leave any part of the write behind. The existing panic-injection tests in
 // crash_safety_test.go prove the deferred release fires for an in-process
 // panic; this proves the same recovery holds for a process that a real crash
 // removes with NO deferred cleanup at all.
@@ -98,16 +97,14 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 
 	assertCommitLockFree(t, st.commitLockPath)
 
-	// The killed process's tx.Commit() succeeded before the hook fired, so
-	// its write is durably staged in the working set even though the
-	// process died before DOLT_COMMIT ran. A fresh process opening the same
-	// path must see it.
+	// The process died before DOLT_COMMIT, and the mutation's writes live in
+	// its transaction, so a fresh process finds none of them.
 	found, err := st.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{"mid-mutation kill target"}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	if len(found) == 0 {
-		t.Fatal("the killed mutation's staged write did not survive the kill — tx.Commit's durability guarantee did not hold under a real process kill")
+	if len(found) != 0 {
+		t.Fatalf("the killed mutation left %d issue(s) behind; a write lands whole or not at all", len(found))
 	}
 
 	// A fresh mutation must succeed — proves the store is not wedged behind

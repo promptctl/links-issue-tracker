@@ -190,11 +190,9 @@ type Store struct {
 	planReadsHookForTest func()
 
 	// commitWorkingSetHookForTest, if non-nil, fires at the top of every
-	// commitWorkingSetOnce — the versioning (DOLT_COMMIT) step — and its error,
-	// if any, stands in for that step failing. Production callers leave it nil;
-	// the withMutation phase-resume test uses it to fail versioning transiently
-	// exactly once, proving a retry resumes at versioning instead of re-running
-	// the staged mutation body. Same per-Store seam rationale as above.
+	// commitWorkingSetOnce and its error, if any, stands in for DOLT_COMMIT
+	// failing. Production callers leave it nil. Same per-Store seam rationale
+	// as above.
 	commitWorkingSetHookForTest func() error
 
 	// landHookForTest, if non-nil, fires at the top of every attempt of a
