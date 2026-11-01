@@ -537,7 +537,7 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	for stack := []string{parentID}; len(stack) > 0; {
 		at := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		parents, err := parentsOfTx(ctx, tx, at)
+		parents, err := parentsOfIssue(ctx, tx, at)
 		if err != nil {
 			return fmt.Errorf("parent cycle check: %w", err)
 		}
@@ -605,18 +605,15 @@ func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, er
 	return parentOf, nil
 }
 
-// parentsOfTx is every parent one issue's stored edges name, by the rule
-// loadParentEdges states: no lifecycle predicate narrows it.
-func parentsOfTx(ctx context.Context, tx *sql.Tx, issueID string) ([]string, error) {
-	edges, err := queryParentEdges(ctx, tx, "r.src_id = ?", issueID)
+// parentsOfIssue is every parent one issue's stored edges name, the statement of
+// model.parentsOf. It reads relations alone, so neither a lifecycle predicate
+// nor a parent row that is gone narrows it.
+func parentsOfIssue(ctx context.Context, q rowQueryer, issueID string) ([]string, error) {
+	rows, err := q.QueryContext(ctx, `SELECT dst_id FROM `+relationsBySrc+` AND type = ?`, issueID, string(model.RelParentChild))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("query parents of %s: %w", issueID, err)
 	}
-	parents := make([]string, len(edges))
-	for i, edge := range edges {
-		parents[i] = edge.parent
-	}
-	return parents, nil
+	return scanIDColumn(rows)
 }
 
 // liveBlocksEdges is the one query body for the blocked-by edges that count,

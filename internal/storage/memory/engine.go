@@ -249,7 +249,7 @@ func (e *Engine) stamp(family map[string]bool) time.Time {
 	for id := range family {
 		seen = append(seen, e.events[id]...)
 	}
-	return e.stamps.Stamp(e.clock, seen)
+	return e.stamps.Stamp(e.clock, model.NewestInstant(seen))
 }
 
 // ObserveChanges adds observe to the observers notify calls, once for every

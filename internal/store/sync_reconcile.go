@@ -228,7 +228,7 @@ func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts
 				seen = append(seen, event)
 			}
 		}
-		issue, event := s.stampEdit(issue, s.stamps.Stamp(s.clock, seen), proseResolvedReason, actor, changes)
+		issue, event := s.stampEdit(issue, s.stamps.Stamp(s.clock, model.NewestInstant(seen)), proseResolvedReason, actor, changes)
 		issues[i] = issue
 		events = append(events, event)
 		recorded += len(changes)

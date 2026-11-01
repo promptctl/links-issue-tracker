@@ -177,7 +177,7 @@ type Store struct {
 	observers []func(storage.Change, model.Issue)
 
 	// planReadsHookForTest, if non-nil, fires amid a write's plan reads — in
-	// Apply after its GetIssue, in CreateIssue after historyFiledUnder — with
+	// Apply after its GetIssue, in CreateIssue after newestFiledUnder — with
 	// the commit lock held and no tx open. Production callers leave it nil; the
 	// concurrency regression tests set it to attempt a foreign write there and
 	// prove it cannot land until the planned write has. It sits after the
@@ -737,7 +737,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		// checks pass. The parent itself is checked in the mutation, so a create
 		// refused there has already taken its reading, and the tally counts it as
 		// it counts any refused write.
-		filed, err := s.historyFiledUnder(ctx, parentID)
+		filed, err := s.newestFiledUnder(ctx, parentID)
 		if err != nil {
 			return err
 		}
@@ -1613,16 +1613,15 @@ func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (
 		if hook := s.planReadsHookForTest; hook != nil {
 			hook()
 		}
-		// [LAW:one-source-of-truth] One read of history plans the change and
-		// stamps it: the issue's own events decide its holder and its phase, and
-		// the lane family's decide the instant, so the write is stamped past
-		// exactly the history it was planned against.
-		family, err := s.laneFamilyHistory(ctx, current.ID)
+		// The lane family's newest instant decides the stamp, the issue's own
+		// events among it, and an action reads those events whole for the holder
+		// and phase they decide. Both reads are under this hold, so the write is
+		// stamped past exactly the history it was planned against.
+		newest, err := s.newestInLaneFamily(ctx, current.ID)
 		if err != nil {
 			return err
 		}
-		at := s.stamps.Stamp(s.clock, family)
-		history := eventsOf(current.ID, family)
+		at := s.stamps.Stamp(s.clock, newest)
 		// [LAW:no-ambient-temporal-coupling] The combined transition+field update
 		// has exactly one atomicity owner: this method plans both writes (pure:
 		// validation, in-memory mutation) and then performs them inside a SINGLE
@@ -1637,6 +1636,10 @@ func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (
 		var lw lifecycleWrite
 		var handover *claims.Handover
 		if c.Action != nil {
+			history, err := s.ListEvents(ctx, current.ID)
+			if err != nil {
+				return err
+			}
 			lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)
 			if err != nil {
 				return err
@@ -2383,35 +2386,108 @@ func queryComments(ctx context.Context, q rowQueryer, from string, args ...any) 
 	return out, nil
 }
 
-// laneFamilyHistory reads issueID's history and its lane family's in one
-// statement, so the plan and the stamp come from one snapshot: issueID's own
-// events whole, for the plan to decide its holder and phase on, and the rest
-// of the family — every issue filed under a parent issueID is filed under,
-// the SQL statement of model.LaneFamily — as bare events, since the stamp
-// reads only their instants and a sibling's description history is no input
-// to it. Every write reads it, so it costs the family's size and not the
-// store's: the two halves are a UNION rather than one condition ORed across
-// them, and each walks from the issue id it is given to the events filed
-// under it by lookup joins. The hints name that walk because Dolt plans every
-// unhinted spelling of this read as a scan of issue_events — at 3,000 issues
-// outside a 30-issue family, 7ms for the OR and 17ms for the UNION, where
-// the hinted read takes 1.2ms, as it does with nothing outside the family. queryEvents parses each stamp into its instant, so the stamp
-// never trusts the varchar's spelling.
+// laneFamilyEvents is the statement selecting columns from the events of
+// issueID's lane family, and its arguments. It is built as model.LaneFamily
+// states the family: issueID's own events, then a branch for each parent, one
+// for what containment leaves, more for what restored data can. An issue filed
+// under a parent sits in both halves, and neither reader minds: queryEvents
+// collapses an event by its id, and an instant read twice is the same instant.
+// The parents are read first and the statement walks down from them because a
+// join of relations to itself costs a read of the family about a fifth more:
+// 44ms over 37ms at 3,999 children and 39,990 events.
+func (s *Store) laneFamilyEvents(ctx context.Context, columns, issueID string) (string, []any, error) {
+	parents, err := parentsOfIssue(ctx, s.db, issueID)
+	if err != nil {
+		return "", nil, err
+	}
+	selection := `SELECT ` + columns + ` FROM issue_events e WHERE e.issue_id = ?`
+	args := []any{issueID}
+	for _, parent := range parents {
+		selection += ` UNION ALL ` + filedUnderEvents(columns)
+		args = append(args, parent, string(model.RelParentChild))
+	}
+	return selection, args, nil
+}
+
+// filedUnderEvents selects columns from the events of every issue filed under
+// one parent, and takes that parent and the parent-child relation type as its
+// arguments. columns name e, the event. It costs the family's size and not the
+// store's, by walking from the parent to the events filed under it by a lookup
+// join. The hints name that walk because Dolt plans every unhinted spelling of
+// a family's read as a scan of issue_events — at 3,000 issues outside a
+// 30-issue family, 7ms for an OR and 17ms for a UNION, where the hinted read
+// takes 1.2ms, as it does with nothing outside the family.
+func filedUnderEvents(columns string) string {
+	return `SELECT /*+ JOIN_ORDER(r, e) LOOKUP_JOIN(r, e) */ ` + columns + ` FROM relations r
+		JOIN issue_events e ON e.issue_id = r.src_id
+		WHERE r.dst_id = ? AND r.type = ?`
+}
+
+// laneFamilyHistory reads the lane family's history as bare events: an instant
+// and an attribution, no Changes, which is what claims.Family asks of them.
 func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, issueEventsQuery+` UNION ALL `+bareEvents(`JOIN_ORDER(own, sibling, e) LOOKUP_JOIN(own, sibling) LOOKUP_JOIN(sibling, e)`, siblingEdges+`
-		JOIN issue_events e ON e.issue_id = sibling.src_id
-		WHERE own.src_id = ? AND own.type = ? AND sibling.src_id <> ?`),
-		issueID, issueID, string(model.RelParentChild), issueID)
+	selection, args, err := s.laneFamilyEvents(ctx, eventColumns+`, NULL AS field, NULL AS from_value, NULL AS to_value`, issueID)
+	if err != nil {
+		return nil, err
+	}
+	events, err := s.queryEvents(ctx, selection, args...)
 	if err != nil {
 		return nil, fmt.Errorf("read lane family history of %s: %w", issueID, err)
 	}
 	return events, nil
 }
 
-// siblingEdges walks from an issue's parent edges, own, to every edge under
-// the same parent, sibling: the join that states model.LaneFamily.
-const siblingEdges = `relations own
-		JOIN relations sibling ON sibling.dst_id = own.dst_id AND sibling.type = own.type`
+// newestInLaneFamily is the newest instant in issueID's lane family's history,
+// the instant a write to issueID is stamped past.
+func (s *Store) newestInLaneFamily(ctx context.Context, issueID string) (time.Time, error) {
+	selection, args, err := s.laneFamilyEvents(ctx, `e.created_at`, issueID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	newest, err := s.newestInstant(ctx, selection, args...)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read the newest instant in the lane family of %s: %w", issueID, err)
+	}
+	return newest, nil
+}
+
+// newestFiledUnder is the newest instant in the history of every issue filed
+// under parentID: the instant a create filed there is stamped past. No issue
+// is filed under the empty parent.
+func (s *Store) newestFiledUnder(ctx context.Context, parentID string) (time.Time, error) {
+	newest, err := s.newestInstant(ctx, filedUnderEvents(`e.created_at`), parentID, string(model.RelParentChild))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read the newest instant filed under %q: %w", parentID, err)
+	}
+	return newest, nil
+}
+
+// newestInstant is the latest of the event stamps selection reads, the zero
+// time for none. It has to read them all: created_at is a varchar, so SQL MAX
+// sorts a stamp by its spelling, and "...05Z" outranks the later "...05.5Z".
+// Each is parsed and compared here, as an instant.
+func (s *Store) newestInstant(ctx context.Context, selection string, args ...any) (time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, selection, args...)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer rows.Close()
+	var newest time.Time
+	for rows.Next() {
+		var stamp string
+		if err := rows.Scan(&stamp); err != nil {
+			return time.Time{}, err
+		}
+		instant, err := scanTime(stamp)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if instant.After(newest) {
+			newest = instant
+		}
+	}
+	return newest, rows.Err()
+}
 
 // LaneFamily reads issueID's family. Nothing here reads the rank ancestry or
 // lists issues, which is what keeps a start off the store's size, and parents
@@ -2443,44 +2519,19 @@ func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, 
 	return claims.Family{Issues: issues, ParentByChild: parents, ParentTypes: parentTypes, Events: events}, nil
 }
 
-// laneFamilyIDs is the id of every issue in issueID's lane family. It reads
-// relations and nothing else, so no issue's retention can reach it.
+// laneFamilyIDs is the id of every issue in issueID's lane family, walked as
+// laneFamilyEvents walks it: down from issueID's parents. Its reads carry no
+// lifecycle predicate, so no issue's retention can reach it.
 func (s *Store) laneFamilyIDs(ctx context.Context, issueID string) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT /*+ JOIN_ORDER(own, sibling) LOOKUP_JOIN(own, sibling) */ sibling.src_id FROM `+siblingEdges+`
-		WHERE own.src_id = ? AND own.type = ?`, issueID, string(model.RelParentChild))
+	parents, err := parentsOfIssue(ctx, s.db, issueID)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := s.childIDsOfParents(ctx, parents)
 	if err != nil {
 		return nil, fmt.Errorf("read lane family of %s: %w", issueID, err)
 	}
-	ids, err := scanIDColumn(rows)
-	if err != nil {
-		return nil, fmt.Errorf("scan lane family of %s: %w", issueID, err)
-	}
 	return append(ids, issueID), nil
-}
-
-// historyFiledUnder reads the events of every issue filed under parentID as
-// bare events, the SQL statement of model.FiledUnder: the history a create
-// filed there is stamped past, read only for its instants. No issue is filed
-// under the empty parent. Hinted for the reason laneFamilyHistory is.
-func (s *Store) historyFiledUnder(ctx context.Context, parentID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, bareEvents(`JOIN_ORDER(r, e) LOOKUP_JOIN(r, e)`, `relations r
-		JOIN issue_events e ON e.issue_id = r.src_id
-		WHERE r.dst_id = ? AND r.type = ?`), parentID, string(model.RelParentChild))
-	if err != nil {
-		return nil, fmt.Errorf("read the history filed under %q: %w", parentID, err)
-	}
-	return events, nil
-}
-
-// eventsOf is issueID's own events among a family's history.
-func eventsOf(issueID string, family []model.IssueEvent) []model.IssueEvent {
-	own := []model.IssueEvent{}
-	for _, event := range family {
-		if event.IssueID == issueID {
-			own = append(own, event)
-		}
-	}
-	return own
 }
 
 // StampCorrections is the account of every stamp this store handed out that
@@ -2527,14 +2578,6 @@ const allEventsQuery = `SELECT ` + eventColumns + `, c.field, c.from_value, c.to
 const issueEventsQuery = `SELECT /*+ LOOKUP_JOIN(e, c) */ ` + eventColumns + `, c.field, c.from_value, c.to_value
 	FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id
 	WHERE e.issue_id = ?`
-
-// bareEvents selects the events from names, a FROM clause that binds
-// issue_events as e, with no change rows: an instant and an attribution, no
-// Changes, for a reader that orders by them and decides nothing from what
-// they changed. hints is the optimizer hint that walks from to e by lookup.
-func bareEvents(hints, from string) string {
-	return `SELECT /*+ ` + hints + ` */ ` + eventColumns + `, NULL AS field, NULL AS from_value, NULL AS to_value FROM ` + from
-}
 
 // queryEvents runs selection, one of the event statements above or a UNION
 // ALL of them, and collapses the per-change rows back

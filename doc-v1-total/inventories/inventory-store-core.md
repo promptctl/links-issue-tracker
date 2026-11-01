@@ -79,7 +79,7 @@ const (
 | `telemetryDir` | `string` | `store.go` = `filepath.Join(filepath.Clean(doltRootDir), "telemetry")` | never read inside `store.go` |
 | `releaseWorkspaceLock` | `func() error` | `store.go` (Open), `store.go` (openInitialized, which OpenForRead, DumpRaw and Unquarantine open through); cleared to `nil` on failure at `store.go`, and in `Close` at `store.go` | the workspace shared-lock release |
 | `attribution` | `model.Attribution` | only by `AttributeTo` (`store.go`) | stamped on every event `newEvent` mints (`store.go`) |
-| `planReadsHookForTest` | `func()` | nil in production; fired at `store.go` | test seam amid a write's plan reads, with the commit lock held and no tx open: in `Apply` after `GetIssue`, in `CreateIssue` after `historyFiledUnder` |
+| `planReadsHookForTest` | `func()` | nil in production; fired at `store.go` | test seam amid a write's plan reads, with the commit lock held and no tx open: in `Apply` after `GetIssue`, in `CreateIssue` after `newestFiledUnder` |
 | `commitWorkingSetHookForTest` | `func() error` | nil in production; fired at `commit_lock.go` | test seam at the top of every `commitWorkingSetOnce` |
 
 Both hooks are per-`Store` instance state, not package globals (`store.go`).
@@ -400,7 +400,7 @@ Test evidence:
 9. `parentID := strings.TrimSpace(in.ParentID)` (`store.go`).
 10. `storage.RejectLeafWithoutParent(issueType, parentID)` (`internal/storage/containment.go`) → `model.ValidationError` for a leaf with no parent (`store.go`).
 
-Under one `withCommitLock` hold (`store.go`): `historyFiledUnder(ctx, parentID)` reads the history filed under the parent, `planReadsHookForTest` fires if set, and `s.stamps.Stamp(s.clock, filed)` takes the instant the issue is created at, so no write lands between the reading and the row stamped past it. Then, re-entrant on that hold, inside `withMutation(ctx, "create issue"...)` (`store.go`):
+Under one `withCommitLock` hold (`store.go`): `newestFiledUnder(ctx, parentID)` reads the newest instant in the history filed under the parent, `planReadsHookForTest` fires if set, and `s.stamps.Stamp(s.clock, filed)` takes the instant the issue is created at, so no write lands between the reading and the row stamped past it. Then, re-entrant on that hold, inside `withMutation(ctx, "create issue"...)` (`store.go`):
 1. `frame, parentType, err := filingParentTx(ctx, tx, parentID)` (`store.go`; defined `internal/store/ranking.go`): an empty `parentID` → `storage.TopLevel` and the empty type; otherwise `SELECT issue_type, deleted_at FROM issues WHERE id = ?`, the type then judged by `storage.RejectParentThatIsNotAContainer(parentID, parentType)` → `model.ValidationError` for a parent that is not an epic (`store.go`), with `sql.ErrNoRows` → `storage.NotFoundError{Entity: "issue", ID: parentID}`, other error → `fmt.Errorf("lookup parent issue %q: %w", parentID, err)`, a non-NULL `deleted_at` → `storage.TopLevel`, and a live parent → `storage.Frame(parentID)`.
 2. `issueid.NormalizeConfiguredPrefix(in.Prefix)`; failure → `fmt.Errorf("normalize issue prefix: %w", err)` (`store.go`).
 3. `issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)` (`store.go`; defined `internal/store/issue_ids.go`).
@@ -659,10 +659,10 @@ The `c.field ASC` sort is deliberate so two reads of an unchanged event compare 
 `store.go`, the single execution path for issue-record changes. Every step below runs under ONE `withCommitLock` hold, so no write lands between the plan's reads and its write; the reads run on `s.db` before the mutation's tx opens (the pool has one connection):
 1. `current, err := s.GetIssue(ctx, id)` — a not-found id fails here; then `c, err := plan.PlanChange(current)` decides the change on it, and a plan's refusal returns before any write (`store.go`).
 2. `planReadsHookForTest` fires here if set (`store.go`).
-3. `family := s.laneFamilyHistory(ctx, current.ID)`; `at := s.stamps.Stamp(s.clock, family)`; `history := eventsOf(current.ID, family)` (`store.go`).
+3. `newest := s.newestInLaneFamily(ctx, current.ID)`; `at := s.stamps.Stamp(s.clock, newest)` (`store.go`).
 4. `actor := storage.Actor(c.Actor)` — trimmed; empty → `"unknown"` (`store.go`).
 5. `baseline := current` (`store.go`).
-6. If `c.Action != nil`: `lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
+6. If `c.Action != nil`: `history := s.ListEvents(ctx, current.ID)`, then `lw, err = s.planLifecycleAction(current, history, at, actor, strings.TrimSpace(c.Reason), c.Action)`; on error, returns immediately with **no** writes; then `baseline = lw.postIssue()` so a following field write diffs against the post-action issue, and `handover = lw.handover()` (`store.go`).
 7. `fw, err := planFieldUpdate(baseline, c.Fields, actor)` — a validation error returns before any write; `hasFields := len(fw.changes) > 0` (`store.go`).
 8. `needsActionWrite := lw != nil && !lw.isNoop()` (`store.go`).
 9. If `needsActionWrite || hasFields`: one `withMutation(ctx, "apply update"...)`, re-entrant on the hold, running `lw.applyTx` then `s.applyFieldsTx`, both in the **same** tx and therefore one Dolt commit (`store.go`).
