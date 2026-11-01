@@ -4,8 +4,10 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // Parallelism convention for this package: a test calls t.Parallel() exactly
@@ -38,12 +40,25 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
+	liftSyncDeadlinesOutOfPlay()
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
 	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cli-config-")
 	code := dirtemplate.Run(m, storeTemplate)
 	_ = os.RemoveAll(stateHome)
 	_ = os.RemoveAll(configHome)
 	os.Exit(code)
+}
+
+// liftSyncDeadlinesOutOfPlay sets the automatic sync's wall-clock deadlines so
+// long that none fires in this suite. Each is a stall detector sized for
+// production, so a test whose subject is not the deadline would otherwise take
+// its verdict from how busy the machine is. [LAW:no-ambient-temporal-coupling]
+// A test about a deadline installs its own figure. Here and not around one
+// test, because some tests run the receive's body under t.Parallel, where
+// nothing may assign these. A detached worker takes TestMain's branch ahead of
+// this, so its own deadlines still end it.
+func liftSyncDeadlinesOutOfPlay() {
+	store.MirrorHoldBudget, store.MirrorPushDeadline, store.ReceiveDeadline = time.Hour, time.Hour, time.Hour
 }
 
 // isolateXDGHome points the XDG base directory key names at a fresh directory

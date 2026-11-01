@@ -3488,17 +3488,6 @@ const (
 	// deliberately not folded into the steps above; slop hidden inside a
 	// measured step is how a measured step stops being measurable.
 	coResidentWaitHeadroom = 8 * storeLockPollInterval
-
-	// ReceiveDeadline bounds the automatic receive — the remote check and
-	// the fetch its detached worker runs when the receive debounce lapses —
-	// so an offline or slow remote cannot keep the worker running
-	// indefinitely. A cut abandons only the fetch (the next interval
-	// retries). The fetch runs on a clone of this store, so this deadline
-	// bounds the worker, not a hold: the live store is held for the clone's
-	// copy (under MirrorHoldBudget) and for the landing of the fetch, whose
-	// cost is proportional to how far the remote moved and which only this
-	// deadline bounds (LandFetchedHead says why). [LAW:one-source-of-truth]
-	ReceiveDeadline = 15 * time.Second
 )
 
 // coResidentHolderWait is the ONE answer to "how long does a caller wait for
@@ -3601,7 +3590,8 @@ const (
 // from that. TestMirrorHoldBudgetExceedsObservedCloneCost and
 // TestCoResidentWaitIsSizedToTheMirrorHold pin both relations. A package
 // variable so a regression test can shrink it without sleeping through the
-// production one.
+// production one, and a test whose subject is not the budget lifts it out of
+// play.
 var MirrorHoldBudget = mirrorHoldBudget
 
 // MirrorPushDeadline is the deadline the background mirror's push runs
@@ -3612,8 +3602,21 @@ var MirrorHoldBudget = mirrorHoldBudget
 // transport cannot wedge the single-flight mirror forever.
 // TestMirrorPushDeadlineExceedsObservedPushCost pins its relation to the
 // measured push. A package variable so the deadline regression test can
-// shrink it without sleeping through the production one.
+// shrink it without sleeping through the production one, and a test whose
+// subject is not the deadline lifts it out of play.
 var MirrorPushDeadline = mirrorPushDeadline
+
+// ReceiveDeadline bounds the automatic receive — the remote check and the
+// fetch its detached worker runs when the receive debounce lapses — so an
+// offline or slow remote cannot keep the worker running indefinitely. A cut
+// abandons only the fetch (the next interval retries). The fetch runs on a
+// clone of this store, so this deadline bounds the worker, not a hold: the
+// live store is held for the clone's copy (under MirrorHoldBudget) and for the
+// landing of the fetch, whose cost is proportional to how far the remote moved
+// and which only this deadline bounds (LandFetchedHead says why). A package
+// variable so a test whose subject is not this deadline lifts it out of play.
+// [LAW:one-source-of-truth]
+var ReceiveDeadline = 15 * time.Second
 
 // HistoryBoundDeadline is the deadline a landed push's history bound runs
 // under. The bound crosses the network three times — the re-root's lease
