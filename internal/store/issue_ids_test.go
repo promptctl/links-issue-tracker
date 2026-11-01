@@ -49,12 +49,14 @@ func TestATopLevelIDIsSizedByTopLevelRowsAlone(t *testing.T) {
 
 // A scan and the index read return one count, and only under a store's size do
 // they differ, so the plan is what holds this: a timing ratio cannot under load.
+// The columns line holds the covering read: naming any column beyond the index's
+// own would fetch each row, which uses the index and costs more than the scan.
 func TestTopLevelIDsCountThroughTheirIndex(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	seedRows(t, ctx, st, 0, 60, false)
 	plan := planOf(t, ctx, st, topLevelIDCount)
-	if !strings.Contains(plan, "IndexedTableAccess(issues)") {
-		t.Errorf("%s plans as\n%s\nwant an index read", topLevelIDCount, plan)
+	if !strings.Contains(plan, "IndexedTableAccess(issues)") || !strings.Contains(plan, "columns: [is_top_level_id]") {
+		t.Errorf("%s plans as\n%s\nwant a read of the index alone", topLevelIDCount, plan)
 	}
 }
