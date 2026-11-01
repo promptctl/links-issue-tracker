@@ -3247,19 +3247,28 @@ func ensureDoltDatabase(ctx context.Context, stderr io.Writer, doltRootDir strin
 }
 
 // doltDatabaseExists answers "is there a database" for a write-capable open:
-// whatever stands at .dolt is the database. [LAW:one-source-of-truth] "No" is
-// what licenses discarding the database directory (discardDeadBuilds), so it
-// is said only of a confirmed absence, and a path that cannot be read fails
-// instead. [LAW:no-silent-failure]
+// a .dolt directory in the database directory. [LAW:one-source-of-truth] "No"
+// is what licenses discarding the database directory (discardDeadBuilds), so
+// it is said only where nothing stands on that path; Lstat tells that from a
+// symlink that points nowhere, which Stat reports the same way. Whatever else
+// stands there fails the open, naming it. [LAW:no-silent-failure]
 func doltDatabaseExists(root string) (bool, error) {
-	switch _, err := os.Lstat(filepath.Join(root, doltDatabaseName, dbfactory.DoltDir)); {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, os.ErrNotExist):
-		return false, nil
-	default:
-		return false, fmt.Errorf("check for a database: %w", err)
+	database := filepath.Join(root, doltDatabaseName)
+	for _, path := range []string{database, filepath.Join(database, dbfactory.DoltDir)} {
+		info, err := os.Stat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			if _, lstatErr := os.Lstat(path); errors.Is(lstatErr, os.ErrNotExist) {
+				return false, nil
+			}
+		}
+		if err != nil {
+			return false, fmt.Errorf("check for a database: %w", err)
+		}
+		if !info.IsDir() {
+			return false, fmt.Errorf("check for a database: %s is not a directory", path)
+		}
 	}
+	return true, nil
 }
 
 // buildDatabaseOnce builds the database a caller found absent. The bootstrap

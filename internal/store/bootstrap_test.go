@@ -303,50 +303,90 @@ func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
 }
 
 // Only a database's confirmed absence licenses discarding what stands in its
-// place. A .dolt that points nowhere is still a .dolt, so its directory is left
-// alone; a path that cannot be read at all fails the bootstrap, and is left
-// alone too.
-func TestBootstrapDiscardsNothingWhenTheDatabaseIsNotConfirmedAbsent(t *testing.T) {
+// place, so a thing at its path that is neither nothing nor a directory, a
+// symlink that points nowhere included, stays where it is, and the open that
+// found it fails naming it rather than deep inside the engine.
+func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
 	t.Parallel()
-	t.Run("a .dolt that points nowhere", func(t *testing.T) {
-		t.Parallel()
-		root := filepath.Join(t.TempDir(), "dolt")
-		database := filepath.Join(root, doltDatabaseName)
-		if err := os.MkdirAll(database, 0o755); err != nil {
-			t.Fatalf("MkdirAll() = %v", err)
-		}
-		if err := os.Symlink(filepath.Join(t.TempDir(), "unmounted"), filepath.Join(database, ".dolt")); err != nil {
+	dangling := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.Symlink(filepath.Join(t.TempDir(), "unmounted"), path); err != nil {
 			t.Fatalf("Symlink() = %v", err)
 		}
-		kept := filepath.Join(database, "kept")
-		if err := os.WriteFile(kept, []byte("still here"), 0o644); err != nil {
+	}
+	file := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("not a database"), 0o644); err != nil {
 			t.Fatalf("WriteFile() = %v", err)
 		}
-		bootstrap, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
-		if err != nil || bootstrap != storage.BootstrapNone {
-			t.Fatalf("EnsureDatabase() = %v, %v; want %v", bootstrap, err, storage.BootstrapNone)
-		}
-		if _, err := os.Stat(kept); err != nil {
-			t.Fatalf("stat %s after the bootstrap = %v; want it untouched", kept, err)
-		}
-	})
-	t.Run("a path that cannot be read", func(t *testing.T) {
-		t.Parallel()
-		root := filepath.Join(t.TempDir(), "dolt")
-		if err := os.MkdirAll(root, 0o755); err != nil {
-			t.Fatalf("MkdirAll() = %v", err)
-		}
-		notADirectory := filepath.Join(root, doltDatabaseName)
-		if err := os.WriteFile(notADirectory, []byte("still here"), 0o644); err != nil {
-			t.Fatalf("WriteFile() = %v", err)
-		}
-		if _, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id"); err == nil {
-			t.Fatal("EnsureDatabase() over an unreadable path = nil, want an error")
-		}
-		if got, err := os.ReadFile(notADirectory); err != nil || string(got) != "still here" {
-			t.Fatalf("%s after the bootstrap = %q, %v; want it untouched", notADirectory, got, err)
-		}
-	})
+	}
+	for name, tc := range map[string]struct {
+		place func(*testing.T, string)
+		under string
+	}{
+		"a database directory that points nowhere": {place: dangling},
+		"a file at the database directory":         {place: file},
+		"a .dolt that points nowhere":              {place: dangling, under: ".dolt"},
+		"a file at .dolt":                          {place: file, under: ".dolt"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := filepath.Join(t.TempDir(), "dolt")
+			database := filepath.Join(root, doltDatabaseName)
+			standing := database
+			parent := root
+			if tc.under != "" {
+				standing = filepath.Join(database, tc.under)
+				parent = database
+			}
+			if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.Fatalf("MkdirAll() = %v", err)
+			}
+			tc.place(t, standing)
+			for open, run := range map[string]func() error{
+				"EnsureDatabase": func() error {
+					_, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
+					return err
+				},
+				"Open": func() error {
+					st, err := Open(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
+					if err != nil {
+						return err
+					}
+					return st.Close()
+				},
+			} {
+				if err := run(); err == nil || !strings.Contains(err.Error(), "check for a database") || !strings.Contains(err.Error(), standing) {
+					t.Errorf("%s = %v; want an error naming %s", open, err, standing)
+				}
+			}
+			if _, err := os.Lstat(standing); err != nil {
+				t.Fatalf("lstat %s after the opens = %v; want it untouched", standing, err)
+			}
+		})
+	}
+}
+
+// A store reached through a symlink opens as it always has: the link stands
+// for the directory it points at, so an existing database is found, and the
+// link is not mistaken for anything to discard.
+func TestAnOpenFollowsASymlinkToAnExistingDatabase(t *testing.T) {
+	t.Parallel()
+	elsewhere := filepath.Join(t.TempDir(), "dolt")
+	if _, err := EnsureDatabase(context.Background(), testStderr(), elsewhere, "test-workspace-id"); err != nil {
+		t.Fatalf("EnsureDatabase() = %v", err)
+	}
+	root := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll() = %v", err)
+	}
+	if err := os.Symlink(filepath.Join(elsewhere, doltDatabaseName), filepath.Join(root, doltDatabaseName)); err != nil {
+		t.Fatalf("Symlink() = %v", err)
+	}
+	bootstrap, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
+	if err != nil || bootstrap != storage.BootstrapNone {
+		t.Fatalf("EnsureDatabase() through a symlink = %v, %v; want %v", bootstrap, err, storage.BootstrapNone)
+	}
 }
 
 // A root directory that is already there but holds no database, empty or

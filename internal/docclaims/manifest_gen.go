@@ -918,6 +918,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: rank: %w", Src: "bulk: rank: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: read the issues the file places: %w", Src: "bulk: read the issues the file places: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "bulk: update %q: %w", Src: "bulk: update %q: %w"},
+	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "check for a database: %s is not a directory", Src: "check for a database: %s is not a directory"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "check for a database: %w", Src: "check for a database: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "checkpoint: %w", Src: "checkpoint: %w"},
 	{Doc: "doc-v1-total/inventories/inventory-store-core.md", Text: "checkpoint: create branch %q: %w", Src: "checkpoint: create branch %q: %w"},
