@@ -162,7 +162,7 @@ func TestNextEventInstant(t *testing.T) {
 		{"a clock at the newest event steps past it", at(3), history, at(3).Add(time.Nanosecond)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := NextEventInstant(c.now, c.seen)
+			got := NextEventInstant(c.now, NewestInstant(c.seen))
 			if !got.Equal(c.want) {
 				t.Fatalf("NextEventInstant = %s, want %s", got, c.want)
 			}

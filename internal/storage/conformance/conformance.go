@@ -173,6 +173,7 @@ var cases = []engineCase{
 	{"a_new_checkout_taking_a_ticket_records", takeoverByANewCheckoutRecords},
 	{"a_reported_handover_is_the_one_recorded", aReportedHandoverIsTheOneRecorded},
 	{"a_write_on_a_slow_clock_sorts_after_the_history_it_saw", aWriteOnASlowClockSortsAfterTheHistoryItSaw},
+	{"a_stamp_is_past_the_newest_instant_not_the_newest_spelling", aStampIsPastTheNewestInstantNotTheNewestSpelling},
 	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
 	{"list_filters_select", listFiltersSelect},
@@ -1012,6 +1013,52 @@ func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Conte
 	}
 	if lag := laterInstant.Sub(earlierInstant); after.Max <= lag {
 		t.Errorf("largest stamp correction = %s, want past the clock's %s lag", after.Max, lag)
+	}
+}
+
+// A stamp is held past the history by instant. The Dolt engine stores an
+// instant as trimmed RFC3339Nano text, where "...05Z" outranks the later
+// "...05.5Z", so a stamp read off that column's sort lands behind the event it
+// was planned against. The case writes that pair into one family, then writes
+// on a slow clock three ways: a create under the parent, an edit under it, and
+// an edit of an issue with no parent, whose family is itself.
+func aStampIsPastTheNewestInstantNotTheNewestSpelling(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	older := time.Date(2026, 1, 1, 0, 0, 5, 0, time.UTC)
+	newer := older.Add(500 * time.Millisecond)
+	retitle := func(id, title string) {
+		t.Helper()
+		if _, err := st.Apply(ctx, id, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "ada"}); err != nil {
+			t.Fatalf("Apply(%s, title) error = %v", id, err)
+		}
+	}
+	newestEvent := func(id string) model.IssueEvent {
+		t.Helper()
+		events, err := st.ListEvents(ctx, id)
+		if err != nil {
+			t.Fatalf("ListEvents(%s) error = %v", id, err)
+		}
+		return events[len(events)-1]
+	}
+
+	clk.Pin(older)
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	clk.Pin(newer)
+	retitle(child.ID, "held past")
+	retitle(epic.ID, "held past")
+
+	clk.Pin(older.Add(-time.Hour))
+	created := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created", Topic: "core", ParentID: epic.ID})
+	if got := newestEvent(created.ID); !got.CreatedAt.After(newer) {
+		t.Errorf("a create under the parent stamped %s, want past %s", got.CreatedAt, newer)
+	}
+	retitle(child.ID, "edited")
+	if got := newestEvent(child.ID); !got.CreatedAt.After(newer) {
+		t.Errorf("an edit under the parent stamped %s, want past %s", got.CreatedAt, newer)
+	}
+	retitle(epic.ID, "edited")
+	if got := newestEvent(epic.ID); !got.CreatedAt.After(newer) {
+		t.Errorf("an edit of an issue with no parent stamped %s, want past %s", got.CreatedAt, newer)
 	}
 }
 

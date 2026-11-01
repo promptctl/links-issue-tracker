@@ -305,6 +305,7 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 		{"a climb's epics", parentEdgesQuery("r.src_id = ? AND " + epicParentPredicate), []any{seededRow(23)}},
 		{"a level of tree order's climb", climb, []any{climbArg}},
 		{"a parent's children", children, []any{childrenArg, string(model.RelParentChild)}},
+		{"the events filed under a parent", filedUnderEvents("e.created_at"), []any{seededRow(0), string(model.RelParentChild)}},
 	} {
 		plan := planOf(t, ctx, st, c.query, c.args...)
 		if !strings.Contains(plan, "LookupJoin") || strings.Contains(plan, "MergeJoin") {

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -627,6 +628,60 @@ func TestALaneFamilyPlacesAChildWithTwoParentsByTheLowerOne(t *testing.T) {
 		t.Fatalf("family of %s = %v, want it to hold the child filed under both parents", sibling.ID, issueIDs(family.Issues))
 	}
 	storagetest.RequireLaneFamiliesMatchTheBacklog(t, ctx, st)
+}
+
+// The family takes every parent a child's edges name, so a write to a child two
+// parents claim is stamped past both families, whichever holds the newer event,
+// and its lane reads the histories of both.
+func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
+	for _, newest := range []int{0, 1} {
+		t.Run(fmt.Sprintf("newest under parent %d", newest), func(t *testing.T) {
+			ctx := context.Background()
+			st := openIssueStore(t, ctx)
+			parents := []string{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
+			child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "child", Topic: "hier", ParentID: parents[0]})
+			if err != nil {
+				t.Fatalf("CreateIssue(child) error = %v", err)
+			}
+			seedParentEdge(t, ctx, st, child.ID, parents[1])
+
+			ahead := time.Now().UTC().Add(time.Hour)
+			instants := []time.Time{ahead, ahead}
+			instants[newest] = ahead.Add(time.Hour)
+			var siblings []string
+			for i, parent := range parents {
+				st.clock = func() time.Time { return instants[i] }
+				sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "sibling", Topic: "hier", ParentID: parent})
+				if err != nil {
+					t.Fatalf("CreateIssue(sibling under %s) error = %v", parent, err)
+				}
+				siblings = append(siblings, sibling.ID)
+			}
+
+			st.clock = func() time.Time { return ahead.Add(-3 * time.Hour) }
+			title := "edited"
+			if _, err := st.Apply(ctx, child.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "ada"}); err != nil {
+				t.Fatalf("Apply(%s, title) error = %v", child.ID, err)
+			}
+			events, err := st.ListEvents(ctx, child.ID)
+			if err != nil {
+				t.Fatalf("ListEvents(%s) error = %v", child.ID, err)
+			}
+			if got := events[len(events)-1].CreatedAt; !got.After(instants[newest]) {
+				t.Errorf("the edit stamped %s, want past %s, the newest event of either family", got, instants[newest])
+			}
+
+			family, err := st.LaneFamily(ctx, child.ID)
+			if err != nil {
+				t.Fatalf("LaneFamily(%s) error = %v", child.ID, err)
+			}
+			for _, sibling := range siblings {
+				if !slices.ContainsFunc(family.Events, func(event model.IssueEvent) bool { return event.IssueID == sibling }) {
+					t.Errorf("family events of %s hold nothing of %s", child.ID, sibling)
+				}
+			}
+		})
+	}
 }
 
 // A child two parents claim is a fault in the data, and every reader still

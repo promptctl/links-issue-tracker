@@ -537,7 +537,7 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	for stack := []string{parentID}; len(stack) > 0; {
 		at := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		parents, err := parentsOfTx(ctx, tx, at)
+		parents, err := parentsOfIssue(ctx, tx, at)
 		if err != nil {
 			return fmt.Errorf("parent cycle check: %w", err)
 		}
@@ -605,10 +605,10 @@ func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, er
 	return parentOf, nil
 }
 
-// parentsOfTx is every parent one issue's stored edges name, by the rule
+// parentsOfIssue is every parent one issue's stored edges name, by the rule
 // loadParentEdges states: no lifecycle predicate narrows it.
-func parentsOfTx(ctx context.Context, tx *sql.Tx, issueID string) ([]string, error) {
-	edges, err := queryParentEdges(ctx, tx, "r.src_id = ?", issueID)
+func parentsOfIssue(ctx context.Context, q rowQueryer, issueID string) ([]string, error) {
+	edges, err := queryParentEdges(ctx, q, "r.src_id = ?", issueID)
 	if err != nil {
 		return nil, err
 	}
