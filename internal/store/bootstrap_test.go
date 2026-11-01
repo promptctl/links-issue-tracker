@@ -213,6 +213,61 @@ func TestARacersContextEndsItsWaitNamingTheBuilder(t *testing.T) {
 	}
 }
 
+// An open of a store that already exists is not deciding to build, so a
+// builder's hold on the bootstrap lock is nothing to it: with the lock held
+// throughout, each open completes and reports no wait on it. The deadline
+// turns an open that queued behind the holder into a failure, not a hang.
+func TestAnExistingStoresOpensPassABootstrapLockHolder(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if _, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id"); err != nil {
+		t.Fatalf("EnsureDatabase() = %v", err)
+	}
+	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
+	if err != nil {
+		t.Fatalf("builder acquireBootstrapLock() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := builder(); err != nil {
+			t.Errorf("builder release error = %v", err)
+		}
+	})
+	for name, open := range map[string]func(context.Context) error{
+		"EnsureDatabase": func(ctx context.Context) error {
+			bootstrap, err := EnsureDatabase(ctx, testStderr(), root, "test-workspace-id")
+			if err == nil && bootstrap != storage.BootstrapNone {
+				return fmt.Errorf("bootstrap = %v, want %v", bootstrap, storage.BootstrapNone)
+			}
+			return err
+		},
+		"Open": func(ctx context.Context) error {
+			st, err := Open(ctx, testEnv(), testStderr(), root, "test-workspace-id")
+			if err != nil {
+				return err
+			}
+			return st.Close()
+		},
+		"OpenSync": func(ctx context.Context) error {
+			st, err := OpenSync(ctx, testEnv(), testStderr(), root, "test-workspace-id")
+			if err != nil {
+				return err
+			}
+			return st.Close()
+		},
+	} {
+		reports := &heldReports{}
+		ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 30*time.Second)
+		err := open(ctx)
+		cancel()
+		if err != nil {
+			t.Errorf("%s with the bootstrap lock held = %v", name, err)
+		}
+		if wait := lockWaitOn(reports, filepath.Base(bootstrapLockPath(root))); wait != nil {
+			t.Errorf("%s waited on the bootstrap lock: %+v", name, wait)
+		}
+	}
+}
+
 // A builder that died mid-build leaves its partial work behind: a staging
 // root, or, from a lit that built in place, a database directory with no
 // .dolt in it. The next bootstrap holds the lock that proves no builder owns

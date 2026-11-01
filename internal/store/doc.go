@@ -37,7 +37,7 @@
 //	workspace → bootstrap → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 //
 // A holder of an inner lock never waits on an outer one. The bootstrap lock
-// is held only inside ensureDoltDatabase, by an opener that holds the
+// is held only inside buildDatabaseOnce, by an opener that holds the
 // workspace lock and no engine yet; the engines its holder opens are on a
 // staging path no other process opens, so it waits on no lock any other
 // holder takes. Two entries need spelling out, because no lit call site

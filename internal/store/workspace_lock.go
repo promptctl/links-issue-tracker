@@ -167,7 +167,7 @@ func bootstrapStagingPath(databasePath string) string {
 // does not control: a racer that gave up after coResidentHolderWait failed
 // "workspace busy" behind a builder still working. Waiting is safe because
 // every wait under this lock is bounded — the build is local work on a fresh
-// database (ensureDoltDatabase), and its engines' waits for the staging root's
+// database (buildDatabaseOnce), and its engines' waits for the staging root's
 // LOCK are bounded by the engine open — so a builder that stands still is
 // wedged in Dolt, or stopped, and a dead one releases the flock in the
 // kernel. A wait added under this lock must stay bounded, or a racer waits
