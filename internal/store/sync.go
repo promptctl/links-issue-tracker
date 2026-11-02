@@ -1265,7 +1265,7 @@ func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName,
 	if err := refuseUnreleasedSchema(remote, branch, commitSchema, ceiling); err != nil {
 		return err
 	}
-	return refuseSchemaRaise(remote, branch, remoteHead, commitSchema, s.env.RaisePolicy(), ceiling)
+	return refuseSchemaRaise(remote, branch, remoteHead, commitSchema, s.env.RaisePolicy())
 }
 
 // headCommitWithinLock reads HEAD's hash under the commit lock the caller

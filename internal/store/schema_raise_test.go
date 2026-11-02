@@ -24,7 +24,6 @@ var releaseBuild = version.RaisePolicy{Release: true}
 func TestRefuseSchemaRaise(t *testing.T) {
 	t.Parallel()
 	origin := remoteName(t, "origin")
-	ceiling := ceilingAt(9)
 	cases := []struct {
 		name    string
 		remote  remoteSchema
@@ -35,16 +34,16 @@ func TestRefuseSchemaRaise(t *testing.T) {
 		{"source build at the remote's schema", knownRemoteSchema(9), 9, sourceBuild, nil},
 		{"source build below the remote's schema", knownRemoteSchema(9), 8, sourceBuild, nil},
 		{"source build above the remote's schema", knownRemoteSchema(8), 9, sourceBuild,
-			&SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9, Ceiling: ceiling}},
+			&SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9}},
 		{"source build with no remote head", unknownRemoteSchema(), 9, sourceBuild,
-			&SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", CommitSchema: 9, Ceiling: ceiling}},
+			&SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", CommitSchema: 9}},
 		{"release above the remote's schema", knownRemoteSchema(8), 9, releaseBuild, nil},
 		{"release with no remote head", unknownRemoteSchema(), 9, releaseBuild, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := refuseSchemaRaise(origin, "master", tc.remote, tc.commit, tc.policy, ceiling)
+			err := refuseSchemaRaise(origin, "master", tc.remote, tc.commit, tc.policy)
 			var refused *SchemaRaiseRequiresReleaseError
 			if tc.refused == nil {
 				if err != nil {
@@ -62,28 +61,29 @@ func TestRefuseSchemaRaise(t *testing.T) {
 	}
 }
 
-// The refusal's remedy follows the design: fetch when the remote's schema is
-// unknown, a release's push when the schema is released, the downgrade when
-// it is not.
+// The refusal names what it judged and the one remedy: the fetch that brings
+// the remote's head current here, and the release whose push raises it when
+// the push is refused again. A remote this store holds no head of says so.
 func TestSchemaRaiseRefusalNamesTheRemedy(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name    string
 		refused SchemaRaiseRequiresReleaseError
-		want    string
+		want    []string
 	}{
-		{"unknown remote", SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", CommitSchema: 9, Ceiling: ceilingAt(9)},
-			"fetch first (`lit sync fetch --remote origin`)"},
-		{"released schema", SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9, Ceiling: ceilingAt(9)},
-			"schema version 9 is released, so a release's `lit sync push` raises the remote"},
-		{"unreleased schema", SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9, Ceiling: ceilingAt(8)},
-			"`lit downgrade` returns this store to schema version 8"},
+		{"unknown remote", SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", CommitSchema: 9},
+			[]string{"origin/master has no tracking ref", "fetch first (`lit sync fetch --remote origin`)", "a release's `lit sync push` to raise the remote to schema version 9"}},
+		{"known remote", SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9},
+			[]string{"from schema version 8 to 9", "fetch first (`lit sync fetch --remote origin`)", "a release's `lit sync push` to raise the remote to schema version 9"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tc.refused.Error(); !strings.Contains(got, tc.want) {
-				t.Fatalf("Error() = %q, want it to contain %q", got, tc.want)
+			got := tc.refused.Error()
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("Error() = %q, want it to contain %q", got, want)
+				}
 			}
 		})
 	}
@@ -159,7 +159,7 @@ func TestASourceBuildNeverRaisesARemote(t *testing.T) {
 	if !errors.As(err, &refused) {
 		t.Fatalf("SyncPush from a source build = %v, want *SchemaRaiseRequiresReleaseError", err)
 	}
-	want := SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: max - 1, RemoteKnown: true, CommitSchema: max, Ceiling: testEnv().ReleasedSchema()}
+	want := SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: max - 1, RemoteKnown: true, CommitSchema: max}
 	if *refused != want {
 		t.Fatalf("refusal = %+v, want %+v", *refused, want)
 	}
@@ -285,7 +285,7 @@ func TestALeasedPushFromASourceBuildNeverRaisesARemote(t *testing.T) {
 	if outcome != "" {
 		t.Fatalf("outcome = %q, want none: the push was refused before it reached the remote", outcome)
 	}
-	want := SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: max - 1, RemoteKnown: true, CommitSchema: max, Ceiling: testEnv().ReleasedSchema()}
+	want := SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: max - 1, RemoteKnown: true, CommitSchema: max}
 	if *refused != want {
 		t.Fatalf("refusal = %+v, want %+v", *refused, want)
 	}

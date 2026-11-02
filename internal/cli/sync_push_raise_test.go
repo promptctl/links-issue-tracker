@@ -23,13 +23,12 @@ func runSourceBuildInDir(t *testing.T, dir string, args ...string) (string, erro
 }
 
 // asSyncFailure routes the store's schema-raise refusal into the sync-failure
-// contract: a block naming both schemas and the remedy the refusal's values
-// choose.
+// contract: a block naming both schemas, the fetch that refreshes the remote's
+// schema here, and the release that alone raises it.
 func TestASchemaRaiseRefusalRendersTheSyncFailureContract(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaRaiseRequiresReleaseError{
 		Remote: "origin", Branch: "master", RemoteSchema: 11, RemoteKnown: true, CommitSchema: 12,
-		Ceiling: version.ReleasedSchemaCeiling{Max: 12, Source: "stamped at build time from release tag v0.24.0"},
 	}
 	var syncFailure SyncFailureError
 	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
@@ -41,25 +40,29 @@ func TestASchemaRaiseRefusalRendersTheSyncFailureContract(t *testing.T) {
 	block := syncFailure.Error()
 	for _, want := range []string{
 		"would raise the remote's schema and this lit is not a release",
-		"is at schema version 12, and origin/master is at schema version 11",
+		"is at schema version 12, and origin/master was at schema version 11 when last fetched",
+		"lit sync fetch --remote origin",
+		"lit sync push --remote origin",
 		"raises the remote to schema v12",
-		"ESCALATION — BLOCKED",
+		"ESCALATION — resolve now",
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("block lacks %q:\n%s", want, block)
 		}
 	}
+	if strings.Contains(block, "lit downgrade") {
+		t.Errorf("block names a downgrade, which no release's schema needs:\n%s", block)
+	}
 
-	unreleased := &store.SchemaRaiseRequiresReleaseError{
-		Remote: "origin", Branch: "master", RemoteSchema: 11, RemoteKnown: true, CommitSchema: 12,
-		Ceiling: version.ReleasedSchemaCeiling{Max: 11, Source: "the checkout this lit was built from had no release tag"},
-	}
-	if block := asSyncFailure(unreleased).Error(); !strings.Contains(block, "returns this backlog to schema v11") {
-		t.Errorf("block for an unreleased schema lacks the downgrade remedy:\n%s", block)
-	}
-	unknown := &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", CommitSchema: 12, Ceiling: version.ReleasedSchemaCeiling{Max: 12}}
-	if block := asSyncFailure(unknown).Error(); !strings.Contains(block, "lit sync fetch --remote origin") {
-		t.Errorf("block for an unknown remote schema lacks the fetch remedy:\n%s", block)
+	unknown := &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", CommitSchema: 12}
+	block = asSyncFailure(unknown).Error()
+	for _, want := range []string{
+		"holds no head of origin/master (no tracking ref)",
+		"lit sync fetch --remote origin",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block for an unknown remote schema lacks %q:\n%s", want, block)
+		}
 	}
 }
 

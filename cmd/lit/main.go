@@ -27,14 +27,10 @@ func main() {
 	if err != nil {
 		os.Exit(cli.WriteCommandError(os.Stderr, err))
 	}
-	info, err := version.Get()
-	if err != nil {
-		os.Exit(cli.WriteCommandError(os.Stderr, err))
-	}
 	inv := cli.Invocation{
 		Dir:    cli.WorkingDirOf(os.Getwd()),
 		Args:   os.Args[1:],
-		Env:    environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(info)),
+		Env:    environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(version.Origin)),
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

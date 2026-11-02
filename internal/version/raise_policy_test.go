@@ -6,10 +6,12 @@ import "testing"
 // nothing built from a working tree does.
 func TestRaisePolicyOfReadsOrigin(t *testing.T) {
 	t.Parallel()
-	if got := RaisePolicyOf(Info{FromSource: false}); !got.Release {
+	if got := RaisePolicyOf(OriginRelease); !got.Release {
 		t.Fatalf("RaisePolicyOf(release) = %+v, want Release", got)
 	}
-	if got := RaisePolicyOf(Info{FromSource: true}); got.Release {
-		t.Fatalf("RaisePolicyOf(source) = %+v, want no release", got)
+	for _, origin := range []string{OriginSource, "snapshot", ""} {
+		if got := RaisePolicyOf(origin); got.Release {
+			t.Fatalf("RaisePolicyOf(%q) = %+v, want no release", origin, got)
+		}
 	}
 }

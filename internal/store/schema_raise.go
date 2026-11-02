@@ -39,7 +39,9 @@ func unknownRemoteSchema() remoteSchema {
 }
 
 // SchemaRaiseRequiresReleaseError refuses a push that would raise a remote's
-// schema from a binary that is no release.
+// schema from a binary that is no release. H is at or below this lit's
+// released-schema ceiling: the ceiling's refusal runs before this one, so a
+// schema no release carries never reaches it.
 type SchemaRaiseRequiresReleaseError struct {
 	Remote string
 	Branch string
@@ -51,18 +53,6 @@ type SchemaRaiseRequiresReleaseError struct {
 	RemoteKnown bool
 	// CommitSchema is H, the schema of the head the push would send.
 	CommitSchema int64
-	// Ceiling is this lit's released-schema ceiling, which decides the
-	// remedy: a released H is raised by a release's own push, and an
-	// unreleased one has only the downgrade.
-	Ceiling version.ReleasedSchemaCeiling
-}
-
-// Released reports whether a release carries H, so a release's `lit sync
-// push` is what raises the remote. Otherwise stepping this store back to R is
-// the one remedy: a downgrade of a released schema would only be migrated back
-// up by the next open.
-func (e *SchemaRaiseRequiresReleaseError) Released() bool {
-	return e.CommitSchema <= e.Ceiling.Max
 }
 
 func (e *SchemaRaiseRequiresReleaseError) Error() string {
@@ -70,35 +60,26 @@ func (e *SchemaRaiseRequiresReleaseError) Error() string {
 	if e.RemoteKnown {
 		raise = fmt.Sprintf("it would raise %s/%s from schema version %d to %d", e.Remote, e.Branch, e.RemoteSchema, e.CommitSchema)
 	}
-	return fmt.Sprintf("refusing to push to %s/%s: %s, and only a release raises a remote's schema; this lit is built from source, not a release — %s",
+	return fmt.Sprintf("refusing to push to %s/%s: %s, and only a release raises a remote's schema; this lit is not a release — %s",
 		e.Remote, e.Branch, raise, e.remedy())
 }
 
-// remedy is the one step that clears the refusal, chosen by the values: fetch
-// when R is unknown, a release's push when H is released, the downgrade when
-// it is not. [LAW:dataflow-not-control-flow]
+// remedy is what clears the refusal. R is the tracking ref's head as of the
+// last fetch, so a fetch comes first: a release may have raised the remote
+// since, and a remote never fetched may already be at H. A push still refused
+// after the fetch is a raise only a release makes.
 func (e *SchemaRaiseRequiresReleaseError) remedy() string {
-	switch {
-	case !e.RemoteKnown:
-		return fmt.Sprintf("fetch first (`lit sync fetch --remote %s`) so the remote's schema is known", e.Remote)
-	case e.Released():
-		return fmt.Sprintf("schema version %d is released, so a release's `lit sync push` raises the remote", e.CommitSchema)
-	default:
-		return fmt.Sprintf("schema version %d is above this lit's released-schema ceiling %d, so `lit downgrade` returns this store to schema version %d", e.CommitSchema, e.Ceiling.Max, e.RemoteSchema)
-	}
+	return fmt.Sprintf("fetch first (`lit sync fetch --remote %s`) so the remote's head is current here; a push at or below it lands from this lit, and a push still refused after the fetch waits for a release's `lit sync push` to raise the remote to schema version %d", e.Remote, e.CommitSchema)
 }
 
-// EventRecord is the remote refused, R and whether it was known, H, and the
-// ceiling that chose the remedy.
+// EventRecord is the remote refused, R and whether it was known, and H.
 func (e *SchemaRaiseRequiresReleaseError) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
-		"schema_raise.remote":         e.Remote,
-		"schema_raise.branch":         e.Branch,
-		"schema_raise.remote_schema":  e.RemoteSchema,
-		"schema_raise.remote_known":   e.RemoteKnown,
-		"schema_raise.commit_schema":  e.CommitSchema,
-		"schema_raise.ceiling":        e.Ceiling.Max,
-		"schema_raise.ceiling_source": e.Ceiling.Source,
+		"schema_raise.remote":        e.Remote,
+		"schema_raise.branch":        e.Branch,
+		"schema_raise.remote_schema": e.RemoteSchema,
+		"schema_raise.remote_known":  e.RemoteKnown,
+		"schema_raise.commit_schema": e.CommitSchema,
 	}, nil
 }
 
@@ -109,7 +90,7 @@ var _ model.RecordedError = (*SchemaRaiseRequiresReleaseError)(nil)
 // no release. A push at or below the remote's schema is no raise and lands
 // from any binary. [LAW:effects-at-boundaries] a pure verdict on the values
 // the caller read; both push sites run it.
-func refuseSchemaRaise(remote storage.RemoteName, branch string, remoteHead remoteSchema, commitSchema int64, policy version.RaisePolicy, ceiling version.ReleasedSchemaCeiling) error {
+func refuseSchemaRaise(remote storage.RemoteName, branch string, remoteHead remoteSchema, commitSchema int64, policy version.RaisePolicy) error {
 	raises := !remoteHead.known || commitSchema > remoteHead.version
 	if !raises || policy.Release {
 		return nil
@@ -120,6 +101,5 @@ func refuseSchemaRaise(remote storage.RemoteName, branch string, remoteHead remo
 		RemoteSchema: remoteHead.version,
 		RemoteKnown:  remoteHead.known,
 		CommitSchema: commitSchema,
-		Ceiling:      ceiling,
 	}
 }

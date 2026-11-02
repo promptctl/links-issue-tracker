@@ -109,13 +109,16 @@ func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote storage.Remot
 // name the failure for the sync-failure contract. [LAW:single-enforcer] the
 // one detection of "remote schema ahead" every write to a remote runs.
 func refuseSchemaAhead(remote storage.RemoteName, branch string, remoteHead remoteSchema) error {
+	if !remoteHead.known {
+		return nil
+	}
 	support, err := version.CarriedSchemaSupport()
 	if err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] The comparison runs every call; the two
 	// versions are the values that decide block-vs-proceed, not a mode.
-	if !remoteHead.known || remoteHead.version <= support.Max {
+	if remoteHead.version <= support.Max {
 		return nil
 	}
 	return &RemoteSchemaAheadError{

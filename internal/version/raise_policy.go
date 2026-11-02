@@ -2,7 +2,7 @@ package version
 
 // RaisePolicy is whether this binary may raise a remote's schema: a push
 // whose head is at a schema above the remote head's lands only from a
-// release. It is built once from the binary's Info at the composition root
+// release. It is built once from the Origin stamp at the composition root
 // (cmd/lit) and handed down on the store's environ.Env, as the released-schema
 // ceiling is; nothing below reads the build stamp. The zero value is no
 // release and fails closed: an Env nobody gave a policy raises nothing.
@@ -19,7 +19,9 @@ type RaisePolicy struct {
 	Release bool
 }
 
-// RaisePolicyOf is the raise policy of the binary info describes.
-func RaisePolicyOf(info Info) RaisePolicy {
-	return RaisePolicy{Release: !info.FromSource}
+// RaisePolicyOf is the raise policy of a binary whose Origin stamp is origin.
+// It reads the stamp alone, no registry: the composition root builds it
+// beside the ceiling without a second ReadDir.
+func RaisePolicyOf(origin string) RaisePolicy {
+	return RaisePolicy{Release: origin == OriginRelease}
 }
