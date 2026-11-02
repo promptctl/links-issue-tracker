@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -155,6 +161,62 @@ func TestTheCompactionBackstopLeavesNoSyncListsOnItsCommandsEvent(t *testing.T) 
 		if values, present := ev.Occurrences[key]; present {
 			t.Errorf("%s event carries %s = %v; no sync ran", ev.Event, key, values)
 		}
+	}
+}
+
+// The backstop runs after any write, and `lit downgrade` is a write that leaves
+// the newer registry in its process. A probe that migrated would lift the store
+// straight back up, past the binary the downgrade is about to install, with the
+// command succeeding and nothing said. So the probe's open applies no migration.
+func TestTheBackstopLeavesADowngradedStoreAtItsTarget(t *testing.T) {
+	isolateEvents(t)
+	dir, marker := litRepoForCadence(t)
+	t.Setenv(DisableAutoSyncEnvVar, "0")
+	newTicket(t, dir)
+	if err := os.Remove(marker); err != nil {
+		t.Fatalf("remove marker: %v", err)
+	}
+	newest, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := newest - 2
+	var out, errOut bytes.Buffer
+	inv := dirInvocation(dir, &out, &errOut, []string{"downgrade"})
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	if err := runWithApp(ctx, inv, app.AccessWrite, func(ctx context.Context, ap *app.App) error {
+		migrator, err := storage.SchemaMigration.Of(ap.Store)
+		if err != nil {
+			return err
+		}
+		_, err = migrator.Downgrade(ctx, target)
+		return err
+	}); err != nil {
+		t.Fatalf("runWithApp: %v\nstderr: %s", err, errOut.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("no probe after the downgrade (%v); this test proves nothing", err)
+	}
+
+	ws, err := resolveWorkspace(ctx, inv.Stderr, inv.Env, inv.Dir, workspace.PrefixRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := engine.Open(ctx, inv.Env, inv.Stderr, engine.Sync, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer st.Close()
+	migrator, err := storage.SchemaMigration.Of(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := migrator.AppliedSchemaVersion(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied != target {
+		t.Fatalf("store at v%d after a downgrade to v%d: the backstop's open migrated it back up", applied, target)
 	}
 }
 

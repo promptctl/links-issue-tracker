@@ -377,6 +377,26 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 	}
 }
 
+// The compaction backstop's hold is routine: DOLT_GC is engine work, so a
+// writer behind a pass that outlasts the wait lands rather than failing behind
+// housekeeping it never asked for.
+func TestAWriterWaitsOutAMaintenanceHold(t *testing.T) {
+	// serial: rewrites the package-level coResidentHolderWait.
+	shrinkWait(t, 400*time.Millisecond)
+	reports := &heldReports{}
+	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
+		return OpenMaintenance(ctx, testEnv(), testStderr(), root, "test-workspace-id")
+	}, func(s *Store) error {
+		return s.ExecRawForTest(context.Background(), "SELECT SLEEP(2)")
+	}, reports)
+	if err != nil {
+		t.Fatalf("a writer behind a working maintenance hold failed after %s: %v", elapsed, err)
+	}
+	if lockWait := lockWaitOn(reports, "LOCK"); lockWait == nil || lockWait.Outcome != LockWaitAcquired || lockWait.ProgressSeen < 2 {
+		t.Fatalf("the writer's LOCK wait was reported as %+v, want acquired after seeing the holder's heartbeats", lockWait)
+	}
+}
+
 // The same engine work under a long hold fails the writer one wait in, naming
 // the holder: long holds keep the contract they always had.
 func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {

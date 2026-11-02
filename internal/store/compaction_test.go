@@ -9,6 +9,8 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 	"github.com/dolthub/dolt/go/store/chunks"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The policy is a pure function of two numbers, so these assert the decision it
@@ -210,8 +212,8 @@ func TestGCProcedureArgsRefusesAnUnknownDepth(t *testing.T) {
 func TestCompactionReportSpeaksOnlyWhenItHasSomethingToSay(t *testing.T) {
 	t.Parallel()
 
-	ran := func(depth GCMode) compactionAttempt {
-		return compactionAttempt{Depth: depth, Ran: true}
+	ran := func(depth GCMode) storage.CompactionPass {
+		return storage.CompactionPass{Depth: depth, Ran: true}
 	}
 
 	if got := compactionReport(ran(GCNewGen), nil); got != "" {
@@ -237,7 +239,7 @@ func TestCompactionReportSaysNothingAboutAPassThatNeverRan(t *testing.T) {
 	t.Parallel()
 
 	for _, depth := range []GCMode{GCNewGen, GCFull} {
-		attempt := compactionAttempt{Depth: depth} // Ran stays false
+		attempt := storage.CompactionPass{Depth: depth} // Ran stays false
 		if got := compactionReport(attempt, nil); got != "" {
 			t.Fatalf("compactionReport(%s not run, nil) = %q, want empty — nothing ran, so nothing is worth reporting", depth, got)
 		}
@@ -248,19 +250,19 @@ func TestCompactionReportSaysNothingAboutAPassThatNeverRan(t *testing.T) {
 	}
 }
 
-// The attempt is the single carrier of "what happened", so the rendering of it
-// must not invent a reclaim for a pass that produced none. An attempt that ran
+// The pass is the single carrier of "what happened", so the rendering of it
+// must not invent a reclaim for a pass that produced none. A pass that ran
 // carries its detail; one that did not carries a depth and nothing else, which
 // is exactly what the contract reserves an empty Detail for.
-func TestCompactionAttemptRendersOnlyWhatHappened(t *testing.T) {
+func TestCompactionPassRendersOnlyWhatHappened(t *testing.T) {
 	t.Parallel()
 
-	ran := compactionAttempt{Depth: GCFull, Ran: true}.outcome("journal 1 B -> 0 B")
+	ran := storage.CompactionPass{Depth: GCFull, Ran: true}.Outcome("journal 1 B -> 0 B")
 	if !ran.Ran || ran.Depth != GCFull || ran.Detail == "" {
 		t.Fatalf("a completed pass rendered as %+v; it must carry Ran, its depth, and its account", ran)
 	}
 
-	notRun := compactionAttempt{Depth: GCFull}.outcome("journal 1 B -> 0 B")
+	notRun := storage.CompactionPass{Depth: GCFull}.Outcome("journal 1 B -> 0 B")
 	if notRun.Ran {
 		t.Fatalf("an attempt that never ran rendered Ran = true (%+v)", notRun)
 	}
@@ -269,6 +271,21 @@ func TestCompactionAttemptRendersOnlyWhatHappened(t *testing.T) {
 	}
 	if notRun.Depth != GCFull {
 		t.Fatalf("an attempt that never ran lost its depth (%+v); the trail needs to say which one failed", notRun)
+	}
+}
+
+// A retry that could not repeat a rewrite does not erase it: the outcome and the
+// trail must agree with the event's pass list that the store was rewritten.
+func TestAPassPlusItsRetryKeepsTheRewrite(t *testing.T) {
+	t.Parallel()
+
+	rewrote := storage.CompactionPass{Depth: GCFull, Ran: true}
+	failed := storage.CompactionPass{Depth: GCFull}
+	if got := rewrote.Plus(failed); !got.Ran || got.Depth != GCFull {
+		t.Fatalf("a rewrite followed by a failed retry = %+v, want it to have run", got)
+	}
+	if got := failed.Plus(failed); got.Ran {
+		t.Fatalf("two passes that never ran = %+v, want none to have run", got)
 	}
 }
 

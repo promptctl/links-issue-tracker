@@ -6,8 +6,9 @@ import (
 )
 
 // The branch a session is on is per-connection state, and a rotated
-// connection (reconnect, reopenEngine) opens on the database's default
-// branch. So the Store records the branch a scratch user switched to, for as
+// connection (reconnect, replaceConnection, reopenEngine) opens on the
+// database's default branch. So the Store records the branch a scratch user
+// switched to, for as
 // long as its scratch run lasts (runOnScratch), and every fresh connection
 // resumes on it: a write a rotation retried inside a
 // scratch run lands on the scratch branch, and one retried while landing it

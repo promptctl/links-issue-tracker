@@ -61,13 +61,14 @@ func openSyncSession(ctx context.Context, env environ.Env, stderr io.Writer, ws 
 // same workspace identity. [LAW:one-type-per-behavior] one opener, the path
 // is data.
 func openSyncSessionAt(ctx context.Context, env environ.Env, stderr io.Writer, databasePath, workspaceID string) (syncSession, func() error, error) {
-	st, syncer, err := openSyncEngineAt(ctx, env, stderr, databasePath, workspaceID)
+	st, syncer, err := openSyncEngineAt(ctx, env, stderr, engine.Sync, databasePath, workspaceID)
 	if err != nil {
 		return syncSession{}, nil, err
 	}
 	return syncSession{engine: st, syncer: syncer}, func() error {
 		reportEventValues(ctx, "reroot.follows", syncer.FollowedReRoots())
 		reportEventValues(ctx, "collection.records", syncer.Collections())
+		reportCompactionPasses(ctx, syncer)
 		reportEventValues(ctx, "reroot.declines", syncer.DeclinedReRoots())
 		reportEventValues(ctx, "reroot.cuts_not_found", syncer.CutsNotFound())
 		reportEventValues(ctx, "fork_point.records", syncer.ForkPointRecords())
@@ -85,9 +86,10 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, stderr io.Writer, d
 
 // openSyncEngineAt is the one place a sync engine is opened and its
 // capability resolved. [LAW:single-enforcer] A sync session wraps it with the
-// close that reports what the engine did; compaction wraps it with a plain one.
-func openSyncEngineAt(ctx context.Context, env environ.Env, stderr io.Writer, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
-	st, err := engine.Open(ctx, env, stderr, engine.Sync, databasePath, workspaceID)
+// close that reports what the engine did; the backstop wraps it with a close
+// that reports its passes. The mode is the hold the caller needs, and is data.
+func openSyncEngineAt(ctx context.Context, env environ.Env, stderr io.Writer, mode engine.Mode, databasePath, workspaceID string) (storage.Store, storage.Syncer, error) {
+	st, err := engine.Open(ctx, env, stderr, mode, databasePath, workspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -108,6 +110,16 @@ func openSyncEngineAt(ctx context.Context, env environ.Env, stderr io.Writer, da
 // where a slow clock is most likely corrected. [LAW:nothing-unseen]
 func reportStampCorrections(ctx context.Context, st storage.StampReporter) {
 	telemetry.Append(ctx, "store.stamp_corrections", st.StampCorrections().EventValue())
+}
+
+// reportCompactionPasses puts syncer's compaction passes on the event when it
+// looked for one owed: [] is a look that owed nothing, and no key is no look.
+// [LAW:single-enforcer] the one place the key is written, for a sync session
+// and the backstop alike. [LAW:nothing-unseen]
+func reportCompactionPasses(ctx context.Context, syncer storage.Syncer) {
+	if passes, looked := syncer.CompactionPasses(); looked {
+		reportEventValues(ctx, "compaction.passes", passes)
+	}
 }
 
 // reportStrandedWrites puts st's stranded-writes commits on the event when it

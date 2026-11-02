@@ -169,6 +169,11 @@ type Syncer interface {
 	// does.
 	Collections() []Collection
 
+	// CompactionPasses is every compaction the engine attempted since it
+	// opened, oldest first, and whether anything looked to see if one was owed:
+	// a look that owed nothing returns none and true.
+	CompactionPasses() ([]CompactionPass, bool)
+
 	// DeclinedReRoots is every re-root of the remote the engine recognized
 	// since it opened and did not follow, oldest first, with the cut and why
 	// no re-root at it reproduces the remote's history.

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
 	"testing"
 )
 
@@ -47,7 +48,7 @@ func lastLockOccurrences(t *testing.T, command string) ([]lockHoldEntry, []map[s
 // the registration table: a command whose work does not grow with its input
 // heartbeats to the writers behind it, and every other write keeps the long
 // hold its waiters fail on, naming it. A new opt-in to routine is a reviewed
-// change to this list.
+// change to this list, or to the backstop's test beside it.
 func TestEachWriteSaysWhetherItsLockHoldWasRoutine(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
@@ -84,6 +85,77 @@ func TestEachWriteSaysWhetherItsLockHoldWasRoutine(t *testing.T) {
 			t.Errorf("%s: lock.waits = %+v, want [] with nothing contending", c.event, waits)
 		}
 	}
+}
+
+// The compaction backstop is the opt-in no command's row states: a write whose
+// probe is due reports the probe's hold, routine, as a second entry beside its
+// own, and what the probe found. Nothing owed is [], so a reader can tell a
+// probe that looked from a write that ran none.
+func TestTheBackstopsHoldIsRoutineAndItsLookIsOnTheEvent(t *testing.T) {
+	isolateEvents(t)
+	dir, marker := litRepoForCadence(t)
+	t.Setenv(DisableAutoSyncEnvVar, "0")
+	newTicket(t, dir)
+	if len(compactionPasses(t, "lit new")) != 0 {
+		t.Fatalf("the first write's probe found a pass owed on an empty store")
+	}
+	holds, _ := lastLockOccurrences(t, "lit new")
+	if len(holds) != 2 || !holds[0].Routine || !holds[1].Routine {
+		t.Fatalf("lock.holds = %+v, want the write's routine hold and the probe's", holds)
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatalf("remove marker: %v", err)
+	}
+	t.Setenv(DisableAutoSyncEnvVar, "1")
+	newTicket(t, dir)
+	if _, present := lastEvent(t).Occurrences["compaction.passes"]; present {
+		t.Fatalf("a write that ran no probe says compaction.passes = %v, want no key", lastEvent(t).Occurrences["compaction.passes"])
+	}
+}
+
+// A pass lands on the event of the command that ran it, with the rotation it
+// took, and a sync session that compacted nothing writes no key. The explicit
+// pass is long: it runs under no deadline, so its waiters fail naming it.
+func TestAPassIsOnTheEventOfTheCommandThatRanIt(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	newEpicInDir(t, repo, "Compact me")
+	runCLIInDir(t, repo, "sync", "remote", "ls")
+	if _, present := lastEvent(t).Occurrences["compaction.passes"]; present {
+		t.Fatalf("a sync session that compacted nothing says compaction.passes = %v, want no key", lastEvent(t).Occurrences["compaction.passes"])
+	}
+	runCLIInDir(t, repo, "sync", "compact")
+	passes := compactionPasses(t, "lit sync compact")
+	if len(passes) != 1 || passes[0]["compaction.depth"] != "newgen" || passes[0]["compaction.ran"] != true || passes[0]["compaction.rotation"] != "connection" {
+		t.Fatalf("compaction.passes = %+v, want the one pass, keeping its engine", passes)
+	}
+	holds, _ := lastLockOccurrences(t, "lit sync compact")
+	if len(holds) != 1 || holds[0].Routine {
+		t.Fatalf("lock.holds = %+v, want one long hold", holds)
+	}
+}
+
+// compactionPasses is the last event's compaction.passes, failing unless the
+// event is command's and the key is present.
+func compactionPasses(t *testing.T, command string) []map[string]any {
+	t.Helper()
+	ev := lastEvent(t)
+	if ev.Event != command {
+		t.Fatalf("last event = %q, want %s", ev.Event, command)
+	}
+	value, present := ev.Occurrences["compaction.passes"]
+	if !present {
+		t.Fatalf("%s event has no compaction.passes", command)
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var passes []map[string]any
+	if err := json.Unmarshal(raw, &passes); err != nil {
+		t.Fatalf("compaction.passes = %s: %v", raw, err)
+	}
+	return passes
 }
 
 // A read holds no LOCK and waits on none, and says both as [].
