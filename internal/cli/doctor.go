@@ -505,8 +505,8 @@ func doctorLeaf() appLeaf {
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	return appLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		// Asked first, so the event records a refused prefix even when an error
-		// below cuts doctor short. [LAW:nothing-unseen]
-		mintablePrefix(ctx, ap.Workspace.IssuePrefix)
+		// below cuts doctor short; it is exited on last. [LAW:nothing-unseen]
+		_, mintErr := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 		// [LAW:parse-dont-validate] Repair is a capability, not a duty every engine
 		// owes: what counts as a fault is engine-specific. Doctor asks once, here,
 		// and the fixes below take the interface rather than the app, so no fix can
@@ -581,8 +581,8 @@ func doctorLeaf() appLeaf {
 		// state above and then exits on it — after the owner notification, which
 		// a divergence is owed whatever else is wrong. It outranks the divergence
 		// exit because it is the one of the two the operator can clear right now.
-		if _, err := ap.Workspace.IssuePrefix.Mintable(); err != nil {
-			return err
+		if mintErr != nil {
+			return mintErr
 		}
 		return exitErr
 	}}

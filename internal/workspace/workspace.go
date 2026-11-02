@@ -238,9 +238,14 @@ func (p PrefixState) Stored() StoredPrefix {
 // name. A refused prefix was read from config, so it never is.
 func (p PrefixState) Derived() bool { return p.spec.Derived() }
 
-// Refused reports whether this is the refused arm: a stored prefix the rules
-// refuse, which mints nothing until `lit prefix set` repairs it.
-func (p PrefixState) Refused() bool { return p.refusal != nil }
+// Arm names which arm this is: "legal", or "refused" for a stored prefix the
+// rules refuse, which mints nothing until `lit prefix set` repairs it.
+func (p PrefixState) Arm() string {
+	if p.refusal != nil {
+		return "refused"
+	}
+	return "legal"
+}
 
 // Remotes is a checkout's git remote configuration as one invocation reads it:
 // the remotes the repository has, and the one the current branch tracks. Each is asked of
@@ -724,6 +729,11 @@ func classifyGitError(context string, err error) error {
 	return fmt.Errorf("%s: %w", context, err)
 }
 
+// carriesNoPrefix is whether config.json's issue_prefix text stands for no
+// prefix at all. [LAW:one-source-of-truth] deriving one and naming what the
+// write did read it here.
+func carriesNoPrefix(configured string) bool { return strings.TrimSpace(configured) == "" }
+
 // resolveIssuePrefix is the single enforcer of the prefix rule. A workspace's
 // prefix has three possible sources and this is the one place that ranks them:
 // the value config.json already carries wins, an explicit request supplies one
@@ -740,11 +750,6 @@ func classifyGitError(context string, err error) error {
 // command whose whole contract is to be safe to re-run, and before the store
 // that could tell a repair from a rewrite is even open.
 // [LAW:single-enforcer] [LAW:no-silent-failure]
-// carriesNoPrefix is whether config.json's issue_prefix text stands for no
-// prefix at all. [LAW:one-source-of-truth] deriving one and naming what the
-// write did read it here.
-func carriesNoPrefix(configured string) bool { return strings.TrimSpace(configured) == "" }
-
 func resolveIssuePrefix(rootDir string, configPath string, configured string, requested PrefixRequest) (PrefixState, error) {
 	if carriesNoPrefix(configured) {
 		// The request is consulted BEFORE derivation, not bolted onto one of its

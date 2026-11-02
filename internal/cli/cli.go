@@ -283,11 +283,7 @@ func recordConfigSettlement(ctx context.Context, settlement *workspace.Settlemen
 // recordWorkspaceResolution puts which arm of PrefixState the resolved prefix
 // took on the invocation's event. [LAW:nothing-unseen]
 func recordWorkspaceResolution(ctx context.Context, ws workspace.Info) {
-	state := "legal"
-	if ws.IssuePrefix.Refused() {
-		state = "refused"
-	}
-	telemetry.Set(ctx, "workspace.prefix_state", state)
+	telemetry.Set(ctx, "workspace.prefix_state", ws.IssuePrefix.Arm())
 	telemetry.Set(ctx, "workspace.prefix_derived", ws.IssuePrefix.Derived())
 }
 

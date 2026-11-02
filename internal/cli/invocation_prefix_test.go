@@ -120,7 +120,10 @@ func TestTheIDPrefixCensusIsOnTheEvent(t *testing.T) {
 	newEpicInDir(t, repo, "counted")
 	prefix := string(resolveForTest(t, repo).IssuePrefix.Stored())
 	for _, args := range [][]string{{"doctor"}, {"prefix", "set", "other", "--apply"}} {
-		_, _ = runCLIInDirAllowError(t, repo, args...)
+		// doctor may exit on what it found; prefix set must succeed.
+		if _, err := runCLIInDirAllowError(t, repo, args...); err != nil && args[0] == "prefix" {
+			t.Fatalf("Run(%v) error = %v", args, err)
+		}
 		facts := lastEvent(t).Facts
 		counts, ok := facts["prefix_census.counts"].(map[string]any)
 		if !ok || counts[prefix] != float64(1) {
