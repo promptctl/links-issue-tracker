@@ -101,11 +101,16 @@ func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, 
 	}
 	observer := rankObserverFrom(ctx)
 	observer.ReadParentEdges(len(links))
+	return observedAncestry(observer, links), nil
+}
+
+// observedAncestry builds the ancestry a read's edges make and tells observer
+// its shape, whether or not the write around the read stands: a refused repair
+// still met the damage it refused over.
+func observedAncestry(observer RankObserver, links []storage.ParentLink) storage.RankAncestry {
 	ancestry := storage.NewRankAncestry(links)
-	// What a read met is told whether or not the write around it stands: a
-	// refused repair still met the damage it refused over.
 	observer.Ancestry(ancestry.Shape())
-	return ancestry, nil
+	return ancestry
 }
 
 // rankClimbQuery reads the framing edges of frontier. The hint keeps it a run of
@@ -147,11 +152,7 @@ func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (sto
 			}
 		}
 	}
-	ancestry := storage.NewRankAncestry(links)
-	// What a read met is told whether or not the write around it stands: a
-	// refused repair still met the damage it refused over.
-	observer.Ancestry(ancestry.Shape())
-	return ancestry, nil
+	return observedAncestry(observer, links), nil
 }
 
 // sortInTreeOrder puts each group in tree order, reading the ancestry of the
@@ -843,19 +844,24 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 }
 
 // ReversedTieError is the refusal of a rank set that would write Above directly
-// over Below while the two share Key, against their ids. It is a validation
-// error, so it exits and reads as one.
+// over Below while the two share Key, against their ids. Its record names the
+// pair on the event of whichever command ran the rank set.
 type ReversedTieError struct {
 	Above, Below, Key string
 }
 
-func (e ReversedTieError) Error() string { return e.validation().Error() }
+func (e ReversedTieError) Error() string {
+	return fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
+		e.Above, e.Below, e.Key, e.Above, e.Below, e.Above, e.Below)
+}
 
-func (e ReversedTieError) Unwrap() error { return e.validation() }
+// RefusesCommand marks ReversedTieError as a Refusal.
+func (ReversedTieError) RefusesCommand() {}
 
-func (e ReversedTieError) validation() model.ValidationError {
-	return model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
-		e.Above, e.Below, e.Key, e.Above, e.Below, e.Above, e.Below)}
+// EventRecord puts the refused pair on the failed command's event, the one it
+// would have written above first.
+func (e ReversedTieError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{"rank_set.refused_tie": []string{e.Above, e.Below}}, nil
 }
 
 // refuseReversedTie refuses an order that sets one of the issues standing in the

@@ -8,7 +8,39 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
+
+// A command that builds tree order more than once over the same damage puts
+// each damaged ticket on its event once, and a build that met nothing new adds
+// nothing.
+func TestEachDamagedTicketGoesOnTheEventOnce(t *testing.T) {
+	t.Parallel()
+	recorder := telemetry.Begin(telemetry.Event{})
+	met := newAncestryMet(telemetry.With(context.Background(), recorder))
+	shape := storage.AncestryShape{
+		Deepest:   3,
+		Conflicts: []storage.ParentConflict{{ChildID: "c", Parents: []string{"p1", "p2"}}},
+		Loops:     []string{"l1", "l2"},
+	}
+	met.record(shape)
+	met.record(shape)
+	met.record(storage.AncestryShape{Loops: []string{"l3"}})
+	ev := recorder.Finish(telemetry.End{})
+	if got := len(ev.Occurrences["rank.ancestry_conflicts"]); got != 1 {
+		t.Errorf("rank.ancestry_conflicts = %v, want c once", ev.Occurrences["rank.ancestry_conflicts"])
+	}
+	var loops []string
+	for _, entry := range ev.Occurrences["rank.ancestry_loops"] {
+		loops = append(loops, entry.(map[string]any)["rank.ancestry_loop.child"].(string))
+	}
+	if !slices.Equal(loops, []string{"l1", "l2", "l3"}) {
+		t.Errorf("rank.ancestry_loops = %v, want each loop ticket once", loops)
+	}
+	if ev.Counts["rank.ancestry_deepest"] != 3 {
+		t.Errorf("rank.ancestry_deepest = %d, want 3", ev.Counts["rank.ancestry_deepest"])
+	}
+}
 
 // What a write did to rank keys is on its event, and a command that wrote none
 // says 0 and [], not nothing.

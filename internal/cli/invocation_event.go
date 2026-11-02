@@ -92,10 +92,7 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
 		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
 	})
-	// A command can build tree order several times over the same damage, so
-	// each damaged ticket goes on the event once.
-	var metMu sync.Mutex
-	metConflict, metLoop := map[string]struct{}{}, map[string]struct{}{}
+	met := newAncestryMet(event)
 	ctx = store.WithRankObserver(ctx, store.RankObserver{
 		Wrote:    func(longestKey int) { telemetry.Max(event, "rank.longest_key", longestKey) },
 		Respaced: func(respace store.Respace) { telemetry.Append(event, "rank.respaces", rankRespaceValue(respace)) },
@@ -103,32 +100,7 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 			telemetry.Add(event, "rank.ancestry_levels", 1)
 			telemetry.Add(event, "rank.ancestry_links", links)
 		},
-		Ancestry: func(shape storage.AncestryShape) {
-			telemetry.Max(event, "rank.ancestry_deepest", shape.Deepest)
-			metMu.Lock()
-			defer metMu.Unlock()
-			var conflicts []any
-			for _, conflict := range shape.Conflicts {
-				if _, met := metConflict[conflict.ChildID]; met {
-					continue
-				}
-				metConflict[conflict.ChildID] = struct{}{}
-				conflicts = append(conflicts, map[string]any{
-					"rank.ancestry_conflict.child":   conflict.ChildID,
-					"rank.ancestry_conflict.parents": slices.Clone(conflict.Parents),
-				})
-			}
-			telemetry.Append(event, "rank.ancestry_conflicts", conflicts...)
-			var loops []any
-			for _, child := range shape.Loops {
-				if _, met := metLoop[child]; met {
-					continue
-				}
-				metLoop[child] = struct{}{}
-				loops = append(loops, map[string]any{"rank.ancestry_loop.child": child})
-			}
-			telemetry.Append(event, "rank.ancestry_loops", loops...)
-		},
+		Ancestry: met.record,
 		RankSet: func(account store.RankSetAccount) {
 			telemetry.Set(event, "rank_set.frame", string(account.Frame))
 			telemetry.Set(event, "rank_set.named", account.Named)
@@ -143,6 +115,56 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
 		telemetry.Append(event, "git.cancels", gitCancelValue(cancelled))
 	})
+}
+
+// ancestryMet puts on event what each ancestry build met. A command can build
+// tree order several times over the same damage, so each damaged ticket goes
+// on the event once.
+type ancestryMet struct {
+	event     context.Context
+	mu        sync.Mutex
+	conflicts map[string]struct{}
+	loops     map[string]struct{}
+}
+
+func newAncestryMet(event context.Context) *ancestryMet {
+	return &ancestryMet{event: event, conflicts: map[string]struct{}{}, loops: map[string]struct{}{}}
+}
+
+func (m *ancestryMet) record(shape storage.AncestryShape) {
+	telemetry.Max(m.event, "rank.ancestry_deepest", shape.Deepest)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var conflicts, loops []any
+	for _, conflict := range shape.Conflicts {
+		if firstMeeting(m.conflicts, conflict.ChildID) {
+			conflicts = append(conflicts, map[string]any{
+				"rank.ancestry_conflict.child":   conflict.ChildID,
+				"rank.ancestry_conflict.parents": slices.Clone(conflict.Parents),
+			})
+		}
+	}
+	for _, child := range shape.Loops {
+		if firstMeeting(m.loops, child) {
+			loops = append(loops, map[string]any{"rank.ancestry_loop.child": child})
+		}
+	}
+	// One append a key per build: each append copies what the key holds.
+	if len(conflicts) > 0 {
+		telemetry.Append(m.event, "rank.ancestry_conflicts", conflicts...)
+	}
+	if len(loops) > 0 {
+		telemetry.Append(m.event, "rank.ancestry_loops", loops...)
+	}
+}
+
+// firstMeeting marks child seen and says whether it was not already.
+func firstMeeting(seen map[string]struct{}, child string) bool {
+	if _, ok := seen[child]; ok {
+		return false
+	}
+	seen[child] = struct{}{}
+	return true
 }
 
 // rankRespaceValue is one rank.respaces occurrence.

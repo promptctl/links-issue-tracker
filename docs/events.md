@@ -340,11 +340,11 @@ A `lit rank set` that decided its write records these facts, and so does a `lit 
 | --- | --- |
 | `rank_set.frame` | The epic whose children it ordered, or `""` for the top level. |
 | `rank_set.named` | How many tickets it was given. |
-| `rank_set.rewritten` | How many rank keys it wrote for the named tickets. `0` when the order had already arrived. Keys a respace rewrote to make room are in `rank.respaces`. |
+| `rank_set.rewritten` | How many rank keys it wrote for the tickets it ordered, which hold an epic in place of a named child of it. `0` when the order had already arrived. Keys a respace rewrote to make room are in `rank.respaces`. |
 | `rank_set.touched` | How many of those were a named ticket moving to a new place, and stamped as updated; the rest were rewritten under a ticket that stays where it stood. |
 | `rank_set.minted` | How many named tickets took a new key above the frame's top, rather than a key handed round among the tickets already leading it. |
 
-A `lit rank set` refused because two tickets share a key and the order would write the higher id above the lower records only `rank_set.refused_tie`: the pair, the one it would have written above first.
+A `lit rank set`, or a `lit import` running one, refused because two tickets share a key and the order would write the higher id above the lower records only `rank_set.refused_tie`: the pair, the one it would have written above first.
 
 ## What checking the config records
 

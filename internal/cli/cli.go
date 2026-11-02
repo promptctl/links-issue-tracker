@@ -1605,9 +1605,6 @@ func rankSetLeaf() appLeaf {
 			return UsageError{Message: usage}
 		}
 		result, err := ap.Store.RankSet(ctx, positional)
-		if tie := (store.ReversedTieError{}); errors.As(err, &tie) {
-			telemetry.Set(ctx, "rank_set.refused_tie", []string{tie.Above, tie.Below})
-		}
 		if err != nil {
 			return err
 		}
