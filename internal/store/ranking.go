@@ -102,8 +102,9 @@ func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, 
 	observer := rankObserverFrom(ctx)
 	observer.ReadParentEdges(len(links))
 	ancestry := storage.NewRankAncestry(links)
-	shape := ancestry.Shape()
-	hear(ctx, func() { observer.Ancestry(shape) })
+	// What a read met is told whether or not the write around it stands: a
+	// refused repair still met the damage it refused over.
+	observer.Ancestry(ancestry.Shape())
 	return ancestry, nil
 }
 
@@ -147,8 +148,9 @@ func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (sto
 		}
 	}
 	ancestry := storage.NewRankAncestry(links)
-	shape := ancestry.Shape()
-	hear(ctx, func() { observer.Ancestry(shape) })
+	// What a read met is told whether or not the write around it stands: a
+	// refused repair still met the damage it refused over.
+	observer.Ancestry(ancestry.Shape())
 	return ancestry, nil
 }
 
@@ -767,6 +769,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		}
 		result := storage.RankSetResult{Resolutions: resolutions, Frame: f}
 		account := RankSetAccount{Frame: f, Named: len(ids)}
+		observer := rankObserverFrom(ctx)
 		ranked := make([]string, len(resolutions))
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
@@ -779,7 +782,6 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// An order that has arrived writes nothing: its issues stand where they
 		// were asked to, and a stamp would say otherwise.
 		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id string) bool { return row.id == id }) {
-			observer := rankObserverFrom(ctx)
 			hear(ctx, func() { observer.RankSet(account) })
 			return result, nil
 		}
@@ -820,6 +822,9 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 			moved := !inHead || stood != i
 			if moved || slots[i] != held[id] {
 				writes = append(writes, rankWrite{id: id, rank: slots[i], touched: moved})
+				if moved {
+					account.Touched++
+				}
 			}
 		}
 		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
@@ -832,12 +837,6 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		}
 		account.Minted = len(minted)
 		account.Rewritten = len(writes)
-		for _, w := range writes {
-			if w.touched {
-				account.Touched++
-			}
-		}
-		observer := rankObserverFrom(ctx)
 		hear(ctx, func() { observer.RankSet(account) })
 		return result, nil
 	})

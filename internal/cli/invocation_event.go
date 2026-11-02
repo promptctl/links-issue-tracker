@@ -92,6 +92,10 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
 		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
 	})
+	// A command can build tree order several times over the same damage, so
+	// each damaged ticket goes on the event once.
+	var metMu sync.Mutex
+	metConflict, metLoop := map[string]struct{}{}, map[string]struct{}{}
 	ctx = store.WithRankObserver(ctx, store.RankObserver{
 		Wrote:    func(longestKey int) { telemetry.Max(event, "rank.longest_key", longestKey) },
 		Respaced: func(respace store.Respace) { telemetry.Append(event, "rank.respaces", rankRespaceValue(respace)) },
@@ -101,17 +105,27 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 		},
 		Ancestry: func(shape storage.AncestryShape) {
 			telemetry.Max(event, "rank.ancestry_deepest", shape.Deepest)
-			conflicts := make([]any, len(shape.Conflicts))
-			for i, conflict := range shape.Conflicts {
-				conflicts[i] = map[string]any{
+			metMu.Lock()
+			defer metMu.Unlock()
+			var conflicts []any
+			for _, conflict := range shape.Conflicts {
+				if _, met := metConflict[conflict.ChildID]; met {
+					continue
+				}
+				metConflict[conflict.ChildID] = struct{}{}
+				conflicts = append(conflicts, map[string]any{
 					"rank.ancestry_conflict.child":   conflict.ChildID,
 					"rank.ancestry_conflict.parents": slices.Clone(conflict.Parents),
-				}
+				})
 			}
 			telemetry.Append(event, "rank.ancestry_conflicts", conflicts...)
-			loops := make([]any, len(shape.Loops))
-			for i, child := range shape.Loops {
-				loops[i] = map[string]any{"rank.ancestry_loop.child": child}
+			var loops []any
+			for _, child := range shape.Loops {
+				if _, met := metLoop[child]; met {
+					continue
+				}
+				metLoop[child] = struct{}{}
+				loops = append(loops, map[string]any{"rank.ancestry_loop.child": child})
 			}
 			telemetry.Append(event, "rank.ancestry_loops", loops...)
 		},
