@@ -41,10 +41,15 @@ A migration can add structure whose content is derivable from vN-1 data, as
 v12's `is_top_level_id` is. It can add structure that holds new user data only
 if the data has somewhere to live at vN-1. That place is the **stash
 carrier**: a `schema_stash (table_name, row_key, column_name, value)` table
-that sits outside the versioned schema. Whichever step first needs it creates
+that sits outside the versioned schema. `row_key` is the row's primary key,
+composite keys included, as canonical JSON; `value` is the value in the same
+type-faithful encoding the canonical export uses. Whichever step first needs it creates
 it, no Down drops it, and the shape comparison ignores it, so it serves the
 released versions below any migration that could have added it and survives
-every step down.
+every step down. It is user data: the recovery shape map carries it
+verbatim, never as bookkeeping. Two clients that stash the same row write the
+same entry unless the row itself diverged, and then the row's own conflict is
+the one to resolve.
 
 - A Down that drops a column holding user data copies the column into the
   stash first. The next Up restores it for every row that still exists.
@@ -55,7 +60,11 @@ every step down.
   not a loss.
 - The stash holds only what the other version cannot represent. A step
   applies it on top of the store's current data, never in place of it, and
-  deletes the entries it consumed. A stash write records every row's value,
+  deletes every entry it was written for: entries whose row is gone are
+  dropped with it, because a row's absence is a user's deletion. A row is
+  its key, so a row re-created under the same key is the same row. Rows an
+  Up collapses into a survivor are stashed whole and return only while the
+  survivor exists. A stash write records every row's value,
   null included, so a value cleared at one version stays cleared.
 
 ### How it is proven
@@ -71,13 +80,16 @@ every step down.
     compare against the export.
   - from vN-1: seed at vN-1; export; run Up then Down; compare against the
     export. This is what catches an Up that destroys data without stashing
-    it.
-- **Cross-version release check.** `release-validate.yml` migrates a fixture
-  with the candidate binary, steps it down to the previous release's
+    it. It runs for migrations written from now on; a released Up that
+    destroyed data, as v4's and v7's did, already destroyed it on every store
+    it ran on, so there is nothing for a Down to return.
+- **Cross-version release check.** On every PR that adds or changes a
+  migration, CI builds the candidate with its own registry max as its
+  released ceiling, migrates a fixture with it, steps it down to the previous release's
   `Schema.Max` — across every migration the candidate adds, however many —
   then runs the previous release's published `lit` against it — read, write,
-  sync — and steps it back up with the candidate. This is the only check that proves rule 1 against code
-  that actually shipped rather than against our own Down SQL.
+  sync — and steps it back up with the candidate. This is the only check that
+  proves rule 1 against code that actually shipped rather than against our own Down SQL.
 
 ### Released migrations: freeze the Up, not the Down
 
@@ -101,14 +113,14 @@ store, and pushes it back up.
 
 `lit downgrade --schema <v> --remote <name>` lowers the remote and writes
 the **remote hold**, `meta.schema_hold = v`, in the same commit. `meta` exists from the baseline
-on, so a store at any version can hold the row. A binary that reads the row
-migrates no store past it and refuses to push a raise past it. The check sits
+on, so a store at any version can hold the row. A binary reads the hold from the fetched remote head as well as from the
+local store, so a local store stepped down under a hold stays down. It
+migrates no store past the hold and refuses to push a raise past it. The check sits
 at the one migration entry that both opening a store and the sync reconcile's
 lift of a fetched head go through, so sync cannot re-raise what open would not.
 A binary whose code needs a schema above the hold refuses to write and names
-the release to install; a local store already above the hold refuses to sync
-and names the `lit downgrade --schema <v>` that returns it, which rule 1 makes
-lossless. The row is removed only by
+the `lit downgrade --to <tag>` that installs a release at the hold; its store
+steps down with it, which rule 1 makes lossless. The row is removed only by
 `lit upgrade --remote <name>`.
 
 Binaries released before the row existed do not read it. The guarantee holds
@@ -123,7 +135,11 @@ A push with H > R — a **raise** — succeeds only when both hold:
 - H is at most the binary's own `Schema.Max`.
 
 Anything else refuses with `SchemaRaiseRequiresReleaseError`, whose message
-names R and the `lit downgrade --schema R` that returns the local store to it.
+names R and the remedy. When H is at most the binary's released ceiling, the
+schema is released and the remedy is running that release's `lit sync` once to
+raise the remote; stepping the store down would only see the next open migrate
+it back. Otherwise it names the `lit downgrade --schema R` that returns the
+store, which the released ceiling then keeps there.
 
 `--schema <v>` steps the store's schema and leaves the binary in place;
 `--to <tag>` installs that release's binary and steps the store to its
@@ -161,9 +177,10 @@ binary's `lit sync` once. That is the routine raise, not a failure.
 | No tracking ref, so R is unknown | Unknown R counts as a raise; fetch first |
 | A push that creates the remote | Counts as a raise from nothing; a dev build creates a remote only by having a release push it |
 
-The raise policy is a value the CLI's composition root builds from
-`version.Info` and hands to the store. Tests construct the store with whatever
-policy they exercise; there is no runtime test mode.
+The raise policy is a value the CLI's composition root builds from the
+`version.Info` its caller passes in and hands to the store. Store tests
+construct the store with whatever policy they exercise, and CLI tests pass
+`cli.Run` the `version.Info` they exercise; there is no runtime test mode.
 
 Out of reach of any "reasonable circumstance", and so out of scope: a build
 that deliberately stamps `-X …Origin=release`, and a `dolt push` run by hand
@@ -174,8 +191,8 @@ against the remote.
 The raise rule guards remotes. A second check guards local stores, so a dev
 build's unreleased migration never strands a real workspace in the first
 place. Every binary carries a stamped **released ceiling**: goreleaser's
-tagged build stamps the binary's own registry max, `install.sh` source mode
-and `just build` stamp the highest migration in the newest release tag as
+tagged build stamps the binary's own registry max; its snapshot builds,
+`install.sh` source mode and `just build` stamp the highest migration in the newest release tag as
 `scripts/release-tags.sh` and `tools/schema-release-check` already compute it,
 and an unstamped binary has ceiling 0. No migration of an existing store moves
 it past the ceiling, whether it runs on open or in the sync reconcile's lift
