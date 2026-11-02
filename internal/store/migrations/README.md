@@ -109,6 +109,10 @@ that. The gate's failure message says the same thing when it fires.
 
 ## Non-losslessly-invertible migrations
 
+Options A and B below describe how released migrations handle loss. A
+migration written now uses neither: its Down is lossless through the stash
+carrier, as `design-docs/schema-reversibility.md` specifies.
+
 Some up-migrations lose information by design — dropping a column, narrowing
 a type, collapsing rows. The `+goose Down` section is still mandatory; what
 varies is **how it represents the loss**:

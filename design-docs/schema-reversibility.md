@@ -27,8 +27,9 @@ For every migration vN and every store S valid at vN:
   vN-1 produces.
 - **Round trip.** `Up(Down(S))` equals S on the canonical export, byte for
   byte.
-- **Old code works.** The vN-1 release binary reads, writes, and syncs
-  `Down(S)`.
+- **Old code works.** The newest release binary whose `Schema.Max` is at
+  most vN-1 reads, writes, and syncs `Down(S)` once it is stepped down to
+  that binary's `Schema.Max`.
 
 A Down that refuses, or one that recreates a column with a default and
 documents the loss, does not meet this. Neither is an option for a migration
@@ -40,7 +41,10 @@ A migration can add structure whose content is derivable from vN-1 data, as
 v12's `is_top_level_id` is. It can add structure that holds new user data only
 if the data has somewhere to live at vN-1. That place is the **stash
 carrier**: a `schema_stash (table_name, row_key, column_name, value)` table
-that one migration adds, empty, so adding it is itself lossless.
+that sits outside the versioned schema. Whichever step first needs it creates
+it, no Down drops it, and the shape comparison ignores it, so it serves the
+released versions below any migration that could have added it and survives
+every step down.
 
 - A Down that drops a column holding user data copies the column into the
   stash first. The next Up restores it for every row that still exists.
@@ -54,13 +58,15 @@ that one migration adds, empty, so adding it is itself lossless.
 
 - **Round-trip gate.** `TestEveryMigrationRoundTripsLosslessly` replaces
   `TestEveryMigrationDownIsExercised`. Every migration ships a seed fixture
-  that fills the structures it adds; a migration without one fails the gate,
-  so the gate cannot pass against empty tables. For each version the gate
+  that fills every table its Up or Down reads or rewrites, not only the
+  structures it adds; a migration without one fails the gate, so the gate
+  cannot pass against empty tables. For each version the gate
   seeds, runs Up, exports, runs Down, checks the shape against a fresh Up to
   vN-1, runs Up again, and compares against the first export.
 - **Cross-version release check.** `release-validate.yml` migrates a fixture
-  with the candidate binary, steps it down one version, then runs the previous
-  release's published `lit` against it — read, write, sync — and steps it back
+  with the candidate binary, steps it down to the previous release's
+  `Schema.Max` — across every migration the candidate adds, however many —
+  then runs the previous release's published `lit` against it — read, write, sync — and steps it back
   up with the candidate. This is the only check that proves rule 1 against code
   that actually shipped rather than against our own Down SQL.
 
@@ -74,6 +80,10 @@ fixed in place, and the round-trip gate covers every version from v2 up. The
 baseline is excluded: going below it destroys the workspace, and
 `DowngradeBelowBaselineError` refuses that.
 
+The fix protects downgrades run by binaries built after it. A release that
+shipped a lossy Down still runs that Down; the guarantee holds for a downgrade
+run with the first release that carries the fixed one.
+
 ## Lowering a remote, and making it stay lowered
 
 A local downgrade alone does not lower a shared remote for long. Every client
@@ -81,11 +91,15 @@ still running vN pulls the lowered head, re-migrates it to vN when it opens the
 store, and pushes it back up.
 
 `lit downgrade <v> --remote <name>` lowers the remote and writes
-`meta.schema_ceiling = v` in the same commit. `meta` exists from the baseline
-on, so a store at any version can hold the row. Every binary that reads the row
-does not migrate a store past it on open and refuses to push a raise past it;
-a binary whose code needs a schema above the ceiling refuses to write and names
-the release to install. The row is removed only by
+the **remote hold**, `meta.schema_hold = v`, in the same commit. `meta` exists from the baseline
+on, so a store at any version can hold the row. A binary that reads the row
+migrates no store past it and refuses to push a raise past it. The check sits
+at the one migration entry that both opening a store and the sync reconcile's
+lift of a fetched head go through, so sync cannot re-raise what open would not.
+A binary whose code needs a schema above the hold refuses to write and names
+the release to install; a local store already above the hold refuses to sync
+and names the `lit downgrade <v>` that returns it, which rule 1 makes
+lossless. The row is removed only by
 `lit upgrade --remote <name>`.
 
 Binaries released before the row existed do not read it. The guarantee holds
@@ -104,18 +118,26 @@ names R and the `lit downgrade R` that returns the local store to it.
 
 There is no "highest released schema" constant. A release binary's whole
 registry is released by definition, because CI cuts the tag at the commit it
-was built from. The second condition stops a release binary from pushing a
+was built from. That holds only if `release` means a tagged build: goreleaser's
+snapshot mode — the master-push proof in `release-validate.yml`, whose
+binaries are uploaded as artifacts, `release-smoke.yml`, a local
+`goreleaser build --snapshot` — stamps `Origin=snapshot`, which counts as
+non-release. The second condition stops a release binary from pushing a
 store that a dev build migrated past it.
 
-Origin already fails closed: goreleaser is the only producer that stamps
-`release`, and a binary with nothing stamped reads as from-source.
-`stamp_sites_test.go` pins that only goreleaser stamps `release`.
+Origin fails closed: goreleaser's tagged build is the only producer that
+stamps `release`, and a binary with nothing stamped reads as from-source.
+`stamp_sites_test.go` pins that.
+
+After a schema-raising release, the shared remote stays at the old schema, and
+source builds at the new one cannot push to it, until someone runs the release
+binary's `lit sync` once. That is the routine raise, not a failure.
 
 ### Every way a raise can reach a remote
 
 | Path | Why it refuses |
 |---|---|
-| A dev build carrying an unreleased migration pushes a scratch store | Raise from a non-release binary (and an existing store never got there: the ceiling refuses the open) |
+| A dev build carrying an unreleased migration pushes a scratch store | Raise from a non-release binary (and an existing store never got there: the released ceiling refuses the open) |
 | A dev build at a released schema pushes over an older remote | Raise from a non-release binary — only a release raises a remote |
 | Compact-and-push, push-from-clone, the reconcile's replay commit, `--force` | The check sits at the one point every push sends refs from |
 | No tracking ref, so R is unknown | Unknown R counts as a raise; fetch first |
@@ -133,16 +155,18 @@ against the remote.
 
 The raise rule guards remotes. A second check guards local stores, so a dev
 build's unreleased migration never strands a real workspace in the first
-place. Every binary carries a stamped released-schema ceiling: goreleaser
-stamps the binary's own registry max, `install.sh` source mode and
-`just build` stamp the highest migration in the newest release tag, and an
-unstamped binary has ceiling 0. A migrating open of an existing store refuses
+place. Every binary carries a stamped **released ceiling**: goreleaser's
+tagged build stamps the binary's own registry max, `just build` stamps the
+highest migration in the newest release tag as `scripts/release-tags.sh` and
+`tools/schema-release-check` already compute it, and an unstamped binary has
+ceiling 0. `install.sh` source mode needs no separate stamp, since it already
+refuses to build a tree past the newest release tag. A migrating open of an existing store refuses
 to move it past the ceiling. Creating a fresh store is not limited, so new
 migrations stay developable in scratch workspaces. Like the raise policy, the
-ceiling enters at the composition root, and tests construct stores with the
+released ceiling enters at the composition root, and tests construct stores with the
 full registry.
 
-The two checks answer different questions. The ceiling asks whether this
+The two checks answer different questions. The released ceiling asks whether this
 schema has been released. The raise rule asks whether this binary is a
 release. A dev build at a released schema passes the first and fails the
 second, which is the case rule 2 exists for.
