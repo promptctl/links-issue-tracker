@@ -19,11 +19,11 @@ import (
 // says about the state is what a second open finds. Serial: the injections
 // are package-level.
 
-// failingMigration makes every goose step fail as a migration one past the
-// registry, which earns a quarantine, and returns its version.
+// failingMigration makes every goose step fail as the registry's last
+// migration, which earns a quarantine, and returns its version.
 func failingMigration(t *testing.T, sentinel error) int64 {
 	t.Helper()
-	version := headVersion(t) + 1
+	version := headVersion(t)
 	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
 		return &goose.MigrationResult{
 			Source: &goose.Source{Version: version, Path: fmt.Sprintf("%05d_test.sql", version)},

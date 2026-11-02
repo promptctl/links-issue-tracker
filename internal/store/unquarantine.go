@@ -67,11 +67,12 @@ func clearedFacts(cleared QuarantineBlockError) map[string]any {
 }
 
 // NoQuarantineError answers an Unquarantine on a workspace no quarantine
-// blocks: the state asked for already holds.
+// blocks this binary's opens of: the state asked for already holds. A lit that
+// has a migration this one lacks may still be refused on its quarantine.
 type NoQuarantineError struct{}
 
 func (NoQuarantineError) Error() string {
-	return "no migration is quarantined: no open of this workspace is refused, so there is nothing to clear"
+	return "no quarantine refuses this lit's opens of this workspace, so there is nothing to clear"
 }
 
 // Satisfied makes the answer a state request that already holds.

@@ -93,7 +93,7 @@ func TestCheckPendingQuarantineBlocksPendingVersion(t *testing.T) {
 	}
 
 	// Applied = 1 → v2 is pending and quarantined.
-	err = st.checkPendingQuarantine(ctx, 1)
+	err = st.checkPendingQuarantine(ctx, 1, headVersion(t))
 	var qErr *QuarantineBlockError
 	if !errors.As(err, &qErr) {
 		t.Fatalf("checkPendingQuarantine(applied=1) = %v (%T), want *QuarantineBlockError", err, err)
@@ -130,7 +130,7 @@ func TestCheckPendingQuarantineAllowsAlreadyApplied(t *testing.T) {
 	}
 
 	// Applied = 1 → v1 is not pending (already applied). Should be nil.
-	if err := st.checkPendingQuarantine(ctx, 1); err != nil {
+	if err := st.checkPendingQuarantine(ctx, 1, headVersion(t)); err != nil {
 		t.Fatalf("checkPendingQuarantine(applied=1, quarantine_version=1) = %v, want nil", err)
 	}
 }
@@ -275,10 +275,9 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	// Force re-migration so applyPendingMigrations runs on next Open.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	// Inject a migration failure via the test hook. The synthetic migration sits
-	// one past HEAD so it cannot collide with (or quarantine) a real registry
-	// migration that the recovery reopen must still be free to apply.
-	failVersion := headVersion(t) + 1
+	// Inject a migration failure via the test hook, as the registry's last
+	// migration: a binary only fails migrations it has.
+	failVersion := headVersion(t)
 	failName := fmt.Sprintf("%05d_test.sql", failVersion)
 	sentinel := errors.New("simulated migration body error")
 	migrationUpByOneForTest = func(ctx context.Context, _ *sql.DB, provider *goose.Provider) (*goose.MigrationResult, error) {
