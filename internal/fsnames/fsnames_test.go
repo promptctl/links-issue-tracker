@@ -75,7 +75,7 @@ type store struct{ defaultsFS embed.FS }
 func (s store) read(name string) ([]byte, error) {
 	return s.defaultsFS.ReadFile(filepath.Join("defaults", name))
 }`,
-			want: []string{"embed.FS.ReadFile Join"},
+			want: []string{"embed.FS.ReadFile filepath.Join"},
 		},
 		{
 			name: "io/fs functions take the name second",
@@ -85,7 +85,7 @@ func f(fsys fs.FS, d string) {
 	fs.ReadFile(fsys, fp.Join(d, "x"))
 	fs.WalkDir(fsys, fp.Clean(d), nil)
 }`,
-			want: []string{"fs.ReadFile Join", "fs.WalkDir Clean"},
+			want: []string{"fs.ReadFile filepath.Join", "fs.WalkDir filepath.Clean"},
 		},
 		{
 			name: "filesystems however they were declared",
@@ -106,7 +106,7 @@ func f(d string, h holder) {
 	h.ReadFile(filepath.Join("x", d))
 	mustSub(raw, "d").Open(filepath.Join("x", d))
 }`,
-			want: []string{"fs.Stat Dir", "fs.FS.Open Join", "*embed.FS.ReadDir Dir", "fs.FS.Open Join", "p.holder.ReadFile Join", "fs.FS.Open Join"},
+			want: []string{"fs.Stat filepath.Dir", "fs.FS.Open filepath.Join", "*embed.FS.ReadDir filepath.Dir", "fs.FS.Open filepath.Join", "p.holder.ReadFile filepath.Join", "fs.FS.Open filepath.Join"},
 		},
 		{
 			name: "a filepath call wrapped in another call",
@@ -117,7 +117,7 @@ func f(d string) {
 	assets.ReadFile(path.Clean(filepath.Join("a", d)))
 	assets.ReadFile(strings.TrimPrefix(filepath.Join(d, "x"), "./"))
 }`,
-			want: []string{"embed.FS.ReadFile Join", "embed.FS.ReadFile Join"},
+			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Join"},
 		},
 		{
 			name: "dot-imported io/fs, method expressions and Go 1.25 reads",
@@ -129,7 +129,7 @@ func f(fsys FS, d string) {
 	ReadLink(fsys, filepath.Join(d, "x"))
 	embed.FS.ReadFile(assets, filepath.Join("d", d))
 }`,
-			want: []string{"fs.ReadFile Join", "fs.ReadLink Join", "embed.FS.ReadFile Join"},
+			want: []string{"fs.ReadFile filepath.Join", "fs.ReadLink filepath.Join", "embed.FS.ReadFile filepath.Join"},
 		},
 		{
 			name: "a method that takes a host path is not an io/fs read",
@@ -147,12 +147,28 @@ func f(d string) {
 }`,
 		},
 		{
+			name: "a name built in a variable or with a separator constant",
+			src: `package p
+import ("embed"; "os"; "path/filepath"; "strings")
+var assets embed.FS
+func f(d string, parts []string) {
+	p := filepath.Join("defaults", d)
+	assets.ReadFile(p)
+	assets.ReadFile(d + string(filepath.Separator) + "x")
+	assets.ReadFile(strings.Join(parts, string(os.PathSeparator)))
+	q := "a"
+	q = filepath.Join(q, d)
+	assets.ReadFile(q)
+}`,
+			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile os.PathSeparator"},
+		},
+		{
 			name: "a local named fs is a value, not the package",
 			src: `package p
 import ("embed"; "io/fs"; "path/filepath")
 var _ fs.FS
 func load(fs embed.FS, n string) { fs.ReadFile(filepath.Join("d", n)) }`,
-			want: []string{"embed.FS.ReadFile Join"},
+			want: []string{"embed.FS.ReadFile filepath.Join"},
 		},
 		{
 			name: "correct builders, separator-free parts and host-path reads pass",
@@ -178,7 +194,7 @@ func f(d string, r *os.Root) {
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
-			info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+			info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
 			conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
 			if _, err := conf.Check("p", fset, []*ast.File{file}, info); err != nil {
 				t.Fatalf("type-check: %v", err)

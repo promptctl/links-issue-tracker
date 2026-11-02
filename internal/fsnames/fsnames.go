@@ -9,9 +9,10 @@
 // call to a name-taking method on a value whose type has io/fs's Open, so a
 // filesystem is recognised however and wherever it was declared.
 //
-// WHAT IT DOES NOT COVER: a name built with filepath outside the read's own
-// argument — stored in a variable first, or built inside a helper such as
-// pathspec's Join.
+// A name is traced through variables assigned exactly once.
+//
+// WHAT IT DOES NOT COVER: a name built inside a helper such as pathspec's
+// Join, or in a variable assigned more than once.
 package fsnames
 
 import (
@@ -22,15 +23,15 @@ import (
 	"slices"
 )
 
-// Finding is a read whose name argument is built with path/filepath.
+// Finding is a read whose name can hold the host's separator.
 type Finding struct {
-	Pos  token.Position
-	Read string // the read, as "fs.ReadFile" or "<receiver type>.ReadFile"
-	Name string // the filepath function that built the name
+	Pos  token.Position // where the name picked up the separator
+	Read string         // the read, as "fs.ReadFile" or "<receiver type>.ReadFile"
+	Name string         // what put it there, as "filepath.Join" or "os.PathSeparator"
 }
 
 func (f Finding) String() string {
-	return fmt.Sprintf("%s:%d: %s name built with filepath.%s", f.Pos.Filename, f.Pos.Line, f.Read, f.Name)
+	return fmt.Sprintf("%s: %s name built with %s", f.Pos, f.Read, f.Name)
 }
 
 // fsFuncs are io/fs's functions that take a filesystem and then a name.
@@ -47,6 +48,7 @@ var separatorFree = []string{"ToSlash", "Base", "Ext"}
 // package, whose name argument calls a filepath function that can put the
 // host's separator into the name.
 func Check(fset *token.FileSet, files []*ast.File, info *types.Info) []Finding {
+	assigned := singleAssignments(files, info)
 	var found []Finding
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -58,8 +60,8 @@ func Check(fset *token.FileSet, files []*ast.File, info *types.Info) []Finding {
 			if arg < 0 || arg >= len(call.Args) {
 				return true
 			}
-			for _, built := range filepathCalls(call.Args[arg], info) {
-				found = append(found, Finding{Pos: fset.Position(built.Pos()), Read: read, Name: calleeOf(built, info).Name()})
+			for _, b := range hostBuilders(call.Args[arg], info, assigned) {
+				found = append(found, Finding{Pos: fset.Position(b.pos), Read: read, Name: b.name})
 			}
 			return true
 		})
@@ -120,27 +122,99 @@ func takesOneName(sig *types.Signature) bool {
 
 func isIOFS(pkg *types.Package) bool { return pkg != nil && pkg.Path() == "io/fs" }
 
-// filepathCalls returns the calls into path/filepath within expr that can put
-// the host's separator into its value. A separator-free call's argument is not
+// hostSeparators are the constants that hold the host's separator, by package.
+var hostSeparators = map[string]string{"path/filepath": "Separator", "os": "PathSeparator"}
+
+// builder is where a name picked up the host's separator.
+type builder struct {
+	pos  token.Pos
+	name string // as "filepath.Join" or "os.PathSeparator"
+}
+
+// hostBuilders returns where expr's value can pick up the host's separator: a
+// call into path/filepath, a separator constant, or either in the one
+// assignment of a variable expr reads. A separator-free call's argument is not
 // searched: whatever built it, the call's result is a valid name.
-func filepathCalls(expr ast.Expr, info *types.Info) []*ast.CallExpr {
-	var calls []*ast.CallExpr
-	ast.Inspect(expr, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		fn := calleeOf(call, info)
-		if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != "path/filepath" {
-			return true
-		}
-		if slices.Contains(separatorFree, fn.Name()) {
+func hostBuilders(expr ast.Expr, info *types.Info, assigned map[*types.Var]ast.Expr) []builder {
+	var found []builder
+	followed := map[*types.Var]bool{} // a variable is followed once, so a cycle ends
+	var visit func(n ast.Node) bool
+	visit = func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.CallExpr:
+			fn := calleeOf(n, info)
+			if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != "path/filepath" {
+				return true
+			}
+			if !slices.Contains(separatorFree, fn.Name()) {
+				found = append(found, builder{n.Pos(), "filepath." + fn.Name()})
+			}
 			return false
+		case *ast.Ident:
+			switch obj := info.Uses[n].(type) {
+			case *types.Const:
+				if obj.Pkg() != nil && hostSeparators[obj.Pkg().Path()] == obj.Name() {
+					found = append(found, builder{n.Pos(), obj.Pkg().Name() + "." + obj.Name()})
+				}
+			case *types.Var:
+				if init, ok := assigned[obj]; ok && !followed[obj] {
+					followed[obj] = true
+					ast.Inspect(init, visit)
+				}
+			}
 		}
-		calls = append(calls, call)
-		return false
-	})
-	return calls
+		return true
+	}
+	ast.Inspect(expr, visit)
+	return found
+}
+
+// singleAssignments maps each variable files assign exactly once, one value to
+// one name, to the value it is assigned.
+func singleAssignments(files []*ast.File, info *types.Info) map[*types.Var]ast.Expr {
+	values := map[*types.Var]ast.Expr{}
+	count := map[*types.Var]int{}
+	record := func(id *ast.Ident, value ast.Expr) {
+		obj := info.Defs[id]
+		if obj == nil {
+			obj = info.Uses[id]
+		}
+		if v, ok := obj.(*types.Var); ok {
+			count[v]++
+			values[v] = value
+		}
+	}
+	for _, file := range files {
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.AssignStmt:
+				for i, lhs := range n.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						var value ast.Expr
+						if len(n.Lhs) == len(n.Rhs) {
+							value = n.Rhs[i]
+						}
+						record(id, value)
+					}
+				}
+			case *ast.ValueSpec:
+				for i, id := range n.Names {
+					var value ast.Expr
+					if len(n.Names) == len(n.Values) {
+						value = n.Values[i]
+					}
+					record(id, value)
+				}
+			}
+			return true
+		})
+	}
+	for v, n := range count {
+		if n != 1 || values[v] == nil {
+			delete(values, v)
+		}
+	}
+	return values
 }
 
 // calleeOf is the function or method call statically calls, or nil.
