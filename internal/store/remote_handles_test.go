@@ -45,3 +45,25 @@ func assertNoOpenFileUnder(t *testing.T, when, dir string) {
 		t.Fatalf("%s, this process still holds %d file(s) under %s open:\n%s", when, len(held), dir, strings.Join(held, "\n"))
 	}
 }
+
+// TestAFailedAdoptLeavesNothingOfItsPartialDatabaseOpen pins that a clone that
+// fails releases the database it was building. The clone creates the target's
+// database before it knows the branch exists; if the failure leaves that
+// handle open, Windows cannot remove the partial database (nor the TempDir
+// holding it), though a POSIX system removes it all the same.
+func TestAFailedAdoptLeavesNothingOfItsPartialDatabaseOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve TempDir: %v", err)
+	}
+	remoteURL := "file://" + filepath.Join(base, "remote")
+	seedReconcileRemote(t, ctx, filepath.Join(base, "producer"), remoteURL)
+
+	consumer := filepath.Join(base, "consumer")
+	if err := AdoptRemoteByClone(ctx, testStderr(), consumer, "ws", remoteName(t, "origin"), remoteURL, "branch-the-remote-does-not-have"); err == nil {
+		t.Fatal("AdoptRemoteByClone(bad branch) = nil, want error")
+	}
+	assertNoOpenFileUnder(t, "after the failed clone returned", consumer)
+}
