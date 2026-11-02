@@ -16,7 +16,7 @@ import (
 // migrated past it, and no commit above it is pushed to any remote: a schema no
 // release carries never leaves a scratch store. Creating a store is not
 // bounded by it, so a scratch workspace can be made at any schema the binary
-// carries. [LAW:single-enforcer] the two refusals below are the only readers of
+// carries. [LAW:single-enforcer] the refusals below are the only readers of
 // the ceiling.
 
 // SchemaRaise names which write would have raised a schema past the ceiling,
@@ -215,17 +215,11 @@ func (s *Store) appliedVersions(ctx context.Context) (map[int64]bool, int64, err
 	return applied, highest, nil
 }
 
-// refuseUnreleasedPush refuses a push of commitHash when the schema recorded
-// at it is above the released-schema ceiling.
-func (s *Store) refuseUnreleasedPush(ctx context.Context, remote storage.RemoteName, branch string, commitHash string) error {
-	if !isDoltCommitHash(commitHash) {
-		return fmt.Errorf("push schema: %q is not a Dolt commit hash", commitHash)
-	}
-	schema, err := s.schemaVersionAtCommit(ctx, commitHash)
-	if err != nil {
-		return err
-	}
-	ceiling := s.env.ReleasedSchema()
+// refuseUnreleasedSchema refuses a push of a head at schema when that schema
+// is above the released-schema ceiling. The caller read the schema at the
+// head it sends; both push sites run this one verdict on it.
+// [LAW:effects-at-boundaries]
+func refuseUnreleasedSchema(remote storage.RemoteName, branch string, schema int64, ceiling version.ReleasedSchemaCeiling) error {
 	if schema <= ceiling.Max {
 		return nil
 	}

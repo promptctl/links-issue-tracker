@@ -43,10 +43,12 @@ const disableAutoSyncEnvVar = cli.DisableAutoSyncEnvVar
 func TestMain(m *testing.M) {
 	if os.Getenv(reexecEnvVar) == "1" {
 		// Behave as the real lit binary, stamped as a release of this tree is:
-		// its released-schema ceiling is the schema it carries. main() owns its
+		// its released-schema ceiling is the schema it carries, and its Origin
+		// is release, so it raises the remotes the suite seeds. main() owns its
 		// own os.Exit on the error and escalation paths; a clean return here
 		// means the command succeeded.
 		version.ReleasedSchema = version.ReleasedSchemaCarried
+		version.Origin = version.OriginRelease
 		main()
 		os.Exit(0)
 	}
@@ -624,5 +626,5 @@ func testEnv() environ.Env {
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"})
+	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
 }

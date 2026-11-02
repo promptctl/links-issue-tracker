@@ -20,16 +20,21 @@ func main() {
 	defer stop()
 	// [LAW:effects-at-boundaries] The one place lit reads its process: the run
 	// below is handed everything it would otherwise read from it.
-	// The released-schema ceiling is read from this binary's build stamp here
-	// and nowhere below: it rides the run's Env to every store open.
+	// The released-schema ceiling and the raise policy are read from this
+	// binary's build stamp here and nowhere below: they ride the run's Env to
+	// every store open.
 	released, err := version.ReadReleasedSchemaCeiling()
+	if err != nil {
+		os.Exit(cli.WriteCommandError(os.Stderr, err))
+	}
+	info, err := version.Get()
 	if err != nil {
 		os.Exit(cli.WriteCommandError(os.Stderr, err))
 	}
 	inv := cli.Invocation{
 		Dir:    cli.WorkingDirOf(os.Getwd()),
 		Args:   os.Args[1:],
-		Env:    environ.Of(os.Environ()).WithReleasedSchema(released),
+		Env:    environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(info)),
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

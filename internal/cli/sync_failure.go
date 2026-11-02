@@ -77,6 +77,13 @@ const (
 	// never clears by retrying: only a lit whose ceiling reaches that schema may
 	// send it, and only a published release that carries the schema has one.
 	syncFailureUnreleasedSchema syncFailureClass = "unreleased_schema"
+	// syncFailureSchemaRaiseRequiresRelease: the push was refused because it
+	// would raise the remote's schema and this lit is no release. Only a
+	// release raises a remote; it never clears by retrying from this binary.
+	// Remedy: by the refusal's values — fetch when the remote's schema is
+	// unknown, a release's push when the schema is released, the downgrade
+	// when it is not.
+	syncFailureSchemaRaiseRequiresRelease syncFailureClass = "schema_raise_requires_release"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -136,6 +143,10 @@ type SyncFailure struct {
 	// syncFailureUnreleasedSchema: the commit's schema and this lit's
 	// released-schema ceiling with its source.
 	Unreleased *store.UnreleasedPushError
+	// RaiseRefused is the store's refusal, populated only for
+	// syncFailureSchemaRaiseRequiresRelease: the remote's schema (or that it
+	// is unknown), the commit's, and the ceiling that chooses the remedy.
+	RaiseRefused *store.SchemaRaiseRequiresReleaseError
 	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
 	// on-both), populated only for syncFailureUnrelatedHistories. Before choosing to
 	// take one side wholesale or union the two, the operator must see what each side
@@ -223,6 +234,22 @@ func unreleasedSchemaFailure(err error) (SyncFailure, bool) {
 	}, true
 }
 
+// schemaRaiseFailure builds the sync-failure contract for a store
+// *SchemaRaiseRequiresReleaseError, or ok=false when err is not one.
+func schemaRaiseFailure(err error) (SyncFailure, bool) {
+	var refused *store.SchemaRaiseRequiresReleaseError
+	if !errors.As(err, &refused) {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:        syncFailureSchemaRaiseRequiresRelease,
+		Remote:       refused.Remote,
+		Branch:       refused.Branch,
+		RaiseRefused: refused,
+		BuildNote:    resolveBuildStatusNote(time.Now()),
+	}, true
+}
+
 // remedyStep is one command of a sync-failure remedy and what it does.
 type remedyStep struct {
 	command, gloss string
@@ -254,6 +281,33 @@ func pushDivergedRemedy(remote string) []remedyStep {
 	}
 }
 
+// schemaRaiseRemedy is how a push refused for raising the remote's schema
+// clears, chosen by the refusal's values: a fetch when the remote's schema
+// is unknown here; a release's own push when the schema is released; the
+// downgrade when it is not, since a downgrade of a released schema would
+// only be migrated back up by the next open. [LAW:dataflow-not-control-flow]
+// [LAW:one-source-of-truth] the block's steps render from the same refusal
+// the store raised.
+func schemaRaiseRemedy(refused *store.SchemaRaiseRequiresReleaseError) []remedyStep {
+	switch {
+	case !refused.RemoteKnown:
+		return []remedyStep{
+			{"lit sync fetch --remote " + refused.Remote, "reads the remote's head, so its schema is known here"},
+			{"lit sync push --remote " + refused.Remote, "lands when this backlog is at or below the remote's schema"},
+		}
+	case refused.Released():
+		return []remedyStep{
+			{"lit version", "shows this lit's build origin and released-schema ceiling"},
+			{"lit upgrade", fmt.Sprintf("only when the user directs it: install a published release, whose `lit sync push` raises the remote to schema v%d", refused.CommitSchema)},
+		}
+	default:
+		return []remedyStep{
+			{"lit version", "shows this lit's build origin and released-schema ceiling"},
+			{"lit downgrade", fmt.Sprintf("only when the user directs it: returns this backlog to schema v%d, the remote's, which no release has moved past", refused.RemoteSchema)},
+		}
+	}
+}
+
 // asSyncFailure converts a store *RemoteSchemaAheadError (exiting as the
 // schema-ahead refusal it unwraps to) or a storage.PushDivergedError (exiting
 // as the block) into the returnable sync-failure contract, so the command
@@ -268,6 +322,9 @@ func asSyncFailure(err error) error {
 		return SyncFailureError{Failure: failure}
 	}
 	if failure, ok := unreleasedSchemaFailure(err); ok {
+		return SyncFailureError{Failure: failure}
+	}
+	if failure, ok := schemaRaiseFailure(err); ok {
 		return SyncFailureError{Failure: failure}
 	}
 	return err
@@ -393,6 +450,8 @@ func (f SyncFailure) headline() string {
 		return "lit sync push was refused because a peer pushed first, and needs you to merge the peer's commits."
 	case syncFailureUnreleasedSchema:
 		return "lit sync push was refused because this backlog is at a schema this lit may not send to a remote, and needs you."
+	case syncFailureSchemaRaiseRequiresRelease:
+		return "lit sync push was refused because it would raise the remote's schema and this lit is not a release, and needs you."
 	default:
 		return fmt.Sprintf("lit sync hit an unrecognized sync-failure class %q — this is a bug; please report it.", f.Class)
 	}
@@ -443,6 +502,15 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"%s holds commits a peer pushed that this checkout lacks, and this checkout holds commits %s lacks, so the remote refused the push and nothing was written to it. A retry is refused the same way until the peer's commits are merged here.",
 			ref, ref)
+	case syncFailureSchemaRaiseRequiresRelease:
+		if !f.RaiseRefused.RemoteKnown {
+			return fmt.Sprintf(
+				"the commit this push would send to %s is at schema version %d, and this checkout holds no head of %s (no tracking ref), so the remote's schema is unknown here and the push counts as raising it. Only a release raises a remote's schema, and this lit is built from source, so nothing was written to %s.",
+				ref, f.RaiseRefused.CommitSchema, ref, ref)
+		}
+		return fmt.Sprintf(
+			"the commit this push would send to %s is at schema version %d, and %s is at schema version %d. Only a release raises a remote's schema, and this lit is built from source, so nothing was written to %s.",
+			ref, f.RaiseRefused.CommitSchema, ref, f.RaiseRefused.RemoteSchema, ref)
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -516,6 +584,8 @@ func (f SyncFailure) resolutionSteps() []string {
 			"lit version               # shows this lit's released-schema ceiling and where it came from",
 			fmt.Sprintf("lit upgrade               # only when the user directs it: install a published release, which can send schema v%d only if a release carries it", f.Unreleased.CommitSchema),
 		}
+	case syncFailureSchemaRaiseRequiresRelease:
+		return remedyLines(schemaRaiseRemedy(f.RaiseRefused))
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -551,6 +621,11 @@ func (f SyncFailure) escalationLine() string {
 			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
 	case syncFailureUnreleasedSchema:
 		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose released-schema ceiling reaches this backlog's schema may push it, and that is a published release carrying the schema. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
+	case syncFailureSchemaRaiseRequiresRelease:
+		if !f.RaiseRefused.RemoteKnown {
+			return "ESCALATION — resolve now: the fetch above tells this checkout the remote's schema; a push at or below it then lands from this lit. If the push is still refused after the fetch, the remote is at an older schema, and only a release raises it: surface that to the user as blocking."
+		}
+		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying from this lit; a binary built from source never raises a remote's schema. " + installReplacesLit + ": run the steps above only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailurePushDiverged:
 		// The push path reads no divergence age or span, so the line is fixed.
 		// It names what clears the refusal and when it stops being the agent's
