@@ -289,7 +289,7 @@ func create(storageDir string, export model.Export) (*Written, error) {
 			Size:    info.Size(),
 		},
 		Refreshed: refreshed,
-		Restamped: !stamp.Equal(clock),
+		Restamped: stampErr == nil && !stamp.Equal(clock),
 	}
 	if stampErr != nil {
 		return written, fmt.Errorf("order backup %s after the snapshots it follows: %w", path, stampErr)
