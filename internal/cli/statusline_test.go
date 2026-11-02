@@ -15,6 +15,7 @@ import (
 // question was the plain one, and the checkout's own work in flight, with its
 // rollup progress and its phase, whatever narrowed it.
 func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
+	t.Parallel()
 	epic := model.Issue{ID: "t-epic", IssueType: model.TypeEpic}
 	inFlight := hydratedIssue(t, "t-1", nil, model.StateInProgress)
 	inFlight.Title = "One"

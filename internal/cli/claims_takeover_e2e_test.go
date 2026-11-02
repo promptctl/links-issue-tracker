@@ -32,6 +32,7 @@ func startFacts(t *testing.T) map[string]any {
 // about evidence that actually made the trip through sync, not an in-process
 // stub.
 func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	// resolveIdentity prefers CLAUDE_CODE_SESSION_ID over --by whenever
 	// it is set, which would flatten alpha's and bravo's assignees to one value
@@ -39,7 +40,7 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	// --by the real identity source, as CLAUDE_CODE_SESSION_ID is for a
 	// real agent session, so this test drives the two-distinct-identities case.
 	// The shared-identity case is its own test below, and it transfers too.
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -150,8 +151,9 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 // technique config_test.go uses to make claims.freshness_window a controllable
 // test input.
 func TestStartOnAnExpiredForeignClaimIsSilent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -234,7 +236,8 @@ func writeTinyFreshnessWindow(t *testing.T, dir string) {
 // nothing, and leave both checkouts believing they held the lane.
 // [LAW:no-silent-failure]
 func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -300,7 +303,8 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 // --assignee, so the prior claimant is the exact zero value and the branch
 // never fires.
 func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")

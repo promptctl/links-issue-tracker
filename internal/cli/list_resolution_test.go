@@ -19,6 +19,7 @@ import (
 // must stay distinguishable in it.
 // [LAW:behavior-not-structure] the contract is the rendered row a reader acts on.
 func TestListStateCellNamesTheCloseReason(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "listing", IssueType: model.TypeEpic, Topic: "listing"})
 	canonical := h.createIssue(storage.CreateIssueInput{Title: "the canonical ticket", IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
@@ -62,13 +63,14 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 // prints to the same cell the listing shows, so the reply to the close and
 // the later listing name the reason identically.
 func TestCloseSummarySharesTheStateCell(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "listing", IssueType: model.TypeEpic, Topic: "listing"})
 	issue := h.createIssue(storage.CreateIssueInput{Title: "declined", IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 
 	var out bytes.Buffer
-	if err := runTransition(h.ctx, &out, h.ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {
-		t.Fatalf("runTransition(close wontfix) error = %v", err)
+	if err := runTransition(t, h.ctx, &out, h.ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {
+		t.Fatalf("runTransition(t, close wontfix) error = %v", err)
 	}
 	want := issue.ID + " [closed:wontfix/task/listing/normal] declined"
 	if !slices.Contains(strings.Split(out.String(), "\n"), want) {

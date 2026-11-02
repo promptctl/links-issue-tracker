@@ -23,20 +23,21 @@ var workableCmds = []struct {
 	{name: backlogView.name, run: func(h readyTestHarness, args ...string) error { return h.runViewErr(backlogView, args...) }},
 	{name: "next", run: func(h readyTestHarness, args ...string) error {
 		var stdout bytes.Buffer
-		return runNext(h.ctx, &stdout, h.ap, args)
+		return runNext(h.t, h.ctx, &stdout, h.ap, args)
 	}},
 }
 
 func (h readyTestHarness) runViewErr(view workableView, args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runWorkable(h.ctx, &stdout, h.ap, args, view)
+	return runWorkable(h.t, h.ctx, &stdout, h.ap, args, view)
 }
 
 // An unrecognized status is rejected rather than coerced to open, which would
 // answer a different question than asked; closed is rejected too because a
 // workable row is never closed — the result would be empty by construction.
 func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "status", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -62,6 +63,7 @@ func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 }
 
 func TestWorkableStatusAcceptsLegalValues(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "status", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})

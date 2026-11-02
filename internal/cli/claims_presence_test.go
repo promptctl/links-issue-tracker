@@ -22,6 +22,7 @@ import (
 // one an agent scans for, so it is withdrawn wherever the claim line printed
 // directly beneath the row would contradict it.
 func TestInProgressSuffixWithdrawsORPHANEDInAHeldLane(t *testing.T) {
+	t.Parallel()
 	orphaned := annotation.AnnotatedIssue{
 		Annotations: []annotation.Annotation{{
 			Kind:    annotation.Orphaned,
@@ -42,6 +43,7 @@ func TestInProgressSuffixWithdrawsORPHANEDInAHeldLane(t *testing.T) {
 // whether or not anybody holds its lane, and a suffix inventing a verdict
 // there would be a second orphan clock beside the annotation's.
 func TestInProgressSuffixSaysNothingWithoutTheAnnotation(t *testing.T) {
+	t.Parallel()
 	for _, laneHeld := range []bool{false, true} {
 		got := inProgressSuffix(annotation.AnnotatedIssue{}, laneHeld)
 		if strings.Contains(got, "stale") || strings.Contains(got, "ORPHANED") {
@@ -58,6 +60,7 @@ func TestInProgressSuffixSaysNothingWithoutTheAnnotation(t *testing.T) {
 // orphan annotation or not: whoever started it no longer holds a claim there,
 // and that is the whole of what "abandoned" means to routing.
 func TestCapacityForReadsAbandonmentOffTheLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "In flight", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})

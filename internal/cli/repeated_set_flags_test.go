@@ -22,6 +22,7 @@ import (
 // lit backlog lists every row the filter admits, so the cases read like the
 // lit ls ones: `want` must appear, `unwanted` must not.
 func TestBacklogRepeatedSetFlagsWiden(t *testing.T) {
+	t.Parallel()
 	h, bugA, taskAB, featB := setFlagFixture(t)
 	for _, tc := range []setFlagCase{
 		{flag: "type", spellings: []setFlagSpelling{{"repeated", []string{"--type", "bug", "--type", "task"}}, {"comma-joined", []string{"--type", "bug,task"}}}, want: []string{bugA, taskAB}, unwanted: []string{featB}},
@@ -51,6 +52,7 @@ func TestBacklogRepeatedSetFlagsWiden(t *testing.T) {
 // taskAB, then featB. Each spelling puts the flag whose overwrite would serve a
 // different row LAST, so the set and the overwrite serve different tickets.
 func TestNextRepeatedSetFlagsWiden(t *testing.T) {
+	t.Parallel()
 	h, bugA, taskAB, _ := setFlagFixture(t)
 	for _, tc := range []struct {
 		flag string
@@ -75,6 +77,7 @@ func TestNextRepeatedSetFlagsWiden(t *testing.T) {
 // A blank member is a bad member in every set, on backlog and next as on ls:
 // a validation refusal before anything prints, never a narrower answer.
 func TestWorkableSetFlagsRejectABadMemberLoudly(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := setFlagFixture(t)
 	for _, args := range [][]string{
 		{"--type", "bug", "--type", "bogus"},
@@ -85,8 +88,8 @@ func TestWorkableSetFlagsRejectABadMemberLoudly(t *testing.T) {
 		{"--assignee", ""},
 	} {
 		for name, run := range map[string]func(*bytes.Buffer) error{
-			"backlog": func(out *bytes.Buffer) error { return runWorkable(h.ctx, out, h.ap, args, backlogView) },
-			"next":    func(out *bytes.Buffer) error { return runNext(h.ctx, out, h.ap, args) },
+			"backlog": func(out *bytes.Buffer) error { return runWorkable(t, h.ctx, out, h.ap, args, backlogView) },
+			"next":    func(out *bytes.Buffer) error { return runNext(t, h.ctx, out, h.ap, args) },
 		} {
 			t.Run(name+" "+strings.Join(args, " "), func(t *testing.T) {
 				var out bytes.Buffer
@@ -105,6 +108,7 @@ func TestWorkableSetFlagsRejectABadMemberLoudly(t *testing.T) {
 // lit orphaned narrows by assignee through the same set: repeating the flag
 // lists both holders' stale work.
 func TestOrphanedRepeatedAssigneeWidens(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "orphans", IssueType: model.TypeEpic, Topic: "orphans"})
 	var stale []string
@@ -126,6 +130,7 @@ func TestOrphanedRepeatedAssigneeWidens(t *testing.T) {
 // `lit bulk close --ids A --ids B` closed B and skipped A. Each bulk command is
 // handed two ids in two occurrences and must act on both.
 func TestBulkRepeatedIDsActOnEveryID(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		run  func(h readyTestHarness, out *bytes.Buffer, idArgs []string) error
@@ -135,13 +140,13 @@ func TestBulkRepeatedIDsActOnEveryID(t *testing.T) {
 		actedShows bool
 	}{
 		{"label", func(h readyTestHarness, out *bytes.Buffer, idArgs []string) error {
-			return runBulkLabel(h.ctx, out, h.ap, append(append([]string{"add"}, idArgs...), "--label", "swept"))
+			return runBulkLabel(t, h.ctx, out, h.ap, append(append([]string{"add"}, idArgs...), "--label", "swept"))
 		}, []string{"--labels", "swept"}, true},
 		{"close", func(h readyTestHarness, out *bytes.Buffer, idArgs []string) error {
-			return runBulkClose(h.ctx, out, h.ap, append(idArgs, "--resolution", "obsolete"))
+			return runBulkClose(t, h.ctx, out, h.ap, append(idArgs, "--resolution", "obsolete"))
 		}, []string{"--status", "closed"}, true},
 		{"archive", func(h readyTestHarness, out *bytes.Buffer, idArgs []string) error {
-			return runLeaf(bulkTransitionLeaf(archiveSpec)(), h.ctx, out, h.ap, idArgs)
+			return runLeaf(t, bulkTransitionLeaf(archiveSpec)(), h.ctx, out, h.ap, idArgs)
 		}, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,9 +168,10 @@ func TestBulkRepeatedIDsActOnEveryID(t *testing.T) {
 // A blank --ids occurrence refuses the whole command before any id is acted
 // on: `--ids A --ids "$UNSET"` must not quietly act on A alone.
 func TestBulkBlankIDRefusesBeforeActing(t *testing.T) {
+	t.Parallel()
 	h, bugA, _, _ := setFlagFixture(t)
 	var out bytes.Buffer
-	err := runBulkClose(h.ctx, &out, h.ap, []string{"--ids", bugA, "--ids", "", "--resolution", "obsolete"})
+	err := runBulkClose(t, h.ctx, &out, h.ap, []string{"--ids", bugA, "--ids", "", "--resolution", "obsolete"})
 	if got := ExitCode(err); got != ExitValidation {
 		t.Fatalf("lit bulk close --ids %s --ids \"\" exit = %d (error %v), want %d", bugA, got, err, ExitValidation)
 	}
@@ -179,6 +185,7 @@ func TestBulkBlankIDRefusesBeforeActing(t *testing.T) {
 // word. Each case also parses its one-occurrence spelling, so the refusal is
 // pinned to the repeat and not to the flag.
 func TestSingleValueFlagRefusesARepeat(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		kind    string
 		declare func(fs *cobraFlagSet)
@@ -209,10 +216,11 @@ func TestSingleValueFlagRefusesARepeat(t *testing.T) {
 // The write the single-value refusal exists for: `lit new --labels a --labels
 // b` stored b alone. It is refused before anything is created.
 func TestNewRefusesARepeatedLabelsFlagBeforeWriting(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "home", IssueType: model.TypeEpic, Topic: "repeat"})
 	var out bytes.Buffer
-	err := runNew(h.ctx, &out, h.ap, []string{"--title", "repeat probe", "--topic", "repeat", "--type", "task", "--parent", epic.ID, "--labels", "a", "--labels", "b"})
+	err := runNew(t, h.ctx, &out, h.ap, []string{"--title", "repeat probe", "--topic", "repeat", "--type", "task", "--parent", epic.ID, "--labels", "a", "--labels", "b"})
 	if got := ExitCode(err); got != ExitUsage {
 		t.Fatalf("lit new --labels a --labels b exit = %d (error %v), want %d", got, err, ExitUsage)
 	}

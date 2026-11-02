@@ -3,35 +3,24 @@ package cli
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestCommentRemove(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
-	t.Setenv("HOME", repo)
-	t.Setenv("CODEX_HOME", filepath.Join(repo, ".codex-home"))
+	setRunEnv(t, "HOME", repo)
 
 	run := func(args ...string) (bytes.Buffer, error) {
 		var stdout bytes.Buffer
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		errCh := make(chan error, 1)
-		go func() { errCh <- Run(ctx, cwdInvocation(&stdout, &stdout, args)) }()
+		go func() { errCh <- Run(ctx, dirInvocation(t, repo, &stdout, &stdout, args)) }()
 		select {
 		case runErr := <-errCh:
 			return stdout, runErr

@@ -15,8 +15,8 @@ import (
 func childrenOutput(t *testing.T, ap *app.App, id string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := runChildren(context.Background(), &buf, ap, []string{id}); err != nil {
-		t.Fatalf("runChildren(%s) error = %v", id, err)
+	if err := runChildren(t, context.Background(), &buf, ap, []string{id}); err != nil {
+		t.Fatalf("runChildren(t, %s) error = %v", id, err)
 	}
 	return buf.String()
 }
@@ -36,6 +36,7 @@ func childrenOutput(t *testing.T, ap *app.App, id string) string {
 // against an id scheme that had stopped tempting anyone.
 // [LAW:one-source-of-truth] Three surfaces, one authority.
 func TestReparentedChildLeavesTheEpicOnEverySurface(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Membership epic", "# Why\nthe plan")
 	stays := f.addChild("Child stays")
 	leaves := f.addChild("Child leaves")

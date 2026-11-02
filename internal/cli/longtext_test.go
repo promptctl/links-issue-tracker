@@ -70,6 +70,7 @@ func sourceFacts(t *testing.T) map[string]any {
 // A comment body arrives inline, from a file, or from stdin, lands exactly as
 // written each way, and the event records which way it came.
 func TestCommentAddTakesItsBodyInlineFromAFileOrFromStdin(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, id, _ := statuslineCheckout(t)
 	file := writeTextFile(t, shellHostileText+" (file)\n")
@@ -97,6 +98,7 @@ func TestCommentAddTakesItsBodyInlineFromAFileOrFromStdin(t *testing.T) {
 // neither flag silently outranks the other. An unreadable path is refused as
 // usage too, naming the flag it came from.
 func TestCommentAddRefusesTwoBodiesAndAnUnreadableFile(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, id, _ := statuslineCheckout(t)
 	file := writeTextFile(t, "from the file")
@@ -123,6 +125,7 @@ func TestCommentAddRefusesTwoBodiesAndAnUnreadableFile(t *testing.T) {
 // stdin the same way comment add reads its body, and an update that supplies
 // neither leaves both fields as they were.
 func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, origin, _ := statuslineCheckout(t)
 	epic := newEpicInDir(t, dir, "long text")
@@ -174,6 +177,7 @@ func TestDescriptionAndPromptTakeAFileOrStdin(t *testing.T) {
 // first left: nothing. Neither refusal writes, and an inline empty value still
 // empties a field on purpose.
 func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, id, _ := statuslineCheckout(t)
 	runCLIInDir(t, dir, "update", id, "--description", "kept description", "--prompt", "kept prompt")
@@ -229,6 +233,7 @@ func TestLongTextRefusesBlankTextAndASecondStdinReader(t *testing.T) {
 // is refused where no workspace exists at all, so no command waits on a pipe
 // or a terminal while it holds the workspace.
 func TestLongTextIsReadBeforeTheWorkspaceOpens(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	missing := filepath.Join(t.TempDir(), "missing.md")
 	_, err := runCLIInDirAllowError(t, t.TempDir(), "comment", "add", "any-id", "--body-file", missing)

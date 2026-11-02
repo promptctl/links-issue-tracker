@@ -22,6 +22,7 @@ import (
 // the counts but never the title — a ticket is often purged because of what it
 // says — and the invocation's event counts each kind of row removed.
 func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "purge", IssueType: model.TypeEpic})
@@ -41,7 +42,7 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	}
 
 	var refused bytes.Buffer
-	err = runLeaf(purgeLeaf(), ctx, &refused, ap, []string{doomed.ID})
+	err = runLeaf(t, purgeLeaf(), ctx, &refused, ap, []string{doomed.ID})
 	var unconfirmed purgeUnconfirmedError
 	if !errors.As(err, &unconfirmed) {
 		t.Fatalf("purge without --yes error = %v, want purgeUnconfirmedError", err)
@@ -60,11 +61,11 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	invocation := telemetry.Begin(telemetry.Event{})
 	purge := purgeLeaf()
 	invoked := telemetry.With(ctx, invocation)
-	positional, err := parseLeaf(invoked, purge, []string{doomed.ID, "--yes"}, cwdInvocation(&stdout, &stdout, nil))
+	positional, err := parseLeaf(invoked, purge, []string{doomed.ID, "--yes"}, dirInvocation(t, t.TempDir(), &stdout, &stdout, nil))
 	if err != nil {
 		t.Fatalf("parse purge --yes error = %v", err)
 	}
-	if err := purge.work(invoked, cwdInvocation(&stdout, &stdout, nil), ap, positional); err != nil {
+	if err := purge.work(invoked, dirInvocation(t, t.TempDir(), &stdout, &stdout, nil), ap, positional); err != nil {
 		t.Fatalf("purge --yes error = %v", err)
 	}
 	counts := invocation.Finish(telemetry.End{}).Counts
@@ -90,9 +91,10 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 // an id that does not exist is reported as missing, not as an unconfirmed
 // purge that --yes would then fail on anyway.
 func TestRunPurgeOfAMissingIssueIsNotFoundBeforeAnyConfirmation(t *testing.T) {
+	t.Parallel()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	err := runLeaf(purgeLeaf(), context.Background(), &stdout, ap, []string{"test-nope"})
+	err := runLeaf(t, purgeLeaf(), context.Background(), &stdout, ap, []string{"test-nope"})
 	var notFound storage.NotFoundError
 	if !errors.As(err, &notFound) {
 		t.Fatalf("purge of a missing id error = %v, want NotFoundError", err)

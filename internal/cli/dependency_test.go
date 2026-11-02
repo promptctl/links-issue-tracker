@@ -26,12 +26,13 @@ func seedCrossEpicPair(t *testing.T, ctx context.Context, ap *app.App, titleA, t
 // blocked_by and A under B's blocks — and prints the edge as that sentence.
 // `dep rm` with the same words removes the same edge.
 func TestDepAddRecordsTheSentenceItReads(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	waiter, blocker := seedCrossEpicPair(t, ctx, ap, "Waiter", "Blocker")
 
 	var stdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", waiter, "--blocked-by", blocker}); err != nil {
+	if err := runAppFamily(t, depFamily, ctx, &stdout, ap, []string{"add", waiter, "--blocked-by", blocker}); err != nil {
 		t.Fatalf("dep add %s --blocked-by %s error = %v", waiter, blocker, err)
 	}
 	if want := waiter + " blocked by " + blocker; !strings.HasPrefix(stdout.String(), want+"\n") {
@@ -56,7 +57,7 @@ func TestDepAddRecordsTheSentenceItReads(t *testing.T) {
 	}
 
 	var lsStdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &lsStdout, ap, []string{"ls", blocker, "--type", "blocked-by"}); err != nil {
+	if err := runAppFamily(t, depFamily, ctx, &lsStdout, ap, []string{"ls", blocker, "--type", "blocked-by"}); err != nil {
 		t.Fatalf("dep ls error = %v", err)
 	}
 	if want := waiter + " blocked by " + blocker + "\n"; lsStdout.String() != want {
@@ -64,7 +65,7 @@ func TestDepAddRecordsTheSentenceItReads(t *testing.T) {
 	}
 
 	var rmStdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", waiter, "--blocked-by", blocker}); err != nil {
+	if err := runAppFamily(t, depFamily, ctx, &rmStdout, ap, []string{"rm", waiter, "--blocked-by", blocker}); err != nil {
 		t.Fatalf("dep rm error = %v", err)
 	}
 	edges, err := ap.Store.ListRelationsForIssue(ctx, waiter, model.RelBlockedBy)
@@ -77,12 +78,13 @@ func TestDepAddRecordsTheSentenceItReads(t *testing.T) {
 }
 
 func TestDepAddRelatedTo(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issueA, issueB := seedCrossEpicPair(t, ctx, ap, "A", "B")
 
 	var stdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", issueA, "--related-to", issueB}); err != nil {
+	if err := runAppFamily(t, depFamily, ctx, &stdout, ap, []string{"add", issueA, "--related-to", issueB}); err != nil {
 		t.Fatalf("dep add --related-to error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), " related to ") {
@@ -104,6 +106,7 @@ func TestDepAddRelatedTo(t *testing.T) {
 // the shape pflag would otherwise read as its last value alone, dropping the
 // first edge without a word.
 func TestDepAddRmNameExactlyOneEdge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issueA, issueB := seedCrossEpicPair(t, ctx, ap, "A", "B")
@@ -123,7 +126,7 @@ func TestDepAddRmNameExactlyOneEdge(t *testing.T) {
 			"relation repeated":                {args: []string{verb, issueA, "--blocked-by", issueB, "--blocked-by", issueA}, want: `"--blocked-by" flag: given more than once`},
 		} {
 			var stdout bytes.Buffer
-			err := runAppFamily(depFamily, ctx, &stdout, ap, tc.args)
+			err := runAppFamily(t, depFamily, ctx, &stdout, ap, tc.args)
 			if _, ok := err.(UsageError); !ok {
 				t.Errorf("dep %s (%s) error = %v (%T), want UsageError", verb, name, err, err)
 				continue
@@ -136,6 +139,7 @@ func TestDepAddRmNameExactlyOneEdge(t *testing.T) {
 }
 
 func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -176,7 +180,7 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout bytes.Buffer
-			err := runAppFamily(depFamily, ctx, &stdout, ap, tc.args)
+			err := runAppFamily(t, depFamily, ctx, &stdout, ap, tc.args)
 			if err == nil {
 				t.Fatalf("dep add should reject same-epic block, got nil; stdout=%q", stdout.String())
 			}
@@ -191,6 +195,7 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 }
 
 func TestDepAddAllowsCrossEpicAndFloatingBlocks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -233,7 +238,7 @@ func TestDepAddAllowsCrossEpicAndFloatingBlocks(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout bytes.Buffer
-			if err := runAppFamily(depFamily, ctx, &stdout, ap, tc.args); err != nil {
+			if err := runAppFamily(t, depFamily, ctx, &stdout, ap, tc.args); err != nil {
 				t.Fatalf("dep add cross-epic case %q errored = %v", tc.name, err)
 			}
 		})
@@ -241,13 +246,14 @@ func TestDepAddAllowsCrossEpicAndFloatingBlocks(t *testing.T) {
 }
 
 func TestDepRmReportsDiagnosticIDsOnNotFound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	issueA, issueB := seedCrossEpicPair(t, ctx, ap, "A", "B")
 
 	var stderr bytes.Buffer
-	err := runAppFamily(depFamily, ctx, &stderr, ap, []string{"rm", issueB, "--blocked-by", issueA})
+	err := runAppFamily(t, depFamily, ctx, &stderr, ap, []string{"rm", issueB, "--blocked-by", issueA})
 	if err == nil {
 		t.Fatal("dep rm nonexistent relation should error")
 	}
@@ -264,6 +270,7 @@ func TestDepRmReportsDiagnosticIDsOnNotFound(t *testing.T) {
 // "blocks" spelling included.
 // [LAW:no-silent-failure]
 func TestDepRejectsUnknownRelationType(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -272,7 +279,7 @@ func TestDepRejectsUnknownRelationType(t *testing.T) {
 	wantMsg := "relation type must be blocked-by, parent-child, or related-to"
 	for _, relType := range []string{"depends-on", "blocks"} {
 		var stdout bytes.Buffer
-		err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"ls", "--type", relType, issueA})
+		err := runAppFamily(t, depFamily, ctx, &stdout, ap, []string{"ls", "--type", relType, issueA})
 		if err == nil || err.Error() != wantMsg {
 			t.Errorf("dep ls --type %s error = %v, want %q", relType, err, wantMsg)
 		}
@@ -290,6 +297,7 @@ func issueIDs(issues []model.Issue) []string {
 // dep add and dep rm say on the event which relation their flag named and
 // which refusal, if any, stopped them.
 func TestDepEventSaysTheRelationAndTheRefusal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	a, b := seedCrossEpicPair(t, ctx, ap, "A", "B")
@@ -311,7 +319,7 @@ func TestDepEventSaysTheRelationAndTheRefusal(t *testing.T) {
 		{depRmLeaf, []string{a, "--blocked-by", b}, "blocked-by", nil},
 	} {
 		var out bytes.Buffer
-		ev, _ := recordLeaf(tc.leaf(), ctx, cwdInvocation(&out, &out, nil), ap, tc.args)
+		ev, _ := recordLeaf(tc.leaf(), ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), ap, tc.args)
 		for key, want := range map[string]any{"dep.relation": tc.relation, "dep.refusal": tc.refusal} {
 			// A null is recorded, never left out: absent and null are not the
 			// same answer.

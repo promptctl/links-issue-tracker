@@ -25,6 +25,7 @@ import (
 // [LAW:behavior-not-structure] every assertion reads a durable trace or a
 // marker on disk, never how the receive reached its decision.
 func TestAutomaticReceiveAsksBeforeFetching(t *testing.T) {
+	t.Parallel()
 	remote, producer, consumer, ws, epicID := twoClonesOverOneDoltRemote(t)
 
 	// Nothing recorded yet: the first receive cannot know the remote is
@@ -163,7 +164,7 @@ func twoClonesOverOneDoltRemote(t *testing.T) (remote, producer, consumer string
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks")
-	ws = workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links")), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws = workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(consumer, ".git", "links")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	return remote, producer, consumer, ws, epicID
 }
 
@@ -206,6 +207,7 @@ func markerModTime(t *testing.T, markerPath string) time.Time {
 // is a receive outcome the inline path can produce; the assertion is what is
 // on disk afterwards. [LAW:behavior-not-structure]
 func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
+	t.Parallel()
 	observed := remoteAdvertisement{remote: remoteName(t, "origin"), url: "git@example.invalid:o/r.git", refs: "abc\trefs/dolt/data"}
 	converged := &reconcileOutcome{state: storage.SyncReconcileLinearized}
 	unconverged := &reconcileOutcome{state: storage.SyncReconcileProsePending}
@@ -234,7 +236,7 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+			ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 			if err := store.WriteReceivedRefs(ws.DatabasePath, previous); err != nil {
 				t.Fatalf("seed record error = %v", err)
 			}
@@ -271,6 +273,7 @@ func remoteDoltHead(t *testing.T, bareRemote string) string {
 // zero advertisement is the no-remote skip, an empty listing the empty-remote
 // skip, and a listing with a ref is ready.
 func TestAnAdvertisementSkipsOnlyOnAnEmptyAnswer(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		ad   remoteAdvertisement
@@ -297,7 +300,7 @@ func TestAPushToARemoteTheReceiveDoesNotAskIsUnproven(t *testing.T) {
 	runGit(t, dir, "init", "-q")
 	runGit(t, dir, "remote", "add", "origin", "https://example.com/a.git")
 	runGit(t, dir, "remote", "add", "fork", "https://example.com/b.git")
-	proven, unproven := provePushedAdvertisement(underInvocation(t.Context()), testEnv(), nil, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(checkoutRoot(t, dir))}, remoteName(t, "origin"))
+	proven, unproven := provePushedAdvertisement(underInvocation(t.Context()), runEnv(t), nil, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(checkoutRoot(t, dir))}, remoteName(t, "origin"))
 	if proven != (remoteAdvertisement{}) || unproven != "the automatic receive asks no remote" {
 		t.Fatalf("provePushedAdvertisement() = %+v, %q; want nothing proven because the receive asks no remote", proven, unproven)
 	}

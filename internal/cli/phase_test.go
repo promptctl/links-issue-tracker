@@ -44,6 +44,7 @@ func workflowFacts(t *testing.T) map[string]any {
 // in_progress.
 // The command's event names the occasion and what fired on it.
 func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, _ := statuslineCheckout(t)
 	bound := map[string]string{
@@ -88,6 +89,7 @@ func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
 // prints the `lit phase` that moves it on, and entering the last prints the
 // `lit done` that ends it.
 func TestShippedWorkflowsNameEachPhaseMove(t *testing.T) {
+	t.Parallel()
 	dir, first, _ := statuslineCheckout(t)
 	phases := model.Phases()
 	for i, phase := range phases {
@@ -105,6 +107,7 @@ func TestShippedWorkflowsNameEachPhaseMove(t *testing.T) {
 // Every text that teaches an agent to work a ticket names each move after
 // lit start with the command that records it.
 func TestAgentGuidanceNamesEveryPhaseMove(t *testing.T) {
+	t.Parallel()
 	texts := map[string]string{}
 	for _, name := range []string{"quickstart-work.md"} {
 		raw, err := templates.EmbeddedDefault(name)
@@ -144,6 +147,7 @@ func phaseMoveAfter(phases []model.Phase, i int, id string) string {
 // records nothing; a ticket that is not in progress refuses the move; and the
 // statusline file keeps naming the ticket being worked on.
 func TestPhaseMovesAnInProgressTicket(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	runCLIInDir(t, dir, "start", first, "--by", "agent")
@@ -193,6 +197,7 @@ func TestPhaseMovesAnInProgressTicket(t *testing.T) {
 // A mis-written `lit phase` is a usage error whatever the id names, and every
 // usage line it prints is the command's one line, naming the required --to.
 func TestPhaseUsageNamesTheRequiredPhase(t *testing.T) {
+	t.Parallel()
 	dir, _, _ := statuslineCheckout(t)
 	const usage = "usage: lit phase <id> --to <plan|impl|review|merge> [--reason <text>]"
 	for _, args := range [][]string{

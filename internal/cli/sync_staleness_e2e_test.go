@@ -34,7 +34,7 @@ func unpushedCloneWithOneLocalChange(t *testing.T) (dir, ticketID string) {
 	runGit(t, dir, "commit", "-m", "seed")
 	runGit(t, dir, "push", "origin", "HEAD")
 
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	// The epic the ticket lives inside is filed before the push below, so it
 	// is part of what the push lands rather than a second unpushed change.
@@ -55,6 +55,7 @@ func unpushedCloneWithOneLocalChange(t *testing.T) (dir, ticketID string) {
 // push it disappears" — across all three commands the ticket names
 // explicitly (backlog, next, show), through the real CLI entrypoint.
 func TestBacklogNextShowWarnOnUnpushedChangesAndClearAfterPush(t *testing.T) {
+	t.Parallel()
 	dir, ticketID := unpushedCloneWithOneLocalChange(t)
 
 	backlogOut := runCLIInDir(t, dir, "backlog")
@@ -93,6 +94,7 @@ func TestBacklogNextShowWarnOnUnpushedChangesAndClearAfterPush(t *testing.T) {
 // prepended, even when there IS unpushed local state to warn about. The
 // banner belongs only to the full-detail view.
 func TestShowFieldOutputStaysCleanOfStalenessWarning(t *testing.T) {
+	t.Parallel()
 	dir, ticketID := unpushedCloneWithOneLocalChange(t)
 
 	fieldOut := runCLIInDir(t, dir, "show", ticketID, "--field", "title")
@@ -121,6 +123,7 @@ func TestShowFieldOutputStaysCleanOfStalenessWarning(t *testing.T) {
 // ahead state). A real fetch of fork says nothing about origin and leaves the
 // warning standing; a real fetch of origin clears it.
 func TestBacklogWarnsOnStaleFetchUntilTheSyncRemoteIsFetched(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	runGit(t, base, "init", "--bare", "fork.git")
@@ -139,12 +142,12 @@ func TestBacklogWarnsOnStaleFetchUntilTheSyncRemoteIsFetched(t *testing.T) {
 	runGit(t, dir, "remote", "add", "fork", filepath.Join(base, "fork.git"))
 	runGit(t, dir, "push", "fork", "HEAD")
 
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	runCLIInDir(t, dir, "sync", "push", "--remote", "fork")
 
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -185,10 +188,11 @@ func TestBacklogWarnsOnStaleFetchUntilTheSyncRemoteIsFetched(t *testing.T) {
 // clock is past the threshold, `lit backlog` warns, and says no success is on
 // record rather than naming one.
 func TestBacklogWarnsOnceAFailingSyncRemoteHasNoSuccessOnRecordPastTheThreshold(t *testing.T) {
+	t.Parallel()
 	dir := soloCheckout(t)
 	runGit(t, dir, "remote", "set-url", "origin", filepath.Join(filepath.Dir(dir), "gone.git"))
 
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -206,7 +210,7 @@ func TestBacklogWarnsOnceAFailingSyncRemoteHasNoSuccessOnRecordPastTheThreshold(
 	if err := os.Chtimes(record, started, started); err != nil {
 		t.Fatalf("os.Chtimes() error = %v", err)
 	}
-	receiveOnce(underInvocation(context.Background()), testStderr(t), testEnv(), ws)
+	receiveOnce(underInvocation(context.Background()), testStderr(t), runEnv(t), ws)
 	fetch, _ := readFetchRecord(testStderr(t), ws, origin, time.Now())
 	if fetch == nil || fetch.basis != noFetchSucceeded {
 		t.Fatalf("record after a failed receive = %+v; want noFetchSucceeded", fetch)
@@ -235,7 +239,7 @@ func soloCheckout(t *testing.T) string {
 	runGit(t, dir, "config", "user.email", "solo@example.com")
 	runGit(t, dir, "config", "user.name", "solo")
 	runGit(t, dir, "commit", "--allow-empty", "-m", "seed")
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	return dir
 }
@@ -244,8 +248,9 @@ func soloCheckout(t *testing.T) string {
 // works on a reachable remote holding nothing, with no receive running: each
 // verb says the remote is empty and its answer confirms the record.
 func TestEverySyncVerbConfirmsARemoteWithNoRefs(t *testing.T) {
+	t.Parallel()
 	dir := soloCheckout(t)
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

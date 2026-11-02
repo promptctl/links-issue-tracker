@@ -17,8 +17,8 @@ import (
 func runOrphanedIDs(t *testing.T, h readyTestHarness, args ...string) []string {
 	t.Helper()
 	var stdout bytes.Buffer
-	if err := runOrphaned(h.ctx, &stdout, h.ap, args); err != nil {
-		t.Fatalf("runOrphaned(%v) error = %v", args, err)
+	if err := runOrphaned(t, h.ctx, &stdout, h.ap, args); err != nil {
+		t.Fatalf("runOrphaned(t, %v) error = %v", args, err)
 	}
 	return issueIDsFromText(stdout.String())
 }
@@ -31,6 +31,7 @@ func startIssueForTest(t *testing.T, h readyTestHarness, id string) {
 }
 
 func TestRunOrphanedListsStaleInProgress(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
@@ -62,6 +63,7 @@ func TestRunOrphanedListsStaleInProgress(t *testing.T) {
 }
 
 func TestRunOrphanedExcludesOpenAndClosed(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
@@ -78,6 +80,7 @@ func TestRunOrphanedExcludesOpenAndClosed(t *testing.T) {
 }
 
 func TestRunOrphanedSortsOldestFirst(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
@@ -98,9 +101,10 @@ func TestRunOrphanedSortsOldestFirst(t *testing.T) {
 }
 
 func TestRunOrphanedTextEmpty(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	var stdout bytes.Buffer
-	if err := runOrphaned(h.ctx, &stdout, h.ap, nil); err != nil {
+	if err := runOrphaned(t, h.ctx, &stdout, h.ap, nil); err != nil {
 		t.Fatalf("runOrphaned: %v", err)
 	}
 	if !strings.Contains(stdout.String(), "No orphaned issues") {
@@ -109,6 +113,7 @@ func TestRunOrphanedTextEmpty(t *testing.T) {
 }
 
 func TestRunOrphanedAssigneeFilter(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "topic", IssueType: "epic"})
@@ -130,6 +135,7 @@ func TestRunOrphanedAssigneeFilter(t *testing.T) {
 }
 
 func TestRunOrphanedExcludesContainerEpics(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "topic", IssueType: "epic"})

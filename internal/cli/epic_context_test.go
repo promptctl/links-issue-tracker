@@ -113,6 +113,7 @@ func (f epicFixture) render(focused string) string {
 // ticket that lit start refuses, and name it as a live blocker of its siblings
 // — the plan would then disagree with the readiness gate about the same edge.
 func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Retention epic", "children on both axes")
 	deleted := f.addChild("Dropped one")
 	archived := f.addChild("Shelved one")
@@ -140,6 +141,7 @@ func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
 // dependent would render "[blocked-by <deleted id>]" naming a ticket absent
 // from every listing, with no command able to clear the edge.
 func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Blocker epic", "one dead blocker")
 	blocker := f.addChild("The blocker")
 	dependent := f.addChild("The dependent")
@@ -159,6 +161,7 @@ func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
 }
 
 func TestRenderEpicContextEmptyEpic(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Empty epic", "# Why this exists\nbecause reasons")
 	out := f.render("")
 
@@ -174,6 +177,7 @@ func TestRenderEpicContextEmptyEpic(t *testing.T) {
 }
 
 func TestRenderEpicContextAllClosed(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Closed epic", "all done")
 	c1 := f.addChild("First")
 	c2 := f.addChild("Second")
@@ -198,6 +202,7 @@ func TestRenderEpicContextAllClosed(t *testing.T) {
 // later ones would be held back by the earlier ones, which is its own test
 // below.
 func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Mixed epic", "# Mixed\nplan context")
 	closed := f.addChildLane("Closed one", "a")
 	inProgress := f.addChildLane("Working one", "b")
@@ -245,6 +250,7 @@ func (f epicFixture) addChildLane(title, lane string) string {
 }
 
 func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Lane epic", "parallel work")
 	laneless := f.addChild("Sequential one")
 	build := f.addChildLane("Build it", "build")
@@ -270,6 +276,7 @@ func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
 // reason — so the plan slice must say so too, or calling it [ready] would make
 // it the one surface of the three answering differently.
 func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Sequential epic", "one lane, two children")
 	first := f.addChild("First")
 	second := f.addChild("Second")
@@ -284,7 +291,7 @@ func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 	// The other half of the claim: routing, over the same store, serves the
 	// first child and not the second. The plan slice and the pick are pinned
 	// together here, so a future change that moves one has to move both.
-	gathered, err := gatherWorkableAnnotated(f.ctx, testEnv(), f.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(f.ctx, runEnv(t), f.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -303,6 +310,7 @@ func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 // a repo that requires one is unservable, and the marker says which field —
 // this kind has no id to name.
 func TestRenderEpicContextMissingRequiredFieldIsNotReady(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Policy epic", "required fields")
 	f.requiredFields = []string{"description"}
 	child := f.addChild("No description")
@@ -322,6 +330,7 @@ func TestRenderEpicContextMissingRequiredFieldIsNotReady(t *testing.T) {
 // it, the orphan annotator reads its derived state, the lane gate asks for its
 // lane. This pins that the whole set tolerates one.
 func TestRenderEpicContextNestedEpicChildIsClassified(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Outer epic", "an epic under an epic")
 	f.requiredFields = []string{"description"}
 	inner, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
@@ -382,6 +391,7 @@ func TestEpicContextMarkerReflectsEveryBlockingKind(t *testing.T) {
 // marker that mentioned only the edge would leave a reader who re-laned the
 // child expecting it to come free.
 func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Sibling block", "deps")
 	blocker := f.addChild("Blocker sibling")
 	blocked := f.addChild("Blocked sibling")
@@ -395,6 +405,7 @@ func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 }
 
 func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "External block", "deps")
 	blocked := f.addChild("Blocked by outsider")
 	// An issue outside this epic.
@@ -414,6 +425,7 @@ func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
 
 // A closed blocker no longer blocks: the dependent renders ready, not blocked.
 func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Closed blocker", "deps")
 	blocker := f.addChild("Done blocker")
 	blocked := f.addChild("Now ready")
@@ -445,6 +457,7 @@ func (f epicFixture) outsider(title string) string {
 }
 
 func TestRenderEpicContextNoCrossEpicEdges(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "No cross edges", "deps")
 	a := f.addChild("Child A")
 	b := f.addChild("Child B")
@@ -457,6 +470,7 @@ func TestRenderEpicContextNoCrossEpicEdges(t *testing.T) {
 }
 
 func TestRenderEpicContextCrossEpicOneDirection(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "One direction", "deps")
 	child := f.addChild("Inside")
 	ext := f.outsider("Outside")
@@ -475,6 +489,7 @@ func TestRenderEpicContextCrossEpicOneDirection(t *testing.T) {
 }
 
 func TestRenderEpicContextCrossEpicBothDirections(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Both directions", "deps")
 	child := f.addChild("Inside")
 	upstream := f.outsider("Upstream")     // inside depends on it
@@ -499,6 +514,7 @@ func TestRenderEpicContextCrossEpicBothDirections(t *testing.T) {
 }
 
 func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Closed sides", "deps")
 	openChild := f.addChild("Open inside")
 	closedChild := f.addChild("Closed inside")
@@ -523,6 +539,7 @@ func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
 // catch a regression to that. Deleted sits on the internal side and archived on
 // the external side, which puts both predicates under one assertion.
 func TestRenderEpicContextCrossEpicFrozenSideFiltered(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Frozen sides", "deps")
 	openChild := f.addChild("Open inside")
 	deletedChild := f.addChild("Deleted inside")
@@ -544,6 +561,7 @@ func TestRenderEpicContextCrossEpicFrozenSideFiltered(t *testing.T) {
 // still renders, so the frozen filter is proved to drop edges for the stated
 // reason rather than the section being absent for some unrelated one.
 func TestRenderEpicContextCrossEpicLiveSidesRender(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Live sides", "deps")
 	child := f.addChild("Open inside")
 	ext := f.outsider("Open outside")
@@ -556,6 +574,7 @@ func TestRenderEpicContextCrossEpicLiveSidesRender(t *testing.T) {
 }
 
 func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Epic self edge", "deps")
 	// The store refuses a blocked-by edge between an issue and its own epic, so the
 	// edge is written first and the issue moved in after — the way a workspace
@@ -573,6 +592,7 @@ func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
 }
 
 func TestRenderEpicContextEpicNodeCrossEpicEdges(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Epic-level deps", "deps")
 	f.addChild("Some child")
 	upstream := f.outsider("Upstream")     // epic depends on it
@@ -623,6 +643,7 @@ func idx(haystack, needle string) int {
 // actions rather than a hand-built display status, so the test would catch the
 // plan disagreeing with what was actually recorded, not merely a renamed field.
 func TestRenderEpicContextNamesTheCloseReason(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Verdict epic", "five ways to be closed")
 	canonical := f.addChild("The canonical one")
 	done := f.addChild("Finished one")
@@ -661,6 +682,7 @@ func TestRenderEpicContextNamesTheCloseReason(t *testing.T) {
 // plan has just read, so the climb is handed that read rather than repeating
 // it.
 func TestBuildEpicContextFetchesTheEpicOnce(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Fetch epic", "the epic is read once")
 	first := f.addChild("First one")
 	f.addChild("Second one")

@@ -24,7 +24,7 @@ import (
 func TestResolveRestoreSourceCap(t *testing.T) {
 	t.Parallel()
 	t.Run("no source is a usage error", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		_, err := resolveRestoreSource(ap, nil, false)
 		if _, ok := err.(UsageError); !ok {
 			t.Fatalf("resolveRestoreSource(no source) error = %v, want UsageError", err)
@@ -32,7 +32,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 	})
 
 	t.Run("both sources is a mutual-exclusion error, not silent precedence", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		_, err := resolveRestoreSource(ap, &inputFile{path: "/some/export.json"}, true)
 		ue, ok := err.(UsageError)
 		if !ok || !strings.Contains(ue.Message, "mutually exclusive") {
@@ -41,7 +41,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 	})
 
 	t.Run("explicit file passes through as read", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		explicit := inputFile{path: "/some/export.json", data: []byte("{}")}
 		got, err := resolveRestoreSource(ap, &explicit, false)
 		if err != nil || got.path != explicit.path || string(got.data) != string(explicit.data) {
@@ -50,7 +50,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 	})
 
 	t.Run("latest with no backups fails loudly", func(t *testing.T) {
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		_, err := resolveRestoreSource(ap, nil, true)
 		if err == nil || !strings.Contains(err.Error(), "no backups available") {
 			t.Fatalf("resolveRestoreSource(latest, empty) error = %v, want no backups available", err)
@@ -59,7 +59,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 
 	t.Run("latest reads the newest snapshot", func(t *testing.T) {
 		dir := t.TempDir()
-		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: dir}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
+		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: dir}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}}
 		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
 		taken, err := backup.Take(context.Background(), dir, backup.Budget, func() (model.Export, error) { return export, nil })
 		if err != nil {
@@ -81,6 +81,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 // workspace opens, as an import spec is: outside any workspace the refusal is
 // the same, and the invocation's event records the usage exit.
 func TestRestoreRefusesAnUnreadablePathBeforeTheWorkspaceOpens(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	_, err := runCLIInDirAllowError(t, t.TempDir(), "backup", "restore", "--path", missing)
@@ -159,6 +160,7 @@ func TestGuardRestoreVerdicts(t *testing.T) {
 // children and a comment, so its relations and comments are exported again
 // in the order the digest was taken in.
 func TestBackupRestoreAfterARestoreProceedsUntilTheWorkspaceMoves(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
 	for _, title := range []string{"First", "Second"} {
@@ -197,6 +199,7 @@ func TestBackupRestoreAfterARestoreProceedsUntilTheWorkspaceMoves(t *testing.T) 
 // what the other clone's restore left. Driven over a real git remote, because
 // the claim is about what sync carries.
 func TestARestoreDigestStaysInTheCloneThatRestored(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -238,6 +241,7 @@ func TestARestoreDigestStaysInTheCloneThatRestored(t *testing.T) {
 // each state once, so the run takes no slot from the distinct backups made
 // before it.
 func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
 	for _, title := range []string{"one", "two", "three"} {
@@ -281,6 +285,7 @@ func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
 // filesystem clock's, and how many snapshots its prune removed are
 // on the event of `backup create` and of a restore alike.
 func TestBackupEventNamesTheSnapshotItTook(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")

@@ -12,6 +12,7 @@ import (
 // Unclaimed, Stale, and an uncontested Held lane all drop out — and the
 // survivors come back in a stable, sorted order.
 func TestContestedLanesFiltersAndSorts(t *testing.T) {
+	t.Parallel()
 	holder := model.NewAttribution("aaaaaaaabbbb", "ws-local")
 	contestant := model.NewAttribution("eeeeeeeeffff", "ws-local")
 
@@ -41,6 +42,7 @@ func TestContestedLanesFiltersAndSorts(t *testing.T) {
 // which is what makes reportContestedLanes print nothing for an ordinary
 // reconcile.
 func TestContestedLanesEmptyForNoContest(t *testing.T) {
+	t.Parallel()
 	holder := model.NewAttribution("aaaaaaaabbbb", "ws-local")
 	lane := model.LaneOf(model.Issue{ID: "aaa"}, nil)
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{By: holder}}}

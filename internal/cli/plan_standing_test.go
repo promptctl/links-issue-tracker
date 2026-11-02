@@ -12,6 +12,7 @@ import (
 // records the standing, and an approval adds the plan and the review it
 // rested on.
 func TestDoneFinishesWhereverThePlanStands(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, _, _ := statuslineCheckout(t)
 	epic := newEpicInDir(t, dir, "planned epic")
@@ -81,6 +82,7 @@ func TestDoneFinishesWhereverThePlanStands(t *testing.T) {
 // A done on a ticket already closed finishes nothing and warns of nothing, and
 // its event says it found the ticket closed.
 func TestDoneOnAClosedTicketFinishesNothing(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, id, _ := statuslineCheckout(t)
 	runCLIInDir(t, dir, "close", id, "--resolution", "wontfix")

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -17,18 +18,19 @@ import (
 // binary, TestMain) and reads its event off the events file, so a mirror push
 // that fails is tied back to the write that caused it. [LAW:nothing-unseen]
 func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, _ := litRepoForCadence(t)
 	spawner := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), spawner)
 	stderr := testStderr(t)
-	ws, err := resolveWorkspace(ctx, stderr, testEnv(), WorkingDirOf(dir, nil), workspace.PrefixRequest{})
+	ws, err := resolveWorkspace(ctx, stderr, runEnv(t), WorkingDirOf(dir, nil), workspace.PrefixRequest{})
 	if err != nil {
 		t.Fatalf("resolveWorkspace: %v", err)
 	}
 	// Parent pid 0: the worker has no spawner to wait out, and the spawner
 	// here is this test process, which stays up.
-	if err := spawnBackgroundMirror(ctx, stderr, envInTrace(testEnv(), spawner), ws, 0); err != nil {
+	if err := spawnBackgroundMirror(ctx, stderr, envInTrace(runEnv(t), spawner), ws, 0); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
 	spawnerEvent := spawner.Finish(telemetry.End{})
@@ -61,8 +63,9 @@ func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.
 // was started with: a lit that a hook runs under a worker is the worker's
 // child, not its sibling.
 func TestAnInvocationHandsItsChildrenItsOwnSpanNotTheOneItInherited(t *testing.T) {
+	t.Parallel()
 	const inherited = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-	inheritedEnv := testEnv().With(telemetry.TraceparentEnvVar + "=" + inherited)
+	inheritedEnv := runEnv(t).With(telemetry.TraceparentEnvVar + "=" + inherited)
 	parent, err := telemetry.ParseTraceparent(inherited)
 	if err != nil {
 		t.Fatal(err)
@@ -93,11 +96,12 @@ func eventsInFile(t *testing.T) []telemetry.Event {
 // handed a value it cannot read starts a trace of its own and says why on its
 // event; one handed none has neither.
 func TestAnInvocationAdoptsTheTraceparentItWasHanded(t *testing.T) {
+	t.Parallel()
 	const trace, span = "4bf92f3577b34da6a3ce929d0e0e4736", "00f067aa0ba902b7"
 	isolateEvents(t)
 	dir := t.TempDir()
 
-	t.Setenv(telemetry.TraceparentEnvVar, "00-"+trace+"-"+span+"-01")
+	setRunEnv(t, telemetry.TraceparentEnvVar, "00-"+trace+"-"+span+"-01")
 	runCLIInDir(t, dir, "version")
 	ev := lastEvent(t)
 	if ev.TraceID != trace || ev.ParentSpanID != span {
@@ -107,7 +111,7 @@ func TestAnInvocationAdoptsTheTraceparentItWasHanded(t *testing.T) {
 		t.Errorf("an adopted traceparent recorded trace.parent_error = %v", ev.Facts["trace.parent_error"])
 	}
 
-	t.Setenv(telemetry.TraceparentEnvVar, "not-a-traceparent")
+	setRunEnv(t, telemetry.TraceparentEnvVar, "not-a-traceparent")
 	runCLIInDir(t, dir, "version")
 	ev = lastEvent(t)
 	if !traceID.MatchString(ev.TraceID) || ev.TraceID == trace || ev.ParentSpanID != "" {
@@ -118,10 +122,11 @@ func TestAnInvocationAdoptsTheTraceparentItWasHanded(t *testing.T) {
 		t.Errorf("trace.parent_error = %v; want it to name the value it refused", ev.Facts["trace.parent_error"])
 	}
 
-	if err := os.Unsetenv(telemetry.TraceparentEnvVar); err != nil {
-		t.Fatal(err)
+	none := dirInvocation(t, dir, io.Discard, io.Discard, []string{"version"})
+	none.Env = none.Env.Without(telemetry.TraceparentEnvVar)
+	if err := Run(context.Background(), none); err != nil {
+		t.Fatalf("Run(version) with no traceparent: %v", err)
 	}
-	runCLIInDir(t, dir, "version")
 	ev = lastEvent(t)
 	if ev.ParentSpanID != "" {
 		t.Errorf("handed no traceparent, event parent span = %q", ev.ParentSpanID)

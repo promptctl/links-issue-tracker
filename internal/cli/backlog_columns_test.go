@@ -28,7 +28,7 @@ import (
 func runBacklogColumns(h readyTestHarness, expr string) (string, error) {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	err := runWorkable(h.ctx, &stdout, h.ap, []string{"--columns", expr}, backlogView)
+	err := runWorkable(h.t, h.ctx, &stdout, h.ap, []string{"--columns", expr}, backlogView)
 	return stdout.String(), err
 }
 
@@ -83,6 +83,7 @@ func backlogCells(t *testing.T, out, id string) []string {
 // would have rows to print — an empty stdout below therefore means the command
 // refused, not that it had nothing to say.
 func TestBacklogRejectsUnknownColumn(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ expr, unknown string }{
 		{expr: "bogus", unknown: "bogus"},
 		{expr: "status", unknown: "status"},
@@ -125,6 +126,7 @@ func TestBacklogRejectsUnknownColumn(t *testing.T) {
 // exact cells — a regression that dropped knobs.columns and rendered
 // defaultColumns() instead would print `id state topic title` and fail.
 func TestBacklogAcceptsValidColumns(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Projected row", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -149,6 +151,7 @@ func TestBacklogAcceptsValidColumns(t *testing.T) {
 // one. Asserting the real ids and the `blocked` label is what makes reverting
 // the derivation in runWorkable fail here instead of printing dashes.
 func TestBacklogRendersRelationColumns(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
 	child := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Child", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -209,6 +212,7 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 // future predicate that drifts from the annotation registry fails here whatever
 // the two happen to say.
 func TestBacklogBlockedColumnAgreesWithTheContextLine(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "First", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -237,11 +241,12 @@ func TestBacklogBlockedColumnAgreesWithTheContextLine(t *testing.T) {
 // through optionalString rather than fs.String, so its help text is a separate
 // call site from `lit ls`'s and can drift out of the shared usage string.
 func TestBacklogHelpEnumeratesValidColumns(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	var stdout bytes.Buffer
 	// --help is answered by the flag parser, which prints and then reports it
 	// via a sentinel error; the output is what this asserts on.
-	_ = runWorkable(h.ctx, &stdout, h.ap, []string{"--help"}, backlogView)
+	_ = runWorkable(t, h.ctx, &stdout, h.ap, []string{"--help"}, backlogView)
 	for _, name := range sortedColumnNames() {
 		if !strings.Contains(stdout.String(), name) {
 			t.Errorf("`lit backlog --help` does not enumerate column %q:\n%s", name, stdout.String())
@@ -259,6 +264,7 @@ func TestBacklogHelpEnumeratesValidColumns(t *testing.T) {
 // of it. Without the first half, a fixture that silently stopped warning would
 // turn the real assertion vacuous while it kept passing.
 func TestBacklogRejectsUnknownColumnBeforeTheSyncWarning(t *testing.T) {
+	t.Parallel()
 	dir, _ := unpushedCloneWithOneLocalChange(t)
 
 	warned := runCLIInDir(t, dir, "backlog")

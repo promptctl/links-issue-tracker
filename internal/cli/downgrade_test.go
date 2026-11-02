@@ -109,11 +109,11 @@ func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolv
 	ctx := telemetry.With(context.Background(), recorder)
 	l := downgradeLeafWith(res, inst, binPath).leaf
 	var out bytes.Buffer
-	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.4.1"}, cwdInvocation(&out, &out, nil))
+	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.4.1"}, dirInvocation(t, t.TempDir(), &out, &out, nil))
 	if err != nil {
 		t.Fatalf("parseLeaf: %v", err)
 	}
-	err = l.work(ctx, cwdInvocation(&out, &out, nil), scope, positional)
+	err = l.work(ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), scope, positional)
 	ev := recorder.Finish(invocationEnd(time.Now(), err, nil))
 	return writtenFacts(t, ev), ev.Counts, out.String(), err
 }
@@ -142,7 +142,7 @@ func TestRunDowngradeWithHappyPath(t *testing.T) {
 	dg := &stubDowngrader{done: reversedFromV4()}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runDowngradeWith(context.Background(), &out, downgradeScope{schema: dg, current: newerCurrentInfo()}, []string{"--to", "v0.4.1"}, res, inst, fixedBinPath("/usr/local/bin/lit", nil))
+	err := runDowngradeWith(t, context.Background(), &out, downgradeScope{schema: dg, current: newerCurrentInfo()}, []string{"--to", "v0.4.1"}, res, inst, fixedBinPath("/usr/local/bin/lit", nil))
 	if err != nil {
 		t.Fatalf("runDowngradeWith: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestRunDowngradeWithInstallFailureSurfacesRecovery(t *testing.T) {
 	dg := &stubDowngrader{done: reversedFromV4()}
 	inst := &stubInstaller{err: errors.New("network down")}
 	var out bytes.Buffer
-	err := runDowngradeWith(context.Background(), &out, downgradeScope{schema: dg, current: newerCurrentInfo()}, []string{"--to", "v0.4.1"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runDowngradeWith(t, context.Background(), &out, downgradeScope{schema: dg, current: newerCurrentInfo()}, []string{"--to", "v0.4.1"}, res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil {
 		t.Fatal("expected install failure to surface as error")
 	}
@@ -188,7 +188,7 @@ func TestRunDowngradeWithSchemaErrorSkipsInstall(t *testing.T) {
 	dg := &stubDowngrader{err: errors.New("schema refused")}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runDowngradeWith(context.Background(), &out, downgradeScope{schema: dg, current: newerCurrentInfo()}, []string{"--to", "v0.4.1"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runDowngradeWith(t, context.Background(), &out, downgradeScope{schema: dg, current: newerCurrentInfo()}, []string{"--to", "v0.4.1"}, res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil || !strings.Contains(err.Error(), "schema refused") {
 		t.Fatalf("expected schema error to propagate, got %v", err)
 	}
@@ -331,6 +331,7 @@ func TestRunDowngradeRecordsTheTagOfAReleaseThatDoesNotResolve(t *testing.T) {
 // can satisfy — nothing is installed, and the event carries the span and the
 // support the refusal was decided from.
 func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
+	t.Parallel()
 	_, ws := initBootstrapTestRepo(t)
 	current, err := version.Get()
 	if err != nil {
@@ -338,7 +339,7 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 	}
 	ahead := current.Schema.Max + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -464,7 +465,7 @@ func TestRunDowngradeRefusesANonReleaseTagBeforeResolving(t *testing.T) {
 	res := &stubResolver{target: newFakeTarget()}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runDowngradeWith(context.Background(), &out, downgradeScope{}, []string{"--to", "v0.14.0.1"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runDowngradeWith(t, context.Background(), &out, downgradeScope{}, []string{"--to", "v0.14.0.1"}, res, inst, fixedBinPath("/p/lit", nil))
 	if code := ExitCode(err); code != ExitValidation {
 		t.Fatalf("exit = %d (err %v); want %d", code, err, ExitValidation)
 	}

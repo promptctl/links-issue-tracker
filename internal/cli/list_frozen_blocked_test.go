@@ -25,6 +25,7 @@ import (
 // play" here while it means the registry's verdict everywhere else.
 // [LAW:one-source-of-truth]
 func TestBlockedColumnOnFrozenRows(t *testing.T) {
+	t.Parallel()
 	for _, freeze := range []struct {
 		name string
 		flag string
@@ -57,7 +58,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 				t.Helper()
 				var out bytes.Buffer
 				args = append([]string{"--columns", "id,blocked"}, args...)
-				if err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(testEnv(), h.ap), args); err != nil {
+				if err := runListWithStore(t, h.ctx, &out, h.ap.Store, workspaceReadyPolicy(runEnv(t), h.ap), args); err != nil {
 					t.Fatalf("lit ls %v: %v", args, err)
 				}
 				cells := fieldsOf(lineForID(t, out.String(), id))
@@ -79,15 +80,15 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 
 			var sink bytes.Buffer
 			for _, id := range []string{gated.ID, ungated.ID} {
-				if err := runTransition(h.ctx, &sink, h.ap, []string{id}, freeze.spec); err != nil {
-					t.Fatalf("runTransition(%s %s): %v", freeze.spec.name, id, err)
+				if err := runTransition(t, h.ctx, &sink, h.ap, []string{id}, freeze.spec); err != nil {
+					t.Fatalf("runTransition(t, %s %s): %v", freeze.spec.name, id, err)
 				}
 			}
 
 			// The rows are gone from a plain listing — otherwise the flag below
 			// proves nothing about frozen rows.
 			var plain bytes.Buffer
-			if err := runListWithStore(h.ctx, &plain, h.ap.Store, workspaceReadyPolicy(testEnv(), h.ap),
+			if err := runListWithStore(t, h.ctx, &plain, h.ap.Store, workspaceReadyPolicy(runEnv(t), h.ap),
 				[]string{"--columns", "id,blocked"}); err != nil {
 				t.Fatalf("lit ls after %s: %v", freeze.spec.name, err)
 			}

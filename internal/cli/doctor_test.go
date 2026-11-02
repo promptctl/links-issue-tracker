@@ -27,7 +27,7 @@ func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 		Location:    workspace.Location{StorageDir: "/tmp/store", GitCommonDir: "/tmp/repo/.git"},
 		WorkspaceID: "ws-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{}),
+		Remotes:     workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{}),
 	}
 	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
@@ -47,7 +47,7 @@ func TestPrintWorkspaceIdentityReportsDerivedPrefix(t *testing.T) {
 	}
 	// A derived PrefixSpec is only mintable by the workspace resolver itself —
 	// the first resolve of a fresh repo derives the prefix from the repo name.
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -109,6 +109,7 @@ func TestPrintSyncFreshness(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			var buf bytes.Buffer
 			if err := printSyncFreshness(&buf, tc.report); err != nil {
 				t.Fatalf("printSyncFreshness() error = %v", err)
@@ -127,27 +128,28 @@ func TestPrintSyncFreshness(t *testing.T) {
 // real git repo with no remote, so the freshness line travels the actual
 // resolve→render path and lands in doctor's output beside the health report.
 func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
+	t.Parallel()
 	repo, _ := initBootstrapTestRepo(t)
 	ctx := context.Background()
-	ap, err := app.Open(ctx, testEnv(), testStderr(t), resolvedWorkspace(t, repo), app.AccessRead)
+	ap, err := app.Open(ctx, runEnv(t), testStderr(t), resolvedWorkspace(t, repo), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}
 	defer ap.Close()
 
 	var buf bytes.Buffer
-	if err := runDoctor(ctx, &buf, ap, nil); err != nil {
-		t.Fatalf("runDoctor() error = %v", err)
+	if err := runDoctor(t, ctx, &buf, ap, nil); err != nil {
+		t.Fatalf("runDoctor(t, ) error = %v", err)
 	}
 	got := buf.String()
 	if !strings.Contains(got, "integrity_check=ok") {
-		t.Fatalf("runDoctor() output missing health line: %q", got)
+		t.Fatalf("runDoctor(t, ) output missing health line: %q", got)
 	}
 	if !strings.Contains(got, "sync: no git remote configured") {
-		t.Fatalf("runDoctor() output missing no-remote freshness line: %q", got)
+		t.Fatalf("runDoctor(t, ) output missing no-remote freshness line: %q", got)
 	}
 	if !strings.Contains(got, "build:") {
-		t.Fatalf("runDoctor() output missing build status line: %q", got)
+		t.Fatalf("runDoctor(t, ) output missing build status line: %q", got)
 	}
 }
 
@@ -156,17 +158,18 @@ func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 // fails and doctor must surface a loud "freshness unavailable" line carrying the
 // reason — without aborting the integrity health check beside it.
 func TestRunDoctorSurfacesUnresolvedFreshness(t *testing.T) {
+	t.Parallel()
 	ap := newTestCLIApp(t)
 	var buf bytes.Buffer
-	if err := runDoctor(context.Background(), &buf, ap, nil); err != nil {
-		t.Fatalf("runDoctor() error = %v", err)
+	if err := runDoctor(t, context.Background(), &buf, ap, nil); err != nil {
+		t.Fatalf("runDoctor(t, ) error = %v", err)
 	}
 	got := buf.String()
 	if !strings.Contains(got, "integrity_check=ok") {
-		t.Fatalf("runDoctor() output missing health line: %q", got)
+		t.Fatalf("runDoctor(t, ) output missing health line: %q", got)
 	}
 	if !strings.Contains(got, "sync: freshness unavailable") {
-		t.Fatalf("runDoctor() output missing unresolved freshness line: %q", got)
+		t.Fatalf("runDoctor(t, ) output missing unresolved freshness line: %q", got)
 	}
 }
 
@@ -177,6 +180,7 @@ func TestRunDoctorSurfacesUnresolvedFreshness(t *testing.T) {
 // which also leaves one edge inverted under any rank order. Doctor prints a
 // warning line for each and no other, and a refused --fix still prints them.
 func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "hier", IssueType: "epic"})
 	loose := h.createIssue(storage.CreateIssueInput{Title: "loose", Topic: "hier", IssueType: "task", ParentID: epic.ID})
@@ -190,8 +194,8 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "dep", IssueType: "task", ParentID: cycleEpicB.ID})
 
 	var clean bytes.Buffer
-	if err := runDoctor(h.ctx, &clean, h.ap, nil); err != nil {
-		t.Fatalf("runDoctor() on a contained hierarchy error = %v", err)
+	if err := runDoctor(t, h.ctx, &clean, h.ap, nil); err != nil {
+		t.Fatalf("runDoctor(t, ) on a contained hierarchy error = %v", err)
 	}
 	if strings.Contains(clean.String(), "warning: ") {
 		t.Fatalf("doctor on a contained hierarchy should print no warning; got:\n%s", clean.String())
@@ -250,8 +254,8 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	if err := runDoctor(h.ctx, &buf, h.ap, nil); err != nil {
-		t.Fatalf("runDoctor() error = %v, want exit 0: every read still answers over these warnings", err)
+	if err := runDoctor(t, h.ctx, &buf, h.ap, nil); err != nil {
+		t.Fatalf("runDoctor(t, ) error = %v, want exit 0: every read still answers over these warnings", err)
 	}
 	assertWarnings(t, buf.String())
 
@@ -266,16 +270,16 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	// The rank repair refuses on the cycle. The refusal is the command's
 	// outcome, and the report it would otherwise have cost is still printed.
 	var fixed bytes.Buffer
-	err = runDoctor(h.ctx, &fixed, h.ap, []string{"--fix=rank"})
+	err = runDoctor(t, h.ctx, &fixed, h.ap, []string{"--fix=rank"})
 	if err == nil || !strings.Contains(err.Error(), "lit dep rm") {
-		t.Fatalf("runDoctor(--fix=rank) error = %v, want the rank repair's refusal on the cycle", err)
+		t.Fatalf("runDoctor(t, --fix=rank) error = %v, want the rank repair's refusal on the cycle", err)
 	}
 	assertWarnings(t, fixed.String())
 
 	// A refused --fix and a clean one print the same report; the event names
 	// the repair that failed and why.
 	var refused bytes.Buffer
-	refusalEvent, err := recordLeaf(doctorLeaf(), h.ctx, cwdInvocation(&refused, &refused, nil), h.ap, []string{"--fix=rank"})
+	refusalEvent, err := recordLeaf(doctorLeaf(), h.ctx, dirInvocation(t, t.TempDir(), &refused, &refused, nil), h.ap, []string{"--fix=rank"})
 	if err == nil {
 		t.Fatal("doctor --fix=rank on a dependency cycle: want the rank repair's refusal")
 	}
@@ -288,9 +292,9 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	}
 
 	// A report cut short by its own write failure still carries the repair's.
-	err = runDoctor(h.ctx, refusingWriter{}, h.ap, []string{"--fix=rank"})
+	err = runDoctor(t, h.ctx, refusingWriter{}, h.ap, []string{"--fix=rank"})
 	if err == nil || !strings.Contains(err.Error(), "stdout is gone") || !strings.Contains(err.Error(), "lit dep rm") {
-		t.Fatalf("runDoctor(--fix=rank) to a refusing stdout error = %v, want both the write failure and the rank repair's refusal", err)
+		t.Fatalf("runDoctor(t, --fix=rank) to a refusing stdout error = %v, want both the write failure and the rank repair's refusal", err)
 	}
 }
 
@@ -306,7 +310,7 @@ func runDoctorRecorded(t *testing.T, h readyTestHarness, args ...string) (map[st
 func runDoctorEvent(t *testing.T, h readyTestHarness, args ...string) (telemetry.Event, string) {
 	t.Helper()
 	var out bytes.Buffer
-	ev, err := recordLeaf(doctorLeaf(), h.ctx, cwdInvocation(&out, &out, nil), h.ap, args)
+	ev, err := recordLeaf(doctorLeaf(), h.ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), h.ap, args)
 	if err != nil {
 		t.Fatalf("doctor %v error = %v\n%s", args, err, out.String())
 	}
@@ -317,6 +321,7 @@ func runDoctorEvent(t *testing.T, h readyTestHarness, args ...string) (telemetry
 // and on the invocation's event; `--fix=rank` gives each holder its own key,
 // and the report it leaves says none is shared.
 func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "rank", IssueType: "epic"})
 	h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "rank", IssueType: "epic"})
@@ -358,6 +363,7 @@ func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
 // says what the check found, what the repair moved, and that no cycle stood in
 // its way. The two epics are filed one way and listed the other.
 func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	early := h.createIssue(storage.CreateIssueInput{Title: "early", Topic: "rank", IssueType: "epic"})
 	late := h.createIssue(storage.CreateIssueInput{Title: "late", Topic: "rank", IssueType: "epic"})
@@ -402,6 +408,7 @@ func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
 // event names the group and no cycle, the queue flags no inversion it would
 // send an agent to `lit doctor --fix` for, and the fix runs.
 func TestDoctorRecordsInterleavedEpicsAndNoCycle(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "rank", IssueType: "epic"})
 	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "rank", IssueType: "epic"})
@@ -434,6 +441,7 @@ func sortedIDs(ids ...string) []string {
 // its output and on its event, and a store within its ceiling says so with
 // "none" rather than an absent value.
 func TestDoctorReportsTheFootprint(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	h.createIssue(storage.CreateIssueInput{Title: "sized", Topic: "footprint", IssueType: "epic"})
 
@@ -492,6 +500,7 @@ func TestPrintFootprintAndOverCeilingPart(t *testing.T) {
 // `lit dep rm` that removes it, and counts it on the invocation's event, which
 // reads "0" on a store with none.
 func TestDoctorNamesABlockedByEdgeBetweenTwoLeavesOfOneEpic(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "blocks", IssueType: "epic"})
 	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "blocks", IssueType: "task", ParentID: epic.ID})
@@ -542,6 +551,7 @@ func assertWarningFacts(t *testing.T, ev telemetry.Event, wantLines int, want ma
 // one of them: its fact reads "unchecked", never a clean "0", while the
 // containment counts, which are column reads, still name a number.
 func TestDoctorEventSaysTiedKeysUncheckedOnAStoredParentCycle(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	top := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
 	sub := h.createIssue(storage.CreateIssueInput{Title: "S", Topic: "loop", IssueType: "epic", ParentID: top.ID})
@@ -555,7 +565,7 @@ func TestDoctorEventSaysTiedKeysUncheckedOnAStoredParentCycle(t *testing.T) {
 		t.Fatalf("plant parent cycle: %v", err)
 	}
 	var out bytes.Buffer
-	ev, err := recordLeaf(doctorLeaf(), h.ctx, cwdInvocation(&out, &out, nil), h.ap, nil)
+	ev, err := recordLeaf(doctorLeaf(), h.ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), h.ap, nil)
 	if !errors.As(err, new(CorruptionError)) {
 		t.Fatalf("doctor error = %v, want the parent cycle's CorruptionError", err)
 	}

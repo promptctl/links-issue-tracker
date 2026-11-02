@@ -30,6 +30,7 @@ func firstIssueID(t *testing.T, out string) string {
 }
 
 func TestRunNewSupportsTopicAndParent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -44,14 +45,14 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{
+	if err := runNew(t, ctx, &stdout, ap, []string{
 		"--title", "Tighten repro",
 		"--topic", "renderer",
 		"--parent", parent.ID,
 		"--type", "task",
 		"--priority", "1",
 	}); err != nil {
-		t.Fatalf("runNew() error = %v", err)
+		t.Fatalf("runNew(t, ) error = %v", err)
 	}
 
 	createdID := firstIssueID(t, stdout.String())
@@ -70,6 +71,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 }
 
 func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -79,8 +81,8 @@ func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
 		t.Helper()
 		var stdout bytes.Buffer
 		base := []string{"--title", title, "--topic", "place", "--type", "epic"}
-		if err := runNew(ctx, &stdout, ap, append(base, args...)); err != nil {
-			t.Fatalf("runNew(%q) error = %v", title, err)
+		if err := runNew(t, ctx, &stdout, ap, append(base, args...)); err != nil {
+			t.Fatalf("runNew(t, %q) error = %v", title, err)
 		}
 		return firstIssueID(t, stdout.String())
 	}
@@ -110,6 +112,7 @@ func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
 // have displaced everything; the assertion is that both epics' children stack
 // in creation order and each stays inside its own frame.
 func TestRunNewAppendsWithinItsFrame(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -117,8 +120,8 @@ func TestRunNewAppendsWithinItsFrame(t *testing.T) {
 		t.Helper()
 		var stdout bytes.Buffer
 		base := []string{"--title", title, "--topic", "place"}
-		if err := runNew(ctx, &stdout, ap, append(base, args...)); err != nil {
-			t.Fatalf("runNew(%q) error = %v", title, err)
+		if err := runNew(t, ctx, &stdout, ap, append(base, args...)); err != nil {
+			t.Fatalf("runNew(t, %q) error = %v", title, err)
 		}
 		return firstIssueID(t, stdout.String())
 	}
@@ -154,6 +157,7 @@ func TestRunNewAppendsWithinItsFrame(t *testing.T) {
 }
 
 func TestRunQuickstartLoadsTemplateGuidance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	templatePath := filepath.Join(ap.Workspace.RootDir, ".lit", "templates", "quickstart.md")
@@ -171,8 +175,8 @@ func TestRunQuickstartLoadsTemplateGuidance(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runQuickstart(ctx, &stdout, ap.Workspace, nil); err != nil {
-		t.Fatalf("runQuickstart() error = %v", err)
+	if err := runQuickstart(t, ctx, &stdout, ap.Workspace, nil); err != nil {
+		t.Fatalf("runQuickstart(t, ) error = %v", err)
 	}
 	output := stdout.String()
 	if !strings.Contains(output, "## Custom quickstart") {
@@ -181,14 +185,15 @@ func TestRunQuickstartLoadsTemplateGuidance(t *testing.T) {
 }
 
 func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-creator")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-creator")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{
+	if err := runLeaf(t, newLeaf(), ctx, &stdout, ap, []string{
 		"--title", "Born unclaimed", "--topic", "lifecycle", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	}); err != nil {
-		t.Fatalf("runNew() error = %v", err)
+		t.Fatalf("runNew(t, ) error = %v", err)
 	}
 	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {
@@ -202,14 +207,15 @@ func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
 }
 
 func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-creator")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-creator")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{
+	if err := runLeaf(t, newLeaf(), ctx, &stdout, ap, []string{
 		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	}); err != nil {
-		t.Fatalf("runNew() error = %v", err)
+		t.Fatalf("runNew(t, ) error = %v", err)
 	}
 	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {
@@ -225,23 +231,24 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 // with the default type and no --parent is a validation refusal (exit 3, the
 // same shape as any other refused value) whose message names the way in.
 func TestRunNewLeafWithoutParentIsRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	var stdout bytes.Buffer
-	err := runNew(ctx, &stdout, ap, []string{"--title", "Homeless", "--topic", "lifecycle"})
+	err := runNew(t, ctx, &stdout, ap, []string{"--title", "Homeless", "--topic", "lifecycle"})
 	if err == nil {
-		t.Fatalf("runNew(no --parent) = nil, want a refusal; output:\n%s", stdout.String())
+		t.Fatalf("runNew(t, no --parent) = nil, want a refusal; output:\n%s", stdout.String())
 	}
 	if code := ExitCode(err); code != ExitValidation {
-		t.Fatalf("runNew(no --parent) exit code = %d, want %d (error: %v)", code, ExitValidation, err)
+		t.Fatalf("runNew(t, no --parent) exit code = %d, want %d (error: %v)", code, ExitValidation, err)
 	}
 	if reason := commandErrorReason(err); reason != reasonValidationRefused {
-		t.Fatalf("runNew(no --parent) reason = %q, want validation_refused (error: %v)", reason, err)
+		t.Fatalf("runNew(t, no --parent) reason = %q, want validation_refused (error: %v)", reason, err)
 	}
 	want := "cannot create a task outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic"
 	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("runNew(no --parent) error = %q, want it to contain %q", err.Error(), want)
+		t.Fatalf("runNew(t, no --parent) error = %q, want it to contain %q", err.Error(), want)
 	}
 }
 
@@ -249,12 +256,13 @@ func TestRunNewLeafWithoutParentIsRefused(t *testing.T) {
 // is the one type that may live at the top level, so `--type epic` with no
 // --parent creates it there.
 func TestRunNewEpicWithoutParentIsTopLevel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{"--title", "A home", "--topic", "lifecycle", "--type", "epic"}); err != nil {
-		t.Fatalf("runNew(--type epic, no --parent) error = %v", err)
+	if err := runNew(t, ctx, &stdout, ap, []string{"--title", "A home", "--topic", "lifecycle", "--type", "epic"}); err != nil {
+		t.Fatalf("runNew(t, --type epic, no --parent) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {

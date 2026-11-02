@@ -24,9 +24,9 @@ import (
 // and the id of one seeded active issue.
 func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
-	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
+	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 	ctx := context.Background()
 
 	storeDir = filepath.Join(t.TempDir(), "links")
@@ -39,7 +39,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		t.Fatalf("WriteFile(config.json) error = %v", err)
 	}
 
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, loc.DatabasePath, wsID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, loc.DatabasePath, wsID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -49,7 +49,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 			RootDir:     storeDir,
 			WorkspaceID: wsID,
 			IssuePrefix: testIssuePrefix(t, prefix),
-			Remotes:     workspace.NewRemotes(testEnv(), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(checkoutRoot(t, storeDir)),
+			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(checkoutRoot(t, storeDir)),
 		},
 		Store: st,
 	}
@@ -64,10 +64,11 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 // store location that is not the cwd's repo, `ls --at <dir>` lists that
 // store's issues.
 func TestLsAtListsForeignStoreIssues(t *testing.T) {
+	t.Parallel()
 	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
+	if err := runList(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 	if !strings.Contains(out.String(), issueID) {
@@ -80,16 +81,17 @@ func TestLsAtListsForeignStoreIssues(t *testing.T) {
 // leaked lock or a write engine taken by the read would make this reopen fail —
 // proving the cross-project read never contended with the store's own writer.
 func TestLsAtLeavesStoreWritable(t *testing.T) {
+	t.Parallel()
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
+	if err := runList(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &out, &out, nil), lsSurface, []string{"--at", storeDir}); err != nil {
 		t.Fatalf("ls --at error = %v", err)
 	}
 
 	ctx := context.Background()
 	loc := workspace.LocationFromStorageDir(storeDir)
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, loc.DatabasePath, "ws-foreign")
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, loc.DatabasePath, "ws-foreign")
 	if err != nil {
 		t.Fatalf("engine.Open() after read error = %v — read left the store un-writable", err)
 	}
@@ -100,7 +102,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 			RootDir:     storeDir,
 			WorkspaceID: "ws-foreign",
 			IssuePrefix: testIssuePrefix(t, "proj"),
-			Remotes:     workspace.NewRemotes(testEnv(), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(checkoutRoot(t, storeDir)),
+			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(checkoutRoot(t, storeDir)),
 		},
 		Store: st,
 	}
@@ -115,14 +117,13 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 // --at is explicitly allowed to be no workspace at all. A cwd-based resolution
 // would silently drop this exact record (no cwd workspace) or misfile it into
 // an unrelated one.
-//
-// Not parallel: it chdirs.
 func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
+	t.Parallel()
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 	loc := workspace.LocationFromStorageDir(storeDir)
 
 	// The --at cwd contract: no workspace anywhere near the cwd.
-	chdir(t, t.TempDir())
+	dir := t.TempDir()
 
 	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), loc.DatabasePath)
 	if err != nil {
@@ -135,7 +136,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 	}()
 
 	var out bytes.Buffer
-	err = Run(context.Background(), cwdInvocation(&out, &out, []string{"ls", "--at", storeDir}))
+	err = Run(context.Background(), dirInvocation(t, dir, &out, &out, []string{"ls", "--at", storeDir}))
 	if err == nil {
 		t.Fatalf("ls --at succeeded against an exclusively held store; expected workspace-busy refusal\noutput=%s", out.String())
 	}
@@ -152,11 +153,10 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 // TestStarvedOpenTraceFilesUnderCwdWorkspace pins the cwd path's half of the
 // same contract: a command starved opening its own store files the trace
 // under the workspace app.Open resolved, carried out on the open's error.
-//
-// Not parallel: it chdirs.
 func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
+	t.Parallel()
 	repo, runLit := initRepoForPrefixTest(t)
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -215,7 +215,7 @@ func TestLsAtRejectsMissingStore(t *testing.T) {
 	missing := filepath.Join(base, "nope", "links")
 	for _, given := range []string{missing, filepath.Join("nope", "links")} {
 		var out bytes.Buffer
-		err := runList(underInvocation(context.Background()), dirInvocation(base, &out, &out, nil), lsSurface, []string{"--at", given})
+		err := runList(underInvocation(context.Background()), dirInvocation(t, base, &out, &out, nil), lsSurface, []string{"--at", given})
 		if err == nil {
 			t.Fatalf("ls --at %s returned nil error with output %q; want a surfaced failure", given, out.String())
 		}
@@ -254,7 +254,7 @@ func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, tc.args)
+		err := runList(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &out, &out, nil), lsSurface, tc.args)
 		if err == nil {
 			t.Fatalf("ls %v = nil error, want a usage error", tc.args)
 		}
@@ -276,14 +276,13 @@ func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 // does not take. The rule is pflag's, not ls's — this test exists because runList
 // reads --at from the parse rather than rescanning argv, and a rescan is exactly
 // what would get this wrong.
-//
-// Not parallel: it chdirs.
 func TestLsAtAfterTerminatorIsNotARoute(t *testing.T) {
+	t.Parallel()
 	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
-	chdir(t, t.TempDir()) // no workspace anywhere near the cwd
+	dir := t.TempDir() // no workspace anywhere near the cwd
 
 	var out bytes.Buffer
-	err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), lsSurface, []string{"--", "--at", storeDir})
+	err := runList(underInvocation(context.Background()), dirInvocation(t, dir, &out, &out, nil), lsSurface, []string{"--", "--at", storeDir})
 
 	// Routing would have listed the foreign store's issue; as positionals, the two
 	// tokens are refused as usage before any store opens.

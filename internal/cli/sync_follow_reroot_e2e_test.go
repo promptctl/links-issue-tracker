@@ -42,7 +42,7 @@ func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
 // and bravo adopted it. It returns the directory both live under.
 func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 	t.Helper()
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	maskGlobalConfig(t)
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -75,7 +75,7 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 // returns the re-root's parentless root.
 func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) string {
 	t.Helper()
-	alphaWS, err := workspace.Resolve(testEnv(), r.alpha)
+	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
@@ -97,18 +97,18 @@ func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string) {
 	// alpha gets the same config so its own commands spawn no background
 	// receive; its notifications go elsewhere.
 	writeOwnerNotifyProjectConfig(t, r.alpha, filepath.Join(base, "alpha-notifications"))
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	isolateEvents(t)
 }
 
 // syncHeadAndBranch reads the workspace's head commit and active branch.
 func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 	t.Helper()
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", dir, err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), ws)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
 	}
@@ -141,7 +141,7 @@ func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entries []string,
 	if !strings.Contains(show, "bravo-title") || strings.Contains(show, "alpha-description") != wantDescription {
 		t.Fatalf("bravo's ticket after the follow (alpha's description expected: %v):\n%s", wantDescription, show)
 	}
-	ws, err := workspace.Resolve(testEnv(), r.bravo)
+	ws, err := workspace.Resolve(runEnv(t), r.bravo)
 	if err != nil {
 		t.Fatalf("resolve bravo: %v", err)
 	}
@@ -162,6 +162,7 @@ func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entries []string,
 // on the remote since bravo forked, lands bravo's — with the follow on the
 // command's event and nothing reporting unrelated histories.
 func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
+	t.Parallel()
 	t.Run("pull", func(t *testing.T) {
 		r := newReRootedCheckouts(t, true)
 		runCLIInDir(t, r.bravo, "sync", "pull")
@@ -218,7 +219,8 @@ func TestEverySyncEntryPointFollowsAReRootedRemote(t *testing.T) {
 // and none the remote can name, the fetch lands, reports fetched, and follows
 // nothing, as no read has a freshness to misreport.
 func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	maskGlobalConfig(t)
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -238,7 +240,7 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 
 	runGit(t, remote, "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
 	runGit(t, alpha, "remote", "set-head", "origin", "-d")
-	ws, err := workspace.Resolve(testEnv(), alpha)
+	ws, err := workspace.Resolve(runEnv(t), alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
@@ -263,6 +265,7 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 // head it left and that head's height, short of the height that re-roots,
 // with nothing published.
 func TestSyncPushPutsTheHistoryBoundOnItsEvent(t *testing.T) {
+	t.Parallel()
 	r, _ := newSharedCheckouts(t)
 	runCLIInDir(t, r.alpha, "new", "--title", "pushed", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	isolateEvents(t)

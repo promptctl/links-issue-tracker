@@ -30,9 +30,10 @@ func writeCLIWorkflow(t *testing.T, workspaceRoot, rel, content string) {
 // embedded "done" default at the event it binds to (work_finished) — the
 // same "always at least the embedded layer" guarantee workflows.Load gives.
 func TestWorkflowsOverviewShowsEmbeddedDefaultAtItsEvent(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	output, err := runLit(t, "workflows")
+	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
@@ -51,11 +52,12 @@ func TestWorkflowsOverviewShowsEmbeddedDefaultAtItsEvent(t *testing.T) {
 // since composition across dimensions is AND to fire but each dimension gets
 // its own place in this static view.
 func TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundDimension(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design/reminder.md",
 		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
 
-	output, err := runLit(t, "workflows")
+	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
@@ -73,11 +75,12 @@ func TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundDimension(t *testin
 // state on the spine — custom stages are the same shape as built-in ones by
 // design (states are open strings, not a closed enum).
 func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "verify.md",
 		"---\nid: verify-reminder\nstates: [{name: verify, when: enter}]\n---\nVerify before accepting.")
 
-	output, err := runLit(t, "workflows")
+	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
@@ -91,10 +94,11 @@ func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
 // parse never breaks `lit workflows`, and shows up under Warnings instead of
 // silently vanishing.
 func TestWorkflowsOverviewFlagsMalformedFileAsAWarning(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "broken.md", "---\nlabels: 17\n---\nbad")
 
-	output, err := runLit(t, "workflows")
+	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
@@ -112,11 +116,12 @@ func TestWorkflowsOverviewFlagsMalformedFileAsAWarning(t *testing.T) {
 // TestWorkflowsShowResolvesOneDefinition is `lit workflows show <id>`'s
 // done-claim: matched frontmatter, source + path, and the full body.
 func TestWorkflowsShowResolvesOneDefinition(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design/reminder.md",
 		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
 
-	output, err := runLit(t, "workflows", "show", "need-design-note")
+	output, err := runLit(t, root, "workflows", "show", "need-design-note")
 	if err != nil {
 		t.Fatalf("Run(workflows show) error = %v", err)
 	}
@@ -138,9 +143,10 @@ func TestWorkflowsShowResolvesOneDefinition(t *testing.T) {
 // TestWorkflowsShowUnknownIDIsAValidationError ensures an id that isn't
 // loaded fails loudly and by type, not with a silent empty view.
 func TestWorkflowsShowUnknownIDIsAValidationError(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	_, err := runLit(t, "workflows", "show", "does-not-exist")
+	_, err := runLit(t, root, "workflows", "show", "does-not-exist")
 	if err == nil {
 		t.Fatalf("Run(workflows show does-not-exist) error = nil, want a model.ValidationError")
 	}
@@ -153,9 +159,10 @@ func TestWorkflowsShowUnknownIDIsAValidationError(t *testing.T) {
 // TestWorkflowsShowMissingIDIsUsageError covers the malformed-invocation
 // shape: `lit workflows show` with no id.
 func TestWorkflowsShowMissingIDIsUsageError(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	_, err := runLit(t, "workflows", "show")
+	_, err := runLit(t, root, "workflows", "show")
 	if _, ok := err.(UsageError); !ok {
 		t.Fatalf("Run(workflows show) error = %v (%T), want UsageError", err, err)
 	}
@@ -167,10 +174,11 @@ func TestWorkflowsShowMissingIDIsUsageError(t *testing.T) {
 // tolerates by default, so this must fail loudly rather than rendering a
 // definition while quietly ignoring the rest of the command line.
 func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "reminder.md", "---\nid: my-id\nevents: [show_ticket]\n---\nbody")
 
-	_, err := runLit(t, "workflows", "show", "my-id", "extra", "junk")
+	_, err := runLit(t, root, "workflows", "show", "my-id", "extra", "junk")
 	if _, ok := err.(UsageError); !ok {
 		t.Fatalf("Run(workflows show my-id extra junk) error = %v (%T), want UsageError", err, err)
 	}
@@ -180,9 +188,10 @@ func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
 // definition" done-claim for an event point: a fresh project file lands with
 // the requested event live and the other two dimensions shown commented.
 func TestWorkflowsEditScaffoldsFreshEventPoint(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	output, err := runLit(t, "workflows", "edit", "work_started")
+	output, err := runLit(t, root, "workflows", "edit", "work_started")
 	if err != nil {
 		t.Fatalf("Run(workflows edit work_started) error = %v", err)
 	}
@@ -205,9 +214,10 @@ func TestWorkflowsEditScaffoldsFreshEventPoint(t *testing.T) {
 // TestWorkflowsEditScaffoldsFreshStateExitPoint covers the `<state>:exit`
 // syntax and its distinct filename from the bare (enter) form.
 func TestWorkflowsEditScaffoldsFreshStateExitPoint(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	if _, err := runLit(t, "workflows", "edit", "closed:exit"); err != nil {
+	if _, err := runLit(t, root, "workflows", "edit", "closed:exit"); err != nil {
 		t.Fatalf("Run(workflows edit closed:exit) error = %v", err)
 	}
 	path := filepath.Join(root, ".lit", "workflows", "closed_exit.md")
@@ -226,9 +236,10 @@ func TestWorkflowsEditScaffoldsFreshStateExitPoint(t *testing.T) {
 // parse its :enter/:exit suffix correctly rather than misclassifying the
 // whole point as a label.
 func TestWorkflowsEditScaffoldsFreshStateExitPointWithColonInStateName(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	if _, err := runLit(t, "workflows", "edit", "deploy:staging:enter"); err != nil {
+	if _, err := runLit(t, root, "workflows", "edit", "deploy:staging:enter"); err != nil {
 		t.Fatalf("Run(workflows edit deploy:staging:enter) error = %v", err)
 	}
 	path := filepath.Join(root, ".lit", "workflows", "deploy-staging.md")
@@ -245,9 +256,10 @@ func TestWorkflowsEditScaffoldsFreshStateExitPointWithColonInStateName(t *testin
 // branch: a point that is neither a known event nor a built-in state name is
 // treated as a label.
 func TestWorkflowsEditScaffoldsFreshLabelPointAsFallback(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	if _, err := runLit(t, "workflows", "edit", "needs-design"); err != nil {
+	if _, err := runLit(t, root, "workflows", "edit", "needs-design"); err != nil {
 		t.Fatalf("Run(workflows edit needs-design) error = %v", err)
 	}
 	path := filepath.Join(root, ".lit", "workflows", "needs-design.md")
@@ -266,9 +278,10 @@ func TestWorkflowsEditScaffoldsFreshLabelPointAsFallback(t *testing.T) {
 // domain-valid case where an unquoted flow sequence would silently split one
 // activation into two.
 func TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	if _, err := runLit(t, "workflows", "edit", "foo,bar:enter"); err != nil {
+	if _, err := runLit(t, root, "workflows", "edit", "foo,bar:enter"); err != nil {
 		t.Fatalf("Run(workflows edit foo,bar:enter) error = %v", err)
 	}
 	path := filepath.Join(root, ".lit", "workflows", "foo-bar.md")
@@ -280,7 +293,7 @@ func TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation(t *testin
 		t.Fatalf("scaffolded content = %q, want the comma-containing state name double-quoted", content)
 	}
 
-	set := workflows.Load(testEnv(), root)
+	set := workflows.Load(runEnv(t), root)
 	def, ok := set.Lookup("foo-bar")
 	if !ok {
 		t.Fatalf("workflows.Load(%s) has no definition with id foo-bar; loaded ids: %+v", root, set.Definitions)
@@ -294,9 +307,10 @@ func TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation(t *testin
 // example: overriding the "done" embedded default copies its exact
 // frontmatter and body into a new project file, ready to customize.
 func TestWorkflowsEditOverridesEmbeddedDefaultVerbatim(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	if _, err := runLit(t, "workflows", "edit", "done"); err != nil {
+	if _, err := runLit(t, root, "workflows", "edit", "done"); err != nil {
 		t.Fatalf("Run(workflows edit done) error = %v", err)
 	}
 	path := filepath.Join(root, ".lit", "workflows", "done.md")
@@ -309,7 +323,7 @@ func TestWorkflowsEditOverridesEmbeddedDefaultVerbatim(t *testing.T) {
 	}
 
 	// The override now resolves as the project-layer source.
-	output, err := runLit(t, "workflows", "show", "done")
+	output, err := runLit(t, root, "workflows", "show", "done")
 	if err != nil {
 		t.Fatalf("Run(workflows show done) error = %v", err)
 	}
@@ -324,7 +338,8 @@ func TestWorkflowsEditOverridesEmbeddedDefaultVerbatim(t *testing.T) {
 // (as a concurrent `edit` racing past the first call's stat check would) must
 // fail on the second call, never silently overwrite the first call's content.
 func TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	path := filepath.Join(root, ".lit", "workflows", "race.md")
 
 	if err := writeWorkflowScaffold(path, "race", []byte("first")); err != nil {
@@ -348,10 +363,11 @@ func TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck(t *testi
 // overwrite guard: a fresh scaffold whose target filename is already
 // occupied (by an unrelated definition) fails loudly instead of clobbering it.
 func TestWorkflowsEditRefusesToClobberAnExistingFile(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "blocked.md", "---\nid: something-else\nlabels: [other]\n---\nunrelated body")
 
-	_, err := runLit(t, "workflows", "edit", "blocked")
+	_, err := runLit(t, root, "workflows", "edit", "blocked")
 	var conflict MergeConflictError
 	if !errors.As(err, &conflict) {
 		t.Fatalf("Run(workflows edit blocked) error = %v (%T), want MergeConflictError", err, err)
@@ -369,10 +385,11 @@ func TestWorkflowsEditRefusesToClobberAnExistingFile(t *testing.T) {
 // pins edit's idempotence: editing an id that's already a project override
 // just opens the existing file — it never re-scaffolds or errors.
 func TestWorkflowsEditReopensAnExistingProjectOverrideWithoutRescaffolding(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "custom.md", "---\nid: my-custom\nevents: [show_ticket]\n---\nalready mine")
 
-	output, err := runLit(t, "workflows", "edit", "my-custom")
+	output, err := runLit(t, root, "workflows", "edit", "my-custom")
 	if err != nil {
 		t.Fatalf("Run(workflows edit my-custom) error = %v", err)
 	}
@@ -393,10 +410,11 @@ func TestWorkflowsEditReopensAnExistingProjectOverrideWithoutRescaffolding(t *te
 // example: "what would inject on work_finished for a ticket labeled
 // needs-design?"
 func TestWorkflowsDryRunExplainsAHypotheticalMatch(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nlabels: [needs-design]\nevents: [work_finished]\n---\nTicket <id>: needs a design pass.")
 
-	output, err := runLit(t, "workflows", "dry-run", "--event", "work_finished", "--label", "needs-design", "--issue", "lit-7")
+	output, err := runLit(t, root, "workflows", "dry-run", "--event", "work_finished", "--label", "needs-design", "--issue", "lit-7")
 	if err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
@@ -413,9 +431,10 @@ func TestWorkflowsDryRunExplainsAHypotheticalMatch(t *testing.T) {
 
 // TestWorkflowsDryRunNoMatchesReportsNone covers the miss shape.
 func TestWorkflowsDryRunNoMatchesReportsNone(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	output, err := runLit(t, "workflows", "dry-run", "--event", "show_backlog")
+	output, err := runLit(t, root, "workflows", "dry-run", "--event", "show_backlog")
 	if err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
@@ -427,7 +446,8 @@ func TestWorkflowsDryRunNoMatchesReportsNone(t *testing.T) {
 // A state name is an open string that can carry a comma, so the occasion
 // line keeps one state named foo,bar apart from the two states foo and bar.
 func TestWorkflowsDryRunOccasionLineSeparatesStates(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
 	for _, tc := range []struct {
 		args []string
@@ -436,7 +456,7 @@ func TestWorkflowsDryRunOccasionLineSeparatesStates(t *testing.T) {
 		{[]string{"--enter", "foo,bar"}, `entered=["foo,bar"] exited=[]`},
 		{[]string{"--enter", "foo", "--enter", "bar"}, `entered=["foo","bar"] exited=[]`},
 	} {
-		output, err := runLit(t, append([]string{"workflows", "dry-run"}, tc.args...)...)
+		output, err := runLit(t, root, append([]string{"workflows", "dry-run"}, tc.args...)...)
 		if err != nil {
 			t.Fatalf("Run(workflows dry-run %v) error = %v", tc.args, err)
 		}
@@ -449,9 +469,10 @@ func TestWorkflowsDryRunOccasionLineSeparatesStates(t *testing.T) {
 // TestWorkflowsEditRejectsOversuppliedArguments guards the same silent-
 // swallow shape TestWorkflowsRejectsOversuppliedArguments pins for `show`.
 func TestWorkflowsEditRejectsOversuppliedArguments(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	_, err := runLit(t, "workflows", "edit", "work_started", "extra")
+	_, err := runLit(t, root, "workflows", "edit", "work_started", "extra")
 	if _, ok := err.(UsageError); !ok {
 		t.Fatalf("Run(workflows edit work_started extra) error = %v (%T), want UsageError", err, err)
 	}
@@ -460,9 +481,10 @@ func TestWorkflowsEditRejectsOversuppliedArguments(t *testing.T) {
 // TestWorkflowsDryRunRejectsUnknownFlags guards against a typo'd flag
 // silently being ignored as a stray positional argument.
 func TestWorkflowsDryRunRejectsUnknownFlags(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	_, err := runLit(t, "workflows", "dry-run", "--evnt", "work_finished")
+	_, err := runLit(t, root, "workflows", "dry-run", "--evnt", "work_finished")
 	if _, ok := err.(UsageError); !ok {
 		t.Fatalf("Run(workflows dry-run --evnt) error = %v (%T), want UsageError", err, err)
 	}
@@ -471,10 +493,11 @@ func TestWorkflowsDryRunRejectsUnknownFlags(t *testing.T) {
 // TestWorkflowsDryRunNeverRecordsAFiringTrace pins that a hypothetical never
 // touches the real firing-trace directory — nothing actually fired.
 func TestWorkflowsDryRunNeverRecordsAFiringTrace(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nevents: [work_finished]\n---\nbody")
 
-	if _, err := runLit(t, "workflows", "dry-run", "--event", "work_finished"); err != nil {
+	if _, err := runLit(t, root, "workflows", "dry-run", "--event", "work_finished"); err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
 	traceDir := filepath.Join(root, ".lit", "traces", "workflows")
@@ -487,11 +510,12 @@ func TestWorkflowsDryRunNeverRecordsAFiringTrace(t *testing.T) {
 // repeats, the occasion line lists every state entered, and each definition
 // names the one state that matched it.
 func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "plan.md", "---\nid: plan-note\nstates: [plan]\n---\nPlan <id> first.")
 	writeCLIWorkflow(t, root, "working.md", "---\nid: working-note\nstates: [in_progress]\n---\nWorking on <id>.")
 
-	output, err := runLit(t, "workflows", "dry-run", "--event", "work_started", "--exit", "open", "--enter", "in_progress", "--enter", "plan", "--issue", "lit-7")
+	output, err := runLit(t, root, "workflows", "dry-run", "--event", "work_started", "--exit", "open", "--enter", "in_progress", "--enter", "plan", "--issue", "lit-7")
 	if err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
 	}
@@ -512,9 +536,10 @@ func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
 // in work order, before closed, each with the embedded default bound to
 // entering it.
 func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	output, err := runLit(t, "workflows")
+	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
@@ -540,9 +565,10 @@ func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
 // A phase named bare is a built-in state, so edit scaffolds it as one, on the
 // enter side, rather than as a label.
 func TestWorkflowsEditScaffoldsABarePhaseAsAState(t *testing.T) {
-	root := chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	if _, err := runLit(t, "workflows", "edit", "review"); err != nil {
+	if _, err := runLit(t, root, "workflows", "edit", "review"); err != nil {
 		t.Fatalf("Run(workflows edit review) error = %v", err)
 	}
 	path := filepath.Join(root, ".lit", "workflows", "review.md")
@@ -559,9 +585,10 @@ func TestWorkflowsEditScaffoldsABarePhaseAsAState(t *testing.T) {
 // each phase among the built-in states, and each catalog event in the event
 // catalog with the command that dispatches it.
 func TestWorkflowsHelpNamesThePhasesAndEveryEvent(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	root := tempRepo(t)
 
-	page, err := runLit(t, "workflows", "--help")
+	page, err := runLit(t, root, "workflows", "--help")
 	if err != nil {
 		t.Fatalf("Run(workflows --help) error = %v", err)
 	}

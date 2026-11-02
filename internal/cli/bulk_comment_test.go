@@ -35,6 +35,7 @@ func (h readyTestHarness) bulkTickets(n int) []string {
 // The ticket's acceptance: one invocation comments on five tickets, and each
 // keeps the comments it already had.
 func TestBulkCommentAddsToEveryTicketAndKeepsItsComments(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	ids := h.bulkTickets(5)
 	prior := map[string][]model.Comment{}
@@ -46,7 +47,7 @@ func TestBulkCommentAddsToEveryTicketAndKeepsItsComments(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{"--ids", strings.Join(ids, ","), "--body", "the epic's premise is falsified"})
+	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, dirInvocation(t, t.TempDir(), &out, io.Discard, nil), h.ap, []string{"--ids", strings.Join(ids, ","), "--body", "the epic's premise is falsified"})
 	if err != nil {
 		t.Fatalf("bulk comment error = %v", err)
 	}
@@ -80,9 +81,10 @@ func TestBulkCommentAddsToEveryTicketAndKeepsItsComments(t *testing.T) {
 
 // --body-file - reads stdin once, and every ticket gets that text.
 func TestBulkCommentReadsStdinOnceForEveryTicket(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	ids := h.bulkTickets(3)
-	inv := cwdInvocation(io.Discard, io.Discard, nil)
+	inv := dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil)
 	inv.Stdin = strings.NewReader("deferred until\nthe store lands\n")
 	if _, err := recordLeaf(bulkCommentLeaf(), h.ctx, inv, h.ap, []string{"--ids", strings.Join(ids, ","), "--body-file", "-"}); err != nil {
 		t.Fatalf("bulk comment error = %v", err)
@@ -99,11 +101,12 @@ func TestBulkCommentReadsStdinOnceForEveryTicket(t *testing.T) {
 // item's entry carries its own reason, and the run, in which the others landed,
 // answers as a partial failure.
 func TestBulkCommentFailsAMissingTicketAndCommentsOnTheRest(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	ids := h.bulkTickets(2)
 	missing := "test-nope"
 	var out bytes.Buffer
-	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{"--ids", ids[0] + "," + missing + "," + ids[1], "--body", "note"})
+	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, dirInvocation(t, t.TempDir(), &out, io.Discard, nil), h.ap, []string{"--ids", ids[0] + "," + missing + "," + ids[1], "--body", "note"})
 	var bulk BulkError
 	if !errors.As(err, &bulk) || len(bulk.Unlanded) != 1 || bulk.Unlanded[0].IssueID != missing {
 		t.Fatalf("error = %v (%T), want one unlanded item, %s", err, err, missing)
@@ -139,15 +142,16 @@ func TestBulkCommentFailsAMissingTicketAndCommentsOnTheRest(t *testing.T) {
 // add` gives, before any ticket is touched: no item runs, so a missing id among
 // them does not mix its own error in, and no ticket gets a comment.
 func TestBulkCommentRefusesABlankBodyBeforeAnyTicket(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	ids := h.bulkTickets(2)
-	inv := cwdInvocation(io.Discard, io.Discard, nil)
+	inv := dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil)
 	singleEv, single := recordLeaf(commentAddLeaf(), h.ctx, inv, h.ap, []string{ids[0], "--body", "  "})
 	if single == nil || singleEv.ExitCode != ExitValidation {
 		t.Fatalf("lit comment add with a blank body: error = %v, exit = %d, want a refusal with exit %d", single, singleEv.ExitCode, ExitValidation)
 	}
 	var out bytes.Buffer
-	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{"--ids", ids[0] + ",test-nope," + ids[1], "--body", " \t\n"})
+	ev, err := recordLeaf(bulkCommentLeaf(), h.ctx, dirInvocation(t, t.TempDir(), &out, io.Discard, nil), h.ap, []string{"--ids", ids[0] + ",test-nope," + ids[1], "--body", " \t\n"})
 	if err == nil || err.Error() != single.Error() || ev.ExitCode != singleEv.ExitCode {
 		t.Fatalf("bulk comment error = %v, exit = %d, want lit comment add's %q, exit %d", err, ev.ExitCode, single, singleEv.ExitCode)
 	}
@@ -163,10 +167,11 @@ func TestBulkCommentRefusesABlankBodyBeforeAnyTicket(t *testing.T) {
 
 // `lit comment add` records the id of the comment it wrote, the one it prints.
 func TestCommentAddRecordsTheCommentID(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	id := h.bulkTickets(1)[0]
 	var out bytes.Buffer
-	ev, err := recordLeaf(commentAddLeaf(), h.ctx, cwdInvocation(&out, io.Discard, nil), h.ap, []string{id, "--body", "note"})
+	ev, err := recordLeaf(commentAddLeaf(), h.ctx, dirInvocation(t, t.TempDir(), &out, io.Discard, nil), h.ap, []string{id, "--body", "note"})
 	if err != nil {
 		t.Fatalf("comment add error = %v", err)
 	}

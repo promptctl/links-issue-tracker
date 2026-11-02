@@ -175,17 +175,8 @@ func extractResolveFingerprint(t *testing.T, guidance, issueID, field string) st
 // be asserted on.
 func runCLIInDirErr(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir(%q) error = %v", dir, err)
-	}
-	defer func() { _ = os.Chdir(prevWD) }()
-
 	var out bytes.Buffer
-	runErr := Run(context.Background(), cwdInvocation(&out, &out, args))
+	runErr := Run(context.Background(), dirInvocation(t, dir, &out, &out, args))
 	return out.String(), runErr
 }
 
@@ -195,9 +186,10 @@ func runCLIInDirErr(t *testing.T, dir string, args ...string) (string, error) {
 // with base/ours/theirs guidance, and `lit sync reconcile resolve` finalizes it
 // with the agent's merged text into linear history that fast-forward pushes.
 func TestProseReconcileSurfacesAndResolves(t *testing.T) {
+	t.Parallel()
 	// This test drives sync explicitly; the inline auto-sync must not reconcile the
 	// divergence out from under the assertions.
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -261,7 +253,7 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 	if version := runCLIInDir(t, consumer, "history", ticketID, "--version", "description@4"); !strings.Contains(version, "alpha-desc and bravo-desc merged") {
 		t.Fatalf("description@4 is not the merged text:\n%s", version)
 	}
-	ws, err := workspace.Resolve(testEnv(), consumer)
+	ws, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -297,7 +289,8 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 // TestProseReconcileAbortLeavesCloneDiverged proves the escape: abort exits zero,
 // leaves the clone diverged and usable, and a later reconcile still surfaces.
 func TestProseReconcileAbortLeavesCloneDiverged(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")

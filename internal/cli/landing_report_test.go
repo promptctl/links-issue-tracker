@@ -14,6 +14,7 @@ import (
 )
 
 func TestWriteRehomedNamesEachMoveAndIsSilentWithoutOne(t *testing.T) {
+	t.Parallel()
 	var none bytes.Buffer
 	if err := writeRehomed(&none, "the backup", nil); err != nil {
 		t.Fatalf("writeRehomed(nil) error = %v", err)
@@ -55,6 +56,7 @@ func TestWriteRehomedNamesEachMoveAndIsSilentWithoutOne(t *testing.T) {
 }
 
 func TestWriteLandingNamesEachRekeyAndIsSilentWithoutOne(t *testing.T) {
+	t.Parallel()
 	var none bytes.Buffer
 	if err := writeLanding(&none, "the backup", storage.Landing{}); err != nil {
 		t.Fatalf("writeLanding(empty) error = %v", err)
@@ -93,6 +95,7 @@ func TestWriteLandingNamesEachRekeyAndIsSilentWithoutOne(t *testing.T) {
 // before schema v7 holds. The restore lands it inside the unfiled epic, prints
 // the move, and records it on the restore's sync trace.
 func TestBackupRestoreNamesTheTicketsItMovesIntoAnEpic(t *testing.T) {
+	t.Parallel()
 	repo, task, path := newPreContainmentBackup(t)
 
 	out := runCLIInDir(t, repo, "backup", "restore", "--path", path)
@@ -113,6 +116,7 @@ func TestBackupRestoreNamesTheTicketsItMovesIntoAnEpic(t *testing.T) {
 // moves in the output and on the trace all the same: both report what the
 // store holds.
 func TestBackupRestoreTracesItsMovesWhenALaterStepFails(t *testing.T) {
+	t.Parallel()
 	repo, task, path := newPreContainmentBackup(t)
 	out := restoreFailingAfterItsReplace(t, repo, "--path", path, "--force")
 	if !strings.Contains(out, "moved 1 ticket(s) the backup held outside an epic;") || !strings.Contains(out, task) {
@@ -159,7 +163,7 @@ func newPreContainmentBackup(t *testing.T) (repo, task, path string) {
 // restoreTraceRecord is the last sync trace record `lit backup restore` left.
 func restoreTraceRecord(t *testing.T, repo string) syncTraceRecord {
 	t.Helper()
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -180,6 +184,7 @@ func restoreTraceRecord(t *testing.T, repo string) syncTraceRecord {
 // gives the one listed first a new key, prints which, and records the move on
 // the restore's trace.
 func TestBackupRestoreNamesTheTicketsItGivesAKeyOfTheirOwn(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	first := newEpicInDir(t, repo, "First")
 	second := newEpicInDir(t, repo, "Second")

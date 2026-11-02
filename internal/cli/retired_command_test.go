@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -21,7 +20,7 @@ func TestRetiredCommandsPointToReplacements(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{"ready", "queue"} {
 		var out bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&out, &out, []string{name}))
+		err := Run(context.Background(), dirInvocation(t, t.TempDir(), &out, &out, []string{name}))
 
 		var retired RetiredCommandError
 		if !errors.As(err, &retired) {
@@ -66,7 +65,7 @@ func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&out, &out, []string{tc.name}))
+		err := Run(context.Background(), dirInvocation(t, t.TempDir(), &out, &out, []string{tc.name}))
 
 		var retired RetiredCommandError
 		if !errors.As(err, &retired) {
@@ -99,17 +98,9 @@ func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
 // production path proves that — `runAppFamily` never opens an app at all, so a
 // test through it would pass whether or not the row is reached before the open.
 func TestBulkImportRetiredPointsToTheEditPathAndBackupRestore(t *testing.T) {
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatalf("Chdir(nonRepo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
+	t.Parallel()
 	var out bytes.Buffer
-	err = Run(context.Background(), cwdInvocation(&out, &out, []string{"bulk", "import"}))
+	err := Run(context.Background(), dirInvocation(t, t.TempDir(), &out, &out, []string{"bulk", "import"}))
 
 	var retired RetiredCommandError
 	if !errors.As(err, &retired) {
@@ -188,7 +179,7 @@ func TestRetiredCommandsAreHiddenButRegistered(t *testing.T) {
 func TestRootHelpShowsCuratedWorkableSurface(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&out, &out, []string{"--help"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, t.TempDir(), &out, &out, []string{"--help"})); err != nil {
 		t.Fatalf("lit --help error = %v", err)
 	}
 	help := out.String()

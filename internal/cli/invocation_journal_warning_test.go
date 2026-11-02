@@ -29,6 +29,7 @@ type journalWarning struct {
 // warning Dolt reported is a dolt.journal_warnings occurrence, and it does not
 // reach stderr through Dolt's logger. [LAW:nothing-unseen]
 func TestAReadThatPassedOverTheJournalIndexSaysSoOnItsEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	newEpicInDir(t, repo, "Indexed epic")
@@ -44,6 +45,7 @@ func TestAReadThatPassedOverTheJournalIndexSaysSoOnItsEvent(t *testing.T) {
 // A write whose store recovered a journal tail an interrupted write left, one
 // no record parser accepts, says so on its event the same way.
 func TestAWriteThatRecoveredAJournalTailSaysSoOnItsEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Torn epic")
@@ -64,7 +66,7 @@ var doltChunkJournalName = strings.Repeat("v", 32)
 // keeps its chunk journal and journal.idx.
 func nomsDir(t *testing.T, repo string) string {
 	t.Helper()
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +155,7 @@ func appendUnparseableTail(t *testing.T, path string) {
 // An invocation that met nothing Dolt observes says so for each observer:
 // git.cancels and dolt.journal_warnings are [], not absent.
 func TestAnInvocationThatMetNoneRecordsEmptyObservations(t *testing.T) {
+	t.Parallel()
 	recorder := telemetry.Begin(telemetry.Event{})
 	invocationContext(context.Background(), recorder)
 	line, err := telemetry.Line(recorder.Finish(telemetry.End{At: time.Now()}))

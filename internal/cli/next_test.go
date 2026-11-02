@@ -23,11 +23,11 @@ import (
 // hold lanes as this checkout. Use asCheckout to write as somebody else.
 func (h readyTestHarness) runNextOutcome() NextOutcome {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(h.t), h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	cc, err := gatherClaimContext(h.ctx, testEnv(), io.Discard, h.ap)
+	cc, err := gatherClaimContext(h.ctx, runEnv(h.t), io.Discard, h.ap)
 	if err != nil {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
@@ -114,6 +114,7 @@ var sealedNextOutcomes = []struct {
 // outcome that carries a row fails here by name instead of turning a served row
 // into a confusing failure far from its cause.
 func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
+	t.Parallel()
 	row, cases := sealedSumRow, sealedNextOutcomes
 	// The sum is sealed at ten cases (isNextOutcome, next_route.go). Counting
 	// them here is what makes an added variant fail loudly at this table instead
@@ -123,6 +124,7 @@ func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := servedRow(tc.outcome)
 			if ok != tc.served {
 				t.Fatalf("servedRow(%T) served = %v, want %v", tc.outcome, ok, tc.served)
@@ -152,14 +154,14 @@ func (h readyTestHarness) asCheckout(streamToken string) {
 func (h readyTestHarness) runNextErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runNext(h.ctx, &stdout, h.ap, args)
+	return runLeaf(h.t, nextLeaf(), h.ctx, &stdout, h.ap, args)
 }
 
 func (h readyTestHarness) runNextText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runNext(h.ctx, &stdout, h.ap, args); err != nil {
-		h.t.Fatalf("runNext(%v) error = %v", args, err)
+	if err := runLeaf(h.t, nextLeaf(), h.ctx, &stdout, h.ap, args); err != nil {
+		h.t.Fatalf("runNext(t, %v) error = %v", args, err)
 	}
 	return stdout.String()
 }
@@ -167,6 +169,7 @@ func (h readyTestHarness) runNextText(args ...string) string {
 // `lit next` returns the top of the ready partition: the first open, unblocked
 // leaf in the same rank order `lit ready` produces.
 func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "first"})
@@ -183,6 +186,7 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 // makes it untouchable — its holder is working it right now — so this is
 // stated against a foreign holder rather than against the state alone.
 func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	// Distinct lanes: the foreign hold, not lane order, is what keeps the open
 	// leaf from being served first.
@@ -202,12 +206,13 @@ func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
 // lane THIS checkout holds is handed back to be resumed, not skipped in favour
 // of a lower-ranked open leaf.
 func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
+	t.Parallel()
 	// The session that started it is the session asking, spelled out rather
 	// than inherited: this test's subject is the sentence that says the work is
 	// YOURS, and an ambient CLAUDE_CODE_SESSION_ID would decide that off-stage
 	// — green on a CI runner that sets none, and a different sentence on any
 	// developer machine inside an agent session.
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-mine")
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "mine"})
@@ -243,7 +248,8 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 // and routing past it would strand the fresh session that inherits a dead
 // predecessor's work.
 func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-peer")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-peer")
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Peer's work, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -252,7 +258,7 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	// Same checkout, same stream token, different session — asCheckout is
 	// deliberately not used, because switching streams would make this the
 	// foreign-lane case.
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-mine")
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
 	text := h.runNextText()
 
 	if !strings.Contains(text, theirs.ID) {
@@ -273,7 +279,8 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 // commands, driven through the CLI, so a start that read its assignee from
 // anywhere but --by fails here.
 func TestStartAndNextNameTheSessionlessOperatorWithOneFlag(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	repo, _ := initBootstrapTestRepo(t)
 	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Home epic", "--topic", "next", "--type", "epic"))
 	mine := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Bob's ticket", "--topic", "next", "--type", "task", "--parent", epic))
@@ -301,7 +308,8 @@ func TestStartAndNextNameTheSessionlessOperatorWithOneFlag(t *testing.T) {
 // told only that the flag is unknown. A command that takes no identity has
 // nothing to point at, so there it stays an ordinary unknown flag.
 func TestStartAssigneePointsToBy(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	repo, _ := initBootstrapTestRepo(t)
 	epic := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Home epic", "--topic", "next", "--type", "epic"))
 	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "Bob's ticket", "--topic", "next", "--type", "task", "--parent", epic))
@@ -320,9 +328,10 @@ func TestStartAssigneePointsToBy(t *testing.T) {
 // so: on start, where it becomes the assignee, on next, where it is the reader,
 // and on a mutating command, where it is the actor.
 func TestByFlagIsDocumentedInHelp(t *testing.T) {
-	initBootstrapTestRepo(t)
+	t.Parallel()
+	repo, _ := initBootstrapTestRepo(t)
 	for _, command := range [][]string{{"start"}, {"next"}, {"label", "add"}} {
-		page := render(t, append(command, "--help"))
+		page := render(t, repo, append(command, "--help"))
 		if !strings.Contains(page, "--by string") || !strings.Contains(page, byUsage) {
 			t.Errorf("`lit %s --help` = %q, want --by listed with its usage %q", strings.Join(command, " "), page, byUsage)
 		}
@@ -338,6 +347,7 @@ func TestByFlagIsDocumentedInHelp(t *testing.T) {
 // keeps the lane you are halfway through — so this also pins that the lane
 // survives the ticket that established it being closed.
 func TestRunNextServesTheNextTicketOfALaneWeHold(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
 	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -373,6 +383,7 @@ func TestRunNextServesTheNextTicketOfALaneWeHold(t *testing.T) {
 // can confirm the chain, rather than reported as a stuck epic beside an
 // invitation to file a ticket that already exists.
 func TestRunNextServesAReadyTicketBehindABlockerThatIsNotStartable(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
@@ -404,6 +415,7 @@ func TestRunNextServesAReadyTicketBehindABlockerThatIsNotStartable(t *testing.T)
 // and is served — the lane a ticket waits in is as much a prerequisite as an
 // edge it declares.
 func TestRunNextServesTheEarlierTicketOfABlockersOwnLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
@@ -427,6 +439,7 @@ func TestRunNextServesTheEarlierTicketOfABlockersOwnLane(t *testing.T) {
 // the pick lists the ticket, and naming either alone leaves a link the reader
 // cannot find.
 func TestRunNextNamesTheTicketUnderAnEpicTheChainPassesThrough(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
@@ -457,6 +470,7 @@ func TestRunNextNamesTheTicketUnderAnEpicTheChainPassesThrough(t *testing.T) {
 // ticket the second. The ready ticket at the end is served as on-path work,
 // not passed over for another epic's.
 func TestRunNextServesTheReadyBlockerOfAnEpicOurEpicWaitsOn(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
@@ -488,6 +502,7 @@ func TestRunNextServesTheReadyBlockerOfAnEpicOurEpicWaitsOn(t *testing.T) {
 // down the chain of our higher-ranked row is served ahead of one gating our
 // lower-ranked row directly, though that one is nearer and itself ranked first.
 func TestRunNextServesTheChainOfOurHighestRankedRowFirst(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Our epic", Topic: "next", IssueType: "epic", Priority: 1})
 	finished := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -524,6 +539,7 @@ func TestRunNextServesTheChainOfOurHighestRankedRowFirst(t *testing.T) {
 // since the chain's only end awaits that event and the link before it clears
 // only when it does.
 func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Other epic", Topic: "next", IssueType: "epic", Priority: 1})
 	elsewhere := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready elsewhere", Topic: "next", IssueType: "task", Priority: 1, ParentID: otherEpic.ID})
@@ -574,6 +590,7 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 // unambiguously top, so the assertion pins both "dependent skipped" and the
 // exact expected pick.
 func TestRunNextSkipsBlockedLeaf(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "blocker"})
@@ -593,6 +610,7 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 // A ticket whose resolution is an outside event is not served, and neither is
 // the ticket waiting on it; next goes past both to work this repo can do.
 func TestRunNextSkipsATicketWaitingOnAnOutsideEvent(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "upstream", Labels: []string{ExternalLabel}})
@@ -609,6 +627,7 @@ func TestRunNextSkipsATicketWaitingOnAnOutsideEvent(t *testing.T) {
 // is expressible; the filter runs in the shared pipeline, so next answers the
 // same narrowed question ready/backlog/queue would.
 func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Top-ranked task", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "task"})
@@ -628,6 +647,7 @@ func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
 // the epic out of work. Driven through runNext, since the defect was in what
 // the command handed routing.
 func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
@@ -651,11 +671,12 @@ func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
 // or column set to vary, so accepting them would be accepting input the
 // command cannot honor.
 func TestRunNextRejectsLimitAndColumns(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	for _, args := range [][]string{{"--limit", "2"}, {"--columns", "id"}} {
 		err := h.runNextErr(args...)
 		if err == nil || !strings.Contains(err.Error(), "unknown flag") {
-			t.Fatalf("runNext(%v) error = %v, want unknown-flag usage error", args, err)
+			t.Fatalf("runNext(t, %v) error = %v, want unknown-flag usage error", args, err)
 		}
 	}
 }
@@ -669,7 +690,8 @@ func TestRunNextRejectsLimitAndColumns(t *testing.T) {
 // --status reaches the gather that makes the in_progress row available to route
 // at all.
 func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-mine")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -689,6 +711,7 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 // "no ready work" — byte-identical to an empty backlog, telling an agent asking
 // what it was on that its work is gone.
 func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -723,16 +746,17 @@ func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *te
 // apart — "stop, there is nothing for you" versus "lit is broken" — so that
 // telling them apart never requires parsing the English.
 func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	err := h.runNextErr()
 	if err == nil {
-		t.Fatal("runNext() error = nil, want non-nil for empty ready set")
+		t.Fatal("runNext(t, ) error = nil, want non-nil for empty ready set")
 	}
 	// Exactly, not merely contains: NoWork appends a clause naming the rows
 	// the pool walk went past, and an empty backlog has none. A contains-check
 	// would pass on a message that had grown a clause here.
 	if err.Error() != "no ready work" {
-		t.Fatalf("runNext() error = %q, want exactly %q — an empty backlog gained no clause", err.Error(), "no ready work")
+		t.Fatalf("runNext(t, ) error = %q, want exactly %q — an empty backlog gained no clause", err.Error(), "no ready work")
 	}
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, err); code != ExitNoWork {
@@ -861,19 +885,21 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 // Passing the flag surfaces a pointer to that replacement instead of an
 // unhelpful "unknown flag" error.
 func TestRunNextContinueFlagIsRetired(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	err := h.runNextErr("--continue")
 	if err == nil {
-		t.Fatal("runNext(--continue) error = nil, want retirement error")
+		t.Fatal("runNext(t, --continue) error = nil, want retirement error")
 	}
 	if !strings.Contains(err.Error(), "retired") {
-		t.Fatalf("runNext(--continue) error = %q, want it to say the flag is retired", err.Error())
+		t.Fatalf("runNext(t, --continue) error = %q, want it to say the flag is retired", err.Error())
 	}
 }
 
 // A leaf picked by `lit next` carries its parent epic inline so the agent knows
 // which epic it would be joining before it claims the leaf.
 func TestRunNextCarriesParentEpic(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Container", Topic: "next", IssueType: "epic", Priority: 1})
 	leaf := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -900,6 +926,7 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 // "a lane you hold" — a sentence could easily acquire the name while keeping
 // the claim.
 func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -929,6 +956,7 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 // a push, so a session that holds a branch all day and says so in comments
 // crosses the orphan threshold while still working.
 func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	quiet := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Held, and silent about it", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -957,6 +985,7 @@ func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 // somebody other than a plain shell — the case where a person runs `lit next` in
 // a checkout an agent session has work in flight in.
 func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	agents := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "An agent started this", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -984,6 +1013,7 @@ func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
 // relationOf, which refuses to read a zero attribution as a match for the same
 // reason: absence is not an identity.
 func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	unassigned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Started by nobody in particular", Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
@@ -1008,6 +1038,7 @@ func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.
 // empty deliberately: formatClaimLine stays on its ("", false) arm, so nothing
 // but this line is under assertion.
 func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1086,6 +1117,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 // The wording assertions elsewhere in this file all become vacuous if the
 // command ever does start claiming, and this is what would still fail.
 func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	target := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unclaimed", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -1128,6 +1160,7 @@ func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 // so a future edit that made the qualifier unconditional (or dropped it) could
 // not pass this by changing the fixture.
 func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})

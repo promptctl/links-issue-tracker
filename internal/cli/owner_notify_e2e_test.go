@@ -29,7 +29,7 @@ import (
 func writeOwnerNotifyProjectConfig(t *testing.T, repo, sink string) {
 	t.Helper()
 	writeOwnerNotifyConfig(t, repo, sink, true)
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", repo, err)
 	}
@@ -61,7 +61,7 @@ func writeOwnerNotifyConfig(t *testing.T, repo, sink string, receive bool) {
 // including a real notifier — out of any test that re-enables auto-sync.
 func maskGlobalConfig(t *testing.T) {
 	t.Helper()
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
 }
 
 // forkedBacklogs builds the forked-backlog shape: producer and consumer
@@ -106,7 +106,8 @@ func forkedBacklogs(t *testing.T, base string) (producer, consumer, producerID, 
 // configured hook with the event's facts, exactly once for the episode however
 // many commands re-detect it.
 func TestDivergenceNotifiesOwnerOutOfBand(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	maskGlobalConfig(t)
 	base := t.TempDir()
 	_, consumer, _, _ := forkedBacklogs(t, base)
@@ -118,7 +119,7 @@ func TestDivergenceNotifiesOwnerOutOfBand(t *testing.T) {
 	}
 
 	// The channel opens; the divergence surfaces; the owner hears once.
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	if _, err := runCLIInDirErr(t, consumer, "sync", "reconcile"); err == nil {
 		t.Fatalf("expected `sync reconcile` to surface unrelated histories")
 	}
@@ -149,7 +150,8 @@ func TestDivergenceNotifiesOwnerOutOfBand(t *testing.T) {
 // step exits refusing with both backlogs intact; a wrong token is refused the
 // same way; the token from the refusal — the owner's approval — runs the take.
 func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	maskGlobalConfig(t)
 	base := t.TempDir()
 	_, consumer, _, _ := forkedBacklogs(t, base)
@@ -206,7 +208,8 @@ func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
 // ends the episode, and the next failure is a new episode that fires
 // immediately.
 func TestPushFailureNotifiesOwner(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	maskGlobalConfig(t)
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -228,7 +231,7 @@ func TestPushFailureNotifiesOwner(t *testing.T) {
 
 	sink := filepath.Join(base, "notifications")
 	writeOwnerNotifyProjectConfig(t, repo, sink)
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 
 	// Healthy push: no notification.
 	runCLIInDir(t, repo, "sync", "push", "--set-upstream")

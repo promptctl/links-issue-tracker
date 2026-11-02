@@ -16,6 +16,7 @@ import (
 // actually do something (the archived/deleted issues are hidden by default and
 // surfaced by both forms). [LAW:behavior-not-structure]
 func TestListQuerySupersetMatchesDiscreteFlags(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	// Three plainly-visible issues plus one archived and one deleted, so every
 	// dimension has an observable effect: sort orders them, limit truncates,

@@ -18,6 +18,7 @@ import (
 // built for real and the command runs through the CLI, so this also pins that
 // the store's refusal reaches the CLI with its type intact.
 func TestAQuarantinedMigrationRefusesAtExit3WithItsOwnReason(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
 	info, err := version.Get()
@@ -26,7 +27,7 @@ func TestAQuarantinedMigrationRefusesAtExit3WithItsOwnReason(t *testing.T) {
 	}
 	latest := info.Schema.Max
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -71,7 +72,7 @@ func quarantineTop(t *testing.T, ws workspace.Info, n int64) int64 {
 	}
 	first := info.Schema.Max - n + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -101,6 +102,7 @@ func quarantineTop(t *testing.T, ws workspace.Info, n int64) int64 {
 // clears that quarantine, says the migration runs again, records the version
 // on its event, and the next command opens the store and runs it.
 func TestUnquarantineClearsTheQuarantineSoTheNextCommandRunsTheMigration(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
 	v := quarantineTop(t, ws, 1)
@@ -123,6 +125,7 @@ func TestUnquarantineClearsTheQuarantineSoTheNextCommandRunsTheMigration(t *test
 // With a second quarantine in force, `lit unquarantine` clears the first and
 // says the next command is refused on the second, never that it runs again.
 func TestUnquarantineNamesTheQuarantineStillInForce(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
 	v := quarantineTop(t, ws, 2)
@@ -140,6 +143,7 @@ func TestUnquarantineNamesTheQuarantineStillInForce(t *testing.T) {
 // `lit unquarantine` with nothing quarantined answers that the state already
 // holds: exit 6, never a retry.
 func TestUnquarantineWithNothingQuarantinedExitsStateAlreadyHolds(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, _ := initBootstrapTestRepo(t)
 	_, err := runCLIInDirAllowError(t, repo, "unquarantine")

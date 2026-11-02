@@ -16,9 +16,10 @@ import (
 )
 
 func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
-	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
+	t.Parallel()
+	setRunEnv(t, debugSyncBranchEnvVar, "debug-branch")
 	ws := pushedRepoWithoutRemoteHead(t)
-	got, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), testEnv(), ws, originRemote(t, ws))
+	got, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, originRemote(t, ws))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
@@ -30,10 +31,11 @@ func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 // A remote that answers but whose HEAD names no branch is the genuine
 // "unavailable": the error names the override, and nothing is recorded.
 func TestResolveSyncBranchErrorsWhenRemoteAdvertisesNoDefault(t *testing.T) {
-	t.Setenv(debugSyncBranchEnvVar, "")
+	t.Parallel()
+	setRunEnv(t, debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
 	runGit(t, ws.RootDir, "--git-dir", originRemote(t, ws).URL(), "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
-	_, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), testEnv(), ws, originRemote(t, ws))
+	_, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, originRemote(t, ws))
 	if err == nil {
 		t.Fatal("expected error when the remote advertises no default branch")
 	}
@@ -48,11 +50,12 @@ func TestResolveSyncBranchErrorsWhenRemoteAdvertisesNoDefault(t *testing.T) {
 // A failed ask surfaces its cause; a cancelled ctx is one, and it must not read
 // as "default branch unavailable". [LAW:no-silent-failure]
 func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testing.T) {
-	t.Setenv(debugSyncBranchEnvVar, "")
+	t.Parallel()
+	setRunEnv(t, debugSyncBranchEnvVar, "")
 	ctx, cancel := context.WithCancel(underInvocation(context.Background()))
 	cancel()
 	ws := pushedRepoWithoutRemoteHead(t)
-	_, err := resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, originRemote(t, ws))
+	_, err := resolveSyncBranch(ctx, testStderr(t), runEnv(t), ws, originRemote(t, ws))
 	if err == nil {
 		t.Fatal("expected error when context is cancelled")
 	}
@@ -67,17 +70,18 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 // The read banner's branch is the one push and pull use: once a sync verb has
 // asked the remote, a read resolves the same branch with no network.
 func TestKnownSyncBranchReportsWhatTheSyncVerbResolved(t *testing.T) {
-	t.Setenv(debugSyncBranchEnvVar, "")
+	t.Parallel()
+	setRunEnv(t, debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
 	ctx := underInvocation(context.Background())
-	if _, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin")); err == nil {
+	if _, err := knownSyncBranch(ctx, runEnv(t), ws, remoteName(t, "origin")); err == nil {
 		t.Fatal("knownSyncBranch() before any sync: want the not-known error")
 	}
-	synced, err := resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, originRemote(t, ws))
+	synced, err := resolveSyncBranch(ctx, testStderr(t), runEnv(t), ws, originRemote(t, ws))
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
-	known, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
+	known, err := knownSyncBranch(ctx, runEnv(t), ws, remoteName(t, "origin"))
 	if err != nil {
 		t.Fatalf("knownSyncBranch() after sync error = %v", err)
 	}
@@ -90,7 +94,8 @@ func TestKnownSyncBranchReportsWhatTheSyncVerbResolved(t *testing.T) {
 // and never answers. A read command's branch lookup returns at once instead of
 // waiting on it. links-scale-om3r.06l
 func TestKnownSyncBranchNeverAsksTheRemote(t *testing.T) {
-	t.Setenv(debugSyncBranchEnvVar, "")
+	t.Parallel()
+	setRunEnv(t, debugSyncBranchEnvVar, "")
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runGit(t, repo, "remote", "add", "origin", silentRemoteURL(t))
@@ -98,7 +103,7 @@ func TestKnownSyncBranchNeverAsksTheRemote(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(underInvocation(context.Background()), 5*time.Second)
 	defer cancel()
-	_, err := knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
+	_, err := knownSyncBranch(ctx, runEnv(t), ws, remoteName(t, "origin"))
 	if err == nil || !strings.Contains(err.Error(), "not known on this machine") || strings.Contains(err.Error(), "%!") {
 		t.Fatalf("knownSyncBranch() error = %v, want the not-known error", err)
 	}
@@ -110,7 +115,8 @@ func TestKnownSyncBranchNeverAsksTheRemote(t *testing.T) {
 // A cancel that lands while the ask is on the wire is the cause the error names,
 // not the "signal: killed" the interrupted git exits with. [LAW:no-silent-failure]
 func TestResolveSyncBranchSurfacesCancellationMidAsk(t *testing.T) {
-	t.Setenv(debugSyncBranchEnvVar, "")
+	t.Parallel()
+	setRunEnv(t, debugSyncBranchEnvVar, "")
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runGit(t, repo, "remote", "add", "origin", silentRemoteURL(t))
@@ -118,7 +124,7 @@ func TestResolveSyncBranchSurfacesCancellationMidAsk(t *testing.T) {
 	remote := originRemote(t, ws)
 	ctx, cancel := context.WithTimeout(underInvocation(context.Background()), 300*time.Millisecond)
 	defer cancel()
-	_, err := resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, remote)
+	_, err := resolveSyncBranch(ctx, testStderr(t), runEnv(t), ws, remote)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want context.DeadlineExceeded in the chain", err)
 	}
@@ -152,18 +158,19 @@ func silentRemoteURL(t *testing.T) string {
 // An unreadable record cannot hide a branch git already knows: it is consulted
 // only after the local chain.
 func TestKnownSyncBranchPrefersGitsRefOverAnUnreadableRecord(t *testing.T) {
-	t.Setenv(debugSyncBranchEnvVar, "")
+	t.Parallel()
+	setRunEnv(t, debugSyncBranchEnvVar, "")
 	ws := pushedRepoWithoutRemoteHead(t)
 	runGit(t, ws.RootDir, "remote", "set-head", "origin", "trunk")
 	if err := os.Mkdir(advertisedSyncBranchPath(ws, remoteName(t, "origin")), 0o755); err != nil {
 		t.Fatalf("make the record unreadable: %v", err)
 	}
-	got, err := knownSyncBranch(underInvocation(context.Background()), testEnv(), ws, remoteName(t, "origin"))
+	got, err := knownSyncBranch(underInvocation(context.Background()), runEnv(t), ws, remoteName(t, "origin"))
 	if err != nil || got != "trunk" {
 		t.Fatalf("knownSyncBranch() = %q, %v; want trunk", got, err)
 	}
 	runGit(t, ws.RootDir, "remote", "set-head", "origin", "--delete")
-	_, err = knownSyncBranch(underInvocation(context.Background()), testEnv(), ws, remoteName(t, "origin"))
+	_, err = knownSyncBranch(underInvocation(context.Background()), runEnv(t), ws, remoteName(t, "origin"))
 	if err == nil || !strings.Contains(err.Error(), "unreadable") {
 		t.Fatalf("knownSyncBranch() error = %v, want the unreadable record named", err)
 	}
@@ -195,14 +202,14 @@ func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	return workspace.Info{
 		RootDir:  checkout.String(),
 		Location: workspace.Location{GitCommonDir: filepath.Join(checkout.String(), ".git"), StorageDir: t.TempDir()},
-		Remotes:  workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkout), Project: testProject(checkout),
+		Remotes:  workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkout), Project: testProject(checkout),
 	}
 }
 
 // originRemote is the workspace's one remote, as lit syncs with it.
 func originRemote(t *testing.T, ws workspace.Info) workspace.SyncableRemote {
 	t.Helper()
-	remotes, err := workspace.NewRemotes(testEnv(), repositoryOf(t, ws.RootDir), checkoutRoot(t, ws.RootDir)).List(underInvocation(context.Background()))
+	remotes, err := workspace.NewRemotes(runEnv(t), repositoryOf(t, ws.RootDir), checkoutRoot(t, ws.RootDir)).List(underInvocation(context.Background()))
 	if err != nil || len(remotes) != 1 {
 		t.Fatalf("Remotes.List() = %v, %v; want one remote", remotes, err)
 	}
@@ -219,6 +226,7 @@ func originRemote(t *testing.T, ws workspace.Info) workspace.SyncableRemote {
 // advertised one for the branch a read reports on. One command can make both
 // decisions, and each keeps its own fact. [LAW:nothing-unseen]
 func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
+	t.Parallel()
 	facts := func(t *testing.T, resolves ...func(ctx context.Context) (string, error)) map[string]any {
 		t.Helper()
 		rec := telemetry.Begin(telemetry.Event{})
@@ -231,10 +239,10 @@ func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
 	}
 	ws := pushedRepoWithoutRemoteHead(t)
 	resolve := func(ctx context.Context) (string, error) {
-		return resolveSyncBranch(ctx, testStderr(t), testEnv(), ws, originRemote(t, ws))
+		return resolveSyncBranch(ctx, testStderr(t), runEnv(t), ws, originRemote(t, ws))
 	}
 	known := func(ctx context.Context) (string, error) {
-		return knownSyncBranch(ctx, testEnv(), ws, remoteName(t, "origin"))
+		return knownSyncBranch(ctx, runEnv(t), ws, remoteName(t, "origin"))
 	}
 	check := func(t *testing.T, when string, got map[string]any, want map[string]any) {
 		t.Helper()
@@ -245,13 +253,13 @@ func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
 		}
 	}
 
-	t.Setenv(debugSyncBranchEnvVar, "")
+	setRunEnv(t, debugSyncBranchEnvVar, "")
 	check(t, "a receive then a banner, remote HEAD unset", facts(t, resolve, known),
 		map[string]any{"sync.branch_source": "advertised", "freshness.branch_source": "recorded"})
 	runGit(t, ws.RootDir, "remote", "set-head", "origin", "trunk")
 	check(t, "set remote HEAD", facts(t, resolve, known),
 		map[string]any{"sync.branch_source": "remote_head", "freshness.branch_source": "remote_head"})
-	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
+	setRunEnv(t, debugSyncBranchEnvVar, "debug-branch")
 	check(t, "override, a read alone", facts(t, known),
 		map[string]any{"freshness.branch_source": "override"})
 }
@@ -260,20 +268,26 @@ func TestSyncBranchSourceIsOnTheEvent(t *testing.T) {
 // that needs the answer, loudly, and no selection that names its remote. The
 // second remote is what makes the upstream decide.
 //
-// Not parallel: it puts a git on PATH that fails `for-each-ref`.
+// lit finds git through the process PATH, which no run's Env reaches, so the
+// git that fails `for-each-ref` goes on the PATH of a child of this test
+// binary that runs only this test; no other test sees it.
 func TestAnUnreadableUpstreamFailsOnlyTheSelectionThatReadsIt(t *testing.T) {
+	if os.Getenv(shimmedChildEnvVar) == "" {
+		t.Parallel()
+		gitPath, err := exec.LookPath("git")
+		if err != nil {
+			t.Fatal(err)
+		}
+		shimDir := t.TempDir()
+		shim := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = for-each-ref ] && { echo 'fatal: ref lock' >&2; exit 128; }; done\nexec " + gitPath + " \"$@\"\n"
+		if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		runShimmedChild(t, shimDir)
+		return
+	}
 	repo := pushedRepoWithoutRemoteHead(t)
 	runGit(t, repo.RootDir, "remote", "add", "fork", filepath.Join(t.TempDir(), "fork.git"))
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shimDir := t.TempDir()
-	shim := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = for-each-ref ] && { echo 'fatal: ref lock' >&2; exit 128; }; done\nexec " + gitPath + " \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	ws := branchTestWorkspace(t, repo.RootDir)
 
 	if remote, ok, err := workspaceSyncRemote(underInvocation(context.Background()), ws, "origin"); err != nil || !ok || remote.Name().String() != "origin" {
@@ -284,19 +298,47 @@ func TestAnUnreadableUpstreamFailsOnlyTheSelectionThatReadsIt(t *testing.T) {
 	}
 }
 
+// shimmedChildEnvVar marks a child of this test binary that runShimmedChild
+// started, so the test it runs takes its child arm.
+const shimmedChildEnvVar = "LIT_TEST_SHIMMED_CHILD"
+
+// runShimmedChild runs t alone in a child of this test binary whose PATH puts
+// shimDir first, failing t with the child's output if the child fails.
+func runShimmedChild(t *testing.T, shimDir string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(self, "-test.run=^"+t.Name()+"$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		shimmedChildEnvVar+"=1",
+		"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s in a child with git shimmed: %v\n%s", t.Name(), err, out)
+	}
+	// A run that matched no test exits clean too; only the test's own pass
+	// says it ran.
+	if !strings.Contains(string(out), "--- PASS: "+t.Name()+" ") {
+		t.Fatalf("the child did not run %s:\n%s", t.Name(), out)
+	}
+}
+
 // The override decides alone: a remote HEAD git cannot read as a branch does
 // not fail a resolve the override has already answered, and no git is spawned
 // to ask it.
 func TestTheSyncBranchOverrideOutranksAnUnreadableRemoteHead(t *testing.T) {
+	t.Parallel()
 	ws := pushedRepoWithoutRemoteHead(t)
 	runGit(t, ws.RootDir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/trunk")
 	remote := originRemote(t, ws)
-	t.Setenv(debugSyncBranchEnvVar, "")
-	if _, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), testEnv(), ws, remote); err == nil || !strings.Contains(err.Error(), "set-head") {
+	setRunEnv(t, debugSyncBranchEnvVar, "")
+	if _, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, remote); err == nil || !strings.Contains(err.Error(), "set-head") {
 		t.Fatalf("resolveSyncBranch() with no override = %v; want the remote HEAD's error naming set-head", err)
 	}
-	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
-	env := testEnv()
+	setRunEnv(t, debugSyncBranchEnvVar, "debug-branch")
+	env := runEnv(t)
 	if got, err := resolveSyncBranch(underInvocation(context.Background()), testStderr(t), env, ws, remote); err != nil || got != "debug-branch" {
 		t.Fatalf("resolveSyncBranch() = %q, %v; want debug-branch", got, err)
 	}

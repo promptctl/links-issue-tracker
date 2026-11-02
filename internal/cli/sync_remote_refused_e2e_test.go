@@ -18,6 +18,7 @@ import (
 // with team/fork, so its sync is refused rather than read as some other
 // remote's, and a fetch naming a still lands.
 func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, remoteURL := soloCheckoutSyncingWithA(t)
 	if refused := lastEvent(t).Facts["remotes.refused"]; !reflect.DeepEqual(refused, map[string]any{}) {
@@ -53,7 +54,7 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 
 	// The automatic receive ends on the refusal before it clones the store,
 	// with the one trace that names it.
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -73,6 +74,7 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 // removed, the fetch and the receive failing on the refusal — and a URL put
 // right syncs again.
 func TestARemoteWhoseURLNamesNoOneRepositoryIsRefusedLikeAName(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, remoteURL := soloCheckoutSyncingWithA(t)
 	runGit(t, dir, "remote", "set-url", "a", "link/../remote.git")
@@ -88,7 +90,7 @@ func TestARemoteWhoseURLNamesNoOneRepositoryIsRefusedLikeAName(t *testing.T) {
 		t.Fatalf("`lit sync remote ls` = %q, want a refused and its Dolt remote gone", out)
 	}
 
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -110,7 +112,8 @@ func TestARemoteWhoseURLNamesNoOneRepositoryIsRefusedLikeAName(t *testing.T) {
 // ask through the symlink, carries no lit data, so init starts fresh and
 // says where the reason is.
 func TestInitBesideARemoteWhoseURLNamesNoOneRepositoryStartsFresh(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	base := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(base, "elsewhere", "dir"), 0o755); err != nil {
 		t.Fatal(err)
@@ -137,6 +140,7 @@ func TestInitBesideARemoteWhoseURLNamesNoOneRepositoryStartsFresh(t *testing.T) 
 // leaves Dolt at the next sync, and that sync's event records the removal
 // and the tracking refs that went with it.
 func TestRemovingAGitRemoteRecordsItsRemoval(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, remoteURL := soloCheckoutSyncingWithA(t)
 	runGit(t, dir, "remote", "add", "c", remoteURL)
@@ -178,7 +182,7 @@ func soloCheckoutSyncingWithA(t *testing.T) (dir, remoteURL string) {
 	runGit(t, dir, "push", "origin", "HEAD")
 	runGit(t, dir, "remote", "rename", "origin", "a")
 
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	return dir, remoteURL

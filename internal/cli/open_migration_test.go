@@ -27,6 +27,7 @@ import (
 // failure. The command is a read, so this also drives the read open's hand-off
 // to the write open that migrates.
 func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, _, stuck := workspaceWhosePruneWillFail(t)
 
@@ -48,6 +49,7 @@ func TestACommandWhoseMigratingOpenCannotPruneStillRuns(t *testing.T) {
 // App, so nothing reads the migration's report: the failed prune rides the
 // command's error instead of vanishing, since the next open migrates nothing.
 func TestAnOpenThatFailsAfterMigratingCarriesThePruneFailure(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws, _ := workspaceWhosePruneWillFail(t)
 	if err := os.WriteFile(filepath.Join(ws.PrivateGitDir, "lit-stream"), []byte("not a token"), 0o644); err != nil {
@@ -69,6 +71,7 @@ func TestAnOpenThatFailsAfterMigratingCarriesThePruneFailure(t *testing.T) {
 // migrates a store behind this binary: the gate records that open's migration
 // and warns of a failed prune like any other open.
 func TestInitsAdoptGateReportsItsOpensMigration(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, _, stuck := workspaceWhosePruneWillFail(t)
 
@@ -104,6 +107,7 @@ func assertMigrationPruneFailureRecorded(t *testing.T, stuck string) {
 // The rollup opens every store it finds, so its event counts the stores whose
 // open migrated and then could not prune, and its output notes each.
 func TestTheRollupCountsStoresWhoseMigratingOpenCannotPrune(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws, _ := workspaceWhosePruneWillFail(t)
 
@@ -134,7 +138,7 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 		t.Fatalf("version.Get() error = %v", err)
 	}
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -171,6 +175,7 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 // lit predates, refuses this lit's writes as a schema-ahead workspace and
 // serves its reads, and each command's event says what its open met.
 func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
 	current, err := version.Get()
@@ -179,7 +184,7 @@ func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
 	}
 	ahead := current.Schema.Max + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -238,6 +243,7 @@ func TestAWorkspaceWhoseWriteRulesThisLitPredatesServesReadsOnly(t *testing.T) {
 // suite's default), collects the table files a dead writer left staged in the
 // store, and its event says how many.
 func TestAWriteCommandCollectsTheTempTableFilesADeadWriterLeft(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
 	staged := filepath.Join(store.TempTableFilesDir(ws.DatabasePath), "buffered_file_byte_sink_99")

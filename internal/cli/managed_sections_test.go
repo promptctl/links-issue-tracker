@@ -13,6 +13,7 @@ import (
 // re-shaped them would rewrite the managed block in every repo on the next
 // `lit init`.
 func TestParseLeavesEmbeddedDefaultsByteIdentical(t *testing.T) {
+	t.Parallel()
 	for name, pair := range map[string]markerPair{
 		templates.PrePushHookTemplateName: litHookMarkers,
 	} {
@@ -31,6 +32,7 @@ func TestParseLeavesEmbeddedDefaultsByteIdentical(t *testing.T) {
 }
 
 func TestParseWrapsMarkerlessContent(t *testing.T) {
+	t.Parallel()
 	pair := litHookMarkers
 	section, err := pair.parse("## House rules\n\nRun lit quickstart.\n")
 	if err != nil {
@@ -46,6 +48,7 @@ func TestParseWrapsMarkerlessContent(t *testing.T) {
 // marker on the last content line, where the next parse could no longer find a
 // whole block on its own line.
 func TestParseWrapsMarkerlessContentMissingTrailingNewline(t *testing.T) {
+	t.Parallel()
 	pair := litHookMarkers
 	section, err := pair.parse("## House rules")
 	if err != nil {
@@ -60,6 +63,7 @@ func TestParseWrapsMarkerlessContentMissingTrailingNewline(t *testing.T) {
 // Whitespace outside the marker span sits outside the region upsert replaces,
 // so it would compound one blank line per run. The pass-through canonicalizes.
 func TestParseCanonicalizesWhitespaceAroundMarkedBlock(t *testing.T) {
+	t.Parallel()
 	pair := litHookMarkers
 	block := pair.begin + "\nbody\n" + pair.end
 	section, err := pair.parse("\n\n  " + block + "\n\n\n")
@@ -75,6 +79,7 @@ func TestParseCanonicalizesWhitespaceAroundMarkedBlock(t *testing.T) {
 // leave part of itself outside the replaced span and re-append that part on
 // every run. Each is refused before anything is written.
 func TestParseRejectsShapesThatCannotConverge(t *testing.T) {
+	t.Parallel()
 	pair := litHookMarkers
 	for name, content := range map[string]string{
 		"begin only":            pair.begin + "\nbody\n",

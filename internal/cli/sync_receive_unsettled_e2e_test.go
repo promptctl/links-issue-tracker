@@ -28,6 +28,7 @@ import (
 // [LAW:behavior-not-structure] asserted through the files a command reads,
 // the event, and the owner hook's own output.
 func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -55,7 +56,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(testEnv(), consumer)
+	ws, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
@@ -83,14 +84,14 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 			t.Fatalf("takeReceiveClone() error = %v", err)
 		}
 		defer removeReceiveClone(testStderr(t), clone)
-		fetch, err := fetchIntoClone(ctx, testStderr(t), testEnv(), ws, clone)
+		fetch, err := fetchIntoClone(ctx, testStderr(t), runEnv(t), ws, clone)
 		if err != nil || fetch.fetchErr != nil {
 			t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 		}
 		unblock := blockTheLanding(t, ws)
-		outcome := landAndRecord(ctx, testStderr(t), testEnv(), ws, clone, fetch, remoteAdvertisement{})
+		outcome := landAndRecord(ctx, testStderr(t), runEnv(t), ws, clone, fetch, remoteAdvertisement{})
 		unblock()
-		surfaceReceiveOutcome(ctx, testStderr(t), testEnv(), ws, outcome, time.Now())
+		surfaceReceiveOutcome(ctx, testStderr(t), runEnv(t), ws, outcome, time.Now())
 		return oneOutcome(writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"])
 	}
 	receive := func() map[string]any {
@@ -218,8 +219,8 @@ func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 // keeping whatever its project config already holds.
 func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) {
 	t.Helper()
-	t.Setenv(DisableAutoSyncEnvVar, "0")
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
 	path := filepath.Join(ws.RootDir, ".lit", "config.toml") // where config.Load reads the project layer
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir project config dir: %v", err)
@@ -286,7 +287,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	runGit(t, dir, "push", "origin", "HEAD")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -296,7 +297,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
 	t.Cleanup(func() { removeReceiveClone(testStderr(t), clone) })
-	fetch, err := fetchIntoClone(ctx, testStderr(t), testEnv(), ws, clone)
+	fetch, err := fetchIntoClone(ctx, testStderr(t), runEnv(t), ws, clone)
 	if err != nil || fetch.fetchErr != nil || fetch.target.skip != syncTargetReady {
 		t.Fatalf("fetchIntoClone() = %+v, %v; want a ready target fetched cleanly", fetch, err)
 	}
@@ -307,9 +308,10 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 // push does not hold the receive lock, so a post-fetch stop there leaves
 // unsettled.first unwritten, and the next automatic receive counts it.
 func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
+	t.Parallel()
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	blockTheLanding(t, ws)
-	err := receivePushedReRoot(ctx, testStderr(t), testEnv(), ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
+	err := receivePushedReRoot(ctx, testStderr(t), runEnv(t), ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
 	if err == nil || !strings.Contains(err.Error(), "stopped at land") {
 		t.Fatalf("receivePushedReRoot() error = %v; want the landing's stop", err)
 	}
@@ -324,12 +326,13 @@ func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 // receive once left, and the mirror's live-store step says the receive it
 // chose failed and where.
 func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
+	t.Parallel()
 	_, ws, clone, fetch := unsettlingCheckout(t)
 	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	landed := pushedHead{remote: fetch.target.remote, branch: fetch.target.branch, head: "pushed", followedReRoot: true}
-	liveStoreLearns(ctx, testStderr(t), testEnv(), io.Discard, ws, clone, landed)
+	liveStoreLearns(ctx, testStderr(t), runEnv(t), io.Discard, ws, clone, landed)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {
@@ -352,9 +355,10 @@ func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 // opening the live store holds no store, and the closer it hands back is one
 // its caller can always call.
 func TestAReceiveWhoseOpenFailsHasNothingToClose(t *testing.T) {
+	t.Parallel()
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
-	outcome, closeLive := performSyncReceive(ctx, testStderr(t), testEnv(), ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
+	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
 	if outcome.stopped != receiveStepOpen {
 		t.Fatalf("receive stopped at %q (err %v); want the open", outcome.stopped, outcome.err)
 	}

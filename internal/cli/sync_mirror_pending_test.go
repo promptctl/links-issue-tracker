@@ -21,7 +21,7 @@ import (
 // geometry function so the fixture cannot drift from real stores.
 func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit")), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 }
 
 // mirrorPendingSet is the in-package spelling of mirrorOwed for tests that
@@ -226,7 +226,7 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 // with ENOTDIR on POSIX only: Windows reports that path not found.
 func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit\x00")), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit\x00")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 
 	owed, err := mirrorOwed(ws)
 	if err == nil {
@@ -267,6 +267,7 @@ func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 // owner notification as an attempt that ran — one completion record, two
 // consumers, no second representation of push health.
 func TestCompleteMirrorWithoutAttempt(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
@@ -276,7 +277,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	}
 
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 
@@ -306,12 +307,13 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 // banner colors later commands over a deliberate teardown — and the owner
 // hook stays silent, identical to a cancelled explicit push.
 func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 
 	cause := fmt.Errorf("open sync store: %w", context.Canceled)
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
@@ -329,6 +331,7 @@ func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 // serialization, not channel degradation — no FAILING banner, no owner page,
 // while the ending is still recorded and the claim still released.
 func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
@@ -337,7 +340,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	}
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, func() {}); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now())
@@ -360,6 +363,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 // fresh residue reads as covered. The hook itself is the witness: it checks
 // for the stamp stopAnswering writes.
 func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	dir := t.TempDir()
 	stamp := filepath.Join(dir, "stopped")
@@ -375,7 +379,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 		_ = f.Close()
 	}
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), testEnv(), ws, cause, stopAnswering); err != nil {
+	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, stopAnswering); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	payload, err := os.ReadFile(sink)
@@ -479,7 +483,7 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 		}
 	}()
 
-	if err := runBackgroundMirror(context.Background(), testStderr(t), ws, nil); err != nil {
+	if err := runBackgroundMirror(t, context.Background(), testStderr(t), ws, nil); err != nil {
 		t.Fatalf("runBackgroundMirror must be best-effort nil, got %v", err)
 	}
 	if mirrorPendingSet(t, ws) {
@@ -509,7 +513,7 @@ func TestRunBackgroundMirrorTeardownReleasesClaim(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if err := runBackgroundMirror(ctx, testStderr(t), ws, nil); err != nil {
+	if err := runBackgroundMirror(t, ctx, testStderr(t), ws, nil); err != nil {
 		t.Fatalf("runBackgroundMirror teardown must be best-effort nil, got %v", err)
 	}
 	if mirrorPendingSet(t, ws) {

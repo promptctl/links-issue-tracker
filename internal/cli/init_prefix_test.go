@@ -12,11 +12,10 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// gitRepoNamed creates a git repository whose DIRECTORY NAME is exactly name
-// and makes it the working directory. The name is the only input the prefix
-// derivation reads, so a test about `lit init --prefix` has to own it; each
-// t.TempDir() is unique, which keeps case-only variants from colliding on a
-// case-insensitive filesystem.
+// gitRepoNamed creates a git repository whose DIRECTORY NAME is exactly name.
+// The name is the only input the prefix derivation reads, so a test about `lit
+// init --prefix` has to own it; each t.TempDir() is unique, which keeps
+// case-only variants from colliding on a case-insensitive filesystem.
 func gitRepoNamed(t *testing.T, name string) string {
 	t.Helper()
 	repo := filepath.Join(t.TempDir(), name)
@@ -24,30 +23,22 @@ func gitRepoNamed(t *testing.T, name string) string {
 		t.Fatalf("MkdirAll(%q) error = %v", repo, err)
 	}
 	runGit(t, repo, "init")
-
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 	return repo
 }
 
-func runInit(t *testing.T, args ...string) error {
+func runInit(t *testing.T, repo string, args ...string) error {
 	t.Helper()
 	var out bytes.Buffer
-	return Run(context.Background(), cwdInvocation(&out, &out, append([]string{"init", "--skip-hooks"}, args...)))
+	return Run(context.Background(), dirInvocation(t, repo, &out, &out, append([]string{"init", "--skip-hooks"}, args...)))
 }
 
 // The whole contract in one test: a repository lit cannot name is unrunnable,
 // and the advice printed under the failure has to name an act that works.
 func TestInitInAnUnnameableRepositoryRefusesWithUsableAdvice(t *testing.T) {
-	gitRepoNamed(t, "ab")
+	t.Parallel()
+	repo := gitRepoNamed(t, "ab")
 
-	err := runInit(t)
+	err := runInit(t, repo)
 	if err == nil {
 		t.Fatal("Run(init) in a repository named \"ab\" succeeded, want a refusal")
 	}
@@ -77,10 +68,11 @@ func TestInitInAnUnnameableRepositoryRefusesWithUsableAdvice(t *testing.T) {
 // works for one caller and not the others would be the same defect arriving by
 // the back door. [LAW:single-enforcer] one message, true for every caller.
 func TestABootstrappingCommandIsGivenAnActThatWorks(t *testing.T) {
-	gitRepoNamed(t, "ab")
+	t.Parallel()
+	repo := gitRepoNamed(t, "ab")
 
 	var out bytes.Buffer
-	err := Run(context.Background(), cwdInvocation(&out, &out, []string{"new", "--type", "epic", "--title", "probe", "--topic", "probe"}))
+	err := Run(context.Background(), dirInvocation(t, repo, &out, &out, []string{"new", "--type", "epic", "--title", "probe", "--topic", "probe"}))
 	if err == nil {
 		t.Fatal("Run(new) in a repository named \"ab\" succeeded, want a refusal")
 	}
@@ -102,20 +94,21 @@ func TestABootstrappingCommandIsGivenAnActThatWorks(t *testing.T) {
 }
 
 func TestInitAcceptsAnExplicitPrefixWhereDerivationRefuses(t *testing.T) {
+	t.Parallel()
 	repo := gitRepoNamed(t, "ab")
 
-	if err := runInit(t, "--prefix", "demo"); err != nil {
+	if err := runInit(t, repo, "--prefix", "demo"); err != nil {
 		t.Fatalf("Run(init --prefix demo) error = %v", err)
 	}
 
 	// The prefix is on disk, so every later command resolves without the flag.
-	if err := runInit(t); err != nil {
+	if err := runInit(t, repo); err != nil {
 		t.Fatalf("Run(init) after a prefix was supplied error = %v — the flag should be needed once", err)
 	}
 	// Asked of the package that owns store geometry rather than rebuilt here, so
 	// this assertion cannot drift from where lit actually writes.
 	// [LAW:one-source-of-truth]
-	info, err := workspace.Resolve(testEnv(), repo)
+	info, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -135,15 +128,16 @@ func TestInitAcceptsAnExplicitPrefixWhereDerivationRefuses(t *testing.T) {
 // to "no flag given" would derive instead, and in the repository where the flag
 // is needed that lands on a message telling them to pass the flag they passed.
 func TestInitRefusesAPrefixFlagWithNothingInIt(t *testing.T) {
+	t.Parallel()
 	// Deliberately a repository whose name DOES derive. In one that does not,
 	// treating `--prefix ""` as "no flag given" still fails — on the derivation
 	// message, which names --prefix too — so the test would pass while the bug
 	// it guards was present. Here, a demoted flag is a silent success, which is
 	// the thing that must not happen.
-	gitRepoNamed(t, "myrepo")
+	repo := gitRepoNamed(t, "myrepo")
 
 	for _, value := range []string{"", "   ", "xy", "_"} {
-		err := runInit(t, "--prefix", value)
+		err := runInit(t, repo, "--prefix", value)
 		if err == nil {
 			t.Fatalf("Run(init --prefix %q) succeeded — a flag with nothing usable in it was silently ignored", value)
 		}
@@ -159,9 +153,10 @@ func TestInitRefusesAPrefixFlagWithNothingInIt(t *testing.T) {
 }
 
 func TestInitUsageNamesEveryFlagItAccepts(t *testing.T) {
-	gitRepoNamed(t, "myrepo")
+	t.Parallel()
+	repo := gitRepoNamed(t, "myrepo")
 
-	err := runInit(t, "unexpected-positional")
+	err := runInit(t, repo, "unexpected-positional")
 	if err == nil {
 		t.Fatal("Run(init <positional>) succeeded, want a usage error")
 	}
@@ -210,12 +205,12 @@ func rewriteStoredPrefix(t *testing.T, configPath string, prefix string) {
 func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID string, runLit func(args ...string) (string, error)) {
 	t.Helper()
 	repo := gitRepoNamed(t, "myrepo")
-	if err := runInit(t); err != nil {
+	if err := runInit(t, repo); err != nil {
 		t.Fatalf("Run(init) in a nameable repository error = %v", err)
 	}
 	runLit = func(args ...string) (string, error) {
 		var out bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&out, &out, args))
+		err := Run(context.Background(), dirInvocation(t, repo, &out, &out, args))
 		return out.String(), err
 	}
 	out, err := runLit("new", "--type", "epic", "--title", "filed before the typo", "--topic", "probe")
@@ -223,7 +218,7 @@ func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID st
 		t.Fatalf("Run(new) error = %v\n%s", err, out)
 	}
 	issueID = issueIDFromNew(out)
-	info, err = workspace.Resolve(testEnv(), repo)
+	info, err = workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -234,6 +229,7 @@ func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID st
 // Minting is what a stored illegal prefix refuses, with its own reason and a
 // remediation naming the command that repairs it.
 func TestAStoredIllegalPrefixRefusesMintingAndNamesTheRepair(t *testing.T) {
+	t.Parallel()
 	info, _, runLit := storedIllegalPrefixWorkspace(t)
 
 	_, err := runLit("new", "--type", "epic", "--title", "probe", "--topic", "probe")
@@ -270,6 +266,7 @@ func TestAStoredIllegalPrefixRefusesMintingAndNamesTheRepair(t *testing.T) {
 // and then repairs it.
 // [LAW:no-silent-failure] the remediation above has to name an act that works.
 func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
+	t.Parallel()
 	info, issueID, runLit := storedIllegalPrefixWorkspace(t)
 
 	// Reading needs no prefix to mint under, so it is not refused.
@@ -329,22 +326,23 @@ func TestPrefixSetRepairsAStoredIllegalPrefix(t *testing.T) {
 // prefix before it creates one — so if `lit prefix set` needed the store, init
 // and it would each name the other and neither could run.
 func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) {
+	t.Parallel()
 	repo := gitRepoNamed(t, "myrepo")
 	runLit := func(args ...string) (string, error) {
 		var out bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&out, &out, args))
+		err := Run(context.Background(), dirInvocation(t, repo, &out, &out, args))
 		return out.String(), err
 	}
 	if out, err := runLit("workspace"); err != nil {
 		t.Fatalf("Run(workspace) error = %v\n%s", err, out)
 	}
-	info, err := workspace.Resolve(testEnv(), repo)
+	info, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 	rewriteStoredPrefix(t, info.ConfigPath, "ab")
 
-	if err := runInit(t); commandErrorReason(err) != reasonStoredPrefixRefused {
+	if err := runInit(t, repo); commandErrorReason(err) != reasonStoredPrefixRefused {
 		t.Fatalf("Run(init) reason = %q (err %v), want stored_prefix_refused", commandErrorReason(err), err)
 	}
 	out, err := runLit("prefix", "set", "myrepo")
@@ -358,7 +356,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) 
 	if out, err := runLit("prefix", "set", "myrepo", "--apply"); err != nil {
 		t.Fatalf("Run(prefix set --apply) error = %v\n%s", err, out)
 	}
-	if err := runInit(t); err != nil {
+	if err := runInit(t, repo); err != nil {
 		t.Fatalf("Run(init) after the repair error = %v", err)
 	}
 }
@@ -375,10 +373,11 @@ func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) 
 // it truncates to 12. A value that survived normalization unchanged would let
 // this test pass without the echo being correct.
 func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
-	gitRepoNamed(t, "myrepo")
+	t.Parallel()
+	repo := gitRepoNamed(t, "myrepo")
 
 	var out bytes.Buffer
-	err := Run(context.Background(), cwdInvocation(&out, &out,
+	err := Run(context.Background(), dirInvocation(t, repo, &out, &out,
 		[]string{"init", "--skip-hooks", "--prefix", "payment_service"}))
 	if err != nil {
 		t.Fatalf("Run(init --prefix payment_service) error = %v\n%s", err, out.String())
@@ -394,11 +393,7 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 		t.Fatalf("init output does not report issue_prefix in the shape `lit prefix set` uses:\n%s", out.String())
 	}
 	// And what it printed is what a later command actually reads back.
-	repo, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	info, err := workspace.Resolve(testEnv(), repo)
+	info, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -422,6 +417,7 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 // arrives after the write. The assertion that earns its keep is the ABSENCE of
 // config.json. [LAW:effects-at-boundaries]
 func TestAFailedInitLeavesNoWorkspaceBehind(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name string
 		args []string
@@ -430,9 +426,10 @@ func TestAFailedInitLeavesNoWorkspaceBehind(t *testing.T) {
 		{"a derived prefix is not persisted either", []string{"stray"}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			repo := gitRepoNamed(t, "myrepo")
 
-			err := runInit(t, testCase.args...)
+			err := runInit(t, repo, testCase.args...)
 			if err == nil {
 				t.Fatalf("Run(init %v) = nil, want a usage refusal", testCase.args)
 			}

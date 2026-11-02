@@ -15,6 +15,7 @@ import (
 // the sink still typed, so a layer that wraps it untyped drops it back to exit 1
 // and the retry advice, and fails here.
 func TestStatusCommandOnFrozenTicketRefusesNamingTheThaw(t *testing.T) {
+	t.Parallel()
 	for _, freeze := range []struct {
 		action model.RetentionAction
 		state  string
@@ -61,6 +62,7 @@ func TestStatusCommandOnFrozenTicketRefusesNamingTheThaw(t *testing.T) {
 // it meets the takeover gate, so the lane is held, and the frozen row is
 // refused ahead of a gate that is really there.
 func TestStartRefusesAFrozenTicketBeforeTheTakeoverGate(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Held", Topic: "frozen", IssueType: "epic"})
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "frozen", IssueType: "task", ParentID: epic.ID})

@@ -27,18 +27,10 @@ func newNestedEpicsInDir(t *testing.T, dir string) (outer, inner string) {
 // that never returns fails the test that ran it instead of hanging the suite.
 func runCLIInDirWithin(t *testing.T, dir string, limit time.Duration, args ...string) (string, error) {
 	t.Helper()
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir(%q) error = %v", dir, err)
-	}
-	defer func() { _ = os.Chdir(prevWD) }()
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	var out bytes.Buffer
-	runErr := Run(ctx, cwdInvocation(&out, &out, args))
+	runErr := Run(ctx, dirInvocation(t, dir, &out, &out, args))
 	return out.String(), runErr
 }
 
@@ -47,6 +39,7 @@ func runCLIInDirWithin(t *testing.T, dir string, limit time.Duration, args ...st
 // on the restore's trace, and the store lists afterwards. Which edge goes is
 // worked by hand from that rule.
 func TestBackupRestoreCutsALoopTheBackupHolds(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	outer, inner := newNestedEpicsInDir(t, repo)
 	created := strings.Fields(runCLIInDir(t, repo, "backup", "create"))
@@ -112,10 +105,11 @@ func TestBackupRestoreCutsALoopTheBackupHolds(t *testing.T) {
 // refuse and cut one — answers `lit ls` with a refusal naming the loop and the
 // repair, as corruption, rather than descending into the loop until killed.
 func TestListRefusesAStoredLoopByName(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	outer, inner := newNestedEpicsInDir(t, repo)
 	ctx := context.Background()
-	ap, err := app.Open(ctx, testEnv(), testStderr(t), resolvedWorkspace(t, repo), app.AccessWrite)
+	ap, err := app.Open(ctx, runEnv(t), testStderr(t), resolvedWorkspace(t, repo), app.AccessWrite)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}

@@ -41,13 +41,25 @@ const suiteStallDeadline = time.Minute
 // as a side effect of unrelated tests. The receive path is exercised explicitly,
 // by tests that run the receive worker's body in-process (receiveNow), so
 // disabling it package-wide loses no coverage.
+// testMirrorPushDeadlineEnvVar carries a test's push deadline to a mirror it
+// runs as a child of this binary, where store.MirrorPushDeadline is the
+// child's own and no other test reads it.
+const testMirrorPushDeadlineEnvVar = "LIT_TEST_MIRROR_PUSH_DEADLINE"
+
 func TestMain(m *testing.M) {
 	store.MirrorHoldBudget, store.ReceiveDeadline = suiteStallDeadline, suiteStallDeadline
 	// A detached worker spawns os.Executable(), which here is this test binary.
 	// Run as that worker rather than as a second copy of the whole suite; the
 	// suite's tests call the receive body directly and never mean to spawn one.
 	if len(os.Args) > 1 && (os.Args[1] == backgroundReceiveSubcommand || os.Args[1] == backgroundMirrorSubcommand) {
-		if err := Run(context.Background(), cwdInvocation(os.Stdout, os.Stderr, os.Args[1:])); err != nil {
+		if deadline, ok := os.LookupEnv(testMirrorPushDeadlineEnvVar); ok {
+			d, err := time.ParseDuration(deadline)
+			if err != nil {
+				panic(testMirrorPushDeadlineEnvVar + ": " + err.Error())
+			}
+			store.MirrorPushDeadline = d
+		}
+		if err := Run(context.Background(), Invocation{Dir: WorkingDirOf(os.Getwd()), Args: os.Args[1:], Env: testEnv(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}); err != nil {
 			os.Exit(WriteCommandError(os.Stderr, err))
 		}
 		os.Exit(0)
@@ -55,27 +67,30 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
-	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
-	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cli-config-")
+	// Every Run appends its invocation event under XDG_STATE_HOME and reads the
+	// global config layer under XDG_CONFIG_HOME, and Dolt reads its own home
+	// in-process on every store open, from the process environment no run's
+	// Env reaches: directories the suite owns keep the developer's events
+	// file, settings and ~/.dolt out of every test, and the detached workers a
+	// test spawns inherit them.
+	var suiteDirs []string
+	for _, home := range []struct{ key, prefix string }{
+		{"XDG_STATE_HOME", "lit-cli-state-"},
+		{"XDG_CONFIG_HOME", "lit-cli-config-"},
+		{"DOLT_ROOT_PATH", "lit-cli-dolt-"},
+	} {
+		dir, err := os.MkdirTemp("", home.prefix)
+		if err != nil {
+			panic("create isolated " + home.key + ": " + err.Error())
+		}
+		if err := os.Setenv(home.key, dir); err != nil {
+			panic("set " + home.key + ": " + err.Error())
+		}
+		suiteDirs = append(suiteDirs, dir)
+	}
 	code := dirtemplate.Run(m, storeTemplate)
-	_ = os.RemoveAll(stateHome)
-	_ = os.RemoveAll(configHome)
+	for _, dir := range suiteDirs {
+		_ = os.RemoveAll(dir)
+	}
 	os.Exit(code)
-}
-
-// isolateXDGHome points the XDG base directory key names at a fresh directory
-// for the rest of the process, and the detached workers a test spawns inherit
-// it. Every Run appends its invocation event under XDG_STATE_HOME: what a test
-// run writes belongs in a directory the suite owns, never in the developer's
-// own events file. Every workspace command reads the global config layer under
-// XDG_CONFIG_HOME, so the developer's own settings stay out of the suite too.
-func isolateXDGHome(key, prefix string) string {
-	dir, err := os.MkdirTemp("", prefix)
-	if err != nil {
-		panic("create isolated " + key + ": " + err.Error())
-	}
-	if err := os.Setenv(key, dir); err != nil {
-		panic("set " + key + ": " + err.Error())
-	}
-	return dir
 }

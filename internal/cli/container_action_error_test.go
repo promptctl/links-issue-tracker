@@ -46,7 +46,7 @@ func (h readyTestHarness) epicFixture(childCount, closedCount int) string {
 // raise site that goes back to an untyped fmt.Errorf fails these tests.
 func (h readyTestHarness) runTransitionErr(issueID string, spec transitionSpec, extraArgs ...string) error {
 	h.t.Helper()
-	return runTransition(h.ctx, io.Discard, h.ap, append([]string{issueID}, extraArgs...), spec)
+	return runTransition(h.t, h.ctx, io.Discard, h.ap, append([]string{issueID}, extraArgs...), spec)
 }
 
 // The flags an action needs at its own command boundary before the call can
@@ -73,6 +73,7 @@ func renderCommandError(t *testing.T, err error) string {
 // to diagnose — and the default's "Retry the command" would be an instruction
 // to loop aimed squarely at an unattended agent.
 func TestDoneOnAClosedEpicIsTerminalAndSaysNoActionIsNeeded(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 2)
 
@@ -97,6 +98,7 @@ func TestDoneOnAClosedEpicIsTerminalAndSaysNoActionIsNeeded(t *testing.T) {
 // is that the two answers are TELLABLE APART, in all three of message, reason,
 // and exit code.
 func TestStartAndDoneOnOneClosedEpicDoNotShareOneAnswer(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 2)
 
@@ -159,6 +161,7 @@ var renderedPhrases = map[commandReason]struct{ want, forbidden []string }{
 // too. None of the three may answer "nothing to do" at ExitNoWork — the code
 // that exists so a caller can stop WITHOUT reading the message.
 func TestEveryContainerRejectionCellHasItsOwnReasonAndExit(t *testing.T) {
+	t.Parallel()
 	cells := []struct {
 		shape            string
 		children, closed int
@@ -189,6 +192,7 @@ func TestEveryContainerRejectionCellHasItsOwnReasonAndExit(t *testing.T) {
 	}
 	for _, cell := range cells {
 		t.Run(cell.shape+"/"+cell.action, func(t *testing.T) {
+			t.Parallel()
 			h := newReadyTestHarness(t)
 			epic := h.epicFixture(cell.children, cell.closed)
 
@@ -223,6 +227,7 @@ func TestEveryContainerRejectionCellHasItsOwnReasonAndExit(t *testing.T) {
 // storage and the wire; printing it mid-sentence leaks a wire format into the
 // prose an agent reads.
 func TestContainerRefusalRendersTheDerivedStateForReading(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 1)
 
@@ -245,6 +250,7 @@ func TestContainerRefusalRendersTheDerivedStateForReading(t *testing.T) {
 // states match a target while work remains, and the counts are what tell them
 // apart.
 func TestContainerActionErrorSatisfiedRequiresNoWorkLeft(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		err  model.ContainerActionError
@@ -280,6 +286,7 @@ func TestContainerActionErrorSatisfiedRequiresNoWorkLeft(t *testing.T) {
 	}}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			tc.err.ID = "test-epics-abcd"
 			if got := tc.err.Satisfied(); got != tc.want {
 				t.Errorf("Satisfied() = %v, want %v", got, tc.want)
@@ -302,8 +309,10 @@ func TestContainerActionErrorSatisfiedRequiresNoWorkLeft(t *testing.T) {
 // could agree with a wrong one as readily as a right one.
 // [LAW:verifiable-goals]
 func TestContainerRefusalNamesTheVerbTheAgentTyped(t *testing.T) {
+	t.Parallel()
 	for _, spec := range []transitionSpec{startSpec, doneSpec, closeSpec, openSpec} {
 		t.Run(spec.name, func(t *testing.T) {
+			t.Parallel()
 			h := newReadyTestHarness(t)
 			epic := h.epicFixture(2, 0)
 			err := h.runTransitionErr(epic, spec, actionFlags[spec.name]...)
@@ -324,6 +333,7 @@ func TestContainerRefusalNamesTheVerbTheAgentTyped(t *testing.T) {
 // answer from a wrong one, and only by looking for the word that must NOT be
 // there.
 func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.epicFixture(2, 0)
 	err := h.runTransitionErr(epic, openSpec)
@@ -342,8 +352,9 @@ func TestOpenRefusalNeverNamesThePersistedEncoding(t *testing.T) {
 // The registry row takes its name from the spec, so there is one spelling of
 // each word, and this reads the registry. [LAW:one-source-of-truth]
 func TestEveryVerbAMessageCanPrintIsACommandThatExists(t *testing.T) {
+	t.Parallel()
 	registered := map[string]bool{}
-	for _, spec := range commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil)) {
+	for _, spec := range commandSpecs(context.Background(), dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil)) {
 		// A retired row is a pointer to a replacement, not a command that runs:
 		// its Run returns RetiredCommandError. Counting it would let `open` be
 		// retired the way `assign` was while refusals kept printing `open` and
@@ -373,6 +384,7 @@ func TestEveryVerbAMessageCanPrintIsACommandThatExists(t *testing.T) {
 // sentence is pinned as a value rather than driven through a command — nothing
 // in the reachable set would notice the persisted encoding coming back.
 func TestSatisfiedSentenceNamesTheTypedVerbToo(t *testing.T) {
+	t.Parallel()
 	err := model.ContainerActionError{
 		ID: "test-epics-1", Action: model.ActionReopen,
 		Target: model.StateOpen, State: model.StateOpen,
@@ -397,6 +409,7 @@ func TestSatisfiedSentenceNamesTheTypedVerbToo(t *testing.T) {
 // `lit bulk open` is the bulk row whose typed verb and events-table encoding
 // differ, so it is the row that can get this wrong.
 func TestBulkUsageNamesTheTypedVerb(t *testing.T) {
+	t.Parallel()
 	leaf := bulkTransitionLeaf(openSpec)()
 	help := leaf.fs.cmd.Flags().Lookup("help")
 	if help == nil {

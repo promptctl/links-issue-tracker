@@ -26,7 +26,7 @@ func listFormatOutput(t *testing.T, expr string) (string, error) {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
-	err = runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--format", expr})
+	err = runListWithStore(t, ctx, &out, ap.Store, noReadyPolicy, []string{"--format", expr})
 	return out.String(), err
 }
 
@@ -35,6 +35,7 @@ func listFormatOutput(t *testing.T, expr string) (string, error) {
 // tells the caller to retry a command that can never succeed, and the message
 // must say which formats exist.
 func TestListFormatRejectsUnknownName(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		expr    string
@@ -80,6 +81,7 @@ func TestListFormatRejectsUnknownName(t *testing.T) {
 // typed in mixed case. The advertised set must equal this table, so a format
 // added to the vocabulary without a row here fails.
 func TestListFormatAcceptsEveryAdvertisedName(t *testing.T) {
+	t.Parallel()
 	// firstLine is what each format puts on its first line: lines starts
 	// straight in on the issue row, table leads with a header, and yaml
 	// opens each update document with its own `---`.

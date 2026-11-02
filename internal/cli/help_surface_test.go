@@ -97,6 +97,7 @@ func repoOnlyNames(t *testing.T, root string) []string {
 // templates `lit quickstart` prints — because the mistake it pins out can
 // appear in all three at once and is one mistake, not three.
 func TestHelpNeverNamesAPathOnlyLitsOwnRepoHas(t *testing.T) {
+	t.Parallel()
 	root := mustRepoRoot(t)
 	forbidden := repoOnlyNames(t, root)
 	if len(forbidden) == 0 {
@@ -272,25 +273,16 @@ func renderedHelpPages(t *testing.T) map[string]string {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
 	pages := map[string]string{}
-	for _, path := range append(commandGroupPaths(), commandLeafPaths()...) {
+	for _, path := range append(commandGroupPaths(t), commandLeafPaths(t)...) {
 		var stdout, stderr bytes.Buffer
 		args := append(append([]string{}, path...), "--help")
-		if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); runErr != nil {
+		if runErr := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, args)); runErr != nil {
 			t.Fatalf("Run(%v) error = %v, want help answered as success", args, runErr)
 		}
 		pages[strings.Join(path, " ")] = stdout.String()
@@ -301,26 +293,18 @@ func renderedHelpPages(t *testing.T) map[string]string {
 // `lit help <cmd>` and `lit <cmd> --help` are two spellings of one question, so
 // they must not be two answers. [LAW:one-source-of-truth]
 func TestHelpCommandAndHelpFlagRenderTheSamePage(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
-	for _, path := range append(commandGroupPaths(), commandLeafPaths()...) {
-		flagSpelling := render(t, append(append([]string{}, path...), "--help"))
-		commandSpelling := render(t, append([]string{"help"}, path...))
+	for _, path := range append(commandGroupPaths(t), commandLeafPaths(t)...) {
+		flagSpelling := render(t, repo, append(append([]string{}, path...), "--help"))
+		commandSpelling := render(t, repo, append([]string{"help"}, path...))
 		if flagSpelling != commandSpelling {
 			t.Errorf("`lit %s --help` and `lit help %s` disagree:\n--help:\n%s\nhelp:\n%s",
 				strings.Join(path, " "), strings.Join(path, " "), flagSpelling, commandSpelling)
@@ -328,10 +312,10 @@ func TestHelpCommandAndHelpFlagRenderTheSamePage(t *testing.T) {
 	}
 }
 
-func render(t *testing.T, args []string) string {
+func render(t *testing.T, dir string, args []string) string {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args)); err != nil {
 		t.Fatalf("Run(%v) error = %v, want help answered as success", args, err)
 	}
 	if got := stderr.String(); got != "" {
@@ -344,6 +328,7 @@ func render(t *testing.T, args []string) string {
 // loudly at that declaration rather than shipping a silently blank description.
 // [LAW:no-silent-failure]
 func TestHelpTextPanicsOnAMissingFile(t *testing.T) {
+	t.Parallel()
 	defer func() {
 		if recover() == nil {
 			t.Fatal("helpText on an unembedded name returned instead of panicking")
@@ -356,20 +341,12 @@ func TestHelpTextPanicsOnAMissingFile(t *testing.T) {
 // at exit 0 would answer the question "what is this command" with an
 // answer-shaped non-answer.
 func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var stdout, stderr bytes.Buffer
-	runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"help", "nosuchcommand"}))
+	runErr := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"help", "nosuchcommand"}))
 
 	var unknown UnknownCommandError
 	if !errors.As(runErr, &unknown) {
@@ -390,20 +367,12 @@ func TestHelpRefusesATopicThatNamesNoCommand(t *testing.T) {
 // advertised-path tests cannot catch that: `help` is not a registry row, so
 // nothing else in this package ever types it.
 func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var stdout, stderr bytes.Buffer
-	if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"help", "help"})); runErr != nil {
+	if runErr := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"help", "help"})); runErr != nil {
 		t.Fatalf("Run([help help]) error = %v, want help answered as success", runErr)
 	}
 	if stdout.Len() == 0 {
@@ -420,7 +389,8 @@ func TestHelpAnswersForCobrasOwnHelpCommand(t *testing.T) {
 // that every typo is a command. The refusal comes before any workspace is
 // resolved, so it holds outside a repository too.
 func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
-	chdir(t, t.TempDir())
+	t.Parallel()
+	dir := t.TempDir()
 
 	for _, args := range [][]string{
 		{"nosuchcommand"},
@@ -436,7 +406,7 @@ func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
 		{"nosuchcommand", "--nosuchflag"},
 	} {
 		var stdout, stderr bytes.Buffer
-		runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args))
+		runErr := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args))
 		if want := (UnknownCommandError{Command: "nosuchcommand"}); runErr != want {
 			t.Errorf("Run(%q) error = %#v, want %#v", args, runErr, want)
 		}
@@ -450,11 +420,12 @@ func TestUnknownCommandRefusesAHelpFlagOnEitherSide(t *testing.T) {
 // root's to refuse, and it refuses it as a usage error (exit 2), like every
 // command's parser does.
 func TestRootRefusesAnUnknownFlagAsAUsageError(t *testing.T) {
-	chdir(t, t.TempDir())
+	t.Parallel()
+	dir := t.TempDir()
 
 	for _, args := range [][]string{{"--nosuchflag"}, {"--nosuchflag", "nosuchcommand"}, {"-x"}} {
 		var stdout, stderr bytes.Buffer
-		runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args))
+		runErr := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args))
 		if _, ok := runErr.(UsageError); !ok {
 			t.Errorf("Run(%q) error = %#v, want UsageError", args, runErr)
 		}
@@ -464,10 +435,11 @@ func TestRootRefusesAnUnknownFlagAsAUsageError(t *testing.T) {
 // Bare `lit` outside a git repository has no workspace to print quickstart
 // guidance for, so it prints the root help instead of failing.
 func TestBareLitOutsideARepositoryPrintsTheRootHelp(t *testing.T) {
-	chdir(t, t.TempDir())
+	t.Parallel()
+	dir := t.TempDir()
 
 	var stdout, stderr bytes.Buffer
-	if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, nil)); runErr != nil {
+	if runErr := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, nil)); runErr != nil {
 		t.Fatalf("Run() outside a repo error = %v, want the root help", runErr)
 	}
 	if got := stdout.String(); !strings.Contains(got, "Agent-native issue tracker") || !strings.Contains(got, "lit [command]") {
@@ -482,11 +454,12 @@ func TestBareLitOutsideARepositoryPrintsTheRootHelp(t *testing.T) {
 // the first token its flag stripping leaves, and it can only strip `--help` as
 // the boolean it is when the root declares the flag before routing.
 func TestHelpFlagBeforeACommandAnswersForThatCommand(t *testing.T) {
-	chdir(t, t.TempDir())
+	t.Parallel()
+	dir := t.TempDir()
 
 	for _, args := range [][]string{{"--help", "ls"}, {"-h", "ls"}, {"--help", "--", "ls"}} {
 		var stdout, stderr bytes.Buffer
-		if runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); runErr != nil {
+		if runErr := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args)); runErr != nil {
 			t.Fatalf("Run(%q) error = %v, want the help for ls", args, runErr)
 		}
 		if got := stdout.String(); !strings.HasPrefix(got, "Usage of ls:") {

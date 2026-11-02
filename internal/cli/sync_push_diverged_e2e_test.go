@@ -19,6 +19,7 @@ import (
 // nothing merges them, so the refusal is an error and the owner is paged
 // push_failed.
 func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T) {
+	t.Parallel()
 	for _, receive := range []struct {
 		name     string
 		on       bool
@@ -71,7 +72,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				if merges := ev.Occurrences["push.outcomes"][0].(map[string]any)["push.receive_merges"]; merges != receive.on {
 					t.Fatalf("bravo's push.receive_merges = %v; want %t", merges, receive.on)
 				}
-				ws, err := workspace.Resolve(testEnv(), r.bravo)
+				ws, err := workspace.Resolve(runEnv(t), r.bravo)
 				if err != nil {
 					t.Fatalf("resolve bravo: %v", err)
 				}

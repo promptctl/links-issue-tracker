@@ -31,8 +31,8 @@ func seedEpicRaw(t *testing.T, ctx context.Context, ap *app.App, title, topic st
 func seedTaskIn(t *testing.T, ctx context.Context, ap *app.App, title, epicID string) string {
 	t.Helper()
 	var out bytes.Buffer
-	if err := runNew(ctx, &out, ap, []string{"--title", title, "--topic", "redirect", "--type", "task", "--parent", epicID}); err != nil {
-		t.Fatalf("runNew(%q) error = %v", title, err)
+	if err := runNew(t, ctx, &out, ap, []string{"--title", title, "--topic", "redirect", "--type", "task", "--parent", epicID}); err != nil {
+		t.Fatalf("runNew(t, %q) error = %v", title, err)
 	}
 	return strings.Fields(out.String())[0]
 }
@@ -49,12 +49,13 @@ func seedOpenIssueRaw(t *testing.T, ctx context.Context, ap *app.App, title stri
 // TestCloseAsDuplicateRequiresTarget pins the parse-boundary requirement: a
 // redirect resolution without --of is rejected before any write.
 func TestCloseAsDuplicateRequiresTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedOpenIssueRaw(t, ctx, ap, "Duplicate without target")
 
 	var out bytes.Buffer
-	err := runTransition(ctx, &out, ap, []string{id, "--resolution", "duplicate"}, closeSpec)
+	err := runTransition(t, ctx, &out, ap, []string{id, "--resolution", "duplicate"}, closeSpec)
 	if err == nil {
 		t.Fatal("close --resolution duplicate without --of = nil error, want rejection")
 	}
@@ -66,13 +67,14 @@ func TestCloseAsDuplicateRequiresTarget(t *testing.T) {
 // TestCloseAsObsoleteRejectsTarget pins the converse: a terminal resolution must
 // not carry --of.
 func TestCloseAsObsoleteRejectsTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedOpenIssueRaw(t, ctx, ap, "Obsolete with target")
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 
 	var out bytes.Buffer
-	err := runTransition(ctx, &out, ap, []string{id, "--resolution", "obsolete", "--of", canonical}, closeSpec)
+	err := runTransition(t, ctx, &out, ap, []string{id, "--resolution", "obsolete", "--of", canonical}, closeSpec)
 	if err == nil {
 		t.Fatal("close --resolution obsolete --of X = nil error, want rejection")
 	}
@@ -85,12 +87,13 @@ func TestCloseAsObsoleteRejectsTarget(t *testing.T) {
 // no other transition registers the flag, so misuse is the parser's
 // unknown-flag error rather than a runtime carve-out. [LAW:types-are-the-program]
 func TestRedirectTargetRejectedOnNonClose(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedOpenIssueRaw(t, ctx, ap, "Reopen with stray target")
 
 	var out bytes.Buffer
-	err := runTransition(ctx, &out, ap, []string{id, "--of", "test-x"}, openSpec)
+	err := runTransition(t, ctx, &out, ap, []string{id, "--of", "test-x"}, openSpec)
 	if err == nil {
 		t.Fatal("reopen --of X = nil error, want rejection")
 	}
@@ -103,14 +106,15 @@ func TestRedirectTargetRejectedOnNonClose(t *testing.T) {
 // close with --of records the canonical ticket as the redirect target, lifted
 // out of the generic related group.
 func TestCloseAsDuplicateRecordsRedirectEdge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(close duplicate) error = %v", err)
+	if err := runTransition(t, ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
 	if err != nil {
@@ -128,19 +132,20 @@ func TestCloseAsDuplicateRecordsRedirectEdge(t *testing.T) {
 // ticket closed as duplicate presents its canonical target under a `redirect:`
 // group, not flattened into `related:`.
 func TestShowRendersRedirectDistinctFromRelated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(close duplicate) error = %v", err)
+	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
 	}
 
 	var out bytes.Buffer
-	if err := runShow(ctx, &out, ap, []string{dup}); err != nil {
-		t.Fatalf("runShow(%s) error = %v", dup, err)
+	if err := runShow(t, ctx, &out, ap, []string{dup}); err != nil {
+		t.Fatalf("runShow(t, %s) error = %v", dup, err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "redirect:\n- "+canonical) {
@@ -155,6 +160,7 @@ func TestShowRendersRedirectDistinctFromRelated(t *testing.T) {
 // acceptance: a ticket with a manual related edge and no redirect renders the
 // related group, with no redirect group.
 func TestShowManualRelatedRendersUnchanged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	focal := seedOpenIssueRaw(t, ctx, ap, "Focal")
@@ -164,8 +170,8 @@ func TestShowManualRelatedRendersUnchanged(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runShow(ctx, &out, ap, []string{focal}); err != nil {
-		t.Fatalf("runShow(%s) error = %v", focal, err)
+	if err := runShow(t, ctx, &out, ap, []string{focal}); err != nil {
+		t.Fatalf("runShow(t, %s) error = %v", focal, err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "related:\n- "+peer) {
@@ -180,6 +186,7 @@ func TestShowManualRelatedRendersUnchanged(t *testing.T) {
 // on the issue row, so it renders correctly even when manual related edges
 // exist.
 func TestShowRedirectAlongsideManualPeers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
@@ -190,8 +197,8 @@ func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 	}
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(close duplicate) error = %v", err)
+	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
 	}
 
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
@@ -206,8 +213,8 @@ func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runShow(ctx, &out, ap, []string{dup}); err != nil {
-		t.Fatalf("runShow(%s) error = %v", dup, err)
+	if err := runShow(t, ctx, &out, ap, []string{dup}); err != nil {
+		t.Fatalf("runShow(t, %s) error = %v", dup, err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "redirect:\n- "+canonical) {
@@ -223,6 +230,7 @@ func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 // a reopen clears the redirect atomically with the resolution, and the
 // re-close succeeds.
 func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
@@ -232,7 +240,7 @@ func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
 	}
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("close duplicate-of an already-related ticket must succeed, got: %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
@@ -248,7 +256,7 @@ func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
 		t.Fatalf("Related = %#v, want the manual edge to %s preserved", detail.Related, canonical)
 	}
 
-	if err := runTransition(ctx, &sink, ap, []string{dup}, openSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{dup}, openSpec); err != nil {
 		t.Fatalf("reopen error = %v", err)
 	}
 	detail, err = ap.Store.GetIssueDetail(ctx, dup)
@@ -262,7 +270,7 @@ func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
 		t.Fatalf("Related after reopen = %#v, want only the manual edge (no leaked machine edge)", detail.Related)
 	}
 
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("re-close duplicate-of the same canonical must succeed, got: %v", err)
 	}
 	detail, err = ap.Store.GetIssueDetail(ctx, dup)
@@ -279,16 +287,17 @@ func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
 // nor a related entry — the machine bookkeeping cannot outlive the close it
 // belonged to.
 func TestReopenAfterPlainDuplicateCloseLeavesNoResidue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("close duplicate error = %v", err)
 	}
-	if err := runTransition(ctx, &sink, ap, []string{dup}, openSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{dup}, openSpec); err != nil {
 		t.Fatalf("reopen error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
@@ -309,14 +318,15 @@ func TestReopenAfterPlainDuplicateCloseLeavesNoResidue(t *testing.T) {
 // store, and both renderers, so the redirect contract is pinned for the whole
 // redirecting subset, not just duplicate.
 func TestCloseAsSupersededRoundTrip(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	replacement := seedOpenIssueRaw(t, ctx, ap, "Replacement")
 	old := seedOpenIssueRaw(t, ctx, ap, "Superseded")
 
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{old, "--resolution", "superseded", "--of", replacement}, closeSpec); err != nil {
-		t.Fatalf("runTransition(close superseded) error = %v", err)
+	if err := runTransition(t, ctx, &out, ap, []string{old, "--resolution", "superseded", "--of", replacement}, closeSpec); err != nil {
+		t.Fatalf("runTransition(t, close superseded) error = %v", err)
 	}
 	// The close adjacency output surfaces the redirect at the close moment.
 	if !strings.Contains(out.String(), "redirect:\n- "+replacement) {
@@ -338,8 +348,8 @@ func TestCloseAsSupersededRoundTrip(t *testing.T) {
 	}
 
 	var show bytes.Buffer
-	if err := runShow(ctx, &show, ap, []string{old}); err != nil {
-		t.Fatalf("runShow(%s) error = %v", old, err)
+	if err := runShow(t, ctx, &show, ap, []string{old}); err != nil {
+		t.Fatalf("runShow(t, %s) error = %v", old, err)
 	}
 	if !strings.Contains(show.String(), "redirect:\n- "+replacement) {
 		t.Fatalf("show output missing redirect group for %s; got:\n%s", replacement, show.String())
@@ -352,16 +362,17 @@ func TestCloseAsSupersededRoundTrip(t *testing.T) {
 // leak — and the duplicate stays open. The archived converse succeeds, since
 // "duplicate of something already done" is the most common real redirect.
 func TestCloseAsDuplicateOfDeletedCanonicalRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{canonical}, deleteSpec); err != nil {
-		t.Fatalf("runTransition(delete canonical) error = %v", err)
+	if err := runTransition(t, ctx, &sink, ap, []string{canonical}, deleteSpec); err != nil {
+		t.Fatalf("runTransition(t, delete canonical) error = %v", err)
 	}
-	err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec)
+	err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec)
 	if err == nil {
 		t.Fatal("close duplicate-of a deleted canonical = nil error, want rejection")
 	}
@@ -381,16 +392,17 @@ func TestCloseAsDuplicateOfDeletedCanonicalRejected(t *testing.T) {
 // TestCloseAsDuplicateOfArchivedCanonicalAllowed pins the accept half at the
 // CLI surface: an archived canonical is a legal redirect target.
 func TestCloseAsDuplicateOfArchivedCanonicalAllowed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{canonical}, archiveSpec); err != nil {
-		t.Fatalf("runTransition(archive canonical) error = %v", err)
+	if err := runTransition(t, ctx, &sink, ap, []string{canonical}, archiveSpec); err != nil {
+		t.Fatalf("runTransition(t, archive canonical) error = %v", err)
 	}
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("close duplicate-of an archived canonical must succeed, got: %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
@@ -406,14 +418,15 @@ func TestCloseAsDuplicateOfArchivedCanonicalAllowed(t *testing.T) {
 // closing as duplicate surfaces the redirect target in the capture-at-close
 // adjacency output, the moment the closing agent most needs "where it went".
 func TestCloseAsDuplicateRendersRedirectAdjacency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(close duplicate) error = %v", err)
+	if err := runTransition(t, ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
 	}
 	if !strings.Contains(out.String(), "redirect:\n- "+canonical) {
 		t.Fatalf("close adjacency missing redirect group for %s; got:\n%s", canonical, out.String())

@@ -47,6 +47,7 @@ func newForkedBelowTheCutAfter(t *testing.T, bravoWrites func(reRootedCheckouts)
 // edits with nothing reporting unrelated histories, and the events name the
 // fork point and the base.
 func TestEverySettlingEntryPointMergesAForkBelowTheCut(t *testing.T) {
+	t.Parallel()
 	for _, entry := range []struct {
 		name string
 		// fetch and settle are the commands whose events carry the fork
@@ -88,6 +89,7 @@ func TestEverySettlingEntryPointMergesAForkBelowTheCut(t *testing.T) {
 // the Dolt remote to match, and since it is the same remote the fork point
 // stays and the pull merges against it.
 func TestAGitRemoteWithANewURLKeepsItsForkPoint(t *testing.T) {
+	t.Parallel()
 	r, adopted := newForkedBelowTheCut(t)
 	runCLIInDir(t, r.bravo, "sync", "fetch")
 	assertForkPointRecorded(t, adopted)
@@ -131,6 +133,7 @@ func assertForkPointRecorded(t *testing.T, adopted string) {
 // lands bravo on alpha's head, and its event says the fast-forward was across
 // the fork point, not along shared history.
 func TestAQuietForkPullsAcrossItsForkPoint(t *testing.T) {
+	t.Parallel()
 	r, _ := newForkedBelowTheCutAfter(t, func(reRootedCheckouts) {})
 	runCLIInDir(t, r.bravo, "sync", "pull")
 	ev := lastEvent(t)
@@ -148,6 +151,7 @@ func TestAQuietForkPullsAcrossItsForkPoint(t *testing.T) {
 // The receive lands bravo on alpha's head, reconciles nothing, and its event
 // says it landed across the fork point.
 func TestAQuietForkReceivesOntoTheRemoteHead(t *testing.T) {
+	t.Parallel()
 	r, _ := newForkedBelowTheCutAfter(t, func(reRootedCheckouts) {})
 	runWorkerInDir(t, r.bravo, backgroundReceiveSubcommand)
 	ev := lastEvent(t)

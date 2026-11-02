@@ -45,6 +45,7 @@ func TestEachDamagedTicketGoesOnTheEventOnce(t *testing.T) {
 // What a write did to rank keys is on its event, and a command that wrote none
 // says 0 and [], not nothing.
 func TestAWriteSaysWhatItDidToRankKeys(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	newEpicInDir(t, repo, "First")
@@ -92,6 +93,7 @@ func TestAWriteSaysWhatItDidToRankKeys(t *testing.T) {
 // edge is on the event like a climb, because it is the read that grows with the
 // store.
 func TestAReadSaysWhatTreeOrderCostIt(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	first := newEpicInDir(t, repo, "First")
@@ -128,6 +130,7 @@ func TestAReadSaysWhatTreeOrderCostIt(t *testing.T) {
 // What a rank set decided is on its event: the frame, the issues named and the
 // keys it wrote, and a repeat of an order that has arrived says it wrote none.
 func TestARankSetSaysWhatItWrote(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	first := newEpicInDir(t, repo, "First")
@@ -159,13 +162,14 @@ func TestARankSetSaysWhatItWrote(t *testing.T) {
 
 // A rank set refused over a tie names the pair on its event.
 func TestARankSetRefusedOverATieNamesThePair(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	ids := []string{newEpicInDir(t, repo, "One"), newEpicInDir(t, repo, "Two")}
 	slices.Sort(ids)
 	low, high := ids[0], ids[1]
 	ctx := context.Background()
-	ap, err := app.Open(ctx, testEnv(), testStderr(t), resolvedWorkspace(t, repo), app.AccessWrite)
+	ap, err := app.Open(ctx, runEnv(t), testStderr(t), resolvedWorkspace(t, repo), app.AccessWrite)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}
@@ -196,6 +200,7 @@ func TestARankSetRefusedOverATieNamesThePair(t *testing.T) {
 // A listing's event carries the deepest chain its ancestry held, and a command
 // that built none says 0, and [] for second parents and loops.
 func TestAListingSaysHowDeepItsAncestryWent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	runCLIInDir(t, repo, "quickstart")

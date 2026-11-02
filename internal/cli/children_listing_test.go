@@ -20,6 +20,7 @@ import (
 // [LAW:behavior-not-structure] the assertion is the rendered output, not which
 // leaf ran.
 func TestChildrenIsLsWithAParent(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	first := f.addChild("First child")
 	second := f.addEpicChild("Second child")
@@ -38,10 +39,10 @@ func TestChildrenIsLsWithAParent(t *testing.T) {
 		{"--query", "status:closed", "--columns", "id,parent"},
 	} {
 		var children, ls bytes.Buffer
-		if err := runChildren(f.ctx, &children, f.ap, append([]string{f.epicID}, flags...)); err != nil {
+		if err := runChildren(t, f.ctx, &children, f.ap, append([]string{f.epicID}, flags...)); err != nil {
 			t.Fatalf("children %s %v error = %v", f.epicID, flags, err)
 		}
-		if err := runListWithStore(f.ctx, &ls, f.ap.Store, workspaceReadyPolicy(testEnv(), f.ap), append([]string{"--parent", f.epicID}, flags...)); err != nil {
+		if err := runListWithStore(t, f.ctx, &ls, f.ap.Store, workspaceReadyPolicy(runEnv(t), f.ap), append([]string{"--parent", f.epicID}, flags...)); err != nil {
 			t.Fatalf("ls --parent %s %v error = %v", f.epicID, flags, err)
 		}
 		if children.String() != ls.String() {
@@ -64,14 +65,15 @@ func TestChildrenIsLsWithAParent(t *testing.T) {
 // empty listing a childless parent gets; the two are different facts.
 // [LAW:no-silent-failure]
 func TestListingUnderAMissingParentIsNotFound(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	var out bytes.Buffer
-	err := runChildren(f.ctx, &out, f.ap, []string{"test-nope"})
+	err := runChildren(t, f.ctx, &out, f.ap, []string{"test-nope"})
 	var notFound storage.NotFoundError
 	if !errors.As(err, &notFound) {
 		t.Fatalf("children test-nope error = %v, want storage.NotFoundError", err)
 	}
-	err = runListWithStore(f.ctx, &out, f.ap.Store, noReadyPolicy, []string{"--query", "parent:test-nope"})
+	err = runListWithStore(t, f.ctx, &out, f.ap.Store, noReadyPolicy, []string{"--query", "parent:test-nope"})
 	if !errors.As(err, &notFound) {
 		t.Fatalf("ls --query parent:test-nope error = %v, want storage.NotFoundError", err)
 	}
@@ -102,7 +104,7 @@ func TestListingRefusesTheWrongPositionalCount(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), tc.surface, tc.args)
+		err := runList(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &out, &out, nil), tc.surface, tc.args)
 		var usage UsageError
 		if !errors.As(err, &usage) || !strings.Contains(err.Error(), "usage: lit "+tc.surface.name) {
 			t.Fatalf("%s %v error = %#v, want a UsageError naming the usage line", tc.surface.name, tc.args, err)
@@ -114,6 +116,7 @@ func TestListingRefusesTheWrongPositionalCount(t *testing.T) {
 // no value, so `--include-archived <id>` must leave the id a positional, and `--`
 // ends the flags without consuming it.
 func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	child := f.addChild("Only child")
 	for _, args := range [][]string{
@@ -124,7 +127,7 @@ func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
 		{" " + f.epicID + " "},
 	} {
 		var out bytes.Buffer
-		if err := runChildren(f.ctx, &out, f.ap, args); err != nil {
+		if err := runChildren(t, f.ctx, &out, f.ap, args); err != nil {
 			t.Fatalf("children %v error = %v", args, err)
 		}
 		if !strings.Contains(out.String(), child) {
@@ -138,6 +141,7 @@ func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
 // to a real id or under `children`, silently ignore part of the request. The
 // refusal is the same on both surfaces. [LAW:no-silent-failure]
 func TestListingRefusesAnEmptyParent(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	cases := []struct {
 		surface listSurface
@@ -151,7 +155,7 @@ func TestListingRefusesAnEmptyParent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
-		err := runListLeaf(f.ctx, &out, tc.surface, listScope{store: f.ap.Store, policy: noReadyPolicy}, tc.args)
+		err := runListLeaf(t, f.ctx, &out, tc.surface, listScope{store: f.ap.Store, policy: noReadyPolicy}, tc.args)
 		if err == nil || ExitCode(err) != ExitValidation || !strings.Contains(err.Error(), "--parent needs an issue id") {
 			t.Fatalf("%s %v error = %#v, want a validation refusal naming the empty --parent", tc.surface.name, tc.args, err)
 		}
@@ -164,6 +168,7 @@ func TestListingRefusesAnEmptyParent(t *testing.T) {
 // A repeated --parent widens the parent set like a repeated --status widens the
 // status set; the second occurrence never replaces the first.
 func TestLsRepeatedParentIsAUnion(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	first := f.addChild("First child")
 	second := f.addEpicChild("Second child")
@@ -186,7 +191,7 @@ func TestLsRepeatedParentIsAUnion(t *testing.T) {
 func TestChildrenHelpListsTheLsFlags(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	if err := runList(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), childrenSurface, []string{"--help"}); !errors.Is(err, errHelpHandled) {
+	if err := runList(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &out, &out, nil), childrenSurface, []string{"--help"}); !errors.Is(err, errHelpHandled) {
 		t.Fatalf("children --help error = %v, want errHelpHandled", err)
 	}
 	for _, flag := range []string{"--format", "--columns", "--status", "--sort", "--parent", "--query"} {

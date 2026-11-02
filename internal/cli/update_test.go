@@ -17,12 +17,13 @@ import (
 func driveTransition(t *testing.T, ctx context.Context, ap *app.App, id string, spec transitionSpec, extra ...string) {
 	t.Helper()
 	args := append([]string{id}, extra...)
-	if err := runTransition(ctx, &bytes.Buffer{}, ap, args, spec); err != nil {
-		t.Fatalf("runTransition(%s %s) error = %v", spec.name, id, err)
+	if err := runTransition(t, ctx, &bytes.Buffer{}, ap, args, spec); err != nil {
+		t.Fatalf("runTransition(t, %s %s) error = %v", spec.name, id, err)
 	}
 }
 
 func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -40,8 +41,8 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 	// `lit done` is single-phase: one invocation closes the ticket and prints
 	// the post-close capture-deposit guidance. There is no preview/apply token.
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, doneSpec); err != nil {
-		t.Fatalf("runTransition(done) error = %v", err)
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, doneSpec); err != nil {
+		t.Fatalf("runTransition(t, done) error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "has been closed") {
 		t.Fatalf("expected post-guidance output, got %q", stdout.String())
@@ -64,7 +65,8 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 // action. Assertions are behavioral — resulting state and event-log content —
 // never output wording.
 func TestRunTransitionTargetStateMatrix(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 
 	const owner = "matrix-owner"
@@ -82,6 +84,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 	for _, verb := range verbs {
 		for _, from := range fromStates {
 			t.Run(verb.spec.name+"_from_"+string(from), func(t *testing.T) {
+				t.Parallel()
 				ap := newTestCLIApp(t)
 				issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 					Prefix: "test", Title: "matrix " + verb.spec.name, Topic: "lifecycle", IssueType: "task", Priority: 0,
@@ -154,6 +157,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 // children. The assertion is the typed shape from links-lifecycle-2wz.3 —
 // errors.As + the live unfinished count — never the message prose.
 func TestRunTransitionMatrixContainerCell(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -177,13 +181,13 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 			if spec.name == "close" {
 				baseArgs = append(baseArgs, "--resolution", "wontfix")
 			}
-			err := runTransition(ctx, &bytes.Buffer{}, ap, baseArgs, spec)
+			err := runTransition(t, ctx, &bytes.Buffer{}, ap, baseArgs, spec)
 			if err == nil {
-				t.Fatalf("runTransition(%s epic) = nil, want container rejection", spec.name)
+				t.Fatalf("runTransition(t, %s epic) = nil, want container rejection", spec.name)
 			}
 			var containerErr model.ContainerActionError
 			if !errors.As(err, &containerErr) {
-				t.Fatalf("runTransition(%s epic) error = %q, want model.ContainerActionError", spec.name, err)
+				t.Fatalf("runTransition(t, %s epic) error = %q, want model.ContainerActionError", spec.name, err)
 			}
 			if got := containerErr.Unfinished(); got != 1 {
 				t.Fatalf("ContainerActionError.Unfinished() = %d, want 1 (one open child)", got)
@@ -197,7 +201,8 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 // owner succeeds, but announces the old and new owner on human output. The
 // assertion names both identities rather than pinning wording.
 func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -207,13 +212,13 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--by", "agent-alice"}, startSpec); err != nil {
-		t.Fatalf("runTransition(first start) error = %v", err)
+	if err := runTransition(t, ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--by", "agent-alice"}, startSpec); err != nil {
+		t.Fatalf("runTransition(t, first start) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--by", "agent-bob"}, startSpec); err != nil {
-		t.Fatalf("runTransition(reclaim) error = %v, want success with notice", err)
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID, "--by", "agent-bob"}, startSpec); err != nil {
+		t.Fatalf("runTransition(t, reclaim) error = %v, want success with notice", err)
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "agent-alice") || !strings.Contains(out, "agent-bob") {
@@ -229,6 +234,7 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 }
 
 func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
@@ -251,13 +257,13 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	err = runTransition(ctx, &stdout, ap, []string{epic.ID, "--by", "tester"}, startSpec)
+	err = runTransition(t, ctx, &stdout, ap, []string{epic.ID, "--by", "tester"}, startSpec)
 	if err == nil {
-		t.Fatal("runTransition(start epic) returned nil; want refusal")
+		t.Fatal("runTransition(t, start epic) returned nil; want refusal")
 	}
 	stdout.Reset()
-	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--by", "tester"}, startSpec); err != nil {
-		t.Fatalf("runTransition(start leaf) error = %v", err)
+	if err := runTransition(t, ctx, &stdout, ap, []string{leaf.ID, "--by", "tester"}, startSpec); err != nil {
+		t.Fatalf("runTransition(t, start leaf) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, leaf.ID)
 	if err != nil {
@@ -275,6 +281,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 // checked explicitly because it is the sharpest gap: accepted, `--status closed`
 // would construct a resolution-less Done, bypassing `close`'s required outcome.
 func TestRunUpdateRejectsStatusFlag(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -291,15 +298,15 @@ func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 
 	for _, status := range []string{"in_progress", "closed", "open"} {
 		var stdout bytes.Buffer
-		err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", status})
+		err := runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--status", status})
 		if err == nil {
-			t.Fatalf("runUpdate(--status %s) error = nil, want rejection", status)
+			t.Fatalf("runUpdate(t, --status %s) error = nil, want rejection", status)
 		}
 		if got := ExitCode(err); got != ExitUsage {
-			t.Fatalf("runUpdate(--status %s) exit code = %d, want %d", status, got, ExitUsage)
+			t.Fatalf("runUpdate(t, --status %s) exit code = %d, want %d", status, got, ExitUsage)
 		}
 		if !strings.Contains(err.Error(), "lit start") || !strings.Contains(err.Error(), "lit close") {
-			t.Fatalf("runUpdate(--status %s) error = %q, want a pointer to the transition verbs", status, err.Error())
+			t.Fatalf("runUpdate(t, --status %s) error = %q, want a pointer to the transition verbs", status, err.Error())
 		}
 		got, err := ap.Store.GetIssue(ctx, created.ID)
 		if err != nil {
@@ -322,7 +329,8 @@ func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 }
 
 func TestRunUpdateSupportsFieldMutations(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -338,8 +346,8 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--priority", "1", "--assignee", "alice", "--labels", "api,urgent"}); err != nil {
-		t.Fatalf("runUpdate(field flags) error = %v", err)
+	if err := runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--priority", "1", "--assignee", "alice", "--labels", "api,urgent"}); err != nil {
+		t.Fatalf("runUpdate(t, field flags) error = %v", err)
 	}
 
 	updated, err := ap.Store.GetIssue(ctx, created.ID)
@@ -358,11 +366,12 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 }
 
 func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	var newOut bytes.Buffer
-	if err := runNew(ctx, &newOut, ap, []string{
+	if err := runNew(t, ctx, &newOut, ap, []string{
 		"--title", "Wire prompt field",
 		"--topic", "prompts",
 		"--type", "task",
@@ -370,7 +379,7 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 		"--priority", "1",
 		"--prompt", "Render at 1024x768 and verify no NaNs.",
 	}); err != nil {
-		t.Fatalf("runNew(--prompt) error = %v", err)
+		t.Fatalf("runNew(t, --prompt) error = %v", err)
 	}
 	createdID := firstIssueID(t, newOut.String())
 	created, err := ap.Store.GetIssue(ctx, createdID)
@@ -382,8 +391,8 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 	}
 
 	var upOut bytes.Buffer
-	if err := runUpdate(ctx, &upOut, ap, []string{created.ID, "--prompt", "Run --headless instead."}); err != nil {
-		t.Fatalf("runUpdate(--prompt) error = %v", err)
+	if err := runUpdate(t, ctx, &upOut, ap, []string{created.ID, "--prompt", "Run --headless instead."}); err != nil {
+		t.Fatalf("runUpdate(t, --prompt) error = %v", err)
 	}
 	updated, err := ap.Store.GetIssue(ctx, created.ID)
 	if err != nil {
@@ -395,6 +404,7 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 }
 
 func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -412,13 +422,14 @@ func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	// --reason alone (no field flags and no --status) must still be rejected
 	// because there is nothing to record the reason on.
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--reason", "no fields here"})
+	err = runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--reason", "no fields here"})
 	if err == nil {
-		t.Fatal("runUpdate(--reason with no fields) error = nil, want validation error")
+		t.Fatal("runUpdate(t, --reason with no fields) error = nil, want validation error")
 	}
 }
 
 func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -434,8 +445,8 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{epic.ID, "--title", "Renamed epic", "--description", "New body"}); err != nil {
-		t.Fatalf("runUpdate(epic --title --description) error = %v", err)
+	if err := runUpdate(t, ctx, &stdout, ap, []string{epic.ID, "--title", "Renamed epic", "--description", "New body"}); err != nil {
+		t.Fatalf("runUpdate(t, epic --title --description) error = %v", err)
 	}
 
 	updated, err := ap.Store.GetIssue(ctx, epic.ID)
@@ -467,6 +478,7 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 // Even an empty --status= is rejected: presence of the flag is the trigger, so
 // there is no value-shaped edge case that slips through to touch status.
 func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -482,19 +494,20 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--status="})
+	err = runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--status="})
 	if err == nil {
-		t.Fatal("runUpdate(--status=) error = nil, want rejection")
+		t.Fatal("runUpdate(t, --status=) error = nil, want rejection")
 	}
 	if got := ExitCode(err); got != ExitUsage {
-		t.Fatalf("runUpdate(--status=) exit code = %d, want %d", got, ExitUsage)
+		t.Fatalf("runUpdate(t, --status=) exit code = %d, want %d", got, ExitUsage)
 	}
 	if !strings.Contains(err.Error(), "lit start") {
-		t.Fatalf("runUpdate(--status=) error = %q, want a pointer to the transition verbs", err.Error())
+		t.Fatalf("runUpdate(t, --status=) error = %q, want a pointer to the transition verbs", err.Error())
 	}
 }
 
 func TestResolveIdentity(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		explicit string
@@ -510,8 +523,9 @@ func TestResolveIdentity(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.env)
-			got := resolveIdentity(testEnv(), tc.explicit)
+			t.Parallel()
+			setRunEnv(t, "CLAUDE_CODE_SESSION_ID", tc.env)
+			got := resolveIdentity(runEnv(t), tc.explicit)
 			if got != tc.want {
 				t.Fatalf("resolveIdentity(%q) with env=%q = %q, want %q", tc.explicit, tc.env, got, tc.want)
 			}
@@ -520,7 +534,8 @@ func TestResolveIdentity(t *testing.T) {
 }
 
 func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -531,8 +546,8 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
-		t.Fatalf("runTransition(start without --by) error = %v", err)
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
+		t.Fatalf("runTransition(t, start without --by) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, issue.ID)
 	if err != nil {
@@ -547,7 +562,8 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 }
 
 func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-abc")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-abc")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -558,8 +574,8 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
-		t.Fatalf("runTransition(start) error = %v", err)
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
+		t.Fatalf("runTransition(t, start) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, issue.ID)
 	if err != nil {
@@ -596,7 +612,8 @@ func lastEventActorForAction(t *testing.T, ap *app.App, ctx context.Context, id,
 // set, the event actor (not just the assignee) resolves to claude_<session>, so
 // history shows the agent performed the transition.
 func TestRunTransitionActorFromSessionEnv(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-actor")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-actor")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -619,7 +636,8 @@ func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 // TestRunTransitionActorFallsBackToByFlag pins the no-agent path: without the
 // session env, the actor is the --by value.
 func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -640,7 +658,8 @@ func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 // explicit clear (or third-party assignee) into a self-assignment.
 // [LAW:no-silent-failure]
 func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-grooming")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-grooming")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -652,8 +671,8 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", ""}); err != nil {
-		t.Fatalf("runUpdate(--assignee \"\") error = %v", err)
+	if err := runUpdate(t, ctx, &stdout, ap, []string{issue.ID, "--assignee", ""}); err != nil {
+		t.Fatalf("runUpdate(t, --assignee \"\") error = %v", err)
 	}
 	updated, err := ap.Store.GetIssue(ctx, issue.ID)
 	if err != nil {
@@ -668,7 +687,8 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 }
 
 func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-me")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-me")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -679,8 +699,8 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", "claude_other-session"}); err != nil {
-		t.Fatalf("runUpdate(--assignee other) error = %v", err)
+	if err := runUpdate(t, ctx, &stdout, ap, []string{issue.ID, "--assignee", "claude_other-session"}); err != nil {
+		t.Fatalf("runUpdate(t, --assignee other) error = %v", err)
 	}
 	updated, err := ap.Store.GetIssue(ctx, issue.ID)
 	if err != nil {

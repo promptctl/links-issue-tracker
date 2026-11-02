@@ -41,6 +41,7 @@ func TestParseGlobalArgs(t *testing.T) {
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			gotArgs, err := parseGlobalArgs(tc.args)
 			if err != nil {
 				t.Fatalf("parseGlobalArgs() error = %v", err)
@@ -66,7 +67,7 @@ func TestParseGlobalArgsRejectsOutputFlag(t *testing.T) {
 func TestRunQuickstartDefaultsToText(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"quickstart"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, tempRepo(t), &stdout, &stdout, []string{"quickstart"})); err != nil {
 		t.Fatalf("Run(quickstart) error = %v", err)
 	}
 	if strings.Contains(stdout.String(), "\"summary\"") {
@@ -97,8 +98,9 @@ func TestRejectsJSONFlag(t *testing.T) {
 	for _, args := range cases {
 		args := args
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			t.Parallel()
 			var stdout bytes.Buffer
-			err := Run(context.Background(), cwdInvocation(&stdout, &stdout, args))
+			err := Run(context.Background(), dirInvocation(t, t.TempDir(), &stdout, &stdout, args))
 			if err == nil {
 				t.Fatalf("Run(%v) unexpectedly succeeded", args)
 			}

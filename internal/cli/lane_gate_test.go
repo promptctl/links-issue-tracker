@@ -13,7 +13,7 @@ import (
 // public ClassifyReadiness rather than any retired command's private filter.
 func (h readyTestHarness) runPullableAnnotated(rf workableFilter) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, rf)
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(h.t), h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
@@ -40,6 +40,7 @@ func containsID(rows []annotation.AnnotatedIssue, id string) bool {
 // non-member of the ready set while the earlier one is open — priority
 // ordering is untouched.
 func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -91,6 +92,7 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 // an open earlier-ranked sibling in another lane. Distinct lane per child is
 // the fully-parallel degenerate case.
 func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "a"})
@@ -111,6 +113,7 @@ func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 // by someone else still gates my later same-lane sibling — otherwise the gate
 // would leak whenever work is split across assignees.
 func TestLaneGateSeesSiblingsHiddenByAssigneeFilter(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "bob's first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Assignee: "bob"})

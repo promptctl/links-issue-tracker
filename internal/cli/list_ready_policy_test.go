@@ -20,6 +20,7 @@ import (
 // something the output shows — so it is pinned from outside, by breaking the
 // config and reading which invocations still work.
 func TestListReadsReadyPolicyOnlyWhenProjected(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	// Invalid for a reason that has nothing to do with listing, and not the
@@ -36,7 +37,7 @@ func TestListReadsReadyPolicyOnlyWhenProjected(t *testing.T) {
 
 	runLS := func(args ...string) (string, error) {
 		var out bytes.Buffer
-		err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(testEnv(), h.ap), args)
+		err := runListWithStore(t, h.ctx, &out, h.ap.Store, workspaceReadyPolicy(runEnv(t), h.ap), args)
 		return out.String(), err
 	}
 

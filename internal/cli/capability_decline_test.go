@@ -49,7 +49,7 @@ type syncOnlyEngine struct {
 // and backups, which is all any of these paths touches before it refuses.
 func declineWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 }
 
 // wantUnsupported asserts the error is the contract's typed refusal naming the
@@ -89,7 +89,7 @@ func TestReconcilerForRefusesAnEngineThatDeclinesReconcile(t *testing.T) {
 			t.Parallel()
 			ws := declineWorkspace(t)
 
-			reconciler, err := reconcilerFor(testStderr(t), testEnv(), ws, syncSession{engine: syncOnlyEngine{}}, command)
+			reconciler, err := reconcilerFor(testStderr(t), runEnv(t), ws, syncSession{engine: syncOnlyEngine{}}, command)
 
 			wantUnsupported(t, err, "reconcile")
 			if reconciler != nil {
@@ -125,7 +125,7 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	t.Parallel()
 	ws := declineWorkspace(t)
 
-	outcome, err := performInlineReconcile(context.Background(), testStderr(t), testEnv(), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
+	outcome, err := performInlineReconcile(context.Background(), testStderr(t), runEnv(t), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
 
 	wantUnsupported(t, err, "reconcile")
 	for _, settled := range []storage.SyncReconcileState{
@@ -170,7 +170,7 @@ func TestRestoreRefusesAnEngineThatCannotImportBeforeTouchingAnything(t *testing
 	ws := declineWorkspace(t)
 	ap := &app.App{Workspace: ws, Store: syncOnlyEngine{}}
 
-	_, err := restoreFromExportFile(context.Background(), testStderr(t), testEnv(), ap, inputFile{path: filepath.Join(t.TempDir(), "export.json"), data: []byte("not an export")}, false)
+	_, err := restoreFromExportFile(context.Background(), testStderr(t), runEnv(t), ap, inputFile{path: filepath.Join(t.TempDir(), "export.json"), data: []byte("not an export")}, false)
 
 	wantUnsupported(t, err, "import")
 	snapshots, listErr := backup.List(ws.StorageDir)

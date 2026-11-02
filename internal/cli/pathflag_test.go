@@ -15,6 +15,7 @@ import (
 // process into it, so a path resolved against the process's own directory
 // would name a file that is not there.
 func TestRelativePathsResolveAgainstTheInvocationDirectory(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, id, _ := statuslineCheckout(t)
 	sub := filepath.Join(repo, "notes")

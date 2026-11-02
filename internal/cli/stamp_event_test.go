@@ -11,6 +11,7 @@ import (
 // saying nothing, and a clone whose clock runs behind its peers is read off
 // its events rather than inferred from event order.
 func TestEachStoreCommandRecordsItsStampCorrections(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, _ := statuslineCheckout(t)
 	for _, args := range [][]string{{"start", first}, {"ls"}} {

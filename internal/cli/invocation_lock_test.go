@@ -50,6 +50,7 @@ func lastLockOccurrences(t *testing.T, command string) ([]lockHoldEntry, []map[s
 // hold its waiters fail on, naming it. A new opt-in to routine is a reviewed
 // change to this list, or to the backstop's test beside it.
 func TestEachWriteSaysWhetherItsLockHoldWasRoutine(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Holds")
@@ -92,9 +93,10 @@ func TestEachWriteSaysWhetherItsLockHoldWasRoutine(t *testing.T) {
 // own, and what the probe found. Nothing owed is [], so a reader can tell a
 // probe that looked from a write that ran none.
 func TestTheBackstopsHoldIsRoutineAndItsLookIsOnTheEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, marker := litRepoForCadence(t)
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	newTicket(t, dir)
 	if len(compactionPasses(t, "lit new")) != 0 {
 		t.Fatalf("the first write's probe found a pass owed on an empty store")
@@ -106,7 +108,7 @@ func TestTheBackstopsHoldIsRoutineAndItsLookIsOnTheEvent(t *testing.T) {
 	if err := os.Remove(marker); err != nil {
 		t.Fatalf("remove marker: %v", err)
 	}
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	newTicket(t, dir)
 	if _, present := lastEvent(t).Occurrences["compaction.passes"]; present {
 		t.Fatalf("a write that ran no probe says compaction.passes = %v, want no key", lastEvent(t).Occurrences["compaction.passes"])
@@ -117,6 +119,7 @@ func TestTheBackstopsHoldIsRoutineAndItsLookIsOnTheEvent(t *testing.T) {
 // took, and a sync session that compacted nothing writes no key. The explicit
 // pass is long: it runs under no deadline, so its waiters fail naming it.
 func TestAPassIsOnTheEventOfTheCommandThatRanIt(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	newEpicInDir(t, repo, "Compact me")
@@ -160,6 +163,7 @@ func compactionPasses(t *testing.T, command string) []map[string]any {
 
 // A read holds no LOCK and waits on none, and says both as [].
 func TestAReadSaysItHeldNoLock(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	newEpicInDir(t, repo, "Read me")

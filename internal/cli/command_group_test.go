@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"strings"
 	"testing"
 )
@@ -17,7 +16,7 @@ import (
 // how the registry is stored.
 func renderedGrouping(t *testing.T) (groupOf map[string]string, headerLine map[string]int) {
 	t.Helper()
-	root := newRootCommand(context.Background(), cwdInvocation(io.Discard, io.Discard, nil))
+	root := newRootCommand(context.Background(), dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil))
 	groupOf = map[string]string{}
 	headerLine = map[string]int{}
 	current := ""
@@ -52,7 +51,7 @@ func renderedGrouping(t *testing.T) (groupOf map[string]string, headerLine map[s
 // `bulk label` included — from the registry the completion projection also
 // reads, so the help contract below covers exactly the groups lit advertises
 // and can never lag behind a newly registered one. [LAW:one-source-of-truth]
-func commandGroupPaths() [][]string {
+func commandGroupPaths(t testing.TB) [][]string {
 	var paths [][]string
 	var walk func(prefix []string, subs []SubcommandSpec)
 	walk = func(prefix []string, subs []SubcommandSpec) {
@@ -65,7 +64,7 @@ func commandGroupPaths() [][]string {
 			walk(path, sub.Subcommands)
 		}
 	}
-	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil))) {
+	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil))) {
 		if len(spec.Subcommands) == 0 {
 			continue
 		}
@@ -80,7 +79,7 @@ func commandGroupPaths() [][]string {
 // resolve. It is the exact complement of commandGroupPaths over the same
 // registry, so between them the two cover the advertised surface with no gap a
 // newly registered command could fall through. [LAW:one-source-of-truth]
-func commandLeafPaths() [][]string {
+func commandLeafPaths(t testing.TB) [][]string {
 	var paths [][]string
 	var walk func(prefix []string, subs []SubcommandSpec)
 	walk = func(prefix []string, subs []SubcommandSpec) {
@@ -96,7 +95,7 @@ func commandLeafPaths() [][]string {
 	// A retired row is Hidden, so it is off this surface: it answers every
 	// invocation — help included — with its replacement pointer rather than a
 	// flag surface, which is the documented break, not a help answer.
-	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil))) {
+	for _, spec := range advertisedCommandSpecs(commandSpecs(context.Background(), dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil))) {
 		if len(spec.Subcommands) == 0 {
 			paths = append(paths, []string{spec.Name})
 			continue
@@ -142,16 +141,10 @@ func leafHelpSubject(help string) (string, bool) {
 // help acquired nothing. [LAW:verifiable-goals] Paths come from the registry, so
 // a leaf registered later without pre-acquisition help fails this test.
 func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatalf("Chdir(nonRepo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+	t.Parallel()
+	dir := t.TempDir()
 
-	paths := commandLeafPaths()
+	paths := commandLeafPaths(t)
 	if len(paths) == 0 {
 		t.Fatal("registry advertises no leaf commands; the test asserted nothing")
 	}
@@ -159,7 +152,7 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 		for _, helpFlag := range []string{"-h", "--help"} {
 			args := append(append([]string{}, path...), helpFlag)
 			var stdout, stderr bytes.Buffer
-			if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
+			if err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args)); err != nil {
 				t.Errorf("Run(%v) outside a repo error = %v, want help answered without any workspace/store/app", args, err)
 				continue
 			}
@@ -199,18 +192,12 @@ func TestLeafHelpAnswersWithoutAcquiringResources(t *testing.T) {
 // so `ls` stands for the leaves there rather than running every one.
 // [LAW:behavior-not-structure]
 func TestHelpFlagFollowsItsValue(t *testing.T) {
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatalf("Chdir(nonRepo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+	t.Parallel()
+	dir := t.TempDir()
 
 	run := func(args ...string) (string, error) {
 		var stdout, stderr bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args))
+		err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args))
 		return stdout.String(), err
 	}
 	with := func(path []string, flag string) []string {
@@ -225,7 +212,7 @@ func TestHelpFlagFollowsItsValue(t *testing.T) {
 		return page
 	}
 
-	leaves, groups := commandLeafPaths(), commandGroupPaths()
+	leaves, groups := commandLeafPaths(t), commandGroupPaths(t)
 	if len(leaves) == 0 || len(groups) == 0 {
 		t.Fatalf("registry advertises %d leaves and %d groups; the test would assert nothing", len(leaves), len(groups))
 	}
@@ -267,28 +254,20 @@ func TestHelpFlagFollowsItsValue(t *testing.T) {
 // answer is asserted; where the recognition lives is the implementation's
 // business.
 func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
-	for _, path := range commandGroupPaths() {
+	for _, path := range commandGroupPaths(t) {
 		for _, helpFlag := range []string{"-h", "--help"} {
 			args := append(append([]string{}, path...), helpFlag)
 			var stdout, stderr bytes.Buffer
-			if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
+			if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, args)); err != nil {
 				t.Fatalf("Run(%v) error = %v, want help answered as success", args, err)
 			}
 			if got := stdout.String(); !strings.Contains(got, path[len(path)-1]) {
@@ -310,17 +289,11 @@ func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
 // Paths are derived from the registry, so a future nested group added to the
 // completion tree without pre-acquisition help recognition fails this test.
 func TestNestedGroupHelpAnswersWithoutAcquiringResources(t *testing.T) {
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(t.TempDir()); err != nil {
-		t.Fatalf("Chdir(nonRepo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+	t.Parallel()
+	dir := t.TempDir()
 
 	tested := 0
-	for _, path := range commandGroupPaths() {
+	for _, path := range commandGroupPaths(t) {
 		if len(path) < 2 {
 			continue
 		}
@@ -328,7 +301,7 @@ func TestNestedGroupHelpAnswersWithoutAcquiringResources(t *testing.T) {
 		for _, helpFlag := range []string{"-h", "--help"} {
 			args := append(append([]string{}, path...), helpFlag)
 			var stdout, stderr bytes.Buffer
-			if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
+			if err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args)); err != nil {
 				t.Fatalf("Run(%v) outside a repo error = %v, want help answered without any workspace/store/app", args, err)
 			}
 			if got := stdout.String(); !strings.Contains(got, path[len(path)-1]) {
@@ -379,7 +352,8 @@ func TestTransitionVerbGrouping(t *testing.T) {
 // claim `lit quickstart update` makes. [LAW:behavior-not-structure] read off
 // rendered output only.
 func TestBulkEditIsReachableFromTheCommandSurface(t *testing.T) {
-	t.Chdir(t.TempDir())
+	t.Parallel()
+	dir := t.TempDir()
 
 	groupOf, _ := renderedGrouping(t)
 	for _, name := range []string{"import", "update", "bulk"} {
@@ -389,12 +363,12 @@ func TestBulkEditIsReachableFromTheCommandSurface(t *testing.T) {
 	}
 
 	const bulkEditPath = "lit import --path <file.yaml>"
-	if got := render(t, []string{"update", "--help"}); !strings.Contains(got, bulkEditPath) {
+	if got := render(t, dir, []string{"update", "--help"}); !strings.Contains(got, bulkEditPath) {
 		t.Errorf("`lit update --help` = %q, want it to name %q", got, bulkEditPath)
 	}
 	for _, guess := range [][]string{{"bulk", "update"}, {"update", "a", "b", "--title", "x"}} {
 		var stdout bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&stdout, &stdout, guess))
+		err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stdout, guess))
 		var usage UsageError
 		if !errors.As(err, &usage) || !strings.Contains(usage.Message, bulkEditPath) {
 			t.Errorf("`lit %s` error = %v, want a usage refusal naming %q", strings.Join(guess, " "), err, bulkEditPath)

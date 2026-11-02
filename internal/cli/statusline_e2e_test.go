@@ -71,8 +71,9 @@ func gitStatus(t *testing.T, dir string) string {
 // done — and never shows in git status, in the main checkout or a worktree,
 // while a committed file beside it under .lit/ still does.
 func TestStatuslineFileFollowsEachCheckoutsOwnWork(t *testing.T) {
+	t.Parallel()
 	// --by is the identity source only when no agent session id is inherited.
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	main := t.TempDir()
 	runGit(t, main, "init")
 	runGit(t, main, "config", "user.email", "m@m.co")
@@ -170,6 +171,7 @@ func statuslineEvent(t *testing.T) (map[string]any, int) {
 // file and its exclude entry, and whether it replaced an unreadable file — and
 // a command that wrote nothing says so with zeros.
 func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	file := filepath.Join(dir, ".lit", "statusline.json")
@@ -240,6 +242,7 @@ func TestEachStatuslineWriteRecordsItsFactsOnTheEvent(t *testing.T) {
 // surely as lit update — and a retitle in an import whose batch is refused is
 // never made, so the file never shows it.
 func TestAnImportRetitleReachesTheStatuslineFile(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, _ := statuslineCheckout(t)
 	runCLIInDir(t, dir, "next")
@@ -278,6 +281,7 @@ func TestAnImportRetitleReachesTheStatuslineFile(t *testing.T) {
 // A backup restore replaces the store the file's records describe, so it
 // clears both of them and keeps the schema version.
 func TestABackupRestoreClearsTheStatuslineFile(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, _ := statuslineCheckout(t)
 	runCLIInDir(t, dir, "next")
@@ -299,6 +303,7 @@ func TestABackupRestoreClearsTheStatuslineFile(t *testing.T) {
 // A bulk transition writes each ticket through the store as its single verb
 // does, so `lit bulk delete` clears both records of a ticket it deletes.
 func TestABulkDeleteClearsTheStatuslineRecordsOfItsTicket(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, _ := statuslineCheckout(t)
 	runCLIInDir(t, dir, "next")
@@ -318,6 +323,7 @@ func TestABulkDeleteClearsTheStatuslineRecordsOfItsTicket(t *testing.T) {
 // that moment — including a start that takes a closed ticket out of the done
 // count.
 func TestTheStatuslineRollupProgressMatchesTheClaimLine(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	claimCount := regexp.MustCompile(`(?m)^\s*claimed here: .* (\d+)/(\d+) done$`)
@@ -353,6 +359,7 @@ func TestTheStatuslineRollupProgressMatchesTheClaimLine(t *testing.T) {
 // of a ticket the file does not name, lit next handing work back, and a
 // reclaim that keeps the phase the work had reached.
 func TestTheStatuslinePhaseMatchesTheTicketsPhase(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, second := statuslineCheckout(t)
 	matches := func(after, id, want string) {
@@ -386,9 +393,10 @@ func TestTheStatuslinePhaseMatchesTheTicketsPhase(t *testing.T) {
 // review, the phase lit show prints there: the takeover keeps the phase the
 // work had reached rather than starting it over in plan.
 func TestATakeoverRecordsThePhaseTheWorkHadReached(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
+	setRunEnv(t, "HOME", t.TempDir())
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -434,6 +442,7 @@ func mustAtoi(t *testing.T, s string) int {
 // A statusline write that fails is on the event with its error, beside what
 // the write had done before it failed; the command itself does not fail.
 func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	litDir := filepath.Join(root, ".lit")
 	if err := os.MkdirAll(litDir, 0o755); err != nil {
@@ -442,7 +451,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	fsperm.Deny(t, litDir, fsperm.Write)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
-	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}, Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
+	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
 	recordStatusline(ctx, testStderr(t), ws, statusline.Facts{statusline.NewStarted(statusline.Ticket{ID: "t-1", Title: "One"}, statusline.RollupProgress{CompletedCount: 0, TotalCount: 1})})
 	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
 	facts := writtenFacts(t, ev)
@@ -462,9 +471,9 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 // so neither lit nor the tools a statusline runs read this machine's config.
 func statuslineCheckout(t *testing.T) (dir, first, second string) {
 	t.Helper()
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
+	setRunEnv(t, "HOME", t.TempDir())
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	dir = t.TempDir()
 	runGit(t, dir, "init")
 	runGit(t, dir, "config", "user.email", "m@m.co")
@@ -508,6 +517,7 @@ func minimalStatuslineScript(t *testing.T) string {
 // not know — with no lit process: a lit first on its PATH fails any render
 // that runs it, so no lit lock can hold the statusline up.
 func TestDocumentedStatuslineRendersTheFileWithNoLitProcess(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Fatalf("the documented statusline is a jq program, and jq is not on PATH: %v", err)
 	}

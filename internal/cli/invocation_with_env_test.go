@@ -12,6 +12,7 @@ import (
 // field, so an Invocation that gains a field fails here until the fixture and
 // withEnv both carry it, rather than dropping it from every run.
 func TestWithEnvKeepsEveryOtherField(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr strings.Builder
 	inv := Invocation{
 		Dir:    WorkingDirOf("/work", nil),

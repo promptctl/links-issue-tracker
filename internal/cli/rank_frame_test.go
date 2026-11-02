@@ -13,6 +13,7 @@ import (
 // user when a cross-frame request was resolved to the containing epic —
 // moving an issue other than the one named must never be silent.
 func TestRankCrossFrameReportsResolution(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -32,7 +33,7 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 
 	// Moved-side resolution: ranking the child against the standalone moves the epic.
 	var stdout bytes.Buffer
-	if err := runRank(ctx, &stdout, ap, []string{child.ID, "--above", standalone.ID}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{child.ID, "--above", standalone.ID}); err != nil {
 		t.Fatalf("rank child --above standalone error = %v", err)
 	}
 	out := stdout.String()
@@ -54,7 +55,7 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 
 	// Anchor-side resolution: ranking the standalone against the child anchors to the epic.
 	stdout.Reset()
-	if err := runRank(ctx, &stdout, ap, []string{standalone.ID, "--below", child.ID}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID, "--below", child.ID}); err != nil {
 		t.Fatalf("rank standalone --below child error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), child.ID+" is inside "+epic.ID) {
@@ -71,6 +72,7 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 // that overstates the scope of the move is a wrong answer, not a cosmetic one.
 // [LAW:no-silent-failure]
 func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -94,7 +96,7 @@ func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 
 	// Siblings: the stack lands inside the epic, and the summary must say so.
 	var stdout bytes.Buffer
-	if err := runRankSet(ctx, &stdout, ap, []string{children[1], children[0]}); err != nil {
+	if err := runRankSet(t, ctx, &stdout, ap, []string{children[1], children[0]}); err != nil {
 		t.Fatalf("rank set siblings error = %v", err)
 	}
 	out := stdout.String()
@@ -104,7 +106,7 @@ func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 
 	// Top level: the summary must name the backlog rather than an epic.
 	stdout.Reset()
-	if err := runRankSet(ctx, &stdout, ap, []string{outsider.ID, epic.ID}); err != nil {
+	if err := runRankSet(t, ctx, &stdout, ap, []string{outsider.ID, epic.ID}); err != nil {
 		t.Fatalf("rank set top-level error = %v", err)
 	}
 	out = stdout.String()

@@ -26,6 +26,7 @@ func writeImportFile(t *testing.T, name, content string) string {
 // The JSON tree-spec path must keep working with `import` dispatching on file
 // extension.
 func TestRunImportTreeJSONPathUnchanged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	path := writeImportFile(t, "tree.json", `[
@@ -33,8 +34,8 @@ func TestRunImportTreeJSONPathUnchanged(t *testing.T) {
 		{"local_id":"t1","title":"Child","type":"task","topic":"import","priority":0,"parent":"e1"}
 	]`)
 	var stdout bytes.Buffer
-	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(json) error = %v", err)
+	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
+		t.Fatalf("runImportTree(t, json) error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "imported 2 issues") {
 		t.Fatalf("output = %q, want the imported-count line", stdout.String())
@@ -45,6 +46,7 @@ func TestRunImportTreeJSONPathUnchanged(t *testing.T) {
 // reads an export. The file here is what `lit export` really writes, so the
 // test tracks the export's shape rather than a hand-made imitation of it.
 func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -54,14 +56,14 @@ func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var export bytes.Buffer
-	if err := runLeaf(exportLeaf(), ctx, &export, ap, nil); err != nil {
+	if err := runLeaf(t, exportLeaf(), ctx, &export, ap, nil); err != nil {
 		t.Fatalf("export error = %v", err)
 	}
 	path := writeImportFile(t, "export.json", export.String())
 
-	err := runImportTree(ctx, &bytes.Buffer{}, ap, []string{"--path", path})
+	err := runImportTree(t, ctx, &bytes.Buffer{}, ap, []string{"--path", path})
 	if err == nil {
-		t.Fatal("runImportTree(export) error = nil, want a refusal")
+		t.Fatal("runImportTree(t, export) error = nil, want a refusal")
 	}
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, err); code != ExitValidation {
@@ -84,6 +86,7 @@ func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
 // not parse is: exit 3 and advice to change the file. The file is what is
 // wrong, so retrying repeats the refusal and lit doctor has nothing to find.
 func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name, file, content, want string
@@ -107,9 +110,10 @@ func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
 		{"bulk file ordering two leaves of one epic", "x.yaml", "local_id: e\ntitle: e\ntype: epic\ntopic: demo\n---\nlocal_id: a\ntitle: a\ntype: task\ntopic: demo\nparent: e\n---\ntitle: b\ntype: bug\ntopic: demo\nparent: e\nblocked_by: [a]\n", `bulk: doc 2 blocked_by "a": ` + storage.SameEpicBlocksRejectionMessage},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			ap := newTestCLIApp(t)
 			path := writeImportFile(t, tc.file, tc.content)
-			err := runImportTree(ctx, &bytes.Buffer{}, ap, []string{"--path", path})
+			err := runImportTree(t, ctx, &bytes.Buffer{}, ap, []string{"--path", path})
 			if err == nil {
 				t.Fatal("runImportTree error = nil, want a refusal")
 			}
@@ -133,6 +137,7 @@ func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
 }
 
 func TestRunImportYAMLCreatesEpicAndChild(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	path := writeImportFile(t, "batch.yaml", `
@@ -148,8 +153,8 @@ topic: import
 parent: e1
 `)
 	var stdout bytes.Buffer
-	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(yaml create) error = %v", err)
+	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
+		t.Fatalf("runImportTree(t, yaml create) error = %v", err)
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "created 2 issues") || !strings.Contains(out, "updated 0 issues") {
@@ -198,6 +203,7 @@ func importedID(t *testing.T, output, ref string) string {
 // a regression fails loudly rather than flaking. t1 is a sub-epic: between
 // two leaves of one epic a blocked_by is refused, since rank orders them.
 func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	content := `[
 		{"local_id":"e1","title":"Epic","type":"epic","topic":"import","priority":0},
@@ -211,8 +217,8 @@ func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
 		ap := newTestCLIApp(t)
 		path := writeImportFile(t, "tree.json", content)
 		var stdout bytes.Buffer
-		if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
-			t.Fatalf("run %d: runImportTree(json) error = %v", run, err)
+		if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
+			t.Fatalf("run %d: runImportTree(t, json) error = %v", run, err)
 		}
 		if got := strings.Join(mappingRefs(t, stdout.String()), ","); got != want {
 			t.Fatalf("run %d: mapping order = %s, want %s\noutput:\n%s", run, got, want, stdout.String())
@@ -221,6 +227,7 @@ func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
 }
 
 func TestRunImportYAMLMappingOrderIsDeterministic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	content := `
 local_id: e1
@@ -258,8 +265,8 @@ parent: e1
 		ap := newTestCLIApp(t)
 		path := writeImportFile(t, "batch.yaml", content)
 		var stdout bytes.Buffer
-		if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
-			t.Fatalf("run %d: runImportTree(yaml) error = %v", run, err)
+		if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
+			t.Fatalf("run %d: runImportTree(t, yaml) error = %v", run, err)
 		}
 		if got := strings.Join(mappingRefs(t, stdout.String()), ","); got != want {
 			t.Fatalf("run %d: mapping order = %s, want %s\noutput:\n%s", run, got, want, stdout.String())
@@ -268,6 +275,7 @@ parent: e1
 }
 
 func TestRunImportYAMLUpdatesByID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -283,8 +291,8 @@ title: After
 labels: [reviewed]
 `)
 	var stdout bytes.Buffer
-	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(yaml update) error = %v", err)
+	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
+		t.Fatalf("runImportTree(t, yaml update) error = %v", err)
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "created 0 issues") || !strings.Contains(out, "updated 1 issues") {
@@ -303,6 +311,7 @@ labels: [reviewed]
 }
 
 func TestRunImportYAMLMixedFileIsLegal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic := seedEpicRaw(t, ctx, ap, "Import", "import")
@@ -323,8 +332,8 @@ id: `+existing.ID+`
 priority: 1
 `)
 	var stdout bytes.Buffer
-	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(yaml mixed) error = %v", err)
+	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
+		t.Fatalf("runImportTree(t, yaml mixed) error = %v", err)
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "created 1 issues") || !strings.Contains(out, "updated 1 issues") {
@@ -335,6 +344,7 @@ priority: 1
 // An id that selects no existing ticket is an error surfaced to the caller,
 // not a silent create.
 func TestRunImportYAMLUnknownIDIsError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	path := writeImportFile(t, "ghost.yaml", `
@@ -342,25 +352,26 @@ id: does-not-exist-1
 title: New title
 `)
 	var stdout bytes.Buffer
-	err := runImportTree(ctx, &stdout, ap, []string{"--path", path})
+	err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path})
 	if err == nil {
-		t.Fatal("runImportTree(yaml unknown id) error = nil, want not-found error")
+		t.Fatal("runImportTree(t, yaml unknown id) error = nil, want not-found error")
 	}
 	if !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("runImportTree(yaml unknown id) error = %v, want not-found error", err)
+		t.Fatalf("runImportTree(t, yaml unknown id) error = %v, want not-found error", err)
 	}
 }
 
 func TestRunImportRequiresPath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	err := runImportTree(ctx, &stdout, ap, nil)
+	err := runImportTree(t, ctx, &stdout, ap, nil)
 	if err == nil {
-		t.Fatal("runImportTree(no --path) error = nil, want usage error")
+		t.Fatal("runImportTree(t, no --path) error = nil, want usage error")
 	}
 	if ExitCode(err) != ExitUsage {
-		t.Fatalf("runImportTree(no --path) exit code = %d, want %d", ExitCode(err), ExitUsage)
+		t.Fatalf("runImportTree(t, no --path) exit code = %d, want %d", ExitCode(err), ExitUsage)
 	}
 }
 
@@ -368,6 +379,7 @@ func TestRunImportRequiresPath(t *testing.T) {
 // the workspace opens, as a long-text file is: outside any workspace the
 // refusal is the same, and the invocation's event records the usage exit.
 func TestRunImportRefusesAnUnreadablePathBeforeTheWorkspaceOpens(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	missing := filepath.Join(t.TempDir(), "missing.json")
 	_, err := runCLIInDirAllowError(t, t.TempDir(), "import", "--path", missing)
@@ -383,7 +395,8 @@ func TestRunImportRefusesAnUnreadablePathBeforeTheWorkspaceOpens(t *testing.T) {
 // A YAML file with at least one update document does consume --by — it
 // attributes that document's field-change event, same as `lit update --by`.
 func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -395,8 +408,8 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 	}
 	path := writeImportFile(t, "update.yaml", "id: "+created.ID+"\ntitle: After\n")
 	var stdout bytes.Buffer
-	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
-		t.Fatalf("runImportTree(yaml update --by) error = %v", err)
+	if err := runLeaf(t, importTreeLeaf(), ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
+		t.Fatalf("runImportTree(t, yaml update --by) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
 	if err != nil {
@@ -417,7 +430,8 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 // create: the created event records --by, as lit new's does, so a plan
 // imported with a ticket has the importer as its author.
 func TestRunImportAttributesCreatesToBy(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	for _, tc := range []struct {
 		file string
 		body func(epic string) string
@@ -428,12 +442,13 @@ func TestRunImportAttributesCreatesToBy(t *testing.T) {
 		{"create.yaml", func(epic string) string { return "title: Imported\ntype: task\ntopic: import\nparent: " + epic + "\n" }},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
+			t.Parallel()
 			ctx := context.Background()
 			ap := newTestCLIApp(t)
 			path := writeImportFile(t, tc.file, tc.body(seedEpicRaw(t, ctx, ap, "Import", "import")))
 			var stdout bytes.Buffer
-			if err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
-				t.Fatalf("runImportTree(%s --by alice) error = %v", tc.file, err)
+			if err := runLeaf(t, importTreeLeaf(), ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
+				t.Fatalf("runImportTree(t, %s --by alice) error = %v", tc.file, err)
 			}
 			for _, id := range importedIDs(t, stdout.String()) {
 				events, err := ap.Store.ListEvents(ctx, id)
@@ -464,6 +479,7 @@ func importedIDs(t *testing.T, output string) []string {
 }
 
 func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -479,8 +495,8 @@ priority: 1
 reason: "  padded reason  "
 `)
 	var stdout bytes.Buffer
-	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(yaml reason) error = %v", err)
+	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
+		t.Fatalf("runImportTree(t, yaml reason) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
 	if err != nil {
@@ -505,6 +521,7 @@ reason: "  padded reason  "
 // it wrote, and the invocation's event counts what the file created, updated
 // and ranked.
 func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	// One import seeds the ten epics: a `lit new` per epic would cost this
@@ -551,6 +568,7 @@ func TestRunImportYAMLRankTopOrdersTheBacklogInOneCall(t *testing.T) {
 // has, and sets one issue's blocked_by and restates another's — and a file
 // whose order names one issue reports it in the singular.
 func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	epic := newEpicInDir(t, dir, "home")
@@ -586,6 +604,7 @@ func TestRunImportEventCountsWhatTheFileWrote(t *testing.T) {
 // event tells a refusal at a write, which the batch's branch held, from one the
 // gate made before writing.
 func TestRunImportEventCountsNothingForARefusedFile(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	// One import seeds the fixture: a `lit new` per issue would cost this

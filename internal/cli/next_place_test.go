@@ -20,6 +20,7 @@ import (
 // pick is new work; TestPlacePastExhaustionFollowsWhatTheCheckoutHasLeft holds
 // the unfinished case.
 func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
+	t.Parallel()
 	want := map[string]struct{ primary, linked startPlace }{
 		"the claimed lane":                 {startHere, startHere},
 		"own work resumed":                 {startHere, startHere},
@@ -56,6 +57,7 @@ func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 // nothing unfinished, so the pick is new work like the global pool's — even
 // with the epic still open in lanes other checkouts hold.
 func TestPlacePastExhaustionFollowsWhatTheCheckoutHasLeft(t *testing.T) {
+	t.Parallel()
 	past := func(scope, own claims.Progress) NextOutcome {
 		return ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}, Progress: scope, OwnProgress: own}}
 	}
@@ -81,6 +83,7 @@ func TestPlacePastExhaustionFollowsWhatTheCheckoutHasLeft(t *testing.T) {
 // The start advice opens with the worktree to run `lit start` from only for a
 // pick that leaves, so the command and its checkout are one instruction.
 func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
 	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Pick", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -104,6 +107,7 @@ func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
 // Where the pick goes lands on the event beside the checkout kind, and a run
 // that served nothing records the place as null rather than leaving it out.
 func TestNextRecordsWhereItsPickStarts(t *testing.T) {
+	t.Parallel()
 	unfinished := Exhausted{Epics: []string{"test-epic-1"}, Progress: claims.Progress{Done: 1, Total: 2}, OwnProgress: claims.Progress{Done: 1, Total: 2}}
 	for _, tc := range []struct {
 		name    string
@@ -135,6 +139,7 @@ func TestNextRecordsWhereItsPickStarts(t *testing.T) {
 // place from a linked worktree that holds nothing, and each run's event says
 // which kind of checkout decided it.
 func TestNextSendsNewWorkOutOfThePrimaryCloneOnly(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	runGit(t, repo, "config", "user.email", "next@example.com")

@@ -50,7 +50,7 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 // errs toward allow.
 func TestShouldReceiveNowDebounce(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
 	now := time.Now()
 	interval := 10 * time.Second
 
@@ -90,10 +90,10 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
+	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
 	ctx := underInvocation(context.Background())
 
-	ensureMirrorCoverage(ctx, testStderr(t), testEnv(), ws)
+	ensureMirrorCoverage(ctx, testStderr(t), runEnv(t), ws)
 	info, err := os.Stat(remoteAbsentMarkerPath(ws))
 	if err != nil {
 		t.Fatalf("first remote-less mutation did not stamp the absence marker: %v", err)
@@ -114,7 +114,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	}
 	stamped := info.ModTime()
 
-	ensureMirrorCoverage(ctx, testStderr(t), testEnv(), ws)
+	ensureMirrorCoverage(ctx, testStderr(t), runEnv(t), ws)
 	info, err = os.Stat(remoteAbsentMarkerPath(ws))
 	if err != nil {
 		t.Fatalf("absence marker vanished: %v", err)

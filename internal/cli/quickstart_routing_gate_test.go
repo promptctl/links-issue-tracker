@@ -103,6 +103,7 @@ var laneRoutingTable = []laneRoutingCase{
 // [LAW:one-source-of-truth] the row's readiness is established by the real
 // gather, not asserted by hand.
 func TestCapacityForEachLaneRelation(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "ready leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
@@ -138,6 +139,7 @@ func TestCapacityForEachLaneRelation(t *testing.T) {
 // shows up here rather than as a silently unexercised routing arm.
 // [LAW:no-silent-failure]
 func TestLaneRoutingTableCoversEveryRelation(t *testing.T) {
+	t.Parallel()
 	covered := map[laneRelation]bool{}
 	for _, tc := range laneRoutingTable {
 		relation := relationOf(tc.standing, selfAttribution)

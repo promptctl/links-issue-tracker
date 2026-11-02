@@ -18,6 +18,7 @@ import (
 // while any spawn's shared hold is open the join does not return, and once
 // the last one is released it does.
 func TestJoinDetachedWorkersWaitsForEveryHoldToBeReleased(t *testing.T) {
+	t.Parallel()
 	storageDir := t.TempDir()
 	holds, err := holdWorkerLock(storageDir)
 	if err != nil {
@@ -40,6 +41,7 @@ func TestJoinDetachedWorkersWaitsForEveryHoldToBeReleased(t *testing.T) {
 // TestJoinDetachedWorkersOfAStoreNoWorkerWasSpawnedForReturns pins that a store
 // with no worker lock answers at once: no spawn ever took a hold there.
 func TestJoinDetachedWorkersOfAStoreNoWorkerWasSpawnedForReturns(t *testing.T) {
+	t.Parallel()
 	if err := JoinDetachedWorkers(t.TempDir(), time.Minute); err != nil {
 		t.Fatalf("JoinDetachedWorkers(store with no lock) = %v; want nil", err)
 	}
@@ -70,7 +72,9 @@ func runWorkerOutlivedByChild(storageDir string) {
 		return nil
 	})
 	// Under an invocation, as Run runs every leaf: the leaf records its event.
-	if err := runLeaf(leaf, underInvocation(context.Background()), os.Stdout, struct{}{}, []string{"--store", storageDir}); err != nil {
+	// This is a child process with no test, so its invocation is the process's.
+	inv := Invocation{Dir: WorkingDirOf(os.Getwd()), Env: testEnv(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
+	if _, err := recordLeaf(leaf, underInvocation(context.Background()), inv, struct{}{}, []string{"--store", storageDir}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -81,6 +85,7 @@ func runWorkerOutlivedByChild(storageDir string) {
 // hold is its own: a child the worker started and left running does not keep
 // the join waiting once the worker has exited.
 func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
+	t.Parallel()
 	storageDir := t.TempDir()
 	holds, err := holdWorkerLock(storageDir)
 	if err != nil {

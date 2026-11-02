@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"io"
+	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -13,7 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// Test adapters for the leaf split (links-cli-1lxr). Each handler is split into
+// Test adapters for the leaf split. Each handler is split into
 // a declaration and a work phase, which is how a command is INVOKED, not what
 // it does, so call sites keep calling a handler name and signature and assert
 // the same observable behavior.
@@ -36,8 +37,8 @@ func underInvocation(ctx context.Context) context.Context {
 // runLeaf drives a leaf the way its pipeline does, minus the acquisition the
 // pipeline performs between parse and work: the resource is whatever the test
 // supplies.
-func runLeaf[R any](l leaf[R], ctx context.Context, stdout io.Writer, res R, args []string) error {
-	_, err := recordLeaf(l, ctx, cwdInvocation(stdout, stdout, nil), res, args)
+func runLeaf[R any](t testing.TB, l leaf[R], ctx context.Context, stdout io.Writer, res R, args []string) error {
+	_, err := recordLeaf(l, ctx, dirInvocation(t, t.TempDir(), stdout, stdout, nil), res, args)
 	return err
 }
 
@@ -56,127 +57,128 @@ func recordLeaf[R any](l leaf[R], ctx context.Context, inv Invocation, res R, ar
 
 // App-mode handlers.
 
-func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(newLeaf(), ctx, stdout, ap, args)
+func runNew(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, newLeaf(), ctx, stdout, ap, args)
 }
 
-func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(followupLeaf(), ctx, stdout, ap, args)
+func runFollowup(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, followupLeaf(), ctx, stdout, ap, args)
 }
 
-func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(showLeaf(), ctx, stdout, ap, args)
+func runShow(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, showLeaf(), ctx, stdout, ap, args)
 }
 
-func runHistory(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(historyLeaf(), ctx, stdout, ap, args)
+func runHistory(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, historyLeaf(), ctx, stdout, ap, args)
 }
 
-func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(updateLeaf(), ctx, stdout, ap, args)
+func runUpdate(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, updateLeaf(), ctx, stdout, ap, args)
 }
 
-func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(nextLeaf(), ctx, stdout, ap, args)
+func runNext(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, nextLeaf(), ctx, stdout, ap, args)
 }
 
-func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(orphanedLeaf(), ctx, stdout, ap, args)
+func runOrphaned(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, orphanedLeaf(), ctx, stdout, ap, args)
 }
 
 // runChildren drives `children` against the workspace store the test opened —
 // the listing leaf under its children surface, exactly as `lit children` runs it.
-func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runListLeaf(ctx, stdout, childrenSurface, listScope{store: ap.Store, policy: workspaceReadyPolicy(testEnv(), ap)}, args)
+func runChildren(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runListLeaf(t, ctx, stdout, childrenSurface, listScope{store: ap.Store, policy: workspaceReadyPolicy(runEnv(t), ap)}, args)
 }
 
-func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(doctorLeaf(), ctx, stdout, ap, args)
+func runDoctor(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, doctorLeaf(), ctx, stdout, ap, args)
 }
 
-func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(importTreeLeaf(), ctx, stdout, ap, args)
+func runImportTree(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, importTreeLeaf(), ctx, stdout, ap, args)
 }
 
-func runLabelAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(labelAddLeaf(), ctx, stdout, ap, args)
+func runLabelAdd(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, labelAddLeaf(), ctx, stdout, ap, args)
 }
 
-func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(parentSetLeaf(), ctx, stdout, ap, args)
+func runParentSet(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, parentSetLeaf(), ctx, stdout, ap, args)
 }
 
-func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(depAddLeaf(), ctx, stdout, ap, args)
+func runDepAdd(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, depAddLeaf(), ctx, stdout, ap, args)
 }
 
-func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(bulkLabelLeaf(), ctx, stdout, ap, args)
+func runBulkLabel(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, bulkLabelLeaf(), ctx, stdout, ap, args)
 }
 
-func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runBulkTransition(ctx, stdout, ap, args, closeSpec)
+func runBulkClose(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runBulkTransition(t, ctx, stdout, ap, args, closeSpec)
 }
 
-func runBulkTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, spec transitionSpec) error {
-	return runLeaf(bulkTransitionLeaf(spec)(), ctx, stdout, ap, args)
+func runBulkTransition(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string, spec transitionSpec) error {
+	return runLeaf(t, bulkTransitionLeaf(spec)(), ctx, stdout, ap, args)
 }
 
 // runRank keeps the `set` dispatch, so a test passing `{"set", ...}` still
 // reaches the rank-set surface.
-func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func runRank(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	l, rest := rankDispatch(args)
-	return runLeaf(l, ctx, stdout, ap, rest)
+	return runLeaf(t, l, ctx, stdout, ap, rest)
 }
 
-func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runLeaf(rankSetLeaf(), ctx, stdout, ap, args)
+func runRankSet(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return runLeaf(t, rankSetLeaf(), ctx, stdout, ap, args)
 }
 
 // App-mode handlers parameterised by the spec or view they serve.
 
-func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, spec transitionSpec) error {
-	return runLeaf(transitionLeaf(spec), ctx, stdout, ap, args)
+func runTransition(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string, spec transitionSpec) error {
+	return runLeaf(t, transitionLeaf(spec), ctx, stdout, ap, args)
 }
 
-func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []string, view workableView) error {
-	return runLeaf(workableLeaf(view), ctx, stdout, ap, args)
+func runWorkable(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string, view workableView) error {
+	return runLeaf(t, workableLeaf(view), ctx, stdout, ap, args)
 }
 
 // Workspace-mode handlers.
 
-func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	return runLeaf(quickstartLeaf(), ctx, stdout, ws, args)
+func runQuickstart(t testing.TB, ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+	return runLeaf(t, quickstartLeaf(), ctx, stdout, ws, args)
 }
 
-func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	return runLeaf(lifeboatRecoverLeaf(), ctx, stdout, ws, args)
+func runLifeboatRecover(t testing.TB, ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+	return runLeaf(t, lifeboatRecoverLeaf(), ctx, stdout, ws, args)
 }
 
 // runBackgroundMirror runs the mirror against ws's store with no handoff on
 // stdin, so its workspace build fails: what it reaches is whichever of the
 // mirror's endings precedes that failure's (the beacon's, a teardown's).
-func runBackgroundMirror(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	return runLeaf(backgroundMirrorLeaf(), ctx, stdout, struct{}{}, append([]string{"--store", ws.StorageDir}, args...))
+func runBackgroundMirror(t testing.TB, ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+	return runLeaf(t, backgroundMirrorLeaf(), ctx, stdout, struct{}{}, append([]string{"--store", ws.StorageDir}, args...))
 }
 
 // runHooksInstall never took a context: installing hooks is filesystem work
 // with nothing to cancel. The leaf's work carries one because every leaf's does,
 // so the adapter supplies the background context the pipeline would.
-func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
-	return runLeaf(hooksInstallLeaf(), context.Background(), stdout, ws, args)
+func runHooksInstall(t testing.TB, stdout io.Writer, ws workspace.Info, args []string) error {
+	return runLeaf(t, hooksInstallLeaf(), context.Background(), stdout, ws, args)
 }
 
 // Sync-mode handlers, over the workspace-plus-session scope their work needs.
 
-func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
-	return runLeaf(syncCompactLeaf(), ctx, stdout, syncScope{ws: ws, session: session}, args)
+func runSyncCompact(t testing.TB, ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+	return runLeaf(t, syncCompactLeaf(), ctx, stdout, syncScope{ws: ws, session: session}, args)
 }
 
 // Version-traversal handlers, over the narrow typed dependencies that let these
 // run with no workspace at all.
 
 func runUpgradeWith(
+	t testing.TB,
 	ctx context.Context,
 	stdout io.Writer,
 	schema schemaReader,
@@ -187,10 +189,11 @@ func runUpgradeWith(
 	binPathFn func() (string, error),
 ) error {
 	l := upgradeLeafWith(resolver, installer, binPathFn).leaf
-	return runLeaf(l, ctx, stdout, upgradeScope{schema: schema, current: current}, args)
+	return runLeaf(t, l, ctx, stdout, upgradeScope{schema: schema, current: current}, args)
 }
 
 func runDowngradeWith(
+	t testing.TB,
 	ctx context.Context,
 	stdout io.Writer,
 	scope downgradeScope,
@@ -200,22 +203,22 @@ func runDowngradeWith(
 	binPathFn func() (string, error),
 ) error {
 	l := downgradeLeafWith(resolver, installer, binPathFn).leaf
-	return runLeaf(l, ctx, stdout, scope, args)
+	return runLeaf(t, l, ctx, stdout, scope, args)
 }
 
 // runListWithStore drives `ls` against a store the test has already opened —
 // the same seam runList hands its two acquisition paths to.
-func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, policy readyPolicy, args []string) error {
+func runListWithStore(t testing.TB, ctx context.Context, stdout io.Writer, st storage.Store, policy readyPolicy, args []string) error {
 	// the store is supplied here, so --at has nothing to route
-	return runListLeaf(ctx, stdout, lsSurface, listScope{store: st, policy: policy}, args)
+	return runListLeaf(t, ctx, stdout, lsSurface, listScope{store: st, policy: policy}, args)
 }
 
 // runListLeaf is runList with the acquisition replaced by a supplied scope: the
 // same parse and the same positional read, then the work.
-func runListLeaf(ctx context.Context, stdout io.Writer, surface listSurface, scope listScope, args []string) error {
+func runListLeaf(t testing.TB, ctx context.Context, stdout io.Writer, surface listSurface, scope listScope, args []string) error {
 	ctx = underInvocation(ctx)
 	l, _ := listLeaf(surface)
-	declared, err := parseLeaf(ctx, l, args, cwdInvocation(stdout, stdout, nil))
+	declared, err := parseLeaf(ctx, l, args, dirInvocation(t, t.TempDir(), stdout, stdout, nil))
 	if err != nil {
 		return err
 	}
@@ -223,5 +226,5 @@ func runListLeaf(ctx context.Context, stdout io.Writer, surface listSurface, sco
 	if err != nil {
 		return err
 	}
-	return l.work(ctx, cwdInvocation(stdout, stdout, nil), scope, positional)
+	return l.work(ctx, dirInvocation(t, t.TempDir(), stdout, stdout, nil), scope, positional)
 }

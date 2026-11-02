@@ -20,6 +20,7 @@ import (
 // publishes the re-root, the live store follows it and shrinks, and the next
 // write the mirror pushes sits one commit above the kept window.
 func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
+	t.Parallel()
 	// Auto-sync stays off throughout: a write here spawns no detached mirror,
 	// which would push from another process, racing the pushes this test
 	// sequences.
@@ -32,7 +33,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	for _, title := range []string{"one", "two", "three"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
-	alphaWS, err := workspace.Resolve(testEnv(), r.alpha)
+	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
@@ -87,11 +88,12 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 // shows the push wrote it, and the received-refs record the earlier push
 // proved stands.
 func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
+	t.Parallel()
 	r, _ := newSharedCheckouts(t)
 	isolateEvents(t)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
-	alphaWS, err := workspace.Resolve(testEnv(), r.alpha)
+	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
 	if err != nil {
 		t.Fatalf("resolve alpha: %v", err)
 	}
@@ -177,6 +179,7 @@ func dirBytes(t *testing.T, root string) int64 {
 // without it, leaves the mirror recording the pushed head, as an ordinary
 // push does; one the remote may carry the re-root in place of waits.
 func TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote(t *testing.T) {
+	t.Parallel()
 	landed := func(reRoot storage.ReRootPublication, followed bool) pushedHead {
 		return pushedHead{remote: remoteName(t, "origin"), branch: "master", head: "abc", reRoot: reRoot, followedReRoot: followed}
 	}
@@ -206,6 +209,7 @@ func TestTheLiveStoreLearnsWhereTheCycleLeftTheRemote(t *testing.T) {
 // the event's history_bound.window_error carries the refusal, with no bound
 // record beside it.
 func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
+	t.Parallel()
 	r, _ := newSharedCheckouts(t)
 	pushed := extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "pushed", "--topic", "demo", "--type", "task", "--parent", r.epic))
 	setHistoryWindow(t, r.alpha, 5, 5)

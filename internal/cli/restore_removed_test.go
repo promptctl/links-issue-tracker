@@ -13,6 +13,7 @@ import (
 )
 
 func TestWriteRemovedAndReplacementMetadataStateAZero(t *testing.T) {
+	t.Parallel()
 	var none bytes.Buffer
 	if err := writeRemoved(&none, nil, "/backups/x.json"); err != nil || none.Len() != 0 {
 		t.Errorf("writeRemoved(nil) printed %q (%v), want nothing", none.String(), err)
@@ -29,6 +30,7 @@ func TestWriteRemovedAndReplacementMetadataStateAZero(t *testing.T) {
 // the file after another writer made a ticket. The restore names that ticket,
 // the backup that still holds it, and the edit path the agent wanted.
 func TestBackupRestoreOfAnEditedExportNamesTheTicketsItDestroys(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
 	edited := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--title", "Before", "--topic", "demo", "--parent", epic))
@@ -73,6 +75,7 @@ func TestBackupRestoreOfAnEditedExportNamesTheTicketsItDestroys(t *testing.T) {
 // a later change traces no count at all: it removed nothing, and nothing was
 // counted.
 func TestBackupRestoreTracesWhatItRemovedOnlyOnceItsReplaceCommits(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
 	created := strings.Fields(runCLIInDir(t, repo, "backup", "create"))
@@ -106,6 +109,7 @@ func TestBackupRestoreTracesWhatItRemovedOnlyOnceItsReplaceCommits(t *testing.T)
 // be recorded — has still removed the tickets the file lacks, so its output names
 // them beside the error.
 func TestBackupRestoreThatFailsAfterItsReplaceNamesTheTicketsItRemoved(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
 	created := strings.Fields(runCLIInDir(t, repo, "backup", "create"))

@@ -19,14 +19,15 @@ import (
 // fails at the process level, keeps the failed ID off stdout, and still applies
 // the valid transition.
 func TestBulkTransitionPartialFailureExitsNonZero(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "bulk-exit-sess")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "bulk-exit-sess")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	good := newAttributionIssue(t, ap, "real target")
 	const bogus = "does-not-exist-xyz"
 
 	var out bytes.Buffer
-	err := runBulkClose(ctx, &out, ap, []string{"--ids", good + "," + bogus, "--resolution", "obsolete", "--reason", "done"})
+	err := runLeaf(t, bulkTransitionLeaf(closeSpec)(), ctx, &out, ap, []string{"--ids", good + "," + bogus, "--resolution", "obsolete", "--reason", "done"})
 	if err == nil {
 		t.Fatal("bulk close with one bogus ID returned nil error, want a failure that drives a non-zero exit code")
 	}
@@ -53,14 +54,15 @@ func TestBulkTransitionPartialFailureExitsNonZero(t *testing.T) {
 // TestBulkLabelAllSucceedExitsZero pins the converse: when every item succeeds,
 // the command returns nil (exit 0) and reports each success on stdout.
 func TestBulkLabelAllSucceedExitsZero(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	a := newAttributionIssue(t, ap, "label a")
 	b := newAttributionIssue(t, ap, "label b")
 
 	var out bytes.Buffer
-	if err := runBulkLabel(ctx, &out, ap, []string{"add", "--ids", a + "," + b, "--label", "urgent"}); err != nil {
-		t.Fatalf("runBulkLabel(all valid) error = %v, want nil (exit 0)", err)
+	if err := runBulkLabel(t, ctx, &out, ap, []string{"add", "--ids", a + "," + b, "--label", "urgent"}); err != nil {
+		t.Fatalf("runBulkLabel(t, all valid) error = %v, want nil (exit 0)", err)
 	}
 	stdout := out.String()
 	for _, id := range []string{a, b} {
@@ -73,11 +75,12 @@ func TestBulkLabelAllSucceedExitsZero(t *testing.T) {
 // TestBulkLabelTotalFailureExitsNonZero pins that an all-bogus run also fails
 // loudly rather than reporting success on an empty result set.
 func TestBulkLabelTotalFailureExitsNonZero(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	var out bytes.Buffer
-	err := runBulkLabel(ctx, &out, ap, []string{"add", "--ids", "nope-1,nope-2", "--label", "urgent"})
+	err := runBulkLabel(t, ctx, &out, ap, []string{"add", "--ids", "nope-1,nope-2", "--label", "urgent"})
 	if err == nil {
 		t.Fatal("bulk label add over only bogus IDs returned nil, want a non-zero exit")
 	}
@@ -96,7 +99,7 @@ func TestBulkLabelTotalFailureExitsNonZero(t *testing.T) {
 func commandAnswer(t *testing.T, repo string, args ...string) (stderr, remediation, stdout string) {
 	t.Helper()
 	var out bytes.Buffer
-	err := Run(context.Background(), dirInvocation(repo, &out, io.Discard, args))
+	err := Run(context.Background(), dirInvocation(t, repo, &out, io.Discard, args))
 	if err == nil {
 		return "", "", out.String()
 	}
@@ -128,6 +131,7 @@ func codeAndReason(t *testing.T, stderr string) string {
 // at once, it answers as a partial failure. Every run names each stuck ticket
 // with its reason and advises re-running none of them.
 func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) {
+	t.Parallel()
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "bulk answers")
 	task := func(t *testing.T, title string) string {

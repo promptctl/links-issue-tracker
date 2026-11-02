@@ -73,6 +73,7 @@ func TestWriteInitSyncLine(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			var out bytes.Buffer
 			if err := writeInitSyncLine(&out, tc.outcome, testBuildNote); err != nil {
 				t.Fatalf("writeInitSyncLine() error = %v", err)
@@ -88,16 +89,18 @@ func TestWriteInitSyncLine(t *testing.T) {
 // the adopt decision: a store with local tickets must be preserved, and a
 // workspace with no git remote has nothing to adopt.
 func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
+	t.Parallel()
 	t.Run("preserves a store that already holds local tickets", func(t *testing.T) {
+		t.Parallel()
 		repo := newInitTestRepo(t)
 		epicID := newEpicInDir(t, repo, "local-epic")
 		runCLIInDir(t, repo, "new", "--title", "local-work", "--topic", "demo", "--type", "task", "--parent", epicID)
-		ws, err := workspace.Resolve(testEnv(), repo)
+		ws, err := workspace.Resolve(runEnv(t), repo)
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
 		var progress bytes.Buffer
-		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, testEnv(), ws)
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, runEnv(t), ws)
 		if outcome.State != initSyncHasLocalTickets {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncHasLocalTickets)
 		}
@@ -110,13 +113,14 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 	})
 
 	t.Run("reports not_configured when no git remote exists", func(t *testing.T) {
+		t.Parallel()
 		repo := newInitTestRepo(t)
-		ws, err := workspace.Resolve(testEnv(), repo)
+		ws, err := workspace.Resolve(runEnv(t), repo)
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
 		var progress bytes.Buffer
-		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, testEnv(), ws)
+		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, runEnv(t), ws)
 		if outcome.State != initSyncNotConfigured {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncNotConfigured)
 		}
@@ -135,6 +139,7 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 // the real CLI for both sides over a real git remote, so "adopted" means the
 // consumer's backlog actually lists the producer's ticket.
 func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -203,6 +208,7 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 // carries no lit data, and creates none when it does, since that backlog is
 // adoptable only once the remote is renamed.
 func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -222,7 +228,7 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 		dir := filepath.Join(base, name)
 		runGit(t, base, "clone", remote, name)
 		runGit(t, dir, "remote", "rename", "origin", "my.fork")
-		ws, err := workspace.Resolve(testEnv(), dir)
+		ws, err := workspace.Resolve(runEnv(t), dir)
 		if err != nil {
 			t.Fatalf("workspace.Resolve(%s) error = %v", name, err)
 		}
@@ -267,6 +273,7 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 // AdoptRemoteByClone itself to fail (the data is confirmed present via
 // refs/dolt/*, but nothing exists at that specific branch to clone).
 func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -295,7 +302,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 
 	// Force the adopt to resolve a branch the remote's Dolt data is not on, so
 	// the clone-based adopt fails even though refs/dolt/* is confirmed present.
-	t.Setenv("LINKS_DEBUG_DOLT_SYNC_BRANCH", "branch-the-remote-does-not-have")
+	setRunEnv(t, "LINKS_DEBUG_DOLT_SYNC_BRANCH", "branch-the-remote-does-not-have")
 	initOut, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks")
 
 	if initErr == nil {
@@ -317,7 +324,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	// so the retry the error text asks for starts from a provably clean slate.
 	// (AdoptRemoteByClone still MkdirAlls the root itself; empty is the
 	// postcondition, absence is not.)
-	ws, err := workspace.Resolve(testEnv(), consumer)
+	ws, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -336,9 +343,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	// The retry story the failure message promises: once the cause is fixed
 	// (here, the branch override removed), a plain re-run of `lit init`
 	// adopts the remote backlog with no manual cleanup in between.
-	if err := os.Unsetenv("LINKS_DEBUG_DOLT_SYNC_BRANCH"); err != nil {
-		t.Fatalf("Unsetenv error = %v", err)
-	}
+	setRunEnv(t, "LINKS_DEBUG_DOLT_SYNC_BRANCH", "")
 	retryOut := runCLIInDir(t, consumer, "init", "--skip-hooks")
 	if !strings.Contains(retryOut, "Pulled existing backlog from origin/master") {
 		t.Fatalf("retry init output missing adopt line:\n%s", retryOut)
@@ -361,6 +366,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 // And when the remote signal is gone too, init fails loudly naming the leftover
 // rather than blessing it as a fresh store.
 func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -384,7 +390,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	ws, err := workspace.Resolve(testEnv(), consumer)
+	ws, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -473,6 +479,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 // exit non-zero, create no store, and surface the real git failure — never
 // guess "empty" and proceed.
 func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	// A local-path URL under a directory that does not exist makes `git
@@ -481,7 +488,7 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 	// remote to resolveSyncRemote/GitRemotes.
 	badRemote := filepath.Join(t.TempDir(), "gone", "does-not-exist.git")
 	runGit(t, repo, "remote", "add", "origin", badRemote)
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -547,7 +554,7 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, testEnv(), workspace.Info{})
+	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspace.Info{})
 
 	<-abandoned
 	if got := stderr.String(); !strings.Contains(got, "while the run waits") || strings.Contains(got, "after the run returned") {
@@ -572,8 +579,7 @@ func newInitTestRepo(t *testing.T) string {
 	return repo
 }
 
-// runCLIInDir runs the real CLI with cwd set to dir and returns its combined
-// output. The chdir is restored on cleanup; these tests must not run in parallel.
+// runCLIInDir runs the real CLI in dir and returns its combined output.
 func runCLIInDir(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	out, err := runCLIInDirAllowError(t, dir, args...)
@@ -607,7 +613,7 @@ func runCLIInDirAllowError(t *testing.T, dir string, args ...string) (string, er
 func runCLIInDirSplit(t *testing.T, dir string, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	runErr := Run(context.Background(), dirInvocation(dir, &out, &errOut, args))
+	runErr := Run(context.Background(), dirInvocation(t, dir, &out, &errOut, args))
 	return out.String(), errOut.String(), runErr
 }
 
@@ -616,7 +622,7 @@ func runCLIInDirSplit(t *testing.T, dir string, args ...string) (stdout, stderr 
 func runCLIInDirWithStdin(t *testing.T, dir, stdin string, args ...string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	inv := dirInvocation(dir, &out, &out, args)
+	inv := dirInvocation(t, dir, &out, &out, args)
 	inv.Stdin = strings.NewReader(stdin)
 	runErr := Run(context.Background(), inv)
 	return out.String(), runErr

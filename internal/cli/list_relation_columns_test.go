@@ -34,6 +34,7 @@ func fieldsOf(line string) []string {
 // shows the epic id, blocked reflects a *live* blocking dependency only, and the
 // default projection is untouched.
 func TestListRelationColumns(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -90,8 +91,8 @@ func TestListRelationColumns(t *testing.T) {
 
 	// --columns id,parent,blocked surfaces the relationship facts.
 	var relOut bytes.Buffer
-	if err := runListWithStore(ctx, &relOut, ap.Store, noReadyPolicy, []string{"--columns", "id,parent,blocked"}); err != nil {
-		t.Fatalf("runListWithStore(--columns): %v", err)
+	if err := runListWithStore(t, ctx, &relOut, ap.Store, noReadyPolicy, []string{"--columns", "id,parent,blocked"}); err != nil {
+		t.Fatalf("runListWithStore(t, --columns): %v", err)
 	}
 
 	cases := []struct {
@@ -120,8 +121,8 @@ func TestListRelationColumns(t *testing.T) {
 
 	// Default projection is unchanged: id | state | topic | title, no parent/blocked.
 	var defOut bytes.Buffer
-	if err := runListWithStore(ctx, &defOut, ap.Store, noReadyPolicy, nil); err != nil {
-		t.Fatalf("runListWithStore(default): %v", err)
+	if err := runListWithStore(t, ctx, &defOut, ap.Store, noReadyPolicy, nil); err != nil {
+		t.Fatalf("runListWithStore(t, default): %v", err)
 	}
 	childLine := fieldsOf(lineForID(t, defOut.String(), child.ID))
 	want := []string{child.ID, "open", "rel", "Child"}
@@ -146,6 +147,7 @@ func TestListRelationColumns(t *testing.T) {
 // for a ticket that is genuinely blocked. Both orders are asserted because a max
 // is the only fold that survives both.
 func TestColumnSourceLadder(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		columns []columnSpec
@@ -177,6 +179,7 @@ func TestColumnSourceLadder(t *testing.T) {
 // re-derives the cell from dependency edges to "save" the annotation pass, this
 // is where the shorter list comes back, and this line is what fails.
 func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic := seedEpicRaw(t, ctx, ap, "Gate", "gate")

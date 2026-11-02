@@ -103,6 +103,7 @@ func TestPrintIssueFieldsUnknownFieldReturnsUsageErrorWithNoOutput(t *testing.T)
 // epic/children summary block. This is the ticket's core contract: an agent
 // can read a ticket's description without the full multi-hundred-line dump.
 func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Plan epic", "the epic's own long description")
 	sibling := f.addChild("Sibling")
 	focus, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
@@ -115,13 +116,13 @@ func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
 	_ = sibling
 
 	var buf bytes.Buffer
-	if err := runShow(context.Background(), &buf, f.ap, []string{focus.ID, "--field", "description"}); err != nil {
-		t.Fatalf("runShow(--field description) error = %v", err)
+	if err := runShow(t, context.Background(), &buf, f.ap, []string{focus.ID, "--field", "description"}); err != nil {
+		t.Fatalf("runShow(t, --field description) error = %v", err)
 	}
 
 	want := "the focused child's own description\n"
 	if buf.String() != want {
-		t.Fatalf("runShow(--field description) = %q, want %q", buf.String(), want)
+		t.Fatalf("runShow(t, --field description) = %q, want %q", buf.String(), want)
 	}
 }
 
@@ -129,6 +130,7 @@ func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
 // same UsageError printIssueFields returns, so `lit show <id> --field bogus`
 // fails clean instead of silently falling back to the full dump.
 func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
+	t.Parallel()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
@@ -139,16 +141,17 @@ func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err = runShow(context.Background(), &buf, ap, []string{issue.ID, "--field", "bogus"})
+	err = runShow(t, context.Background(), &buf, ap, []string{issue.ID, "--field", "bogus"})
 	var usageErr UsageError
 	if !errors.As(err, &usageErr) {
-		t.Fatalf("runShow(--field bogus) error = %v, want UsageError", err)
+		t.Fatalf("runShow(t, --field bogus) error = %v, want UsageError", err)
 	}
 }
 
 // Omitting --field entirely leaves the default full-detail view (header,
 // epic context, siblings, ...) unchanged.
 func TestRunShowWithoutFieldFlagIsUnchanged(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Plan epic", "epic body")
 	focus := f.addChild("Focused child")
 
