@@ -222,36 +222,15 @@ func migrationFileOf(version int64, name string, data []byte) migrationFile {
 	return migrationFile{version: version, name: name, upSHA256: hex.EncodeToString(sum[:])}
 }
 
-// upSection returns the bytes goose runs as the Up: every line before the
-// Down annotation, byte for byte, plus any `NO TRANSACTION` annotation after
-// it, since goose applies that one to the whole file. Annotations are
-// recognized as goose's sqlparser recognizes them, with no comment or quote
-// tracking, so the split lands where goose's does.
-// [LAW:one-source-of-truth] the producer is goose; this mirrors its parser.
+// upSection returns the bytes the pin hashes: Split's head, which is every
+// line goose reads before the Down, and one NO TRANSACTION line when goose
+// would run the file outside a transaction, wherever that annotation sits.
 func upSection(data []byte) []byte {
-	var kept []string
-	inDown := false
-	for _, line := range strings.Split(string(data), "\n") {
-		annotation, ok := gooseAnnotation(line)
-		switch {
-		case ok && strings.EqualFold(annotation, "Down"):
-			inDown = true
-		case !inDown, ok && strings.EqualFold(annotation, "NO TRANSACTION"):
-			kept = append(kept, line)
-		}
+	s := Split(data)
+	if s.NoTransaction {
+		return []byte(s.Head + "\n-- +goose NO TRANSACTION")
 	}
-	return []byte(strings.Join(kept, "\n"))
-}
-
-// gooseAnnotation returns the annotation a line carries as goose v3's
-// sqlparser reads it: a line whose trimmed text starts with `--` and that
-// contains `+goose`, with every `--` and the first `+goose` removed.
-func gooseAnnotation(line string) (string, bool) {
-	if !strings.HasPrefix(strings.TrimSpace(line), "--") || !strings.Contains(line, "+goose") {
-		return "", false
-	}
-	cmd := strings.Replace(strings.ReplaceAll(line, "--", ""), "+goose", "", 1)
-	return strings.TrimSpace(cmd), true
+	return []byte(s.Head)
 }
 
 // TestUpSection pins what the Up-section hash sees: a Down edit is invisible
@@ -271,6 +250,7 @@ func TestUpSection(t *testing.T) {
 		{"Down directive spelled without spaces", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n--+goose Down\nALTER TABLE t DROP c;\n", true},
 		// goose reads NO TRANSACTION anywhere in the file and runs the Up by it.
 		{"NO TRANSACTION added under Down", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\n-- +goose NO TRANSACTION\nALTER TABLE t DROP c;\n", false},
+		{"indented Down annotation is no split", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n\t-- +goose Down\nALTER TABLE t DROP c;\n", false},
 	}
 	want := string(upSection([]byte(released)))
 	for _, tc := range cases {
@@ -283,8 +263,8 @@ func TestUpSection(t *testing.T) {
 }
 
 // TestReleasedDownIsFixableInPlace is the acceptance case on a real released
-// migration: rewriting its Down passes the pin, and one changed byte of its Up
-// fails it.
+// migration: rewriting its Down passes the pin, and one added byte of its Up, a
+// blank line goose still parses, fails it.
 func TestReleasedDownIsFixableInPlace(t *testing.T) {
 	const name = "00002_add_lane.sql"
 	data, err := FS.ReadFile(name)
@@ -305,7 +285,7 @@ func TestReleasedDownIsFixableInPlace(t *testing.T) {
 	}
 
 	upAt += len("-- +goose Up\n")
-	upEdited := text[:upAt] + " " + text[upAt:]
+	upEdited := text[:upAt] + "\n" + text[upAt:]
 	findings := detectVersionReuse(pins, []migrationFile{migrationFileOf(2, name, []byte(upEdited))})
 	if len(findings) != 1 || findings[0].kind != kindContentChanged {
 		t.Errorf("editing one byte of the Up of %s: got findings %+v, want one content change", name, findings)

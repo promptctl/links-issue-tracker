@@ -1362,8 +1362,8 @@ CREATE TABLE `plan_reviews` (
 
 `baselineSchema()` parses the embedded `00001_baseline.sql` Up section into a
 table→columns map (`internal/store/migration_runner.go`), reading
-only the section between `-- +goose up` and `-- +goose down`
-(`internal/store/migration_runner.go`) and only the first identifier
+only the lines between the Up and Down annotations as goose reads them
+(`internal/store/migrations/sections.go`) and only the first identifier
 of each top-level comma-separated item that is not a constraint keyword
 (`internal/store/migration_runner.go`). `CREATE INDEX` statements are
 ignored entirely (`internal/store/migration_runner.go`).
@@ -2103,7 +2103,7 @@ Regexes (shapemap_known.go):
 - `alterTableRE = (?is)ALTER\s+TABLE\s+`?(\w+)`?([^;]*)` — group 1 = table, group 2 = statement body up to `;` or EOF.
 - `dropColumnRE = (?is)DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?` — group 1 = column; matched repeatedly within one ALTER body, so multi-drop statements are fully captured (shapemap_known.go).
 
-`gooseUpSection` (migration_runner.go): case-insensitively finds `-- +goose up`; if absent returns the whole SQL; otherwise slices from that index to the next `-- +goose down` (or to EOF if there is none).
+`gooseUpSection` (ddl_text.go): returns `migrations.Split`'s Up, the lines after the Up annotation and before the Down annotation, recognized as goose's sqlparser recognizes them; a file with no Up annotation yields the empty text.
 
 Current corpus content of this map: **empty**. Every `DROP COLUMN` in `internal/store/migrations/` occurs in a `-- +goose Down` section — `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql` — and `README.md` is not a `.sql` migration but is still read (the loop does not filter by extension, shapemap_known.go); its `ALTER TABLE issues DROP COLUMN priority_band;` lies outside any `-- +goose Up` marker, and `gooseUpSection` returns the whole text when no marker is found, so whether it contributes depends on that file's marker content.
 
