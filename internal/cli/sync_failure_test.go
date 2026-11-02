@@ -285,21 +285,21 @@ func TestSyncFailureBlockOmitsBuildStatusWhenUnset(t *testing.T) {
 // ceiling and its source, and a remedy that installs a published release.
 func TestAnUnreleasedSchemaPushRendersTheSyncFailureContract(t *testing.T) {
 	t.Parallel()
-	storeErr := &store.UnreleasedPushError{
+	storeErr := &store.SchemaCeilingPushError{
 		Remote: "origin", Branch: "master", CommitSchema: 12,
-		Ceiling: version.ReleasedSchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0"},
+		Ceiling: version.SchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0"},
 	}
 	var syncFailure SyncFailureError
 	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
 		t.Fatalf("asSyncFailure(%v) is not a SyncFailureError", storeErr)
 	}
-	if syncFailure.Failure.Class != syncFailureUnreleasedSchema || syncFailure.Failure.Unreleased != storeErr {
+	if syncFailure.Failure.Class != syncFailureSchemaCeiling || syncFailure.Failure.AboveCeiling != storeErr {
 		t.Fatalf("mapped failure = %+v", syncFailure.Failure)
 	}
 	block := syncFailure.Error()
 	for _, want := range []string{
-		"at schema version 12, and this lit's released-schema ceiling is 11 (stamped at build time from release tag v0.24.0)",
-		"install a published release",
+		"at schema version 12, and the schema ceiling for this push is 11 (stamped at build time from release tag v0.24.0)",
+		"lit sync fetch --remote origin",
 		"ESCALATION — BLOCKED",
 	} {
 		if !strings.Contains(block, want) {
@@ -308,6 +308,34 @@ func TestAnUnreleasedSchemaPushRendersTheSyncFailureContract(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(block), "rebuild") {
 		t.Errorf("block advises a rebuild:\n%s", block)
+	}
+}
+
+// The same block renders a refusal the remote's schema hold made: the hold is
+// the ceiling, its source names the remote head, and the remedy names only
+// commands this lit has, never an upgrade a hold would refuse too.
+func TestASchemaHoldPushRefusalRendersTheHoldAsTheCeiling(t *testing.T) {
+	t.Parallel()
+	storeErr := &store.SchemaCeilingPushError{
+		Remote: "origin", Branch: "master", CommitSchema: 12,
+		Ceiling: version.SchemaCeiling{Max: 11, Source: "origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set"},
+	}
+	var syncFailure SyncFailureError
+	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
+		t.Fatalf("asSyncFailure(%v) is not a SyncFailureError", storeErr)
+	}
+	block := syncFailure.Error()
+	for _, want := range []string{
+		"the schema ceiling for this push is 11 (origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
+		"lit sync fetch --remote origin",
+		"ESCALATION — BLOCKED",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block lacks %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, "lit upgrade") {
+		t.Errorf("block names an upgrade, which a hold refuses too:\n%s", block)
 	}
 }
 

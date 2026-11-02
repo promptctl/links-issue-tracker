@@ -13,8 +13,8 @@ import (
 )
 
 // ceilingAt is a released-schema ceiling of max, as a test sets one.
-func ceilingAt(max int64) version.ReleasedSchemaCeiling {
-	return version.ReleasedSchemaCeiling{Max: max, Source: "set by the test"}
+func ceilingAt(max int64) version.SchemaCeiling {
+	return version.SchemaCeiling{Max: max, Source: "set by the test"}
 }
 
 // registryMax is the highest migration this tree carries.
@@ -45,11 +45,11 @@ func TestAMigratingOpenRefusesToMoveAnExistingWorkspacePastTheReleasedSchema(t *
 	snapshotsBefore := snapshotCount(t, doltRoot)
 
 	_, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
-	var refused *UnreleasedMigrationError
+	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
-		t.Fatalf("Open() with released schema %d = %v, want an UnreleasedMigrationError", max-1, err)
+		t.Fatalf("Open() with released schema %d = %v, want an SchemaCeilingError", max-1, err)
 	}
-	if want := (UnreleasedMigrationError{Raise: RaiseMigrate, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
+	if want := (SchemaCeilingError{Raise: RaiseMigrate, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 	if got := asConvergenceError(t, err).Step; got != stepRefuseUnreleased {
@@ -118,11 +118,11 @@ func TestAPushOfAStoreAboveTheReleasedSchemaSendsNothing(t *testing.T) {
 	if closeErr := sync.Close(); closeErr != nil {
 		t.Fatalf("Close(sync) = %v", closeErr)
 	}
-	var refused *UnreleasedPushError
+	var refused *SchemaCeilingPushError
 	if !errors.As(err, &refused) {
-		t.Fatalf("SyncPush() with released schema %d = %v, want an UnreleasedPushError", max-1, err)
+		t.Fatalf("SyncPush() with released schema %d = %v, want an SchemaCeilingPushError", max-1, err)
 	}
-	if want := (UnreleasedPushError{Remote: "origin", Branch: "master", CommitSchema: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
+	if want := (SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "refused-clone"), "ws", origin, remoteURL, "master"); err == nil {
@@ -165,9 +165,9 @@ func TestTheUnreleasedRefusalRunsBeforeDriftRepair(t *testing.T) {
 	logBefore := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 
 	_, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
-	var refused *UnreleasedMigrationError
+	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
-		t.Fatalf("Open() with released schema %d = %v, want an UnreleasedMigrationError", max-1, err)
+		t.Fatalf("Open() with released schema %d = %v, want an SchemaCeilingError", max-1, err)
 	}
 	if logAfter := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id"); !slices.Equal(logAfter, logBefore) {
 		t.Errorf("the refused open wrote before refusing:\nbefore %q\nafter  %q", logBefore, logAfter)
@@ -191,11 +191,11 @@ func TestAnUnreleasedRaiseOfAPreVersionedWorkspaceNamesItsShape(t *testing.T) {
 	}
 
 	_, err = Open(ctx, testEnv().WithReleasedSchema(ceilingAt(max-1)), testStderr(), doltRoot, "test-workspace-id")
-	var refused *UnreleasedMigrationError
+	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
-		t.Fatalf("Open() with released schema %d = %v, want an UnreleasedMigrationError", max-1, err)
+		t.Fatalf("Open() with released schema %d = %v, want an SchemaCeilingError", max-1, err)
 	}
-	if want := (UnreleasedMigrationError{Raise: RaiseMigrate, PreVersioned: true, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
+	if want := (SchemaCeilingError{Raise: RaiseMigrate, PreVersioned: true, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 	if !strings.Contains(err.Error(), "unversioned pre-migration shape") || strings.Contains(err.Error(), "schema version 0") {
@@ -215,11 +215,11 @@ func TestAStepIntoAnOutOfOrderGapAboveTheCeilingIsRefused(t *testing.T) {
 	st.env = testEnv().WithReleasedSchema(ceilingAt(max - 2))
 
 	err := st.liftWorkingSetToRegistry(ctx)
-	var refused *UnreleasedMigrationError
+	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
-		t.Fatalf("lift over a gap at %d with released schema %d = %v, want an UnreleasedMigrationError", max-1, max-2, err)
+		t.Fatalf("lift over a gap at %d with released schema %d = %v, want an SchemaCeilingError", max-1, max-2, err)
 	}
-	if want := (UnreleasedMigrationError{Raise: RaiseLift, WorkspaceVersion: max, TargetVersion: max - 1, Ceiling: ceilingAt(max - 2)}); *refused != want {
+	if want := (SchemaCeilingError{Raise: RaiseLift, WorkspaceVersion: max, TargetVersion: max - 1, Ceiling: ceilingAt(max - 2)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 }
@@ -229,13 +229,13 @@ func TestAStepIntoAnOutOfOrderGapAboveTheCeilingIsRefused(t *testing.T) {
 // unstamped build gets wrong.
 func TestARefusalNamesTheCeilingAndItsSource(t *testing.T) {
 	t.Parallel()
-	ceiling := version.ReleasedSchemaCeiling{Max: 4, Source: "the checkout this lit was built from had no release tag"}
+	ceiling := version.SchemaCeiling{Max: 4, Source: "the checkout this lit was built from had no release tag"}
 	for _, err := range []error{
-		&UnreleasedMigrationError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling},
-		&UnreleasedPushError{Remote: "origin", Branch: "master", CommitSchema: 5, Ceiling: ceiling},
+		&SchemaCeilingError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling},
+		&SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 5, Ceiling: ceiling},
 	} {
 		msg := err.Error()
-		if !strings.Contains(msg, "this lit's released-schema ceiling is 4 (the checkout this lit was built from had no release tag)") {
+		if !strings.Contains(msg, "the schema ceiling") || !strings.Contains(msg, "is 4 (the checkout this lit was built from had no release tag)") {
 			t.Errorf("refusal %q does not name the ceiling and its source", msg)
 		}
 		if strings.Contains(msg, "published") {
@@ -258,11 +258,11 @@ func TestTheReconcileLiftRefusesToRaisePastTheReleasedSchema(t *testing.T) {
 	st.env = testEnv().WithReleasedSchema(ceilingAt(max - 1))
 
 	err := st.liftWorkingSetToRegistry(ctx)
-	var refused *UnreleasedMigrationError
+	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
-		t.Fatalf("lift with released schema %d = %v, want an UnreleasedMigrationError", max-1, err)
+		t.Fatalf("lift with released schema %d = %v, want an SchemaCeilingError", max-1, err)
 	}
-	if want := (UnreleasedMigrationError{Raise: RaiseLift, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
+	if want := (SchemaCeilingError{Raise: RaiseLift, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != max-1 {
@@ -288,9 +288,9 @@ func TestADriftRepairAboveTheCeilingIsRefusedBeforeItWrites(t *testing.T) {
 	logBefore := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
 
 	_, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(1)), testStderr(), doltRoot, "test-workspace-id")
-	var refused *UnreleasedMigrationError
+	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
-		t.Fatalf("Open() of a drifted workspace with released schema 1 = %v, want an UnreleasedMigrationError", err)
+		t.Fatalf("Open() of a drifted workspace with released schema 1 = %v, want an SchemaCeilingError", err)
 	}
 	if refused.Raise != RaiseRepair || refused.TargetVersion <= 1 {
 		t.Errorf("refusal = %+v, want a repair refusal above version 1", *refused)
@@ -307,7 +307,7 @@ func TestADriftRepairAboveTheCeilingIsRefusedBeforeItWrites(t *testing.T) {
 // workspace.
 func TestALiftRefusalSaysItWasALift(t *testing.T) {
 	t.Parallel()
-	err := &UnreleasedMigrationError{Raise: RaiseLift, WorkspaceVersion: 10, TargetVersion: 11, Ceiling: ceilingAt(10)}
+	err := &SchemaCeilingError{Raise: RaiseLift, WorkspaceVersion: 10, TargetVersion: 11, Ceiling: ceilingAt(10)}
 	if msg := err.Error(); !strings.Contains(msg, "refusing to lift a commit from schema version 10 to 11 for a sync") || strings.Contains(msg, "migrate this workspace") {
 		t.Errorf("lift refusal = %q", msg)
 	}

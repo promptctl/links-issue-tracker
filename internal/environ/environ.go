@@ -47,7 +47,7 @@ type Env struct {
 	// ceiling is passed in at the composition root rather than read as a
 	// global below it. Of leaves it 0, which moves no existing workspace's
 	// schema: an Env nobody gave a ceiling fails closed.
-	releasedSchema version.ReleasedSchemaCeiling
+	releasedSchema version.SchemaCeiling
 	// raisePolicy is whether this binary may raise a remote's schema, as
 	// cmd/lit built it from its build stamp (version.RaisePolicyOf). It rides
 	// here for the reason releasedSchema does, and Of leaves it the zero
@@ -129,14 +129,14 @@ func (e Env) With(set ...string) Env {
 // WithReleasedSchema is the environment with its released-schema ceiling set
 // to ceiling: no existing workspace is migrated past it, and no commit above
 // it is pushed.
-func (e Env) WithReleasedSchema(ceiling version.ReleasedSchemaCeiling) Env {
+func (e Env) WithReleasedSchema(ceiling version.SchemaCeiling) Env {
 	e.releasedSchema = ceiling
 	return e
 }
 
 // ReleasedSchema is the released-schema ceiling WithReleasedSchema set; its
 // Max is 0 when none was.
-func (e Env) ReleasedSchema() version.ReleasedSchemaCeiling {
+func (e Env) ReleasedSchema() version.SchemaCeiling {
 	return e.releasedSchema
 }
 

@@ -216,6 +216,7 @@ working directory's.
 | `migration.min_writer_schema` | The oldest schema version a lit must support to write that newer workspace, as a migration this lit lacks recorded it, or `0` when none did or the workspace is not newer. A read open serves a workspace whose minimum is above this lit; a write open, and every `lit sync` command, refuses it. |
 | `migration.min_writer_schema_error` | Why that minimum is not a schema version, or `null`. A read open serves the workspace; a write open refuses it. |
 | `migration.read_only` | `true` when the open served the newer workspace for reading only, because its minimum is above this lit or cannot be read; `false` otherwise. |
+| `migration.schema_hold` | The schema version the store's schema hold (`meta.schema_hold`, written by a remote downgrade) keeps it at, as the open read it, or `0` when the store holds none. A migrating open raises no held store past its hold. |
 | `migration.v8_rows_renamed` | Recorded only when the open applied migration 8, which renames the dependency edge from `blocks` to `blocked-by`: how many edges it renamed. |
 | `migration.v8_dropped_check` | Recorded with `migration.v8_rows_renamed`: the name of the CHECK constraint migration 8 dropped from the relations table, `relations_type_check`, or the name the database engine gave it (`relations_chk_<suffix>`) on a store created before lit versioned its schema. |
 | `migration.probe_error` | Recorded instead of those two when the open applied migration 8 but could not read them first: why. |
@@ -404,7 +405,7 @@ block it was, since every divergence class shares one reason.
 
 | Key | Meaning |
 | --- | --- |
-| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `unreleased_schema` (a push refused because the commit's schema is above this lit's released-schema ceiling), or `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release). |
+| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `schema_ceiling` (a push refused because the commit's schema is above the schema ceiling for that remote: this lit's released-schema ceiling or the hold the remote's head carries, whichever is lower), or `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release). |
 
 ## What `lit init` records
 

@@ -307,13 +307,13 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 	classes := []syncFailureClass{
 		syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureRemoteSchemaAhead,
 		syncFailureUnrelatedHistories, syncFailureIDCollision, syncFailureReceiveUnsettled,
-		syncFailurePushDiverged, syncFailureUnreleasedSchema, syncFailureSchemaRaiseRequiresRelease,
+		syncFailurePushDiverged, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease,
 	}
 	for _, class := range classes {
 		failure := SyncFailure{
 			Class: class, Remote: "origin", Branch: "master",
 			RemoteAhead:    &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8},
-			Unreleased:     &store.UnreleasedPushError{Remote: "origin", Branch: "master", CommitSchema: 9},
+			AboveCeiling:   &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9},
 			RaiseRefused:   &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9},
 			StoppedAt:      receiveStepSettle,
 			UnsettledSince: time.Now().Add(-time.Hour),

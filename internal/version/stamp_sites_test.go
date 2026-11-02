@@ -197,12 +197,12 @@ func TestTheCIReporterRunsAReleasedLit(t *testing.T) {
 	}
 }
 
-// TestReleasedSchemaCeilingReadsTheStamp pins the stamp's grammar and the
+// TestSchemaCeilingReadsTheStamp pins the stamp's grammar and the
 // source each form names: unstamped fails closed at 0, the release stamp is
 // the carried schema, "<version>@<label>" is that version from the tag (or the
 // snapshot, or no tag) the label names, and anything else is a broken
 // producer.
-func TestReleasedSchemaCeilingReadsTheStamp(t *testing.T) {
+func TestSchemaCeilingReadsTheStamp(t *testing.T) {
 	saved := ReleasedSchema
 	t.Cleanup(func() { ReleasedSchema = saved })
 	carried, err := CarriedSchemaSupport()

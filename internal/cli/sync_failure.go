@@ -72,11 +72,12 @@ const (
 	// lacks (storage.ErrPushDiverged). A retry is refused the same way until the
 	// peer's commits are merged here. Remedy: a foreground pull, then the push.
 	syncFailurePushDiverged syncFailureClass = "push_diverged"
-	// syncFailureUnreleasedSchema: the push was refused because the commit it
-	// would send is at a schema above this lit's released-schema ceiling. It
-	// never clears by retrying: only a lit whose ceiling reaches that schema may
-	// send it, and only a published release that carries the schema has one.
-	syncFailureUnreleasedSchema syncFailureClass = "unreleased_schema"
+	// syncFailureSchemaCeiling: the push was refused because the commit it
+	// would send is at a schema above the schema ceiling for that remote: this
+	// lit's released-schema ceiling, or the hold the remote's head carries,
+	// whichever is lower. It never clears by retrying from this lit; the
+	// ceiling's source names which bound refused.
+	syncFailureSchemaCeiling syncFailureClass = "schema_ceiling"
 	// syncFailureSchemaRaiseRequiresRelease: the push was refused because it
 	// would raise the remote's schema and this lit is no release. The remote's
 	// schema is the tracking ref's as of the last fetch, so the remedy is a
@@ -138,10 +139,10 @@ type SyncFailure struct {
 	// the field present names which class rendered, so a consumer cannot read a
 	// remote-schema-ahead block without the versions that make it actionable.
 	RemoteAhead *store.RemoteSchemaAheadError
-	// Unreleased is the store's refusal, populated only for
-	// syncFailureUnreleasedSchema: the commit's schema and this lit's
-	// released-schema ceiling with its source.
-	Unreleased *store.UnreleasedPushError
+	// AboveCeiling is the store's refusal, populated only for
+	// syncFailureSchemaCeiling: the commit's schema and the ceiling that
+	// refused it, with its source.
+	AboveCeiling *store.SchemaCeilingPushError
 	// RaiseRefused is the store's refusal, populated only for
 	// syncFailureSchemaRaiseRequiresRelease: the remote's schema (or that it
 	// is unknown), the commit's, and the ceiling that chooses the remedy.
@@ -217,19 +218,19 @@ func pushDivergedFailure(err error) (SyncFailure, bool) {
 	}, true
 }
 
-// unreleasedSchemaFailure builds the sync-failure contract for a store
-// *UnreleasedPushError, or ok=false when err is not one.
-func unreleasedSchemaFailure(err error) (SyncFailure, bool) {
-	var unreleased *store.UnreleasedPushError
-	if !errors.As(err, &unreleased) {
+// schemaCeilingFailure builds the sync-failure contract for a store
+// *SchemaCeilingPushError, or ok=false when err is not one.
+func schemaCeilingFailure(err error) (SyncFailure, bool) {
+	var refused *store.SchemaCeilingPushError
+	if !errors.As(err, &refused) {
 		return SyncFailure{}, false
 	}
 	return SyncFailure{
-		Class:      syncFailureUnreleasedSchema,
-		Remote:     unreleased.Remote,
-		Branch:     unreleased.Branch,
-		Unreleased: unreleased,
-		BuildNote:  resolveBuildStatusNote(time.Now()),
+		Class:        syncFailureSchemaCeiling,
+		Remote:       refused.Remote,
+		Branch:       refused.Branch,
+		AboveCeiling: refused,
+		BuildNote:    resolveBuildStatusNote(time.Now()),
 	}, true
 }
 
@@ -322,7 +323,7 @@ func schemaRefusalFailure(err error) (SyncFailure, bool) {
 	if failure, ok := remoteSchemaAheadFailure(err); ok {
 		return failure, true
 	}
-	if failure, ok := unreleasedSchemaFailure(err); ok {
+	if failure, ok := schemaCeilingFailure(err); ok {
 		return failure, true
 	}
 	return schemaRaiseFailure(err)
@@ -372,8 +373,8 @@ func (e SyncFailureError) Unwrap() error {
 	switch {
 	case e.Failure.RemoteAhead != nil:
 		return e.Failure.RemoteAhead
-	case e.Failure.Unreleased != nil:
-		return e.Failure.Unreleased
+	case e.Failure.AboveCeiling != nil:
+		return e.Failure.AboveCeiling
 	case e.Failure.RaiseRefused != nil:
 		return e.Failure.RaiseRefused
 	}
@@ -453,8 +454,8 @@ func (f SyncFailure) headline() string {
 		return "lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you."
 	case syncFailurePushDiverged:
 		return "lit sync push was refused because a peer pushed first, and needs you to merge the peer's commits."
-	case syncFailureUnreleasedSchema:
-		return "lit sync push was refused because this backlog is at a schema this lit may not send to a remote, and needs you."
+	case syncFailureSchemaCeiling:
+		return "lit sync push was refused because this backlog is at a schema above the remote's schema ceiling, and needs you."
 	case syncFailureSchemaRaiseRequiresRelease:
 		return "lit sync push was refused because it would raise the remote's schema and this lit is not a release, and needs you."
 	default:
@@ -499,10 +500,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the automatic receive fetched %s and then stopped at %s. A receive first stopped after its fetch at %s, and no settle has succeeded on this checkout since then, so it is still on the history it last settled to and is not receiving the shared backlog. The cause from the latest stop is below.",
 			ref, f.StoppedAt.describe(), f.UnsettledSince.UTC().Format(time.RFC3339))
-	case syncFailureUnreleasedSchema:
+	case syncFailureSchemaCeiling:
 		return fmt.Sprintf(
-			"the commit this push would send to %s is at schema version %d, and this lit's released-schema ceiling is %d (%s). A lit never sends a commit above its ceiling to a remote, so nothing was written to %s.",
-			ref, f.Unreleased.CommitSchema, f.Unreleased.Ceiling.Max, f.Unreleased.Ceiling.Source, ref)
+			"the commit this push would send to %s is at schema version %d, and the schema ceiling for this push is %d (%s). A lit never sends a commit above the ceiling to a remote, so nothing was written to %s.",
+			ref, f.AboveCeiling.CommitSchema, f.AboveCeiling.Ceiling.Max, f.AboveCeiling.Ceiling.Source, ref)
 	case syncFailurePushDiverged:
 		return fmt.Sprintf(
 			"%s holds commits a peer pushed that this checkout lacks, and this checkout holds commits %s lacks, so the remote refused the push and nothing was written to it. A retry is refused the same way until the peer's commits are merged here.",
@@ -584,10 +585,10 @@ func (f SyncFailure) resolutionSteps() []string {
 		}
 	case syncFailurePushDiverged:
 		return remedyLines(pushDivergedRemedy(f.Remote))
-	case syncFailureUnreleasedSchema:
+	case syncFailureSchemaCeiling:
 		return []string{
 			"lit version               # shows this lit's released-schema ceiling and where it came from",
-			fmt.Sprintf("lit upgrade               # only when the user directs it: install a published release, which can send schema v%d only if a release carries it", f.Unreleased.CommitSchema),
+			fmt.Sprintf("lit sync fetch --remote %s  # the remote's schema hold is read from its head as of the last fetch", f.Remote),
 		}
 	case syncFailureSchemaRaiseRequiresRelease:
 		return remedyLines(schemaRaiseRemedy(f.RaiseRefused))
@@ -624,8 +625,8 @@ func (f SyncFailure) escalationLine() string {
 		return fmt.Sprintf(
 			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
 			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
-	case syncFailureUnreleasedSchema:
-		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose released-schema ceiling reaches this backlog's schema may push it, and that is a published release carrying the schema. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
+	case syncFailureSchemaCeiling:
+		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying from this lit; the ceiling's source above says which bound refused, a released-schema ceiling or the remote's schema hold, and what set it. Surface this to the user as blocking."
 	case syncFailureSchemaRaiseRequiresRelease:
 		return "ESCALATION — resolve now: run the fetch and the push above once. A push refused again after the fetch is a raise, or the first push to a branch the remote does not have yet; a lit that is no release makes neither, and that will not clear by waiting or retrying from this lit. " + installReplacesLit + ": run the upgrade only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailurePushDiverged:

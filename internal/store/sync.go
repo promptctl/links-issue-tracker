@@ -1248,18 +1248,19 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 }
 
 // refuseSchemaSend is the two verdicts on the schema of the head a push
-// sends, H, against the remote head it read, R: a schema no release carries
-// never leaves this store (refuseUnreleasedSchema), and a schema above R is a
-// raise only a release makes (refuseSchemaRaise). One read of H serves both.
-// Every DOLT_PUSH runs it: the plain push here and the leased push in
-// push_lease.go. [LAW:single-enforcer] [LAW:one-source-of-truth]
+// sends, H, against the remote head it read, R: a schema above the ceiling
+// never leaves this store (refuseSchemaAboveCeiling), where the ceiling is
+// the lower of this lit's released-schema ceiling and the hold R carries; and
+// a schema above R is a raise only a release makes (refuseSchemaRaise). One
+// read of H serves both. Every DOLT_PUSH runs it: the plain push here and the
+// leased push in push_lease.go. [LAW:single-enforcer] [LAW:one-source-of-truth]
 func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName, branch string, remoteHead remoteSchema, commitHash string) error {
 	commitSchema, err := s.remoteHeadSchema(ctx, commitHash)
 	if err != nil {
 		return err
 	}
-	ceiling := s.env.ReleasedSchema()
-	if err := refuseUnreleasedSchema(remote, branch, commitSchema, ceiling); err != nil {
+	ceiling := s.env.ReleasedSchema().Lower(remoteHead.hold)
+	if err := refuseSchemaAboveCeiling(remote, branch, commitSchema, ceiling); err != nil {
 		return err
 	}
 	return refuseSchemaRaise(remote, branch, remoteHead, commitSchema, s.env.RaisePolicy())

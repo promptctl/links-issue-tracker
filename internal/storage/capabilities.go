@@ -326,10 +326,14 @@ type SchemaMigrator interface {
 // finding nothing to migrate, would succeed without retrying the prune. The
 // collection's error is a field for the same reason.
 type Migrated struct {
-	Bootstrap      Bootstrap
-	Snapshot       *RecoverySnapshot
-	PruneErr       error
-	SchemaAhead    SchemaAhead
+	Bootstrap   Bootstrap
+	Snapshot    *RecoverySnapshot
+	PruneErr    error
+	SchemaAhead SchemaAhead
+	// SchemaHold is the schema version the store's hold keeps it at, as the
+	// open read it, or 0 when the store holds none: a schema version starts
+	// at the baseline, so 0 is not a hold.
+	SchemaHold     int64
 	TempTableFiles *TempTableFilesCollection
 	// Probed is what the migrations the open committed read before they ran,
 	// as event facts under their own keys; empty when none had a probe.
@@ -479,6 +483,7 @@ func (m Migrated) EventRecord() map[string]any {
 	facts := m.Bootstrap.EventRecord()
 	maps.Copy(facts, MigrationRecoveryFacts(m.Snapshot, m.PruneErr))
 	maps.Copy(facts, m.SchemaAhead.EventRecord())
+	facts["migration.schema_hold"] = m.SchemaHold
 	maps.Copy(facts, m.TempTableFiles.EventRecord())
 	maps.Copy(facts, m.Probed)
 	return facts

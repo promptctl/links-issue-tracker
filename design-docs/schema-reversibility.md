@@ -118,10 +118,16 @@ local store, so a local store stepped down under a hold stays down. It
 migrates no store past the hold and refuses to push a raise past it. The check sits
 at the one migration entry that both opening a store and the sync reconcile's
 lift of a fetched head go through, so sync cannot re-raise what open would not.
-A binary whose code needs a schema above the hold refuses to write and names
-the `lit downgrade --to <tag>` that installs a release at the hold; its store
-steps down with it, which rule 1 makes lossless. The row is removed only by
-`lit upgrade --remote <name>`.
+The hold enters each of those sites as a `version.SchemaCeiling`, the type
+the released-schema ceiling already is, and the lower of the two binds
+(`SchemaCeiling.Lower`); a store with no row yields the unbounded ceiling, so
+no site asks whether a hold exists. A binary whose code needs a schema above
+the hold refuses to open the store, as it refuses any raise above a ceiling
+(`SchemaCeilingError`), naming the hold as the ceiling's source; the store
+knows the hold's version, not which release carries it, so the refusal names
+no release tag. The remedy is a release at the hold (`lit downgrade --to
+<tag>`), whose store steps down with it, which rule 1 makes lossless. The row
+is removed only by `lit upgrade --remote <name>`.
 
 Binaries released before the row existed do not read it. The guarantee holds
 from the first release that does.
@@ -135,7 +141,7 @@ A push with H > R — a **raise** — succeeds only when both hold:
 - H is at most the binary's own `Schema.Max`.
 
 The second condition is the released-schema ceiling's own refusal
-(`UnreleasedPushError`), which runs before the raise check; a release's
+(`SchemaCeilingPushError`), which runs before the raise check; a release's
 ceiling is its `Schema.Max`. A raise that passes it refuses with
 `SchemaRaiseRequiresReleaseError`, whose message names R as of the last fetch
 and the remedy: fetch, since a release may have raised the remote since, and

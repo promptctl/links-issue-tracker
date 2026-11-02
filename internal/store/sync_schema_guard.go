@@ -67,11 +67,11 @@ var (
 	_ model.RecordedError = (*RemoteSchemaAheadError)(nil)
 )
 
-// trackingHeadSchema is the schema of the head `remotes/<remote>/<branch>`
-// points at, or unknownRemoteSchema when that ref does not exist yet (the
-// branch was never fetched or pushed). It is the one read of R a push makes:
-// the schema-ahead refusal and the raise refusal both judge the value it
-// returns. [LAW:one-source-of-truth]
+// trackingHeadSchema is the schema and schema hold of the head
+// `remotes/<remote>/<branch>` points at, or unknownRemoteSchema when that ref
+// does not exist yet (the branch was never fetched or pushed). It is the one
+// read of R a push makes: the schema-ahead refusal, the ceiling refusal and
+// the raise refusal all judge the value it returns. [LAW:one-source-of-truth]
 func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteName, branch string) (remoteSchema, error) {
 	head, synced, err := s.trackingHeadHash(ctx, remote, branch)
 	if err != nil {
@@ -80,11 +80,7 @@ func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteNam
 	if !synced {
 		return unknownRemoteSchema(), nil
 	}
-	remoteVersion, err := s.remoteHeadSchema(ctx, head)
-	if err != nil {
-		return remoteSchema{}, err
-	}
-	return knownRemoteSchema(remoteVersion), nil
+	return s.remoteHeadAt(ctx, head, fmt.Sprintf("%s/%s's head", remote, branch))
 }
 
 // guardCommitSchemaAhead reads the schema version recorded at commitHash as

@@ -2,10 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"errors"
-	"fmt"
-	"strconv"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -84,25 +80,17 @@ func (s *Store) operability(ctx context.Context, workspaceSchema, maxSupported i
 	return op, err
 }
 
-// minWriterSchema parses meta.min_writer_schema: the version it declares, 0
+// minWriterSchema reads meta.min_writer_schema: the version it declares, 0
 // when no migration set the row; malformed, why the row is not a schema
-// version; and err, why the row could not be read. [LAW:parse-dont-validate]
-// a malformed row is kept as the reason the minimum is unknown, never read as
-// no declaration.
+// version; and err, why the row could not be read. The read is
+// metaSchemaVersionRow's, shared with the schema hold (schema_hold.go).
 func (s *Store) minWriterSchema(ctx context.Context) (version int64, malformed, err error) {
-	var raw string
-	err = s.db.QueryRowContext(ctx, `SELECT meta_value FROM meta WHERE meta_key = ?`, minWriterSchemaKey).Scan(&raw)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return 0, nil, nil
-	case err != nil:
-		return 0, nil, fmt.Errorf("read meta %s: %w", minWriterSchemaKey, err)
-	}
-	version, err = strconv.ParseInt(raw, 10, 64)
+	row := s.db.QueryRowContext(ctx, `SELECT meta_value FROM meta WHERE meta_key = ?`, minWriterSchemaKey)
+	read, err := metaSchemaVersionRow(minWriterSchemaKey, row)
 	if err != nil {
-		return 0, fmt.Errorf("meta %s = %q is not a schema version: %w", minWriterSchemaKey, raw, err), nil
+		return 0, nil, err
 	}
-	return version, nil, nil
+	return read.version, read.malformed, nil
 }
 
 // assessOperability classifies the workspace and reads what this binary may do

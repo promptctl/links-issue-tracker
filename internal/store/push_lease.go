@@ -45,11 +45,10 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteN
 	// read from the one commit a held lease can replace: expected. The
 	// tracking ref may lag it, and a lease over a schema-ahead head would
 	// regress the shared remote to this binary's schema.
-	expectedSchema, err := s.remoteHeadSchema(ctx, trimmedExpected)
+	remoteHead, err := s.remoteHeadAt(ctx, trimmedExpected, fmt.Sprintf("%s/%s's head", remote, trimmedBranch))
 	if err != nil {
 		return "", err
 	}
-	remoteHead := knownRemoteSchema(expectedSchema)
 	if err := refuseSchemaAhead(remote, trimmedBranch, remoteHead); err != nil {
 		return "", err
 	}
