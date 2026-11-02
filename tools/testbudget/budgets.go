@@ -52,6 +52,14 @@ var budgets = map[string]time.Duration{
 	// the production mirror-contention it exists to reproduce.
 	"github.com/promptctl/links-issue-tracker/cmd/lit": 50 * time.Second,
 
+	// 38.6s/19.7s (dev, empty build cache, 2026-11-02). The gate type-checks
+	// every package of the module and of the vendored driver, which needs
+	// their compiled export data, Dolt's cgo graph included; on CI that cold
+	// compile is contended by the rest of the run's own builds. The cost is
+	// the behavior the test pins: reading types is what recognizes a
+	// filesystem however it is declared.
+	"github.com/promptctl/links-issue-tracker/internal/fsnames": 60 * time.Second,
+
 	// 18.2–30.2s across two same-day CI runs (cold corpus load makes it the
 	// suite's noisiest package) / 7.2s dev — the one CI-bound entry, and
 	// above every unlisted package in its worst environment, which is what
