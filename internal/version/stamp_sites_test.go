@@ -1,6 +1,7 @@
 package version
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,20 +181,32 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 	}
 }
 
-// TestTheCIReporterRunsAReleasedLit pins that the CI action writing to the
-// shared remote store runs the latest published release rather than building
-// this checkout: CI must never run unreleased code against the remote.
-func TestTheCIReporterRunsAReleasedLit(t *testing.T) {
+// TestNoCIJobWritesToTheTracker pins the owner's ruling that CI holds no
+// write access to the lit backlog: no workflow or action under .github syncs a
+// lit store or touches its refs/dolt/data ref. A scheduled job that did could
+// write the backlog at any hour with nobody present, and one did migrate the
+// shared store to a schema no release carries.
+func TestNoCIJobWritesToTheTracker(t *testing.T) {
 	t.Parallel()
-	action := repoFile(t, ".github/actions/report-to-lit/action.yml")
-	// install.sh prefers the directory of a lit already on PATH over GOBIN,
-	// so the action pins both: a PATH with no lit, and the GOBIN it runs from.
-	if !strings.Contains(action, `env PATH=/usr/bin:/bin GOBIN="$bindir" GH_TOKEN="$TOKEN" bash scripts/install.sh --latest-release`) ||
-		!strings.Contains(action, `lit="$bindir/lit"`) {
-		t.Error(".github/actions/report-to-lit/action.yml does not install the latest release into the one directory it then runs lit from")
-	}
-	if strings.Contains(action, "go build") {
-		t.Error(".github/actions/report-to-lit/action.yml builds lit from source — CI would run unreleased code against the shared remote")
+	root := filepath.Join("..", "..", ".github")
+	forbidden := []string{"lit sync", "refs/dolt", "report-to-lit"}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, f := range forbidden {
+			if strings.Contains(string(b), f) {
+				t.Errorf("%s contains %q — CI never writes to the lit tracker", path, f)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
