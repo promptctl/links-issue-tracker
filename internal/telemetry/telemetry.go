@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"strings"
 	"sync"
 	"time"
 )
@@ -61,11 +62,18 @@ type Event struct {
 	// `lit`, an unknown command — is "lit".
 	Event   string `json:"event"`
 	TraceID string `json:"trace_id"`
-	Service string `json:"service"`
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
-	PID     int    `json:"pid"`
-	Cwd     string `json:"cwd"`
+	// SpanID names this invocation within its trace. A process this invocation
+	// spawns adopts TraceID and names SpanID as its ParentSpanID, which is how
+	// its event is tied back to the command that caused it.
+	SpanID string `json:"span_id"`
+	// ParentSpanID is the span of the invocation that spawned this one, handed
+	// down in TRACEPARENT; empty on an invocation nothing spawned.
+	ParentSpanID string `json:"parent_span_id,omitempty"`
+	Service      string `json:"service"`
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	PID          int    `json:"pid"`
+	Cwd          string `json:"cwd"`
 	// Flags are the names of the flags the command was given, never their
 	// values: a value can be a title, a body, or a pasted secret.
 	Flags      []string  `json:"flags"`
@@ -118,10 +126,22 @@ func (r *Recorder) event() *Recorder {
 }
 
 // Begin opens an invocation's event from its identity — everything known
-// before the command runs — and mints its trace id.
+// before the command runs — and mints its trace id and span id.
 func Begin(identity Event) *Recorder {
+	return BeginUnder(identity, Parent{})
+}
+
+// BeginUnder opens the event of an invocation another process spawned: it
+// joins parent's trace and names parent's span as its own parent. A zero
+// parent is Begin's fresh trace.
+func BeginUnder(identity Event, parent Parent) *Recorder {
 	ev := identity
 	ev.TraceID = newTraceID()
+	if !parent.IsZero() {
+		ev.TraceID = parent.TraceID
+		ev.ParentSpanID = parent.SpanID
+	}
+	ev.SpanID = newSpanID()
 	ev.Counts = map[string]int{}
 	ev.Facts = map[string]any{}
 	ev.Occurrences = map[string][]any{}
@@ -312,6 +332,67 @@ func Record(ctx context.Context, facts map[string]any, counts map[string]int) {
 	defer r.mu.Unlock()
 	maps.Copy(r.ev.Facts, facts)
 	maps.Copy(r.ev.Counts, counts)
+}
+
+// TraceparentEnvVar is the environment variable the W3C Trace Context spec
+// names for handing a trace to a process the current one starts.
+const TraceparentEnvVar = "TRACEPARENT"
+
+// Parent is the span of the invocation that spawned the one beginning.
+type Parent struct {
+	TraceID string
+	SpanID  string
+}
+
+// IsZero is the Parent of an invocation nothing spawned.
+func (p Parent) IsZero() bool { return p == Parent{} }
+
+// ParseTraceparent reads a W3C traceparent value. The only version lit writes
+// is 00, so it is the only one read: a value of any other version, or of the
+// wrong shape, is an error for the caller to put on the event, never a guess
+// at what its writer meant. [LAW:no-silent-failure]
+func ParseTraceparent(value string) (Parent, error) {
+	// version "-" trace-id "-" parent-id "-" trace-flags, all lowercase hex.
+	fields := strings.Split(value, "-")
+	if len(fields) != 4 || len(fields[0]) != 2 || len(fields[1]) != 32 || len(fields[2]) != 16 || len(fields[3]) != 2 {
+		return Parent{}, fmt.Errorf("traceparent %q is not 00-<32 hex>-<16 hex>-<2 hex>", value)
+	}
+	for _, field := range fields {
+		if !isLowerHex(field) {
+			return Parent{}, fmt.Errorf("traceparent %q has a character outside 0-9a-f", value)
+		}
+	}
+	if fields[0] != "00" {
+		return Parent{}, fmt.Errorf("traceparent %q is version %s; only version 00 is read", value, fields[0])
+	}
+	if allZero(fields[1]) || allZero(fields[2]) {
+		return Parent{}, fmt.Errorf("traceparent %q has an all-zero trace id or parent id", value)
+	}
+	return Parent{TraceID: fields[1], SpanID: fields[2]}, nil
+}
+
+func isLowerHex(s string) bool {
+	return strings.IndexFunc(s, func(r rune) bool { return !strings.ContainsRune("0123456789abcdef", r) }) < 0
+}
+
+func allZero(s string) bool { return strings.Trim(s, "0") == "" }
+
+// Traceparent is the invocation's trace position as a W3C traceparent value,
+// for a process it spawns to adopt: the child's event joins this trace and
+// names this invocation's span as its parent. The sampled flag is always set,
+// as every invocation leaves an event.
+func (r *Recorder) Traceparent() string {
+	r = r.event()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return "00-" + r.ev.TraceID + "-" + r.ev.SpanID + "-01"
+}
+
+// newSpanID is a W3C Trace Context span id: 8 random bytes in lowercase hex.
+func newSpanID() string {
+	var id [8]byte
+	_, _ = rand.Read(id[:])
+	return hex.EncodeToString(id[:])
 }
 
 // newTraceID is a W3C Trace Context trace id: 16 random bytes in lowercase hex.
