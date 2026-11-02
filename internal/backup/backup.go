@@ -128,7 +128,10 @@ func takeHeld(storageDir string, keep int, read func() (model.Export, error)) (T
 // write reads an export, writes it into the set and prunes the set to keep. A
 // nil Written means its read or its create wrote nothing; a create that
 // stamped nothing, or a prune that fails after it, returns the Written with an
-// error naming it.
+// error naming it. A create that stamped nothing skips the prune: it removes
+// the oldest by order, and this take's place in that order was never set, so
+// it could remove the take itself. Taking again is safe: the same content
+// lands on the same name and is stamped then.
 func write(storageDir string, keep int, read func() (model.Export, error)) (*Written, error) {
 	export, err := read()
 	if err != nil {
