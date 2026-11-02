@@ -668,7 +668,7 @@ exceptions are `doctor.reranked`, `doctor.repair_failed` and
 Every warning line the report prints has a fact of its own: the rank, cycle,
 interleaved, refused-block and footprint facts below, or one of the counts here.
 `doctor.warnings` is how many warning lines were printed, so a count above zero
-with every one of those facts at `"0"` is a warning that has no fact.
+that none of those facts accounts for is a warning that has no fact.
 
 | Key | Meaning |
 | --- | --- |
