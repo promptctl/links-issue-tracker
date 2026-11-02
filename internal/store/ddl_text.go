@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
 // alterAddColumnRe matches an `ALTER TABLE <table> ADD COLUMN <column>`
@@ -128,19 +130,11 @@ func terminatedStatement(s string, start int) (stmt string, ok bool) {
 	return "", false
 }
 
-// gooseUpSection returns the SQL between the goose Up and Down markers, so the
-// parser never reads the Down (DROP TABLE) statements as table definitions.
+// gooseUpSection returns the SQL between the goose Up and Down annotations,
+// as migrations.UpSQL reads them, so the parser never reads the Down's
+// statements as the Up's.
 func gooseUpSection(sql string) string {
-	lower := strings.ToLower(sql)
-	up := strings.Index(lower, "-- +goose up")
-	if up < 0 {
-		return sql
-	}
-	body := sql[up:]
-	if down := strings.Index(strings.ToLower(body), "-- +goose down"); down >= 0 {
-		return body[:down]
-	}
-	return body
+	return migrations.UpSQL([]byte(sql))
 }
 
 // parseCreateTableColumns extracts table -> column-names from CREATE TABLE

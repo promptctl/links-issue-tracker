@@ -125,7 +125,7 @@ The install story is the same one end users follow — see
 
 `./scripts/install.sh` (and `just install`) installs only a tree whose schema a
 published release supports. Before building lit, it checks that the newest local
-`vX.Y.Z` tag carries every migration in the tree, byte for byte, and prints the
+`vX.Y.Z` tag carries every migration in the tree with the same Up, and prints the
 comparison on every run:
 
 ```text
