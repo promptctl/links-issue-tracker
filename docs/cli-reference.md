@@ -1050,8 +1050,8 @@ A backup is named by its content, so the set holds each state once: backing up a
 state it already holds makes that backup the newest instead of adding a copy.
 Each backup first removes the partial file any backup killed mid-write left in
 the set.
-`list` prints each backup's name, when it was taken, its size and its path, newest
-first.
+`list` prints each backup's name, when it was taken, its size and its path, in
+the order taken, newest first.
 `restore` refuses to overwrite changes made since the last restore without
 `--force`, and is the one
 home for loading an export JSON. It replaces the whole workspace, so every ticket
