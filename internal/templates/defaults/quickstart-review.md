@@ -14,7 +14,7 @@ Invoke the `laws:code` skill; if your harness has no skills, read its text, `plu
 
 ## 3. Judge the core first
 
-Find the plan's core, stated at the top of the plan: the one idea, and the facts it rests on. Check each fact against the code, the recorded fixture or the measurement it names. If the core does not hold (a fact is false, unmeasured, or recorded nowhere, or the plan reads a proxy for it), fail on that alone: cite the laws the core breaks and name the fact. Do not review the edge cases built on top of it, and cite no law for them. The author has to replace the core, and findings on a core that is going away only invite patches. A plan with no stated core fails here, naming that.
+Find the plan's core, stated at the top of the plan: the one idea, and the facts it rests on. Check each fact against the code, the recorded fixture or the measurement it names. If the core does not hold (a fact is false, unmeasured, or recorded nowhere, or the plan reads a proxy for it), fail on that alone: cite the laws the core breaks and name the fact. Do not review the edge cases built on top of it, and cite no law for them. The author has to replace the core, and findings on a core that is going away only invite patches.
 
 ## 4. Find the whole mechanism
 
@@ -38,7 +38,7 @@ The moment to watch is the one where you think: *"this is small, well-scoped, an
 
 ## 6. Record, then stop
 
-On a fail, write your reasons first, so that no fail is ever on the record without them. Say which law each part of the plan breaks, what in the mechanism shows it, and the cause the finding is an instance of. A cure is optional. If you give one, keep it apart from what breaks and label it a suggestion; prefer one that removes or merges. A cure that adds a field, a stamp, a holder or a special case is one the next review has to audit, so say so when it is the only option. The author revises the plan from your reasons.
+On a fail, write your reasons first, so that no fail is ever on the record without them. Say which law each failing part of the plan breaks, what in the mechanism shows it, and the cause the finding is an instance of. A cure is optional. If you give one, keep it apart from what breaks and label it a suggestion; prefer one that removes or merges. A cure that adds a field, a stamp, a holder or a special case is one the next review has to audit, so say so when it is the only option. The author revises the plan from your reasons.
 
 ```
 lit comment add <id> --body-file - <<'REASONS'
