@@ -201,7 +201,7 @@ func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if _, err := workspace.UpdateConfig(stale.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
+	if _, _, err := workspace.UpdateConfig(stale.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
 		cfg.IssuePrefix = "between"
 		return cfg, nil
 	}); err != nil {

@@ -89,6 +89,10 @@ type Info struct {
 	RootDir     string
 	WorkspaceID string
 	IssuePrefix PrefixState
+	// Settlement is what resolving did to config.json under its lock; the zero
+	// value on a workspace that was handed rather than resolved, which takes no
+	// lock and settles nothing.
+	Settlement Settlement
 	// PrivateGitDir is this CHECKOUT's own git directory, and it lives on Info
 	// rather than on the embedded Location for a reason that is easy to get
 	// backwards: Location is per-REPOSITORY geometry, identical from every
@@ -381,7 +385,7 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("create storage dir: %w", err)
 	}
-	cfg, prefix, err := loadOrCreateConfig(geo.root, loc.ConfigPath, requested)
+	cfg, prefix, settlement, err := loadOrCreateConfig(geo.root, loc.ConfigPath, requested)
 	if err != nil {
 		return Info{}, err
 	}
@@ -390,6 +394,7 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 		RootDir:       geo.root,
 		WorkspaceID:   cfg.WorkspaceID,
 		IssuePrefix:   prefix,
+		Settlement:    settlement,
 		PrivateGitDir: privateGitDir,
 		// git prints --show-toplevel absolute with every symlink resolved, so its
 		// answer is a CheckoutRoot as it stands.
@@ -795,47 +800,70 @@ func ReadConfig(path string) (Config, error) {
 	return cfg, nil
 }
 
-func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (cfg Config, prefix PrefixState, err error) {
-	err = withConfigLock(path, func() error {
-		cfg, prefix, err = settleConfig(rootDir, path, requested)
+// ConfigSettle is what settling config.json did under its lock. Only this
+// split tells apart the racer that created a workspace id from the one that
+// lost the create and read the winner's. [LAW:types-are-the-program]
+type ConfigSettle string
+
+const (
+	// ConfigCreated wrote config.json where there was none.
+	ConfigCreated ConfigSettle = "created"
+	// ConfigRead found config.json holding what it should and left it alone.
+	ConfigRead ConfigSettle = "read"
+	// ConfigRenormalized rewrote the prefix config.json carried into the form
+	// the rules normalize it to.
+	ConfigRenormalized ConfigSettle = "renormalized"
+)
+
+// Settlement is what one resolution did to config.json: how long it waited
+// for the config lock and what it did holding it.
+type Settlement struct {
+	Waited time.Duration
+	Settle ConfigSettle
+}
+
+func loadOrCreateConfig(rootDir string, path string, requested PrefixRequest) (cfg Config, prefix PrefixState, settlement Settlement, err error) {
+	settlement.Waited, err = withConfigLock(path, func() error {
+		cfg, prefix, settlement.Settle, err = settleConfig(rootDir, path, requested)
 		return err
 	})
-	return cfg, prefix, err
+	return cfg, prefix, settlement, err
 }
 
 // settleConfig reads config.json, decides what it should hold, and writes that
 // back. The caller holds the config lock across all three.
-func settleConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixState, error) {
+func settleConfig(rootDir string, path string, requested PrefixRequest) (Config, PrefixState, ConfigSettle, error) {
 	cfg, err := ReadConfig(path)
 	if err == nil {
 		prefix, err := resolveIssuePrefix(rootDir, path, cfg.IssuePrefix, requested)
 		if err != nil {
-			return Config{}, PrefixState{}, err
+			return Config{}, PrefixState{}, "", err
 		}
 		// [LAW:one-source-of-truth] config.json holds the resolved value, so a
 		// derivation or a normalization change is persisted the moment it happens.
 		// A refused value's Stored text is what config.json already carries, so
 		// it is left exactly as found: repairing it is `lit prefix set`'s
 		// decision, never a side effect of resolving.
-		if string(prefix.Stored()) != cfg.IssuePrefix {
-			cfg.IssuePrefix = string(prefix.Stored())
-			cfg, err = writeConfig(path, cfg)
-			if err != nil {
-				return Config{}, PrefixState{}, err
-			}
+		if string(prefix.Stored()) == cfg.IssuePrefix {
+			return cfg, prefix, ConfigRead, nil
 		}
-		return cfg, prefix, nil
+		cfg.IssuePrefix = string(prefix.Stored())
+		cfg, err = writeConfig(path, cfg)
+		if err != nil {
+			return Config{}, PrefixState{}, "", err
+		}
+		return cfg, prefix, ConfigRenormalized, nil
 	}
 	// [LAW:no-silent-failure] A missing config is the ordinary "not yet
 	// initialized" case that this create path handles; a parse error, an empty
 	// workspace_id, or any other read failure is already fully described by
 	// ReadConfig and must surface as-is rather than be mistaken for "create one".
 	if !errors.Is(err, os.ErrNotExist) {
-		return Config{}, PrefixState{}, err
+		return Config{}, PrefixState{}, "", err
 	}
 	prefix, err := resolveIssuePrefix(rootDir, path, "", requested)
 	if err != nil {
-		return Config{}, PrefixState{}, err
+		return Config{}, PrefixState{}, "", err
 	}
 	cfg = Config{
 		WorkspaceID: uuid.NewString(),
@@ -845,9 +873,9 @@ func settleConfig(rootDir string, path string, requested PrefixRequest) (Config,
 	}
 	cfg, err = writeConfig(path, cfg)
 	if err != nil {
-		return Config{}, PrefixState{}, err
+		return Config{}, PrefixState{}, "", err
 	}
-	return cfg, prefix, nil
+	return cfg, prefix, ConfigCreated, nil
 }
 
 func writeConfig(path string, cfg Config) (Config, error) {
@@ -874,13 +902,13 @@ func writeConfig(path string, cfg Config) (Config, error) {
 //
 // [LAW:single-enforcer] All in-place edits to the workspace config go through
 // this single read-modify-write boundary so partial writes can't desync
-// callers from on-disk state.
-func UpdateConfig(path string, mutate func(Config) (Config, error)) (updated Config, err error) {
-	err = withConfigLock(path, func() error {
+// callers from on-disk state. waited is how long it queued for the lock.
+func UpdateConfig(path string, mutate func(Config) (Config, error)) (updated Config, waited time.Duration, err error) {
+	waited, err = withConfigLock(path, func() error {
 		updated, err = updateConfigLocked(path, mutate)
 		return err
 	})
-	return updated, err
+	return updated, waited, err
 }
 
 func updateConfigLocked(path string, mutate func(Config) (Config, error)) (Config, error) {

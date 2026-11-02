@@ -259,8 +259,34 @@ func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, di
 		}
 		return workspace.Info{}, err
 	}
+	recordWorkspaceResolution(ctx, ws)
 	reportConfigLayers(ctx, stderr, env, ws.Project)
 	return ws, nil
+}
+
+// recordWorkspaceResolution puts what resolving the workspace decided on the
+// invocation's event: how long it queued for the config lock, what it did to
+// config.json holding it, and which arm of PrefixState the prefix took.
+// [LAW:nothing-unseen]
+func recordWorkspaceResolution(ctx context.Context, ws workspace.Info) {
+	telemetry.Set(ctx, "workspace.config_lock_wait_ms", ws.Settlement.Waited.Milliseconds())
+	telemetry.Set(ctx, "workspace.config_settle", string(ws.Settlement.Settle))
+	state := "legal"
+	if _, err := ws.IssuePrefix.Mintable(); err != nil {
+		state = "refused"
+	}
+	telemetry.Set(ctx, "workspace.prefix_state", state)
+	telemetry.Set(ctx, "workspace.prefix_derived", ws.IssuePrefix.Derived())
+}
+
+// mintablePrefix is PrefixState.Mintable for a command, with whether it refused
+// put on the event. [LAW:single-enforcer] every command that needs a prefix to
+// mint under reads it here, so none can be refused without the event saying so.
+func mintablePrefix(ctx context.Context, state workspace.PrefixState) (workspace.PrefixSpec, error) {
+	spec, err := state.Mintable()
+	telemetry.Set(ctx, "prefix.mintable_refused", err != nil)
+	telemetry.Set(ctx, "prefix.mintable_error", telemetry.ErrorText(err))
+	return spec, err
 }
 
 // rewriteHelpCommand turns `lit help <path...>` into `lit <path...> --help`, so
@@ -359,7 +385,7 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		prefix, err := ap.Workspace.IssuePrefix.Mintable()
+		prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 		if err != nil {
 			return err
 		}
@@ -455,7 +481,7 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		prefix, err := ap.Workspace.IssuePrefix.Mintable()
+		prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 		if err != nil {
 			return err
 		}
@@ -2283,7 +2309,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
-	prefix, err := ap.Workspace.IssuePrefix.Mintable()
+	prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 	if err != nil {
 		return err
 	}
@@ -2333,7 +2359,7 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err != nil {
 		return err
 	}
-	prefix, err := ap.Workspace.IssuePrefix.Mintable()
+	prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 	if err != nil {
 		return err
 	}

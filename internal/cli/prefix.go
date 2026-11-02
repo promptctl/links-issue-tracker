@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -63,6 +64,7 @@ func prefixSetLeaf() wsLeaf {
 		if err != nil {
 			return err
 		}
+		census.record(ctx)
 		normalized := spec.Value()
 		// Stored, not Mintable: this command is the repair for a stored prefix
 		// the rules refuse, so it has to run in that state and name what it is
@@ -73,11 +75,13 @@ func prefixSetLeaf() wsLeaf {
 			// replaces under the lock that orders its write, so of two racing
 			// applies the second reports the first's value as what it replaced,
 			// rather than the one both resolved before either wrote.
-			if _, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
+			_, waited, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
 				previous = cfg.IssuePrefix
 				cfg.IssuePrefix = normalized
 				return cfg, nil
-			}); err != nil {
+			})
+			telemetry.Set(ctx, "prefix_set.config_lock_wait_ms", waited.Milliseconds())
+			if err != nil {
 				return fmt.Errorf("update workspace config: %w", err)
 			}
 		}

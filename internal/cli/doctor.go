@@ -391,6 +391,7 @@ func printDoctorReport(ctx context.Context, stderr io.Writer, stdout io.Writer, 
 	if err != nil {
 		return err
 	}
+	census.record(ctx)
 	if err := printWorkspaceIdentity(stdout, ap.Workspace, census); err != nil {
 		return err
 	}
@@ -577,7 +578,7 @@ func doctorLeaf() appLeaf {
 		// state above and then exits on it — after the owner notification, which
 		// a divergence is owed whatever else is wrong. It outranks the divergence
 		// exit because it is the one of the two the operator can clear right now.
-		if _, err := ap.Workspace.IssuePrefix.Mintable(); err != nil {
+		if _, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix); err != nil {
 			return err
 		}
 		return exitErr
