@@ -224,6 +224,7 @@ var doltWorkspaceMachinery = map[string][]string{
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
 		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
 		"UnsupportedSchemaVersionError", "QuarantineBlockError", "RemoteSchemaAheadError", "UnreleasedPushError",
+		"SchemaRaiseRequiresReleaseError",
 		"OwnerApprovalRequiredError",
 		"SchemaConvergenceError", "ConvergenceStep", "ConvergenceSteps",
 		"ActClearCause", "ActRestoreSnapshot", "ActEscalate",

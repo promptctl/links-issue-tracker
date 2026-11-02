@@ -41,18 +41,23 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteN
 	if !isDoltCommitHash(trimmedExpected) {
 		return "", fmt.Errorf("leased push to %s/%s: %q is not a Dolt commit hash", remote, trimmedBranch, expected)
 	}
-	// [LAW:single-enforcer] the same schema-ahead refusal every push runs,
-	// on the one commit a held lease can replace: expected. The tracking ref
-	// may lag it, and a lease over a schema-ahead head would regress the
-	// shared remote to this binary's schema.
-	if err := s.guardCommitSchemaAhead(ctx, remote, trimmedBranch, trimmedExpected); err != nil {
+	// [LAW:single-enforcer] the same schema refusals every push runs, with R
+	// read from the one commit a held lease can replace: expected. The
+	// tracking ref may lag it, and a lease over a schema-ahead head would
+	// regress the shared remote to this binary's schema.
+	expectedSchema, err := s.remoteHeadSchema(ctx, trimmedExpected)
+	if err != nil {
+		return "", err
+	}
+	remoteHead := knownRemoteSchema(expectedSchema)
+	if err := refuseSchemaAhead(remote, trimmedBranch, remoteHead); err != nil {
 		return "", err
 	}
 	sourceHead, err := commitHashOfRef(ctx, s.db, trimmedSource)
 	if err != nil {
 		return "", err
 	}
-	if err := s.refuseUnreleasedPush(ctx, remote, trimmedBranch, sourceHead); err != nil {
+	if err := s.refuseSchemaSend(ctx, remote, trimmedBranch, remoteHead, sourceHead); err != nil {
 		return "", err
 	}
 	args := []string{"--force-with-lease=" + trimmedBranch + ":" + trimmedExpected, remote.String(), trimmedSource + ":" + trimmedBranch}

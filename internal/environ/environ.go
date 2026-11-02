@@ -48,6 +48,11 @@ type Env struct {
 	// global below it. Of leaves it 0, which moves no existing workspace's
 	// schema: an Env nobody gave a ceiling fails closed.
 	releasedSchema version.ReleasedSchemaCeiling
+	// raisePolicy is whether this binary may raise a remote's schema, as
+	// cmd/lit built it from its build stamp (version.RaisePolicyOf). It rides
+	// here for the reason releasedSchema does, and Of leaves it the zero
+	// policy, which raises no remote: an Env nobody gave a policy fails closed.
+	raisePolicy version.RaisePolicy
 }
 
 // IsZero reports whether e is the zero Env, which no Env built by Of or
@@ -108,13 +113,17 @@ func (e Env) Without(keys ...string) Env {
 			kept = append(kept, kv)
 		}
 	}
-	return Env{vars: kept, goos: e.goos, gitSpawns: e.gitSpawns, releasedSchema: e.releasedSchema}
+	// The receiver is copied whole, so every field but vars rides along
+	// without being named: a field added to Env cannot be dropped here.
+	e.vars = kept
+	return e
 }
 
 // With is the environment with the KEY=VALUE entries set appended, so each
 // overrides any earlier entry for its key.
 func (e Env) With(set ...string) Env {
-	return Env{vars: append(slices.Clone(e.vars), set...), goos: e.goos, gitSpawns: e.gitSpawns, releasedSchema: e.releasedSchema}
+	e.vars = append(slices.Clone(e.vars), set...)
+	return e
 }
 
 // WithReleasedSchema is the environment with its released-schema ceiling set
@@ -129,6 +138,19 @@ func (e Env) WithReleasedSchema(ceiling version.ReleasedSchemaCeiling) Env {
 // Max is 0 when none was.
 func (e Env) ReleasedSchema() version.ReleasedSchemaCeiling {
 	return e.releasedSchema
+}
+
+// WithRaisePolicy is the environment with its raise policy set to policy: a
+// push that would raise a remote's schema lands only as the policy permits.
+func (e Env) WithRaisePolicy(policy version.RaisePolicy) Env {
+	e.raisePolicy = policy
+	return e
+}
+
+// RaisePolicy is the raise policy WithRaisePolicy set; the zero policy, which
+// raises nothing, when none was.
+func (e Env) RaisePolicy() version.RaisePolicy {
+	return e.raisePolicy
 }
 
 // List is the environment as a KEY=VALUE list, a copy of the Env's own. It is

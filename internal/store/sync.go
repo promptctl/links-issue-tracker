@@ -1200,8 +1200,13 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote
 	// whose head is at a schema this binary cannot produce — otherwise a plain
 	// push is rejected with a raw non-fast-forward string and a --force push
-	// would REGRESS the shared remote to this binary's older schema.
-	if err := s.guardRemoteSchemaAhead(ctx, remote, trimmedBranch); err != nil {
+	// would REGRESS the shared remote to this binary's older schema. R is the
+	// tracking ref's head as of the last fetch, read once for every verdict.
+	remoteHead, err := s.trackingHeadSchema(ctx, remote, trimmedBranch)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
+	if err := refuseSchemaAhead(remote, trimmedBranch, remoteHead); err != nil {
 		return storage.SyncPushResult{}, err
 	}
 	// HEAD is read BEFORE the push: the caller holds the commit lock, so HEAD
@@ -1213,7 +1218,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	if err != nil {
 		return storage.SyncPushResult{}, err
 	}
-	if err := s.refuseUnreleasedPush(ctx, remote, trimmedBranch, head); err != nil {
+	if err := s.refuseSchemaSend(ctx, remote, trimmedBranch, remoteHead, head); err != nil {
 		return storage.SyncPushResult{}, err
 	}
 	args := []string{}
@@ -1240,6 +1245,24 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	result.Message = nullStringValue(message)
 	result.Head = head
 	return result, nil
+}
+
+// refuseSchemaSend is the two verdicts on the schema of the head a push
+// sends, H, against the remote head it read, R: a schema no release carries
+// never leaves this store (refuseUnreleasedSchema), and a schema above R is a
+// raise only a release makes (refuseSchemaRaise). One read of H serves both.
+// Every DOLT_PUSH runs it: the plain push here and the leased push in
+// push_lease.go. [LAW:single-enforcer] [LAW:one-source-of-truth]
+func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName, branch string, remoteHead remoteSchema, commitHash string) error {
+	commitSchema, err := s.remoteHeadSchema(ctx, commitHash)
+	if err != nil {
+		return err
+	}
+	ceiling := s.env.ReleasedSchema()
+	if err := refuseUnreleasedSchema(remote, branch, commitSchema, ceiling); err != nil {
+		return err
+	}
+	return refuseSchemaRaise(remote, branch, remoteHead, commitSchema, s.env.RaisePolicy())
 }
 
 // headCommitWithinLock reads HEAD's hash under the commit lock the caller

@@ -134,15 +134,17 @@ A push with H > R — a **raise** — succeeds only when both hold:
 - the binary's `version.Origin` is `release`, and
 - H is at most the binary's own `Schema.Max`.
 
-Anything else refuses with `SchemaRaiseRequiresReleaseError`, whose message
-names R and the remedy. When H is at most the binary's released ceiling, the
-schema is released and the remedy is running that release's `lit sync` once to
-raise the remote; stepping the store down would only see the next open migrate
-it back. Otherwise it names the `lit downgrade --schema R` that returns the
-store, which the released ceiling then keeps there.
+The second condition is the released-schema ceiling's own refusal
+(`UnreleasedPushError`), which runs before the raise check; a release's
+ceiling is its `Schema.Max`. A raise that passes it refuses with
+`SchemaRaiseRequiresReleaseError`, whose message names R as of the last fetch
+and the remedy: fetch, since a release may have raised the remote since, and
+push once more; a push still refused is raised by a release's own `lit sync
+push`. Stepping the store down is never the remedy: the head refused is one a
+release carries, and the next open would only migrate it back.
 
-`--schema <v>` steps the store's schema and leaves the binary in place;
-`--to <tag>` installs that release's binary and steps the store to its
+`lit downgrade --schema <v>` steps the store's schema and leaves the binary in
+place; `--to <tag>` installs that release's binary and steps the store to its
 `Schema.Max`.
 
 The second condition is checked at the push, against the schema of the head
@@ -178,9 +180,9 @@ binary's `lit sync` once. That is the routine raise, not a failure.
 | A push that creates the remote | Counts as a raise from nothing; a dev build creates a remote only by having a release push it |
 
 The raise policy is a value the CLI's composition root builds from the
-`version.Info` its caller passes in and hands to the store. Store tests
-construct the store with whatever policy they exercise, and CLI tests pass
-`cli.Run` the `version.Info` they exercise; there is no runtime test mode.
+`version.Origin` stamp and hands to the store on the run's `environ.Env`. Store
+tests construct the store with whatever policy they exercise, and CLI tests
+build the Env with the policy they exercise; there is no runtime test mode.
 
 Out of reach of any "reasonable circumstance", and so out of scope: a build
 that deliberately stamps `-X …Origin=release`, and a `dolt push` run by hand

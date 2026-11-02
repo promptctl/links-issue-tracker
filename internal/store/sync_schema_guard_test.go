@@ -117,10 +117,10 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master")
+	err := syncB.refuseTrackingHeadAhead(ctx, remoteName(t, "origin"), "master")
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
-		t.Fatalf("guardRemoteSchemaAhead = %v, want *RemoteSchemaAheadError", err)
+		t.Fatalf("refuseSchemaAhead(tracking head) = %v, want *RemoteSchemaAheadError", err)
 	}
 	if ahead.RemoteVersion != future || ahead.BinarySupportedMax != registryMax {
 		t.Fatalf("refusal = %+v, want RemoteVersion=%d Max=%d", ahead, future, registryMax)
@@ -147,14 +147,24 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	if err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "master"); err != nil {
+	if err := syncB.refuseTrackingHeadAhead(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("guard at-or-below max = %v, want nil", err)
 	}
 	// A branch the remote has never seen has no tracking ref, so the guard cannot
 	// and must not block it.
-	if err := syncB.guardRemoteSchemaAhead(ctx, remoteName(t, "origin"), "no-such-branch"); err != nil {
+	if err := syncB.refuseTrackingHeadAhead(ctx, remoteName(t, "origin"), "no-such-branch"); err != nil {
 		t.Fatalf("guard never-synced branch = %v, want nil", err)
 	}
+}
+
+// refuseTrackingHeadAhead is the push's schema-ahead verdict on a branch's
+// tracking head, as pushWithinLock composes it.
+func (s *Store) refuseTrackingHeadAhead(ctx context.Context, remote storage.RemoteName, branch string) error {
+	remoteHead, err := s.trackingHeadSchema(ctx, remote, branch)
+	if err != nil {
+		return err
+	}
+	return refuseSchemaAhead(remote, branch, remoteHead)
 }
 
 // TestSyncPushRefusesWhenRemoteSchemaAhead is the push-path acceptance: a clone at

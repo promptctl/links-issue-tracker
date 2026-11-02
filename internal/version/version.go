@@ -212,7 +212,7 @@ func Get() (Info, error) {
 		Commit:     Commit,
 		Date:       Date,
 		IsDev:      Version == "",
-		FromSource: Origin != OriginRelease,
+		FromSource: !IsRelease(Origin),
 		Schema:     schema,
 	}, nil
 }

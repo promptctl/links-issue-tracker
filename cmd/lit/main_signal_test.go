@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,6 +36,12 @@ import (
 // shipped binary's behavior, not a test-only reimplementation of it.
 const reexecEnvVar = "LIT_TEST_REEXEC"
 
+// reexecOriginEnvVar, when set on a child invocation, is the Origin the child
+// runs stamped with; unset, the child is a release. It exists so one test can
+// drive the real entrypoint as a source build and see the wiring that reads
+// the stamp into the run's Env hold, which no package-level Env can show.
+const reexecOriginEnvVar = "LIT_TEST_ORIGIN"
+
 // disableAutoSyncEnvVar is the process-level auto-sync kill switch, read from the
 // one canonical definition in internal/cli so this test cannot drift from the
 // CLI's env contract if that name ever changes. [LAW:one-source-of-truth]
@@ -43,10 +50,12 @@ const disableAutoSyncEnvVar = cli.DisableAutoSyncEnvVar
 func TestMain(m *testing.M) {
 	if os.Getenv(reexecEnvVar) == "1" {
 		// Behave as the real lit binary, stamped as a release of this tree is:
-		// its released-schema ceiling is the schema it carries. main() owns its
+		// its released-schema ceiling is the schema it carries, and its Origin
+		// is release, so it raises the remotes the suite seeds. main() owns its
 		// own os.Exit on the error and escalation paths; a clean return here
 		// means the command succeeded.
 		version.ReleasedSchema = version.ReleasedSchemaCarried
+		version.Origin = cmp.Or(os.Getenv(reexecOriginEnvVar), version.OriginRelease)
 		main()
 		os.Exit(0)
 	}
@@ -624,5 +633,5 @@ func testEnv() environ.Env {
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"})
+	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
 }

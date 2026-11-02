@@ -67,52 +67,64 @@ var (
 	_ model.RecordedError = (*RemoteSchemaAheadError)(nil)
 )
 
-// guardRemoteSchemaAhead refuses when the remote-tracking head's schema exceeds
-// this binary's schema support, so no push authors a commit below the remote head's
-// schema. It resolves the remote head from the tracking ref that reflects the
-// remote as of the last fetch; a branch that never synced (no tracking ref) has no
-// remote head to fall behind, so the guard is a no-op there. [LAW:single-enforcer]
-// the push and the reconcile share this one detection of "remote schema ahead".
-func (s *Store) guardRemoteSchemaAhead(ctx context.Context, remote storage.RemoteName, branch string) error {
-	trimmedBranch, err := requireSyncArg("branch", branch)
+// trackingHeadSchema is the schema of the head `remotes/<remote>/<branch>`
+// points at, or unknownRemoteSchema when that ref does not exist yet (the
+// branch was never fetched or pushed). It is the one read of R a push makes:
+// the schema-ahead refusal and the raise refusal both judge the value it
+// returns. [LAW:one-source-of-truth]
+func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteName, branch string) (remoteSchema, error) {
+	head, synced, err := s.trackingHeadHash(ctx, remote, branch)
 	if err != nil {
-		return err
-	}
-	head, synced, err := s.trackingHeadHash(ctx, remote, trimmedBranch)
-	if err != nil {
-		return err
+		return remoteSchema{}, err
 	}
 	if !synced {
-		return nil
+		return unknownRemoteSchema(), nil
 	}
-	return s.guardCommitSchemaAhead(ctx, remote, trimmedBranch, head)
+	remoteVersion, err := s.remoteHeadSchema(ctx, head)
+	if err != nil {
+		return remoteSchema{}, err
+	}
+	return knownRemoteSchema(remoteVersion), nil
 }
 
-// guardCommitSchemaAhead is the shared core: it reads the schema version recorded
-// at commitHash as data and refuses when it is above this binary's schema support.
-// The reconcile calls it with the remote head anchor it already captured (no second
-// read); the push calls it via guardRemoteSchemaAhead after resolving the tracking
-// head. [LAW:no-ambient-temporal-coupling] the version is read from a fixed commit
-// hash, so the decision cannot shift under a concurrent fetch. remote and branch
-// are carried only to name the failure for the sync-failure contract.
+// guardCommitSchemaAhead reads the schema version recorded at commitHash as
+// data and refuses when it is above this binary's schema support. The
+// reconcile calls it with the remote head anchor it already captured (no
+// second read). [LAW:no-ambient-temporal-coupling] the version is read from a
+// fixed commit hash, so the decision cannot shift under a concurrent fetch.
 func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote storage.RemoteName, branch string, commitHash string) error {
-	support, err := version.CarriedSchemaSupport()
+	remoteVersion, err := s.remoteHeadSchema(ctx, commitHash)
 	if err != nil {
 		return err
 	}
-	remoteVersion, err := s.remoteHeadSchema(ctx, commitHash)
+	return refuseSchemaAhead(remote, branch, knownRemoteSchema(remoteVersion))
+}
+
+// refuseSchemaAhead is the schema-ahead verdict on a remote head's schema the
+// caller read: it refuses when that schema is above this binary's schema
+// support, so no push authors a commit below the remote head's schema. A
+// remote this store holds no head of is not ahead. The push runs it on the
+// tracking head, the leased push on the lease's expected commit, the
+// reconcile on its captured anchor. remote and branch are carried only to
+// name the failure for the sync-failure contract. [LAW:single-enforcer] the
+// one detection of "remote schema ahead" every write to a remote runs.
+func refuseSchemaAhead(remote storage.RemoteName, branch string, remoteHead remoteSchema) error {
+	if !remoteHead.known {
+		return nil
+	}
+	support, err := version.CarriedSchemaSupport()
 	if err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] The comparison runs every call; the two
 	// versions are the values that decide block-vs-proceed, not a mode.
-	if remoteVersion <= support.Max {
+	if remoteHead.version <= support.Max {
 		return nil
 	}
 	return &RemoteSchemaAheadError{
 		Remote:             remote.String(),
 		Branch:             branch,
-		RemoteVersion:      remoteVersion,
+		RemoteVersion:      remoteHead.version,
 		BinarySupportedMax: support.Max,
 	}
 }

@@ -950,14 +950,13 @@ func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env enviro
 	if outcome.traceErr != nil {
 		fmt.Fprintf(stderr, "lit: on-change mirror trace not recorded: %v\n", outcome.traceErr)
 	}
-	// A remote schema ahead of this binary is NOT the "next push retries" case: it
-	// will never succeed until the binary is upgraded, so surface the one
-	// sync-failure contract to stderr instead of letting it read as a transient
-	// hiccup.
+	// A schema refusal is NOT the "next push retries" case: none clears until
+	// the binary changes, so surface the one sync-failure contract to stderr
+	// instead of letting it read as a transient hiccup.
 	// [LAW:single-enforcer] one adapter, one contract. Other pushErr (e.g. offline)
 	// is already captured in the trace; the mutation is durable locally and the next
 	// push retries, so the mirror stops cleanly either way.
-	if failure, ok := remoteSchemaAheadFailure(outcome.pushErr); ok {
+	if failure, ok := schemaRefusalFailure(outcome.pushErr); ok {
 		fmt.Fprintln(stderr, failure.blockString())
 	}
 	if outcome.skip != syncTargetReady || outcome.pushErr != nil {
