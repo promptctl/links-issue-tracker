@@ -1366,17 +1366,18 @@ func historyLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		// What the command decided is recorded from the record it read, before
-		// anything prints, so a failed write never leaves half of it on the
-		// event and the renderers stay free of telemetry.
+		// Each field's versions are numbered once, here, and both what the
+		// command records and what it prints read that one numbering.
+		versions := historyVersions(detail)
 		if ref != nil {
-			held := len(storage.TextVersions(detail.Issue, detail.Events, ref.field))
-			telemetry.Set(ctx, "history.version_found", ref.number <= held)
-			telemetry.Count(ctx, "history.version_held", held)
-			return printFieldVersion(inv.Stdout, detail, *ref)
+			texts := versions[ref.field.Name]
+			telemetry.Count(ctx, "history.version_held", len(texts))
+			err := printFieldVersion(inv.Stdout, detail, *ref, texts)
+			telemetry.Set(ctx, "history.version_found", !errors.As(err, new(storage.VersionNotFoundError)))
+			return err
 		}
 		for _, field := range storage.LongTextFields() {
-			telemetry.Count(ctx, "history.versions."+field.Name, len(storage.TextVersions(detail.Issue, detail.Events, field)))
+			telemetry.Count(ctx, "history.versions."+field.Name, len(versions[field.Name]))
 			changes := 0
 			for _, event := range detail.Events {
 				for _, change := range event.Changes {
@@ -1387,7 +1388,7 @@ func historyLeaf() appLeaf {
 			}
 			telemetry.Count(ctx, "history.version_changes."+field.Name, changes)
 		}
-		return printIssueHistory(inv.Stdout, detail)
+		return printIssueHistory(inv.Stdout, detail, versions)
 	}}
 }
 

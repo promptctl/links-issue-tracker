@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -217,7 +218,7 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := printIssueHistory(&stdout, detail); err != nil {
+	if err := printIssueHistory(&stdout, detail, historyVersions(detail)); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	var steps []string
@@ -240,7 +241,7 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 			t.Fatalf("parseVersionRef(%s) error = %v", ref, err)
 		}
 		var out bytes.Buffer
-		if err := printFieldVersion(&out, detail, parsed); err != nil || out.String() != want {
+		if err := printFieldVersion(&out, detail, parsed, historyVersions(detail)[parsed.field.Name]); err != nil || out.String() != want {
 			t.Fatalf("printFieldVersion(%s) = %q, %v; want %q", ref, out.String(), err, want)
 		}
 	}
@@ -269,7 +270,7 @@ func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := printIssueHistory(&stdout, detail); err != nil {
+	if err := printIssueHistory(&stdout, detail, historyVersions(detail)); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	stamp, br := formatHistoryTimestamp(time.Time{}), quotedBreak
@@ -414,7 +415,7 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 		found  bool
 	}{{"description@2", 2, true}, {"description@3", 3, false}} {
 		ev, err := recordLeaf(historyLeaf(), ctx, cwdInvocation(io.Discard, io.Discard, nil), ap, []string{issue.ID, "--version", tc.ref})
-		if tc.found != (err == nil) {
+		if tc.found != (err == nil) || (!tc.found && !errors.As(err, new(storage.VersionNotFoundError))) {
 			t.Fatalf("history --version %s error = %v, want found %v", tc.ref, err, tc.found)
 		}
 		if got := ev.Facts["history.version_field"]; got != "description" {

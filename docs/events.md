@@ -511,7 +511,7 @@ Those keys never appear at the event's top level.
 | `counts.history.version_changes.<field>` | A count recorded with `counts.history.versions.<field>`: how many of the trail's changes are to that field. |
 | `history.version_field` | The field `--version <field>@<n>` named. A malformed reference is a usage error and records none of the `--version` keys. |
 | `history.version_number` | The version number `--version` asked for. |
-| `history.version_found` | `true` when the field holds that version and its text printed; `false` when the command refused it as a version the field never held. Absent when the issue could not be read. |
+| `history.version_found` | `true` when the field holds that version; `false` when the command refused it as a version the field never held. Absent when the issue could not be read. |
 | `counts.history.version_held` | A count recorded with `history.version_found`: how many versions the field holds. |
 
 ## What `lit verdict` records

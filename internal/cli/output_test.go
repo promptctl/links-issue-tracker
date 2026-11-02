@@ -76,7 +76,7 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 	}
 
 	var history bytes.Buffer
-	if err := printIssueHistory(&history, detail); err != nil {
+	if err := printIssueHistory(&history, detail, historyVersions(detail)); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	if !strings.Contains(history.String(), changeLine) {
