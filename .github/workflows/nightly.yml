@@ -6,12 +6,10 @@
 # here is guaranteed by Go, not by convention. The Windows lane runs here too,
 # for the platform the Linux-only gate cannot execute.
 #
-# A nightly job whose failures nobody sees is deletion with extra steps, so a
-# red lane files (or extends) an urgent lit bug under its own label,
-# `nightly-failure`, `nightly-windows-failure` or `nightly-scale-failure`, and
-# the ten-times lane files each limit it measured broken under that limit's
-# own key, all through .github/actions/report-to-lit, where each label is also
-# its ticket's topic and lane. [LAW:no-silent-failure]
+# A red lane is reported by the failed run itself, in the Actions tab and in
+# GitHub's failed-run notice to whoever last edited the schedule; nothing else
+# carries it. No job here writes to the lit backlog — CI holds no write access
+# to the tracker. [LAW:no-silent-failure]
 name: Nightly full suite
 
 on:
@@ -22,10 +20,7 @@ on:
 permissions:
   contents: read
 
-# A dispatched run overlapping the scheduled one must queue, not race: two
-# concurrent failing runs would each see no open ticket under a lane's label
-# and file a duplicate. Never cancel-in-progress — a cancelled full lane is a
-# skipped full lane.
+# Never cancel-in-progress — a cancelled full lane is a skipped full lane.
 concurrency:
   group: nightly-full-suite
   cancel-in-progress: false
@@ -91,10 +86,10 @@ jobs:
   #
   # A RED LIMIT IS THE DESIGN'S LIMIT, NOT A BAD COMMIT. Every verdict
   # perfbench reaches is written to --limits the moment it is reached, keyed
-  # by the limit it breaks, and each limit is its own ticket: a new one
-  # arrives urgent, a known one gets that night's measured value as a comment.
-  # The answer to one is work on that limit. Raising a budget or an allowance
-  # to turn this green is the alarm disconnected. [LAW:no-silent-failure]
+  # by the limit it breaks; the leg that breaks one goes red, and the verdict
+  # annotates the run with each breached limit and its measured values. The
+  # answer to one is work on that limit. Raising a budget or an allowance to
+  # turn this green is the alarm disconnected. [LAW:no-silent-failure]
   #
   # The scale points are listed once, here, and the legs and the verdict both
   # read them, so a leg that never reported is a leg the verdict knows is
@@ -170,9 +165,6 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    outputs:
-      limits: ${{ steps.verdict.outputs.limits }}
-      broken: ${{ steps.verdict.outputs.broken }}
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -194,61 +186,17 @@ jobs:
             case "$code" in 0|2) ;; *) broken=true ;; esac
           done
           limits=$(find scale -name limits.jsonl -exec cat {} + | jq -sc 'group_by(.limit) | map({limit: .[0].limit, title: .[0].title, measured: (map(.measured) | join("\n"))})')
+          # Every limit in plain text first: GitHub keeps at most ten
+          # annotations per step, and the log keeps the rest.
           jq -r '.[] | "LIMIT \(.limit): \(.title)\n\(.measured)\n"' <<<"$limits"
-          echo "limits=$limits" >> "$GITHUB_OUTPUT"
-          echo "broken=$broken" >> "$GITHUB_OUTPUT"
-
-  # One ticket per limit, filed or extended through the one reporter. Serial,
-  # because every one pushes the same store and a refused push costs a pull
-  # and a retry. Skipped on a night with no limit, where an empty matrix
-  # would fail the run on the night the design finally holds.
-  report-scale-limit:
-    needs: scale-verdict
-    if: ${{ always() && needs.scale-verdict.result == 'success' && needs.scale-verdict.outputs.limits != '[]' && github.ref == 'refs/heads/master' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    strategy:
-      max-parallel: 1
-      fail-fast: false
-      matrix:
-        limit: ${{ fromJSON(needs.scale-verdict.outputs.limits) }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/report-to-lit
-        with:
-          label: ${{ matrix.limit.limit }}
-          title: ${{ matrix.limit.title }}
-          token: ${{ github.token }}
-          details: ${{ matrix.limit.measured }}
-          body: |
-            The nightly ten-times lane (perfbench at 10x-store and 10x-fleet) measured this limit broken. A red limit is the design reaching its limit, not a bad commit: answer it with work on the limit, never by raising a budget or an allowance. Each red night appends its measured value here. If this is the design's known slope rather than a regression, lower this ticket to normal priority and leave it open, so it keeps collecting each night's value and closes when the work on it turns the lane green.
-
-  # The lane itself broke: a scale point that did not finish measuring (a tool
-  # failure, a timeout, a cancelled leg), or a verdict that could not be read.
-  # After the limits, for the reason they run serially: it pushes the same
-  # store.
-  report-scale:
-    needs: [scale-points, scale, scale-verdict, report-scale-limit]
-    if: ${{ always() && github.ref == 'refs/heads/master' && (needs.scale-verdict.result != 'success' || needs.scale-verdict.outputs.broken == 'true') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/report-to-lit
-        with:
-          label: nightly-scale-failure
-          title: Nightly ten-times lane did not finish measuring
-          token: ${{ github.token }}
-          body: |
-            A scale point of the nightly ten-times lane (perfbench --sizes 10x-store / 10x-fleet) did not finish measuring: perfbench failed as a tool, its leg timed out or was cancelled, or the verdict could not be read. The run log names which. Any limit it reached before it stopped is filed under its own key. This is the instrument broken, not a limit: fix it so the lane measures again.
+          # Then one annotation per limit, measured values included. Workflow
+          # command data escapes %, CR and LF.
+          jq -r 'def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            .[] | "::error::LIMIT \(.limit): \(.title | esc)%0A\(.measured | esc)"' <<<"$limits"
+          if [ "$broken" = true ]; then
+            echo "::error::a scale point did not report; its leg's log says why"
+            exit 1
+          fi
 
   # Windows is a release target, and this is the one lane that executes it.
   # The store's filesystem primitives - lock share modes, renaming over an open
@@ -371,48 +319,15 @@ jobs:
           CGO_ENABLED: '1'
         run: go -C internal/vendor/dolthub-driver test -short ./...
 
-  # Each lane reports in its own job, so no suite runs holding the write token
-  # a report needs. Each lane has its own alarm label too: one lane's open
-  # ticket must not absorb the other lane's red runs as "Red again" comments,
-  # or a Linux regression would hide behind a Windows red that is already
-  # known. `result != 'success'` covers failure, cancellation, and the
-  # job-level timeout, which GitHub reports as cancelled. [LAW:no-silent-failure]
-  # Only master's runs report: the backlog is master's, and a run dispatched
-  # on a branch is red in front of the session that dispatched it.
-  report:
-    needs: full-suite
-    if: ${{ always() && needs.full-suite.result != 'success' && github.ref == 'refs/heads/master' }}
+  # A job that hits its timeout ends cancelled, and GitHub sends no failure
+  # notice for a cancelled run, so a hung nightly lane would go unheard. This job
+  # turns that into a failed run. [LAW:no-silent-failure]
+  timed-out:
+    needs: [full-suite, scale-points, scale, scale-verdict, windows]
+    if: ${{ always() && contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/report-to-lit
-        with:
-          label: nightly-failure
-          title: Nightly full test lane is failing
-          token: ${{ github.token }}
-          body: |
-            A step in the nightly full-suite job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane runs everything the PR gate's `-short` skips, the law-token upstream check, and perfbench at the design size (the size ceiling's input allowances, latency and the writer storm at that size): triage it, do not mute it.
-
-  report-windows:
-    needs: windows
-    if: ${{ always() && needs.windows.result != 'success' && github.ref == 'refs/heads/master' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/report-to-lit
-        with:
-          label: nightly-windows-failure
-          title: Nightly Windows test lane is failing
-          token: ${{ github.token }}
-          body: |
-            A step in the nightly windows job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled); the run log names which step and why. This lane is the only place lit's tests run on Windows, a release target, so a failure here is a Windows-only regression no other lane can show: triage it, do not mute it.
+      - run: |
+          echo "::error::a nightly lane job was cancelled, usually by its timeout; its log says where it stopped"
+          exit 1

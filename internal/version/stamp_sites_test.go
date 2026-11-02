@@ -1,21 +1,30 @@
 package version
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // repoFile reads a path relative to the repository root. Tests run with cwd set
 // to the package directory, so the root is two levels up.
 func repoFile(t *testing.T, rel string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", rel))
+	b, err := os.ReadFile(repoPath(rel))
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
 	return string(b)
+}
+
+// repoPath joins elems onto the repository root.
+func repoPath(elems ...string) string {
+	return filepath.Join(append([]string{"..", ".."}, elems...)...)
 }
 
 // exportedNames returns the variable names carried on a shell script's `export`
@@ -180,20 +189,86 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 	}
 }
 
-// TestTheCIReporterRunsAReleasedLit pins that the CI action writing to the
-// shared remote store runs the latest published release rather than building
-// this checkout: CI must never run unreleased code against the remote.
-func TestTheCIReporterRunsAReleasedLit(t *testing.T) {
+// TestNoCIJobWritesToTheTracker pins the owner's ruling that CI holds no
+// write access to the lit backlog. The backlog is the refs/dolt/data ref of
+// this repository, so any job holding a contents write grant can push it,
+// whatever it runs: every workflow declares its top-level permissions, none of
+// them writes contents, and the one job that may is release-validate.yml's
+// publish job, which creates the release tag. A token from any other secret
+// would need no grant, so no file under .github reads a secret but the
+// workflow's own GITHUB_TOKEN, and none names the ways lit writes a remote
+// store. A scheduled job that held the grant once migrated the shared store to
+// a schema no release carries.
+func TestNoCIJobWritesToTheTracker(t *testing.T) {
 	t.Parallel()
-	action := repoFile(t, ".github/actions/report-to-lit/action.yml")
-	// install.sh prefers the directory of a lit already on PATH over GOBIN,
-	// so the action pins both: a PATH with no lit, and the GOBIN it runs from.
-	if !strings.Contains(action, `env PATH=/usr/bin:/bin GOBIN="$bindir" GH_TOKEN="$TOKEN" bash scripts/install.sh --latest-release`) ||
-		!strings.Contains(action, `lit="$bindir/lit"`) {
-		t.Error(".github/actions/report-to-lit/action.yml does not install the latest release into the one directory it then runs lit from")
+	const publisherFile, publisherJob = "release-validate.yml", "publish"
+	dir := repoPath(".github", "workflows")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(action, "go build") {
-		t.Error(".github/actions/report-to-lit/action.yml builds lit from source — CI would run unreleased code against the shared remote")
+	type permissioned struct {
+		Permissions any `yaml:"permissions"`
+	}
+	var workflow struct {
+		Permissions any                     `yaml:"permissions"`
+		Jobs        map[string]permissioned `yaml:"jobs"`
+	}
+	writesContents := func(p any) bool {
+		switch v := p.(type) {
+		case string:
+			return v == "write-all"
+		case map[string]any:
+			return v["contents"] == "write"
+		}
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !(strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		workflow.Permissions, workflow.Jobs = nil, nil
+		if err := yaml.Unmarshal(b, &workflow); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if workflow.Permissions == nil {
+			t.Errorf("%s declares no top-level permissions, so its jobs get the repository's default token", name)
+		} else if writesContents(workflow.Permissions) {
+			t.Errorf("%s grants contents write to every job", name)
+		}
+		for job, j := range workflow.Jobs {
+			if writesContents(j.Permissions) && (name != publisherFile || job != publisherJob) {
+				t.Errorf("%s job %s grants contents write — CI never writes to the lit tracker", name, job)
+			}
+		}
+	}
+	pushes := regexp.MustCompile(`sync\s+push|refs/dolt|report-to-lit`)
+	secret := regexp.MustCompile(`secrets\.([A-Za-z0-9_]+)`)
+	err = filepath.WalkDir(repoPath(".github"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if m := pushes.Find(b); m != nil {
+			t.Errorf("%s contains %q — CI never writes to the lit tracker", path, m)
+		}
+		for _, m := range secret.FindAllSubmatch(b, -1) {
+			if string(m[1]) != "GITHUB_TOKEN" {
+				t.Errorf("%s reads secret %s — CI's only credential is its GITHUB_TOKEN, whose grant this test bounds", path, m[1])
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

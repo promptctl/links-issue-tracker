@@ -167,8 +167,8 @@ evicted from the queue, and the burst's last run published v0.9.0 unaided).
 The residual failure — the surviving run goes red or is cancelled and no later
 push arrives — is caught by
 [`release-watchdog.yml`](.github/workflows/release-watchdog.yml): an hourly
-check that goes red and files (or extends) an urgent `release-stuck` lit ticket whenever a
-promoted version has had no tag for over two hours. Its recovery path is the
+check that goes red whenever a promoted version has had no tag for over two
+hours; the failed run is the alarm. Its recovery path is the
 `workflow_dispatch` re-run below.
 
 ### Dry-run a release locally (optional)

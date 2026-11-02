@@ -80,11 +80,11 @@ own runtime, so a full-lane run's output is the current number). The **full lane
 real work brushes go test's 10-minute per-package default — runs everything,
 and a scheduled job
 ([`.github/workflows/nightly.yml`](.github/workflows/nightly.yml)) runs it
-nightly, filing an urgent `nightly-failure` lit ticket when it breaks so the skipped tests
-stay covered rather than quietly rotting. The same workflow runs the `-short` suite
+nightly, and a failed run is the alarm, so the skipped tests stay covered
+rather than quietly rotting. The same workflow runs the `-short` suite
 on Windows, the one place a Windows-only regression shows (the PR gate is
 Linux-only), skipping the known failures in
-[`.github/windows-known-failures.txt`](.github/windows-known-failures.txt), and files `nightly-windows-failure` when that lane breaks.
+[`.github/windows-known-failures.txt`](.github/windows-known-failures.txt), and goes red when that lane breaks.
 The fix for a listed failure deletes its line. A test belongs behind
 `testing.Short()` only when its cost is the scale it generates, not the
 behavior it pins — never move a test there to make a slow test disappear.
@@ -241,7 +241,7 @@ generated once and the rest are byte copies, so the fleet costs about one
 census of import. Its `fleet bytes` figure is row data only: a generated store
 has no snapshots, remote cache or history beyond its import. `--limits <file>`
 writes each verdict as a JSON line the moment it is reached, keyed by the
-limit it breaks; the nightly ten-times lane files one ticket per key from it.
+limit it breaks; a ten-times leg that breaks a limit fails, and the nightly verdict annotates the run with every key in it.
 
 CI's `perf-budget` job runs this on every PR against a 700-row store. Because
 the budget is the destination and not a CI setting, `just perf` fails the same
