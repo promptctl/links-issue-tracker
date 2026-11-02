@@ -287,7 +287,7 @@ func TestAnUnreleasedSchemaPushRendersTheSyncFailureContract(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaCeilingPushError{
 		Remote: "origin", Branch: "master", CommitSchema: 12,
-		Ceiling: version.SchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0"},
+		Ceiling: version.SchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0", Bound: version.BoundReleased},
 	}
 	var syncFailure SyncFailureError
 	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
@@ -299,7 +299,7 @@ func TestAnUnreleasedSchemaPushRendersTheSyncFailureContract(t *testing.T) {
 	block := syncFailure.Error()
 	for _, want := range []string{
 		"at schema version 12, and the schema ceiling for this push is 11 (stamped at build time from release tag v0.24.0)",
-		"lit sync fetch --remote origin",
+		"lit upgrade",
 		"ESCALATION — BLOCKED",
 	} {
 		if !strings.Contains(block, want) {
@@ -312,13 +312,14 @@ func TestAnUnreleasedSchemaPushRendersTheSyncFailureContract(t *testing.T) {
 }
 
 // The same block renders a refusal the remote's schema hold made: the hold is
-// the ceiling, its source names the remote head, and the remedy names only
-// commands this lit has, never an upgrade a hold would refuse too.
+// the ceiling, its source names the remote head, and the remedy is a fetch,
+// for a hold since lifted, then the release at the hold, never an upgrade a
+// hold would refuse too.
 func TestASchemaHoldPushRefusalRendersTheHoldAsTheCeiling(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaCeilingPushError{
 		Remote: "origin", Branch: "master", CommitSchema: 12,
-		Ceiling: version.SchemaCeiling{Max: 11, Source: "origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set"},
+		Ceiling: version.SchemaCeiling{Max: 11, Source: "origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set", Bound: version.BoundHold},
 	}
 	var syncFailure SyncFailureError
 	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
@@ -328,6 +329,8 @@ func TestASchemaHoldPushRefusalRendersTheHoldAsTheCeiling(t *testing.T) {
 	for _, want := range []string{
 		"the schema ceiling for this push is 11 (origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
 		"lit sync fetch --remote origin",
+		"lit downgrade --to <tag>",
+		"release at schema v11",
 		"ESCALATION — BLOCKED",
 	} {
 		if !strings.Contains(block, want) {

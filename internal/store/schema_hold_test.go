@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
@@ -23,7 +25,7 @@ func holdStore(t *testing.T, ctx context.Context, st *Store, v int64) {
 
 // holdBy is the ceiling a hold at v held by holder reads as.
 func holdBy(holder string, v int64) version.SchemaCeiling {
-	return version.SchemaCeiling{Max: v, Source: fmt.Sprintf("%s holds its schema at %d (meta.schema_hold), which a remote downgrade set", holder, v)}
+	return version.SchemaCeiling{Max: v, Source: fmt.Sprintf("%s holds its schema at %d (meta.schema_hold), which a remote downgrade set", holder, v), Bound: version.BoundHold}
 }
 
 // A store with no hold row reads as the unbounded ceiling, a held store as a
@@ -45,9 +47,11 @@ func TestASchemaHoldReadsAsACeiling(t *testing.T) {
 		t.Fatalf("schemaHold() of a held store = %+v, %v; want %+v", hold, err, holdBy("this store", 7))
 	}
 
-	mustExec(t, ctx, st, `UPDATE meta SET meta_value = 'seven' WHERE meta_key = ?`, schemaHoldKey)
-	if _, err := st.schemaHold(ctx); err == nil || !strings.Contains(err.Error(), `meta schema_hold = "seven" is not a schema version`) {
-		t.Fatalf("schemaHold() of a malformed hold = %v, want the malformed row named", err)
+	for _, raw := range []string{"seven", "0", "-1"} {
+		mustExec(t, ctx, st, `UPDATE meta SET meta_value = ? WHERE meta_key = ?`, raw, schemaHoldKey)
+		if _, err := st.schemaHold(ctx); err == nil || !strings.Contains(err.Error(), fmt.Sprintf(`meta schema_hold = %q is not a schema version`, raw)) {
+			t.Fatalf("schemaHold() of hold %q = %v, want the malformed row named", raw, err)
+		}
 	}
 }
 
@@ -80,8 +84,9 @@ func TestAMigratingOpenRefusesToRaiseAHeldStore(t *testing.T) {
 	}
 }
 
-// A hold at the schema the store already has refuses nothing: the open serves
-// the store and reports the hold.
+// A hold at the schema the store already has refuses nothing: every open
+// serves the store and reports the hold, the read-only and sync opens as the
+// migrating open does.
 func TestAnOpenAtTheHoldServesTheStoreAndReportsTheHold(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -92,16 +97,21 @@ func TestAnOpenAtTheHoldServesTheStoreAndReportsTheHold(t *testing.T) {
 		t.Fatalf("Close() = %v", err)
 	}
 
-	held, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() of a store held at its own schema %d = %v", max, err)
-	}
-	defer held.Close()
-	if got := held.Migrated().SchemaHold; got != max {
-		t.Errorf("Migrated().SchemaHold = %d, want %d", got, max)
-	}
-	if got := held.Migrated().EventRecord()["migration.schema_hold"]; got != max {
-		t.Errorf("migration.schema_hold = %v, want %d", got, max)
+	type opener func(context.Context, environ.Env, io.Writer, string, string) (*Store, error)
+	for name, open := range map[string]opener{"Open": Open, "OpenForRead": OpenForRead, "OpenSync": OpenSync} {
+		held, err := open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+		if err != nil {
+			t.Fatalf("%s() of a store held at its own schema %d = %v", name, max, err)
+		}
+		if got := held.Migrated().SchemaHold; got != max {
+			t.Errorf("%s: Migrated().SchemaHold = %d, want %d", name, got, max)
+		}
+		if got := held.Migrated().EventRecord()["migration.schema_hold"]; got != max {
+			t.Errorf("%s: migration.schema_hold = %v, want %d", name, got, max)
+		}
+		if err := held.Close(); err != nil {
+			t.Fatalf("%s: Close() = %v", name, err)
+		}
 	}
 }
 

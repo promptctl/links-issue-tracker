@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // syncFailureClass is the closed set of non-transient sync failures that reach an
@@ -294,6 +295,30 @@ func schemaRaiseRemedy(refused *store.SchemaRaiseRequiresReleaseError) []remedyS
 		{"lit sync push --remote " + refused.Remote, "lands when this backlog is at or below the remote's schema"},
 		{"lit version", "if the push is refused again: shows this lit's build origin"},
 		{"lit upgrade", fmt.Sprintf("only when the user directs it: install a published release, whose `lit sync push` raises the remote to schema v%d", refused.CommitSchema)},
+	}
+}
+
+// schemaCeilingRemedy is how a push refused for a commit above the schema
+// ceiling clears, by the bound that refused it. Over this lit's
+// released-schema ceiling, only a published release carrying the schema may
+// send it. Over the remote's hold, the remote's head is read as of the last
+// fetch, so a fetch finds a hold since lifted, and otherwise a release at the
+// hold (`lit downgrade --to`) steps this backlog down to it, as the design's
+// remedy for a hold. [LAW:dataflow-not-control-flow] the bound is the domain's
+// own discriminator; neither arm reads the source prose.
+func schemaCeilingRemedy(refused *store.SchemaCeilingPushError) []remedyStep {
+	switch refused.Ceiling.Bound {
+	case version.BoundHold:
+		return []remedyStep{
+			{"lit sync fetch --remote " + refused.Remote, "reads the remote's current head; a hold lifted on the remote since the last fetch clears this"},
+			{"lit sync push --remote " + refused.Remote, "lands when the remote no longer holds its schema below this backlog's"},
+			{"lit downgrade --to <tag>", fmt.Sprintf("only when the user directs it: install the release at schema v%d, which steps this backlog down to the hold", refused.Ceiling.Max)},
+		}
+	default:
+		return []remedyStep{
+			{"lit version", "shows this lit's released-schema ceiling and where it came from"},
+			{"lit upgrade", fmt.Sprintf("only when the user directs it: install a published release, which can send schema v%d only if a release carries it", refused.CommitSchema)},
+		}
 	}
 }
 
@@ -586,10 +611,7 @@ func (f SyncFailure) resolutionSteps() []string {
 	case syncFailurePushDiverged:
 		return remedyLines(pushDivergedRemedy(f.Remote))
 	case syncFailureSchemaCeiling:
-		return []string{
-			"lit version               # shows this lit's released-schema ceiling and where it came from",
-			fmt.Sprintf("lit sync fetch --remote %s  # the remote's schema hold is read from its head as of the last fetch", f.Remote),
-		}
+		return remedyLines(schemaCeilingRemedy(f.AboveCeiling))
 	case syncFailureSchemaRaiseRequiresRelease:
 		return remedyLines(schemaRaiseRemedy(f.RaiseRefused))
 	default:
@@ -626,7 +648,7 @@ func (f SyncFailure) escalationLine() string {
 			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
 			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
 	case syncFailureSchemaCeiling:
-		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying from this lit; the ceiling's source above says which bound refused, a released-schema ceiling or the remote's schema hold, and what set it. Surface this to the user as blocking."
+		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying from this lit; the ceiling's source above says which bound refused, a released-schema ceiling or the remote's schema hold, and what set it. " + installReplacesLit + ": run the install above only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailureSchemaRaiseRequiresRelease:
 		return "ESCALATION — resolve now: run the fetch and the push above once. A push refused again after the fetch is a raise, or the first push to a branch the remote does not have yet; a lit that is no release makes neither, and that will not clear by waiting or retrying from this lit. " + installReplacesLit + ": run the upgrade only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailurePushDiverged:

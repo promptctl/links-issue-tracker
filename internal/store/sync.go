@@ -98,11 +98,11 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 	// open's to bring forward. [LAW:single-enforcer] both write opens apply
 	// the one floor through checkWritable, so a failure of either step is
 	// the same SchemaConvergenceError in both.
-	_, op, fail := s.checkWritable(ctx)
+	state, op, fail := s.checkWritable(ctx)
 	if fail != nil {
 		err = fail
 	}
-	s.migrated = storage.Migrated{Bootstrap: bootstrap, SchemaAhead: op.schemaAhead()}
+	s.migrated = storage.Migrated{Bootstrap: bootstrap, SchemaAhead: op.schemaAhead(), SchemaHold: state.schemaHold()}
 	// Same per-open branch normalization Store.Open runs: the bootstrap only
 	// normalizes at creation, so a pre-made database (an adopt's clone) gets
 	// renamed to master here on the mirror's own engine. The decision is a

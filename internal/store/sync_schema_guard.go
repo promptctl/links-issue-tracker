@@ -80,7 +80,7 @@ func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteNam
 	if !synced {
 		return unknownRemoteSchema(), nil
 	}
-	return s.remoteHeadAt(ctx, head, fmt.Sprintf("%s/%s's head", remote, branch))
+	return s.remoteHeadAt(ctx, head, remote, branch)
 }
 
 // guardCommitSchemaAhead reads the schema version recorded at commitHash as

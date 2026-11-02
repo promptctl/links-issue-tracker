@@ -437,7 +437,7 @@ type migrationState struct {
 // lowers unconditionally; a store with none holds the unbounded ceiling.
 func (st migrationState) ceiling(released version.SchemaCeiling) version.SchemaCeiling {
 	if st.phase == phaseFresh {
-		return version.SchemaCeiling{Max: st.support.Max, Source: "a new store is created at the schema this lit carries"}
+		return version.SchemaCeiling{Max: st.support.Max, Source: "a new store is created at the schema this lit carries", Bound: version.BoundCarried}
 	}
 	return released.Lower(st.hold)
 }
@@ -446,7 +446,7 @@ func (st migrationState) ceiling(released version.SchemaCeiling) version.SchemaC
 // 0 when the store holds none. No hold is at 0: a schema version starts at
 // the baseline, so 0 is "none" and not a hold. [LAW:nothing-unseen]
 func (st migrationState) schemaHold() int64 {
-	if st.hold == version.UnboundedSchemaCeiling() {
+	if st.hold.Bound != version.BoundHold {
 		return 0
 	}
 	return st.hold.Max

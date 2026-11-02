@@ -45,14 +45,14 @@ func unknownRemoteSchema() remoteSchema {
 
 // remoteHeadAt is the remote head at commitHash as a push judges it: its
 // schema and its hold, both read AS OF that one commit, so the two cannot
-// come from different heads. holder names the head for the hold's source, as
-// "origin/master's head". [LAW:one-source-of-truth]
-func (s *Store) remoteHeadAt(ctx context.Context, commitHash string, holder string) (remoteSchema, error) {
+// come from different heads. The hold's source names the head as
+// "<remote>/<branch>'s head". [LAW:one-source-of-truth]
+func (s *Store) remoteHeadAt(ctx context.Context, commitHash string, remote storage.RemoteName, branch string) (remoteSchema, error) {
 	remoteVersion, err := s.remoteHeadSchema(ctx, commitHash)
 	if err != nil {
 		return remoteSchema{}, err
 	}
-	hold, err := s.schemaHoldAt(ctx, commitHash, holder)
+	hold, err := s.schemaHoldAt(ctx, commitHash, fmt.Sprintf("%s/%s's head", remote, branch))
 	if err != nil {
 		return remoteSchema{}, err
 	}

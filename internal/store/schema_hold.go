@@ -32,10 +32,12 @@ type metaSchemaVersion struct {
 }
 
 // metaSchemaVersionRow reads the row the caller selected from meta for key as
-// a schema version. A missing meta table (MySQL error 1146) is a store before
-// the baseline, which no migration or downgrade has written a row into, the
-// classification schemaVersionAtCommit gives a missing goose table; no row is
-// no declaration; every other read error propagates. [LAW:no-silent-failure]
+// a schema version: an integer at or above 1, the baseline, since no
+// migration or hold is at 0 and 0 is what a reader reports for "none". A
+// missing meta table (MySQL error 1146) is a store before the baseline, which
+// no migration or downgrade has written a row into, the classification
+// schemaVersionAtCommit gives a missing goose table; no row is no
+// declaration; every other read error propagates. [LAW:no-silent-failure]
 // It is the one reader of meta's schema-version rows: the minimum writer
 // schema (schema_operability.go) and the schema hold differ only in what the
 // caller does with the value. [LAW:one-type-per-behavior]
@@ -49,8 +51,8 @@ func metaSchemaVersionRow(key string, row *sql.Row) (metaSchemaVersion, error) {
 		return metaSchemaVersion{}, fmt.Errorf("read meta %s: %w", key, err)
 	}
 	v, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil {
-		return metaSchemaVersion{present: true, malformed: fmt.Errorf("meta %s = %q is not a schema version: %w", key, raw, err)}, nil
+	if err != nil || v < 1 {
+		return metaSchemaVersion{present: true, malformed: fmt.Errorf("meta %s = %q is not a schema version, an integer at or above 1", key, raw)}, nil
 	}
 	return metaSchemaVersion{version: v, present: true}, nil
 }
@@ -70,6 +72,7 @@ func (m metaSchemaVersion) ceiling(holder string) (version.SchemaCeiling, error)
 	return version.SchemaCeiling{
 		Max:    m.version,
 		Source: fmt.Sprintf("%s holds its schema at %d (meta.%s), which a remote downgrade set", holder, m.version, schemaHoldKey),
+		Bound:  version.BoundHold,
 	}, nil
 }
 
