@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // quarantinedWorkspace builds a workspace whose top `pending` migrations are
@@ -169,6 +171,119 @@ func TestUnquarantineLeavesARowThatBlocksNothing(t *testing.T) {
 	if !errors.As(err, &none) {
 		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
 	}
+}
+
+// recordQuarantineBeyondRegistry leaves the row a newer lit's failed migration
+// leaves, a quarantine one past this binary's registry, and returns its version.
+// It writes below the migration gate, since an open would migrate the store.
+func recordQuarantineBeyondRegistry(t *testing.T, ctx context.Context, doltRoot string) int64 {
+	t.Helper()
+	s, err := openInitialized(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id", engineWrite)
+	if err != nil {
+		t.Fatalf("openInitialized error = %v", err)
+	}
+	defer func() {
+		if err := s.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}()
+	beyond := headVersion(t) + 1
+	if err := s.recordQuarantine(ctx, &QuarantineBlockError{Version: beyond, Name: "newer.sql", ErrorText: "simulated failure"}); err != nil {
+		t.Fatalf("recordQuarantine error = %v", err)
+	}
+	if err := s.commitWorkingSet(ctx, "quarantine for test"); err != nil {
+		t.Fatalf("commitWorkingSet error = %v", err)
+	}
+	return beyond
+}
+
+// assertRefusesLitWithMigration checks that the quarantine of beyond is still in
+// force for a lit whose registry reaches it.
+func assertRefusesLitWithMigration(t *testing.T, ctx context.Context, doltRoot string, applied, beyond int64) {
+	t.Helper()
+	observeDolt(t, ctx, doltRoot, "test-workspace-id", func(s *Store) {
+		var blocked *QuarantineBlockError
+		if err := s.checkPendingQuarantine(ctx, applied, version.SchemaSupport{Max: beyond}); !errors.As(err, &blocked) || blocked.Version != beyond {
+			t.Errorf("a lit with v%d pending got %v; want the quarantine of v%d in force", beyond, err, beyond)
+		}
+	})
+}
+
+// workspaceOneBehindHead is a migrated workspace with its last migration
+// reversed: this binary has a migration to run.
+func workspaceOneBehindHead(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		if _, err := st.Downgrade(ctx, headVersion(t)-1); err != nil {
+			t.Fatalf("Downgrade error = %v", err)
+		}
+	})
+	return doltRoot
+}
+
+// A lit older than a quarantined migration runs the migrations it has: the
+// quarantine names one it would never run, and stays to refuse the lit that
+// has it.
+func TestAnOlderLitMigratesPastAQuarantineItDoesNotHave(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := workspaceOneBehindHead(t, ctx)
+	beyond := recordQuarantineBeyondRegistry(t, ctx, doltRoot)
+
+	head := headVersion(t)
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		applied, err := st.recordedMigrationVersion(ctx)
+		if err != nil {
+			t.Fatalf("recordedMigrationVersion error = %v", err)
+		}
+		if applied != head {
+			t.Errorf("applied = v%d after the open, want v%d", applied, head)
+		}
+	})
+	assertRefusesLitWithMigration(t, ctx, doltRoot, head, beyond)
+}
+
+// Clearing is the gate's answer, so a lit that is not refused cannot delete the
+// quarantine guarding a newer lit from rerunning its failed migration.
+func TestUnquarantineLeavesAQuarantineThisLitDoesNotHaveInForce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := workspaceOneBehindHead(t, ctx)
+	beyond := recordQuarantineBeyondRegistry(t, ctx, doltRoot)
+
+	_, err := Unquarantine(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	var none NoQuarantineError
+	if !errors.As(err, &none) {
+		t.Fatalf("Unquarantine() error = %v (%T); want NoQuarantineError", err, err)
+	}
+	assertRefusesLitWithMigration(t, ctx, doltRoot, headVersion(t)-1, beyond)
+}
+
+// A quarantine on a migration this lit has refuses it as ever, and a further
+// row past its registry is not the next thing it meets: the clear promises the
+// run, and the run lands.
+func TestAQuarantineBeyondTheRegistryIsNotTheNextOneMet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot, quarantined := quarantinedWorkspace(t, ctx, 1)
+	beyond := recordQuarantineBeyondRegistry(t, ctx, doltRoot)
+
+	var blocked *QuarantineBlockError
+	if err := openErr(t, doltRoot); !errors.As(err, &blocked) || blocked.Version != quarantined || blocked.Next != nil {
+		t.Fatalf("Open() error = %v; want the quarantine of v%d and no Next", err, quarantined)
+	}
+	done, err := Unquarantine(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Unquarantine() error = %v", err)
+	}
+	if done.Cleared.Version != quarantined || done.Cleared.Next != nil {
+		t.Errorf("Unquarantine() cleared %+v; want v%d and no Next", done.Cleared, quarantined)
+	}
+	if err := openErr(t, doltRoot); err != nil {
+		t.Fatalf("Open() after the clear error = %v", err)
+	}
+	assertRefusesLitWithMigration(t, ctx, doltRoot, quarantined, beyond)
 }
 
 // A clear whose commit fails is still in force: the error names it with the

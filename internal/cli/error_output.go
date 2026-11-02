@@ -593,7 +593,7 @@ func commandErrorRemediation(reason commandReason) string {
 		// lets a migration that already failed run again, on the judgment that
 		// the failure was transient. So both are gated the way
 		// workspace_schema_ahead gates its paths.
-		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
+		return "Do not retry unchanged — a migration this workspace has pending failed and is quarantined, and every command of this lit that opens the store refuses until the quarantine is cleared or a snapshot taken before the failure is restored. The message above names both. " + agentInstructionsOpen + "Restoring a snapshot discards everything written since it was taken, and clearing the quarantine lets a migration that already failed run again: take either path only when the user directs it, and until then surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonBatchLandedThenFailed:
 		return "Do not run it again — every write it made landed, and running it again writes each one a second time, creating its created issues again. If a later command fails, run `lit doctor` for diagnostics."
 	case reasonBulkPartialFailure:

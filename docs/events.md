@@ -570,8 +570,8 @@ the ones it had.
 
 ## What `lit unquarantine` records
 
-`lit unquarantine` clears the quarantine that every command opening the store
-is refused on. When no quarantine blocks the store, the command exits 6, reason
+`lit unquarantine` clears the quarantine that this `lit`'s commands opening the
+store are refused on. When no quarantine refuses this `lit`, the command exits 6, reason
 `state_already_holds`, and its event carries none of these keys. When the clear's
 commit fails, the command fails and its event still carries them: the clear is in
 force.

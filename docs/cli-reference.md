@@ -1108,9 +1108,11 @@ store runs that migration again. Run it once the cause of the failure is fixed; 
 keeps every write, where `lit snapshots restore` discards those made since the
 snapshot. It clears exactly the quarantine the refusal named and prints it; when
 another quarantined migration still blocks the store, it names that one instead of
-promising the run. With nothing quarantined it exits 6 (`state_already_holds`). If
-the clear's commit fails, the command fails and says so, but the clear is in force,
-and the next write commits it.
+promising the run. With no quarantine refusing this `lit` it exits 6
+(`state_already_holds`). A quarantine on a migration this `lit` does not have
+refuses nothing here and is left in place, so it still refuses the `lit` that has
+that migration. If the clear's commit fails, the command fails and says so, but the
+clear is in force, and the next write commits it.
 
 ---
 

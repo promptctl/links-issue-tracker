@@ -67,11 +67,12 @@ func clearedFacts(cleared QuarantineBlockError) map[string]any {
 }
 
 // NoQuarantineError answers an Unquarantine on a workspace no quarantine
-// blocks: the state asked for already holds.
+// blocks this binary's opens of: the state asked for already holds. A lit that
+// has a migration this one lacks may still be refused on its quarantine.
 type NoQuarantineError struct{}
 
 func (NoQuarantineError) Error() string {
-	return "no migration is quarantined: no open of this workspace is refused, so there is nothing to clear"
+	return "no quarantine refuses this lit's opens of this workspace, so there is nothing to clear"
 }
 
 // Satisfied makes the answer a state request that already holds.
@@ -82,8 +83,8 @@ var (
 	_ model.RecordedError     = (*UnquarantineCommitError)(nil)
 )
 
-// Unquarantine clears the quarantine every write open of this workspace is
-// refused on, so the next open runs that migration again, and commits the
+// Unquarantine clears the quarantine this lit's write opens of this workspace
+// are refused on, so the next open runs that migration again, and commits the
 // clear as one Dolt commit.
 //
 // [LAW:locality-or-seam] This is a below-the-gate entry point like DumpRaw:
