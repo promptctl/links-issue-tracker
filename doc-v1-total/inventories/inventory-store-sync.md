@@ -1680,7 +1680,7 @@ Nothing in `bounds.go` enforces monotonicity or gap-freeness; version identity i
 
 `earliest(a, b, c int) (int, string)`: smallest non-negative index among the three, tagged `"--"`, `"#"`, or `"/*"`; ties resolve to the first in the fixed order `{a,"--"}, {b,"#"}, {c,"/*"}` because the comparison is strict `<`. All negative → `(-1, "")`.
 
-`TestEveryMigrationHasDownSection`: `Embedded()`, error → Fatal; each of its migrations must satisfy `hasDownSection`, failure being a `t.Errorf` stating the Down section must contain at least one non-empty non-comment SQL statement between `-- +goose Down` and EOF (or the next `-- +goose Up`), that loss-making migrations should reconstruct the schema with documented loss or document the loss contract, and that "The presence of the Down section itself is non-negotiable". **No count is pinned to a specific number.** The doc names the runtime sibling `TestEveryMigrationDownIsExercised` in `internal/store`, which proves the section actually runs.
+`TestEveryMigrationHasDownSection`: `Embedded()`, error → Fatal; each of its migrations must satisfy `hasDownSection`, failure being a `t.Errorf` stating the Down section must contain at least one non-empty non-comment SQL statement between `-- +goose Down` and EOF (or the next `-- +goose Up`), that the Down must be lossless, putting dropped user data in the stash carrier first, and that "The presence of the Down section itself is non-negotiable". **No count is pinned to a specific number.** Its runtime sibling is `TestEveryMigrationRoundTripsLosslessly` in `internal/store`, which runs every Down from v2 up and checks both the schema and the data after the round trip.
 
 `TestHasDownSectionRejectsMissingShapes` — fifteen fixtures:
 

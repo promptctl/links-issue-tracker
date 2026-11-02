@@ -317,6 +317,16 @@ func applySeed(t *testing.T, db *sql.DB, seed string) {
 	if ran == 0 {
 		t.Fatal("seed holds no statements; it must fill every table its migration's Up or Down reads or rewrites")
 	}
+	for _, name := range comparedTables(t, db) {
+		var any int
+		err := db.QueryRowContext(context.Background(), "SELECT 1 FROM `"+strings.ReplaceAll(name, "`", "``")+"` LIMIT 1").Scan(&any)
+		if errors.Is(err, sql.ErrNoRows) {
+			t.Fatalf("seed leaves table %s empty; a round trip over an empty table proves nothing about it", name)
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+	}
 }
 
 func stripSQLComments(stmt string) string {
