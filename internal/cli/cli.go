@@ -50,7 +50,7 @@ func Run(ctx context.Context, inv Invocation) (err error) {
 		return errors.New("the invocation was given no stderr")
 	}
 	inv.Stderr = serializeWrites(inv.Stderr)
-	recorder := beginInvocation(time.Now(), inv.Dir)
+	recorder := beginInvocation(time.Now(), inv.Dir, inv.Env)
 	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env, gitSpawnsBefore: inv.Env.GitSpawns()}
 	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
 	defer func() {

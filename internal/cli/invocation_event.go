@@ -42,12 +42,20 @@ const eventsSink = "file"
 const goPanicExitCode = 2
 
 // beginInvocation opens the event for an invocation starting at now in dir,
-// named "lit" until the dispatch reaches a command and names it.
-func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
+// named "lit" until the dispatch reaches a command and names it. An env that
+// carries the TRACEPARENT of the process that spawned this one puts the event
+// in that trace; one whose TRACEPARENT cannot be read starts a trace of its
+// own and says why on the event. [LAW:nothing-unseen]
+func beginInvocation(now time.Time, dir WorkingDir, env environ.Env) *telemetry.Recorder {
 	// A cwd that cannot be read is recorded as empty: every command that needs
 	// the cwd fails on it loudly, and that failure is on this same event.
 	cwd, _ := dir.Path()
-	return telemetry.Begin(telemetry.Event{
+	var parent telemetry.Parent
+	var parentErr error
+	if value, ok := env.Lookup(telemetry.TraceparentEnvVar); ok {
+		parent, parentErr = telemetry.ParseTraceparent(value)
+	}
+	recorder := telemetry.BeginUnder(telemetry.Event{
 		Event:     "lit",
 		Service:   "lit",
 		Version:   version.Version,
@@ -55,7 +63,11 @@ func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 		PID:       os.Getpid(),
 		Cwd:       cwd,
 		StartedAt: now,
-	})
+	}, parent)
+	if parentErr != nil {
+		telemetry.Set(telemetry.With(context.Background(), recorder), "trace.parent_error", telemetry.ErrorText(parentErr))
+	}
+	return recorder
 }
 
 // invocationContext is the context an invocation's dispatch runs under: its
