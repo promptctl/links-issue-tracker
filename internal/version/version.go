@@ -212,7 +212,7 @@ func Get() (Info, error) {
 		Commit:     Commit,
 		Date:       Date,
 		IsDev:      Version == "",
-		FromSource: !RaisePolicyOf(Origin).Release,
+		FromSource: !IsRelease(Origin),
 		Schema:     schema,
 	}, nil
 }

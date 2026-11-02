@@ -303,19 +303,29 @@ func schemaRaiseRemedy(refused *store.SchemaRaiseRequiresReleaseError) []remedyS
 // through this one adapter so none of them renders the raw refusal instead of the
 // contract. [LAW:single-enforcer]
 func asSyncFailure(err error) error {
-	if failure, ok := remoteSchemaAheadFailure(err); ok {
+	if failure, ok := schemaRefusalFailure(err); ok {
 		return SyncFailureError{Failure: failure}
 	}
 	if failure, ok := pushDivergedFailure(err); ok {
 		return SyncFailureError{Failure: failure}
 	}
-	if failure, ok := unreleasedSchemaFailure(err); ok {
-		return SyncFailureError{Failure: failure}
-	}
-	if failure, ok := schemaRaiseFailure(err); ok {
-		return SyncFailureError{Failure: failure}
-	}
 	return err
+}
+
+// schemaRefusalFailure builds the sync-failure contract for any of the
+// store's three schema refusals — the remote ahead of this binary, a commit
+// above the released ceiling, a raise from no release — or ok=false when err
+// is none of them. None clears by retrying from this binary, so the on-change
+// mirror renders every one of them as the block rather than as a transient
+// push error the next mutation retries. [LAW:single-enforcer]
+func schemaRefusalFailure(err error) (SyncFailure, bool) {
+	if failure, ok := remoteSchemaAheadFailure(err); ok {
+		return failure, true
+	}
+	if failure, ok := unreleasedSchemaFailure(err); ok {
+		return failure, true
+	}
+	return schemaRaiseFailure(err)
 }
 
 // persistent reports whether the divergence has crossed from "reconcile still in
@@ -357,10 +367,17 @@ var _ model.RecordedError = SyncFailureError{}
 // Every other class exits as the block itself: a push_diverged block renders
 // its refusal as the Cause line and does not unwrap to it.
 func (e SyncFailureError) Unwrap() error {
-	if e.Failure.RemoteAhead == nil {
-		return nil
+	// At most one store refusal is set; each arm returns its own pointer so a
+	// nil one never escapes as a non-nil error.
+	switch {
+	case e.Failure.RemoteAhead != nil:
+		return e.Failure.RemoteAhead
+	case e.Failure.Unreleased != nil:
+		return e.Failure.Unreleased
+	case e.Failure.RaiseRefused != nil:
+		return e.Failure.RaiseRefused
 	}
-	return e.Failure.RemoteAhead
+	return nil
 }
 
 // blockString renders the one authoritative sync-failure block: an

@@ -404,7 +404,7 @@ block it was, since every divergence class shares one reason.
 
 | Key | Meaning |
 | --- | --- |
-| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, or `push_diverged` (`lit sync push` refused because a peer pushed first). |
+| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `unreleased_schema` (a push refused because the commit's schema is above this lit's released-schema ceiling), or `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release). |
 
 ## What `lit init` records
 

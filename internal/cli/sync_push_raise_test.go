@@ -37,6 +37,15 @@ func TestASchemaRaiseRefusalRendersTheSyncFailureContract(t *testing.T) {
 	if syncFailure.Failure.Class != syncFailureSchemaRaiseRequiresRelease || syncFailure.Failure.RaiseRefused != storeErr {
 		t.Fatalf("mapped failure = %+v", syncFailure.Failure)
 	}
+	// The store refusal stays on the chain, so its event fields reach the
+	// command's error record and errors.As still finds it.
+	var unwrapped *store.SchemaRaiseRequiresReleaseError
+	if !errors.As(syncFailure, &unwrapped) || unwrapped != storeErr {
+		t.Fatalf("the sync failure does not unwrap to the store refusal: %v", syncFailure)
+	}
+	if mirror, ok := schemaRefusalFailure(storeErr); !ok || mirror.Class != syncFailureSchemaRaiseRequiresRelease {
+		t.Fatalf("the mirror's schema-refusal adapter does not recognize the raise: %+v %v", mirror, ok)
+	}
 	block := syncFailure.Error()
 	for _, want := range []string{
 		"would raise the remote's schema and this lit is not a release",

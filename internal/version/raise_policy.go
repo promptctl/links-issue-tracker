@@ -19,9 +19,16 @@ type RaisePolicy struct {
 	Release bool
 }
 
+// IsRelease reports whether an Origin stamp names goreleaser's tagged build:
+// the one definition of "this binary is a release" that Info.FromSource and
+// the raise policy both read. [LAW:one-source-of-truth]
+func IsRelease(origin string) bool {
+	return origin == OriginRelease
+}
+
 // RaisePolicyOf is the raise policy of a binary whose Origin stamp is origin.
 // It reads the stamp alone, no registry: the composition root builds it
 // beside the ceiling without a second ReadDir.
 func RaisePolicyOf(origin string) RaisePolicy {
-	return RaisePolicy{Release: origin == OriginRelease}
+	return RaisePolicy{Release: IsRelease(origin)}
 }

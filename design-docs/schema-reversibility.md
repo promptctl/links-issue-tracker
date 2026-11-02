@@ -143,6 +143,10 @@ push once more; a push still refused is raised by a release's own `lit sync
 push`. Stepping the store down is never the remedy: the head refused is one a
 release carries, and the next open would only migrate it back.
 
+`lit downgrade --schema <v>` steps the store's schema and leaves the binary in
+place; `--to <tag>` installs that release's binary and steps the store to its
+`Schema.Max`.
+
 The second condition is checked at the push, against the schema of the head
 being sent. Push-from-clone and compact-and-push send refs without opening
 the store, so the open-time refusal of a store above `Schema.Max` does not
