@@ -390,3 +390,67 @@ func TestAFailedAdoptionStampCallsForTheSnapshot(t *testing.T) {
 		t.Fatalf("failure = step %s (act %d), snapshot %v; want %s with the snapshot", fail.Step, fail.Step.Act(), fail.Snapshot, stepAdoptStamp)
 	}
 }
+
+// A failed reset leaves the failed step's changes in the working set, and the
+// next open's quarantine gate meets them before it commits its own table: they
+// are versioned under a message that says what they are, never as the
+// quarantine table's ensure.
+func TestTheGateVersionsWhatAFailedResetLeftUnderAMessageThatNamesIt(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+	version := headVersion(t) + 1
+	migrationUpByOneForTest = func(ctx context.Context, db *sql.DB, _ *goose.Provider) (*goose.MigrationResult, error) {
+		if _, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS partial_step (id INT PRIMARY KEY)`); err != nil {
+			return nil, err
+		}
+		return &goose.MigrationResult{
+			Source: &goose.Source{Version: version, Path: fmt.Sprintf("%05d_test.sql", version)},
+		}, errors.New("simulated migration failure")
+	}
+	t.Cleanup(func() { migrationUpByOneForTest = nil })
+	clear := injectFailpoint(t, errors.New("simulated reset failure"), stepMigrationReset)
+	if fail := asConvergenceError(t, openErr(t, doltRoot)); fail.Step != stepMigrationReset {
+		t.Fatalf("failure step = %s; want %s", fail.Step, stepMigrationReset)
+	}
+	clear()
+	migrationUpByOneForTest = nil
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		rows, err := st.db.QueryContext(ctx,
+			`SELECT l.message FROM dolt_log l JOIN dolt_diff d ON d.commit_hash = l.commit_hash WHERE d.table_name = 'partial_step'`)
+		if err != nil {
+			t.Fatalf("read the commits that changed partial_step: %v", err)
+		}
+		defer rows.Close()
+		var messages []string
+		for rows.Next() {
+			var message string
+			if err := rows.Scan(&message); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			messages = append(messages, message)
+		}
+		if len(messages) != 1 || messages[0] != standingWritesCommitMessage {
+			t.Errorf("commits that changed partial_step = %q; want one, %q", messages, standingWritesCommitMessage)
+		}
+		commits, looked := st.StrandedWritesCommits()
+		if !looked || len(commits) != 1 || commits[0].Tables != 1 {
+			t.Errorf("StrandedWritesCommits() = %v, looked %v; want the one commit over the one table", commits, looked)
+		}
+	})
+}
+
+// An open that reaches the gate with nothing standing in the working set
+// versions nothing and records no look at stranded writes: the key on the
+// event stays absent, which means "not looked at".
+func TestTheGateOnACleanWorkingSetRecordsNoLookAtStrandedWrites(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		commits, looked := st.StrandedWritesCommits()
+		if looked || len(commits) != 0 {
+			t.Errorf("StrandedWritesCommits() = %v, looked %v; want no commit and no look", commits, looked)
+		}
+	})
+}

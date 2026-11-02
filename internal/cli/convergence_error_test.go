@@ -31,6 +31,7 @@ var convergenceStepReasons = map[string]string{
 	"ensure_quarantine_table":         "migration_failed",
 	"quarantine_table_shape":          "schema_shape_refused",
 	"commit_quarantine_table":         "migration_failed",
+	"commit_standing_writes":          "migration_failed",
 	"check_quarantine":                "migration_failed",
 	"check_reconcile_prerequisites":   "migration_failed",
 	"reconcile_prerequisites_missing": "schema_shape_refused",
