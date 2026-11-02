@@ -50,9 +50,11 @@ func TestResolvingTheWorkspaceSaysWhatItDidToConfig(t *testing.T) {
 	runCLIInDir(t, repo, "workspace")
 	settle("renormalized")
 
-	rewriteStoredPrefix(t, info.ConfigPath, "")
-	runCLIInDir(t, repo, "workspace")
-	settle("prefixed")
+	for _, none := range []string{"", "   "} {
+		rewriteStoredPrefix(t, info.ConfigPath, none)
+		runCLIInDir(t, repo, "workspace")
+		settle("prefixed")
+	}
 }
 
 // A resolution that fails holding the config lock still says how long it
@@ -73,6 +75,14 @@ func TestAFailedResolutionStillSaysItQueuedForTheConfigLock(t *testing.T) {
 	}
 	if settle, ok := facts["workspace.config_settle"]; ok {
 		t.Errorf("workspace.config_settle = %#v, want absent", settle)
+	}
+
+	// One that never reached the lock records no wait at all.
+	if _, err := runCLIInDirAllowError(t, t.TempDir(), "workspace"); err == nil {
+		t.Fatal("Run(workspace) outside a git repository succeeded, want a failure")
+	}
+	if wait, ok := lastEvent(t).Facts["workspace.config_lock_wait_ms"]; ok {
+		t.Errorf("workspace.config_lock_wait_ms = %#v outside a repository, want absent", wait)
 	}
 }
 

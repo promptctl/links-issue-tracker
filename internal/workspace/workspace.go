@@ -238,6 +238,10 @@ func (p PrefixState) Stored() StoredPrefix {
 // name. A refused prefix was read from config, so it never is.
 func (p PrefixState) Derived() bool { return p.spec.Derived() }
 
+// Refused reports whether this is the refused arm: a stored prefix the rules
+// refuse, which mints nothing until `lit prefix set` repairs it.
+func (p PrefixState) Refused() bool { return p.refusal != nil }
+
 // Remotes is a checkout's git remote configuration as one invocation reads it:
 // the remotes the repository has, and the one the current branch tracks. Each is asked of
 // git at most once, on first use, and every later read in the invocation is
@@ -360,16 +364,17 @@ func Resolve(env environ.Env, cwd string) (Info, error) {
 // it crosses this boundary as a value, instead of being parked somewhere
 // ambient for this function to read back. [LAW:no-shared-mutable-globals]
 // [LAW:effects-at-boundaries] the request reaches the one write that consumes it.
-// The Settlement comes back on failure too: a resolution refused at or under
-// the config lock still queued for it. [LAW:nothing-unseen]
-func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (Info, Settlement, error) {
+// The Settlement comes back on a failure at or under the config lock too, since
+// that resolution still queued for it; it is nil only when resolving failed
+// before it reached the lock. [LAW:nothing-unseen]
+func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (Info, *Settlement, error) {
 	geo, err := askGeometry(env, cwd)
 	if err != nil {
-		return Info{}, Settlement{}, err
+		return Info{}, nil, err
 	}
 	loc, err := locationOf(geo)
 	if err != nil {
-		return Info{}, Settlement{}, err
+		return Info{}, nil, err
 	}
 	// Resolved here as pure geometry — the path only. Minting the token that
 	// lives in it is deliberately NOT done here: Resolve runs for read-only
@@ -377,16 +382,16 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 	// identity. The mint hangs off the access mode instead, in app.Open.
 	privateGitDir, err := canonicalGitDir(geo.gitDir)
 	if err != nil {
-		return Info{}, Settlement{}, err
+		return Info{}, nil, err
 	}
 	// [LAW:effects-at-boundaries] Locate is pure geometry; store
 	// creation is the one mutation, gathered here where the write is intended.
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
-		return Info{}, Settlement{}, fmt.Errorf("create storage dir: %w", err)
+		return Info{}, nil, fmt.Errorf("create storage dir: %w", err)
 	}
 	cfg, prefix, settlement, err := loadOrCreateConfig(geo.root, loc.ConfigPath, requested)
 	if err != nil {
-		return Info{}, settlement, err
+		return Info{}, &settlement, err
 	}
 	return Info{
 		Location:      loc,
@@ -398,7 +403,7 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 		// answer is a CheckoutRoot as it stands.
 		Remotes: NewRemotes(env, loc.Repository(), CheckoutRoot{path: geo.root}),
 		Project: config.CheckoutProject(env, pathspec.New(geo.root)),
-	}, settlement, nil
+	}, &settlement, nil
 }
 
 // Handed is the workspace a detached worker runs against: the store at loc,
@@ -735,8 +740,13 @@ func classifyGitError(context string, err error) error {
 // command whose whole contract is to be safe to re-run, and before the store
 // that could tell a repair from a rewrite is even open.
 // [LAW:single-enforcer] [LAW:no-silent-failure]
+// carriesNoPrefix is whether config.json's issue_prefix text stands for no
+// prefix at all. [LAW:one-source-of-truth] deriving one and naming what the
+// write did read it here.
+func carriesNoPrefix(configured string) bool { return strings.TrimSpace(configured) == "" }
+
 func resolveIssuePrefix(rootDir string, configPath string, configured string, requested PrefixRequest) (PrefixState, error) {
-	if strings.TrimSpace(configured) == "" {
+	if carriesNoPrefix(configured) {
 		// The request is consulted BEFORE derivation, not bolted onto one of its
 		// failure exits, so every way the repository name can come up short is
 		// answered by the same flag. [LAW:dataflow-not-control-flow]
@@ -849,7 +859,7 @@ func settleConfig(rootDir string, path string, requested PrefixRequest) (Config,
 			return cfg, prefix, ConfigRead, nil
 		}
 		settle := ConfigRenormalized
-		if cfg.IssuePrefix == "" {
+		if carriesNoPrefix(cfg.IssuePrefix) {
 			settle = ConfigPrefixed
 		}
 		cfg.IssuePrefix = string(prefix.Stored())

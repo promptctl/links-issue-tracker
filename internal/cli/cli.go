@@ -267,9 +267,13 @@ func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, di
 
 // recordConfigSettlement puts how long resolving queued for the config lock,
 // and what it did to config.json holding it, on the invocation's event — a
-// resolution that failed included, so a timed-out queue is seen. One that
-// failed before it settled records no settle. [LAW:nothing-unseen]
-func recordConfigSettlement(ctx context.Context, settlement workspace.Settlement) {
+// resolution that failed under the lock included, so a timed-out queue is seen.
+// One that never reached the lock records neither, and one that failed before
+// it settled records no settle. [LAW:nothing-unseen]
+func recordConfigSettlement(ctx context.Context, settlement *workspace.Settlement) {
+	if settlement == nil {
+		return
+	}
 	telemetry.Set(ctx, "workspace.config_lock_wait_ms", settlement.Waited.Milliseconds())
 	if settlement.Settle != "" {
 		telemetry.Set(ctx, "workspace.config_settle", string(settlement.Settle))
@@ -280,7 +284,7 @@ func recordConfigSettlement(ctx context.Context, settlement workspace.Settlement
 // took on the invocation's event. [LAW:nothing-unseen]
 func recordWorkspaceResolution(ctx context.Context, ws workspace.Info) {
 	state := "legal"
-	if _, err := ws.IssuePrefix.Mintable(); err != nil {
+	if ws.IssuePrefix.Refused() {
 		state = "refused"
 	}
 	telemetry.Set(ctx, "workspace.prefix_state", state)
