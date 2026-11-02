@@ -251,7 +251,8 @@ func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, di
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
 	}
-	ws, err := workspace.ResolveWithPrefix(env, cwd, requested)
+	ws, settlement, err := workspace.ResolveWithPrefix(env, cwd, requested)
+	recordConfigSettlement(ctx, settlement)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			// [LAW:types-are-the-program] Typed error carries classification; message preserved for surface display.
@@ -259,8 +260,40 @@ func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, di
 		}
 		return workspace.Info{}, err
 	}
+	recordWorkspaceResolution(ctx, ws)
 	reportConfigLayers(ctx, stderr, env, ws.Project)
 	return ws, nil
+}
+
+// recordConfigSettlement puts how long resolving queued for the config lock,
+// and what it did to config.json holding it, on the invocation's event — a
+// resolution that failed under the lock included, so a timed-out queue is seen.
+// One that never reached the lock records neither, and one that failed before
+// it settled records no settle. [LAW:nothing-unseen]
+func recordConfigSettlement(ctx context.Context, settlement *workspace.Settlement) {
+	if settlement == nil {
+		return
+	}
+	telemetry.Set(ctx, "workspace.config_lock_wait_ms", settlement.Waited.Milliseconds())
+	if settlement.Settle != "" {
+		telemetry.Set(ctx, "workspace.config_settle", string(settlement.Settle))
+	}
+}
+
+// recordWorkspaceResolution puts which arm of PrefixState the resolved prefix
+// took on the invocation's event. [LAW:nothing-unseen]
+func recordWorkspaceResolution(ctx context.Context, ws workspace.Info) {
+	telemetry.Set(ctx, "workspace.prefix_state", ws.IssuePrefix.Arm())
+	telemetry.Set(ctx, "workspace.prefix_derived", ws.IssuePrefix.Derived())
+}
+
+// mintablePrefix is PrefixState.Mintable for a command, with whether it refused
+// put on the event. [LAW:single-enforcer] every command that needs a prefix to
+// mint under reads it here, so none can be refused without the event saying so.
+func mintablePrefix(ctx context.Context, state workspace.PrefixState) (workspace.PrefixSpec, error) {
+	spec, err := state.Mintable()
+	telemetry.Set(ctx, "prefix.mintable_error", telemetry.ErrorText(err))
+	return spec, err
 }
 
 // rewriteHelpCommand turns `lit help <path...>` into `lit <path...> --help`, so
@@ -359,7 +392,7 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		prefix, err := ap.Workspace.IssuePrefix.Mintable()
+		prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 		if err != nil {
 			return err
 		}
@@ -455,7 +488,7 @@ func followupLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		prefix, err := ap.Workspace.IssuePrefix.Mintable()
+		prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 		if err != nil {
 			return err
 		}
@@ -2283,7 +2316,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
-	prefix, err := ap.Workspace.IssuePrefix.Mintable()
+	prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 	if err != nil {
 		return err
 	}
@@ -2333,7 +2366,7 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if err != nil {
 		return err
 	}
-	prefix, err := ap.Workspace.IssuePrefix.Mintable()
+	prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 	if err != nil {
 		return err
 	}

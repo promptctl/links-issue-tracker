@@ -41,19 +41,23 @@ func configLockPath(configPath string) string {
 // [LAW:single-enforcer] every config.json writer passes through here.
 // [LAW:no-ambient-temporal-coupling] the ordering has an owner, the kernel
 // flock, instead of depending on which rename happens to land last.
-func withConfigLock(configPath string, fn func() error) error {
+// waited is how long the acquire took, held or not, so a command that queued
+// behind another lit process says so. [LAW:nothing-unseen]
+func withConfigLock(configPath string, fn func() error) (waited time.Duration, err error) {
 	lockPath := configLockPath(configPath)
+	start := time.Now()
 	release, acquired, err := filelock.Acquire(context.Background(), lockPath, true, configLockAttempts, configLockRetryDelay)
+	waited = time.Since(start)
 	if err != nil {
-		return fmt.Errorf("lock workspace config: %w", err)
+		return waited, fmt.Errorf("lock workspace config: %w", err)
 	}
 	if !acquired {
-		return fmt.Errorf("%w: another lit process held %s for over %s; retry once it exits",
+		return waited, fmt.Errorf("%w: another lit process held %s for over %s; retry once it exits",
 			ErrConfigBusy, lockPath, time.Duration(configLockAttempts)*configLockRetryDelay)
 	}
 	fnErr := fn()
 	if relErr := release(); relErr != nil {
-		return errors.Join(fnErr, fmt.Errorf("release workspace config lock: %w", relErr))
+		return waited, errors.Join(fnErr, fmt.Errorf("release workspace config lock: %w", relErr))
 	}
-	return fnErr
+	return waited, fnErr
 }

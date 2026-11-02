@@ -67,7 +67,7 @@ func TestConcurrentUpdateConfigLosesNoWrite(t *testing.T) {
 	const racers = 16
 	errs := make([]error, racers)
 	raceN(racers, func(i int) {
-		_, errs[i] = UpdateConfig(info.ConfigPath, func(cfg Config) (Config, error) {
+		_, _, errs[i] = UpdateConfig(info.ConfigPath, func(cfg Config) (Config, error) {
 			cfg.IssuePrefix += "x"
 			return cfg, nil
 		})

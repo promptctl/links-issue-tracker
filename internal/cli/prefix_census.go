@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -132,6 +133,18 @@ func (c idPrefixCensus) String() string {
 		return "none"
 	}
 	return strings.Join(parts, ",")
+}
+
+// record puts the census on the invocation's event: issues per prefix, the
+// ids it could not read, and whether there was a store to count at all.
+func (c idPrefixCensus) record(ctx context.Context) {
+	counts := make(map[string]int, len(c.counts))
+	for _, count := range c.counts {
+		counts[count.prefix] = count.issues
+	}
+	telemetry.Set(ctx, "prefix_census.counts", counts)
+	telemetry.Set(ctx, "prefix_census.unreadable", c.unreadable)
+	telemetry.Set(ctx, "prefix_census.no_store", c.noStore)
 }
 
 // mismatch reports whether the store holds readable ids and none of them

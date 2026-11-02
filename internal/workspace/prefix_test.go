@@ -96,7 +96,7 @@ func TestResolveWithPrefixInitializesEveryNameDerivationRefuses(t *testing.T) {
 				t.Fatalf("RequestPrefix() error = %v", err)
 			}
 			repo := repoNamed(t, name)
-			info, err := ResolveWithPrefix(testEnv(), repo, requested)
+			info, _, err := ResolveWithPrefix(testEnv(), repo, requested)
 			if err != nil {
 				t.Fatalf("ResolveWithPrefix() in a repository named %q error = %v", name, err)
 			}
@@ -153,7 +153,7 @@ func TestResolveWithPrefixLeavesADerivableNameAlone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestPrefix() error = %v", err)
 	}
-	explicit, err := ResolveWithPrefix(testEnv(), repoNamed(t, "myrepo"), requested)
+	explicit, _, err := ResolveWithPrefix(testEnv(), repoNamed(t, "myrepo"), requested)
 	if err != nil {
 		t.Fatalf("ResolveWithPrefix() error = %v", err)
 	}
@@ -172,7 +172,7 @@ func TestResolveWithPrefixRefusesToContradictAWorkspaceThatHasOne(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RequestPrefix() error = %v", err)
 	}
-	_, err = ResolveWithPrefix(testEnv(), repo, requested)
+	_, _, err = ResolveWithPrefix(testEnv(), repo, requested)
 	if err == nil {
 		t.Fatal("ResolveWithPrefix() overwrote an existing workspace's prefix, want a refusal")
 	}
@@ -212,7 +212,7 @@ func TestResolveWithPrefixRefusesToOverrideAnIllegalStoredPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RequestPrefix() error = %v", err)
 	}
-	_, err = ResolveWithPrefix(testEnv(), repo, requested)
+	_, _, err = ResolveWithPrefix(testEnv(), repo, requested)
 	var stored StoredPrefixError
 	if err == nil || errors.As(err, &stored) || !errors.Is(err, ErrIssuePrefixRefused) {
 		t.Fatalf("ResolveWithPrefix() error = %v, want the contradiction refusal", err)
@@ -242,7 +242,7 @@ func TestResolveWithPrefixAcceptsAPrefixTheWorkspaceAlreadyHas(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RequestPrefix(%q) error = %v", spelling, err)
 		}
-		info, err := ResolveWithPrefix(testEnv(), repo, requested)
+		info, _, err := ResolveWithPrefix(testEnv(), repo, requested)
 		if err != nil {
 			t.Fatalf("ResolveWithPrefix(%q) error = %v, want agreement", spelling, err)
 		}

@@ -68,7 +68,7 @@ func initLeaf() (wsLeaf, wsAcquire) {
 		// A workspace init leaves behind has to be able to mint, so a stored
 		// prefix the rules refuse is refused here, before any effect, with the
 		// remediation naming the command that repairs it.
-		prefix, err := ws.IssuePrefix.Mintable()
+		prefix, err := mintablePrefix(ctx, ws.IssuePrefix)
 		if err != nil {
 			return err
 		}
