@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
+
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // Env is an environment, as os.Environ lists one. The zero Env is no
@@ -37,6 +39,15 @@ type Env struct {
 	// that hands one Env to several runs shares the count among them. Git is
 	// its only writer and GitSpawns its reader.
 	gitSpawns *atomic.Int64
+	// releasedSchema is the highest schema version a published release
+	// carries, as cmd/lit read it from its build stamp
+	// (version.ReadReleasedSchemaCeiling). It is no environment variable: a
+	// variable could be set to lift it. It rides here because Env is the one
+	// value cmd/lit builds per run and every store open is handed, so the
+	// ceiling is passed in at the composition root rather than read as a
+	// global below it. Of leaves it 0, which moves no existing workspace's
+	// schema: an Env nobody gave a ceiling fails closed.
+	releasedSchema version.ReleasedSchemaCeiling
 }
 
 // IsZero reports whether e is the zero Env, which no Env built by Of or
@@ -97,13 +108,27 @@ func (e Env) Without(keys ...string) Env {
 			kept = append(kept, kv)
 		}
 	}
-	return Env{vars: kept, goos: e.goos, gitSpawns: e.gitSpawns}
+	return Env{vars: kept, goos: e.goos, gitSpawns: e.gitSpawns, releasedSchema: e.releasedSchema}
 }
 
 // With is the environment with the KEY=VALUE entries set appended, so each
 // overrides any earlier entry for its key.
 func (e Env) With(set ...string) Env {
-	return Env{vars: append(slices.Clone(e.vars), set...), goos: e.goos, gitSpawns: e.gitSpawns}
+	return Env{vars: append(slices.Clone(e.vars), set...), goos: e.goos, gitSpawns: e.gitSpawns, releasedSchema: e.releasedSchema}
+}
+
+// WithReleasedSchema is the environment with its released-schema ceiling set
+// to ceiling: no existing workspace is migrated past it, and no commit above
+// it is pushed.
+func (e Env) WithReleasedSchema(ceiling version.ReleasedSchemaCeiling) Env {
+	e.releasedSchema = ceiling
+	return e
+}
+
+// ReleasedSchema is the released-schema ceiling WithReleasedSchema set; its
+// Max is 0 when none was.
+func (e Env) ReleasedSchema() version.ReleasedSchemaCeiling {
+	return e.releasedSchema
 }
 
 // List is the environment as a KEY=VALUE list, a copy of the Env's own. It is

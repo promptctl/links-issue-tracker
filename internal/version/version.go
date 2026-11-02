@@ -15,6 +15,9 @@
 package version
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
@@ -43,7 +46,73 @@ var (
 	// provenance is carried as its own fact, never guessed from another one.
 	// [LAW:types-are-the-program]
 	Origin string
+	// ReleasedSchema is the highest schema version a published release of lit
+	// carries, as the producer of this binary knew it: the ceiling this binary
+	// may move an existing workspace's schema to, and the highest schema a
+	// commit it pushes may be at. See ReadReleasedSchemaCeiling for its grammar.
+	ReleasedSchema string
 )
+
+// ReleasedSchemaCarried is goreleaser's stamp for ReleasedSchema on a real
+// release: every migration a release binary carries is released, because the
+// binary is the release.
+const ReleasedSchemaCarried = "carried"
+
+// The labels a ReleasedSchema stamp of the form "<version>@<label>" may carry
+// besides a release tag's name: goreleaser's snapshot build, and a from-source
+// build of a checkout with no release tag.
+const (
+	releasedLabelSnapshot = "snapshot"
+	releasedLabelNoTag    = "none"
+)
+
+// ReleasedSchemaCeiling is this binary's released-schema ceiling and where it
+// came from, in words a refusal or `lit version` can print as they are.
+type ReleasedSchemaCeiling struct {
+	Max    int64
+	Source string
+}
+
+// ReadReleasedSchemaCeiling reads the ReleasedSchema stamp:
+//
+//   - "" (a bare `go build`, `go run`): ceiling 0. Nothing says which of its
+//     migrations a release carries, so it raises no existing workspace's
+//     schema and pushes no commit with a schema. Unknown fails closed.
+//   - "carried" (a release): the schema this binary embeds.
+//   - "<version>@<label>": that version, read by the producer from the release
+//     tag the label names, or "none" for a checkout with no release tag, or
+//     "snapshot" for goreleaser's snapshot build.
+//
+// Any other stamp is a broken producer, reported rather than read as some
+// ceiling. [LAW:no-silent-failure] [LAW:parse-dont-validate]
+//
+// cmd/lit reads this once and hands it down on the run's environ.Env; no code
+// below the composition root reads the stamp, so tests construct stores with
+// whatever ceiling they are about.
+func ReadReleasedSchemaCeiling() (ReleasedSchemaCeiling, error) {
+	switch ReleasedSchema {
+	case "":
+		return ReleasedSchemaCeiling{Source: "this lit was built without a released-schema stamp"}, nil
+	case ReleasedSchemaCarried:
+		support, err := CarriedSchemaSupport()
+		if err != nil {
+			return ReleasedSchemaCeiling{}, err
+		}
+		return ReleasedSchemaCeiling{Max: support.Max, Source: "this lit is a release, and carries only released migrations"}, nil
+	}
+	digits, label, ok := strings.Cut(ReleasedSchema, "@")
+	n, err := strconv.ParseInt(digits, 10, 64)
+	if !ok || label == "" || err != nil || n < 0 {
+		return ReleasedSchemaCeiling{}, fmt.Errorf("this lit was built with released-schema stamp %q, which is neither %q nor <schema version>@<label>", ReleasedSchema, ReleasedSchemaCarried)
+	}
+	switch label {
+	case releasedLabelSnapshot:
+		return ReleasedSchemaCeiling{Max: n, Source: "this lit is a snapshot build, which no release vouches for"}, nil
+	case releasedLabelNoTag:
+		return ReleasedSchemaCeiling{Max: n, Source: "the checkout this lit was built from had no release tag"}, nil
+	}
+	return ReleasedSchemaCeiling{Max: n, Source: "stamped at build time from release tag " + label + " in the checkout this lit was built from"}, nil
+}
 
 // OriginRelease is the only value meaning "this binary will not be refreshed
 // by rebuilding a working tree". Every other value — including the empty

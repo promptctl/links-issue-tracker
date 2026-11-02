@@ -36,7 +36,7 @@ build:
     source "{{justfile_directory()}}/scripts/version-ldflags.sh"
     pkg="github.com/promptctl/links-issue-tracker/internal/version"
     go build -buildvcs=false \
-        -ldflags "-X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE} -X ${pkg}.Origin=${LIT_BUILD_ORIGIN}" \
+        -ldflags "-X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE} -X ${pkg}.Origin=${LIT_BUILD_ORIGIN} -X ${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA}" \
         ./cmd/lit
 
 # The inner loop: the whole suite minus the generated-scale tests. This is

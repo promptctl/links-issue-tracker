@@ -27,10 +27,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-go@v5
-      with:
-        go-version-file: go.mod
-
     - name: File the alarm in lit and push it
       shell: bash
       env:
@@ -56,8 +52,16 @@ runs:
         git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $auth"
         git config --global user.name 'github-actions[bot]'
         git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
-        lit="$RUNNER_TEMP/lit"
-        go build -o "$lit" ./cmd/lit
+        # The latest published release, never this checkout's source: the
+        # shared remote store is only ever touched by released code, and an
+        # unreleased migration on master cannot stop an alarm from landing.
+        # install.sh installs over a `lit` it finds on PATH before it reads
+        # GOBIN, so it runs with a PATH that holds no lit: the release lands in
+        # bindir, the one path this step then runs.
+        bindir="$RUNNER_TEMP/lit-bin"
+        env PATH=/usr/bin:/bin GOBIN="$bindir" GH_TOKEN="$TOKEN" bash scripts/install.sh --latest-release
+        lit="$bindir/lit"
+        test -x "$lit"
         # A fresh clone adopts the remote's backlog here (first-receive).
         "$lit" init
         existing=$("$lit" ls --labels "$LABEL" --status open,in_progress --limit 1 --columns id)

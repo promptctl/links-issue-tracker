@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,4 +60,12 @@ func TestEveryModeHasAnOpener(t *testing.T) {
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the run starts.
-func testEnv() environ.Env { return environ.Of(os.Environ()) }
+// Its released-schema ceiling is this tree's own highest migration, so the
+// suite exercises every migration the tree carries.
+func testEnv() environ.Env {
+	max, err := migrations.MaxVersion()
+	if err != nil {
+		panic("read the migration registry: " + err.Error())
+	}
+	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"})
+}

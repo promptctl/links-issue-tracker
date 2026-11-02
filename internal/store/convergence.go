@@ -74,6 +74,7 @@ const (
 	stepClassify ConvergenceStep = iota
 	stepVerifyContent
 	stepRefuseUnwritable
+	stepRefuseUnreleased
 	stepDriftCheckpoint
 	stepDriftRepair
 	stepDriftRepairReset
@@ -130,6 +131,9 @@ var convergenceSteps = [convergenceStepCount]struct {
 	stepClassify:         {"classify", ActClearCause},
 	stepVerifyContent:    {"verify_content", ActClearCause},
 	stepRefuseUnwritable: {"refuse_unwritable", ActClearCause},
+	// Cleared by a lit whose released-schema ceiling reaches the target: a
+	// release that carries it.
+	stepRefuseUnreleased: {"refuse_unreleased", ActClearCause},
 	stepDriftCheckpoint:  {"drift_checkpoint", ActClearCause},
 	stepDriftRepair:      {"drift_repair", ActClearCause},
 	// The next open probes the live schema and repairs whatever is still

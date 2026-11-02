@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // assertContractElements pins that a rendered sync-failure block carries all four
@@ -276,6 +277,37 @@ func TestSyncFailureBlockOmitsBuildStatusWhenUnset(t *testing.T) {
 	block := SyncFailure{Class: syncFailureDivergedUnresolved, Remote: "origin", Branch: "master"}.blockString()
 	if strings.Contains(block, "build:") {
 		t.Errorf("block rendered a build status line with BuildNote unset:\n%s", block)
+	}
+}
+
+// asSyncFailure routes the store's unreleased-schema push refusal into the
+// sync-failure contract: a block naming the commit's schema, this lit's
+// ceiling and its source, and a remedy that installs a published release.
+func TestAnUnreleasedSchemaPushRendersTheSyncFailureContract(t *testing.T) {
+	t.Parallel()
+	storeErr := &store.UnreleasedPushError{
+		Remote: "origin", Branch: "master", CommitSchema: 12,
+		Ceiling: version.ReleasedSchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0"},
+	}
+	var syncFailure SyncFailureError
+	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
+		t.Fatalf("asSyncFailure(%v) is not a SyncFailureError", storeErr)
+	}
+	if syncFailure.Failure.Class != syncFailureUnreleasedSchema || syncFailure.Failure.Unreleased != storeErr {
+		t.Fatalf("mapped failure = %+v", syncFailure.Failure)
+	}
+	block := syncFailure.Error()
+	for _, want := range []string{
+		"at schema version 12, and this lit's released-schema ceiling is 11 (stamped at build time from release tag v0.24.0)",
+		"install a published release",
+		"ESCALATION — BLOCKED",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block lacks %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(strings.ToLower(block), "rebuild") {
+		t.Errorf("block advises a rebuild:\n%s", block)
 	}
 }
 

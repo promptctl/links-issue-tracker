@@ -163,7 +163,7 @@ func runSourceInstall(t *testing.T, built string, releases []release, checkout s
 	}
 	writeFile(t, filepath.Join(scriptDir, "cgo-env.sh"), ":\n", 0o644)
 	writeFile(t, filepath.Join(scriptDir, "version-ldflags.sh"),
-		"export LIT_BUILD_COMMIT=test LIT_BUILD_DATE=test LIT_BUILD_ORIGIN=source\n", 0o644)
+		"export LIT_BUILD_COMMIT=test LIT_BUILD_DATE=test LIT_BUILD_ORIGIN=source LIT_BUILD_RELEASED_SCHEMA=0@none\n", 0o644)
 	buildLog := filepath.Join(root, "go-builds")
 	writeFile(t, filepath.Join(stubBin, "go"), `#!/bin/sh
 for a; do
@@ -310,6 +310,46 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 				t.Errorf("go built %q, want %q", run.built, wantBuilt)
 			}
 		})
+	}
+}
+
+// TestReleasedSchemaIsTheHighestVersionTheReleaseCarriesByteForByte pins the
+// ceiling every from-source build stamps: the highest N whose every tree
+// migration at or below N is the release's own bytes. A migration the release
+// lacks, or holds different bytes for, caps it below that migration's version,
+// even when the release's registry reaches the same number.
+func TestReleasedSchemaIsTheHighestVersionTheReleaseCarriesByteForByte(t *testing.T) {
+	t.Parallel()
+	tree := treeSchema(t)
+	for _, tc := range []struct {
+		name    string
+		release release
+		want    int64
+	}{
+		{"a tree level with the release", release{tag: "v0.1.0", schema: tree}, tree},
+		{"a tree one migration ahead", release{tag: "v0.1.0", schema: tree - 1}, tree - 1},
+		{"a tree whose migration differs under a released number", release{tag: "v0.1.0", schema: tree, diverged: true}, tree - 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			initFixtureRepo(t, root, []release{tc.release})
+			cmd := exec.Command(schemaReleaseCheck, "-released-schema", tc.release.tag)
+			cmd.Dir = root
+			var stderr bytes.Buffer
+			cmd.Stderr = &stderr
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("schema-release-check -released-schema: %v\n%s", err, stderr.String())
+			}
+			if got := strings.TrimSpace(string(out)); got != fmt.Sprint(tc.want) {
+				t.Errorf("released schema = %s, want %d", got, tc.want)
+			}
+		})
+	}
+	out, err := exec.Command(schemaReleaseCheck, "-released-schema", "").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "0" {
+		t.Errorf("released schema with no tag = %q, %v; want 0", out, err)
 	}
 }
 

@@ -640,6 +640,11 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	// by running lit — no operator SQL, ever. [LAW:no-silent-failure] A failure
 	// repairing (as opposed to detecting) still aborts Open loudly; only a
 	// clean repair is swallowed into a routine commit.
+	// Before anything is written, drift repair included: an existing workspace
+	// is never moved to a schema no release carries.
+	if fail := attempt(stepRefuseUnreleased, func() error { return s.refuseUnreleasedRaise(ctx, state, assessment.drift) }); fail != nil {
+		return nil, fail
+	}
 	if assessment.drift != nil {
 		if pruneErr, fail = s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, assessment.drift); fail != nil {
 			return pruneErr, fail
@@ -739,7 +744,7 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 			return nil, fail
 		}
 	}
-	return s.applyPendingMigrations(ctx, p)
+	return s.applyPendingMigrations(ctx, p, raiseCeiling(state, s.env.ReleasedSchema()))
 }
 
 // upByOne applies the single next pending migration via goose. It is the ONE
@@ -753,7 +758,15 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 // [LAW:single-enforcer] one goose stepper; [LAW:one-source-of-truth] both
 // consume the same embedded registry via newGooseProvider, so neither mints a
 // second schema-adaptation path.
-func (s *Store) upByOne(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
+//
+// It is also the one enforcer of the released-schema ceiling over every raise
+// of a schema: no step applies a migration above ceiling. The migrating open
+// refuses the whole raise earlier, before it writes anything, through the same
+// predicate (refuseUnreleasedRaise); the reconcile's lift meets it here.
+func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling) (*goose.MigrationResult, error) {
+	if err := s.refuseStepPastCeiling(ctx, raise, ceiling); err != nil {
+		return nil, err
+	}
 	return stepResult(provider.UpByOne(ctx))
 }
 
@@ -797,7 +810,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 		return fmt.Errorf("construct schema-lift provider: %w", err)
 	}
 	for {
-		result, err := s.upByOne(ctx, provider)
+		result, err := s.upByOne(ctx, provider, RaiseLift, s.env.ReleasedSchema())
 		if errors.Is(err, goose.ErrNoNextVersion) {
 			return nil
 		}
@@ -833,7 +846,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 // [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
 // → prune) runs on every call; variability lives in the applied-vs-registry
 // set, not in whether stages execute.
-func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted) (pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceiling version.ReleasedSchemaCeiling) (pruneErr error, fail *SchemaConvergenceError) {
 	// Construct the provider before creating the checkpoint so a provider
 	// construction failure leaves no orphaned branch behind.
 	var provider *goose.Provider
@@ -864,7 +877,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted) (prun
 		if hook := migrationUpByOneForTest; hook != nil {
 			return stepResult(hook(ctx, s.db, provider))
 		}
-		return s.upByOne(ctx, provider)
+		return s.upByOne(ctx, provider, RaiseMigrate, ceiling)
 	}
 	pruneCheckpoints := func(ctx context.Context) error {
 		return prune(pruneMigrationCheckpoints, "prune migration checkpoints", func() error {

@@ -143,3 +143,92 @@ func TestOnlyGoreleaserClaimsReleaseProvenance(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryProducerStampsTheReleasedSchema pins the released-schema ceiling at
+// every producer. A producer that forgets it builds a lit with ceiling 0, which
+// migrates no existing workspace and pushes nothing; one that stamped the
+// tree's own schema would let an unreleased migration reach a real workspace.
+// The from-source producers carry the number the one shared script reads from
+// the newest release tag; goreleaser states that a release's schema is its own.
+func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
+	t.Parallel()
+
+	ldflags := repoFile(t, "scripts/version-ldflags.sh")
+	if !strings.Contains(ldflags, "tools/schema-release-check -released-schema") {
+		t.Error("scripts/version-ldflags.sh does not read LIT_BUILD_RELEASED_SCHEMA from tools/schema-release-check -released-schema")
+	}
+	if !strings.Contains(ldflags, `LIT_BUILD_RELEASED_SCHEMA="${_lit_released}@${_lit_newest_tag:-`+releasedLabelNoTag+`}"`) {
+		t.Errorf("scripts/version-ldflags.sh does not stamp <version>@<tag>, or @%s with no tag — the ceiling's source would be lost", releasedLabelNoTag)
+	}
+	// A tree with no .git of its own reads no tags, as install.sh's guard
+	// reads none, so a tarball inside another repo cannot borrow its tags.
+	if !strings.Contains(ldflags, `if [ -e "$_lit_root/.git" ]; then`) {
+		t.Error("scripts/version-ldflags.sh reads release tags without checking the checkout has its own .git")
+	}
+	if !exportedNames(ldflags)["LIT_BUILD_RELEASED_SCHEMA"] {
+		t.Error("scripts/version-ldflags.sh never exports LIT_BUILD_RELEASED_SCHEMA, so neither caller would receive it")
+	}
+	for _, file := range []string{"Justfile", "scripts/install.sh"} {
+		if !strings.Contains(repoFile(t, file), "${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA}") {
+			t.Errorf("%s does not pass ${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA} to the linker — a lit it builds would have released-schema ceiling 0", file)
+		}
+	}
+	// Only a real release claims its own schema; a snapshot is stamped 0.
+	const releaseStamp = "internal/version.ReleasedSchema={{ if .IsSnapshot }}0@" + releasedLabelSnapshot + "{{ else }}" + ReleasedSchemaCarried + "{{ end }}"
+	if !strings.Contains(repoFile(t, ".goreleaser.yml"), releaseStamp) {
+		t.Errorf(".goreleaser.yml does not stamp %s — released binaries would refuse every migration and push, or snapshots would claim to be releases", releaseStamp)
+	}
+}
+
+// TestTheCIReporterRunsAReleasedLit pins that the CI action writing to the
+// shared remote store runs the latest published release rather than building
+// this checkout: CI must never run unreleased code against the remote.
+func TestTheCIReporterRunsAReleasedLit(t *testing.T) {
+	t.Parallel()
+	action := repoFile(t, ".github/actions/report-to-lit/action.yml")
+	// install.sh prefers the directory of a lit already on PATH over GOBIN,
+	// so the action pins both: a PATH with no lit, and the GOBIN it runs from.
+	if !strings.Contains(action, `env PATH=/usr/bin:/bin GOBIN="$bindir" GH_TOKEN="$TOKEN" bash scripts/install.sh --latest-release`) ||
+		!strings.Contains(action, `lit="$bindir/lit"`) {
+		t.Error(".github/actions/report-to-lit/action.yml does not install the latest release into the one directory it then runs lit from")
+	}
+	if strings.Contains(action, "go build") {
+		t.Error(".github/actions/report-to-lit/action.yml builds lit from source — CI would run unreleased code against the shared remote")
+	}
+}
+
+// TestReleasedSchemaCeilingReadsTheStamp pins the stamp's grammar and the
+// source each form names: unstamped fails closed at 0, the release stamp is
+// the carried schema, "<version>@<label>" is that version from the tag (or the
+// snapshot, or no tag) the label names, and anything else is a broken
+// producer.
+func TestReleasedSchemaCeilingReadsTheStamp(t *testing.T) {
+	saved := ReleasedSchema
+	t.Cleanup(func() { ReleasedSchema = saved })
+	carried, err := CarriedSchemaSupport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		stamp  string
+		want   int64
+		source string
+		ok     bool
+	}{
+		{"", 0, "without a released-schema stamp", true},
+		{ReleasedSchemaCarried, carried.Max, "is a release", true},
+		{"11@v0.24.0", 11, "release tag v0.24.0", true},
+		{"0@none", 0, "had no release tag", true},
+		{"0@snapshot", 0, "snapshot build", true},
+		{"11", 0, "", false},
+		{"11@", 0, "", false},
+		{"-1@v0.1.0", 0, "", false},
+		{"v11@v0.1.0", 0, "", false},
+	} {
+		ReleasedSchema = tc.stamp
+		got, err := ReadReleasedSchemaCeiling()
+		if (err == nil) != tc.ok || got.Max != tc.want || !strings.Contains(got.Source, tc.source) {
+			t.Errorf("ReadReleasedSchemaCeiling() with stamp %q = %+v, %v; want max %d naming %q, ok=%v", tc.stamp, got, err, tc.want, tc.source, tc.ok)
+		}
+	}
+}

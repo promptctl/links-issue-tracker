@@ -1189,14 +1189,6 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	if err := s.guardRemoteSchemaAhead(ctx, remote, trimmedBranch); err != nil {
 		return storage.SyncPushResult{}, err
 	}
-	args := []string{}
-	if setUpstream {
-		args = append(args, "--set-upstream")
-	}
-	if force {
-		args = append(args, "--force")
-	}
-	args = append(args, remote.String(), fmt.Sprintf("HEAD:%s", trimmedBranch))
 	// HEAD is read BEFORE the push: the caller holds the commit lock, so HEAD
 	// cannot move between this read and the push, and a read that fails
 	// fails an attempt that has sent nothing. Read afterwards, a failure
@@ -1206,6 +1198,17 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	if err != nil {
 		return storage.SyncPushResult{}, err
 	}
+	if err := s.refuseUnreleasedPush(ctx, remote, trimmedBranch, head); err != nil {
+		return storage.SyncPushResult{}, err
+	}
+	args := []string{}
+	if setUpstream {
+		args = append(args, "--set-upstream")
+	}
+	if force {
+		args = append(args, "--force")
+	}
+	args = append(args, remote.String(), fmt.Sprintf("HEAD:%s", trimmedBranch))
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	var result storage.SyncPushResult
 	var message sql.NullString

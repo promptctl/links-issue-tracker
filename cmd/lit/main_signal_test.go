@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"net"
 	"os"
 	"os/exec"
@@ -40,8 +42,11 @@ const disableAutoSyncEnvVar = cli.DisableAutoSyncEnvVar
 
 func TestMain(m *testing.M) {
 	if os.Getenv(reexecEnvVar) == "1" {
-		// Behave as the real lit binary. main() owns its own os.Exit on the error
-		// and escalation paths; a clean return here means the command succeeded.
+		// Behave as the real lit binary, stamped as a release of this tree is:
+		// its released-schema ceiling is the schema it carries. main() owns its
+		// own os.Exit on the error and escalation paths; a clean return here
+		// means the command succeeded.
+		version.ReleasedSchema = version.ReleasedSchemaCarried
 		main()
 		os.Exit(0)
 	}
@@ -612,4 +617,12 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the run starts.
-func testEnv() environ.Env { return environ.Of(os.Environ()) }
+// Its released-schema ceiling is this tree's own highest migration, so the
+// suite exercises every migration the tree carries.
+func testEnv() environ.Env {
+	max, err := migrations.MaxVersion()
+	if err != nil {
+		panic("read the migration registry: " + err.Error())
+	}
+	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"})
+}

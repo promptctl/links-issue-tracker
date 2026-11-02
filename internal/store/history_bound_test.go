@@ -698,7 +698,11 @@ func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
 	if err := newer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	pusher := openSyncOrFatal(t, ctx, bravo)
+	// The newer binary's release carries the schema it pushes.
+	pusher, err := OpenSync(ctx, testEnv().WithReleasedSchema(ceilingAt(registryMax+1)), testStderr(), bravo, "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pusher.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(bravo) error = %v", err)
 	}

@@ -138,10 +138,19 @@ stays refused until the epic's release ships it. Until then:
 
 - Develop the migration with `go test`.
 - Run a `go build` or `just build` binary only in a scratch workspace: `lit
-  init` in a temporary git repo. Never run it inside a real workspace, this
-  checkout included. lit opens the store of whatever repo your cwd is in, and
-  this binary would migrate it to a schema no release can open. Nothing
-  enforces this rule. The install guard covers only `install.sh`.
+  init` in a temporary git repo. Never let it create a store inside a real
+  repo, this checkout included.
+
+Every lit carries a released-schema ceiling: the highest migration in the
+newest release tag (`just build`, `install.sh`), the schema it embeds (a
+release), or 0 (a bare `go build`). lit never migrates an existing workspace
+past its ceiling and never pushes a commit whose schema is above it, so no
+remote is ever moved to a schema no release carries. Creating a store is not
+bounded: a new store is created at the binary's full schema, which is what makes
+a scratch workspace work. That is also why a dev-built lit must never create a
+store inside a real repo: the store lives in that repo's `.git/links/dolt`,
+shared by every checkout of it, and would hold a schema no release carries.
+`lit version` prints the ceiling and where it came from.
 
 The guard reads local tags and trusts every `vX.Y.Z` tag as a published release;
 only the release pipeline makes one, so never make one by hand. A stale tag list

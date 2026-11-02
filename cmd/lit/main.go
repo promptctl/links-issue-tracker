@@ -7,6 +7,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 func main() {
@@ -19,10 +20,16 @@ func main() {
 	defer stop()
 	// [LAW:effects-at-boundaries] The one place lit reads its process: the run
 	// below is handed everything it would otherwise read from it.
+	// The released-schema ceiling is read from this binary's build stamp here
+	// and nowhere below: it rides the run's Env to every store open.
+	released, err := version.ReadReleasedSchemaCeiling()
+	if err != nil {
+		os.Exit(cli.WriteCommandError(os.Stderr, err))
+	}
 	inv := cli.Invocation{
 		Dir:    cli.WorkingDirOf(os.Getwd()),
 		Args:   os.Args[1:],
-		Env:    environ.Of(os.Environ()),
+		Env:    environ.Of(os.Environ()).WithReleasedSchema(released),
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

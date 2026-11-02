@@ -48,6 +48,13 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteN
 	if err := s.guardCommitSchemaAhead(ctx, remote, trimmedBranch, trimmedExpected); err != nil {
 		return "", err
 	}
+	sourceHead, err := commitHashOfRef(ctx, s.db, trimmedSource)
+	if err != nil {
+		return "", err
+	}
+	if err := s.refuseUnreleasedPush(ctx, remote, trimmedBranch, sourceHead); err != nil {
+		return "", err
+	}
 	args := []string{"--force-with-lease=" + trimmedBranch + ":" + trimmedExpected, remote.String(), trimmedSource + ":" + trimmedBranch}
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	pushErr := s.runRemoteIO(ctx, func(ctx context.Context) error {
