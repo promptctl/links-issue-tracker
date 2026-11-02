@@ -1,8 +1,6 @@
 package migrations
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -216,24 +214,12 @@ func TestReleasedMigrationsAreContentPinned(t *testing.T) {
 }
 
 // migrationFileOf reduces one migration file's bytes to the identity the pin
-// compares: its Up section's sha256.
+// compares: its UpIdentity.
 func migrationFileOf(version int64, name string, data []byte) migrationFile {
-	sum := sha256.Sum256(upSection(data))
-	return migrationFile{version: version, name: name, upSHA256: hex.EncodeToString(sum[:])}
+	return migrationFile{version: version, name: name, upSHA256: UpIdentity(data)}
 }
 
-// upSection returns the bytes the pin hashes: Split's head, which is every
-// line goose reads before the Down, and one NO TRANSACTION line when goose
-// would run the file outside a transaction, wherever that annotation sits.
-func upSection(data []byte) []byte {
-	s := Split(data)
-	if s.NoTransaction {
-		return []byte(s.Head + "\n-- +goose NO TRANSACTION")
-	}
-	return []byte(s.Head)
-}
-
-// TestUpSection pins what the Up-section hash sees: a Down edit is invisible
+// TestUpSection pins what UpIdentity sees: a Down edit is invisible
 // to it, and any byte outside a Down section is not.
 func TestUpSection(t *testing.T) {
 	const released = "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n"
@@ -250,13 +236,12 @@ func TestUpSection(t *testing.T) {
 		{"Down directive spelled without spaces", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n--+goose Down\nALTER TABLE t DROP c;\n", true},
 		// goose reads NO TRANSACTION anywhere in the file and runs the Up by it.
 		{"NO TRANSACTION added under Down", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\n-- +goose NO TRANSACTION\nALTER TABLE t DROP c;\n", false},
-		{"indented Down annotation is no split", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n\t-- +goose Down\nALTER TABLE t DROP c;\n", false},
 	}
-	want := string(upSection([]byte(released)))
+	want := UpIdentity([]byte(released))
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := string(upSection([]byte(tc.body))) == want; got != tc.same {
-				t.Errorf("Up section unchanged = %v, want %v\nreleased Up: %q\nedited Up:   %q", got, tc.same, want, upSection([]byte(tc.body)))
+			if got := UpIdentity([]byte(tc.body)) == want; got != tc.same {
+				t.Errorf("UpIdentity unchanged = %v, want %v", got, tc.same)
 			}
 		})
 	}

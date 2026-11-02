@@ -4,12 +4,13 @@
 // its one argument: the empty string when the checkout has none.
 //
 // A tree is released when every migration it embeds is in the tag's
-// internal/store/migrations byte for byte: the files that release's binary
-// embedded. This binary is built from the same tree as the lit about to be
-// installed, so it embeds the same registry. Comparing bytes, not only the
-// highest version, refuses a tree whose migration shares a version with the
-// release's but not its SQL: a lit built from it would record that version for
-// SQL no release ran.
+// internal/store/migrations under the same migrations.UpIdentity: the Ups that
+// release's binary ran. This binary is built from the same tree as the lit
+// about to be installed, so it embeds the same registry. Comparing Ups, not
+// only the highest version, refuses a tree whose migration shares a version
+// with the release's but not its Up SQL: a lit built from it would record that
+// version for SQL no release ran. A Down fixed in place changes no Up, so it
+// leaves its migration released.
 //
 // Every run prints one comparison line on stdout, whatever the verdict:
 //
@@ -112,7 +113,7 @@ func compare(tag string, stderr io.Writer) outcome {
 
 // printReleasedSchema prints the released-schema ceiling of this tree against
 // tag: the highest version N such that every migration this tree carries at or
-// below N is in tag's registry byte for byte, and N is no higher than tag's own
+// below N is in tag's registry with the same Up, and N is no higher than tag's own
 // highest. A migration edited, or re-added, under a released number lowers the
 // ceiling below that number. No tag is ceiling 0.
 // [LAW:one-source-of-truth] it reads the install guard's own comparison
@@ -160,9 +161,9 @@ func or(s, empty string) string {
 }
 
 // releaseSchema is the highest migration version in tag's registry, and the
-// migrations this tree embeds that tag's registry does not hold byte for byte.
+// migrations this tree embeds that tag's registry does not hold with the same Up.
 func releaseSchema(tag string, embedded migrations.Registry, stderr io.Writer) (int64, []string, error) {
-	release, err := releaseBlobs(tag, stderr)
+	release, err := releaseUps(tag, stderr)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -170,31 +171,41 @@ func releaseSchema(tag string, embedded migrations.Registry, stderr io.Writer) (
 	if err != nil {
 		return 0, nil, err
 	}
-	tree, err := treeRegistry(embedded, stderr)
+	tree, err := treeUps(embedded)
 	if err != nil {
 		return 0, nil, err
 	}
 	return registry.MaxVersion(), unreleasedMigrations(tree, release), nil
 }
 
-// releaseBlobs is the blob id of every migration file in tag's registry.
-func releaseBlobs(tag string, stderr io.Writer) (blobIDs, error) {
+// releaseUps is the UpIdentity of every migration file in tag's registry.
+func releaseUps(tag string, stderr io.Writer) (upIDs, error) {
 	var out bytes.Buffer
 	cmd := exec.Command("git", "ls-tree", "-z", "refs/tags/"+tag, "--", registryInTree)
 	cmd.Stdout, cmd.Stderr = &out, stderr
 	if err := cmd.Run(); err != nil {
 		return nil, fmt.Errorf("list %s at %s: %w", registryInTree, tag, err)
 	}
-	release, err := parseLsTree(out.String())
+	blobs, err := parseLsTree(out.String())
 	if err != nil {
 		return nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
 	}
-	return release, nil
+	ups := upIDs{}
+	for name, blob := range blobs {
+		var content bytes.Buffer
+		cmd := exec.Command("git", "cat-file", "blob", blob)
+		cmd.Stdout, cmd.Stderr = &content, stderr
+		if err := cmd.Run(); err != nil {
+			return nil, fmt.Errorf("read %s at %s: %w", name, tag, err)
+		}
+		ups[name] = migrations.UpIdentity(content.Bytes())
+	}
+	return ups, nil
 }
 
 // parseReleaseRegistry reads release's file names by the rule the runner reads
 // its own: migrations.ParseRegistry. [LAW:one-source-of-truth]
-func parseReleaseRegistry(tag string, release blobIDs) (migrations.Registry, error) {
+func parseReleaseRegistry(tag string, release upIDs) (migrations.Registry, error) {
 	registry, err := migrations.ParseRegistry(slices.Collect(maps.Keys(release)))
 	if err != nil {
 		return migrations.Registry{}, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
@@ -202,13 +213,13 @@ func parseReleaseRegistry(tag string, release blobIDs) (migrations.Registry, err
 	return registry, nil
 }
 
-// blobIDs maps a migration file's name to its git blob id.
-type blobIDs map[string]string
+// upIDs maps a migration file's name to its migrations.UpIdentity.
+type upIDs map[string]string
 
-// parseLsTree reads `git ls-tree -z` output: NUL-terminated
-// "<mode> <type> <id>\t<path>" entries.
-func parseLsTree(out string) (blobIDs, error) {
-	ids := blobIDs{}
+// parseLsTree reads `git ls-tree -z` output, NUL-terminated
+// "<mode> <type> <id>\t<path>" entries, into each file's blob id.
+func parseLsTree(out string) (map[string]string, error) {
+	ids := map[string]string{}
 	for _, entry := range strings.Split(strings.TrimSuffix(out, "\x00"), "\x00") {
 		if entry == "" {
 			continue
@@ -223,30 +234,23 @@ func parseLsTree(out string) (blobIDs, error) {
 	return ids, nil
 }
 
-// treeRegistry is the blob id of every migration this binary embeds, as git
-// hashes them. --no-filters hashes the embedded bytes as they are.
-func treeRegistry(embedded migrations.Registry, stderr io.Writer) (blobIDs, error) {
-	ids := blobIDs{}
+// treeUps is the UpIdentity of every migration this binary embeds.
+func treeUps(embedded migrations.Registry) (upIDs, error) {
+	ups := upIDs{}
 	for _, m := range embedded.Migrations() {
 		content, err := migrations.FS.ReadFile(m.Name)
 		if err != nil {
 			return nil, fmt.Errorf("read embedded migration %s: %w", m.Name, err)
 		}
-		var out bytes.Buffer
-		cmd := exec.Command("git", "hash-object", "--no-filters", "--stdin")
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = bytes.NewReader(content), &out, stderr
-		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("hash embedded migration %s: %w", m.Name, err)
-		}
-		ids[m.Name] = strings.TrimSpace(out.String())
+		ups[m.Name] = migrations.UpIdentity(content)
 	}
-	return ids, nil
+	return ups, nil
 }
 
-// unreleasedMigrations is every tree migration the release lacks or holds
-// different bytes for, in name order. Empty exactly when the release carries
+// unreleasedMigrations is every tree migration the release lacks or holds a
+// different Up for, in name order. Empty exactly when the release carries
 // the whole tree's registry, which bounds the tree's schema by the release's.
-func unreleasedMigrations(tree, release blobIDs) []string {
+func unreleasedMigrations(tree, release upIDs) []string {
 	var unreleased []string
 	for name, id := range tree {
 		if release[name] != id {

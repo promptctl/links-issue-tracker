@@ -55,11 +55,13 @@ func TestMain(m *testing.M) {
 }
 
 // release is a tag in a fixture repo whose registry is this tree's migrations
-// 1..schema. A diverged release holds different bytes for its highest one.
+// 1..schema. A diverged release holds a different Up for its highest one; a
+// downFixed release, a different Down.
 type release struct {
-	tag      string
-	schema   int64
-	diverged bool
+	tag       string
+	schema    int64
+	diverged  bool
+	downFixed bool
 }
 
 // treeSchema is the schema of the tree these tests run in.
@@ -115,7 +117,11 @@ func initFixtureRepo(t *testing.T, root string, releases []release) {
 		for v := int64(1); v <= r.schema; v++ {
 			content := readFile(t, filepath.Join(treeRegistry, migrationFiles[v]))
 			if r.diverged && v == r.schema {
-				content += "\n-- not this tree's bytes\n"
+				// Before the Down, so the release's Up differs from this tree's.
+				content = "-- not this tree's Up\n" + content
+			}
+			if r.downFixed && v == r.schema {
+				content += "\n-- not this tree's Down\n"
 			}
 			writeFile(t, filepath.Join(registry, migrationFiles[v]), content, 0o644)
 		}
@@ -260,6 +266,10 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 		comparison: fmt.Sprintf("tree=%d release_tag=v0.1.0 release_schema=%d verdict=refuse", tree, tree),
 		refusal:    []string{fmt.Sprintf("%05d_", tree), "v0.1.0 does not carry these migrations", "scripts/install.sh --latest-release"},
 	}, {
+		name:       "a tree whose released migration's Down was fixed in place installs",
+		releases:   []release{{tag: "v0.1.0", schema: tree, downFixed: true}},
+		comparison: fmt.Sprintf("tree=%d release_tag=v0.1.0 release_schema=%d verdict=install", tree, tree),
+	}, {
 		name:       "a tree level with the release installs",
 		releases:   []release{{tag: "v0.1.0", schema: tree}},
 		comparison: fmt.Sprintf("tree=%d release_tag=v0.1.0 release_schema=%d verdict=install", tree, tree),
@@ -313,12 +323,13 @@ func TestInstallComparesTheTreeSchemaWithTheNewestRelease(t *testing.T) {
 	}
 }
 
-// TestReleasedSchemaIsTheHighestVersionTheReleaseCarriesByteForByte pins the
+// TestReleasedSchemaIsTheHighestVersionTheReleaseCarriesWithTheSameUp pins the
 // ceiling every from-source build stamps: the highest N whose every tree
-// migration at or below N is the release's own bytes. A migration the release
-// lacks, or holds different bytes for, caps it below that migration's version,
-// even when the release's registry reaches the same number.
-func TestReleasedSchemaIsTheHighestVersionTheReleaseCarriesByteForByte(t *testing.T) {
+// migration at or below N has the release's own Up. A migration the release
+// lacks, or holds a different Up for, caps it below that migration's version,
+// even when the release's registry reaches the same number; a Down fixed in
+// place does not.
+func TestReleasedSchemaIsTheHighestVersionTheReleaseCarriesWithTheSameUp(t *testing.T) {
 	t.Parallel()
 	tree := treeSchema(t)
 	for _, tc := range []struct {
@@ -329,6 +340,7 @@ func TestReleasedSchemaIsTheHighestVersionTheReleaseCarriesByteForByte(t *testin
 		{"a tree level with the release", release{tag: "v0.1.0", schema: tree}, tree},
 		{"a tree one migration ahead", release{tag: "v0.1.0", schema: tree - 1}, tree - 1},
 		{"a tree whose migration differs under a released number", release{tag: "v0.1.0", schema: tree, diverged: true}, tree - 1},
+		{"a tree whose released migration's Down was fixed in place", release{tag: "v0.1.0", schema: tree, downFixed: true}, tree},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

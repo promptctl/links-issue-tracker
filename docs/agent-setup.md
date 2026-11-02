@@ -53,7 +53,7 @@ build notes are in [introduction/installation.md](introduction/installation.md).
 
 The source build installs only a tree whose schema a published release supports. It prints
 the comparison it made, and refuses when the newest `vX.Y.Z` tag lacks one of the tree's
-migrations byte for byte, or when the checkout has no release tag. Every lit carries a
+migrations with the same Up, or when the checkout has no release tag. Every lit carries a
 released-schema ceiling (see section 6), so a binary built from a tree no release supports
 does not migrate an existing workspace or push an unreleased schema.
 

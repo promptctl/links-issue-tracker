@@ -131,10 +131,10 @@ func terminatedStatement(s string, start int) (stmt string, ok bool) {
 }
 
 // gooseUpSection returns the SQL between the goose Up and Down annotations,
-// as migrations.Split reads them, so the parser never reads the Down's
+// as migrations.UpSQL reads them, so the parser never reads the Down's
 // statements as the Up's.
 func gooseUpSection(sql string) string {
-	return migrations.Split([]byte(sql)).Up
+	return migrations.UpSQL([]byte(sql))
 }
 
 // parseCreateTableColumns extracts table -> column-names from CREATE TABLE

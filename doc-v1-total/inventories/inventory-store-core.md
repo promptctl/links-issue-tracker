@@ -2103,9 +2103,9 @@ Regexes (shapemap_known.go):
 - `alterTableRE = (?is)ALTER\s+TABLE\s+`?(\w+)`?([^;]*)` — group 1 = table, group 2 = statement body up to `;` or EOF.
 - `dropColumnRE = (?is)DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?` — group 1 = column; matched repeatedly within one ALTER body, so multi-drop statements are fully captured (shapemap_known.go).
 
-`gooseUpSection` (ddl_text.go): returns `migrations.Split`'s Up, the lines after the Up annotation and before the Down annotation, recognized as goose's sqlparser recognizes them; a file with no Up annotation yields the empty text.
+`gooseUpSection` (ddl_text.go): returns `migrations.UpSQL`, the lines after the Up annotation and before the Down annotation, recognized as goose's sqlparser recognizes them; a file with no Up annotation yields the empty text.
 
-Current corpus content of this map: **empty**. Every `DROP COLUMN` in `internal/store/migrations/` occurs in a `-- +goose Down` section — `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql` — and `README.md` is not a `.sql` migration but is still read (the loop does not filter by extension, shapemap_known.go); its `ALTER TABLE issues DROP COLUMN priority_band;` lies outside any `-- +goose Up` marker, and `gooseUpSection` returns the whole text when no marker is found, so whether it contributes depends on that file's marker content.
+Current corpus content of this map: **empty**. Every `DROP COLUMN` in `internal/store/migrations/` occurs in a `-- +goose Down` section — `00002_add_lane.sql`, `00003_add_resolution.sql`, `00004_add_redirect_target.sql`, `00005_add_event_attribution.sql` — and `README.md` is not a `.sql` migration but is still read (the loop does not filter by extension, shapemap_known.go); its `ALTER TABLE issues DROP COLUMN priority_band;` lies outside any Up annotation, so `gooseUpSection` yields the empty text for it and it contributes nothing.
 
 On `fs.ReadDir` or `ReadFile` failure, the package `panic`s: `"scan migration drops: read embedded registry: " + err.Error()` (shapemap_known.go) and `"scan migration drops: read " + entry.Name() + ": " + err.Error()` (shapemap_known.go).
 
