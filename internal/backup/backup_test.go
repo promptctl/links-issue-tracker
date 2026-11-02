@@ -242,24 +242,29 @@ func TestTakesKeepTheOrderTheyWereTaken(t *testing.T) {
 	if _, err := os.Stat(stale.Path); !os.IsNotExist(err) {
 		t.Errorf("the snapshot from before the step survived a prune past it: stat error = %v", err)
 	}
-	if !latest.Created.Equal(list[0].Created) {
-		t.Errorf("Take reported Created %v, List reads %v", latest.Created, list[0].Created)
+	if !taken[n-1].Created.Equal(list[0].Created) {
+		t.Errorf("Take reported Created %v, List reads %v", taken[n-1].Created, list[0].Created)
 	}
 }
 
-// A take of content the set holds becomes the newest even when it is stamped
-// against the snapshots beside it, never its own old mtime.
+// A take of content the set holds becomes the newest even when its own old
+// mtime is the latest in the set: it is stamped against the snapshots beside
+// it, never against itself.
 func TestARefreshedTakeIsTheNewest(t *testing.T) {
 	t.Parallel()
 
 	storageDir := t.TempDir()
-	first := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-a"})
-	setMTime(t, first.Path, time.Now().Add(time.Hour))
 	take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-b"})
+	first := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-a"})
+	ahead := time.Now().Add(time.Hour)
+	setMTime(t, first.Path, ahead)
 	again := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-a"})
 	latest, err := Latest(storageDir)
 	if err != nil || latest == nil || latest.Path != first.Path || !again.Refreshed {
 		t.Fatalf("Latest = %+v, %v; want the refreshed %s", latest, err, first.Path)
+	}
+	if !again.Created.Before(ahead) {
+		t.Errorf("the refresh was stamped %v, held to its own old mtime %v", again.Created, ahead)
 	}
 }
 
