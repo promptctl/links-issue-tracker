@@ -12,6 +12,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -158,8 +159,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 	if _, err := provider.DownTo(ctx, below); err != nil {
 		return fmt.Errorf("Down to v%d: %w", below, err)
 	}
-	ref, _ := storeAtVersion(t, fsys, below)
-	if got, want := schemaShape(t, st.db), schemaShape(t, ref.db); got != want {
+	if got, want := schemaShape(t, st.db), freshShape(t, below); got != want {
 		return fmt.Errorf("shape after Down differs from a fresh Up to v%d:\n%s", below,
 			unifiedSchemaDiff("fresh Up", "after Down", want, got))
 	}
@@ -171,6 +171,22 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 			unifiedSchemaDiff("seeded", "after Up(Down)", before, after))
 	}
 	return nil
+}
+
+// freshShapes caches freshShape per version: one Up-only store per version
+// for the whole package, not one per round trip.
+var freshShapes sync.Map // int64 -> func() string
+
+// freshShape is the schema shape a fresh Up of the embedded registry to v
+// produces. A mutant registry differs from it only in a Down, so its fresh
+// Ups give the same shape.
+func freshShape(t *testing.T, v int64) string {
+	t.Helper()
+	build, _ := freshShapes.LoadOrStore(v, sync.OnceValue(func() string {
+		st, _ := storeAtVersion(t, migrations.FS, v)
+		return schemaShape(t, st.db)
+	}))
+	return build.(func() string)()
 }
 
 // roundTripBelow: seed at below, export, Up to v, Down to below, compare the
