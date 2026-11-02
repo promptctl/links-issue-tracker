@@ -447,6 +447,11 @@ func PruneMatching(databaseDir string, keep int, match func(name string) bool) e
 func Remove(snapshot Snapshot) error {
 	retired := filepath.Join(filepath.Dir(snapshot.Path), retiredName(snapshot.Created, time.Now()))
 	if err := os.Rename(snapshot.Path, retired); err != nil {
+		// Already gone is the state Remove delivers, as it was for RemoveAll.
+		// Concurrent prunes, or a Restore, can take the snapshot first.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		return fmt.Errorf("retire snapshot %s: %w", snapshot.Path, err)
 	}
 	if err := os.RemoveAll(retired); err != nil {

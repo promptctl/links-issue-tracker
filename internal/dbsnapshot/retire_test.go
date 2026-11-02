@@ -81,6 +81,23 @@ func TestRemove_PartialRemovalIsNeitherListedNorRestorable(t *testing.T) {
 	}
 }
 
+// TestRemove_AnAlreadyAbsentSnapshotIsRemoved pins that Remove is idempotent:
+// a snapshot another prune or a Restore took first is the state Remove wants.
+func TestRemove_AnAlreadyAbsentSnapshotIsRemoved(t *testing.T) {
+	t.Parallel()
+	src := newTakenSource(t)
+	taken, err := Take(context.Background(), os.Stderr, src, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(taken.Snapshot); err != nil {
+		t.Fatalf("first Remove: %v", err)
+	}
+	if err := Remove(taken.Snapshot); err != nil {
+		t.Fatalf("Remove of an absent snapshot = %v, want nil", err)
+	}
+}
+
 // TestPruneMatching_GoesOnPastASnapshotThatWillNotGo pins that one stuck
 // snapshot does not keep the ones behind it over budget, and that the failure
 // still reaches the caller.
