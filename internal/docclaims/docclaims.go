@@ -141,13 +141,13 @@ func (c Corpus) add(handle, body string) error {
 // Test files do not ship, and neither does tools/, so a message living only in
 // either could otherwise survive its own deletion from the product.
 func ShippedText(fsys fs.FS) (Corpus, error) {
-	shipped, err := ShippedPackages(fsys)
+	shipped, err := shippedPackages(fsys)
 	if err != nil {
 		return nil, err
 	}
 	corpus := Corpus{}
 	for _, dir := range shipped {
-		err := EachProductFile(fsys, dir, func(name string, src []byte) error {
+		err := eachProductFile(fsys, dir, func(name string, src []byte) error {
 			return collectFile(fsys, name, src, corpus)
 		})
 		if err != nil {
@@ -157,7 +157,7 @@ func ShippedText(fsys fs.FS) (Corpus, error) {
 	return corpus, nil
 }
 
-// ShippedPackages lists this module's package directories that a binary under
+// shippedPackages lists this module's package directories that a binary under
 // cmd/ actually links, by walking the import graph out from each main package.
 //
 // Matched anchors a quotation to the SHORTEST source containing it, so a
@@ -181,7 +181,7 @@ func ShippedText(fsys fs.FS) (Corpus, error) {
 // user of lit and are gated like any other. Its example/ program is in the same
 // tree and is linked by nothing, so it is out. Being vendored was never the
 // disqualifier — being unreachable is.
-func ShippedPackages(fsys fs.FS) ([]string, error) {
+func shippedPackages(fsys fs.FS) ([]string, error) {
 	sources, err := localSources(fsys)
 	if err != nil {
 		return nil, err
@@ -363,7 +363,7 @@ func entryPackages(fsys fs.FS) ([]string, error) {
 // importsOf returns the import paths of one package's product files.
 func importsOf(fsys fs.FS, dir string) ([]string, error) {
 	var out []string
-	err := EachProductFile(fsys, dir, func(name string, src []byte) error {
+	err := eachProductFile(fsys, dir, func(name string, src []byte) error {
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, name, src, parser.ImportsOnly|parser.ParseComments)
 		if err != nil {
@@ -387,12 +387,12 @@ func importsOf(fsys fs.FS, dir string) ([]string, error) {
 	return out, nil
 }
 
-// EachProductFile calls fn for every Go file of one package that the product
+// eachProductFile calls fn for every Go file of one package that the product
 // build compiles. One traversal for both callers, so the set of files whose
 // imports are followed cannot differ from the set whose literals are collected
 // — a package reached but not read would report its own messages as drifted.
 // [LAW:single-enforcer]
-func EachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) error) error {
+func eachProductFile(fsys fs.FS, dir string, fn func(name string, src []byte) error) error {
 	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return fmt.Errorf("reading package %s: %w", dir, err)

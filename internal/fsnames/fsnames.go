@@ -5,48 +5,32 @@
 // fails every lookup on Windows, and per-PR CI runs only on Linux. path is the
 // builder for an io/fs name; filepath.ToSlash converts a host path into one.
 //
-// The check reads syntax, not types: type-checking every shipped package from
-// source would load Dolt's whole cgo tree on every PR. A value counts as a
-// filesystem when it is declared with a filesystem type (embed.FS, or io/fs's
-// FS and its extension interfaces) or assigned from os.DirFS or fs.Sub, and
-// names are matched package-wide by identifier, as the check cannot tell two
-// declarations of one name apart.
+// The check reads types: a read is a call to one of io/fs's functions, or a
+// call to a name-taking method on a value whose type has io/fs's Open, so a
+// filesystem is recognised however and wherever it was declared.
 //
-// WHAT IT DOES NOT COVER: a filesystem reached through a name declared some
-// other way (a := from any other call, an interface method's result), and a
-// name built with filepath and stored in a variable before the read.
+// WHAT IT DOES NOT COVER: a name built with filepath outside the read's own
+// argument — stored in a variable first, or built inside a helper such as
+// pathspec's Join.
 package fsnames
 
 import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"slices"
-	"strconv"
-	"strings"
 )
 
-// Finding is a read whose name argument is a call into path/filepath.
+// Finding is a read whose name argument is built with path/filepath.
 type Finding struct {
 	Pos  token.Position
-	Read string // the read, as "fs.ReadFile" or "<receiver>.ReadFile"
+	Read string // the read, as "fs.ReadFile" or "<receiver type>.ReadFile"
 	Name string // the filepath function that built the name
 }
 
 func (f Finding) String() string {
 	return fmt.Sprintf("%s:%d: %s name built with filepath.%s", f.Pos.Filename, f.Pos.Line, f.Read, f.Name)
-}
-
-// fsTypes are the filesystem types a declaration can name, by import path.
-var fsTypes = map[string][]string{
-	"embed": {"FS"},
-	"io/fs": {"FS", "ReadFileFS", "ReadDirFS", "StatFS", "SubFS", "GlobFS"},
-}
-
-// fsBuilders are the calls whose result is a filesystem, by import path.
-var fsBuilders = map[string][]string{
-	"os":    {"DirFS"},
-	"io/fs": {"Sub"},
 }
 
 // fsFuncs are io/fs's functions that take a filesystem and then a name.
@@ -55,38 +39,27 @@ var fsFuncs = []string{"ReadFile", "ReadDir", "Stat", "Sub", "Glob", "WalkDir"}
 // fsMethods are the filesystem methods whose first argument is a name.
 var fsMethods = []string{"Open", "ReadFile", "ReadDir", "Stat", "Sub", "Glob"}
 
-// Check returns every io/fs read in files, the files of one package, whose name
-// argument is a call into path/filepath other than ToSlash.
-func Check(fset *token.FileSet, files []*ast.File) []Finding {
-	filesystems := map[string]bool{}
-	for _, file := range files {
-		collectFilesystems(file, imports(file), filesystems)
-	}
+// separatorFree are the filepath functions whose result holds no separator, or
+// holds only slashes, so it is a valid io/fs name or name element on every OS.
+var separatorFree = []string{"ToSlash", "Base", "Ext"}
+
+// Check returns every io/fs read in files, the type-checked files of one
+// package, whose name argument calls a filepath function that can put the
+// host's separator into the name.
+func Check(fset *token.FileSet, files []*ast.File, info *types.Info) []Finding {
 	var found []Finding
 	for _, file := range files {
-		local := imports(file)
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			read, arg := "", -1
-			if pkg, ok := sel.X.(*ast.Ident); ok && local[pkg.Name] == "io/fs" {
-				if slices.Contains(fsFuncs, sel.Sel.Name) {
-					read, arg = "fs."+sel.Sel.Name, 1
-				}
-			} else if name := lastName(sel.X); filesystems[name] && slices.Contains(fsMethods, sel.Sel.Name) {
-				read, arg = name+"."+sel.Sel.Name, 0
-			}
+			read, arg := readOf(call, info)
 			if arg < 0 || arg >= len(call.Args) {
 				return true
 			}
-			if built, ok := filepathCall(call.Args[arg], local); ok {
-				found = append(found, Finding{Pos: fset.Position(call.Args[arg].Pos()), Read: read, Name: built})
+			for _, built := range filepathCalls(call.Args[arg], info) {
+				found = append(found, Finding{Pos: fset.Position(built.Pos()), Read: read, Name: calleeOf(built, info).Name()})
 			}
 			return true
 		})
@@ -94,96 +67,78 @@ func Check(fset *token.FileSet, files []*ast.File) []Finding {
 	return found
 }
 
-// collectFilesystems adds to into every name file declares as a filesystem.
-func collectFilesystems(file *ast.File, local map[string]string, into map[string]bool) {
-	isFS := func(expr ast.Expr) bool {
-		if star, ok := expr.(*ast.StarExpr); ok {
-			expr = star.X
-		}
-		return qualified(expr, local, fsTypes)
+// readOf names call and the index of its name argument when call is an io/fs
+// read, and returns -1 otherwise.
+func readOf(call *ast.CallExpr, info *types.Info) (string, int) {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return "", -1
 	}
-	built := func(expr ast.Expr) bool {
-		call, ok := expr.(*ast.CallExpr)
-		return ok && qualified(call.Fun, local, fsBuilders)
+	if fn := calleeOf(call, info); fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == "io/fs" &&
+		fn.Signature().Recv() == nil && slices.Contains(fsFuncs, fn.Name()) {
+		return "fs." + fn.Name(), 1
 	}
-	ast.Inspect(file, func(n ast.Node) bool {
-		switch n := n.(type) {
-		case *ast.Field:
-			if isFS(n.Type) {
-				for _, name := range n.Names {
-					into[name.Name] = true
-				}
-			}
-		case *ast.ValueSpec:
-			for i, name := range n.Names {
-				if (n.Type != nil && isFS(n.Type)) || (i < len(n.Values) && built(n.Values[i])) {
-					into[name.Name] = true
-				}
-			}
-		case *ast.AssignStmt:
-			// fs.Sub returns (fs.FS, error), so its filesystem is the first name.
-			if len(n.Rhs) == 1 && built(n.Rhs[0]) {
-				if id, ok := n.Lhs[0].(*ast.Ident); ok {
-					into[id.Name] = true
-				}
-			}
-		}
-		return true
-	})
+	selection, ok := info.Selections[sel]
+	if !ok || selection.Kind() != types.MethodVal || !slices.Contains(fsMethods, sel.Sel.Name) {
+		return "", -1
+	}
+	recv := selection.Recv()
+	if !isFilesystem(recv) {
+		return "", -1
+	}
+	return types.TypeString(recv, (*types.Package).Name) + "." + sel.Sel.Name, 0
 }
 
-// filepathCall reports the filepath function expr calls, unless it is ToSlash.
-func filepathCall(expr ast.Expr, local map[string]string) (string, bool) {
-	call, ok := ast.Unparen(expr).(*ast.CallExpr)
-	if !ok {
-		return "", false
-	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
-	}
-	pkg, ok := sel.X.(*ast.Ident)
-	if !ok || local[pkg.Name] != "path/filepath" || sel.Sel.Name == "ToSlash" {
-		return "", false
-	}
-	return sel.Sel.Name, true
-}
-
-// qualified reports whether expr is pkg.Name for a name watched lists under
-// pkg's import path.
-func qualified(expr ast.Expr, local map[string]string, watched map[string][]string) bool {
-	sel, ok := expr.(*ast.SelectorExpr)
+// isFilesystem reports whether t has io/fs's FS method, Open(string) (fs.File,
+// error) — the method every filesystem type has and nothing else need.
+func isFilesystem(t types.Type) bool {
+	obj, _, _ := types.LookupFieldOrMethod(t, true, nil, "Open")
+	fn, ok := obj.(*types.Func)
 	if !ok {
 		return false
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && slices.Contains(watched[local[pkg.Name]], sel.Sel.Name)
+	sig := fn.Signature()
+	if sig.Params().Len() != 1 || sig.Results().Len() != 2 {
+		return false
+	}
+	named, ok := types.Unalias(sig.Results().At(0).Type()).(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "io/fs" && named.Obj().Name() == "File"
 }
 
-// lastName is the identifier a receiver ends in: x for x, f for s.f.
-func lastName(expr ast.Expr) string {
-	switch e := ast.Unparen(expr).(type) {
+// filepathCalls returns the calls into path/filepath within expr that can put
+// the host's separator into its value. A separator-free call's argument is not
+// searched: whatever built it, the call's result is a valid name.
+func filepathCalls(expr ast.Expr, info *types.Info) []*ast.CallExpr {
+	var calls []*ast.CallExpr
+	ast.Inspect(expr, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		fn := calleeOf(call, info)
+		if fn == nil || fn.Pkg() == nil || fn.Pkg().Path() != "path/filepath" {
+			return true
+		}
+		if slices.Contains(separatorFree, fn.Name()) {
+			return false
+		}
+		calls = append(calls, call)
+		return false
+	})
+	return calls
+}
+
+// calleeOf is the function or method call statically calls, or nil.
+func calleeOf(call *ast.CallExpr, info *types.Info) *types.Func {
+	var id *ast.Ident
+	switch fun := ast.Unparen(call.Fun).(type) {
 	case *ast.Ident:
-		return e.Name
+		id = fun
 	case *ast.SelectorExpr:
-		return e.Sel.Name
+		id = fun.Sel
+	default:
+		return nil
 	}
-	return ""
-}
-
-// imports maps each local package name in file to its import path.
-func imports(file *ast.File) map[string]string {
-	local := map[string]string{}
-	for _, imp := range file.Imports {
-		path, err := strconv.Unquote(imp.Path.Value)
-		if err != nil {
-			continue
-		}
-		name := path[strings.LastIndex(path, "/")+1:]
-		if imp.Name != nil {
-			name = imp.Name.Name
-		}
-		local[name] = path
-	}
-	return local
+	fn, _ := info.Uses[id].(*types.Func)
+	return fn
 }
