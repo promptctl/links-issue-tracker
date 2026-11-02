@@ -319,7 +319,7 @@ func (s *Store) AddRelation(ctx context.Context, in storage.AddRelationInput) (m
 	// [LAW:types-are-the-program] in.Type is sealed at the trust boundary by
 	// ParseRelationType; no string re-validation here.
 	if in.Type == model.RelRelatedTo && in.SrcID == in.DstID {
-		return model.Relation{}, model.ValidationError{Message: "related-to cannot target itself"}
+		return model.Relation{}, storage.RelationRuleError{Rule: storage.RuleSelfLoop, Message: "related-to cannot target itself"}
 	}
 	srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)
 	now := s.clock.Now()
@@ -495,14 +495,14 @@ func setSingleValuedEdgeTx(ctx context.Context, tx *sql.Tx, rel model.Relation) 
 // snapshot of existing edges.
 func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency string) error {
 	if dependent == dependency {
-		return model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
+		return storage.RelationRuleError{Rule: storage.RuleSelfLoop, Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
 	var precedes int
 	if err := tx.QueryRowContext(ctx, blocksPrecedesQuery, dependent, dependency).Scan(&precedes); err != nil {
 		return fmt.Errorf("blocked-by cycle check: %w", err)
 	}
 	if precedes > 0 {
-		return model.ValidationError{Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
+		return storage.RelationRuleError{Rule: storage.RuleCycle, Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
 }

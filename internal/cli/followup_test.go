@@ -291,3 +291,35 @@ func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
 		t.Fatalf("created.AssigneeValue() = %q, want empty: followup capture is not a claim", got)
 	}
 }
+
+// A follow-up's event says where its parent came from: --parent, the --on
+// ticket's own parent, or neither, for a top-level --on.
+func TestFollowupEventSaysWhereItsParentCameFrom(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	epic := seedEpicRaw(t, ctx, ap, "Renderer", "renderer")
+	other := seedEpicRaw(t, ctx, ap, "Cache", "cache")
+	leaf, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Renderer work", Topic: "renderer", IssueType: model.TypeTask, ParentID: epic,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(leaf) error = %v", err)
+	}
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--on", leaf.ID}, "on_parent"},
+		{[]string{"--on", leaf.ID, "--parent", other}, "flag"},
+		{[]string{"--on", epic, "--type", "epic"}, "none"},
+	} {
+		var stdout bytes.Buffer
+		ev, err := recordLeaf(followupLeaf(), ctx, cwdInvocation(&stdout, &stdout, nil), ap, append(tc.args, "--title", "Follow-up"))
+		if err != nil {
+			t.Fatalf("followup %v error = %v", tc.args, err)
+		}
+		if got := ev.Facts["followup.parent_source"]; got != tc.want {
+			t.Errorf("followup %v: followup.parent_source = %v, want %q", tc.args, got, tc.want)
+		}
+	}
+}

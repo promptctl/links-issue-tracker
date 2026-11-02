@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -454,7 +455,7 @@ func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 		fail.PruneErr = pruneErr
 		return storage.Migrated{}, fail
 	}
-	done := storage.Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr}
+	done := storage.Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr, Probed: s.probed}
 	snap, ok := guard.took()
 	if !ok {
 		return done, nil
@@ -905,6 +906,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 	}
 
 	for {
+		probed, probeErr := s.probeNextMigration(ctx, provider)
 		result, gooseErr := step()
 		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
 			// Success: prune old checkpoints to the retention count. Every
@@ -930,7 +932,61 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 		}); err != nil {
 			return recoverFrom(stepCommitMigration, stepCommitMigrationReset, result, fmt.Errorf("commit migration v%d: %w", result.Source.Version, err), false)
 		}
+		s.recordProbe(probed, probeErr)
 	}
+}
+
+// migrationProbe reads, before its migration runs, what the run will change
+// and what it destroys, so the open's event can say what the migration did.
+type migrationProbe func(ctx context.Context, db *sql.DB) (map[string]any, error)
+
+// migrationProbes holds the probe of each migration that has one, by version.
+// A migration whose effect needs no reading has none.
+var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge}
+
+// probeNextMigration runs the probe of the migration the next step applies,
+// if it has one, and returns what it read; nil facts when it has none.
+func (s *Store) probeNextMigration(ctx context.Context, provider *goose.Provider) (map[string]any, error) {
+	current, err := provider.GetDBVersion(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read schema version before migrating: %w", err)
+	}
+	probe, ok := migrationProbes[current+1]
+	if !ok {
+		return nil, nil
+	}
+	return probe(ctx, s.db)
+}
+
+// recordProbe keeps a committed migration's probe for the open's event: the
+// facts it read, or why it could not read them.
+func (s *Store) recordProbe(facts map[string]any, err error) {
+	if err != nil {
+		facts = map[string]any{"migration.probe_error": telemetry.ErrorText(err)}
+	}
+	if len(facts) == 0 {
+		return
+	}
+	if s.probed == nil {
+		s.probed = map[string]any{}
+	}
+	maps.Copy(s.probed, facts)
+}
+
+// probeBlockedByEdge reads what v8 does: every 'blocks' row is one it renames,
+// and relations' one CHECK is the constraint it drops, whatever the engine
+// named it on a store created before goose.
+func probeBlockedByEdge(ctx context.Context, db *sql.DB) (map[string]any, error) {
+	var renamed int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relations WHERE type = 'blocks'`).Scan(&renamed); err != nil {
+		return nil, fmt.Errorf("count blocks edges: %w", err)
+	}
+	var dropped string
+	if err := db.QueryRowContext(ctx, `SELECT constraint_name FROM information_schema.table_constraints
+		WHERE table_schema = DATABASE() AND table_name = 'relations' AND constraint_type = 'CHECK'`).Scan(&dropped); err != nil {
+		return nil, fmt.Errorf("read relations CHECK name: %w", err)
+	}
+	return map[string]any{"migration.v8_rows_renamed": renamed, "migration.v8_dropped_check": dropped}, nil
 }
 
 // earnsQuarantine says whether a failed migration step earns a quarantine: it

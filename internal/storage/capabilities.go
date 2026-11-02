@@ -331,6 +331,9 @@ type Migrated struct {
 	PruneErr       error
 	SchemaAhead    SchemaAhead
 	TempTableFiles *TempTableFilesCollection
+	// Probed is what the migrations the open committed read before they ran,
+	// as event facts under their own keys; nil when none had a probe.
+	Probed map[string]any
 }
 
 // Failures is every failure the open survived, each saying what the open
@@ -477,6 +480,7 @@ func (m Migrated) EventRecord() map[string]any {
 	maps.Copy(facts, MigrationRecoveryFacts(m.Snapshot, m.PruneErr))
 	maps.Copy(facts, m.SchemaAhead.EventRecord())
 	maps.Copy(facts, m.TempTableFiles.EventRecord())
+	maps.Copy(facts, m.Probed)
 	return facts
 }
 

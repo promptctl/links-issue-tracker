@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 var depFamily = commandFamily[appSubcommand]{
@@ -66,7 +68,9 @@ func depAddLeaf() appLeaf {
 	edge := registerEdgeFlags(fs)
 	resolveActor := registerActor(fs)
 	const usageLine0 = "usage: lit dep add <id> " + edgeFlagsUsage
-	return appLeaf{fs: fs, usage: usageLine0, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, usage: usageLine0, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) (err error) {
+		var rt model.RelationType
+		defer func() { recordDepOutcome(ctx, rt, err) }()
 		if len(positional) != 1 {
 			return UsageError{Message: usageLine0}
 		}
@@ -79,7 +83,7 @@ func depAddLeaf() appLeaf {
 		// would otherwise corrupt downstream blocker traversals. Cheap to catch
 		// here; transitive cycle detection is the store's.
 		if issueID == otherID {
-			return model.ValidationError{Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)", issueID, rt, otherID)}
+			return storage.RelationRuleError{Rule: storage.RuleSelfLoop, Message: fmt.Sprintf("dep add: self-loop rejected (%s %s %s)", issueID, rt, otherID)}
 		}
 		rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: issueID, DstID: otherID, Type: rt, CreatedBy: resolveActor(inv.Env)})
 		if err != nil {
@@ -96,7 +100,9 @@ func depRmLeaf() appLeaf {
 	fs := newCobraFlagSet("dep rm")
 	edge := registerEdgeFlags(fs)
 	const usageLine1 = "usage: lit dep rm <id> " + edgeFlagsUsage
-	return appLeaf{fs: fs, usage: usageLine1, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
+	return appLeaf{fs: fs, usage: usageLine1, positionals: 1, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) (err error) {
+		var rt model.RelationType
+		defer func() { recordDepOutcome(ctx, rt, err) }()
 		if len(positional) != 1 {
 			return UsageError{Message: usageLine1}
 		}
@@ -112,6 +118,37 @@ func depRmLeaf() appLeaf {
 		}
 		return emitBreadcrumb(inv.Stdout, "update")
 	}}
+}
+
+// recordDepOutcome puts on the event the relation the edge flag named, null
+// when none was read, and the refusal err is, null when the command was not
+// refused. The refusal is read off err's type, never its text.
+// [LAW:types-are-the-program]
+func recordDepOutcome(ctx context.Context, rt model.RelationType, err error) {
+	var relation any
+	if rt != "" {
+		relation = string(rt)
+	}
+	telemetry.Set(ctx, "dep.relation", relation)
+	telemetry.Set(ctx, "dep.refusal", depRefusal(err))
+}
+
+// depRefusal is the refusal err is, or nil when it is none of dep's refusals.
+func depRefusal(err error) any {
+	var (
+		usage    UsageError
+		rule     storage.RelationRuleError
+		notFound storage.NotFoundError
+	)
+	switch {
+	case errors.As(err, &usage):
+		return "usage"
+	case errors.As(err, &rule):
+		return string(rule.Rule)
+	case errors.As(err, &notFound):
+		return "not_found"
+	}
+	return nil
 }
 
 func depLsLeaf() appLeaf {

@@ -239,6 +239,9 @@ type Store struct {
 
 	// migrated is what Open's migrate did; see Migrated.
 	migrated storage.Migrated
+	// probed is what the probes of the migrations Open committed read, as
+	// event facts; migrate hands it on in Migrated.Probed.
+	probed map[string]any
 }
 
 // Open opens the store for a long write hold (engineWrite): the hold every
