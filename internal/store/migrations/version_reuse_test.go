@@ -10,13 +10,16 @@ import (
 )
 
 // pinnedMigration is the released identity of one migration version: the file it
-// shipped as and the sha256 of its exact bytes at release. The pin is a durable,
+// shipped as and the sha256 of its Up section (upSection) at release. Only the Up
+// is frozen: goose never re-runs a stamped version's Up, but a Down always runs
+// from the binary doing the downgrade, so a released Down is fixed in place.
+// The pin is a durable,
 // in-repo snapshot of what git history assigned to a version number — the same
 // choice baseline_frozen_test.go makes for v1 (pin the identity, not a commit
 // hash a squash could rewrite, and not a live `git log` a shallow CI clone lacks).
 type pinnedMigration struct {
-	file   string
-	sha256 string
+	file     string
+	upSHA256 string
 }
 
 // pinnedVersionContent maps every RELEASED, non-baseline migration version to its
@@ -31,25 +34,25 @@ type pinnedMigration struct {
 // [LAW:one-source-of-truth] adding a migration adds exactly one line here, in the
 // same PR that adds the file; the pin and the file land together or the guard fails.
 var pinnedVersionContent = map[int64]pinnedMigration{
-	2:  {file: "00002_add_lane.sql", sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
-	3:  {file: "00003_add_resolution.sql", sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
-	4:  {file: "00004_add_redirect_target.sql", sha256: "e171b9a18f13d67967e6c235499fc35254125ac23b36f9a687eddc7c411b590d"},
-	5:  {file: "00005_add_event_attribution.sql", sha256: "ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70"},
-	6:  {file: "00006_add_follows_up.sql", sha256: "f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45"},
-	7:  {file: "00007_every_ticket_inside_a_container.sql", sha256: "2eb2ae5ab7a43df7116e4dd9137901d8272f03f89a7569bb67b7437182101458"},
-	8:  {file: "00008_blocked_by_edge.sql", sha256: "2ab61664b7a73c4e36dc0a11d37e2f5b86b261a97aebf67ffa364ae9596e9deb"},
-	9:  {file: "00009_purges.sql", sha256: "f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852"},
-	10: {file: "00010_history_can_be_re_rooted.sql", sha256: "1203641ecfc7404f23b8153497df136bd3f23d90194e92ff91b959c2aa168fec"},
-	11: {file: "00011_plans_and_plan_reviews.sql", sha256: "285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e"},
+	2:  {file: "00002_add_lane.sql", upSHA256: "b7f402fbc9356b075026f92bb95735e83607a47c0a65cf3537c66d19fdd2ca8a"},
+	3:  {file: "00003_add_resolution.sql", upSHA256: "fc4950d6551b19a55c71c28b6a6d45da2d79f8b034a132f9433904954ba29a1b"},
+	4:  {file: "00004_add_redirect_target.sql", upSHA256: "e05850fa88ee369a5c28e9d55f7a1c4f09ba8fa02617fc1913899da124b21aa3"},
+	5:  {file: "00005_add_event_attribution.sql", upSHA256: "0b77eca74d253be6d473361c99e7f7c442afa1770eec84adce65cfe3638455a8"},
+	6:  {file: "00006_add_follows_up.sql", upSHA256: "efa661fe146b028c3dc724b81e848e59603ffded4328271d17d5b3ac791bd1dd"},
+	7:  {file: "00007_every_ticket_inside_a_container.sql", upSHA256: "309734ef37630b3231dd706f63c37858ffe132f651a28fbcc9f7ddafcb57815f"},
+	8:  {file: "00008_blocked_by_edge.sql", upSHA256: "b692c89627a4a9d3149e2c3c073b7c3845e512891598c2fe947c0b9db6b80a59"},
+	9:  {file: "00009_purges.sql", upSHA256: "c3aca522c2e2cada23b7d2b3e1e140b3fa5dc902430864f5b1f7d24a70021587"},
+	10: {file: "00010_history_can_be_re_rooted.sql", upSHA256: "d9262bb984cc5c0a80d839beec6f940880c142539e74a909af28c2fdd12a03f4"},
+	11: {file: "00011_plans_and_plan_reviews.sql", upSHA256: "8477d335ea8d62c52c94b44792477318e22fcdcfdddfbc6a623e29e9be2a85f7"},
 }
 
 // migrationFile is one on-disk, non-baseline registry entry reduced to the identity
 // this guard reasons about: its version number, its filename, and the sha256 of its
-// exact bytes.
+// Up section.
 type migrationFile struct {
-	version int64
-	name    string
-	sha256  string
+	version  int64
+	name     string
+	upSHA256 string
 }
 
 // reuseKind enumerates the exhaustive ways the on-disk non-baseline registry can
@@ -100,7 +103,7 @@ func detectVersionReuse(pinned map[int64]pinnedMigration, onDisk []migrationFile
 			findings = append(findings, reuseFinding{kind: kindUnpinned, version: version, onDisk: f})
 			continue
 		}
-		if f.sha256 != pin.sha256 {
+		if f.upSHA256 != pin.upSHA256 {
 			// Content drift is the dangerous, workspace-bricking case; it takes
 			// priority over a filename difference on the same version.
 			findings = append(findings, reuseFinding{kind: kindContentChanged, version: version, pinned: pin, onDisk: f})
@@ -136,8 +139,8 @@ func (f reuseFinding) explain() string {
 	case kindContentChanged:
 		got := f.onDisk
 		return fmt.Sprintf(`version %d has been REUSED under different content.
-  released as: %s (sha256 %s)
-  now on disk: %s (sha256 %s)
+  released as: %s (Up sha256 %s)
+  now on disk: %s (Up sha256 %s)
 
 goose keys migrations by version NUMBER, not by content. Every workspace that already
 applied v%d is stamped on it and will NEVER re-run it, so the new content silently
@@ -145,10 +148,11 @@ never reaches those workspaces (missing columns, absent tables) — exactly the
 migrate-drift epic's damage.
 
 DO NOT change this version's pin in pinnedVersionContent to match the new bytes; that
-re-enables the bug class this gate exists to prevent. Instead: keep v%d exactly as it
-shipped, and add your change as the next free version number (a new NNNNN_*.sql),
-pinned here in the same PR.`,
-			f.version, f.pinned.file, f.pinned.sha256, got.name, got.sha256, f.version, f.version)
+re-enables the bug class this gate exists to prevent. Instead: keep v%d's Up exactly
+as it shipped, and add your change as the next free version number (a new
+NNNNN_*.sql), pinned here in the same PR. Its Down is not pinned and may be fixed in
+place.`,
+			f.version, f.pinned.file, f.pinned.upSHA256, got.name, got.upSHA256, f.version, f.version)
 	case kindRenamed:
 		got := f.onDisk
 		return fmt.Sprintf(`version %d kept its content but was RENAMED: %s -> %s.
@@ -164,17 +168,17 @@ pinnedVersionContent in the same PR.`,
 
 Every released, non-baseline migration must be pinned so this gate can refuse a later
 reuse of its number under different content. If you just added this migration, add:
-  %d: {file: %q, sha256: %q},
+  %d: {file: %q, upSHA256: %q},
 to pinnedVersionContent, in the same PR as the file.`,
-			f.version, got.name, f.version, got.name, got.sha256)
+			f.version, got.name, f.version, got.name, got.upSHA256)
 	case kindDeleted:
-		return fmt.Sprintf(`version %d was released as %s (sha256 %s) but is now MISSING from the registry.
+		return fmt.Sprintf(`version %d was released as %s (Up sha256 %s) but is now MISSING from the registry.
 
 A released migration must never be deleted: workspaces are stamped on its number, and
 freeing that number invites a future file to reuse it under different content. Restore
 the file. Retiring a version number is a schema decision that must not happen via a
 silent deletion — raise it explicitly.`,
-			f.version, f.pinned.file, f.pinned.sha256)
+			f.version, f.pinned.file, f.pinned.upSHA256)
 	default:
 		return fmt.Sprintf("unhandled reuse finding kind %d for version %d — add a message in reuseFinding.explain", f.kind, f.version)
 	}
@@ -204,11 +208,97 @@ func TestReleasedMigrationsAreContentPinned(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %q: %v", m.Name, err)
 		}
-		sum := sha256.Sum256(data)
-		onDisk = append(onDisk, migrationFile{version: m.Version, name: m.Name, sha256: hex.EncodeToString(sum[:])})
+		onDisk = append(onDisk, migrationFileOf(m.Version, m.Name, data))
 	}
 	for _, finding := range detectVersionReuse(pinnedVersionContent, onDisk) {
 		t.Errorf("%s", finding.explain())
+	}
+}
+
+// migrationFileOf reduces one migration file's bytes to the identity the pin
+// compares: its Up section's sha256.
+func migrationFileOf(version int64, name string, data []byte) migrationFile {
+	sum := sha256.Sum256(upSection(data))
+	return migrationFile{version: version, name: name, upSHA256: hex.EncodeToString(sum[:])}
+}
+
+// upSection returns data without its Down sections: every line from a
+// `+goose Down` directive up to the next `+goose Up` directive or EOF is
+// dropped, and every other line is kept byte for byte, header comments and the
+// Up directive included. Directives are recognized exactly as hasDownSection
+// recognizes them, so a directive inside a block comment ends no section.
+// [LAW:one-source-of-truth]
+func upSection(data []byte) []byte {
+	var kept []string
+	inBlock, inDown := false, false
+	for _, line := range strings.Split(string(data), "\n") {
+		_, exitedBlock := lineContent(line, inBlock)
+		if !inBlock && isGooseDirective(line, "down") {
+			inDown = true
+		} else if !inBlock && isGooseDirective(line, "up") {
+			inDown = false
+		}
+		inBlock = exitedBlock
+		if !inDown {
+			kept = append(kept, line)
+		}
+	}
+	return []byte(strings.Join(kept, "\n"))
+}
+
+// TestUpSection pins what the Up-section hash sees: a Down edit is invisible
+// to it, and any byte outside a Down section is not.
+func TestUpSection(t *testing.T) {
+	const released = "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n"
+	cases := []struct {
+		name string
+		body string
+		same bool
+	}{
+		{"Down body rewritten", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\nALTER TABLE t DROP COLUMN c;\nSELECT 1;\n", true},
+		// A missing Down is TestEveryMigrationHasDownSection's to refuse.
+		{"Down section removed", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n", true},
+		{"Up byte changed", "-- header\n-- +goose Up\nALTER TABLE t ADD d INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n", false},
+		{"header comment changed", "-- header!\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n", false},
+		{"Down directive hidden in a block comment", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n/*\n-- +goose Down\n*/\n-- +goose Down\nALTER TABLE t DROP c;\n", false},
+		{"Up statement after a second Up directive", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n-- +goose Up\nSELECT 1;\n", false},
+	}
+	want := string(upSection([]byte(released)))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := string(upSection([]byte(tc.body))) == want; got != tc.same {
+				t.Errorf("Up section unchanged = %v, want %v\nreleased Up: %q\nedited Up:   %q", got, tc.same, want, upSection([]byte(tc.body)))
+			}
+		})
+	}
+}
+
+// TestReleasedDownIsFixableInPlace is the acceptance case on a real released
+// migration: rewriting its Down passes the pin, and one changed byte of its Up
+// fails it.
+func TestReleasedDownIsFixableInPlace(t *testing.T) {
+	const name = "00002_add_lane.sql"
+	data, err := FS.ReadFile(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins := map[int64]pinnedMigration{2: pinnedVersionContent[2]}
+	text := string(data)
+	downAt := strings.Index(text, "-- +goose Down")
+	if downAt < 0 {
+		t.Fatalf("%s has no Down directive", name)
+	}
+
+	downEdited := text + "SELECT 1;\n"
+	if findings := detectVersionReuse(pins, []migrationFile{migrationFileOf(2, name, []byte(downEdited))}); len(findings) != 0 {
+		t.Errorf("editing the Down of %s failed the pin: %s", name, findings[0].explain())
+	}
+
+	upAt := strings.Index(text, "-- +goose Up") + len("-- +goose Up\n")
+	upEdited := text[:upAt] + " " + text[upAt:]
+	findings := detectVersionReuse(pins, []migrationFile{migrationFileOf(2, name, []byte(upEdited))})
+	if len(findings) != 1 || findings[0].kind != kindContentChanged {
+		t.Errorf("editing one byte of the Up of %s: got findings %+v, want one content change", name, findings)
 	}
 }
 
@@ -220,9 +310,9 @@ func TestReleasedMigrationsAreContentPinned(t *testing.T) {
 // [LAW:behavior-not-structure] the fixtures assert WHICH collisions are detected
 // (kind + version), not the wording of any message.
 func TestDetectVersionReuse(t *testing.T) {
-	pin := func(file, sha string) pinnedMigration { return pinnedMigration{file: file, sha256: sha} }
+	pin := func(file, sha string) pinnedMigration { return pinnedMigration{file: file, upSHA256: sha} }
 	file := func(v int64, name, sha string) migrationFile {
-		return migrationFile{version: v, name: name, sha256: sha}
+		return migrationFile{version: v, name: name, upSHA256: sha}
 	}
 	base := map[int64]pinnedMigration{
 		2: pin("00002_add_lane.sql", "aaa"),
@@ -314,8 +404,8 @@ func TestDetectVersionReuse(t *testing.T) {
 // [LAW:no-silent-failure] a divergence the formatter can't describe is a divergence
 // a reviewer can't act on; this keeps that unrepresentable.
 func TestEveryReuseKindHasMessage(t *testing.T) {
-	pin := pinnedMigration{file: "00007_x.sql", sha256: "cafef00d"}
-	one := migrationFile{version: 7, name: "00007_x.sql", sha256: "deadbeef"}
+	pin := pinnedMigration{file: "00007_x.sql", upSHA256: "cafef00d"}
+	one := migrationFile{version: 7, name: "00007_x.sql", upSHA256: "deadbeef"}
 
 	// Each fixture mirrors exactly what detectVersionReuse produces for that kind,
 	// so explain() is exercised against the real onDisk/pinned shapes.

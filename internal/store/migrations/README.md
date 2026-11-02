@@ -33,11 +33,11 @@ invertibility that the runtime cannot deliver.
 3. Write the `+goose Down` section: the inverse. It MUST contain at least one
    real SQL statement and that statement MUST execute cleanly when goose runs
    it against a workspace that has just had the Up applied.
-4. Pin the file's content hash in `pinnedVersionContent`
+4. Pin the hash of the file's Up section in `pinnedVersionContent`
    (`version_reuse_test.go`), in this same PR. `TestReleasedMigrationsAreContentPinned`
    fails until you do, and its message prints the exact line to add. This is what
-   makes the version number's content immutable from release forward — see
-   "Released migrations are content-frozen" below.
+   makes the version number's Up immutable from release forward — see
+   "Released migrations are Up-frozen" below.
 
 A skeleton:
 
@@ -85,7 +85,7 @@ existed writes regardless, whatever its registry: every release through
 v0.20.1 (schema 9), and builds of the schema 10 and 11 registries made before
 it.
 
-## Released migrations are content-frozen
+## Released migrations are Up-frozen
 
 goose keys migrations by version **number**, not by content: a workspace that has
 applied version *N* is stamped on *N* and will never re-run it. So if version *N*'s
@@ -95,16 +95,18 @@ migrate-drift epic (`links-migrate-drift-hh1t`) bricked workspaces: a baseline r
 refilled version slots 2 and 3 with new content while old workspaces stayed stamped on
 the deleted content.
 
-Two gates make a version number's content immutable from release forward:
+Two gates make a version number's content immutable from release forward. For v2+ that content is
+the Up section only: goose never re-runs a stamped version's Up, but a Down always
+runs from the binary doing the downgrade, so a released Down is fixed in place.
 
 | Gate                                       | Lives in                                                  | What it proves                                                                                   |
 | ------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `TestBaselineFileIsFrozen`                 | `internal/store/migrations/baseline_frozen_test.go`       | v1 (`00001_baseline.sql`) bytes never change — pinned to one sha256.                              |
-| `TestReleasedMigrationsAreContentPinned`   | `internal/store/migrations/version_reuse_test.go`         | Every non-baseline released version's bytes and filename match `pinnedVersionContent`, and none is deleted, renamed, duplicated, or left unpinned. |
+| `TestReleasedMigrationsAreContentPinned`   | `internal/store/migrations/version_reuse_test.go`         | Every non-baseline released version's Up section and filename match `pinnedVersionContent`, and none is deleted, renamed, duplicated, or left unpinned. |
 
 `[LAW:single-enforcer]` one content enforcer per version number: baseline_frozen owns
 v1, the pin manifest owns v2+. To change a released migration's effect, **never edit
-its file or reuse its number** — add the change as the next free version number and pin
+its Up or reuse its number** — add the change as the next free version number and pin
 that. The gate's failure message says the same thing when it fires.
 
 ## Non-losslessly-invertible migrations
@@ -112,8 +114,8 @@ that. The gate's failure message says the same thing when it fires.
 Options A and B below are what released migrations shipped with.
 `design-docs/schema-reversibility.md` supersedes them and the gates in this
 file; until it is implemented, the gates here are what CI enforces. Under it,
-a released lossy Down is fixed in place, only a released migration's Up is
-pinned, and a migration written now has a lossless Down through the stash
+a released lossy Down is fixed in place (the pin already covers only the
+Up), and a migration written now has a lossless Down through the stash
 carrier.
 
 Some up-migrations lose information by design — dropping a column, narrowing
