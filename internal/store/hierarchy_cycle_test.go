@@ -555,8 +555,8 @@ func TestABlockedByCheckClimbsAStoredLoopOfEpics(t *testing.T) {
 		t.Fatalf("AddRelation out of a stored loop error = %v", err)
 	}
 	_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: loop[0].ID, DstID: loop[1].ID, Type: model.RelBlockedBy, CreatedBy: "test"})
-	var refusal model.ValidationError
-	if !errors.As(err, &refusal) || refusal.Message != storage.SameEpicBlocksRejectionMessage {
+	var refusal storage.RelationRuleError
+	if !errors.As(err, &refusal) || refusal.Rule != storage.RuleSameEpic || refusal.Message != storage.SameEpicBlocksRejectionMessage {
 		t.Fatalf("AddRelation inside a stored loop error = %v, want the same-epic refusal", err)
 	}
 }

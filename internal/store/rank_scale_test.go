@@ -481,9 +481,9 @@ func TestACycleCheckReadsWhatItReachesInOneRead(t *testing.T) {
 		return err, time.Since(began)
 	}
 	err, took := check(link(0), link(chain-1))
-	var refused model.ValidationError
-	if !errors.As(err, &refused) {
-		t.Fatalf("closing a %d-link chain: %v, want a refusal", chain, err)
+	var refused storage.RelationRuleError
+	if !errors.As(err, &refused) || refused.Rule != storage.RuleCycle {
+		t.Fatalf("closing a %d-link chain: %v, want the cycle refusal", chain, err)
 	}
 	if took > time.Second {
 		t.Errorf("a cycle check over %d links took %v, past a second", chain, took)
