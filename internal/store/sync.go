@@ -1254,10 +1254,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 // Every DOLT_PUSH runs it: the plain push here and the leased push in
 // push_lease.go. [LAW:single-enforcer] [LAW:one-source-of-truth]
 func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName, branch string, remoteHead remoteSchema, commitHash string) error {
-	if !isDoltCommitHash(commitHash) {
-		return fmt.Errorf("push schema: %q is not a Dolt commit hash", commitHash)
-	}
-	commitSchema, err := s.schemaVersionAtCommit(ctx, commitHash)
+	commitSchema, err := s.remoteHeadSchema(ctx, commitHash)
 	if err != nil {
 		return err
 	}

@@ -113,13 +113,17 @@ func (e Env) Without(keys ...string) Env {
 			kept = append(kept, kv)
 		}
 	}
-	return Env{vars: kept, goos: e.goos, gitSpawns: e.gitSpawns, releasedSchema: e.releasedSchema, raisePolicy: e.raisePolicy}
+	// The receiver is copied whole, so every field but vars rides along
+	// without being named: a field added to Env cannot be dropped here.
+	e.vars = kept
+	return e
 }
 
 // With is the environment with the KEY=VALUE entries set appended, so each
 // overrides any earlier entry for its key.
 func (e Env) With(set ...string) Env {
-	return Env{vars: append(slices.Clone(e.vars), set...), goos: e.goos, gitSpawns: e.gitSpawns, releasedSchema: e.releasedSchema, raisePolicy: e.raisePolicy}
+	e.vars = append(slices.Clone(e.vars), set...)
+	return e
 }
 
 // WithReleasedSchema is the environment with its released-schema ceiling set

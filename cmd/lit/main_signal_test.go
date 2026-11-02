@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -35,6 +36,12 @@ import (
 // shipped binary's behavior, not a test-only reimplementation of it.
 const reexecEnvVar = "LIT_TEST_REEXEC"
 
+// reexecOriginEnvVar, when set on a child invocation, is the Origin the child
+// runs stamped with; unset, the child is a release. It exists so one test can
+// drive the real entrypoint as a source build and see the wiring that reads
+// the stamp into the run's Env hold, which no package-level Env can show.
+const reexecOriginEnvVar = "LIT_TEST_ORIGIN"
+
 // disableAutoSyncEnvVar is the process-level auto-sync kill switch, read from the
 // one canonical definition in internal/cli so this test cannot drift from the
 // CLI's env contract if that name ever changes. [LAW:one-source-of-truth]
@@ -48,7 +55,7 @@ func TestMain(m *testing.M) {
 		// own os.Exit on the error and escalation paths; a clean return here
 		// means the command succeeded.
 		version.ReleasedSchema = version.ReleasedSchemaCarried
-		version.Origin = version.OriginRelease
+		version.Origin = cmp.Or(os.Getenv(reexecOriginEnvVar), version.OriginRelease)
 		main()
 		os.Exit(0)
 	}

@@ -493,7 +493,7 @@ func (f SyncFailure) whatLine() string {
 	case syncFailureSchemaRaiseRequiresRelease:
 		if !f.RaiseRefused.RemoteKnown {
 			return fmt.Sprintf(
-				"the commit this push would send to %s is at schema version %d, and this checkout holds no head of %s (no tracking ref), so the remote's schema is unknown here and the push counts as raising it. Only a release raises a remote's schema, and this lit is not a release, so nothing was written to %s.",
+				"the commit this push would send to %s is at schema version %d, and this checkout holds no head of %s (no tracking ref): either the branch was never fetched here, or it does not exist on the remote yet and this push would create it. Either way the push counts as raising the remote's schema. Only a release raises a remote's schema, and this lit is not a release, so nothing was written to %s.",
 				ref, f.RaiseRefused.CommitSchema, ref, ref)
 		}
 		return fmt.Sprintf(
@@ -610,7 +610,7 @@ func (f SyncFailure) escalationLine() string {
 	case syncFailureUnreleasedSchema:
 		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose released-schema ceiling reaches this backlog's schema may push it, and that is a published release carrying the schema. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailureSchemaRaiseRequiresRelease:
-		return "ESCALATION — resolve now: run the fetch and the push above once. A push refused again after the fetch is a raise, which a lit that is no release never makes, and that will not clear by waiting or retrying from this lit. " + installReplacesLit + ": run the upgrade only when the user directs it, and until then surface this to the user as blocking."
+		return "ESCALATION — resolve now: run the fetch and the push above once. A push refused again after the fetch is a raise, or the first push to a branch the remote does not have yet; a lit that is no release makes neither, and that will not clear by waiting or retrying from this lit. " + installReplacesLit + ": run the upgrade only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailurePushDiverged:
 		// The push path reads no divergence age or span, so the line is fixed.
 		// It names what clears the refusal and when it stops being the agent's

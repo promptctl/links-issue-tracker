@@ -72,15 +72,19 @@ func (e *SchemaRaiseRequiresReleaseError) remedy() string {
 	return fmt.Sprintf("fetch first (`lit sync fetch --remote %s`) so the remote's head is current here; a push at or below it lands from this lit, and a push still refused after the fetch waits for a release's `lit sync push` to raise the remote to schema version %d", e.Remote, e.CommitSchema)
 }
 
-// EventRecord is the remote refused, R and whether it was known, and H.
+// EventRecord is the remote refused, H, and R when it was known: an unknown R
+// has no number, and a 0 would read as a pre-goose remote.
 func (e *SchemaRaiseRequiresReleaseError) EventRecord() (map[string]any, map[string]int) {
-	return map[string]any{
+	fields := map[string]any{
 		"schema_raise.remote":        e.Remote,
 		"schema_raise.branch":        e.Branch,
-		"schema_raise.remote_schema": e.RemoteSchema,
 		"schema_raise.remote_known":  e.RemoteKnown,
 		"schema_raise.commit_schema": e.CommitSchema,
-	}, nil
+	}
+	if e.RemoteKnown {
+		fields["schema_raise.remote_schema"] = e.RemoteSchema
+	}
+	return fields, nil
 }
 
 var _ model.RecordedError = (*SchemaRaiseRequiresReleaseError)(nil)
