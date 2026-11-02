@@ -8,7 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 )
 
-// Limits: each verdict as a record a machine files, written the moment the
+// Limits: each verdict as a record a machine reads, written the moment the
 // verdict is reached.
 //
 // A red nightly run is the design reaching a limit, and the answer is work on

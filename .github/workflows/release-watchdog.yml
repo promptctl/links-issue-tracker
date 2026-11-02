@@ -77,7 +77,7 @@ jobs:
           # [LAW:one-source-of-truth]
           promoted_at=$(git log -1 --format=%ct -S "## [$VER]" -- CHANGELOG.md)
           if [ -z "$promoted_at" ]; then
-            echo "::error::v$VER is pending but no commit introducing '## [$VER]' exists in CHANGELOG.md history — cannot measure how long; treating as stuck rather than guessing. Recovery: \`gh workflow run release-validate.yml --ref master\` (RELEASING.md, 'Re-running the pipeline on demand')." >&2
+            echo "::error::v$VER is pending but no commit introducing '## [$VER]' exists in CHANGELOG.md history — cannot measure how long; treating as stuck rather than guessing. The CHANGELOG history is inconsistent with the pending version; see RELEASING.md before re-running anything." >&2
             exit 1
           fi
           age_minutes=$(( ( $(date +%s) - promoted_at ) / 60 ))

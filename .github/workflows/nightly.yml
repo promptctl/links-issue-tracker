@@ -86,9 +86,10 @@ jobs:
   #
   # A RED LIMIT IS THE DESIGN'S LIMIT, NOT A BAD COMMIT. Every verdict
   # perfbench reaches is written to --limits the moment it is reached, keyed
-  # by the limit it breaks, and the verdict fails the lane naming each breached
-  # limit and its measured values. The answer to one is work on that limit. Raising a budget or an allowance
-  # to turn this green is the alarm disconnected. [LAW:no-silent-failure]
+  # by the limit it breaks; the leg that breaks one goes red, and the verdict
+  # annotates the run with each breached limit and its measured values. The
+  # answer to one is work on that limit. Raising a budget or an allowance to
+  # turn this green is the alarm disconnected. [LAW:no-silent-failure]
   #
   # The scale points are listed once, here, and the legs and the verdict both
   # read them, so a leg that never reported is a leg the verdict knows is
@@ -185,10 +186,11 @@ jobs:
             case "$code" in 0|2) ;; *) broken=true ;; esac
           done
           limits=$(find scale -name limits.jsonl -exec cat {} + | jq -sc 'group_by(.limit) | map({limit: .[0].limit, title: .[0].title, measured: (map(.measured) | join("\n"))})')
-          jq -r '.[] | "::error::LIMIT \(.limit): \(.title)\n\(.measured)\n"' <<<"$limits"
-          # The red run is the alarm: a breached limit or a leg that did not
-          # report fails the lane. [LAW:no-silent-failure]
-          if [ "$broken" = true ] || [ "$(jq 'length' <<<"$limits")" -gt 0 ]; then
+          # One annotation per limit, measured values included: an annotation
+          # ends at its first newline, so they are encoded as %0A.
+          jq -r '.[] | "::error::LIMIT \(.limit): \(.title)%0A\(.measured | gsub("\n"; "%0A"))"' <<<"$limits"
+          if [ "$broken" = true ]; then
+            echo "::error::a scale point did not report; its leg's log says why"
             exit 1
           fi
 

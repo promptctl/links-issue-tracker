@@ -1,8 +1,10 @@
 package version
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -190,14 +192,15 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 // TestNoCIJobWritesToTheTracker pins the owner's ruling that CI holds no
 // write access to the lit backlog. The backlog is the refs/dolt/data ref of
 // this repository, so any job holding a contents write grant can push it,
-// whatever it runs. The guard is on the grant, not on what a job's steps say:
-// every workflow declares its top-level permissions, none of them writes
-// contents, and the one job that may is release-validate.yml's publisher,
-// which creates the release tag. A scheduled job that held the grant once
-// migrated the shared store to a schema no release carries.
+// whatever it runs: every workflow declares its top-level permissions, none of
+// them writes contents, and the one job that may is release-validate.yml's
+// publish job, which creates the release tag. A token from a secret needs no
+// grant, so every file under .github is also read for the ways lit writes a
+// remote store. A scheduled job that held the grant once migrated the shared
+// store to a schema no release carries.
 func TestNoCIJobWritesToTheTracker(t *testing.T) {
 	t.Parallel()
-	const publisher = "release-validate.yml"
+	const publisherFile, publisherJob = "release-validate.yml", "publish"
 	dir := repoPath(".github", "workflows")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -244,10 +247,27 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 			}
 		}
 		for job, j := range workflow.Jobs {
-			if writesContents(j.Permissions) && name != publisher {
+			if writesContents(j.Permissions) && (name != publisherFile || job != publisherJob) {
 				t.Errorf("%s job %s grants contents write — CI never writes to the lit tracker", name, job)
 			}
 		}
+	}
+	pushes := regexp.MustCompile(`sync\s+push|refs/dolt|report-to-lit`)
+	err = filepath.WalkDir(repoPath(".github"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if m := pushes.Find(b); m != nil {
+			t.Errorf("%s contains %q — CI never writes to the lit tracker", path, m)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
