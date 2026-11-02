@@ -474,6 +474,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "lit doctor [--fix]", Src: "internal/templates/defaults/quickstart-doctor.md"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "lit done <id>", Src: "internal/workflows/defaults/phase-merge.md"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "lit downgrade", Src: "usage: lit downgrade --to <version>"},
+	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "lit downgrade --to <tag>", Src: "lit downgrade --to <tag>"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "lit followup", Src: "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "lit hooks install", Src: "usage: lit hooks install"},
 	{Doc: "doc-v1-total/inventories/inventory-cli-ops.md", Text: "lit import --path", Src: "usage: lit import --path <tree-spec.json | bulk-file.yaml> (run `lit import --help` for both formats)"},
