@@ -16,7 +16,7 @@ divergence is a bug in one of them.
    published release does.
 
 The rules support each other. If anything ever gets a store past where it
-should be, rule 1 makes the return lossless: `lit downgrade` back to the
+should be, rule 1 makes the return lossless: `lit downgrade --schema` back to the
 remote's version loses nothing.
 
 ## What rule 1 means, precisely
@@ -53,6 +53,10 @@ every step down.
 - A vN-1 binary never reads the stash. It may delete a row whose stashed
   fields then have no row to return to; that is the vN-1 user's deletion,
   not a loss.
+- The stash holds only what the other version cannot represent. A step
+  applies it on top of the store's current data, never in place of it, and
+  deletes the entries it consumed. A stash write records every row's value,
+  null included, so a value cleared at one version stays cleared.
 
 ### How it is proven
 
@@ -60,14 +64,19 @@ every step down.
   `TestEveryMigrationDownIsExercised`. Every migration ships a seed fixture
   that fills every table its Up or Down reads or rewrites, not only the
   structures it adds; a migration without one fails the gate, so the gate
-  cannot pass against empty tables. For each version the gate
-  seeds, runs Up, exports, runs Down, checks the shape against a fresh Up to
-  vN-1, runs Up again, and compares against the first export.
+  cannot pass against empty tables. Each version is tested in both
+  directions, each starting from data seeded at the version it starts from:
+  - from vN: seed at vN, including user data in the structures vN adds;
+    export; run Down; check the shape against a fresh Up to vN-1; run Up;
+    compare against the export.
+  - from vN-1: seed at vN-1; export; run Up then Down; compare against the
+    export. This is what catches an Up that destroys data without stashing
+    it.
 - **Cross-version release check.** `release-validate.yml` migrates a fixture
   with the candidate binary, steps it down to the previous release's
   `Schema.Max` — across every migration the candidate adds, however many —
-  then runs the previous release's published `lit` against it — read, write, sync — and steps it back
-  up with the candidate. This is the only check that proves rule 1 against code
+  then runs the previous release's published `lit` against it — read, write,
+  sync — and steps it back up with the candidate. This is the only check that proves rule 1 against code
   that actually shipped rather than against our own Down SQL.
 
 ### Released migrations: freeze the Up, not the Down
@@ -90,7 +99,7 @@ A local downgrade alone does not lower a shared remote for long. Every client
 still running vN pulls the lowered head, re-migrates it to vN when it opens the
 store, and pushes it back up.
 
-`lit downgrade <v> --remote <name>` lowers the remote and writes
+`lit downgrade --schema <v> --remote <name>` lowers the remote and writes
 the **remote hold**, `meta.schema_hold = v`, in the same commit. `meta` exists from the baseline
 on, so a store at any version can hold the row. A binary that reads the row
 migrates no store past it and refuses to push a raise past it. The check sits
@@ -98,7 +107,7 @@ at the one migration entry that both opening a store and the sync reconcile's
 lift of a fetched head go through, so sync cannot re-raise what open would not.
 A binary whose code needs a schema above the hold refuses to write and names
 the release to install; a local store already above the hold refuses to sync
-and names the `lit downgrade <v>` that returns it, which rule 1 makes
+and names the `lit downgrade --schema <v>` that returns it, which rule 1 makes
 lossless. The row is removed only by
 `lit upgrade --remote <name>`.
 
@@ -114,7 +123,16 @@ A push with H > R — a **raise** — succeeds only when both hold:
 - H is at most the binary's own `Schema.Max`.
 
 Anything else refuses with `SchemaRaiseRequiresReleaseError`, whose message
-names R and the `lit downgrade R` that returns the local store to it.
+names R and the `lit downgrade --schema R` that returns the local store to it.
+
+`--schema <v>` steps the store's schema and leaves the binary in place;
+`--to <tag>` installs that release's binary and steps the store to its
+`Schema.Max`.
+
+The second condition is checked at the push, against the schema of the head
+being sent. Push-from-clone and compact-and-push send refs without opening
+the store, so the open-time refusal of a store above `Schema.Max` does not
+cover them.
 
 There is no "highest released schema" constant. A release binary's whole
 registry is released by definition, because CI cuts the tag at the commit it
@@ -156,13 +174,13 @@ against the remote.
 The raise rule guards remotes. A second check guards local stores, so a dev
 build's unreleased migration never strands a real workspace in the first
 place. Every binary carries a stamped **released ceiling**: goreleaser's
-tagged build stamps the binary's own registry max, `just build` stamps the
-highest migration in the newest release tag as `scripts/release-tags.sh` and
-`tools/schema-release-check` already compute it, and an unstamped binary has
-ceiling 0. `install.sh` source mode needs no separate stamp, since it already
-refuses to build a tree past the newest release tag. A migrating open of an existing store refuses
-to move it past the ceiling. Creating a fresh store is not limited, so new
-migrations stay developable in scratch workspaces. Like the raise policy, the
+tagged build stamps the binary's own registry max, `install.sh` source mode
+and `just build` stamp the highest migration in the newest release tag as
+`scripts/release-tags.sh` and `tools/schema-release-check` already compute it,
+and an unstamped binary has ceiling 0. No migration of an existing store moves
+it past the ceiling, whether it runs on open or in the sync reconcile's lift
+of a fetched head. Only a store created empty, holding no fetched head, is
+exempt, so new migrations stay developable in scratch workspaces. Like the raise policy, the
 released ceiling enters at the composition root, and tests construct stores with the
 full registry.
 
