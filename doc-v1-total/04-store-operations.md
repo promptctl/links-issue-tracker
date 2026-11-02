@@ -72,10 +72,10 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go`): usage is 
 
 | Check | Mechanism | On hit |
 |---|---|---|
-| constraint violations | `CALL DOLT_VERIFY_CONSTRAINTS()` | `IntegrityCheck = "constraint_violations"`, **error** `constraint violations: %d` |
+| constraint violations | `CALL DOLT_VERIFY_CONSTRAINTS('--all', '--output-only', <every table but the audit log>)` — every row of those tables, since every write is committed and a bare call verifies only uncommitted changes; nothing recorded in the working set, so a read open can run it | `IntegrityCheck = "constraint_violations"`, **error** `constraint violations: the store holds rows that break a declared constraint` |
 | FK orphans | three LEFT-JOIN counts (relations' endpoints, comments' issue, labels' issue), summed | **error** `foreign key violations: %d` |
 | invalid related-to ordering | `COUNT(*) ... type='related-to' AND src_id >= dst_id` | **warning** `invalid related-to ordering rows: %d` |
-| orphan event rows | events joined to missing issues | **warning** `orphan issue event rows: %d` |
+| orphan event rows | events joined to missing issues, plus event changes joined to missing events, summed; the audit log's one verdict, so the verification above leaves `issue_events` and `issue_event_changes` out | **warning** `orphan issue event rows: %d` |
 | containment | non-epics with no parent-child edge, and parent-child edges onto a non-epic (`containmentFindings`) | **warning** `tickets outside an epic: …` and `tickets under a parent that is not an epic: …`, naming each and `lit parent set --child <id> --parent <epic-id>` |
 | rank inversions | `len(invertedEdges(order, dependencies, live))` over every non-deleted issue in key order and `live`, the blocked-by edges between live issues, loaded once for this row and the three after it (computed in Go): an edge whose dependency tree order lists after its dependent, an edge between an issue and its own container and one inside a group of frame-mates whose lifted edges loop excepted (`storage.DependencyOrder.Inverted`) | **warning** `rank inversions: %d (dependencies ranked below dependents)` |
 | interleaved | `dependencies.Interleaved()`: frame-mates whose issues wait on one another both ways, read off the edges lifted onto them, so no order of them lists every dependency first; recorded in `Interleaved` | per group, **warning** `interleaved: <members> — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges` |
@@ -83,7 +83,7 @@ The CLI restore flow (`lit backup restore`, `internal/cli/backup.go`): usage is 
 | tied rank keys | `rank.PrefixTied` over the same order's keys: adjacent distinct keys equal on the 191 chars `idx_issues_rank` holds, which only a key a store inherited can be | **warning** `rank keys tied on the index prefix: %d (reads return these pairs in the wrong order — 'lit doctor --fix=rank' separates them without changing the order)` |
 | blocked-by cycle | `blocksCycle(order, live)` — a loop of the issues' own edges, which `FixRankInversions` refuses on | **warning** `blocked-by dependency cycle: <a -> b -> ...> (no rank order exists; remove one edge with 'lit dep rm' to break it)` |
 
-`FixIntegrity` (`import_export.go`) runs under a mutation with Dolt commit message `fix integrity`, executing exactly three statements — delete orphan events, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
+`FixIntegrity` (`import_export.go`) runs under a mutation with Dolt commit message `fix integrity`, executing exactly four statements — delete orphan events, delete orphan event changes, delete self-referential related-to rows, swap mis-ordered related-to endpoints — then returns a fresh `Doctor` report. It does not touch FK violations, rank inversions, or cycles.
 
 ## Tree import (`lit import`, JSON)
 

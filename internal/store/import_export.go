@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -48,6 +49,10 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	return model.Export{Version: model.ExportVersion, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events, Purges: purges, PlanReviews: planReviews}, nil
 }
 
+// auditLogTables are the tables whose orphan rows Doctor reports as the
+// orphan-history warning and FixIntegrity deletes, not as a constraint error.
+var auditLogTables = []string{"issue_events", "issue_event_changes"}
+
 func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	report := storage.HealthReport{
 		DependencyCycle: []string{},
@@ -70,13 +75,32 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if warning, over := overCeilingWarning(footprint); over {
 		report.Warnings = append(report.Warnings, warning)
 	}
-	var violations int
-	if err := s.db.QueryRowContext(ctx, `CALL DOLT_VERIFY_CONSTRAINTS()`).Scan(&violations); err != nil {
+	// '--all' verifies every row; bare, Dolt verifies only the working set's
+	// changes against HEAD, and every lit write is committed, so the bare call
+	// answers 0 on any lit store. '--output-only' keeps the verification from
+	// recording what it finds in the working set: that write is one a
+	// JournalReadOnly engine refuses, and it would leave a store opened for
+	// read dirty. The procedure answers 1 or 0, never a count.
+	//
+	// The audit log is left out: an orphan row in it is the warning below, one
+	// verdict for the fact, and a faithful rebuild of a source that holds some
+	// must not be refused (healthFindings). Every other table is verified, so a
+	// table added later is covered without being listed here.
+	// [LAW:single-enforcer]
+	tables, err := listTables(ctx, s.db)
+	if err != nil {
 		return report, fmt.Errorf("verify constraints: %w", err)
 	}
-	if violations > 0 {
+	args := append([]string{"--all", "--output-only"}, slices.DeleteFunc(tables, func(name string) bool {
+		return slices.Contains(auditLogTables, name)
+	})...)
+	var violated int
+	if err := s.db.QueryRowContext(ctx, buildProcedureCall("DOLT_VERIFY_CONSTRAINTS", len(args)), stringArgsToAny(args)...).Scan(&violated); err != nil {
+		return report, fmt.Errorf("verify constraints: %w", err)
+	}
+	if violated > 0 {
 		report.IntegrityCheck = "constraint_violations"
-		report.Errors = append(report.Errors, fmt.Sprintf("constraint violations: %d", violations))
+		report.Errors = append(report.Errors, "constraint violations: the store holds rows that break a declared constraint")
 	}
 	for _, query := range []string{
 		`SELECT COUNT(*) FROM relations r LEFT JOIN issues s ON s.id = r.src_id LEFT JOIN issues d ON d.id = r.dst_id WHERE s.id IS NULL OR d.id IS NULL`,
@@ -98,7 +122,9 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if report.InvalidRelatedRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("invalid related-to ordering rows: %d", report.InvalidRelatedRows))
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL`).Scan(&report.OrphanHistoryRows); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL) +
+		(SELECT COUNT(*) FROM issue_event_changes c LEFT JOIN issue_events e ON e.id = c.event_id WHERE e.id IS NULL)`).Scan(&report.OrphanHistoryRows); err != nil {
 		return report, fmt.Errorf("count orphan event rows: %w", err)
 	}
 	if report.OrphanHistoryRows > 0 {
@@ -263,6 +289,9 @@ func (s *Store) FixIntegrity(ctx context.Context) (storage.HealthReport, error) 
 		// with the backlog, and linearly.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
 			return fmt.Errorf("repair orphan events: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM issue_event_changes WHERE event_id NOT IN (SELECT id FROM issue_events)`); err != nil {
+			return fmt.Errorf("repair orphan event changes: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE type='related-to' AND src_id = dst_id`); err != nil {
 			return fmt.Errorf("repair self related rows: %w", err)
