@@ -28,7 +28,7 @@ import (
 // opens it, and no engine can write a file the gate has not judged.
 // [LAW:single-enforcer] [LAW:one-source-of-truth] [LAW:parse-dont-validate]
 //
-// Every refusal here is a model.ValidationError: the file is what is wrong,
+// Every refusal here is a model.Refusal: the file is what is wrong,
 // so the same file is refused the same way on every run.
 
 // ParseImportTreeFile gates a tree-import file and returns its documents,

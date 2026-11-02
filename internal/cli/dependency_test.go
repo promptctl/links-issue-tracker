@@ -312,11 +312,12 @@ func TestDepEventSaysTheRelationAndTheRefusal(t *testing.T) {
 	} {
 		var out bytes.Buffer
 		ev, _ := recordLeaf(tc.leaf(), ctx, cwdInvocation(&out, &out, nil), ap, tc.args)
-		if got := ev.Facts["dep.relation"]; got != tc.relation {
-			t.Errorf("%v: dep.relation = %v, want %v", tc.args, got, tc.relation)
-		}
-		if got := ev.Facts["dep.refusal"]; got != tc.refusal {
-			t.Errorf("%v: dep.refusal = %v, want %v", tc.args, got, tc.refusal)
+		for key, want := range map[string]any{"dep.relation": tc.relation, "dep.refusal": tc.refusal} {
+			// A null is recorded, never left out: absent and null are not the
+			// same answer.
+			if got, ok := ev.Facts[key]; !ok || got != want {
+				t.Errorf("%v: %s = %v (recorded %t), want %v", tc.args, key, got, ok, want)
+			}
 		}
 	}
 }

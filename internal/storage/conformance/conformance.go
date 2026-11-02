@@ -4220,9 +4220,9 @@ func assertWroteNothing(t *testing.T, ctx context.Context, st storage.Store, bef
 // retrying.
 func assertRefused(t *testing.T, err error, what string) {
 	t.Helper()
-	var refused model.ValidationError
+	var refused model.Refusal
 	if !errors.As(err, &refused) {
-		t.Errorf("%s error = %v, want model.ValidationError", what, err)
+		t.Errorf("%s error = %v, want a model.Refusal", what, err)
 	}
 }
 

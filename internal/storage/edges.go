@@ -22,8 +22,8 @@ const (
 )
 
 // RelationRuleError is a dependency edge refused by one of the edge rules. It
-// is a ValidationError to every classifier, and its Rule says which rule fired
-// without anyone reading the message. [LAW:types-are-the-program]
+// is a Refusal, and its Rule says which rule fired without anyone reading the
+// message. [LAW:types-are-the-program]
 type RelationRuleError struct {
 	Rule    RelationRule
 	Message string
@@ -31,7 +31,8 @@ type RelationRuleError struct {
 
 func (e RelationRuleError) Error() string { return e.Message }
 
-func (e RelationRuleError) Unwrap() error { return model.ValidationError{Message: e.Message} }
+// RefusesCommand marks RelationRuleError as a Refusal.
+func (RelationRuleError) RefusesCommand() {}
 
 // EpicTree is the containment the same-epic blocks rule reads: every issue
 // that sits directly under an epic, with those epics and its own type. An

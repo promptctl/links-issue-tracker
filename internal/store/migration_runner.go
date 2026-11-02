@@ -450,12 +450,13 @@ func (st migrationState) willMutate() bool {
 // this one boundary; the snapshot/prune budget lives here, not at callsites.
 func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
-	op, pruneErr, fail := s.runMigration(ctx, guard)
+	probed := probedFacts{}
+	op, pruneErr, fail := s.runMigration(ctx, guard, probed)
 	if fail != nil {
 		fail.PruneErr = pruneErr
 		return storage.Migrated{}, fail
 	}
-	done := storage.Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr, Probed: s.probed}
+	done := storage.Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr, Probed: probed}
 	snap, ok := guard.took()
 	if !ok {
 		return done, nil
@@ -604,7 +605,7 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 // [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (op operability, pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, probed probedFacts) (op operability, pruneErr error, fail *SchemaConvergenceError) {
 	state, op, fail := s.checkWritable(ctx)
 	if fail != nil {
 		return operability{}, nil, fail
@@ -613,13 +614,13 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) (op oper
 	if fail != nil {
 		return operability{}, nil, fail
 	}
-	pruneErr, fail = s.applyMigration(ctx, guard, assessment)
+	pruneErr, fail = s.applyMigration(ctx, guard, assessment, probed)
 	return op, pruneErr, fail
 }
 
 // applyMigration is runMigration's work on a workspace this binary may write,
 // up to and including the recovery snapshot; applySnapshotted does the rest.
-func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment) (pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	state := assessment.state
 	if !assessment.needsWrite() {
 		return nil, nil
@@ -681,7 +682,7 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	}); fail != nil {
 		return pruneErr, fail
 	}
-	migrationPruneErr, fail := s.applySnapshotted(ctx, snapshotted{snap: snap}, guard, state)
+	migrationPruneErr, fail := s.applySnapshotted(ctx, snapshotted{snap: snap}, guard, state, probed)
 	return errors.Join(pruneErr, migrationPruneErr), fail
 }
 
@@ -689,7 +690,7 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 // snapshot: adopt a pre-goose workspace if needed, then apply the pending
 // migrations. Every failure it returns is built from p, so it carries the
 // snapshot.
-func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snapshotGuard, state migrationState) (pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snapshotGuard, state migrationState, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	if state.phase == phaseAdopt {
 		// [LAW:single-enforcer] Pre-goose workspaces at any historical
 		// canonical shape forward-migrate through reconcileToBaseline
@@ -745,7 +746,7 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 			return nil, fail
 		}
 	}
-	return s.applyPendingMigrations(ctx, p, raiseCeiling(state, s.env.ReleasedSchema()))
+	return s.applyPendingMigrations(ctx, p, raiseCeiling(state, s.env.ReleasedSchema()), probed)
 }
 
 // upByOne applies the single next pending migration via goose. It is the ONE
@@ -764,11 +765,21 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 // of a schema: no step applies a migration above ceiling. The migrating open
 // refuses the whole raise earlier, before it writes anything, through the same
 // predicate (refuseUnreleasedRaise); the reconcile's lift meets it here.
-func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling) (*goose.MigrationResult, error) {
-	if err := s.refuseStepPastCeiling(ctx, raise, ceiling); err != nil {
-		return nil, err
+//
+// probes holds the probes to run before the step they read for; the lift,
+// which reports nothing, passes nil. What a probe read comes back beside the
+// step's result, and the probe of a step the ceiling refuses never runs.
+func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling, probes map[int64]migrationProbe) (*goose.MigrationResult, probeOutcome, error) {
+	next, err := s.nextStepWithinCeiling(ctx, raise, ceiling)
+	if err != nil {
+		return nil, probeOutcome{}, err
 	}
-	return stepResult(provider.UpByOne(ctx))
+	var probed probeOutcome
+	if probe, ok := probes[next]; ok {
+		probed.facts, probed.err = probe(ctx, s.db)
+	}
+	result, err := stepResult(provider.UpByOne(ctx))
+	return result, probed, err
 }
 
 // stepResult is a goose step's outcome with the step's result beside its error
@@ -811,7 +822,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 		return fmt.Errorf("construct schema-lift provider: %w", err)
 	}
 	for {
-		result, err := s.upByOne(ctx, provider, RaiseLift, s.env.ReleasedSchema())
+		result, _, err := s.upByOne(ctx, provider, RaiseLift, s.env.ReleasedSchema(), nil)
 		if errors.Is(err, goose.ErrNoNextVersion) {
 			return nil
 		}
@@ -847,7 +858,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 // [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
 // → prune) runs on every call; variability lives in the applied-vs-registry
 // set, not in whether stages execute.
-func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceiling version.ReleasedSchemaCeiling) (pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceiling version.ReleasedSchemaCeiling, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	// Construct the provider before creating the checkpoint so a provider
 	// construction failure leaves no orphaned branch behind.
 	var provider *goose.Provider
@@ -874,11 +885,12 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 	// goose's step here, so the transient reconcile lift never sees it, and
 	// its outcome passes through stepResult like goose's own.
 	// [LAW:composability] [LAW:single-enforcer]
-	step := func() (*goose.MigrationResult, error) {
+	step := func() (*goose.MigrationResult, probeOutcome, error) {
 		if hook := migrationUpByOneForTest; hook != nil {
-			return stepResult(hook(ctx, s.db, provider))
+			result, err := stepResult(hook(ctx, s.db, provider))
+			return result, probeOutcome{}, err
 		}
-		return s.upByOne(ctx, provider, RaiseMigrate, ceiling)
+		return s.upByOne(ctx, provider, RaiseMigrate, ceiling, migrationProbes)
 	}
 	pruneCheckpoints := func(ctx context.Context) error {
 		return prune(pruneMigrationCheckpoints, "prune migration checkpoints", func() error {
@@ -906,8 +918,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 	}
 
 	for {
-		probed, probeErr := s.probeNextMigration(ctx, provider)
-		result, gooseErr := step()
+		result, outcome, gooseErr := step()
 		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
 			// Success: prune old checkpoints to the retention count. Every
 			// migration has committed, so the run's outcome is settled: a
@@ -932,7 +943,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 		}); err != nil {
 			return recoverFrom(stepCommitMigration, stepCommitMigrationReset, result, fmt.Errorf("commit migration v%d: %w", result.Source.Version, err), false)
 		}
-		s.recordProbe(probed, probeErr)
+		probed.record(outcome)
 	}
 }
 
@@ -944,33 +955,26 @@ type migrationProbe func(ctx context.Context, db *sql.DB) (map[string]any, error
 // A migration whose effect needs no reading has none.
 var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge}
 
-// probeNextMigration runs the probe of the migration the next step applies,
-// if it has one, and returns what it read; nil facts when it has none.
-func (s *Store) probeNextMigration(ctx context.Context, provider *goose.Provider) (map[string]any, error) {
-	current, err := provider.GetDBVersion(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("read schema version before migrating: %w", err)
-	}
-	probe, ok := migrationProbes[current+1]
-	if !ok {
-		return nil, nil
-	}
-	return probe(ctx, s.db)
+// probeOutcome is what one step's probe read, or why it could not; zero when
+// the step's migration has no probe.
+type probeOutcome struct {
+	facts map[string]any
+	err   error
 }
 
-// recordProbe keeps a committed migration's probe for the open's event: the
-// facts it read, or why it could not read them.
-func (s *Store) recordProbe(facts map[string]any, err error) {
-	if err != nil {
-		facts = map[string]any{"migration.probe_error": telemetry.ErrorText(err)}
-	}
-	if len(facts) == 0 {
+// probedFacts gathers, for one migrating open, what the probes of the
+// migrations it committed read, as event facts. migrate makes it and hands it
+// on in Migrated.Probed.
+type probedFacts map[string]any
+
+// record keeps a committed step's probe: the facts it read, or why it could
+// not read them.
+func (p probedFacts) record(o probeOutcome) {
+	if o.err != nil {
+		p["migration.probe_error"] = telemetry.ErrorText(o.err)
 		return
 	}
-	if s.probed == nil {
-		s.probed = map[string]any{}
-	}
-	maps.Copy(s.probed, facts)
+	maps.Copy(p, o.facts)
 }
 
 // probeBlockedByEdge reads what v8 does: every 'blocks' row is one it renames,

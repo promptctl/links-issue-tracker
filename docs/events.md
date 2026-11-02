@@ -494,8 +494,8 @@ Those keys never appear at the event's top level.
 
 | Key | Meaning |
 | --- | --- |
-| `dep.relation` | The relation the edge flag named: `blocked-by` or `related-to`; null when the command stopped before it read one. |
-| `dep.refusal` | Which refusal stopped the command: `usage` (no edge flag, or more than one), `self_loop` (an edge from an issue to itself), `same_epic` (a `blocked-by` edge between two issues of one epic, which rank orders instead), `cycle` (a `blocked-by` edge that would close a dependency cycle), or `not_found` (an issue or, for `lit dep rm`, the edge does not exist); null when no refusal stopped it. |
+| `dep.relation` | The relation the edge flag named: `blocked-by` or `related-to`; null when the command stopped before it read one. Absent, with `dep.refusal`, when the command was refused while its flags were parsed (a repeated or unknown flag, a surplus argument); `reason` says why. |
+| `dep.refusal` | Which refusal stopped the command: `usage` (no edge flag, or two different ones), `self_loop` (an edge from an issue to itself), `same_epic` (a `blocked-by` edge between two issues of one epic, which rank orders instead), `cycle` (a `blocked-by` edge that would close a dependency cycle), or `not_found` (an issue or, for `lit dep rm`, the edge does not exist); null when no refusal stopped it. |
 
 ## What `lit followup` records
 
