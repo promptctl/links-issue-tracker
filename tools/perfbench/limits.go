@@ -17,7 +17,7 @@ import (
 // got that far; a run that times out, or whose second scale point fails, would
 // take every verdict it had already reached down with it. So each verdict is
 // also appended to --limits as it is logged, keyed by the limit it breaks, and
-// the nightly lane's verdict fails the run naming every key in that file.
+// the nightly lane's verdict annotates the run with every key in that file.
 // [LAW:no-silent-failure]
 
 // limitRecord is one verdict as the lane's verdict reads it: limit is the key
@@ -37,8 +37,8 @@ type limitVerdict interface {
 }
 
 // limitKey names the limit what breaks at the scale point s, in the slug form
-// lit takes for a label and a topic. [LAW:single-enforcer] the slug rules are
-// issueid's, the ones `lit new --topic` enforces, not a second copy here.
+// lit takes for a topic; the nightly verdict groups breaches by it.
+// [LAW:single-enforcer] the slug rules are issueid's, not a second copy here.
 func limitKey(s size, what string) string {
 	return issueid.NormalizeSlug(s.name + " " + what)
 }

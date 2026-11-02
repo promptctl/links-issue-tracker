@@ -241,7 +241,7 @@ generated once and the rest are byte copies, so the fleet costs about one
 census of import. Its `fleet bytes` figure is row data only: a generated store
 has no snapshots, remote cache or history beyond its import. `--limits <file>`
 writes each verdict as a JSON line the moment it is reached, keyed by the
-limit it breaks; the nightly ten-times lane's verdict fails the run naming every key in it.
+limit it breaks; a ten-times leg that breaks a limit fails, and the nightly verdict annotates the run with every key in it.
 
 CI's `perf-budget` job runs this on every PR against a 700-row store. Because
 the budget is the destination and not a CI setting, `just perf` fails the same

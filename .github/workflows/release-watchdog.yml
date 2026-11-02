@@ -87,3 +87,16 @@ jobs:
           fi
           echo "::error::v$VER has been pending for ${age_minutes}m (grace: ${GRACE_MINUTES}m) — the promotion merged but no release-validate run has published its tag, and no master push has arrived to re-trigger the gate. Usual cause: the promotion's run was evicted from release-validate's concurrency queue by later master pushes. Recovery: \`gh workflow run release-validate.yml --ref master\` (RELEASING.md, 'Re-running the pipeline on demand')." >&2
           exit 1
+
+  # A job that hits its timeout ends cancelled, and GitHub sends no failure
+  # notice for a cancelled run, so a hung watchdog would go unheard. This job
+  # turns that into a failed run. [LAW:no-silent-failure]
+  timed-out:
+    needs: [watchdog]
+    if: ${{ always() && contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "::error::a watchdog job was cancelled, usually by its timeout; its log says where it stopped"
+          exit 1

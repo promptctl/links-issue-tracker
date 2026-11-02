@@ -194,10 +194,11 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 // this repository, so any job holding a contents write grant can push it,
 // whatever it runs: every workflow declares its top-level permissions, none of
 // them writes contents, and the one job that may is release-validate.yml's
-// publish job, which creates the release tag. A token from a secret needs no
-// grant, so every file under .github is also read for the ways lit writes a
-// remote store. A scheduled job that held the grant once migrated the shared
-// store to a schema no release carries.
+// publish job, which creates the release tag. A token from any other secret
+// would need no grant, so no file under .github reads a secret but the
+// workflow's own GITHUB_TOKEN, and none names the ways lit writes a remote
+// store. A scheduled job that held the grant once migrated the shared store to
+// a schema no release carries.
 func TestNoCIJobWritesToTheTracker(t *testing.T) {
 	t.Parallel()
 	const publisherFile, publisherJob = "release-validate.yml", "publish"
@@ -210,7 +211,7 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 		Permissions any `yaml:"permissions"`
 	}
 	var workflow struct {
-		Permissions *yaml.Node              `yaml:"permissions"`
+		Permissions any                     `yaml:"permissions"`
 		Jobs        map[string]permissioned `yaml:"jobs"`
 	}
 	writesContents := func(p any) bool {
@@ -237,14 +238,8 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 		}
 		if workflow.Permissions == nil {
 			t.Errorf("%s declares no top-level permissions, so its jobs get the repository's default token", name)
-		} else {
-			var top any
-			if err := workflow.Permissions.Decode(&top); err != nil {
-				t.Fatalf("%s permissions: %v", name, err)
-			}
-			if writesContents(top) {
-				t.Errorf("%s grants contents write to every job", name)
-			}
+		} else if writesContents(workflow.Permissions) {
+			t.Errorf("%s grants contents write to every job", name)
 		}
 		for job, j := range workflow.Jobs {
 			if writesContents(j.Permissions) && (name != publisherFile || job != publisherJob) {
@@ -253,6 +248,7 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 		}
 	}
 	pushes := regexp.MustCompile(`sync\s+push|refs/dolt|report-to-lit`)
+	secret := regexp.MustCompile(`secrets\.([A-Za-z0-9_]+)`)
 	err = filepath.WalkDir(repoPath(".github"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -263,6 +259,11 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 		}
 		if m := pushes.Find(b); m != nil {
 			t.Errorf("%s contains %q — CI never writes to the lit tracker", path, m)
+		}
+		for _, m := range secret.FindAllSubmatch(b, -1) {
+			if string(m[1]) != "GITHUB_TOKEN" {
+				t.Errorf("%s reads secret %s — CI's only credential is its GITHUB_TOKEN, whose grant this test bounds", path, m[1])
+			}
 		}
 		return nil
 	})

@@ -186,9 +186,13 @@ jobs:
             case "$code" in 0|2) ;; *) broken=true ;; esac
           done
           limits=$(find scale -name limits.jsonl -exec cat {} + | jq -sc 'group_by(.limit) | map({limit: .[0].limit, title: .[0].title, measured: (map(.measured) | join("\n"))})')
-          # One annotation per limit, measured values included: an annotation
-          # ends at its first newline, so they are encoded as %0A.
-          jq -r '.[] | "::error::LIMIT \(.limit): \(.title)%0A\(.measured | gsub("\n"; "%0A"))"' <<<"$limits"
+          # Every limit in plain text first: GitHub keeps at most ten
+          # annotations per step, and the log keeps the rest.
+          jq -r '.[] | "LIMIT \(.limit): \(.title)\n\(.measured)\n"' <<<"$limits"
+          # Then one annotation per limit, measured values included. Workflow
+          # command data escapes %, CR and LF.
+          jq -r 'def esc: gsub("%"; "%25") | gsub("\r"; "%0D") | gsub("\n"; "%0A");
+            .[] | "::error::LIMIT \(.limit): \(.title | esc)%0A\(.measured | esc)"' <<<"$limits"
           if [ "$broken" = true ]; then
             echo "::error::a scale point did not report; its leg's log says why"
             exit 1
@@ -314,3 +318,16 @@ jobs:
         env:
           CGO_ENABLED: '1'
         run: go -C internal/vendor/dolthub-driver test -short ./...
+
+  # A job that hits its timeout ends cancelled, and GitHub sends no failure
+  # notice for a cancelled run, so a hung nightly lane would go unheard. This job
+  # turns that into a failed run. [LAW:no-silent-failure]
+  timed-out:
+    needs: [full-suite, scale-points, scale, scale-verdict, windows]
+    if: ${{ always() && contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "::error::a nightly lane job was cancelled, usually by its timeout; its log says where it stopped"
+          exit 1
