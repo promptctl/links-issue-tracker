@@ -156,11 +156,13 @@ func f(d string, parts []string) {
 	assets.ReadFile(p)
 	assets.ReadFile(d + string(filepath.Separator) + "x")
 	assets.ReadFile(strings.Join(parts, string(os.PathSeparator)))
+	const sep = string(filepath.Separator)
+	assets.ReadFile("a" + sep + d)
 	q := "a"
 	q = filepath.Join(q, d)
 	assets.ReadFile(q)
 }`,
-			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile os.PathSeparator"},
+			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile os.PathSeparator", "embed.FS.ReadFile filepath.Separator"},
 		},
 		{
 			name: "a local named fs is a value, not the package",

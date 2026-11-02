@@ -135,9 +135,9 @@ type builder struct {
 // call into path/filepath, a separator constant, or either in the one
 // assignment of a variable expr reads. A separator-free call's argument is not
 // searched: whatever built it, the call's result is a valid name.
-func hostBuilders(expr ast.Expr, info *types.Info, assigned map[*types.Var]ast.Expr) []builder {
+func hostBuilders(expr ast.Expr, info *types.Info, assigned map[types.Object]ast.Expr) []builder {
 	var found []builder
-	followed := map[*types.Var]bool{} // a variable is followed once, so a cycle ends
+	followed := map[types.Object]bool{} // a name is followed once, so a cycle ends
 	var visit func(n ast.Node) bool
 	visit = func(n ast.Node) bool {
 		switch n := n.(type) {
@@ -151,16 +151,13 @@ func hostBuilders(expr ast.Expr, info *types.Info, assigned map[*types.Var]ast.E
 			}
 			return false
 		case *ast.Ident:
-			switch obj := info.Uses[n].(type) {
-			case *types.Const:
-				if obj.Pkg() != nil && hostSeparators[obj.Pkg().Path()] == obj.Name() {
-					found = append(found, builder{n.Pos(), obj.Pkg().Name() + "." + obj.Name()})
-				}
-			case *types.Var:
-				if init, ok := assigned[obj]; ok && !followed[obj] {
-					followed[obj] = true
-					ast.Inspect(init, visit)
-				}
+			obj := info.Uses[n]
+			if c, ok := obj.(*types.Const); ok && c.Pkg() != nil && hostSeparators[c.Pkg().Path()] == c.Name() {
+				found = append(found, builder{n.Pos(), c.Pkg().Name() + "." + c.Name()})
+			}
+			if init, ok := assigned[obj]; ok && !followed[obj] {
+				followed[obj] = true
+				ast.Inspect(init, visit)
 			}
 		}
 		return true
@@ -169,19 +166,20 @@ func hostBuilders(expr ast.Expr, info *types.Info, assigned map[*types.Var]ast.E
 	return found
 }
 
-// singleAssignments maps each variable files assign exactly once, one value to
-// one name, to the value it is assigned.
-func singleAssignments(files []*ast.File, info *types.Info) map[*types.Var]ast.Expr {
-	values := map[*types.Var]ast.Expr{}
-	count := map[*types.Var]int{}
+// singleAssignments maps each variable or constant files assign exactly once,
+// one value to one name, to the value it is assigned.
+func singleAssignments(files []*ast.File, info *types.Info) map[types.Object]ast.Expr {
+	values := map[types.Object]ast.Expr{}
+	count := map[types.Object]int{}
 	record := func(id *ast.Ident, value ast.Expr) {
 		obj := info.Defs[id]
 		if obj == nil {
 			obj = info.Uses[id]
 		}
-		if v, ok := obj.(*types.Var); ok {
-			count[v]++
-			values[v] = value
+		switch obj.(type) {
+		case *types.Var, *types.Const:
+			count[obj]++
+			values[obj] = value
 		}
 	}
 	for _, file := range files {
