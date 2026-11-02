@@ -24,7 +24,6 @@ links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttempt
 links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttemptBusySkipsOwner
 links-windows-qr8l.bc1 internal/cli TestEverySettlingEntryPointMergesAForkBelowTheCut
 links-windows-qr8l.bc1 internal/cli TestEverySyncEntryPointFollowsAReRootedRemote
-links-windows-qr8l.9j5 internal/cli TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete
 links-windows-qr8l.bc1 internal/cli TestInlineReconcileSurfacesContractOnProseHeld
 links-windows-qr8l.nca internal/cli TestMirrorOwedIgnoresLiveness
 links-windows-qr8l.bc1 internal/cli TestReadCommandsStaySilentOnAFreshOrReleasedBuild
@@ -36,4 +35,3 @@ links-windows-qr8l.bc1 internal/cli TestSyncReconcileNamesContestedLaneAfterPart
 links-windows-qr8l.bc1 internal/cli TestTheMirrorAloneKeepsTheHistoryBound
 links-windows-qr8l.bc1 internal/cli TestTheMirrorsReceiveStartsNoRun
 links-windows-qr8l.bc1 internal/cli TestTwoCheckoutsSyncAcrossTheHistoryBound
-links-windows-qr8l.9j5 internal/store TestAdoptRemoteByCloneFailedCloneLeavesNoResidue
