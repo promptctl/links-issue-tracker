@@ -121,7 +121,7 @@ func (e *Engine) AddRelation(ctx context.Context, in storage.AddRelationInput) (
 
 func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error) {
 	if in.Type == model.RelRelatedTo && in.SrcID == in.DstID {
-		return model.Relation{}, model.ValidationError{Message: "related-to cannot target itself"}
+		return model.Relation{}, storage.RelationRuleError{Rule: storage.RuleSelfLoop, Message: "related-to cannot target itself"}
 	}
 	srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)
 	if _, err := e.mustRecord(srcID); err != nil {
@@ -240,7 +240,7 @@ func (e *Engine) rejectParentCycle(childID, parentID string) error {
 // the reverse.
 func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
 	if dependent == dependency {
-		return model.ValidationError{Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
+		return storage.RelationRuleError{Rule: storage.RuleSelfLoop, Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
 	// dependency -> dependents: who is forced to come after whom.
 	precedes := map[string][]string{}
@@ -268,7 +268,7 @@ func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
 		return false
 	}
 	if reaches(dependent) {
-		return model.ValidationError{Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
+		return storage.RelationRuleError{Rule: storage.RuleCycle, Message: fmt.Sprintf("blocked-by: cannot add %s blocked by %s — %s is already blocked by %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)}
 	}
 	return nil
 }

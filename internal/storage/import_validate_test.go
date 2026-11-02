@@ -190,9 +190,9 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 				}
 				return
 			}
-			var refused model.ValidationError
+			var refused model.Refusal
 			if !errors.As(err, &refused) {
-				t.Fatalf("gate error = %v, want a model.ValidationError", err)
+				t.Fatalf("gate error = %v, want a model.Refusal", err)
 			}
 			if err.Error() != c.want {
 				t.Errorf("gate error =\n  %s\nwant\n  %s", err, c.want)

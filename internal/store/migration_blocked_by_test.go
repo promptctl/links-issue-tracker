@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMigrationRenamesBlocksEdgesKeepingTheirMeaning pins v8 on a store whose
@@ -79,6 +81,58 @@ func TestMigrationRenamesBlocksEdgesKeepingTheirMeaning(t *testing.T) {
 	wantDown := []string{"e-blocker e-peer related-to", "e-waiter e-blocker blocks"}
 	if got := relationRows(t, ctx, f); !slices.Equal(got, wantDown) {
 		t.Fatalf("relations after down to v7 = %v, want %v", got, wantDown)
+	}
+}
+
+// An open that applies v8 says on its event how many edges it renamed and the
+// CHECK it dropped, under the name the engine gave it.
+func TestAnOpenThatAppliesV8SaysWhatItRenamedAndDropped(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	provider, err := newGooseProvider(st.db)
+	if err != nil {
+		t.Fatalf("newGooseProvider() error = %v", err)
+	}
+	if _, err := provider.DownTo(ctx, 7); err != nil {
+		t.Fatalf("DownTo(7) error = %v", err)
+	}
+	f := containmentFixture{st: st, now: time.Now().UTC().Format(time.RFC3339Nano)}
+	for _, stmt := range []string{
+		`ALTER TABLE relations DROP CONSTRAINT relations_type_check`,
+		`ALTER TABLE relations ADD CHECK (type IN ('blocks','parent-child','related-to'))`,
+	} {
+		if _, err := st.db.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("give relations a pre-goose CHECK (%s): %v", stmt, err)
+		}
+	}
+	check := relationsCheckName(t, ctx, f)
+	for _, id := range []string{"e-a", "e-b", "e-c"} {
+		f.issue(t, ctx, seedRow{id: id, issueType: "epic", rank: "a" + id, lane: id})
+	}
+	for _, edge := range [][3]string{{"e-a", "e-b", "blocks"}, {"e-b", "e-c", "blocks"}, {"e-a", "e-c", "related-to"}} {
+		if _, err := st.db.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, 'seed')`, edge[0], edge[1], edge[2], f.now); err != nil {
+			t.Fatalf("seed %v: %v", edge, err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	reopened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("reopen at v7 error = %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	facts := reopened.Migrated().EventRecord()
+	if facts["migration.v8_rows_renamed"] != 2 || facts["migration.v8_dropped_check"] != check {
+		t.Fatalf("v8 facts = %v, %v; want 2, %q", facts["migration.v8_rows_renamed"], facts["migration.v8_dropped_check"], check)
+	}
+	if _, ok := facts["migration.probe_error"]; ok {
+		t.Fatalf("migration.probe_error = %v, want absent", facts["migration.probe_error"])
 	}
 }
 

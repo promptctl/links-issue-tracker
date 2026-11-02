@@ -216,6 +216,9 @@ working directory's.
 | `migration.min_writer_schema` | The oldest schema version a lit must support to write that newer workspace, as a migration this lit lacks recorded it, or `0` when none did or the workspace is not newer. A read open serves a workspace whose minimum is above this lit; a write open, and every `lit sync` command, refuses it. |
 | `migration.min_writer_schema_error` | Why that minimum is not a schema version, or `null`. A read open serves the workspace; a write open refuses it. |
 | `migration.read_only` | `true` when the open served the newer workspace for reading only, because its minimum is above this lit or cannot be read; `false` otherwise. |
+| `migration.v8_rows_renamed` | Recorded only when the open applied migration 8, which renames the dependency edge from `blocks` to `blocked-by`: how many edges it renamed. |
+| `migration.v8_dropped_check` | Recorded with `migration.v8_rows_renamed`: the name of the CHECK constraint migration 8 dropped from the relations table, `relations_type_check`, or the name the database engine gave it (`relations_chk_<suffix>`) on a store created before lit versioned its schema. |
+| `migration.probe_error` | Recorded instead of those two when the open applied migration 8 but could not read them first: why. |
 | `temp_table_files.files` | How many temp table files a dead Dolt process left the open removed from `links/.dolt/temptf`; `null` when the open did not look. |
 | `temp_table_files.bytes` | How many bytes those files held, or `null` when the open did not look. |
 | `temp_table_files.error` | Why some could not be removed, or `null`. The command runs all the same, and prints a `warning: temp table files a dead writer left were not all removed:` line on stderr; the next open that changes tickets tries again. |
@@ -486,6 +489,19 @@ Those keys never appear at the event's top level.
 | Key | Meaning |
 | --- | --- |
 | `label.changed` | `false` when the issue already held the label `lit label add` named, so nothing was recorded; `true` when the labels field moved. A refused edit, such as `lit label rm` of a label the issue does not hold, has none. |
+
+## What `lit dep add` and `lit dep rm` record
+
+| Key | Meaning |
+| --- | --- |
+| `dep.relation` | The relation the edge flag named: `blocked-by` or `related-to`; null when the command stopped before it read one. Absent, with `dep.refusal`, when the command was refused while its flags were parsed (a repeated or unknown flag, a surplus argument); `reason` says why. |
+| `dep.refusal` | Which refusal stopped the command: `usage` (no edge flag, or two different ones), `self_loop` (an edge from an issue to itself), `same_epic` (a `blocked-by` edge between two issues of one epic, which rank orders instead), `cycle` (a `blocked-by` edge that would close a dependency cycle), or `not_found` (an issue or, for `lit dep rm`, the edge does not exist); null when no refusal stopped it. |
+
+## What `lit followup` records
+
+| Key | Meaning |
+| --- | --- |
+| `followup.parent_source` | Where the follow-up's parent came from: `flag` (`--parent`), `on_parent` (the parent of the `--on` ticket), or `none` (the `--on` ticket is top-level and `--parent` was not given). |
 
 ## What `lit verdict` records
 

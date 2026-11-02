@@ -160,31 +160,31 @@ func (s *Store) refuseUnreleasedRaise(ctx context.Context, state migrationState,
 	}
 }
 
-// refuseStepPastCeiling refuses the step goose would take next when the
-// migration it applies is above ceiling. That migration is the lowest pending
-// one, which is not always above the highest applied: a history applied out
-// of order has a gap below it. It costs one read of the version table, so a
-// lift with nothing pending costs next to nothing. With nothing pending it
-// passes, and goose reports ErrNoNextVersion itself.
-func (s *Store) refuseStepPastCeiling(ctx context.Context, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling) error {
+// nextStepWithinCeiling is the version of the migration goose applies next,
+// refused when it is above ceiling. That migration is the lowest pending one,
+// which is not always above the highest applied: a history applied out of
+// order has a gap below it. It costs one read of the version table, so a lift
+// with nothing pending costs next to nothing. With nothing pending it is 0,
+// and goose reports ErrNoNextVersion itself.
+func (s *Store) nextStepWithinCeiling(ctx context.Context, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling) (int64, error) {
 	applied, highest, err := s.appliedVersions(ctx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	registry, err := migrations.Embedded()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, m := range registry.Migrations() {
 		if applied[m.Version] {
 			continue
 		}
 		if m.Version <= ceiling.Max {
-			return nil
+			return m.Version, nil
 		}
-		return &UnreleasedMigrationError{Raise: raise, WorkspaceVersion: highest, TargetVersion: m.Version, Ceiling: ceiling}
+		return 0, &UnreleasedMigrationError{Raise: raise, WorkspaceVersion: highest, TargetVersion: m.Version, Ceiling: ceiling}
 	}
-	return nil
+	return 0, nil
 }
 
 // appliedVersions is the set of versions goose records as applied, and the

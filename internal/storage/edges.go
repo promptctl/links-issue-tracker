@@ -12,6 +12,28 @@ import (
 // verbatim in tests; RejectBlocksWithinEpic is the one rule that refuses with it.
 const SameEpicBlocksRejectionMessage = "Do not set blocked-by relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"
 
+// RelationRule names the rule that refused a dependency edge.
+type RelationRule string
+
+const (
+	RuleSelfLoop RelationRule = "self_loop"
+	RuleSameEpic RelationRule = "same_epic"
+	RuleCycle    RelationRule = "cycle"
+)
+
+// RelationRuleError is a dependency edge refused by one of the edge rules. It
+// is a Refusal, and its Rule says which rule fired without anyone reading the
+// message. [LAW:types-are-the-program]
+type RelationRuleError struct {
+	Rule    RelationRule
+	Message string
+}
+
+func (e RelationRuleError) Error() string { return e.Message }
+
+// RefusesCommand marks RelationRuleError as a Refusal.
+func (RelationRuleError) RefusesCommand() {}
+
 // EpicTree is the containment the same-epic blocks rule reads: every issue
 // that sits directly under an epic, with those epics and its own type. An
 // issue under no epic has no entry. A parent that is not an epic is left out,
@@ -54,7 +76,7 @@ func (t EpicTree) Place(child string, childType model.IssueType, epic string) {
 // [LAW:single-enforcer] [LAW:one-source-of-truth]
 func RejectBlocksWithinEpic(tree EpicTree, dependent, dependency string) error {
 	if climbsTo(tree, dependent, dependency) || climbsTo(tree, dependency, dependent) || leafSiblings(tree, dependent, dependency) {
-		return model.ValidationError{Message: SameEpicBlocksRejectionMessage}
+		return RelationRuleError{Rule: RuleSameEpic, Message: SameEpicBlocksRejectionMessage}
 	}
 	return nil
 }

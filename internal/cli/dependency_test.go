@@ -286,3 +286,38 @@ func issueIDs(issues []model.Issue) []string {
 	}
 	return ids
 }
+
+// dep add and dep rm say on the event which relation their flag named and
+// which refusal, if any, stopped them.
+func TestDepEventSaysTheRelationAndTheRefusal(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	a, b := seedCrossEpicPair(t, ctx, ap, "A", "B")
+	epic := seedEpicRaw(t, ctx, ap, "Shared", "dep")
+	s1, s2 := seedTaskIn(t, ctx, ap, "S1", epic), seedTaskIn(t, ctx, ap, "S2", epic)
+	for _, tc := range []struct {
+		leaf     func() appLeaf
+		args     []string
+		relation any
+		refusal  any
+	}{
+		{depAddLeaf, []string{a}, nil, "usage"},
+		{depAddLeaf, []string{a, "--blocked-by", a}, "blocked-by", "self_loop"},
+		{depAddLeaf, []string{s1, "--blocked-by", s2}, "blocked-by", "same_epic"},
+		{depAddLeaf, []string{a, "--blocked-by", b}, "blocked-by", nil},
+		{depAddLeaf, []string{b, "--blocked-by", a}, "blocked-by", "cycle"},
+		{depAddLeaf, []string{a, "--related-to", "test-missing"}, "related-to", "not_found"},
+		{depRmLeaf, []string{a, "--related-to", b}, "related-to", "not_found"},
+		{depRmLeaf, []string{a, "--blocked-by", b}, "blocked-by", nil},
+	} {
+		var out bytes.Buffer
+		ev, _ := recordLeaf(tc.leaf(), ctx, cwdInvocation(&out, &out, nil), ap, tc.args)
+		for key, want := range map[string]any{"dep.relation": tc.relation, "dep.refusal": tc.refusal} {
+			// A null is recorded, never left out: absent and null are not the
+			// same answer.
+			if got, ok := ev.Facts[key]; !ok || got != want {
+				t.Errorf("%v: %s = %v (recorded %t), want %v", tc.args, key, got, ok, want)
+			}
+		}
+	}
+}

@@ -468,10 +468,15 @@ func followupLeaf() appLeaf {
 		// being the value a top-level create carries. The store judges the
 		// parent against the follow-up's type as it judges every create.
 		// [LAW:dataflow-not-control-flow] [LAW:single-enforcer]
-		parentID := strings.TrimSpace(*parent)
-		if parentID == "" && origin.Parent != nil {
-			parentID = origin.Parent.ID
+		parentID, parentSource := strings.TrimSpace(*parent), "flag"
+		switch {
+		case parentID != "":
+		case origin.Parent != nil:
+			parentID, parentSource = origin.Parent.ID, "on_parent"
+		default:
+			parentSource = "none"
 		}
+		telemetry.Set(ctx, "followup.parent_source", parentSource)
 		resolvedTopic := strings.TrimSpace(*topic)
 		if resolvedTopic == "" {
 			resolvedTopic = origin.Issue.Topic
