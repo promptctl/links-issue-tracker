@@ -240,7 +240,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	// these legitimately, and an error also fails the recovery gate.
 	// [LAW:single-enforcer] storage.RefusedBlocks asks the write boundary's own
 	// rule, so this names exactly the edges `lit dep add` would refuse.
-	tree, err := epicTreeAbove(ctx, s.db, edgeEndpoints(live)...)
+	tree, err := loadEpicTree(ctx, s.db)
 	if err != nil {
 		return report, fmt.Errorf("blocks hierarchy check: %w", err)
 	}
@@ -249,16 +249,6 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by edge within one epic's work: %s blocked by %s (%s; remove it with 'lit dep rm %s --blocked-by %s')", edge.Dependent, edge.Dependency, storage.SameEpicBlocksRejectionMessage, edge.Dependent, edge.Dependency))
 	}
 	return report, nil
-}
-
-// edgeEndpoints lists every issue an edge names, for reading the containment
-// above them once.
-func edgeEndpoints(edges []storage.DependencyEdge) []string {
-	ids := make([]string, 0, 2*len(edges))
-	for _, e := range edges {
-		ids = append(ids, e.Dependent, e.Dependency)
-	}
-	return ids
 }
 
 // FixIntegrity repairs what this engine can be structurally wrong about, then
