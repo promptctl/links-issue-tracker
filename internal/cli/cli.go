@@ -1352,19 +1352,43 @@ func historyLeaf() appLeaf {
 		}
 		// The flag is parsed before the store is read, so a malformed reference
 		// is a usage error whatever the id names. [LAW:parse-dont-validate]
-		render := printIssueHistory
+		var ref *versionRef
 		if fs.Changed("version") {
-			ref, err := parseVersionRef(*version)
+			parsed, err := parseVersionRef(*version)
 			if err != nil {
 				return err
 			}
-			render = func(w io.Writer, detail model.IssueDetail) error { return printFieldVersion(w, detail, ref) }
+			ref = &parsed
+			telemetry.Set(ctx, "history.version_field", ref.field.Name)
+			telemetry.Set(ctx, "history.version_number", ref.number)
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 		if err != nil {
 			return err
 		}
-		return render(inv.Stdout, detail)
+		// Each field's versions are numbered once, here, and both what the
+		// command records and what it prints read that one numbering.
+		versions := historyVersions(detail)
+		if ref != nil {
+			texts := versions[ref.field.Name]
+			telemetry.Count(ctx, "history.version_held", len(texts))
+			err := printFieldVersion(inv.Stdout, detail, *ref, texts)
+			telemetry.Set(ctx, "history.version_found", !errors.As(err, new(storage.VersionNotFoundError)))
+			return err
+		}
+		for _, field := range storage.LongTextFields() {
+			telemetry.Count(ctx, "history.versions."+field.Name, len(versions[field.Name]))
+			changes := 0
+			for _, event := range detail.Events {
+				for _, change := range event.Changes {
+					if change.Field == field.Name {
+						changes++
+					}
+				}
+			}
+			telemetry.Count(ctx, "history.version_changes."+field.Name, changes)
+		}
+		return printIssueHistory(inv.Stdout, detail, versions)
 	}}
 }
 

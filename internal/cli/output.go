@@ -497,6 +497,16 @@ func singleLine(s string) string {
 	return strings.Join(lines, quotedBreak)
 }
 
+// historyVersions numbers the texts each long text field has held, keyed by
+// field name: the one numbering lit history prints and records.
+func historyVersions(detail model.IssueDetail) map[string][]string {
+	versions := map[string][]string{}
+	for _, field := range storage.LongTextFields() {
+		versions[field.Name] = storage.TextVersions(detail.Issue, detail.Events, field)
+	}
+	return versions
+}
+
 // printIssueHistory renders the standalone `lit history` view: an identifying
 // header (id + title) so the output stands alone, then the field-level
 // transition trail via the shared printHistoryEvents, then one line per long
@@ -505,16 +515,14 @@ func singleLine(s string) string {
 // least its "created" event, so the trail is never empty in practice; an
 // empty Events slice honestly prints just the header rather than fabricating
 // a line.
-func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
+func printIssueHistory(w io.Writer, detail model.IssueDetail, versions map[string][]string) error {
 	id := singleLine(detail.Issue.ID)
 	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", id, singleLine(detail.Issue.Title)); err != nil {
 		return err
 	}
-	versions := map[string][]string{}
 	var superseded []string
 	for _, field := range storage.LongTextFields() {
-		texts := storage.TextVersions(detail.Issue, detail.Events, field)
-		versions[field.Name] = texts
+		texts := versions[field.Name]
 		current := field.Current(detail.Issue)
 		if slices.ContainsFunc(texts, func(text string) bool { return text != current }) {
 			superseded = append(superseded, fmt.Sprintf("    %s: %s — lit history %s --version %s@<n> prints one\n", field.Name, storage.DescribeVersions(len(texts)), id, field.Name))
@@ -621,8 +629,7 @@ func parseVersionRef(raw string) (versionRef, error) {
 // printFieldVersion prints the text one version of a long text field held,
 // bare, so it round-trips into `lit update --description` the way
 // `lit show --field` output does.
-func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
-	texts := storage.TextVersions(detail.Issue, detail.Events, ref.field)
+func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef, texts []string) error {
 	if ref.number > len(texts) {
 		return storage.VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Number: ref.number, Held: len(texts)}
 	}
