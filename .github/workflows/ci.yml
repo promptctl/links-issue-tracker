@@ -51,9 +51,28 @@ jobs:
       # the package's slowest top-level tests.
       # `shell: bash` is load-bearing — it enables pipefail, so go test's own
       # exit code still fails the step through the pipe. [LAW:no-silent-failure]
+      # The same commit has measured internal/store at 152s on one runner and
+      # 266s on another, so a red budget is the code's fault or the hardware's.
+      # The runner's CPU, printed beside the table, says which.
+      - name: Runner CPU
+        run: |
+          nproc
+          lscpu | grep -E '^Model name'
+
+      # The -json stream is kept as an artifact because testbudget lists only
+      # an over-budget package's ten slowest top-level tests, and parallel
+      # tests' wall clock overlaps; finding what to make cheaper needs every row.
       - name: Test
         shell: bash
-        run: go test -short -json ./... | go run ./tools/testbudget
+        run: go test -short -json ./... | tee test.json | go run ./tools/testbudget
+
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-json
+          path: test.json
+          retention-days: 14
 
       # internal/vendor/dolthub-driver is its own Go module, so the ./... above
       # never reaches its tests, the patch guards README.lit-patch.md names
