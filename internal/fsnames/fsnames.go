@@ -187,4 +187,3 @@ func imports(file *ast.File) map[string]string {
 	}
 	return local
 }
-
