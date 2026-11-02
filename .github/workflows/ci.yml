@@ -126,10 +126,10 @@ jobs:
       # was a second slowness alarm that fired first — runs 36312282343 and
       # 36320546964 died at 600s in internal/cli with the running test 1-2s
       # old, on runners slow enough to take internal/store 1.4x its median.
-      # The ceiling is sized from the binding budget, internal/cli's 580s,
-      # which is already set from the slowest runner the pool hands out:
+      # The ceiling is sized from the binding budget, internal/cli's 300s:
       # x2.6 under the detector (median of 79 paired runs to 2026-09-28)
-      # ≈ 25m. Any lower value can fire before testbudget does. The cost is paid only by a real hang,
+      # ≈ 13m, and 30m leaves room for an above-median ratio. Any lower value
+      # can fire before testbudget does. The cost is paid only by a real hang,
       # which now takes ~30m instead of ~10m to be named.
       - name: Test with race detector
         run: go test -short -race -timeout 30m ./cmd/... ./internal/...
