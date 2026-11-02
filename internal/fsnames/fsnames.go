@@ -34,10 +34,10 @@ func (f Finding) String() string {
 }
 
 // fsFuncs are io/fs's functions that take a filesystem and then a name.
-var fsFuncs = []string{"ReadFile", "ReadDir", "Stat", "Sub", "Glob", "WalkDir"}
+var fsFuncs = []string{"ReadFile", "ReadDir", "Stat", "Lstat", "ReadLink", "Sub", "Glob", "WalkDir"}
 
-// fsMethods are the filesystem methods whose first argument is a name.
-var fsMethods = []string{"Open", "ReadFile", "ReadDir", "Stat", "Sub", "Glob"}
+// fsMethods are io/fs's interface methods, each of which takes one name.
+var fsMethods = []string{"Open", "ReadFile", "ReadDir", "Stat", "Lstat", "ReadLink", "Sub", "Glob"}
 
 // separatorFree are the filepath functions whose result holds no separator, or
 // holds only slashes, so it is a valid io/fs name or name element on every OS.
@@ -70,23 +70,30 @@ func Check(fset *token.FileSet, files []*ast.File, info *types.Info) []Finding {
 // readOf names call and the index of its name argument when call is an io/fs
 // read, and returns -1 otherwise.
 func readOf(call *ast.CallExpr, info *types.Info) (string, int) {
+	if fn := calleeOf(call, info); fn != nil && isIOFS(fn.Pkg()) &&
+		fn.Signature().Recv() == nil && slices.Contains(fsFuncs, fn.Name()) {
+		return "fs." + fn.Name(), 1
+	}
 	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
 	if !ok {
 		return "", -1
 	}
-	if fn := calleeOf(call, info); fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == "io/fs" &&
-		fn.Signature().Recv() == nil && slices.Contains(fsFuncs, fn.Name()) {
-		return "fs." + fn.Name(), 1
-	}
 	selection, ok := info.Selections[sel]
-	if !ok || selection.Kind() != types.MethodVal || !slices.Contains(fsMethods, sel.Sel.Name) {
+	if !ok || !slices.Contains(fsMethods, sel.Sel.Name) || !isFilesystem(selection.Recv()) {
 		return "", -1
 	}
-	recv := selection.Recv()
-	if !isFilesystem(recv) {
+	method, ok := selection.Obj().(*types.Func)
+	if !ok || !takesOneName(method.Signature()) {
 		return "", -1
 	}
-	return types.TypeString(recv, (*types.Package).Name) + "." + sel.Sel.Name, 0
+	read := types.TypeString(selection.Recv(), (*types.Package).Name) + "." + sel.Sel.Name
+	switch selection.Kind() {
+	case types.MethodVal:
+		return read, 0
+	case types.MethodExpr:
+		return read, 1 // the receiver is the first argument
+	}
+	return "", -1
 }
 
 // isFilesystem reports whether t has io/fs's FS method, Open(string) (fs.File,
@@ -94,16 +101,24 @@ func readOf(call *ast.CallExpr, info *types.Info) (string, int) {
 func isFilesystem(t types.Type) bool {
 	obj, _, _ := types.LookupFieldOrMethod(t, true, nil, "Open")
 	fn, ok := obj.(*types.Func)
-	if !ok {
+	if !ok || !takesOneName(fn.Signature()) {
 		return false
 	}
-	sig := fn.Signature()
+	named, ok := types.Unalias(fn.Signature().Results().At(0).Type()).(*types.Named)
+	return ok && isIOFS(named.Obj().Pkg()) && named.Obj().Name() == "File"
+}
+
+// takesOneName reports whether sig has io/fs's method shape: one string in,
+// a result and an error out.
+func takesOneName(sig *types.Signature) bool {
 	if sig.Params().Len() != 1 || sig.Results().Len() != 2 {
 		return false
 	}
-	named, ok := types.Unalias(sig.Results().At(0).Type()).(*types.Named)
-	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "io/fs" && named.Obj().Name() == "File"
+	return types.Identical(sig.Params().At(0).Type(), types.Typ[types.String]) &&
+		types.Identical(sig.Results().At(1).Type(), types.Universe.Lookup("error").Type())
 }
+
+func isIOFS(pkg *types.Package) bool { return pkg != nil && pkg.Path() == "io/fs" }
 
 // filepathCalls returns the calls into path/filepath within expr that can put
 // the host's separator into its value. A separator-free call's argument is not

@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,11 +16,22 @@ import (
 // TestModuleBuildsNoFSNameWithFilepath is the gate: every package of this
 // module, and of the vendored driver module it links, is checked on every PR.
 // Dependencies load from the build's export data, not from source.
+//
+// It scans the files that build for the host OS, test files included, so a
+// _windows.go file is scanned by the nightly Windows lane: type-checking for a
+// Windows target elsewhere needs Dolt's cgo dependencies cross-compiled.
 func TestModuleBuildsNoFSNameWithFilepath(t *testing.T) {
+	if raceEnabled {
+		// The export data is built without -race, so under it this would
+		// rebuild the whole dependency graph to repeat a check the plain
+		// run already makes.
+		t.Skip("the gate's verdict does not depend on -race")
+	}
 	t.Parallel()
 	cfg := &packages.Config{
-		Dir:  "../..",
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		Dir:   "../..",
+		Mode:  packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		Tests: true,
 	}
 	pkgs, err := packages.Load(cfg, "./...", "github.com/dolthub/driver/...")
 	if err != nil {
@@ -39,6 +51,10 @@ func TestModuleBuildsNoFSNameWithFilepath(t *testing.T) {
 	if files == 0 {
 		t.Fatal("scanned no files; the gate would pass vacuously")
 	}
+	// A package loads once alone and once with its tests, so a file can be
+	// checked twice.
+	slices.Sort(found)
+	found = slices.Compact(found)
 	if len(found) > 0 {
 		t.Errorf("an io/fs name is slash-separated on every OS, so a name built with filepath fails every lookup on Windows; build it with path (or convert a host path with filepath.ToSlash):\n  %s", strings.Join(found, "\n  "))
 	}
@@ -102,6 +118,33 @@ func f(d string) {
 	assets.ReadFile(strings.TrimPrefix(filepath.Join(d, "x"), "./"))
 }`,
 			want: []string{"embed.FS.ReadFile Join", "embed.FS.ReadFile Join"},
+		},
+		{
+			name: "dot-imported io/fs, method expressions and Go 1.25 reads",
+			src: `package p
+import ("embed"; . "io/fs"; "path/filepath")
+var assets embed.FS
+func f(fsys FS, d string) {
+	ReadFile(fsys, filepath.Join(d, "x"))
+	ReadLink(fsys, filepath.Join(d, "x"))
+	embed.FS.ReadFile(assets, filepath.Join("d", d))
+}`,
+			want: []string{"fs.ReadFile Join", "fs.ReadLink Join", "embed.FS.ReadFile Join"},
+		},
+		{
+			name: "a method that takes a host path is not an io/fs read",
+			src: `package p
+import ("io/fs"; "path/filepath")
+type disk struct{}
+func (disk) Open(name string) (fs.File, error) { return nil, nil }
+func (disk) Stat(host string, follow bool) (fs.FileInfo, error) { return nil, nil }
+type ids struct{}
+func (ids) Open(id int) (fs.File, error) { return nil, nil }
+func (ids) ReadFile(name string) ([]byte, error) { return nil, nil }
+func f(d string) {
+	disk{}.Stat(filepath.Join(d, "x"), true)
+	ids{}.ReadFile(filepath.Join(d, "x"))
+}`,
 		},
 		{
 			name: "a local named fs is a value, not the package",
