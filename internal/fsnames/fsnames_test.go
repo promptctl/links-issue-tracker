@@ -6,59 +6,9 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
-	"slices"
 	"strings"
 	"testing"
-
-	"golang.org/x/tools/go/packages"
 )
-
-// TestModuleBuildsNoFSNameWithFilepath is the gate: every package of this
-// module, and of the vendored driver module it links, is checked on every PR.
-// Dependencies load from the build's export data, not from source.
-//
-// It scans the files that build for the host OS, test files included, so a
-// _windows.go file is scanned by the nightly Windows lane: type-checking for a
-// Windows target elsewhere needs Dolt's cgo dependencies cross-compiled.
-func TestModuleBuildsNoFSNameWithFilepath(t *testing.T) {
-	if raceEnabled {
-		// The export data is built without -race, so under it this would
-		// rebuild the whole dependency graph to repeat a check the plain
-		// run already makes.
-		t.Skip("the gate's verdict does not depend on -race")
-	}
-	t.Parallel()
-	cfg := &packages.Config{
-		Dir:   "../..",
-		Mode:  packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Tests: true,
-	}
-	pkgs, err := packages.Load(cfg, "./...", "github.com/dolthub/driver/...")
-	if err != nil {
-		t.Fatalf("packages.Load: %v", err)
-	}
-	if packages.PrintErrors(pkgs) > 0 {
-		t.Fatal("packages failed to load; the gate cannot read their types")
-	}
-	var found []string
-	files := 0
-	for _, pkg := range pkgs {
-		files += len(pkg.Syntax)
-		for _, f := range Check(pkg.Fset, pkg.Syntax, pkg.TypesInfo) {
-			found = append(found, f.String())
-		}
-	}
-	if files == 0 {
-		t.Fatal("scanned no files; the gate would pass vacuously")
-	}
-	// A package loads once alone and once with its tests, so a file can be
-	// checked twice.
-	slices.Sort(found)
-	found = slices.Compact(found)
-	if len(found) > 0 {
-		t.Errorf("an io/fs name is slash-separated on every OS, so a name built with filepath fails every lookup on Windows; build it with path (or convert a host path with filepath.ToSlash):\n  %s", strings.Join(found, "\n  "))
-	}
-}
 
 func TestCheck(t *testing.T) {
 	t.Parallel()

@@ -229,6 +229,13 @@ jobs:
           version: v2.8.0
           verify: false
 
+      # An io/fs name built with path/filepath fails every lookup on Windows,
+      # and this lane runs on Linux. It reads every package's types, so it
+      # rides the job whose linter has already built their export data.
+      - name: No io/fs name holds the host's separator
+        if: ${{ !cancelled() }}
+        run: go run ./tools/fsnames-check
+
       # [LAW:single-enforcer] the one place .golangci.yml is checked against
       # its schema, so a misspelled key cannot silently switch a rule off.
       # The schema is golangci-lint.run's golangci.v<minor>.jsonschema.json,
