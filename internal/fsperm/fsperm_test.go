@@ -25,6 +25,26 @@ func TestDenyWriteRefusesANewEntryUntilRestored(t *testing.T) {
 	assertOnlyEntry(t, dir, "entry")
 }
 
+// A denied tree the code under test renamed away is still cleared at the end:
+// Deny's restore finds nothing at the old path, RestoreTree finds the tree.
+func TestRestoreTreeReachesATreeRenamedAfterItWasDenied(t *testing.T) {
+	root := t.TempDir()
+	denied := filepath.Join(root, "denied")
+	if err := os.MkdirAll(denied, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(denied, "held"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	RestoreTree(t, root)
+	Deny(t, denied, RemoveAll)
+	if err := os.Rename(denied, filepath.Join(root, "moved")); err != nil {
+		t.Fatal(err)
+	}
+	// t.TempDir's own cleanup runs after the cleanups registered here, and
+	// fails the test if the moved tree is still locked.
+}
+
 func TestDenyReadRefusesAListingUntilRestored(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "entry"), nil, 0o644); err != nil {

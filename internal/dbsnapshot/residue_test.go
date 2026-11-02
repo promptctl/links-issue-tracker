@@ -189,11 +189,12 @@ func TestCollectOrphanedResidue_SparesForeignNames(t *testing.T) {
 	spared := []string{
 		"backup.tmp",       // foreign head under a producer suffix
 		"backup.condemned", // condemned suffix without the collector's shape
-		"backup.tmp.1700000000000000001.condemned", // collector frame around a foreign head
-		"1700000000000000006.tmp.condemned",        // stampless: no collector ever minted it
-		"+1700000000000000006.tmp",                 // signed head: ParseInt tolerance is not minting
-		"1700000000000000006.tmp.+1.condemned",     // signed collector stamp: same
-		"1700000000000000006-my.backup.tmp",        // dotted label no sanitizeLabel ever emitted
+		"backup.tmp.1700000000000000001.condemned",              // collector frame around a foreign head
+		"1700000000000000006.tmp.condemned",                     // stampless: no collector ever minted it
+		"+1700000000000000006.tmp",                              // signed head: ParseInt tolerance is not minting
+		"1700000000000000006.tmp.+1.condemned",                  // signed collector stamp: same
+		"1700000000000000006-my.backup.tmp",                     // dotted label no sanitizeLabel ever emitted
+		"1700000000000000006-foo.1700000000000000001.condemned", // labelled retired shape: Remove drops the label, so no lit mints it
 	}
 	for _, name := range spared {
 		if err := os.MkdirAll(filepath.Join(snapshotsDir, name), 0o755); err != nil {

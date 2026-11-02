@@ -249,8 +249,11 @@ type ceilingHold struct {
 // reach whoever is pruning.
 //
 // It stops between removals once ctx is done, so the caller's deadline bounds
-// the removals too — each is a whole copy of the store — and whatever it left
-// is retired by the next prune.
+// the removals too — each is a whole copy of the store — and whatever it did
+// not reach is retired by the next prune. A snapshot whose removal fails
+// part-way does not stop the ones behind it, as in dbsnapshot.PruneMatching;
+// its remains are out of the snapshot namespace and the next snapshot take
+// collects them.
 //
 // The footprint it returns is measured once, before the removals, less what
 // was removed — the store as the prune left it, without a second walk.
@@ -260,13 +263,16 @@ func (s *Store) pruneAutomaticSnapshots(ctx context.Context) (ceilingHold, error
 		return ceilingHold{}, fmt.Errorf("measure store footprint: %w", err)
 	}
 	var hold ceilingHold
+	var errs []error
 	gone := map[string]bool{}
 	for _, snap := range snapshotsToPrune(f, s.sizeCeiling) {
 		if err = ctx.Err(); err != nil {
+			errs = append(errs, err)
 			break
 		}
 		if err = dbsnapshot.Remove(snap.Snapshot); err != nil {
-			break
+			errs = append(errs, err)
+			continue
 		}
 		hold.pruned = append(hold.pruned, snap.Name)
 		gone[snap.Name] = true
@@ -279,7 +285,7 @@ func (s *Store) pruneAutomaticSnapshots(ctx context.Context) (ceilingHold, error
 	}
 	f.automatic = kept
 	hold.footprint = f.contract(s.sizeCeiling)
-	return hold, err
+	return hold, errors.Join(errs...)
 }
 
 // footprint measures the store this handle is open on, under its ceiling.

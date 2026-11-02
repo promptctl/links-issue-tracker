@@ -424,19 +424,38 @@ func PruneMatching(databaseDir string, keep int, match func(name string) bool) e
 	if len(matched) <= keep {
 		return nil
 	}
+	// One snapshot that will not go must not keep the ones behind it past the
+	// budget, so every over-budget snapshot is attempted. [LAW:no-silent-failure]
+	var errs []error
 	for _, snapshot := range matched[keep:] {
 		if err := Remove(snapshot); err != nil {
-			return err
+			errs = append(errs, err)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Remove deletes one snapshot List returned. Every retention policy, whatever
 // it counts, retires a snapshot through here. [LAW:single-enforcer]
+//
+// The snapshot is first renamed out of the snapshot namespace to a retired
+// name, then deleted. RemoveAll deletes what it can before it fails, so a
+// failure part-way leaves a partial tree; under its own name that tree would
+// still be listed and restorable. Under a retired name it is a .condemned
+// corpse that List and Restore refuse and the next Take's collector retries.
+// A failed rename leaves the snapshot whole, so it is still a true snapshot.
 func Remove(snapshot Snapshot) error {
-	if err := os.RemoveAll(snapshot.Path); err != nil {
-		return fmt.Errorf("remove snapshot %s: %w", snapshot.Path, err)
+	retired := filepath.Join(filepath.Dir(snapshot.Path), retiredName(snapshot.Created, time.Now()))
+	if err := os.Rename(snapshot.Path, retired); err != nil {
+		// Already gone is the state Remove delivers, as it was for RemoveAll.
+		// Concurrent prunes, or a Restore, can take the snapshot first.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("retire snapshot %s: %w", snapshot.Path, err)
+	}
+	if err := os.RemoveAll(retired); err != nil {
+		return fmt.Errorf("remove retired snapshot %s (no longer listed or restorable; the next snapshot take collects it): %w", retired, err)
 	}
 	return nil
 }
@@ -535,13 +554,17 @@ func isCollectibleArtifactName(name string) bool {
 	return false
 }
 
-// isCollectorCondemnedName reports whether name has exactly the shape
-// condemnResidue mints: a collectible .tmp/.reserve artifact name, then a
-// "." + positive all-digit nanosecond stamp, then ".condemned".
+// isCollectorCondemnedName reports whether name has exactly a shape the
+// collector's own side mints: condemnResidue's collectible .tmp/.reserve
+// artifact name, then a "." + positive all-digit nanosecond stamp, then
+// ".condemned"; or Remove's retiredName.
 func isCollectorCondemnedName(name string) bool {
 	head, ok := strings.CutSuffix(name, condemnedSuffix)
 	if !ok {
 		return false
+	}
+	if isRetiredHead(head) {
+		return true
 	}
 	dot := strings.LastIndexByte(head, '.')
 	if dot < 0 {
@@ -551,6 +574,31 @@ func isCollectorCondemnedName(name string) bool {
 		return false
 	}
 	return isCollectibleArtifactName(head[:dot])
+}
+
+// retiredName is the name Remove gives a snapshot before deleting it:
+// <created-ns>.<now-ns>.condemned. The label is dropped so the name's length
+// does not depend on the snapshot's: parseName accepts unbounded legacy labels,
+// and a name built from one could exceed NAME_MAX and make the snapshot
+// unremovable. The fresh stamp keeps a retired name from colliding with an
+// earlier interrupted removal of a snapshot created in the same instant.
+// isRetiredHead is its parser; the two live together so the shape has one
+// definition. [LAW:one-source-of-truth]
+func retiredName(created, now time.Time) string {
+	return fmt.Sprintf("%d.%d%s", created.UnixNano(), now.UnixNano(), condemnedSuffix)
+}
+
+// isRetiredHead reports whether head, a name with the .condemned suffix cut,
+// is exactly <positive-digits>.<positive-digits>. A labelled head is refused:
+// no lit mints one, and the collector destroys what this accepts.
+func isRetiredHead(head string) bool {
+	created, stamp, ok := strings.Cut(head, ".")
+	if !ok {
+		return false
+	}
+	_, createdOK := parsePositiveDigits(created)
+	_, stampOK := parsePositiveDigits(stamp)
+	return createdOK && stampOK
 }
 
 // parseName is the one predicate for "is this a snapshot name". Rejecting

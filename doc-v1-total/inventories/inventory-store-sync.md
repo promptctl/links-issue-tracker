@@ -1991,9 +1991,9 @@ Tests: `snapshot_test.go` (round trip — source mutated after the snapshot, sub
 2. `List(databaseDir)`; error propagated verbatim.
 3. `match == nil` ⇒ every snapshot matches; otherwise filter by `match(s.Name)` **preserving newest-first order**.
 4. `len(matched) <= keep` → nil, nothing removed.
-5. For each `matched[keep:]` (the oldest), `Remove(snapshot)`; the first error aborts the rest.
+5. For each `matched[keep:]` (the oldest), `Remove(snapshot)`; every one is attempted, and the errors are joined.
 
-`Remove(snapshot)` (`snapshot.go`) = `os.RemoveAll(snapshot.Path)`, error `"remove snapshot %s: %w"`. Every retention policy retires a snapshot through it.
+`Remove(snapshot)` (`snapshot.go`) renames the snapshot out of the snapshot namespace to `<created-ns>.<now-ns>.condemned`, then `os.RemoveAll`s that. A rename of an already-absent snapshot is success. A failed rename is `"retire snapshot %s: %w"` and leaves the snapshot whole. A `RemoveAll` that fails part-way is `"remove retired snapshot %s (no longer listed or restorable; the next snapshot take collects it): %w"`: the remains are no longer listed or restorable, and the next `Take`'s collector retries them. Every retention policy retires a snapshot through it.
 
 Non-matching snapshots are never removed regardless of age. Residue collection deliberately does **not** run here.
 
@@ -2066,7 +2066,8 @@ The design rule stated in-code (`snapshot.go`): **reject broadly (`IsProducerArt
 | `snapshot.go` | stat databaseDir other error | `stat database dir: %w` |
 | `snapshot.go` | install rename fails | `(rotatedPath, install snapshot at database dir: %w)` |
 | `snapshot.go` | `keep <= 0` | `dbsnapshot: keep must be > 0` |
-| `snapshot.go` | `RemoveAll` of a snapshot fails | `remove snapshot %s: %w` (aborts loop) |
+| `snapshot.go` | rename of a snapshot to its retired name fails | `retire snapshot %s: %w` (loop goes on) |
+| `snapshot.go` | `RemoveAll` of a retired snapshot fails | `remove retired snapshot %s (no longer listed or restorable; the next snapshot take collects it): %w` (loop goes on) |
 | `snapshot.go` | unsupported file type in walk | `dbsnapshot: unsupported file type at %s: %v` |
 | `residue.go` | stat snapshotsDir other error | `stat snapshots dir: %w` |
 | `residue.go` | beacon probe real error | `probe snapshot producer beacon: %w` |

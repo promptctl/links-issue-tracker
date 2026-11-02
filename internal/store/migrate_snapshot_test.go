@@ -262,16 +262,17 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}
-	// Leave exactly a full retention budget of migration snapshots, the oldest
-	// of which cannot be removed: the open's own snapshot pushes it out, and
-	// the prune fails on it.
+	// Leave one more than a full retention budget of migration snapshots, the
+	// oldest of which cannot be removed: the open's own snapshot pushes it and
+	// the one behind it out, and the prune fails on the oldest but must still
+	// retire the next.
 	dir := dbsnapshot.DirFor(doltRoot)
 	if err := os.RemoveAll(dir); err != nil {
 		t.Fatalf("clear snapshots: %v", err)
 	}
 	const base = int64(1700000000000000000)
-	var stuck string
-	for i := int64(0); i < automaticSnapshotsPerKind; i++ {
+	var stuck, behind string
+	for i := int64(0); i < automaticSnapshotsPerKind+1; i++ {
 		path := filepath.Join(dir, fmt.Sprintf("%d-%s-%d", base+i, migrationSnapshotLabel, base+i))
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("plant snapshot: %v", err)
@@ -279,11 +280,15 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(path, "held"), nil, 0o644); err != nil {
 			t.Fatalf("plant snapshot file: %v", err)
 		}
-		if i == 0 {
+		switch i {
+		case 0:
 			stuck = path
+		case 1:
+			behind = path
 		}
 	}
 	fsperm.Deny(t, stuck, fsperm.RemoveAll)
+	fsperm.RestoreTree(t, dir)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -298,8 +303,18 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune migration snapshots") {
 		t.Fatalf("PruneErr = %v, want the prune failure", done.PruneErr)
 	}
-	if _, err := os.Stat(stuck); err != nil {
-		t.Fatalf("stuck snapshot: %v; want it left in place", err)
+	if _, err := os.Stat(behind); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("snapshot behind the stuck one: stat err = %v; want it pruned", err)
+	}
+	// Half-deleted, the stuck snapshot must not read as a snapshot to restore.
+	listed, err := dbsnapshot.List(doltRoot)
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	for _, s := range listed {
+		if s.Name == filepath.Base(stuck) {
+			t.Fatalf("stuck snapshot %s is still listed after its removal failed part-way", s.Name)
+		}
 	}
 }
 

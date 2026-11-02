@@ -163,6 +163,7 @@ func workspaceWhosePruneWillFail(t *testing.T) (repo string, ws workspace.Info, 
 		}
 	}
 	fsperm.Deny(t, stuck, fsperm.RemoveAll)
+	fsperm.RestoreTree(t, dir)
 	return repo, ws, stuck
 }
 

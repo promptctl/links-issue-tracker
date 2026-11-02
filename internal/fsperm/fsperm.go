@@ -67,6 +67,28 @@ func Deny(t testing.TB, dir string, op Op) (restore func()) {
 	return restore
 }
 
+// RestoreTree makes every directory under root writable and listable again
+// when the test ends, for a fault whose tree the code under test moved: Deny
+// puts a mode back at the path it denied, and that path is empty once the tree
+// has been renamed away, so t.TempDir could not clear what is left.
+func RestoreTree(t testing.TB, root string) {
+	t.Helper()
+	t.Cleanup(func() {
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return os.Chmod(path, 0o755)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Errorf("restore %s: %v", root, err)
+		}
+	})
+}
+
 // inject sets op's mode on dir and attempts op where the attempt cannot harm
 // dir, returning what it met.
 func (op Op) inject(t testing.TB, dir string) (restore func(), attempt error) {
