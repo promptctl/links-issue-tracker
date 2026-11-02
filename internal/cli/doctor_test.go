@@ -182,7 +182,10 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	under := h.createIssue(storage.CreateIssueInput{Title: "under", Topic: "hier", IssueType: "task", ParentID: epic.ID})
 	cycleEpic := h.createIssue(storage.CreateIssueInput{Title: "C", Topic: "dep", IssueType: "epic"})
 	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "dep", IssueType: "task", ParentID: cycleEpic.ID})
-	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "dep", IssueType: "task", ParentID: cycleEpic.ID})
+	// The cycle runs between two epics so that it is the one finding it plants: an
+	// edge between two leaves of one epic is also a refused blocked-by edge.
+	cycleEpicB := h.createIssue(storage.CreateIssueInput{Title: "D", Topic: "dep", IssueType: "epic"})
+	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "dep", IssueType: "task", ParentID: cycleEpicB.ID})
 
 	var clean bytes.Buffer
 	if err := runDoctor(h.ctx, &clean, h.ap, nil); err != nil {
@@ -442,5 +445,40 @@ func TestPrintFootprintAndOverCeilingPart(t *testing.T) {
 	}
 	if got := footprintFieldValue(fp, "3072"); got != "3072" {
 		t.Errorf("footprintFieldValue(measured) = %q, want the value", got)
+	}
+}
+
+// A blocked-by edge between two leaves of one epic is what an import from
+// before the same-epic rule leaves behind. Doctor prints a warning naming the
+// `lit dep rm` that removes it, and counts it on the invocation's event, which
+// reads "0" on a store with none.
+func TestDoctorNamesABlockedByEdgeBetweenTwoLeavesOfOneEpic(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "blocks", IssueType: "epic"})
+	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "blocks", IssueType: "task", ParentID: epic.ID})
+	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "blocks", IssueType: "task", ParentID: epic.ID})
+
+	facts, out := runDoctorRecorded(t, h)
+	if got := fmt.Sprint(facts["doctor.refused_blocks"]); got != "0" {
+		t.Errorf("event fact doctor.refused_blocks = %v on a store with no such edge, want \"0\"\n%s", got, out)
+	}
+
+	raw, err := storage.TestSupport.Of(h.ap.Store)
+	if err != nil {
+		t.Fatalf("TestSupport: %v", err)
+	}
+	if err := raw.ExecRawForTest(h.ctx,
+		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`,
+		second.ID, first.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("plant the edge: %v", err)
+	}
+	facts, out = runDoctorRecorded(t, h)
+	if got := fmt.Sprint(facts["doctor.refused_blocks"]); got != "1" {
+		t.Errorf("event fact doctor.refused_blocks = %v, want \"1\"\n%s", got, out)
+	}
+	want := "warning: blocked-by edge within one epic's work: " + second.ID + " blocked by " + first.ID
+	repair := "remove it with 'lit dep rm " + second.ID + " --blocked-by " + first.ID + "'"
+	if !strings.Contains(out, want) || !strings.Contains(out, repair) {
+		t.Errorf("doctor output missing the warning %q naming %q:\n%s", want, repair, out)
 	}
 }
