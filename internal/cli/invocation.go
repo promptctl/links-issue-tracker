@@ -28,6 +28,14 @@ type Invocation struct {
 	Stderr io.Writer
 }
 
+// withEnv is inv with env as its environment. It is a literal and not an
+// assignment to inv.Env, which process_reads_test.go reads as writing a child
+// process's Env; a field added to Invocation must be carried here
+// (TestWithEnvKeepsEveryOtherField fails until it is).
+func (inv Invocation) withEnv(env environ.Env) Invocation {
+	return Invocation{Dir: inv.Dir, Args: inv.Args, Env: env, Stdin: inv.Stdin, Stdout: inv.Stdout, Stderr: inv.Stderr}
+}
+
 // WorkingDir is the absolute directory an invocation ran in, or the error
 // reading it gave. An unreadable one fails only what needs it, through Path:
 // the commands that resolve a workspace or a relative path refuse with it,
