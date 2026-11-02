@@ -295,6 +295,13 @@ jobs:
           CGO_ENABLED: '1'
         run: go build ./cmd/lit
 
+      # The PR lane reads only the files that build on Linux; the _windows.go
+      # files are read here, where they build.
+      - name: No io/fs name holds the host's separator
+        env:
+          CGO_ENABLED: '1'
+        run: go run ./tools/fsnames-check
+
       # Every test runs except the known failures in
       # .github/windows-known-failures.txt, each owned by a child of epic
       # links-windows-qr8l, so the lane is green and a red run is a new
@@ -308,6 +315,7 @@ jobs:
       # each test's verdict in the log: a test whose fault this platform does
       # not enforce skips itself saying why, and only -v shows that it did.
       - name: Test (-short)
+        if: ${{ !cancelled() }}
         env:
           CGO_ENABLED: '1'
         run: |

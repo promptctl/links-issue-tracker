@@ -1,0 +1,181 @@
+package fsnames
+
+import (
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	"go/types"
+	"strings"
+	"testing"
+)
+
+func TestCheck(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want []string // Finding.Read + " " + Finding.Name, in order
+	}{
+		{
+			name: "embedded template lookup built with filepath.Join",
+			src: `package p
+import ("embed"; "path/filepath")
+type store struct{ defaultsFS embed.FS }
+func (s store) read(name string) ([]byte, error) {
+	return s.defaultsFS.ReadFile(filepath.Join("defaults", name))
+}`,
+			want: []string{"embed.FS.ReadFile filepath.Join"},
+		},
+		{
+			name: "io/fs functions take the name second",
+			src: `package p
+import ("io/fs"; fp "path/filepath")
+func f(fsys fs.FS, d string) {
+	fs.ReadFile(fsys, fp.Join(d, "x"))
+	fs.WalkDir(fsys, fp.Clean(d), nil)
+}`,
+			want: []string{"fs.ReadFile filepath.Join", "fs.WalkDir filepath.Clean"},
+		},
+		{
+			name: "filesystems however they were declared",
+			src: `package p
+import ("embed"; "io/fs"; "os"; "path/filepath")
+var assets *embed.FS
+var raw embed.FS
+var sub2 = mustSub(raw, "d")
+func mustSub(f fs.FS, d string) fs.FS { s, _ := fs.Sub(f, d); return s }
+type holder struct{ embed.FS }
+func f(d string, h holder) {
+	root := os.DirFS(d)
+	sub, _ := fs.Sub(root, "x")
+	fs.Stat(sub, filepath.Dir(d))
+	root.Open(filepath.Join(d, "a"))
+	assets.ReadDir(filepath.Dir(d))
+	sub2.Open(filepath.Join("x", d))
+	h.ReadFile(filepath.Join("x", d))
+	mustSub(raw, "d").Open(filepath.Join("x", d))
+}`,
+			want: []string{"fs.Stat filepath.Dir", "fs.FS.Open filepath.Join", "*embed.FS.ReadDir filepath.Dir", "fs.FS.Open filepath.Join", "p.holder.ReadFile filepath.Join", "fs.FS.Open filepath.Join"},
+		},
+		{
+			name: "a filepath call wrapped in another call",
+			src: `package p
+import ("embed"; "path"; "path/filepath"; "strings")
+var assets embed.FS
+func f(d string) {
+	assets.ReadFile(path.Clean(filepath.Join("a", d)))
+	assets.ReadFile(strings.TrimPrefix(filepath.Join(d, "x"), "./"))
+}`,
+			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Join"},
+		},
+		{
+			name: "dot-imported io/fs, method expressions and Go 1.25 reads",
+			src: `package p
+import ("embed"; . "io/fs"; "path/filepath")
+var assets embed.FS
+func f(fsys FS, d string) {
+	ReadFile(fsys, filepath.Join(d, "x"))
+	ReadLink(fsys, filepath.Join(d, "x"))
+	embed.FS.ReadFile(assets, filepath.Join("d", d))
+}`,
+			want: []string{"fs.ReadFile filepath.Join", "fs.ReadLink filepath.Join", "embed.FS.ReadFile filepath.Join"},
+		},
+		{
+			name: "a method that takes a host path is not an io/fs read",
+			src: `package p
+import ("io/fs"; "path/filepath")
+type disk struct{}
+func (disk) Open(name string) (fs.File, error) { return nil, nil }
+func (disk) Stat(host string, follow bool) (fs.FileInfo, error) { return nil, nil }
+type ids struct{}
+func (ids) Open(id int) (fs.File, error) { return nil, nil }
+func (ids) ReadFile(name string) ([]byte, error) { return nil, nil }
+func f(d string) {
+	disk{}.Stat(filepath.Join(d, "x"), true)
+	ids{}.ReadFile(filepath.Join(d, "x"))
+}`,
+		},
+		{
+			name: "a name built in a variable or with a separator constant",
+			src: `package p
+import ("embed"; "os"; "path/filepath"; "strings")
+var assets embed.FS
+func f(d string, parts []string) {
+	p := filepath.Join("defaults", d)
+	assets.ReadFile(p)
+	assets.ReadFile(d + string(filepath.Separator) + "x")
+	assets.ReadFile(strings.Join(parts, string(os.PathSeparator)))
+	const sep = string(filepath.Separator)
+	assets.ReadFile("a" + sep + d)
+	q := "a"
+	q = filepath.Join(q, d)
+	assets.ReadFile(q)
+	var r string
+	r = filepath.Join("b", d)
+	assets.ReadFile(r)
+}`,
+			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile os.PathSeparator", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile filepath.Join"},
+		},
+		{
+			name: "a variable overwritten by range or through a pointer is not traced",
+			src: `package p
+import ("embed"; "fmt"; "path/filepath")
+var assets embed.FS
+func f(d string) {
+	a := filepath.Join("c", d)
+	for _, a = range []string{"x"} {}
+	assets.ReadFile(a)
+	b := filepath.Join("c", d)
+	fmt.Sscan(d, &b)
+	assets.ReadFile(b)
+}`,
+		},
+		{
+			name: "a local named fs is a value, not the package",
+			src: `package p
+import ("embed"; "io/fs"; "path/filepath")
+var _ fs.FS
+func load(fs embed.FS, n string) { fs.ReadFile(filepath.Join("d", n)) }`,
+			want: []string{"embed.FS.ReadFile filepath.Join"},
+		},
+		{
+			name: "correct builders, separator-free parts and host-path reads pass",
+			src: `package p
+import ("embed"; "os"; "path"; "path/filepath")
+var assets embed.FS
+func f(d string, r *os.Root) {
+	assets.ReadFile(path.Join("defaults", d))
+	assets.ReadFile(filepath.ToSlash(filepath.Join("defaults", d)))
+	assets.ReadFile(path.Join("x", filepath.Base(d)))
+	assets.ReadFile("x" + filepath.Ext(d))
+	os.ReadFile(filepath.Join(d, "x"))
+	os.Open(filepath.Join(d, "x"))
+	r.Open(filepath.Join(d, "x"))
+}`,
+		},
+	}
+	// One importer for every case, so the standard library is type-checked
+	// from source once; it is not safe for concurrent use, so cases run in turn.
+	fset := token.NewFileSet()
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			file, err := parser.ParseFile(fset, "p.go", tc.src, 0)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
+			if _, err := conf.Check("p", fset, []*ast.File{file}, info); err != nil {
+				t.Fatalf("type-check: %v", err)
+			}
+			var got []string
+			for _, f := range Check(fset, []*ast.File{file}, info) {
+				got = append(got, f.Read+" "+f.Name)
+			}
+			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+				t.Errorf("Check() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
