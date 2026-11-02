@@ -315,6 +315,7 @@ jobs:
       # each test's verdict in the log: a test whose fault this platform does
       # not enforce skips itself saying why, and only -v shows that it did.
       - name: Test (-short)
+        if: ${{ !cancelled() }}
         env:
           CGO_ENABLED: '1'
         run: |

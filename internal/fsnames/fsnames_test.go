@@ -111,8 +111,25 @@ func f(d string, parts []string) {
 	q := "a"
 	q = filepath.Join(q, d)
 	assets.ReadFile(q)
+	var r string
+	r = filepath.Join("b", d)
+	assets.ReadFile(r)
 }`,
-			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile os.PathSeparator", "embed.FS.ReadFile filepath.Separator"},
+			want: []string{"embed.FS.ReadFile filepath.Join", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile os.PathSeparator", "embed.FS.ReadFile filepath.Separator", "embed.FS.ReadFile filepath.Join"},
+		},
+		{
+			name: "a variable overwritten by range or through a pointer is not traced",
+			src: `package p
+import ("embed"; "fmt"; "path/filepath")
+var assets embed.FS
+func f(d string) {
+	a := filepath.Join("c", d)
+	for _, a = range []string{"x"} {}
+	assets.ReadFile(a)
+	b := filepath.Join("c", d)
+	fmt.Sscan(d, &b)
+	assets.ReadFile(b)
+}`,
 		},
 		{
 			name: "a local named fs is a value, not the package",
@@ -138,16 +155,17 @@ func f(d string, r *os.Root) {
 }`,
 		},
 	}
+	// One importer for every case, so the standard library is type-checked
+	// from source once; it is not safe for concurrent use, so cases run in turn.
+	fset := token.NewFileSet()
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			fset := token.NewFileSet()
 			file, err := parser.ParseFile(fset, "p.go", tc.src, 0)
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
 			info := &types.Info{Defs: map[*ast.Ident]types.Object{}, Uses: map[*ast.Ident]types.Object{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
-			conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
 			if _, err := conf.Check("p", fset, []*ast.File{file}, info); err != nil {
 				t.Fatalf("type-check: %v", err)
 			}

@@ -12,7 +12,8 @@
 // A name is traced through variables assigned exactly once.
 //
 // WHAT IT DOES NOT COVER: a name built inside a helper such as pathspec's
-// Join, or in a variable assigned more than once, or a name or pattern handed
+// Join, or by a caller and passed in as a parameter, or in a variable assigned
+// more than once, or a name or pattern handed
 // to a reader outside io/fs, such as template.ParseFS.
 package fsnames
 
@@ -197,12 +198,28 @@ func singleAssignments(files []*ast.File, info *types.Info) map[types.Object]ast
 					}
 				}
 			case *ast.ValueSpec:
+				// A declaration without values holds the zero value, which
+				// is no assignment, so `var p string; p = ...` is traced.
 				for i, id := range n.Names {
+					if len(n.Values) == 0 {
+						break
+					}
 					var value ast.Expr
 					if len(n.Names) == len(n.Values) {
 						value = n.Values[i]
 					}
 					record(id, value)
+				}
+			case *ast.RangeStmt:
+				for _, e := range []ast.Expr{n.Key, n.Value} {
+					if id, ok := e.(*ast.Ident); ok {
+						record(id, nil)
+					}
+				}
+			case *ast.UnaryExpr:
+				// &v hands v to code that can write it.
+				if id, ok := n.X.(*ast.Ident); ok && n.Op == token.AND {
+					record(id, nil)
 				}
 			}
 			return true
