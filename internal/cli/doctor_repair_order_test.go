@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -88,7 +89,7 @@ func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 	}
 	// The same skip is on the event, where a refused --fix and a clean one are
 	// told apart without the stderr text.
-	if withheld := facts["doctor.fix_withheld"]; !slices.Equal(anyStrings(withheld), []string{"rank"}) {
+	if withheld := facts["doctor.fix_withheld"]; !reflect.DeepEqual(withheld, []any{"rank"}) {
 		t.Errorf("event fact doctor.fix_withheld = %v, want [rank]", withheld)
 	}
 	if facts["doctor.repair_failed"] != nil || facts["doctor.repair_error"] != nil {
@@ -116,7 +117,7 @@ func TestDoctorStillRunsRepairsOnACleanHierarchy(t *testing.T) {
 	}
 	// Anti-vacuity for the withheld fact: a clean run writes the empty list, not
 	// an absent key.
-	if withheld, present := facts["doctor.fix_withheld"]; !present || len(anyStrings(withheld)) != 0 {
+	if withheld, present := facts["doctor.fix_withheld"]; !present || !reflect.DeepEqual(withheld, []any{}) {
 		t.Errorf("event fact doctor.fix_withheld = %v (present %v), want the empty list", withheld, present)
 	}
 	if facts["doctor.repair_failed"] != nil || facts["doctor.repair_error"] != nil {
@@ -187,14 +188,4 @@ func TestDoctorKeepsTheReportWhenARepairFails(t *testing.T) {
 	if facts["doctor.repair_failed"] != "rank" || facts["doctor.repair_error"] != refusal.Error() {
 		t.Errorf("event facts repair_failed=%v repair_error=%v, want rank and %q", facts["doctor.repair_failed"], facts["doctor.repair_error"], refusal.Error())
 	}
-}
-
-// anyStrings is a fact read back from the events file, a list of strings.
-func anyStrings(v any) []string {
-	items, _ := v.([]any)
-	out := make([]string, len(items))
-	for i, item := range items {
-		out[i], _ = item.(string)
-	}
-	return out
 }

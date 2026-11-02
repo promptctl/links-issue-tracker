@@ -68,7 +68,8 @@ type HealthReport struct {
 	// RankInversions and the repair does not reorder them for those edges.
 	Interleaved [][]string `json:"interleaved"`
 	// OutsideEpic counts the tickets that are not an epic and have no parent;
-	// UnderNonEpic counts the tickets whose parent is not an epic. Containment is
+	// UnderNonEpic counts the parent links from a ticket to a parent that is not
+	// an epic, the entries the warning line names. Containment is
 	// refused at every write, so these are what a rebuild or a pre-v7 source
 	// brought in. Each is a column read, so a looped hierarchy does not stop it.
 	OutsideEpic  int `json:"outside_epic"`

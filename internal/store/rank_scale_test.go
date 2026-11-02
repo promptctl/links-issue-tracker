@@ -708,7 +708,11 @@ func TestDoctorWarnsOnTiedKeysAndNotOnLongOnes(t *testing.T) {
 				t.Errorf("Doctor().Warnings = %v, want a tied-key warning: %t", report.Warnings, c.want)
 			}
 			// The count the event carries and the warning line come from one value.
-			if wantTied := map[bool]int{false: 0, true: 1}[c.want]; report.TiedRankKeys != wantTied {
+			wantTied := 0
+			if c.want {
+				wantTied = 1
+			}
+			if report.TiedRankKeys != wantTied {
 				t.Errorf("Doctor().TiedRankKeys = %d, want %d", report.TiedRankKeys, wantTied)
 			}
 		})

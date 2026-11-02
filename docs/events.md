@@ -661,8 +661,9 @@ write waited for the config lock.
 
 Doctor sets its keys once the report it prints is read, after any `--fix`
 repairs have run, so they describe the state the command left behind. The
-exceptions are `doctor.reranked` and the three repair facts below, which the
-repairs set as they run.
+exceptions are `doctor.reranked`, `doctor.repair_failed` and
+`doctor.repair_error`, which the repairs set as they run, and
+`doctor.fix_withheld`, which is set from the first report, before any repair.
 
 Every warning line the report prints has a fact of its own: the rank, cycle,
 interleaved, refused-block and footprint facts below, or one of the counts here.
@@ -683,7 +684,7 @@ with every one of those facts at `"0"` is a warning that has no fact.
 | `doctor.invalid_related_rows` | The related-to rows whose ids are not in ascending order, as the status line prints it, a count such as `"0"`. |
 | `doctor.orphan_history_rows` | The issue event rows with no issue or event to belong to, as the status line prints it, a count such as `"0"`. |
 | `doctor.outside_epic` | The tickets that are not an epic and have no parent, a count such as `"0"`. |
-| `doctor.under_non_epic` | The tickets whose parent is not an epic, a count such as `"0"`. |
+| `doctor.under_non_epic` | The parent links from a ticket to a parent that is not an epic, one per entry the warning line names, a count such as `"0"`. |
 | `doctor.fix_withheld` | The `--fix` repairs a parent cycle withheld, such as `["rank"]`; `[]` when none was. Set whether or not `--fix` was given. |
 | `doctor.repair_failed` | The repair that failed, such as `"rank"`; null when none did. |
 | `doctor.repair_error` | The failed repair's error text; null when no repair failed. |
