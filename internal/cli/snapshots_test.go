@@ -675,6 +675,7 @@ func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
 	}
 	oldestPath := filepath.Join(dir, oldest)
 	fsperm.Deny(t, oldestPath, fsperm.RemoveAll)
+	fsperm.RestoreTree(t, dir)
 
 	var stdout, stderr bytes.Buffer
 	runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"}))

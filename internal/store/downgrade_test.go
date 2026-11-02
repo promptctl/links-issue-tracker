@@ -438,6 +438,7 @@ func TestDowngradePruneFailureReportsTheCommittedReverse(t *testing.T) {
 		}
 	}
 	fsperm.Deny(t, stuck, fsperm.RemoveAll)
+	fsperm.RestoreTree(t, dir)
 
 	done, err := st.Downgrade(ctx, registryMax-1)
 	if err != nil {

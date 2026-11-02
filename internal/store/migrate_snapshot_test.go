@@ -284,6 +284,7 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 		}
 	}
 	fsperm.Deny(t, stuck, fsperm.RemoveAll)
+	fsperm.RestoreTree(t, dir)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -298,8 +299,15 @@ func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	if done.PruneErr == nil || !strings.Contains(done.PruneErr.Error(), "prune migration snapshots") {
 		t.Fatalf("PruneErr = %v, want the prune failure", done.PruneErr)
 	}
-	if _, err := os.Stat(stuck); err != nil {
-		t.Fatalf("stuck snapshot: %v; want it left in place", err)
+	// Half-deleted, the stuck snapshot must not read as a snapshot to restore.
+	listed, err := dbsnapshot.List(doltRoot)
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	for _, s := range listed {
+		if s.Name == filepath.Base(stuck) {
+			t.Fatalf("stuck snapshot %s is still listed after its removal failed part-way", s.Name)
+		}
 	}
 }
 
