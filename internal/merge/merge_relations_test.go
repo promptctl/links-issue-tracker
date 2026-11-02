@@ -191,3 +191,24 @@ func TestThreeWayEditedIssueKeepsItsChildRowsWhenTheOtherSideDroppedIt(t *testin
 		})
 	}
 }
+
+// Each endpoint of a relation is held by a different side: one side dropped x and
+// edited y, the other dropped y and edited x. Both tickets survive, and neither
+// side's export can hold an edge between them, so no side describes it and the
+// merge keeps none.
+func TestThreeWayRelationBetweenTicketsHeldByDifferentSidesHasNoDescriber(t *testing.T) {
+	x := open(t, "x")
+	y := open(t, "y")
+	editedX, editedY := x, y
+	editedX.Title = "x, edited"
+	editedY.Title = "y, edited"
+	dep := model.Relation{SrcID: "x", DstID: "y", Type: model.RelBlockedBy, CreatedAt: t1}
+	base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{x, y}, Relations: []model.Relation{dep}}
+	local := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{editedX}}
+	remote := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{editedY}}
+
+	export := provisional(t, ThreeWay(base, local, remote))
+	if len(export.Issues) != 2 || len(export.Relations) != 0 {
+		t.Fatalf("issues=%d relations=%+v, want both tickets and no edge", len(export.Issues), export.Relations)
+	}
+}
