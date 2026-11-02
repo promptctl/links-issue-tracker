@@ -15,9 +15,9 @@ divergence is a bug in one of them.
    whatever the command or flag. Raising a remote is something only a
    published release does.
 
-The rules support each other. Rule 2 refuses at push time, after a dev build
-may already have migrated its local store. Rule 1 makes that recoverable:
-`lit downgrade` back to the remote's version loses nothing.
+The rules support each other. If anything ever gets a store past where it
+should be, rule 1 makes the return lossless: `lit downgrade` back to the
+remote's version loses nothing.
 
 ## What rule 1 means, precisely
 
@@ -115,7 +115,7 @@ Origin already fails closed: goreleaser is the only producer that stamps
 
 | Path | Why it refuses |
 |---|---|
-| A dev build carrying an unreleased migration migrates the local store and pushes | Raise from a non-release binary |
+| A dev build carrying an unreleased migration pushes a scratch store | Raise from a non-release binary (and an existing store never got there: the ceiling refuses the open) |
 | A dev build at a released schema pushes over an older remote | Raise from a non-release binary — only a release raises a remote |
 | Compact-and-push, push-from-clone, the reconcile's replay commit, `--force` | The check sits at the one point every push sends refs from |
 | No tracking ref, so R is unknown | Unknown R counts as a raise; fetch first |
@@ -129,9 +129,20 @@ Out of reach of any "reasonable circumstance", and so out of scope: a build
 that deliberately stamps `-X …Origin=release`, and a `dolt push` run by hand
 against the remote.
 
-### The window between merge and release
+### Unreleased schemas never reach an existing store
 
-A dev build carrying a migration that is merged but not yet released can
-migrate a local store but cannot push from it. Refusing to open the store
-instead would block every developer from using their own build on their own
-workspace during that window. The refusal at push names the lossless way back.
+The raise rule guards remotes. A second check guards local stores, so a dev
+build's unreleased migration never strands a real workspace in the first
+place. Every binary carries a stamped released-schema ceiling: goreleaser
+stamps the binary's own registry max, `install.sh` source mode and
+`just build` stamp the highest migration in the newest release tag, and an
+unstamped binary has ceiling 0. A migrating open of an existing store refuses
+to move it past the ceiling. Creating a fresh store is not limited, so new
+migrations stay developable in scratch workspaces. Like the raise policy, the
+ceiling enters at the composition root, and tests construct stores with the
+full registry.
+
+The two checks answer different questions. The ceiling asks whether this
+schema has been released. The raise rule asks whether this binary is a
+release. A dev build at a released schema passes the first and fails the
+second, which is the case rule 2 exists for.
