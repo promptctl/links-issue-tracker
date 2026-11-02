@@ -49,7 +49,7 @@ func TestAMigratingOpenRefusesToMoveAnExistingWorkspacePastTheReleasedSchema(t *
 	if !errors.As(err, &refused) {
 		t.Fatalf("Open() with released schema %d = %v, want an UnreleasedMigrationError", max-1, err)
 	}
-	if want := (UnreleasedMigrationError{WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
+	if want := (UnreleasedMigrationError{Raise: RaiseMigrate, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 	if got := asConvergenceError(t, err).Step; got != stepRefuseUnreleased {
@@ -195,7 +195,7 @@ func TestAnUnreleasedRaiseOfAPreVersionedWorkspaceNamesItsShape(t *testing.T) {
 	if !errors.As(err, &refused) {
 		t.Fatalf("Open() with released schema %d = %v, want an UnreleasedMigrationError", max-1, err)
 	}
-	if want := (UnreleasedMigrationError{PreVersioned: true, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
+	if want := (UnreleasedMigrationError{Raise: RaiseMigrate, PreVersioned: true, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 	if !strings.Contains(err.Error(), "unversioned pre-migration shape") || strings.Contains(err.Error(), "schema version 0") {
@@ -219,7 +219,7 @@ func TestAStepIntoAnOutOfOrderGapAboveTheCeilingIsRefused(t *testing.T) {
 	if !errors.As(err, &refused) {
 		t.Fatalf("lift over a gap at %d with released schema %d = %v, want an UnreleasedMigrationError", max-1, max-2, err)
 	}
-	if want := (UnreleasedMigrationError{WorkspaceVersion: max, TargetVersion: max - 1, Ceiling: ceilingAt(max - 2)}); *refused != want {
+	if want := (UnreleasedMigrationError{Raise: RaiseLift, WorkspaceVersion: max, TargetVersion: max - 1, Ceiling: ceilingAt(max - 2)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 }
@@ -262,10 +262,53 @@ func TestTheReconcileLiftRefusesToRaisePastTheReleasedSchema(t *testing.T) {
 	if !errors.As(err, &refused) {
 		t.Fatalf("lift with released schema %d = %v, want an UnreleasedMigrationError", max-1, err)
 	}
-	if want := (UnreleasedMigrationError{WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
+	if want := (UnreleasedMigrationError{Raise: RaiseLift, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
 	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != max-1 {
 		t.Fatalf("recorded version after the refused lift = %d, %v; want %d", got, err, max-1)
+	}
+}
+
+// A drift-only open, at the schema the binary carries and missing content of a
+// version above the ceiling, is refused before the repair writes anything:
+// restoring that content would put a version above the ceiling in place.
+func TestADriftRepairAboveTheCeilingIsRefusedBeforeItWrites(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, doltRoot := openWorkspaceForDowngrade(t)
+	mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check`)
+	mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check`)
+	mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN lane`)
+	mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN resolution`)
+	mustCommit(t, ctx, st, "test: drift at the binary's own schema")
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	logBefore := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id")
+
+	_, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(1)), testStderr(), doltRoot, "test-workspace-id")
+	var refused *UnreleasedMigrationError
+	if !errors.As(err, &refused) {
+		t.Fatalf("Open() of a drifted workspace with released schema 1 = %v, want an UnreleasedMigrationError", err)
+	}
+	if refused.Raise != RaiseRepair || refused.TargetVersion <= 1 {
+		t.Errorf("refusal = %+v, want a repair refusal above version 1", *refused)
+	}
+	if !strings.Contains(err.Error(), "refusing to restore this workspace's missing schema content") {
+		t.Errorf("refusal %q does not say it refused a repair", err)
+	}
+	if logAfter := observedCommitMessages(t, ctx, doltRoot, "test-workspace-id"); !slices.Equal(logAfter, logBefore) {
+		t.Errorf("the refused open wrote before refusing:\nbefore %q\nafter  %q", logBefore, logAfter)
+	}
+}
+
+// A lift's refusal says it refused a sync's lift, not a migration of the
+// workspace.
+func TestALiftRefusalSaysItWasALift(t *testing.T) {
+	t.Parallel()
+	err := &UnreleasedMigrationError{Raise: RaiseLift, WorkspaceVersion: 10, TargetVersion: 11, Ceiling: ceilingAt(10)}
+	if msg := err.Error(); !strings.Contains(msg, "refusing to lift a commit from schema version 10 to 11 for a sync") || strings.Contains(msg, "migrate this workspace") {
+		t.Errorf("lift refusal = %q", msg)
 	}
 }

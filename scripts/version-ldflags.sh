@@ -58,7 +58,13 @@ LIT_BUILD_ORIGIN="source"
 _lit_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/release-tags.sh
 . "$_lit_root/scripts/release-tags.sh"
-_lit_newest_tag="$(git -C "$_lit_root" tag --list | newest_release_tag)"
+# Only this checkout's own tags count: a tree with no .git of its own (a source
+# tarball, even one unpacked inside another repo) has none, and stamps 0@none,
+# as install.sh's guard reads it.
+_lit_newest_tag=""
+if [ -e "$_lit_root/.git" ]; then
+    _lit_newest_tag="$(git -C "$_lit_root" tag --list | newest_release_tag)"
+fi
 if ! _lit_released="$(cd "$_lit_root" && GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go run ./tools/schema-release-check -released-schema "$_lit_newest_tag")"; then
     echo "version-ldflags: could not read the released schema of tag '${_lit_newest_tag}'" >&2
     unset _lit_root _lit_newest_tag _lit_released

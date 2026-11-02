@@ -223,6 +223,8 @@ Every store open runs `migrate` (`internal/store/migration_runner.go`): a snapsh
 
 **Phase classification** (read-only, `migration_runner.go`): the presence of the legacy `issue_history` table forces `phaseAdopt` **regardless of what `goose_db_version` claims** — that table is pre-goose-only, so its presence is conclusive, and this re-routes workspaces where a buggy older binary fabricated goose rows. Otherwise `goose_db_version` present → `phaseManaged` (with the recorded max version); a workspace with none of the baseline tables → `phaseFresh`; anything else → `phaseAdopt`. `willMutate` is true except for a managed workspace already at the registry max.
 
+**Released-schema ceiling** (`internal/store/released_schema.go`): the run's `environ.Env` carries this lit's released-schema ceiling and its source, read once by `cmd/lit` from the build stamp. Before an open writes anything, drift repair included, step `refuse_unreleased` (ClearCause) refuses an existing workspace whose pending migrations, or whose missing content to restore, reach a version above the ceiling (`UnreleasedMigrationError`). A fresh workspace is created at the binary's full schema, unbounded. `upByOne`, the one goose stepper, refuses a step to a pending migration above the ceiling, so the sync reconcile's lift is bound too. Both pushes refuse a commit whose schema is above the ceiling before `DOLT_PUSH` (`UnreleasedPushError`), which the CLI renders as the `unreleased_schema` sync-failure block.
+
 **`runMigration`'s exact order** (`migration_runner.go`):
 
 1. Classify.

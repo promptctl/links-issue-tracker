@@ -160,6 +160,11 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 	if !strings.Contains(ldflags, `LIT_BUILD_RELEASED_SCHEMA="${_lit_released}@${_lit_newest_tag:-`+releasedLabelNoTag+`}"`) {
 		t.Errorf("scripts/version-ldflags.sh does not stamp <version>@<tag>, or @%s with no tag — the ceiling's source would be lost", releasedLabelNoTag)
 	}
+	// A tree with no .git of its own reads no tags, as install.sh's guard
+	// reads none, so a tarball inside another repo cannot borrow its tags.
+	if !strings.Contains(ldflags, `if [ -e "$_lit_root/.git" ]; then`) {
+		t.Error("scripts/version-ldflags.sh reads release tags without checking the checkout has its own .git")
+	}
 	if !exportedNames(ldflags)["LIT_BUILD_RELEASED_SCHEMA"] {
 		t.Error("scripts/version-ldflags.sh never exports LIT_BUILD_RELEASED_SCHEMA, so neither caller would receive it")
 	}

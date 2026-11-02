@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pressly/goose/v3"
-
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -20,16 +19,31 @@ import (
 // carries. [LAW:single-enforcer] the two refusals below are the only readers of
 // the ceiling.
 
-// UnreleasedMigrationError refuses raising an existing workspace's schema, or
-// a commit's in a sync's lift, to a version above this lit's released-schema
-// ceiling.
+// SchemaRaise names which write would have raised a schema past the ceiling,
+// so a refusal says what it refused.
+type SchemaRaise string
+
+const (
+	// RaiseMigrate is a migrating open applying pending migrations.
+	RaiseMigrate SchemaRaise = "migrate"
+	// RaiseRepair is a migrating open restoring a version's missing content.
+	RaiseRepair SchemaRaise = "repair"
+	// RaiseLift is a sync lifting a commit it reads to this lit's schema.
+	RaiseLift SchemaRaise = "lift"
+)
+
+// UnreleasedMigrationError refuses a write that would put an existing
+// workspace's schema, or a commit a sync reads, at a version above this lit's
+// released-schema ceiling.
 type UnreleasedMigrationError struct {
-	// WorkspaceVersion is the schema version the workspace records. It is
-	// meaningful only when PreVersioned is false.
+	Raise SchemaRaise
+	// WorkspaceVersion is the schema version the workspace or commit records.
+	// It is meaningful only when PreVersioned is false.
 	WorkspaceVersion int64
 	// PreVersioned is true for a workspace that predates schema versioning:
 	// it records no version at all, which is not version 0.
-	PreVersioned  bool
+	PreVersioned bool
+	// TargetVersion is the highest version the write would have put in place.
 	TargetVersion int64
 	Ceiling       version.ReleasedSchemaCeiling
 }
@@ -39,16 +53,24 @@ func (e *UnreleasedMigrationError) Error() string {
 	if e.PreVersioned {
 		from = "its unversioned pre-migration shape"
 	}
-	return fmt.Sprintf(
-		"refusing to migrate this workspace from %s to schema version %d: this lit's released-schema ceiling is %d (%s), "+
-			"and it never migrates an existing workspace past that ceiling",
-		from, e.TargetVersion, e.Ceiling.Max, e.Ceiling.Source)
+	var refused string
+	switch e.Raise {
+	case RaiseRepair:
+		refused = fmt.Sprintf("refusing to restore this workspace's missing schema content for version %d", e.TargetVersion)
+	case RaiseLift:
+		refused = fmt.Sprintf("refusing to lift a commit from schema version %d to %d for a sync", e.WorkspaceVersion, e.TargetVersion)
+	default:
+		refused = fmt.Sprintf("refusing to migrate this workspace from %s to schema version %d", from, e.TargetVersion)
+	}
+	return fmt.Sprintf("%s: this lit's released-schema ceiling is %d (%s), and it never puts a schema above that ceiling in place in an existing store",
+		refused, e.Ceiling.Max, e.Ceiling.Source)
 }
 
-// EventRecord is the schema the workspace is at, the one the raise would have
-// moved it to, and the ceiling that refused it.
+// EventRecord is what the write was, the schema it started from, the one it
+// would have put in place, and the ceiling that refused it.
 func (e *UnreleasedMigrationError) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
+		"released_schema.raise":            string(e.Raise),
 		"released_schema.workspace_schema": e.WorkspaceVersion,
 		"released_schema.pre_versioned":    e.PreVersioned,
 		"released_schema.target_schema":    e.TargetVersion,
@@ -99,19 +121,41 @@ func raiseCeiling(state migrationState, released version.ReleasedSchemaCeiling) 
 	return released
 }
 
-// refuseUnreleasedRaise refuses a migrating open whose target is above the
-// ceiling raiseCeiling gives it, before the open writes anything. It asks the
-// question upByOne asks of every step, of the whole raise at once, so the
-// open refuses with nothing written instead of partway through.
-func (s *Store) refuseUnreleasedRaise(state migrationState) error {
+// refuseUnreleasedRaise refuses a migrating open that would put a version
+// above the ceiling raiseCeiling gives it in place, before the open writes
+// anything: the pending migrations it would apply, or the missing content of
+// an applied version above the ceiling that drift repair would restore. It
+// asks the question upByOne asks of every step, of the whole open at once, so
+// the open refuses with nothing written instead of partway through.
+func (s *Store) refuseUnreleasedRaise(ctx context.Context, state migrationState, drift *VersionContentMismatchError) error {
 	ceiling := raiseCeiling(state, s.env.ReleasedSchema())
-	if state.support.Max <= ceiling.Max {
+	if state.willMutate() && state.support.Max > ceiling.Max {
+		return &UnreleasedMigrationError{
+			Raise:            RaiseMigrate,
+			WorkspaceVersion: state.appliedVersion,
+			PreVersioned:     state.phase == phaseAdopt,
+			TargetVersion:    state.support.Max,
+			Ceiling:          ceiling,
+		}
+	}
+	if drift == nil || state.appliedVersion <= ceiling.Max {
+		return nil
+	}
+	missing, err := s.missingVersionContent(ctx, state.appliedVersion)
+	if err != nil {
+		return err
+	}
+	var highest int64
+	for _, target := range missing {
+		highest = max(highest, target.version)
+	}
+	if highest <= ceiling.Max {
 		return nil
 	}
 	return &UnreleasedMigrationError{
+		Raise:            RaiseRepair,
 		WorkspaceVersion: state.appliedVersion,
-		PreVersioned:     state.phase == phaseAdopt,
-		TargetVersion:    state.support.Max,
+		TargetVersion:    highest,
 		Ceiling:          ceiling,
 	}
 }
@@ -119,27 +163,56 @@ func (s *Store) refuseUnreleasedRaise(state migrationState) error {
 // refuseStepPastCeiling refuses the step goose would take next when the
 // migration it applies is above ceiling. That migration is the lowest pending
 // one, which is not always above the highest applied: a history applied out
-// of order has a gap below it. With nothing pending it passes, and goose
-// reports ErrNoNextVersion itself.
-func refuseStepPastCeiling(ctx context.Context, provider *goose.Provider, ceiling version.ReleasedSchemaCeiling) error {
-	statuses, err := provider.Status(ctx)
+// of order has a gap below it. It costs one read of the version table, so a
+// lift with nothing pending costs next to nothing. With nothing pending it
+// passes, and goose reports ErrNoNextVersion itself.
+func (s *Store) refuseStepPastCeiling(ctx context.Context, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling) error {
+	applied, highest, err := s.appliedVersions(ctx)
 	if err != nil {
-		return fmt.Errorf("read pending migrations before a migration step: %w", err)
+		return err
 	}
-	var applied int64
-	next := int64(-1)
-	for _, st := range statuses {
-		switch {
-		case st.State == goose.StateApplied:
-			applied = max(applied, st.Source.Version)
-		case st.State == goose.StatePending && (next < 0 || st.Source.Version < next):
-			next = st.Source.Version
+	registry, err := migrations.Embedded()
+	if err != nil {
+		return err
+	}
+	for _, m := range registry.Migrations() {
+		if applied[m.Version] {
+			continue
 		}
+		if m.Version <= ceiling.Max {
+			return nil
+		}
+		return &UnreleasedMigrationError{Raise: raise, WorkspaceVersion: highest, TargetVersion: m.Version, Ceiling: ceiling}
 	}
-	if next < 0 || next <= ceiling.Max {
-		return nil
+	return nil
+}
+
+// appliedVersions is the set of versions goose records as applied, and the
+// highest of them, in one read. A working set with no version table yet has
+// none applied.
+func (s *Store) appliedVersions(ctx context.Context) (map[int64]bool, int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT version_id FROM `+gooseVersionTable+` WHERE is_applied`)
+	if err != nil {
+		if isMissingTableError(err) {
+			return map[int64]bool{}, 0, nil
+		}
+		return nil, 0, fmt.Errorf("read applied migration versions: %w", err)
 	}
-	return &UnreleasedMigrationError{WorkspaceVersion: applied, TargetVersion: next, Ceiling: ceiling}
+	defer rows.Close()
+	applied := map[int64]bool{}
+	var highest int64
+	for rows.Next() {
+		var v int64
+		if err := rows.Scan(&v); err != nil {
+			return nil, 0, fmt.Errorf("read applied migration versions: %w", err)
+		}
+		applied[v] = true
+		highest = max(highest, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read applied migration versions: %w", err)
+	}
+	return applied, highest, nil
 }
 
 // refuseUnreleasedPush refuses a push of commitHash when the schema recorded

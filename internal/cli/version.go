@@ -14,7 +14,11 @@ import (
 //
 // [LAW:one-source-of-truth] version.Info (and its BuildAge method) is the
 // only data source.
-func runVersion(stdout io.Writer, args []string) error {
+//
+// released is the run's released-schema ceiling, the one its store opens are
+// bound by, handed down from cmd/lit on the run's Env; it is printed as given
+// rather than read from the build stamp a second time.
+func runVersion(stdout io.Writer, released version.ReleasedSchemaCeiling, args []string) error {
 	fs := newCobraFlagSet("version")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
@@ -68,7 +72,7 @@ func runVersion(stdout io.Writer, args []string) error {
 	if _, err := fmt.Fprintf(stdout, "schema versions supported: %d–%d\n", info.Schema.Min, info.Schema.Max); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "released-schema ceiling: %d (%s)\n", info.Released.Max, info.Released.Source)
+	_, err = fmt.Fprintf(stdout, "released-schema ceiling: %d (%s)\n", released.Max, released.Source)
 	return err
 }
 

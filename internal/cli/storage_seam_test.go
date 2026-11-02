@@ -222,7 +222,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	"typed engine failures": {
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
 		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
-		"UnsupportedSchemaVersionError", "QuarantineBlockError", "RemoteSchemaAheadError",
+		"UnsupportedSchemaVersionError", "QuarantineBlockError", "RemoteSchemaAheadError", "UnreleasedPushError",
 		"OwnerApprovalRequiredError",
 		"SchemaConvergenceError", "ConvergenceStep", "ConvergenceSteps",
 		"ActClearCause", "ActRestoreSnapshot", "ActEscalate",

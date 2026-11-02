@@ -642,10 +642,8 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	// clean repair is swallowed into a routine commit.
 	// Before anything is written, drift repair included: an existing workspace
 	// is never moved to a schema no release carries.
-	if state.willMutate() {
-		if fail := attempt(stepRefuseUnreleased, func() error { return s.refuseUnreleasedRaise(state) }); fail != nil {
-			return nil, fail
-		}
+	if fail := attempt(stepRefuseUnreleased, func() error { return s.refuseUnreleasedRaise(ctx, state, assessment.drift) }); fail != nil {
+		return nil, fail
 	}
 	if assessment.drift != nil {
 		if pruneErr, fail = s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, assessment.drift); fail != nil {
@@ -765,8 +763,8 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 // of a schema: no step applies a migration above ceiling. The migrating open
 // refuses the whole raise earlier, before it writes anything, through the same
 // predicate (refuseUnreleasedRaise); the reconcile's lift meets it here.
-func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, ceiling version.ReleasedSchemaCeiling) (*goose.MigrationResult, error) {
-	if err := refuseStepPastCeiling(ctx, provider, ceiling); err != nil {
+func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling) (*goose.MigrationResult, error) {
+	if err := s.refuseStepPastCeiling(ctx, raise, ceiling); err != nil {
 		return nil, err
 	}
 	return stepResult(provider.UpByOne(ctx))
@@ -812,7 +810,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 		return fmt.Errorf("construct schema-lift provider: %w", err)
 	}
 	for {
-		result, err := s.upByOne(ctx, provider, s.env.ReleasedSchema())
+		result, err := s.upByOne(ctx, provider, RaiseLift, s.env.ReleasedSchema())
 		if errors.Is(err, goose.ErrNoNextVersion) {
 			return nil
 		}
@@ -879,7 +877,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 		if hook := migrationUpByOneForTest; hook != nil {
 			return stepResult(hook(ctx, s.db, provider))
 		}
-		return s.upByOne(ctx, provider, ceiling)
+		return s.upByOne(ctx, provider, RaiseMigrate, ceiling)
 	}
 	pruneCheckpoints := func(ctx context.Context) error {
 		return prune(pruneMigrationCheckpoints, "prune migration checkpoints", func() error {

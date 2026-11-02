@@ -174,11 +174,6 @@ type Info struct {
 	// rather than a rule mkmanifest must remember.
 	FromSource bool          `json:"-"`
 	Schema     SchemaSupport `json:"schema_support"`
-	// Released is this binary's released-schema ceiling and its source. Never
-	// serialized, for FromSource's reason: Info's only JSON encoding is the
-	// release manifest, which binaries already in the field decode with
-	// DisallowUnknownFields, so a new field there would break `lit upgrade`.
-	Released ReleasedSchemaCeiling `json:"-"`
 }
 
 // SchemaSupport is the inclusive schema-version range this binary can produce
@@ -212,12 +207,7 @@ func Get() (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	released, err := ReadReleasedSchemaCeiling()
-	if err != nil {
-		return Info{}, err
-	}
 	return Info{
-		Released:   released,
 		Version:    Version,
 		Commit:     Commit,
 		Date:       Date,

@@ -665,7 +665,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 	}
 
 	versionRun := func(args []string) error {
-		return runVersion(stdout, args)
+		return runVersion(stdout, inv.Env.ReleasedSchema(), args)
 	}
 
 	// Nested family surfaces are grafted onto their parent subcommand so the

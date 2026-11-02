@@ -72,6 +72,11 @@ const (
 	// lacks (storage.ErrPushDiverged). A retry is refused the same way until the
 	// peer's commits are merged here. Remedy: a foreground pull, then the push.
 	syncFailurePushDiverged syncFailureClass = "push_diverged"
+	// syncFailureUnreleasedSchema: the push was refused because the commit it
+	// would send is at a schema above this lit's released-schema ceiling. It
+	// never clears by retrying: only a lit whose ceiling reaches that schema may
+	// send it, and only a published release that carries the schema has one.
+	syncFailureUnreleasedSchema syncFailureClass = "unreleased_schema"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -127,6 +132,10 @@ type SyncFailure struct {
 	// the field present names which class rendered, so a consumer cannot read a
 	// remote-schema-ahead block without the versions that make it actionable.
 	RemoteAhead *store.RemoteSchemaAheadError
+	// Unreleased is the store's refusal, populated only for
+	// syncFailureUnreleasedSchema: the commit's schema and this lit's
+	// released-schema ceiling with its source.
+	Unreleased *store.UnreleasedPushError
 	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
 	// on-both), populated only for syncFailureUnrelatedHistories. Before choosing to
 	// take one side wholesale or union the two, the operator must see what each side
@@ -198,6 +207,22 @@ func pushDivergedFailure(err error) (SyncFailure, bool) {
 	}, true
 }
 
+// unreleasedSchemaFailure builds the sync-failure contract for a store
+// *UnreleasedPushError, or ok=false when err is not one.
+func unreleasedSchemaFailure(err error) (SyncFailure, bool) {
+	var unreleased *store.UnreleasedPushError
+	if !errors.As(err, &unreleased) {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:      syncFailureUnreleasedSchema,
+		Remote:     unreleased.Remote,
+		Branch:     unreleased.Branch,
+		Unreleased: unreleased,
+		BuildNote:  resolveBuildStatusNote(time.Now()),
+	}, true
+}
+
 // remedyStep is one command of a sync-failure remedy and what it does.
 type remedyStep struct {
 	command, gloss string
@@ -240,6 +265,9 @@ func asSyncFailure(err error) error {
 		return SyncFailureError{Failure: failure}
 	}
 	if failure, ok := pushDivergedFailure(err); ok {
+		return SyncFailureError{Failure: failure}
+	}
+	if failure, ok := unreleasedSchemaFailure(err); ok {
 		return SyncFailureError{Failure: failure}
 	}
 	return err
@@ -363,6 +391,8 @@ func (f SyncFailure) headline() string {
 		return "lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you."
 	case syncFailurePushDiverged:
 		return "lit sync push was refused because a peer pushed first, and needs you to merge the peer's commits."
+	case syncFailureUnreleasedSchema:
+		return "lit sync push was refused because this backlog is at a schema this lit may not send to a remote, and needs you."
 	default:
 		return fmt.Sprintf("lit sync hit an unrecognized sync-failure class %q — this is a bug; please report it.", f.Class)
 	}
@@ -405,6 +435,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the automatic receive fetched %s and then stopped at %s. A receive first stopped after its fetch at %s, and no settle has succeeded on this checkout since then, so it is still on the history it last settled to and is not receiving the shared backlog. The cause from the latest stop is below.",
 			ref, f.StoppedAt.describe(), f.UnsettledSince.UTC().Format(time.RFC3339))
+	case syncFailureUnreleasedSchema:
+		return fmt.Sprintf(
+			"the commit this push would send to %s is at schema version %d, and this lit's released-schema ceiling is %d (%s). A lit never sends a commit above its ceiling to a remote, so nothing was written to %s.",
+			ref, f.Unreleased.CommitSchema, f.Unreleased.Ceiling.Max, f.Unreleased.Ceiling.Source, ref)
 	case syncFailurePushDiverged:
 		return fmt.Sprintf(
 			"%s holds commits a peer pushed that this checkout lacks, and this checkout holds commits %s lacks, so the remote refused the push and nothing was written to it. A retry is refused the same way until the peer's commits are merged here.",
@@ -477,6 +511,11 @@ func (f SyncFailure) resolutionSteps() []string {
 		}
 	case syncFailurePushDiverged:
 		return remedyLines(pushDivergedRemedy(f.Remote))
+	case syncFailureUnreleasedSchema:
+		return []string{
+			"lit version               # shows this lit's released-schema ceiling and where it came from",
+			fmt.Sprintf("lit upgrade               # only when the user directs it: install a published release, which can send schema v%d only if a release carries it", f.Unreleased.CommitSchema),
+		}
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -510,6 +549,8 @@ func (f SyncFailure) escalationLine() string {
 		return fmt.Sprintf(
 			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
 			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
+	case syncFailureUnreleasedSchema:
+		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose released-schema ceiling reaches this backlog's schema may push it, and that is a published release carrying the schema. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailurePushDiverged:
 		// The push path reads no divergence age or span, so the line is fixed.
 		// It names what clears the refusal and when it stops being the agent's
