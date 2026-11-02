@@ -74,19 +74,17 @@ func openOneVersionBehind(t *testing.T, ctx context.Context, doltRoot string) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	versions, err := registryVersionsDescending()
-	if err != nil {
-		t.Fatalf("enumerate migration versions: %v", err)
-	}
+	versions := registryMigrations(t)
 	if len(versions) < 2 {
 		t.Fatalf("registry has %d migrations; this test needs a next-lower version to land on", len(versions))
 	}
+	below := versions[len(versions)-2].Version
 	provider, err := newGooseProvider(st.db)
 	if err != nil {
 		t.Fatalf("newGooseProvider() error = %v", err)
 	}
-	if _, err := provider.DownTo(ctx, versions[1]); err != nil {
-		t.Fatalf("DownTo(%d) error = %v", versions[1], err)
+	if _, err := provider.DownTo(ctx, below); err != nil {
+		t.Fatalf("DownTo(%d) error = %v", below, err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)

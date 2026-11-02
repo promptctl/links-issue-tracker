@@ -126,6 +126,16 @@ func dumpConvergedSchema(ctx context.Context, db *sql.DB) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	ddl, err := tablesDDL(ctx, db, tables)
+	if err != nil {
+		return "", err
+	}
+	return schemaSnapshotHeader + "\n\n" + ddl, nil
+}
+
+// tablesDDL is each table's verbatim SHOW CREATE TABLE, terminated with a
+// semicolon, in the order given.
+func tablesDDL(ctx context.Context, db *sql.DB, tables []string) (string, error) {
 	blocks := make([]string, 0, len(tables))
 	for _, table := range tables {
 		ddl, err := showCreateTable(ctx, db, table)
@@ -134,7 +144,7 @@ func dumpConvergedSchema(ctx context.Context, db *sql.DB) (string, error) {
 		}
 		blocks = append(blocks, ddl+";")
 	}
-	return schemaSnapshotHeader + "\n\n" + strings.Join(blocks, "\n\n") + "\n", nil
+	return strings.Join(blocks, "\n\n") + "\n", nil
 }
 
 // applicationTables lists the active database's tables minus goose's version
