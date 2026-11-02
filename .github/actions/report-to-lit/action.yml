@@ -55,8 +55,11 @@ runs:
         # The latest published release, never this checkout's source: the
         # shared remote store is only ever touched by released code, and an
         # unreleased migration on master cannot stop an alarm from landing.
+        # install.sh installs over a `lit` it finds on PATH before it reads
+        # GOBIN, so it runs with a PATH that holds no lit: the release lands in
+        # bindir, the one path this step then runs.
         bindir="$RUNNER_TEMP/lit-bin"
-        GOBIN="$bindir" GH_TOKEN="$TOKEN" bash scripts/install.sh --latest-release
+        env PATH=/usr/bin:/bin GOBIN="$bindir" GH_TOKEN="$TOKEN" bash scripts/install.sh --latest-release
         lit="$bindir/lit"
         test -x "$lit"
         # A fresh clone adopts the remote's backlog here (first-receive).

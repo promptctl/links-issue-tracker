@@ -22,7 +22,7 @@ func main() {
 	// below is handed everything it would otherwise read from it.
 	// The released-schema ceiling is read from this binary's build stamp here
 	// and nowhere below: it rides the run's Env to every store open.
-	released, err := version.ReleasedSchemaCeiling()
+	released, err := version.ReadReleasedSchemaCeiling()
 	if err != nil {
 		os.Exit(cli.WriteCommandError(os.Stderr, err))
 	}

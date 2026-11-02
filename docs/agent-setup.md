@@ -146,9 +146,12 @@ lit doctor [--fix]        # health check; run --fix yourself before escalating a
   released-schema ceiling: a release, the schema it embeds; `just build` and `install.sh`,
   the highest migration in the newest local `vX.Y.Z` tag; a bare `go build`, 0. lit refuses
   to migrate an existing workspace past that ceiling and refuses to push a commit whose
-  schema is above it, to any remote. Creating a store is not bounded, so a binary with an
-  unreleased migration runs in a scratch workspace (`lit init` in a temporary git repo), and
-  that store stays local.
+  schema is above it, to any remote. Creating a store is not bounded: a new store is created at the
+  binary's full schema. So a binary built from a tree with an unreleased migration runs only
+  in a scratch workspace (`lit init` in a temporary git repo), and must never create a store
+  inside a real repo, where it would write a schema no release carries into the
+  `.git/links/dolt` every checkout of that repo shares. `lit version` prints the ceiling and
+  where it came from.
 
 ## 7. Finishing
 

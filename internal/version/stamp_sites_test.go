@@ -157,6 +157,9 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 	if !strings.Contains(ldflags, "tools/schema-release-check -released-schema") {
 		t.Error("scripts/version-ldflags.sh does not read LIT_BUILD_RELEASED_SCHEMA from tools/schema-release-check -released-schema")
 	}
+	if !strings.Contains(ldflags, `LIT_BUILD_RELEASED_SCHEMA="${_lit_released}@${_lit_newest_tag:-`+releasedLabelNoTag+`}"`) {
+		t.Errorf("scripts/version-ldflags.sh does not stamp <version>@<tag>, or @%s with no tag — the ceiling's source would be lost", releasedLabelNoTag)
+	}
 	if !exportedNames(ldflags)["LIT_BUILD_RELEASED_SCHEMA"] {
 		t.Error("scripts/version-ldflags.sh never exports LIT_BUILD_RELEASED_SCHEMA, so neither caller would receive it")
 	}
@@ -166,7 +169,7 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 		}
 	}
 	// Only a real release claims its own schema; a snapshot is stamped 0.
-	const releaseStamp = "internal/version.ReleasedSchema={{ if .IsSnapshot }}0{{ else }}" + ReleasedSchemaCarried + "{{ end }}"
+	const releaseStamp = "internal/version.ReleasedSchema={{ if .IsSnapshot }}0@" + releasedLabelSnapshot + "{{ else }}" + ReleasedSchemaCarried + "{{ end }}"
 	if !strings.Contains(repoFile(t, ".goreleaser.yml"), releaseStamp) {
 		t.Errorf(".goreleaser.yml does not stamp %s — released binaries would refuse every migration and push, or snapshots would claim to be releases", releaseStamp)
 	}
@@ -178,17 +181,22 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 func TestTheCIReporterRunsAReleasedLit(t *testing.T) {
 	t.Parallel()
 	action := repoFile(t, ".github/actions/report-to-lit/action.yml")
-	if !strings.Contains(action, "scripts/install.sh --latest-release") {
-		t.Error(".github/actions/report-to-lit/action.yml does not install the latest release with scripts/install.sh --latest-release")
+	// install.sh prefers the directory of a lit already on PATH over GOBIN,
+	// so the action pins both: a PATH with no lit, and the GOBIN it runs from.
+	if !strings.Contains(action, `env PATH=/usr/bin:/bin GOBIN="$bindir" GH_TOKEN="$TOKEN" bash scripts/install.sh --latest-release`) ||
+		!strings.Contains(action, `lit="$bindir/lit"`) {
+		t.Error(".github/actions/report-to-lit/action.yml does not install the latest release into the one directory it then runs lit from")
 	}
 	if strings.Contains(action, "go build") {
 		t.Error(".github/actions/report-to-lit/action.yml builds lit from source — CI would run unreleased code against the shared remote")
 	}
 }
 
-// TestReleasedSchemaCeilingReadsTheStamp pins the stamp's grammar: unstamped
-// fails closed at 0, the release stamp is the carried schema, a number is
-// itself, and anything else is a broken producer.
+// TestReleasedSchemaCeilingReadsTheStamp pins the stamp's grammar and the
+// source each form names: unstamped fails closed at 0, the release stamp is
+// the carried schema, "<version>@<label>" is that version from the tag (or the
+// snapshot, or no tag) the label names, and anything else is a broken
+// producer.
 func TestReleasedSchemaCeilingReadsTheStamp(t *testing.T) {
 	saved := ReleasedSchema
 	t.Cleanup(func() { ReleasedSchema = saved })
@@ -197,14 +205,25 @@ func TestReleasedSchemaCeilingReadsTheStamp(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		stamp string
-		want  int64
-		ok    bool
-	}{{"", 0, true}, {ReleasedSchemaCarried, carried.Max, true}, {"11", 11, true}, {"-1", 0, false}, {"v11", 0, false}} {
+		stamp  string
+		want   int64
+		source string
+		ok     bool
+	}{
+		{"", 0, "without a released-schema stamp", true},
+		{ReleasedSchemaCarried, carried.Max, "is a release", true},
+		{"11@v0.24.0", 11, "release tag v0.24.0", true},
+		{"0@none", 0, "had no release tag", true},
+		{"0@snapshot", 0, "snapshot build", true},
+		{"11", 0, "", false},
+		{"11@", 0, "", false},
+		{"-1@v0.1.0", 0, "", false},
+		{"v11@v0.1.0", 0, "", false},
+	} {
 		ReleasedSchema = tc.stamp
-		got, err := ReleasedSchemaCeiling()
-		if (err == nil) != tc.ok || got != tc.want {
-			t.Errorf("ReleasedSchemaCeiling() with stamp %q = %d, %v; want %d, ok=%v", tc.stamp, got, err, tc.want, tc.ok)
+		got, err := ReadReleasedSchemaCeiling()
+		if (err == nil) != tc.ok || got.Max != tc.want || !strings.Contains(got.Source, tc.source) {
+			t.Errorf("ReadReleasedSchemaCeiling() with stamp %q = %+v, %v; want max %d naming %q, ok=%v", tc.stamp, got, err, tc.want, tc.source, tc.ok)
 		}
 	}
 }

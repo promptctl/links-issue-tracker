@@ -1,18 +1,21 @@
 # shellcheck shell=bash
 # version-ldflags.sh — single source of truth for the git commit, build
-# timestamp and provenance every from-source build stamps into
-# internal/version.{Commit,Date,Origin}.
+# timestamp, provenance and released-schema ceiling every from-source build
+# stamps into internal/version.{Commit,Date,Origin,ReleasedSchema}.
 # Source it, then build with:
 #
 #     source scripts/version-ldflags.sh
-#     go build -ldflags "-X ${pkg}.Commit=$LIT_BUILD_COMMIT -X ${pkg}.Date=$LIT_BUILD_DATE -X ${pkg}.Origin=$LIT_BUILD_ORIGIN" ...
+#     go build -ldflags "-X ${pkg}.Commit=$LIT_BUILD_COMMIT -X ${pkg}.Date=$LIT_BUILD_DATE -X ${pkg}.Origin=$LIT_BUILD_ORIGIN -X ${pkg}.ReleasedSchema=$LIT_BUILD_RELEASED_SCHEMA" ...
 #
-# None of the three needs the network: Commit and Date come from local commands
-# (git rev-parse --short HEAD, the local system clock) and Origin is a literal,
-# so a from-source build stamps identically on a restricted or air-gapped
-# machine. [LAW:one-source-of-truth] the Justfile's `build` recipe and
-# scripts/install.sh's source mode both source this and nowhere else computes
-# these three strings, so they cannot drift apart.
+# None of the four needs the network: Commit and Date come from local commands
+# (git rev-parse --short HEAD, the local system clock), Origin is a literal,
+# and ReleasedSchema is read from the local release tags by
+# `go run ./tools/schema-release-check`, which needs Go and this module's
+# dependencies in the local module cache (a from-source build needs both
+# anyway). So a from-source build stamps identically on a restricted or
+# air-gapped machine. [LAW:one-source-of-truth] the Justfile's `build` recipe
+# and scripts/install.sh's source mode both source this and nowhere else
+# computes these strings, so they cannot drift apart.
 #
 # Deliberately does NOT set Version, and TestOnlyTheJustfileOmitsVersion pins
 # that. internal/version.Version == "" is the IsDev discriminator
@@ -56,10 +59,13 @@ _lit_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/release-tags.sh
 . "$_lit_root/scripts/release-tags.sh"
 _lit_newest_tag="$(git -C "$_lit_root" tag --list | newest_release_tag)"
-if ! LIT_BUILD_RELEASED_SCHEMA="$(cd "$_lit_root" && GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go run ./tools/schema-release-check -released-schema "$_lit_newest_tag")"; then
+if ! _lit_released="$(cd "$_lit_root" && GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go run ./tools/schema-release-check -released-schema "$_lit_newest_tag")"; then
     echo "version-ldflags: could not read the released schema of tag '${_lit_newest_tag}'" >&2
-    unset _lit_root _lit_newest_tag LIT_BUILD_RELEASED_SCHEMA
+    unset _lit_root _lit_newest_tag _lit_released
     return 1
 fi
-unset _lit_root _lit_newest_tag
+# <version>@<tag it was read from>, or @none with no release tag, so `lit
+# version` and a refusal can say where the ceiling came from.
+LIT_BUILD_RELEASED_SCHEMA="${_lit_released}@${_lit_newest_tag:-none}"
+unset _lit_root _lit_newest_tag _lit_released
 export LIT_BUILD_COMMIT LIT_BUILD_DATE LIT_BUILD_ORIGIN LIT_BUILD_RELEASED_SCHEMA

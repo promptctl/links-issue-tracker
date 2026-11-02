@@ -765,7 +765,7 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 // of a schema: no step applies a migration above ceiling. The migrating open
 // refuses the whole raise earlier, before it writes anything, through the same
 // predicate (refuseUnreleasedRaise); the reconcile's lift meets it here.
-func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, ceiling int64) (*goose.MigrationResult, error) {
+func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, ceiling version.ReleasedSchemaCeiling) (*goose.MigrationResult, error) {
 	if err := refuseStepPastCeiling(ctx, provider, ceiling); err != nil {
 		return nil, err
 	}
@@ -848,7 +848,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 // [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
 // → prune) runs on every call; variability lives in the applied-vs-registry
 // set, not in whether stages execute.
-func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceiling int64) (pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceiling version.ReleasedSchemaCeiling) (pruneErr error, fail *SchemaConvergenceError) {
 	// Construct the provider before creating the checkpoint so a provider
 	// construction failure leaves no orphaned branch behind.
 	var provider *goose.Provider

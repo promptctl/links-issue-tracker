@@ -8,7 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // The released-schema ceiling is the highest schema version a published lit
@@ -21,16 +21,17 @@ import (
 // the ceiling.
 
 // UnreleasedMigrationError refuses raising an existing workspace's schema, or
-// a commit's in a sync's lift, to a version above the released-schema ceiling.
+// a commit's in a sync's lift, to a version above this lit's released-schema
+// ceiling.
 type UnreleasedMigrationError struct {
 	// WorkspaceVersion is the schema version the workspace records. It is
 	// meaningful only when PreVersioned is false.
 	WorkspaceVersion int64
 	// PreVersioned is true for a workspace that predates schema versioning:
 	// it records no version at all, which is not version 0.
-	PreVersioned   bool
-	TargetVersion  int64
-	ReleasedSchema int64
+	PreVersioned  bool
+	TargetVersion int64
+	Ceiling       version.ReleasedSchemaCeiling
 }
 
 func (e *UnreleasedMigrationError) Error() string {
@@ -39,9 +40,9 @@ func (e *UnreleasedMigrationError) Error() string {
 		from = "its unversioned pre-migration shape"
 	}
 	return fmt.Sprintf(
-		"refusing to migrate this workspace from %s to schema version %d: no published lit release carries a schema above %d, "+
-			"and an existing workspace is never migrated to a schema no release carries",
-		from, e.TargetVersion, e.ReleasedSchema)
+		"refusing to migrate this workspace from %s to schema version %d: this lit's released-schema ceiling is %d (%s), "+
+			"and it never migrates an existing workspace past that ceiling",
+		from, e.TargetVersion, e.Ceiling.Max, e.Ceiling.Source)
 }
 
 // EventRecord is the schema the workspace is at, the one the raise would have
@@ -51,33 +52,35 @@ func (e *UnreleasedMigrationError) EventRecord() (map[string]any, map[string]int
 		"released_schema.workspace_schema": e.WorkspaceVersion,
 		"released_schema.pre_versioned":    e.PreVersioned,
 		"released_schema.target_schema":    e.TargetVersion,
-		"released_schema.ceiling":          e.ReleasedSchema,
+		"released_schema.ceiling":          e.Ceiling.Max,
+		"released_schema.ceiling_source":   e.Ceiling.Source,
 	}, nil
 }
 
-// UnreleasedPushError refuses a push of a commit whose schema is above the
-// released-schema ceiling, whatever the remote is.
+// UnreleasedPushError refuses a push of a commit whose schema is above this
+// lit's released-schema ceiling, whatever the remote is.
 type UnreleasedPushError struct {
-	Remote         string
-	Branch         string
-	CommitSchema   int64
-	ReleasedSchema int64
+	Remote       string
+	Branch       string
+	CommitSchema int64
+	Ceiling      version.ReleasedSchemaCeiling
 }
 
 func (e *UnreleasedPushError) Error() string {
 	return fmt.Sprintf(
-		"refusing to push to %s/%s: the commit is at schema version %d, and no published lit release carries a schema above %d; "+
-			"a commit at a schema no release carries is never sent to a remote",
-		e.Remote, e.Branch, e.CommitSchema, e.ReleasedSchema)
+		"refusing to push to %s/%s: the commit is at schema version %d, and this lit's released-schema ceiling is %d (%s); "+
+			"it never sends a commit above that ceiling to a remote",
+		e.Remote, e.Branch, e.CommitSchema, e.Ceiling.Max, e.Ceiling.Source)
 }
 
 // EventRecord is the remote refused, the commit's schema, and the ceiling.
 func (e *UnreleasedPushError) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
-		"released_schema.remote":        e.Remote,
-		"released_schema.branch":        e.Branch,
-		"released_schema.commit_schema": e.CommitSchema,
-		"released_schema.ceiling":       e.ReleasedSchema,
+		"released_schema.remote":         e.Remote,
+		"released_schema.branch":         e.Branch,
+		"released_schema.commit_schema":  e.CommitSchema,
+		"released_schema.ceiling":        e.Ceiling.Max,
+		"released_schema.ceiling_source": e.Ceiling.Source,
 	}, nil
 }
 
@@ -86,13 +89,12 @@ var (
 	_ model.RecordedError = (*UnreleasedPushError)(nil)
 )
 
-// raiseCeiling is the highest schema version a migrating open of state may
-// raise its workspace to: the released-schema ceiling for an existing
-// workspace, and the binary's own schema for a fresh one, which is created
-// rather than raised.
-func raiseCeiling(state migrationState, released int64) int64 {
+// raiseCeiling is the ceiling a migrating open of state may raise its
+// workspace to: the released-schema ceiling for an existing workspace, and the
+// binary's own schema for a fresh one, which is created rather than raised.
+func raiseCeiling(state migrationState, released version.ReleasedSchemaCeiling) version.ReleasedSchemaCeiling {
 	if state.phase == phaseFresh {
-		return state.support.Max
+		return version.ReleasedSchemaCeiling{Max: state.support.Max, Source: "a new store is created at the schema this lit carries"}
 	}
 	return released
 }
@@ -103,39 +105,41 @@ func raiseCeiling(state migrationState, released int64) int64 {
 // open refuses with nothing written instead of partway through.
 func (s *Store) refuseUnreleasedRaise(state migrationState) error {
 	ceiling := raiseCeiling(state, s.env.ReleasedSchema())
-	if state.support.Max <= ceiling {
+	if state.support.Max <= ceiling.Max {
 		return nil
 	}
 	return &UnreleasedMigrationError{
 		WorkspaceVersion: state.appliedVersion,
 		PreVersioned:     state.phase == phaseAdopt,
 		TargetVersion:    state.support.Max,
-		ReleasedSchema:   ceiling,
+		Ceiling:          ceiling,
 	}
 }
 
 // refuseStepPastCeiling refuses the step goose would take next when the
-// version it applies is above ceiling. With nothing pending it passes, and
-// goose reports ErrNoNextVersion itself.
-func refuseStepPastCeiling(ctx context.Context, provider *goose.Provider, ceiling int64) error {
-	current, err := provider.GetDBVersion(ctx)
+// migration it applies is above ceiling. That migration is the lowest pending
+// one, which is not always above the highest applied: a history applied out
+// of order has a gap below it. With nothing pending it passes, and goose
+// reports ErrNoNextVersion itself.
+func refuseStepPastCeiling(ctx context.Context, provider *goose.Provider, ceiling version.ReleasedSchemaCeiling) error {
+	statuses, err := provider.Status(ctx)
 	if err != nil {
-		return fmt.Errorf("read schema version before a migration step: %w", err)
+		return fmt.Errorf("read pending migrations before a migration step: %w", err)
 	}
-	registry, err := migrations.Embedded()
-	if err != nil {
-		return err
+	var applied int64
+	next := int64(-1)
+	for _, st := range statuses {
+		switch {
+		case st.State == goose.StateApplied:
+			applied = max(applied, st.Source.Version)
+		case st.State == goose.StatePending && (next < 0 || st.Source.Version < next):
+			next = st.Source.Version
+		}
 	}
-	for _, m := range registry.Migrations() {
-		if m.Version <= current {
-			continue
-		}
-		if m.Version > ceiling {
-			return &UnreleasedMigrationError{WorkspaceVersion: current, TargetVersion: m.Version, ReleasedSchema: ceiling}
-		}
+	if next < 0 || next <= ceiling.Max {
 		return nil
 	}
-	return nil
+	return &UnreleasedMigrationError{WorkspaceVersion: applied, TargetVersion: next, Ceiling: ceiling}
 }
 
 // refuseUnreleasedPush refuses a push of commitHash when the schema recorded
@@ -148,13 +152,14 @@ func (s *Store) refuseUnreleasedPush(ctx context.Context, remote storage.RemoteN
 	if err != nil {
 		return err
 	}
-	if schema <= s.env.ReleasedSchema() {
+	ceiling := s.env.ReleasedSchema()
+	if schema <= ceiling.Max {
 		return nil
 	}
 	return &UnreleasedPushError{
-		Remote:         remote.String(),
-		Branch:         branch,
-		CommitSchema:   schema,
-		ReleasedSchema: s.env.ReleasedSchema(),
+		Remote:       remote.String(),
+		Branch:       branch,
+		CommitSchema: schema,
+		Ceiling:      ceiling,
 	}
 }

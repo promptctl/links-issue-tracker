@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"io"
 	"os"
 	"testing"
@@ -92,7 +93,7 @@ func testEnv() environ.Env {
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(os.Environ()).WithReleasedSchema(max)
+	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"})
 }
 
 // testStderr is where a store a test opens prints its notices: the test

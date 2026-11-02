@@ -172,3 +172,21 @@ func TestVersionOmitsBuildAgeWithoutDate(t *testing.T) {
 		t.Errorf("output rendered an age/warning with no Date stamped:\n%s", out)
 	}
 }
+
+// TestVersionHumanSurfacesTheReleasedSchemaCeiling pins that `lit version`
+// says how high this lit raises an existing workspace's schema, and where that
+// ceiling came from.
+func TestVersionHumanSurfacesTheReleasedSchemaCeiling(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.ReleasedSchema.
+	saved := version.ReleasedSchema
+	t.Cleanup(func() { version.ReleasedSchema = saved })
+	version.ReleasedSchema = "7@v9.8.7"
+
+	var stdout bytes.Buffer
+	if err := runVersion(&stdout, nil); err != nil {
+		t.Fatalf("runVersion error = %v", err)
+	}
+	if want := "released-schema ceiling: 7 (stamped at build time from release tag v9.8.7"; !strings.Contains(stdout.String(), want) {
+		t.Errorf("human output missing %q:\n%s", want, stdout.String())
+	}
+}

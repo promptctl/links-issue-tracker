@@ -65,7 +65,10 @@ func runVersion(stdout io.Writer, args []string) error {
 		}
 	}
 
-	_, err = fmt.Fprintf(stdout, "schema versions supported: %d–%d\n", info.Schema.Min, info.Schema.Max)
+	if _, err := fmt.Fprintf(stdout, "schema versions supported: %d–%d\n", info.Schema.Min, info.Schema.Max); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "released-schema ceiling: %d (%s)\n", info.Released.Max, info.Released.Source)
 	return err
 }
 

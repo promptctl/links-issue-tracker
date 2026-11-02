@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
+
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // Env is an environment, as os.Environ lists one. The zero Env is no
@@ -39,13 +41,13 @@ type Env struct {
 	gitSpawns *atomic.Int64
 	// releasedSchema is the highest schema version a published release
 	// carries, as cmd/lit read it from its build stamp
-	// (version.ReleasedSchemaCeiling). It is no environment variable: a
+	// (version.ReadReleasedSchemaCeiling). It is no environment variable: a
 	// variable could be set to lift it. It rides here because Env is the one
 	// value cmd/lit builds per run and every store open is handed, so the
 	// ceiling is passed in at the composition root rather than read as a
 	// global below it. Of leaves it 0, which moves no existing workspace's
 	// schema: an Env nobody gave a ceiling fails closed.
-	releasedSchema int64
+	releasedSchema version.ReleasedSchemaCeiling
 }
 
 // IsZero reports whether e is the zero Env, which no Env built by Of or
@@ -116,16 +118,16 @@ func (e Env) With(set ...string) Env {
 }
 
 // WithReleasedSchema is the environment with its released-schema ceiling set
-// to max: no existing workspace is migrated past it, and no commit above it is
-// pushed.
-func (e Env) WithReleasedSchema(max int64) Env {
-	e.releasedSchema = max
+// to ceiling: no existing workspace is migrated past it, and no commit above
+// it is pushed.
+func (e Env) WithReleasedSchema(ceiling version.ReleasedSchemaCeiling) Env {
+	e.releasedSchema = ceiling
 	return e
 }
 
-// ReleasedSchema is the released-schema ceiling WithReleasedSchema set, 0 when
-// none was.
-func (e Env) ReleasedSchema() int64 {
+// ReleasedSchema is the released-schema ceiling WithReleasedSchema set; its
+// Max is 0 when none was.
+func (e Env) ReleasedSchema() version.ReleasedSchemaCeiling {
 	return e.releasedSchema
 }
 

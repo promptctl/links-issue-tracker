@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,7 +36,7 @@ func testEnv() environ.Env {
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(os.Environ()).WithReleasedSchema(max)
+	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"})
 }
 
 // A literal that leaves Env out holds the zero Env. Run refuses it, where the

@@ -624,5 +624,5 @@ func testEnv() environ.Env {
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(os.Environ()).WithReleasedSchema(max)
+	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"})
 }
