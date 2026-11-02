@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"io"
 	"os"
 	"path/filepath"
@@ -12,6 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"

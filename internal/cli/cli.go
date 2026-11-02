@@ -1352,23 +1352,42 @@ func historyLeaf() appLeaf {
 		}
 		// The flag is parsed before the store is read, so a malformed reference
 		// is a usage error whatever the id names. [LAW:parse-dont-validate]
-		render := printIssueHistory
+		var ref *versionRef
 		if fs.Changed("version") {
-			ref, err := parseVersionRef(*version)
+			parsed, err := parseVersionRef(*version)
 			if err != nil {
 				return err
 			}
+			ref = &parsed
 			telemetry.Set(ctx, "history.version_field", ref.field.Name)
 			telemetry.Set(ctx, "history.version_number", ref.number)
-			render = func(ctx context.Context, w io.Writer, detail model.IssueDetail) error {
-				return printFieldVersion(ctx, w, detail, ref)
-			}
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 		if err != nil {
 			return err
 		}
-		return render(ctx, inv.Stdout, detail)
+		// What the command decided is recorded from the record it read, before
+		// anything prints, so a failed write never leaves half of it on the
+		// event and the renderers stay free of telemetry.
+		if ref != nil {
+			held := len(storage.TextVersions(detail.Issue, detail.Events, ref.field))
+			telemetry.Set(ctx, "history.version_found", ref.number <= held)
+			telemetry.Count(ctx, "history.version_held", held)
+			return printFieldVersion(inv.Stdout, detail, *ref)
+		}
+		for _, field := range storage.LongTextFields() {
+			telemetry.Count(ctx, "history.versions."+field.Name, len(storage.TextVersions(detail.Issue, detail.Events, field)))
+			changes := 0
+			for _, event := range detail.Events {
+				for _, change := range event.Changes {
+					if change.Field == field.Name {
+						changes++
+					}
+				}
+			}
+			telemetry.Count(ctx, "history.version_changes."+field.Name, changes)
+		}
+		return printIssueHistory(inv.Stdout, detail)
 	}}
 }
 

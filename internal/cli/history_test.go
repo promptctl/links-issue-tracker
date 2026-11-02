@@ -217,7 +217,7 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := printIssueHistory(telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{})), &stdout, detail); err != nil {
+	if err := printIssueHistory(&stdout, detail); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	var steps []string
@@ -240,7 +240,7 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 			t.Fatalf("parseVersionRef(%s) error = %v", ref, err)
 		}
 		var out bytes.Buffer
-		if err := printFieldVersion(telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{})), &out, detail, parsed); err != nil || out.String() != want {
+		if err := printFieldVersion(&out, detail, parsed); err != nil || out.String() != want {
 			t.Fatalf("printFieldVersion(%s) = %q, %v; want %q", ref, out.String(), err, want)
 		}
 	}
@@ -269,7 +269,7 @@ func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := printIssueHistory(telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{})), &stdout, detail); err != nil {
+	if err := printIssueHistory(&stdout, detail); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	stamp, br := formatHistoryTimestamp(time.Time{}), quotedBreak
@@ -409,9 +409,10 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		ref   string
-		found bool
-	}{{"description@2", true}, {"description@3", false}} {
+		ref    string
+		number int
+		found  bool
+	}{{"description@2", 2, true}, {"description@3", 3, false}} {
 		ev, err := recordLeaf(historyLeaf(), ctx, cwdInvocation(io.Discard, io.Discard, nil), ap, []string{issue.ID, "--version", tc.ref})
 		if tc.found != (err == nil) {
 			t.Fatalf("history --version %s error = %v, want found %v", tc.ref, err, tc.found)
@@ -419,7 +420,7 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 		if got := ev.Facts["history.version_field"]; got != "description" {
 			t.Errorf("%s: history.version_field = %v, want description", tc.ref, got)
 		}
-		if got, want := ev.Facts["history.version_number"], map[bool]int{true: 2, false: 3}[tc.found]; got != want {
+		if got, want := ev.Facts["history.version_number"], tc.number; got != want {
 			t.Errorf("%s: history.version_number = %v, want %d", tc.ref, got, want)
 		}
 		if got := ev.Facts["history.version_found"]; got != tc.found {

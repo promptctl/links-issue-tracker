@@ -507,8 +507,8 @@ Those keys never appear at the event's top level.
 
 | Key | Meaning |
 | --- | --- |
-| `counts.history.versions.<field>` | A count, per long text field (`description`, `prompt`, `plan`), recorded when the trail prints: how many texts the field has held, each numbered once. |
-| `counts.history.version_changes.<field>` | A count recorded with `counts.history.versions.<field>`: how many of the trail's changes to that field printed as `vN → vM`. |
+| `counts.history.versions.<field>` | A count, per long text field (`description`, `prompt`, `plan`), recorded when `lit history` reads the issue without `--version`: how many texts the field has held, each numbered once. |
+| `counts.history.version_changes.<field>` | A count recorded with `counts.history.versions.<field>`: how many of the trail's changes are to that field. |
 | `history.version_field` | The field `--version <field>@<n>` named. A malformed reference is a usage error and records none of the `--version` keys. |
 | `history.version_number` | The version number `--version` asked for. |
 | `history.version_found` | `true` when the field holds that version and its text printed; `false` when the command refused it as a version the field never held. Absent when the issue could not be read. |
