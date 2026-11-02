@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // TestQuarantineTableCreatedByFreshOpen pins that a fresh-workspace Open

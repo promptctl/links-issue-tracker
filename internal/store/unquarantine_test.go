@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"path/filepath"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // quarantinedWorkspace builds a workspace whose top `pending` migrations are
@@ -265,24 +266,24 @@ func TestUnquarantineLeavesAQuarantineThisLitDoesNotHaveInForce(t *testing.T) {
 func TestAQuarantineBeyondTheRegistryIsNotTheNextOneMet(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot, version := quarantinedWorkspace(t, ctx, 1)
+	doltRoot, quarantined := quarantinedWorkspace(t, ctx, 1)
 	beyond := recordQuarantineBeyondRegistry(t, ctx, doltRoot)
 
 	var blocked *QuarantineBlockError
-	if err := openErr(t, doltRoot); !errors.As(err, &blocked) || blocked.Version != version || blocked.Next != nil {
-		t.Fatalf("Open() error = %v; want the quarantine of v%d and no Next", err, version)
+	if err := openErr(t, doltRoot); !errors.As(err, &blocked) || blocked.Version != quarantined || blocked.Next != nil {
+		t.Fatalf("Open() error = %v; want the quarantine of v%d and no Next", err, quarantined)
 	}
 	done, err := Unquarantine(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Unquarantine() error = %v", err)
 	}
-	if done.Cleared.Version != version || done.Cleared.Next != nil {
-		t.Errorf("Unquarantine() cleared %+v; want v%d and no Next", done.Cleared, version)
+	if done.Cleared.Version != quarantined || done.Cleared.Next != nil {
+		t.Errorf("Unquarantine() cleared %+v; want v%d and no Next", done.Cleared, quarantined)
 	}
 	if err := openErr(t, doltRoot); err != nil {
 		t.Fatalf("Open() after the clear error = %v", err)
 	}
-	assertRefusesLitWithMigration(t, ctx, doltRoot, version, beyond)
+	assertRefusesLitWithMigration(t, ctx, doltRoot, quarantined, beyond)
 }
 
 // A clear whose commit fails is still in force: the error names it with the
