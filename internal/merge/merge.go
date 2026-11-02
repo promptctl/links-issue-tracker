@@ -62,8 +62,10 @@ const (
 // Every merged id takes both, except one whose two sides were different tickets:
 // there the surviving row is ours alone, so their relations, comments, labels and
 // events describe work it never did and unioning them would fuse the pair one
-// level below the fields. [LAW:types-are-the-program] which rows belong is a fact
-// about (id, side), so that is the shape the child merges read.
+// level below the fields. The other exception is a ticket one side dropped and
+// the other edited: only the edited side holds it, so only its child rows do.
+// [LAW:types-are-the-program] which rows belong is a fact about (id, side), so
+// that is the shape the child merges read.
 type issueScope map[string]side
 
 // admits reports whether a child row of issueID, read from that side, belongs to
@@ -99,6 +101,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	mergedIssues := make([]model.Issue, 0, len(allIDs))
 	pending := make([]ProsePending, 0)
 	collisions := make([]Collision, 0)
+	onlyDescribedBy := map[string]side{}
 
 	for _, id := range allIDs {
 		baseIssue, hasBase := baseMap[id]
@@ -150,11 +153,16 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 				mergedIssues = append(mergedIssues, resolution.Provisional())
 				pending = append(pending, resolution.Pending...)
 			case hasLocal:
-				// remote removed it, local edited -> preserve the surviving edit.
+				// remote removed it, local edited -> preserve the surviving edit,
+				// and with it the surviving side's child rows: the side that
+				// dropped the row has none, which against a base that had them
+				// would read as removing every edge and label of a live ticket.
 				mergedIssues = append(mergedIssues, localIssue)
+				onlyDescribedBy[id] = fromLocal
 			case hasRemote:
 				// local removed it, remote edited -> preserve the surviving edit.
 				mergedIssues = append(mergedIssues, remoteIssue)
+				onlyDescribedBy[id] = fromRemote
 				// both removed a base-only row -> converged removal, append nothing.
 			}
 		}
@@ -165,6 +173,9 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	for _, issue := range mergedIssues {
 		scope[issue.ID] = bothSides
 	}
+	for id, from := range onlyDescribedBy {
+		scope[id] = from
+	}
 	for _, collision := range collisions {
 		scope[collision.IssueID] = fromLocal
 	}
@@ -174,7 +185,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		WorkspaceID: local.WorkspaceID,
 		ExportedAt:  local.ExportedAt,
 		Issues:      mergedIssues,
-		Relations:   mergeRelations(scope, local.Relations, remote.Relations),
+		Relations:   mergeRelations(scope, base.Relations, local.Relations, remote.Relations),
 		Comments:    mergeRecords(scope, local.Comments, remote.Comments, func(c model.Comment) (string, string) { return c.ID, c.IssueID }),
 		Labels:      mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
 		Events:      mergeRecords(scope, local.Events, remote.Events, func(e model.IssueEvent) (string, string) { return e.ID, e.IssueID }),
@@ -280,24 +291,69 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 	}
 }
 
-func mergeRelations(scope issueScope, locals, remotes []model.Relation) []model.Relation {
+// mergeMembers decides which rows of a membership table survive a three-way
+// merge. A row is a fact that exists or does not, so it has no value to
+// reconcile, only presence: per key the two-tier rule reads whether each side
+// moved it off base, which is what lets a removal win over a side that merely
+// kept the row. A side that does not admit a key (issueScope) has no say over
+// it: it presents base's presence, so the admitting side decides alone and a
+// side filtered out of scope is not read as having removed anything. The row
+// kept for a surviving key comes from the admitting sides, remote winning ties.
+// [LAW:one-type-per-behavior] [LAW:single-enforcer] relations and labels are both
+// membership tables and share this one rule; each supplies only its key and the
+// scope question for it.
+func mergeMembers[K comparable, R any](admits func(K, side) bool, keyOf func(R) K, base, locals, remotes []R) []R {
+	byKey := func(rows []R) map[K]R {
+		out := make(map[K]R, len(rows))
+		for _, row := range rows {
+			out[keyOf(row)] = row
+		}
+		return out
+	}
+	baseRows, localRows, remoteRows := byKey(base), byKey(locals), byKey(remotes)
+	candidates := map[K]struct{}{}
+	for _, rows := range []map[K]R{baseRows, localRows, remoteRows} {
+		for k := range rows {
+			candidates[k] = struct{}{}
+		}
+	}
+
+	out := make([]R, 0, len(candidates))
+	for k := range candidates {
+		if !admits(k, bothSides) {
+			continue
+		}
+		_, inBase := baseRows[k]
+		has := func(rows map[K]R, from side) bool {
+			if !admits(k, from) {
+				return inBase
+			}
+			_, in := rows[k]
+			return in
+		}
+		// base is always supplied; an empty base makes every present row an add.
+		if !twoTier(true, inBase, has(localRows, fromLocal), has(remoteRows, fromRemote), presentOr) {
+			continue
+		}
+		if row, ok := remoteRows[k]; ok && admits(k, fromRemote) {
+			out = append(out, row)
+		} else if row, ok := localRows[k]; ok && admits(k, fromLocal) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func mergeRelations(scope issueScope, base, locals, remotes []model.Relation) []model.Relation {
 	type key struct {
 		Src, Dst string
 		Type     model.RelationType
 	}
-	merged := map[key]model.Relation{}
-	for _, sided := range bothSidesOf(locals, remotes) {
-		for _, relation := range sided.rows {
-			if !scope.admits(relation.SrcID, sided.from) || !scope.admits(relation.DstID, sided.from) {
-				continue
-			}
-			merged[key{Src: relation.SrcID, Dst: relation.DstID, Type: relation.Type}] = relation
-		}
-	}
-	out := make([]model.Relation, 0, len(merged))
-	for _, relation := range merged {
-		out = append(out, relation)
-	}
+	out := mergeMembers(
+		func(k key, from side) bool { return scope.admits(k.Src, from) && scope.admits(k.Dst, from) },
+		func(r model.Relation) key { return key{Src: r.SrcID, Dst: r.DstID, Type: r.Type} },
+		base, locals, remotes,
+	)
 	out = enforceSingleParent(out)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].SrcID != out[j].SrcID {
@@ -366,68 +422,19 @@ func mergeRecords[R any](scope issueScope, locals, remotes []R, keys func(R) (id
 	return out
 }
 
-// mergeLabels converges the authoritative label table the same way the resolver
-// converges a row's label view: per (issue, name) the two-tier rule decides
-// membership, so a label one side removed is not resurrected by the other side
-// merely retaining it. base is the merge-base label set that supplies that
-// "which side changed" causality. [LAW:one-source-of-truth] The label table is
-// authoritative (issue.Labels is a derived view); this is where removal must be
-// honored.
+// mergeLabels converges the authoritative label table: per (issue, name) the
+// shared membership rule decides, so a label one side removed is not resurrected
+// by the other side merely retaining it. base is the merge-base label set that
+// supplies that "which side changed" causality. [LAW:one-source-of-truth] The
+// label table is authoritative (issue.Labels is a derived view); this is where
+// removal must be honored.
 func mergeLabels(scope issueScope, base, locals, remotes []model.Label) []model.Label {
 	type key struct{ IssueID, Name string }
-	keyOf := func(l model.Label) key { return key{IssueID: l.IssueID, Name: l.Name} }
-	admitted := func(rows []model.Label, from side) []model.Label {
-		out := make([]model.Label, 0, len(rows))
-		for _, label := range rows {
-			if scope.admits(label.IssueID, from) {
-				out = append(out, label)
-			}
-		}
-		return out
-	}
-	locals, remotes = admitted(locals, fromLocal), admitted(remotes, fromRemote)
-	keySet := func(labels []model.Label) map[key]struct{} {
-		out := make(map[key]struct{}, len(labels))
-		for _, label := range labels {
-			out[keyOf(label)] = struct{}{}
-		}
-		return out
-	}
-	baseSet, localSet, remoteSet := keySet(base), keySet(locals), keySet(remotes)
-
-	// One row per key carries the label's metadata; remote wins ties, matching
-	// the existing last-write preference.
-	rows := map[key]model.Label{}
-	for _, label := range locals {
-		rows[keyOf(label)] = label
-	}
-	for _, label := range remotes {
-		rows[keyOf(label)] = label
-	}
-
-	candidates := map[key]struct{}{}
-	for _, set := range []map[key]struct{}{baseSet, localSet, remoteSet} {
-		for k := range set {
-			candidates[k] = struct{}{}
-		}
-	}
-
-	out := make([]model.Label, 0, len(rows))
-	for k := range candidates {
-		if !scope.admits(k.IssueID, bothSides) {
-			continue
-		}
-		_, inBase := baseSet[k]
-		_, inLocal := localSet[k]
-		_, inRemote := remoteSet[k]
-		// base is always supplied; an empty base makes every present label an add.
-		if !twoTier(true, inBase, inLocal, inRemote, presentOr) {
-			continue
-		}
-		if row, ok := rows[k]; ok {
-			out = append(out, row)
-		}
-	}
+	out := mergeMembers(
+		func(k key, from side) bool { return scope.admits(k.IssueID, from) },
+		func(l model.Label) key { return key{IssueID: l.IssueID, Name: l.Name} },
+		base, locals, remotes,
+	)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].IssueID != out[j].IssueID {
 			return out[i].IssueID < out[j].IssueID
