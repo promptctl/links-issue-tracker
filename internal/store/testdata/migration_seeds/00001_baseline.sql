@@ -1,0 +1,17 @@
+-- Seed: a store valid at v1 (00001_baseline.sql), filling every table its Up or Down reads or rewrites.
+REPLACE INTO meta (meta_key, meta_value) VALUES ('seed_marker', 'v1');
+REPLACE INTO meta (meta_key, meta_value) VALUES ('producer_binary_version', 'lit 0.0.0-seed');
+INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at, item_rank) VALUES ('seed-epic', 'Seed epic', 'the container', NULL, NULL, 0, 'epic', 'core', '', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', NULL, NULL, NULL, 'a0');
+INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at, item_rank) VALUES ('seed-t1', 'Seed open task', 'open work', 'do the thing', 'open', 1, 'task', 'core', 'alice', '2026-01-01T00:00:00Z', '2026-01-03T00:00:00Z', NULL, NULL, NULL, 'a1');
+INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at, item_rank) VALUES ('seed-t2', 'Seed duplicate', 'closed as a duplicate', NULL, 'closed', 0, 'bug', 'core', 'bob', '2026-01-01T00:00:00Z', '2026-01-04T00:00:00Z', '2026-01-04T00:00:00Z', NULL, NULL, 'a2');
+INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at, item_rank) VALUES ('seed-t3', 'Seed follow-up', 'filed after seed-t2', NULL, 'in_progress', 0, 'chore', 'core', '', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', NULL, '2026-01-06T00:00:00Z', NULL, 'a3');
+INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at, item_rank) VALUES ('seed-t4', 'Seed loose task', 'in no container, as v7 found some', NULL, 'open', 0, 'task', 'core', '', '2026-01-05T00:00:00Z', '2026-01-05T00:00:00Z', NULL, NULL, NULL, 'a4');
+INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t1', 'seed-epic', 'parent-child', '2026-01-01T00:00:00Z', 'seed');
+INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t2', 'seed-epic', 'parent-child', '2026-01-01T00:00:00Z', 'seed');
+INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t3', 'seed-epic', 'parent-child', '2026-01-01T00:00:00Z', 'seed');
+INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t3', 'seed-t1', 'blocks', '2026-01-05T00:00:00Z', 'seed');
+INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t1', 'seed-t2', 'related-to', '2026-01-04T00:00:00Z', 'seed');
+INSERT INTO comments (id, issue_id, body, created_at, created_by) VALUES ('seed-c1', 'seed-t1', 'a comment', '2026-01-03T00:00:00Z', 'alice');
+INSERT INTO labels (issue_id, label, created_at, created_by) VALUES ('seed-t1', 'seeded', '2026-01-03T00:00:00Z', 'alice');
+INSERT INTO issue_events (id, issue_id, action, reason, actor, created_at) VALUES ('seed-e1', 'seed-t1', 'update', 'seeded', 'alice', '2026-01-03T00:00:00Z');
+INSERT INTO issue_event_changes (event_id, field, from_value, to_value) VALUES ('seed-e1', 'status', 'open', NULL);

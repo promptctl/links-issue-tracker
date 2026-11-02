@@ -147,8 +147,8 @@ func earliest(a, b, c int) (int, string) {
 //
 // [LAW:single-enforcer] This is the single static enforcer of the discipline;
 // no other code checks for Down-section presence. The runtime sibling
-// (TestEveryMigrationDownIsExercised, in internal/store) proves the section
-// is not merely present but also actually runs.
+// (TestEveryMigrationRoundTripsLosslessly, in internal/store) proves the
+// section runs and loses nothing.
 func TestEveryMigrationHasDownSection(t *testing.T) {
 	registry, err := Embedded()
 	if err != nil {
@@ -168,9 +168,8 @@ section must contain at least one non-empty, non-comment SQL statement
 between the `+"`-- +goose Down`"+` marker and EOF (or the next
 `+"`-- +goose Up`"+` marker).
 
-If this migration loses information (e.g. drops a column), the Down
-section should either reconstruct the schema with documented loss, or
-the migration's loss contract should be documented in
+The Down must be lossless: a column or table it drops that holds user
+data goes into the stash carrier first. See
 internal/store/migrations/README.md. The presence of the Down section
 itself is non-negotiable.`, m.Name)
 		}

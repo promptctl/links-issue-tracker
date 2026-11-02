@@ -19,10 +19,10 @@ Two CI gates enforce the invariant — neither alone is sufficient:
 | Gate                                       | Lives in                                                  | What it proves                                                                               |
 | ------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `TestEveryMigrationHasDownSection`         | `internal/store/migrations/down_section_test.go`          | Static: every `*.sql` contains a `-- +goose Down` marker followed by at least one statement. |
-| `TestEveryMigrationDownIsExercised`        | `internal/store/migration_down_exercised_test.go`         | Runtime: every Down section actually runs (`goose.DownTo`) against a real workspace.         |
+| `TestEveryMigrationRoundTripsLosslessly`   | `internal/store/migration_round_trip_test.go`             | Runtime: every Down from v2 up is lossless, as "The lossless contract" below defines.        |
 
-An unexercised Down is worse than no Down — the registry would claim
-invertibility that the runtime cannot deliver.
+A Down that runs but loses data is worse than no Down: the registry would
+claim a downgrade the runtime cannot deliver.
 
 ## Writing a new migration
 
@@ -32,26 +32,38 @@ invertibility that the runtime cannot deliver.
 2. Write the `+goose Up` section: the forward-direction schema change.
 3. Write the `+goose Down` section: the inverse. It MUST contain at least one
    real SQL statement and that statement MUST execute cleanly when goose runs
-   it against a workspace that has just had the Up applied.
-4. Pin the hash of the file's Up section in `pinnedVersionContent`
+   it against a workspace that has just had the Up applied, and it MUST be
+   lossless (see "The lossless contract" below).
+4. Add a seed, `internal/store/testdata/migration_seeds/<same file name>`: SQL
+   that fills a store at your version, covering every table your Up or Down
+   reads or rewrites, user data in the structures you add included. The
+   round-trip gate fails by name until it exists.
+5. Pin the hash of the file's Up section in `pinnedVersionContent`
    (`version_reuse_test.go`), in this same PR. `TestReleasedMigrationsAreContentPinned`
    fails until you do, and its message prints the exact line to add. This is what
    makes the version number's Up immutable from release forward — see
    "Released migrations are Up-frozen" below.
 
-A skeleton:
+A skeleton, for a column whose every value is derivable from data the version
+below already holds, so dropping it loses nothing:
 
 ```sql
 -- +goose Up
 -- +goose StatementBegin
-ALTER TABLE issues ADD COLUMN priority_band VARCHAR(16) NOT NULL DEFAULT 'normal';
+ALTER TABLE issues ADD COLUMN is_closed BOOLEAN NOT NULL DEFAULT FALSE;
+-- +goose StatementEnd
+-- +goose StatementBegin
+UPDATE issues SET is_closed = (status = 'closed');
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
-ALTER TABLE issues DROP COLUMN priority_band;
+ALTER TABLE issues DROP COLUMN is_closed;
 -- +goose StatementEnd
 ```
+
+A column that holds new user data needs the stash carrier in its Down; see
+below.
 
 ## A migration that changes a write rule
 
@@ -109,56 +121,50 @@ v1, the pin manifest owns v2+. To change a released migration's effect, **never 
 its Up or reuse its number** — add the change as the next free version number and pin
 that. The gate's failure message says the same thing when it fires.
 
-## Non-losslessly-invertible migrations
+## The lossless contract
 
-Options A and B below are what released migrations shipped with.
-`design-docs/schema-reversibility.md` supersedes them. Its first half is
-enforced now: the pin covers only the Up, so a released lossy Down is fixed in
-place. Its second half, a lossless Down through the stash carrier, is not yet
-implemented; until it is, a new lossy migration uses option A or B.
+`design-docs/schema-reversibility.md` ("What rule 1 means, precisely") is the
+authority. For every migration vN and every store S valid at vN:
 
-Some up-migrations lose information by design — dropping a column, narrowing
-a type, collapsing rows. The `+goose Down` section is still mandatory; what
-varies is **how it represents the loss**:
+- **Shape.** The schema after Down equals the schema a fresh Up to vN-1
+  produces.
+- **Round trip.** Up after Down gives back S, byte for byte on the export.
+  Down after Up, from a store at vN-1, gives back that store.
+- **Old code works.** The release binary for vN-1 reads, writes, and syncs the
+  stepped-down store.
 
-### Option A — refuse with a typed error
+A Down that refuses, or that recreates a column with a default and documents
+the loss, does not meet this.
 
-If the loss is irrecoverable (the dropped column had no derivable replacement
-on disk), the refusal lives at the user-invoked boundary `Downgrade()` (see
-`internal/store/downgrade.go`) — so it is symmetric with
-other downgrade refusals (e.g. "downgrade past baseline would destroy the
-workspace"). That boundary refuses *before* invoking goose, so the file's
-Down section is unreachable from the user-facing `lit downgrade` command.
+### The stash carrier
 
-The Down section in the file is still required (both CI gates demand a
-non-empty, cleanly-executing Down). Write the "would-be" SQL that goose would
-run if it were ever reached — for a column drop, the `ALTER TABLE ... ADD
-COLUMN ...` that restores it (defaulted however makes sense for an
-unreachable branch) — and add a comment above the section pointing readers at
-the `Downgrade()` refusal so they understand the file's Down is never the
-operator-facing answer. The baseline file itself is the canonical example:
-its Down drops every table, and `Downgrade()` refuses to invoke it.
+Data the other version cannot represent goes in `schema_stash (table_name,
+row_key, column_name, value)`, a table outside the versioned schema. No Down
+drops it, and the gate's comparisons leave it out.
 
-### Option B — restore with documented loss
+- A Down that drops a column holding user data copies it into the stash
+  first, and the next Up restores it to every row that still exists.
+- An Up that drops, narrows, or collapses data stashes what it destroys, and
+  its Down restores it.
+- A step applies the stash on top of the current data and deletes the entries
+  it used. Entries whose row is gone are dropped with it.
 
-If the loss is acceptable to the operator (e.g. the dropped column was a
-derived cache that the operator does not need restored), the Down may
-recreate the column with a default value, documenting the loss with a
-comment block above `-- +goose StatementBegin`:
+The table itself lands with `promptctl-schema-reversal-u0if.l8l`; until then
+no migration can stash.
 
-```sql
--- +goose Down
--- LOSS CONTRACT: this Down recreates priority_band but does NOT restore the
--- per-issue value that was in place before the Up; every row gets 'normal'.
--- Operators who need exact values must restore from a pre-upgrade dbsnapshot.
--- +goose StatementBegin
-ALTER TABLE issues ADD COLUMN priority_band VARCHAR(16) NOT NULL DEFAULT 'normal';
--- +goose StatementEnd
-```
+### Exemptions
 
-The CI gate does not police *which* option a migration chooses — it polices
-that a non-empty Down section is present and runs. The choice itself is a
-design decision that lives in the PR that introduces the migration.
+The gate holds two lists in `migration_round_trip_test.go`, each entry naming
+its reason:
+
+- `pendingLosslessDown`: released Downs that lose data today. They are fixed
+  in place (the pin covers only the Up), and the list empties as they are.
+- `releasedDestructiveUp`: released Ups that destroyed data on every store
+  they ran on (v4, v7, v10). No Down can return what is already gone, so the
+  check from the version below skips them. This list is permanent and closed.
+
+An exempt version that passes fails the gate, so the lists only shrink. A new
+migration is never added to either.
 
 ## Why this lives at the registry, not at the call site
 
@@ -175,12 +181,8 @@ type-checker. A migration that fails either gate is a migration the
 downgrade pipeline cannot use — and the build fails, not Open, not
 production.
 
-`[LAW:single-enforcer]`: the refusal for "downgrade would destroy data"
-lives in exactly one place (`Downgrade()`); the Down section communicates
-the impossibility via that channel, never via scattered runtime checks.
-
 `[LAW:no-defensive-null-guards]`: the gates are positive ("has Down" /
-"Down runs"), not negative ("guards against missing Down at runtime").
+"Down round-trips"), not negative ("guards against missing Down at runtime").
 A missing Down is a build-time failure, not a runtime defense.
 
 ## The baseline's Down
@@ -192,7 +194,8 @@ no data. The downgrade pipeline (`Downgrade()`) refuses this case by default
 user-facing `lit downgrade` command. The Down section exists in the file
 because:
 
-1. The CI gate requires it.
+1. The static gate requires it, and the round-trip gate checks it removes
+   every baseline table.
 2. Future tooling (e.g. test fixtures, schema-reset helpers) may want to
    exercise the down-to-zero path explicitly.
 
