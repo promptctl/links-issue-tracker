@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -33,14 +34,21 @@ const migrationSeedsDir = "testdata/migration_seeds"
 // comparison reads it.
 const schemaStashTable = "schema_stash"
 
+// lastVersionBeforeTheGate is the highest migration that existed when this
+// gate landed. Only versions up to it may be exempt; every later migration
+// passes both round trips.
+const lastVersionBeforeTheGate = 11
+
 // pendingLosslessDown lists the released migrations whose Down fails the
-// round trip from their own version today. Each is fixed in place by
-// promptctl-schema-reversal-u0if.38e, which empties this list.
+// round trip from their own version today. Each is fixed in place, and the
+// list empties as they are.
 var pendingLosslessDown = map[int64]string{
 	2:  "its Down drops lane without stashing it",
 	3:  "its Down drops resolution without stashing it",
+	4:  "its Down re-materializes redirects as related-to edges, so the next Up reads a lone manual peer edge as a redirect",
 	5:  "its Down drops stream_id and workspace_id without stashing them",
 	6:  "its Down drops follows_up without stashing it",
+	7:  "its Down deletes the unfiled epic with what hangs on it and resets every lane spelled as its ticket's id",
 	9:  "its Down drops purges without stashing it",
 	11: "its Down drops work_plan and plan_reviews without stashing them",
 }
@@ -64,8 +72,20 @@ var releasedDestructiveUp = map[int64]string{
 // covered the moment its file lands, and fails here until it ships a seed.
 func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 	t.Parallel()
-	versions := registryVersions(t)
-	seeds := seedsByVersion(t, versions)
+	registry := registryMigrations(t)
+	seeds := seedsByVersion(t, registry)
+	versions := make([]int64, len(registry))
+	for i, m := range registry {
+		versions[i] = m.Version
+	}
+	for _, exempt := range []map[int64]string{pendingLosslessDown, releasedDestructiveUp} {
+		for v, reason := range exempt {
+			if v > lastVersionBeforeTheGate {
+				t.Fatalf("v%d is exempt (%s), but only migrations up to v%d may be; make its round trip lossless instead",
+					v, reason, lastVersionBeforeTheGate)
+			}
+		}
+	}
 
 	for i := 1; i < len(versions); i++ {
 		below, v := versions[i-1], versions[i]
@@ -98,7 +118,7 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 func TestTheRoundTripGateCatchesALossyDown(t *testing.T) {
 	t.Parallel()
 	const v, below = 11, 10
-	seeds := seedsByVersion(t, registryVersions(t))
+	seeds := seedsByVersion(t, registryMigrations(t))
 	cases := []struct {
 		name, down, want string
 	}{
@@ -147,7 +167,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 		return fmt.Errorf("Up to v%d after Down: %w", v, err)
 	}
 	if after := exportTables(t, st.db); after != before {
-		return fmt.Errorf("export after Up(Down) differs from the seeded export:\n%s",
+		return fmt.Errorf("%w: export after Up(Down) differs from the seeded export:\n%s", errDataLost,
 			unifiedSchemaDiff("seeded", "after Up(Down)", before, after))
 	}
 	return nil
@@ -168,19 +188,25 @@ func roundTripBelow(t *testing.T, fsys fs.FS, v, below int64, seed string) error
 		return fmt.Errorf("Down to v%d after Up: %w", below, err)
 	}
 	if after := exportTables(t, st.db); after != before {
-		return fmt.Errorf("export after Down(Up) differs from the seeded export:\n%s",
+		return fmt.Errorf("%w: export after Down(Up) differs from the seeded export:\n%s", errDataLost,
 			unifiedSchemaDiff("seeded", "after Down(Up)", before, after))
 	}
 	return nil
 }
 
-// expectExempt fails on a round-trip error unless v is exempt, and fails an
-// exempt version that passes, so an exemption list can only shrink.
+// errDataLost marks the one failure an exemption covers: the round trip ran
+// and the export came back different. A wrong shape or a failing step is
+// never exempt.
+var errDataLost = errors.New("data lost")
+
+// expectExempt fails on a round-trip error unless v is exempt and the error
+// is lost data, and fails an exempt version that passes, so an exemption list
+// can only shrink.
 func expectExempt(t *testing.T, v int64, exempt map[int64]string, err error) {
 	t.Helper()
 	reason, isExempt := exempt[v]
 	switch {
-	case err != nil && !isExempt:
+	case err != nil && !(isExempt && errors.Is(err, errDataLost)):
 		t.Fatal(err)
 	case err == nil && isExempt:
 		t.Fatalf("v%d now round-trips; remove it from its exemption list (%s)", v, reason)
@@ -236,18 +262,14 @@ func exportTables(t *testing.T, db *sql.DB) string {
 	return string(b) + "\n"
 }
 
-// schemaShape is every application table's SHOW CREATE TABLE, in name order.
+// schemaShape is every compared table's SHOW CREATE TABLE, in name order.
 func schemaShape(t *testing.T, db *sql.DB) string {
 	t.Helper()
-	var blocks []string
-	for _, name := range comparedTables(t, db) {
-		ddl, err := showCreateTable(context.Background(), db, name)
-		if err != nil {
-			t.Fatalf("show create %s: %v", name, err)
-		}
-		blocks = append(blocks, ddl+";")
+	ddl, err := tablesDDL(context.Background(), db, comparedTables(t, db))
+	if err != nil {
+		t.Fatalf("schema shape: %v", err)
 	}
-	return strings.Join(blocks, "\n\n") + "\n"
+	return ddl
 }
 
 // comparedTables is what the round trip compares: every table but goose's
@@ -278,9 +300,11 @@ func mapQuoted(prefix string, names []string) []string {
 	return out
 }
 
-// applySeed runs a seed's statements, one per ';'-terminated line run.
+// applySeed runs a seed's statements, one per ';'-terminated line run. A seed
+// with none would compare empty tables to empty tables and prove nothing.
 func applySeed(t *testing.T, db *sql.DB, seed string) {
 	t.Helper()
+	ran := 0
 	for _, stmt := range strings.Split(seed, ";\n") {
 		if strings.TrimSpace(stripSQLComments(stmt)) == "" {
 			continue
@@ -288,6 +312,10 @@ func applySeed(t *testing.T, db *sql.DB, seed string) {
 		if _, err := db.ExecContext(context.Background(), stmt); err != nil {
 			t.Fatalf("seed statement failed: %v\n%s", err, stmt)
 		}
+		ran++
+	}
+	if ran == 0 {
+		t.Fatal("seed holds no statements; it must fill every table its migration's Up or Down reads or rewrites")
 	}
 }
 
@@ -301,33 +329,22 @@ func stripSQLComments(stmt string) string {
 	return strings.Join(kept, "\n")
 }
 
-// registryVersions is the embedded registry's versions, ascending. Gaps stay
-// gaps: "the version below" is the next lower one that exists.
-func registryVersions(t *testing.T) []int64 {
+// registryMigrations is the embedded registry, ascending by version. Gaps
+// stay gaps: "the version below" is the next lower one that exists.
+func registryMigrations(t *testing.T) []migrations.Migration {
 	t.Helper()
 	registry, err := migrations.Embedded()
 	if err != nil {
 		t.Fatalf("read registry: %v", err)
 	}
-	var versions []int64
-	for _, m := range registry.Migrations() {
-		versions = append(versions, m.Version)
-	}
-	return versions
+	return registry.Migrations()
 }
 
-// seedsByVersion pairs every migration with its seed, failing by name on a
-// migration with no seed and on a seed with no migration.
-func seedsByVersion(t *testing.T, versions []int64) map[int64]string {
+// seedsByVersion pairs every migration with its seed, the file of the same
+// name, failing by name on a migration with no seed and on a seed with no
+// migration.
+func seedsByVersion(t *testing.T, registry []migrations.Migration) map[int64]string {
 	t.Helper()
-	names := map[int64]string{}
-	registry, err := migrations.Embedded()
-	if err != nil {
-		t.Fatalf("registry: %v", err)
-	}
-	for _, m := range registry.Migrations() {
-		names[m.Version] = path.Base(m.Name)
-	}
 	entries, err := fs.ReadDir(migrationSeeds, migrationSeedsDir)
 	if err != nil {
 		t.Fatalf("read seeds: %v", err)
@@ -337,21 +354,17 @@ func seedsByVersion(t *testing.T, versions []int64) map[int64]string {
 		seedFiles[e.Name()] = true
 	}
 	seeds := map[int64]string{}
-	for _, v := range versions {
-		file := names[v]
-		if !strings.HasSuffix(file, ".sql") {
-			file += ".sql"
-		}
-		if !seedFiles[file] {
+	for _, m := range registry {
+		if !seedFiles[m.Name] {
 			t.Fatalf("migration v%d has no seed: add %s/%s, a store valid at v%d filling every table its Up or Down reads or rewrites",
-				v, migrationSeedsDir, file, v)
+				m.Version, migrationSeedsDir, m.Name, m.Version)
 		}
-		delete(seedFiles, file)
-		b, err := migrationSeeds.ReadFile(path.Join(migrationSeedsDir, file))
+		delete(seedFiles, m.Name)
+		b, err := migrationSeeds.ReadFile(path.Join(migrationSeedsDir, m.Name))
 		if err != nil {
-			t.Fatalf("read seed %s: %v", file, err)
+			t.Fatalf("read seed %s: %v", m.Name, err)
 		}
-		seeds[v] = string(b)
+		seeds[m.Version] = string(b)
 	}
 	for file := range seedFiles {
 		t.Fatalf("seed %s/%s names no migration in the registry", migrationSeedsDir, file)

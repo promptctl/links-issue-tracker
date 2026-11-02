@@ -14,3 +14,5 @@ INSERT INTO comments (id, issue_id, body, created_at, created_by) VALUES ('seed-
 INSERT INTO labels (issue_id, label, created_at, created_by) VALUES ('seed-t1', 'seeded', '2026-01-03T00:00:00Z', 'alice');
 INSERT INTO issue_events (id, issue_id, action, reason, actor, created_at) VALUES ('seed-e1', 'seed-t1', 'update', 'seeded', 'alice', '2026-01-03T00:00:00Z');
 INSERT INTO issue_event_changes (event_id, field, from_value, to_value) VALUES ('seed-e1', 'status', 'open', NULL);
+INSERT INTO issues (id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at, item_rank, lane, resolution, redirect_target) VALUES ('seed-t5', 'Seed duplicate with a peer', 'closed as a duplicate, its target unknown, one manual peer link', NULL, 'closed', 0, 'task', 'core', '', '2026-01-05T00:00:00Z', '2026-01-07T00:00:00Z', '2026-01-07T00:00:00Z', NULL, NULL, 'a5', 'lane-X', 'duplicate', NULL);
+INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t1', 'seed-t5', 'related-to', '2026-01-06T00:00:00Z', 'alice');

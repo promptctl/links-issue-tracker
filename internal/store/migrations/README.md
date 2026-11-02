@@ -19,7 +19,7 @@ Two CI gates enforce the invariant — neither alone is sufficient:
 | Gate                                       | Lives in                                                  | What it proves                                                                               |
 | ------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | `TestEveryMigrationHasDownSection`         | `internal/store/migrations/down_section_test.go`          | Static: every `*.sql` contains a `-- +goose Down` marker followed by at least one statement. |
-| `TestEveryMigrationRoundTripsLosslessly`   | `internal/store/migration_round_trip_test.go`             | Runtime: every Down from v2 up is lossless, as "The lossless contract" below defines.        |
+| `TestEveryMigrationRoundTripsLosslessly`   | `internal/store/migration_round_trip_test.go`             | Runtime: every Down from v2 up restores the schema and, after Up, the data it started from.   |
 
 A Down that runs but loses data is worse than no Down: the registry would
 claim a downgrade the runtime cannot deliver.
@@ -149,8 +149,7 @@ drops it, and the gate's comparisons leave it out.
 - A step applies the stash on top of the current data and deletes the entries
   it used. Entries whose row is gone are dropped with it.
 
-The table itself lands with `promptctl-schema-reversal-u0if.l8l`; until then
-no migration can stash.
+The table itself has not landed yet; until it does, no migration can stash.
 
 ### Exemptions
 

@@ -74,11 +74,11 @@ func openOneVersionBehind(t *testing.T, ctx context.Context, doltRoot string) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	versions := registryVersions(t)
+	versions := registryMigrations(t)
 	if len(versions) < 2 {
 		t.Fatalf("registry has %d migrations; this test needs a next-lower version to land on", len(versions))
 	}
-	below := versions[len(versions)-2]
+	below := versions[len(versions)-2].Version
 	provider, err := newGooseProvider(st.db)
 	if err != nil {
 		t.Fatalf("newGooseProvider() error = %v", err)
