@@ -14,7 +14,7 @@ Invoke the `laws:code` skill; if your harness has no skills, read its text, `plu
 
 ## 3. Judge the core first
 
-Find the plan's core: the one idea, and the facts it rests on. Check each fact against the code, the recorded fixture or the measurement it names. If the core does not hold (a fact is false, unmeasured, or recorded nowhere, or the plan reads a proxy for it), fail on that alone: cite the law it breaks and name the fact. Do not list the edge cases built on top of it. The author has to replace the core, and findings on a core that is going away only invite patches. A plan with no stated core fails here, naming that.
+Find the plan's core, stated at the top of the plan: the one idea, and the facts it rests on. Check each fact against the code, the recorded fixture or the measurement it names. If the core does not hold (a fact is false, unmeasured, or recorded nowhere, or the plan reads a proxy for it), fail on that alone: cite the laws the core breaks and name the fact. Do not review the edge cases built on top of it, and cite no law for them. The author has to replace the core, and findings on a core that is going away only invite patches. A plan with no stated core fails here, naming that.
 
 ## 4. Find the whole mechanism
 
@@ -22,7 +22,7 @@ A plan says what mechanism it touches, what it adds there, and what it removes. 
 
 - Find the mechanism in the code. Write down everything it already carries: state, timeouts and budgets, deadlines, retries, locks, background work, and modes.
 - Read its history: `lit ls --search <term> --status open,in_progress,closed`, then `lit show` on each ticket that shaped it, plus `git log` on its files. Tickets that each added one guard to the same mechanism are the pattern this review exists to catch.
-- Read the same history for this plan. `lit history <id>` lists its earlier versions and earlier reviews, and `lit history <id> --version plan@<n>` prints one. Account for each earlier finding as answered, still standing, or withdrawn. Then ask what the revisions did: if each version answered its review by adding a guard, if the plan grew every round, or if the same law broke in a new place each round, that is the pattern again, inside one ticket. Fail citing `escape-local-minima` and name the cause the versions share; don't list the newest guard's new holes.
+- Read the same history for this plan. `lit history <id>` lists its earlier versions and earlier reviews, and `lit history <id> --version plan@<n>` prints one. Account for each earlier finding as answered, still standing, or withdrawn. Then ask what the revisions did: if each version answered its review by adding a guard, if the plan grew by another guard every round, or if the same law broke in a new place each round, that is the pattern again, inside one ticket. Fail citing `escape-local-minima` and name the cause the versions share; don't list the newest guard's new holes.
 - Check the plan's claims against the code. If it says it adds nothing, confirm that.
 
 ## 5. Decide
