@@ -1095,16 +1095,16 @@ func (s *Store) recreateQuarantineTable(ctx context.Context, cols map[string]boo
 // quarantineGate refuses a write open with the quarantine in force: the
 // lowest quarantined version this binary has pending.
 //
-// It first ensures the quarantine table exists — and self-heals it to the
+// It first versions the writes already standing in the working set (a failed
+// migration whose reset also failed leaves its changes there), under a message
+// that says what they are. The ensure's commit versions every dirty table, so
+// without this the commit that ensures the quarantine table would hold them too.
+//
+// It then ensures the quarantine table exists — and self-heals it to the
 // canonical shape if a prior lit build left it in an older one — because
 // reading a stale-shaped table fails with a raw column-not-found SQL error.
 // The table is committed at once, so it survives a checkpoint reset should one
 // fire later in the open.
-//
-// The ensure's commit versions every dirty table, so writes already standing in
-// the working set (a failed migration whose reset also failed leaves its
-// changes there) are versioned first, under a message that says what they are:
-// the commit that ensures the table then holds the table and nothing else.
 //
 // For phaseAdopt, adoptPreGooseWorkspace will stamp baselineVersion before any
 // migration runs, so the effective applied version is baselineVersion — a
@@ -1141,7 +1141,7 @@ const standingWritesCommitMessage = "migrate: commit writes standing in the work
 
 // commitStandingWrites versions the writes standing in the working set, and
 // does nothing when none do, so an open with a clean working set records no
-// look at stranded writes. [LAW:single-enforcer] commitStrandedWrites is the
+// look at stranded writes. [LAW:single-enforcer] landStrandedWrites is the
 // one place a stranded write is committed.
 func (s *Store) commitStandingWrites(ctx context.Context) error {
 	return s.retryInPlace(ctx, func(ctx context.Context) error {
@@ -1149,7 +1149,7 @@ func (s *Store) commitStandingWrites(ctx context.Context) error {
 		if err != nil || tables == 0 {
 			return err
 		}
-		return s.commitStrandedWrites(ctx, standingWritesCommitMessage)
+		return s.landStrandedWrites(ctx, tables, standingWritesCommitMessage)
 	})
 }
 

@@ -668,6 +668,12 @@ func (s *Store) commitStrandedWrites(ctx context.Context, message string) error 
 	if err != nil {
 		return err
 	}
+	return s.landStrandedWrites(ctx, tables, message)
+}
+
+// landStrandedWrites commits the working set over the tables a look at it
+// counted dirty, and records the look.
+func (s *Store) landStrandedWrites(ctx context.Context, tables int, message string) error {
 	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: message}); err != nil {
 		return err
 	}

@@ -439,3 +439,18 @@ func TestTheGateVersionsWhatAFailedResetLeftUnderAMessageThatNamesIt(t *testing.
 		}
 	})
 }
+
+// An open that reaches the gate with nothing standing in the working set
+// versions nothing and records no look at stranded writes: the key on the
+// event stays absent, which means "not looked at".
+func TestTheGateOnACleanWorkingSetRecordsNoLookAtStrandedWrites(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		commits, looked := st.StrandedWritesCommits()
+		if looked || len(commits) != 0 {
+			t.Errorf("StrandedWritesCommits() = %v, looked %v; want no commit and no look", commits, looked)
+		}
+	})
+}
