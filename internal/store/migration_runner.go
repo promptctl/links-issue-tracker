@@ -1101,6 +1101,11 @@ func (s *Store) recreateQuarantineTable(ctx context.Context, cols map[string]boo
 // The table is committed at once, so it survives a checkpoint reset should one
 // fire later in the open.
 //
+// The ensure's commit versions every dirty table, so writes already standing in
+// the working set (a failed migration whose reset also failed leaves its
+// changes there) are versioned first, under a message that says what they are:
+// the commit that ensures the table then holds the table and nothing else.
+//
 // For phaseAdopt, adoptPreGooseWorkspace will stamp baselineVersion before any
 // migration runs, so the effective applied version is baselineVersion — a
 // quarantine row for the baseline itself must not block after adoption confirms
@@ -1112,6 +1117,9 @@ func (s *Store) recreateQuarantineTable(ctx context.Context, cols map[string]boo
 // other. Quarantine table creation is decoupled from goose migrations so a
 // goose rollback cannot erase the table it depends on.
 func (s *Store) quarantineGate(ctx context.Context, state migrationState) *SchemaConvergenceError {
+	if fail := attempt(stepCommitStandingWrites, func() error { return s.commitStandingWrites(ctx) }); fail != nil {
+		return fail
+	}
 	if fail := attempt(stepEnsureQuarantineTable, func() error { return s.ensureQuarantineTable(ctx) }); fail != nil {
 		return fail
 	}
@@ -1125,6 +1133,24 @@ func (s *Store) quarantineGate(ctx context.Context, state migrationState) *Schem
 		effectiveApplied = baselineVersion
 	}
 	return attempt(stepCheckQuarantine, func() error { return s.checkPendingQuarantine(ctx, effectiveApplied, state.support) })
+}
+
+// standingWritesCommitMessage is the message of the commit the gate lands over
+// writes it found in the working set, which it did not write.
+const standingWritesCommitMessage = "migrate: commit writes standing in the working set before the quarantine gate"
+
+// commitStandingWrites versions the writes standing in the working set, and
+// does nothing when none do, so an open with a clean working set records no
+// look at stranded writes. [LAW:single-enforcer] commitStrandedWrites is the
+// one place a stranded write is committed.
+func (s *Store) commitStandingWrites(ctx context.Context) error {
+	return s.retryInPlace(ctx, func(ctx context.Context) error {
+		tables, err := s.strandedTables(ctx)
+		if err != nil || tables == 0 {
+			return err
+		}
+		return s.commitStrandedWrites(ctx, standingWritesCommitMessage)
+	})
 }
 
 // checkPendingQuarantine returns a QuarantineBlockError for the lowest

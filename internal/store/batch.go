@@ -68,7 +68,7 @@ func withBatch[R any](ctx context.Context, s *Store, fn func(ctx context.Context
 			if slices.ContainsFunc(scratchPrefixes, func(prefix string) bool { return strings.HasPrefix(from, prefix) }) {
 				return fmt.Errorf("refusing to start a batch on %q, a scratch branch", from)
 			}
-			if err := s.commitStrandedWrites(ctx); err != nil {
+			if err := s.commitStrandedWrites(ctx, strandedWritesCommitMessage); err != nil {
 				return err
 			}
 			if landing.From, err = readDoltHead(ctx, s.db); err != nil {

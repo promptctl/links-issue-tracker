@@ -78,6 +78,7 @@ const (
 	stepDriftCheckpoint
 	stepDriftRepair
 	stepDriftRepairReset
+	stepCommitStandingWrites
 	stepEnsureQuarantineTable
 	stepQuarantineTableShape
 	stepCommitQuarantineTable
@@ -138,7 +139,10 @@ var convergenceSteps = [convergenceStepCount]struct {
 	stepDriftRepair:      {"drift_repair", ActClearCause},
 	// The next open probes the live schema and repairs whatever is still
 	// missing, whether or not the reset held.
-	stepDriftRepairReset:      {"drift_repair_reset", ActClearCause},
+	stepDriftRepairReset: {"drift_repair_reset", ActClearCause},
+	// Writes already in the working set when the gate runs, versioned before
+	// the gate commits its own table. The next open runs it again.
+	stepCommitStandingWrites:  {"commit_standing_writes", ActClearCause},
 	stepEnsureQuarantineTable: {"ensure_quarantine_table", ActClearCause},
 	stepQuarantineTableShape:  {"quarantine_table_shape", ActEscalate},
 	stepCommitQuarantineTable: {"commit_quarantine_table", ActClearCause},

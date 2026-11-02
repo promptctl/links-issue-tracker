@@ -649,7 +649,7 @@ const strandedWritesCommitMessage = "commit writes a failed commit left staged"
 // is diverged, not behind. [LAW:single-enforcer] The settle and the reconcile
 // plan both read it.
 func (s *Store) freshnessOverEveryWrite(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncFreshness, error) {
-	if err := s.commitStrandedWrites(ctx); err != nil {
+	if err := s.commitStrandedWrites(ctx, strandedWritesCommitMessage); err != nil {
 		return storage.SyncFreshness{}, err
 	}
 	return s.SyncFreshness(ctx, remote, branch)
@@ -663,12 +663,12 @@ func (s *Store) freshnessOverEveryWrite(ctx context.Context, remote storage.Remo
 // discards a write that is not its own. [LAW:single-enforcer] the one place a
 // stranded write is committed. [LAW:no-silent-failure] [LAW:nothing-unseen]
 // The caller holds the commit lock.
-func (s *Store) commitStrandedWrites(ctx context.Context) error {
-	var tables int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT table_name) FROM dolt_status`).Scan(&tables); err != nil {
-		return fmt.Errorf("read the working set: %w", err)
+func (s *Store) commitStrandedWrites(ctx context.Context, message string) error {
+	tables, err := s.strandedTables(ctx)
+	if err != nil {
+		return err
 	}
-	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: strandedWritesCommitMessage}); err != nil {
+	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: message}); err != nil {
 		return err
 	}
 	if tables > 0 {
@@ -676,6 +676,15 @@ func (s *Store) commitStrandedWrites(ctx context.Context) error {
 	}
 	s.strandedWritesLooked = true
 	return nil
+}
+
+// strandedTables is how many tables stand dirty in the working set.
+func (s *Store) strandedTables(ctx context.Context) (int, error) {
+	var tables int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(DISTINCT table_name) FROM dolt_status`).Scan(&tables); err != nil {
+		return 0, fmt.Errorf("read the working set: %w", err)
+	}
+	return tables, nil
 }
 
 // settleReceivedWithinLock is the half of a receive that follows the fetch:
