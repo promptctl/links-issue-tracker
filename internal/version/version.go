@@ -101,10 +101,13 @@ const (
 	BoundNone SchemaBound = "none"
 )
 
-// Lower is the lower of c and other: other when its Max is strictly below
-// c's, c otherwise, so a tie keeps the receiver and the source it carries.
+// Lower is the lower of c and other: other when its Max is at or below c's,
+// c otherwise. A tie takes other: every site lowers this lit's own bound by a
+// store's hold, and at a tie the hold is the bound whose remedy clears both,
+// since a release the released ceiling's remedy installs is refused by the
+// equal hold again.
 func (c SchemaCeiling) Lower(other SchemaCeiling) SchemaCeiling {
-	if other.Max < c.Max {
+	if other.Max <= c.Max {
 		return other
 	}
 	return c

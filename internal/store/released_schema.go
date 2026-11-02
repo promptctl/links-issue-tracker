@@ -66,8 +66,23 @@ func (e *SchemaCeilingError) Error() string {
 	default:
 		refused = fmt.Sprintf("refusing to migrate this workspace from %s to schema version %d", from, e.TargetVersion)
 	}
-	return fmt.Sprintf("%s: the schema ceiling here is %d (%s), and this lit never puts a schema above that ceiling in place in an existing store",
-		refused, e.Ceiling.Max, e.Ceiling.Source)
+	return fmt.Sprintf("%s: the schema ceiling here is %d (%s), and this lit never puts a schema above that ceiling in place in an existing store%s",
+		refused, e.Ceiling.Max, e.Ceiling.Source, e.remedy())
+}
+
+// remedy is the clause a hold's refusal ends with: the store knows the hold's
+// version, not which release carries it, so it names the release by schema
+// (design-docs/schema-reversibility.md, "Lowering a remote"). A refusal by
+// the released-schema ceiling names none: no release carries the schema the
+// write would put in place. [LAW:dataflow-not-control-flow] the bound is the
+// domain's discriminator.
+func (e *SchemaCeilingError) remedy() string {
+	switch e.Ceiling.Bound {
+	case version.BoundHold:
+		return fmt.Sprintf("; the release at schema version %d (`lit downgrade --to <tag>`) steps this store down to the hold", e.Ceiling.Max)
+	default:
+		return ""
+	}
 }
 
 // EventRecord is what the write was, the schema it started from, the one it

@@ -231,8 +231,8 @@ func TestStaleSourceBuildShapeTable(t *testing.T) {
 	}
 }
 
-// Lower is the strictly lower ceiling with its own source, the receiver on a
-// tie, and the unbounded ceiling is its identity on either side.
+// Lower is the lower ceiling with its own source, the argument on a tie, and
+// the unbounded ceiling is its identity on either side.
 func TestSchemaCeilingLowerKeepsTheLowerBoundAndItsSource(t *testing.T) {
 	t.Parallel()
 	released := SchemaCeiling{Max: 12, Source: "release"}
@@ -244,7 +244,7 @@ func TestSchemaCeilingLowerKeepsTheLowerBoundAndItsSource(t *testing.T) {
 	}{
 		{"hold below", released.Lower(hold), hold},
 		{"hold above", hold.Lower(released), hold},
-		{"tie keeps the receiver", released.Lower(tie), released},
+		{"tie takes the argument", released.Lower(tie), tie},
 		{"unbounded on the right", released.Lower(UnboundedSchemaCeiling()), released},
 		{"unbounded on the left", UnboundedSchemaCeiling().Lower(released), released},
 		{"both unbounded", UnboundedSchemaCeiling().Lower(UnboundedSchemaCeiling()), UnboundedSchemaCeiling()},
