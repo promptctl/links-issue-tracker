@@ -51,13 +51,15 @@ LIT_BUILD_ORIGIN="source"
 # carries the release's ceiling, so it migrates no existing workspace past it
 # and pushes no commit above it. With no local release tag the ceiling is 0.
 # A stale tag list can only lower it, which fails closed.
+# The tags and the checker are this repository's, wherever the caller's cwd is.
+_lit_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/release-tags.sh
-. "$(dirname "${BASH_SOURCE[0]}")/release-tags.sh"
-_lit_newest_tag="$(git tag --list | newest_release_tag)"
-if ! LIT_BUILD_RELEASED_SCHEMA="$(GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go run ./tools/schema-release-check -released-schema "$_lit_newest_tag")"; then
+. "$_lit_root/scripts/release-tags.sh"
+_lit_newest_tag="$(git -C "$_lit_root" tag --list | newest_release_tag)"
+if ! LIT_BUILD_RELEASED_SCHEMA="$(cd "$_lit_root" && GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go run ./tools/schema-release-check -released-schema "$_lit_newest_tag")"; then
     echo "version-ldflags: could not read the released schema of tag '${_lit_newest_tag}'" >&2
-    unset _lit_newest_tag LIT_BUILD_RELEASED_SCHEMA
+    unset _lit_root _lit_newest_tag LIT_BUILD_RELEASED_SCHEMA
     return 1
 fi
-unset _lit_newest_tag
+unset _lit_root _lit_newest_tag
 export LIT_BUILD_COMMIT LIT_BUILD_DATE LIT_BUILD_ORIGIN LIT_BUILD_RELEASED_SCHEMA

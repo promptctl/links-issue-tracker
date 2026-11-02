@@ -617,9 +617,8 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the run starts.
-// testEnv is the process environment with the released-schema ceiling at this
-// tree's own highest migration, so the suite exercises every migration the
-// tree carries, unreleased ones included.
+// Its released-schema ceiling is this tree's own highest migration, so the
+// suite exercises every migration the tree carries.
 func testEnv() environ.Env {
 	max, err := migrations.MaxVersion()
 	if err != nil {

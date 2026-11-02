@@ -150,8 +150,9 @@ builds:
       # about this producer rather than about any particular build of it.
       - -X github.com/promptctl/links-issue-tracker/internal/version.Origin=release
       # A release carries only released migrations, by definition: its
-      # released-schema ceiling is the schema it embeds.
-      - -X github.com/promptctl/links-issue-tracker/internal/version.ReleasedSchema=carried
+      # released-schema ceiling is the schema it embeds. A snapshot is no
+      # release, so it gets ceiling 0 and raises no existing workspace.
+      - -X github.com/promptctl/links-issue-tracker/internal/version.ReleasedSchema={{ if .IsSnapshot }}0{{ else }}carried{{ end }}
 
 archives:
   - id: lit

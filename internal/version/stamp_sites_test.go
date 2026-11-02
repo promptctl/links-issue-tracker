@@ -160,14 +160,29 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 	if !exportedNames(ldflags)["LIT_BUILD_RELEASED_SCHEMA"] {
 		t.Error("scripts/version-ldflags.sh never exports LIT_BUILD_RELEASED_SCHEMA, so neither caller would receive it")
 	}
-	for _, file := range []string{"Justfile", "scripts/install.sh", ".github/actions/report-to-lit/action.yml"} {
+	for _, file := range []string{"Justfile", "scripts/install.sh"} {
 		if !strings.Contains(repoFile(t, file), "${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA}") {
 			t.Errorf("%s does not pass ${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA} to the linker — a lit it builds would have released-schema ceiling 0", file)
 		}
 	}
-	const releaseStamp = "internal/version.ReleasedSchema=" + ReleasedSchemaCarried
+	// Only a real release claims its own schema; a snapshot is stamped 0.
+	const releaseStamp = "internal/version.ReleasedSchema={{ if .IsSnapshot }}0{{ else }}" + ReleasedSchemaCarried + "{{ end }}"
 	if !strings.Contains(repoFile(t, ".goreleaser.yml"), releaseStamp) {
-		t.Errorf(".goreleaser.yml does not stamp %s — released binaries would refuse every migration and push", releaseStamp)
+		t.Errorf(".goreleaser.yml does not stamp %s — released binaries would refuse every migration and push, or snapshots would claim to be releases", releaseStamp)
+	}
+}
+
+// TestTheCIReporterRunsAReleasedLit pins that the CI action writing to the
+// shared remote store runs the latest published release rather than building
+// this checkout: CI must never run unreleased code against the remote.
+func TestTheCIReporterRunsAReleasedLit(t *testing.T) {
+	t.Parallel()
+	action := repoFile(t, ".github/actions/report-to-lit/action.yml")
+	if !strings.Contains(action, "scripts/install.sh --latest-release") {
+		t.Error(".github/actions/report-to-lit/action.yml does not install the latest release with scripts/install.sh --latest-release")
+	}
+	if strings.Contains(action, "go build") {
+		t.Error(".github/actions/report-to-lit/action.yml builds lit from source — CI would run unreleased code against the shared remote")
 	}
 }
 

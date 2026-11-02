@@ -20,11 +20,11 @@
 // comparison could not be made). CI's install step accepts 3 and nothing else,
 // because a merged migration leaves master ahead until its release is cut.
 //
-// With -released-schema, it instead prints the highest migration version in the
-// tag's registry and nothing else: the released-schema ceiling every from-source
-// build stamps into internal/version.ReleasedSchema (scripts/version-ldflags.sh).
-// An empty tag prints 0: with no release known, no schema is released. It exits
-// 1 when the tag's registry cannot be read.
+// With -released-schema, it instead prints the released-schema ceiling of this
+// tree against the tag and nothing else (printReleasedSchema): the number every
+// from-source build stamps into internal/version.ReleasedSchema
+// (scripts/version-ldflags.sh). An empty tag prints 0: with no release known,
+// no schema is released. It exits 1 when the comparison cannot be made.
 package main
 
 import (
@@ -110,20 +110,46 @@ func compare(tag string, stderr io.Writer) outcome {
 	return o
 }
 
-// printReleasedSchema prints tag's released schema: its registry's highest
-// migration version, 0 for no tag.
+// printReleasedSchema prints the released-schema ceiling of this tree against
+// tag: the highest version N such that every migration this tree carries at or
+// below N is in tag's registry byte for byte, and N is no higher than tag's own
+// highest. A migration edited, or re-added, under a released number lowers the
+// ceiling below that number. No tag is ceiling 0.
+// [LAW:one-source-of-truth] it reads the install guard's own comparison
+// (releaseSchema), so the guard and the ceiling cannot disagree about what is
+// released.
 func printReleasedSchema(tag string, stdout, stderr io.Writer) int {
 	if tag == "" {
 		fmt.Fprintln(stdout, 0)
 		return exitInstall
 	}
-	release, err := releaseRegistry(tag, stderr)
+	ceiling, err := releasedCeiling(tag, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: schema-release-check: %v\n", err)
 		return exitUnknown
 	}
-	fmt.Fprintln(stdout, release.MaxVersion())
+	fmt.Fprintln(stdout, ceiling)
 	return exitInstall
+}
+
+// releasedCeiling is printReleasedSchema's number.
+func releasedCeiling(tag string, stderr io.Writer) (int64, error) {
+	embedded, err := migrations.Embedded()
+	if err != nil {
+		return 0, err
+	}
+	ceiling, unreleased, err := releaseSchema(tag, embedded, stderr)
+	if err != nil {
+		return 0, err
+	}
+	for _, name := range unreleased {
+		version, ok := migrations.ParseVersion(name)
+		if !ok {
+			return 0, fmt.Errorf("embedded migration %s has no version", name)
+		}
+		ceiling = min(ceiling, version-1)
+	}
+	return ceiling, nil
 }
 
 func or(s, empty string) string {
@@ -149,15 +175,6 @@ func releaseSchema(tag string, embedded migrations.Registry, stderr io.Writer) (
 		return 0, nil, err
 	}
 	return registry.MaxVersion(), unreleasedMigrations(tree, release), nil
-}
-
-// releaseRegistry is tag's migration registry.
-func releaseRegistry(tag string, stderr io.Writer) (migrations.Registry, error) {
-	release, err := releaseBlobs(tag, stderr)
-	if err != nil {
-		return migrations.Registry{}, err
-	}
-	return parseReleaseRegistry(tag, release)
 }
 
 // releaseBlobs is the blob id of every migration file in tag's registry.
