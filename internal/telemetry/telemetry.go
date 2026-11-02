@@ -70,10 +70,10 @@ type Event struct {
 	// down in TRACEPARENT; empty on an invocation nothing spawned.
 	ParentSpanID string `json:"parent_span_id,omitempty"`
 	Service      string `json:"service"`
-	Version string `json:"version"`
-	Commit  string `json:"commit"`
-	PID     int    `json:"pid"`
-	Cwd     string `json:"cwd"`
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	PID          int    `json:"pid"`
+	Cwd          string `json:"cwd"`
 	// Flags are the names of the flags the command was given, never their
 	// values: a value can be a title, a body, or a pasted secret.
 	Flags      []string  `json:"flags"`
@@ -381,8 +381,8 @@ func allZero(s string) bool { return strings.Trim(s, "0") == "" }
 // for a process it spawns to adopt: the child's event joins this trace and
 // names this invocation's span as its parent. The sampled flag is always set,
 // as every invocation leaves an event.
-func Traceparent(ctx context.Context) string {
-	r := from(ctx).event()
+func (r *Recorder) Traceparent() string {
+	r = r.event()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return "00-" + r.ev.TraceID + "-" + r.ev.SpanID + "-01"

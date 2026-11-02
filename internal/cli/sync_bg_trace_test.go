@@ -28,7 +28,7 @@ func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.
 	}
 	// Parent pid 0: the worker has no spawner to wait out, and the spawner
 	// here is this test process, which stays up.
-	if err := spawnBackgroundMirror(ctx, stderr, testEnv(), ws, 0); err != nil {
+	if err := spawnBackgroundMirror(ctx, stderr, envInTrace(testEnv(), spawner), ws, 0); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
 	spawnerEvent := spawner.Finish(telemetry.End{})
@@ -54,6 +54,28 @@ func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.
 			t.Fatalf("the worker left no event within %s; events written: %v", suiteStallDeadline, eventsInFile(t))
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// An invocation hands every process it starts its own position, not the one it
+// was started with: a lit that a hook runs under a worker is the worker's
+// child, not its sibling.
+func TestAnInvocationHandsItsChildrenItsOwnSpanNotTheOneItInherited(t *testing.T) {
+	const inherited = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	inheritedEnv := testEnv().With(telemetry.TraceparentEnvVar + "=" + inherited)
+	parent, err := telemetry.ParseTraceparent(inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := telemetry.BeginUnder(telemetry.Event{}, parent)
+
+	handed, err := telemetry.ParseTraceparent(envInTrace(inheritedEnv, worker).Get(telemetry.TraceparentEnvVar))
+	if err != nil {
+		t.Fatalf("the traceparent handed to children is unreadable: %v", err)
+	}
+	workerEvent := worker.Finish(telemetry.End{})
+	if handed.TraceID != parent.TraceID || handed.SpanID != workerEvent.SpanID {
+		t.Errorf("children are handed trace/span %q/%q; want the worker's own %q/%q", handed.TraceID, handed.SpanID, parent.TraceID, workerEvent.SpanID)
 	}
 }
 

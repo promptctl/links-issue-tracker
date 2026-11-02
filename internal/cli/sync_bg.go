@@ -209,11 +209,6 @@ func spawnDetachedWorker(ctx context.Context, stderr io.Writer, ws workspace.Inf
 	if err != nil {
 		return err
 	}
-	// The worker's event joins this invocation's trace, so a failed mirror push
-	// is tied to the write that caused it. Set here, where every worker is
-	// spawned, over any TRACEPARENT the spawner itself inherited.
-	// [LAW:single-enforcer]
-	env = env.With(telemetry.TraceparentEnvVar + "=" + telemetry.Traceparent(ctx))
 	cmd := env.Command(ws.StorageDir, self, subcommand, "--store", ws.StorageDir, "--parent-pid", strconv.Itoa(parentPID))
 	cmd.Stdin = handoffRead
 	cmd.ExtraFiles = holds

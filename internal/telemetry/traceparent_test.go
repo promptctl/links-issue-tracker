@@ -1,7 +1,6 @@
 package telemetry
 
 import (
-	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -30,7 +29,7 @@ func TestBeginMintsASpanIDPerEvent(t *testing.T) {
 // process, begins an event in the spawner's trace under the spawner's span.
 func TestAnEventBegunUnderATraceparentJoinsTheSpawnersTrace(t *testing.T) {
 	spawner := Begin(Event{})
-	parent, err := ParseTraceparent(Traceparent(With(context.Background(), spawner)))
+	parent, err := ParseTraceparent(spawner.Traceparent())
 	if err != nil {
 		t.Fatalf("the spawner's own traceparent is unreadable: %v", err)
 	}

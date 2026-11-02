@@ -70,6 +70,15 @@ func beginInvocation(now time.Time, dir WorkingDir, env environ.Env) *telemetry.
 	return recorder
 }
 
+// envInTrace is env with this invocation's own trace position as its
+// TRACEPARENT, over any it inherited. Every process the invocation starts
+// through env, the detached mirror and receive workers and the lit that a hook
+// runs under them alike, then joins this invocation's trace under this
+// invocation's span. [LAW:single-enforcer]
+func envInTrace(env environ.Env, recorder *telemetry.Recorder) environ.Env {
+	return env.With(telemetry.TraceparentEnvVar + "=" + recorder.Traceparent())
+}
+
 // invocationContext is the context an invocation's dispatch runs under: its
 // open event, and the observers that put Dolt's own facts on that event,
 // which reach lit only as text through the SQL driver, while the context
