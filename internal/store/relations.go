@@ -663,6 +663,21 @@ func epicTreeAbove(ctx context.Context, q rowQueryer, ids ...string) (storage.Ep
 	return tree, nil
 }
 
+// loadEpicTree is the whole containment: every edge to an epic, in one read. It
+// answers storage.RejectBlocksWithinEpic for any pair, so a check over many
+// edges asks the store once where epicTreeAbove asks it once per climb step.
+func loadEpicTree(ctx context.Context, q rowQueryer) (storage.EpicTree, error) {
+	edges, err := queryParentEdges(ctx, q, epicParentPredicate)
+	if err != nil {
+		return nil, err
+	}
+	tree := storage.EpicTree{}
+	for _, edge := range edges {
+		tree.Place(edge.child, edge.childType, edge.parent)
+	}
+	return tree, nil
+}
+
 // parentEdge is one stored parent-child row, with its child's type.
 type parentEdge struct {
 	child, parent string

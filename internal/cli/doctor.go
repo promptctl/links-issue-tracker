@@ -541,6 +541,7 @@ func doctorLeaf() appLeaf {
 		telemetry.Set(ctx, "doctor.rank_inversions", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(report.RankInversions)))
 		telemetry.Set(ctx, "doctor.dependency_cycle", doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle)))
 		telemetry.Set(ctx, "doctor.interleaved", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(len(report.Interleaved))))
+		telemetry.Set(ctx, "doctor.refused_blocks", doctorFieldValue(report, storage.CheckRefusedBlocks, strconv.Itoa(len(report.RefusedBlocks))))
 		telemetry.Set(ctx, "doctor.footprint_bytes", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.GovernedBytes(), 10)))
 		telemetry.Set(ctx, "doctor.footprint_ceiling", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.Ceiling, 10)))
 		telemetry.Set(ctx, "doctor.over_ceiling", footprintFieldValue(report.Footprint, overCeilingPart(report.Footprint)))

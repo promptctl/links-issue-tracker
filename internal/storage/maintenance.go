@@ -38,6 +38,7 @@ const (
 	CheckRankInversions  = "rank_inversions"
 	CheckDuplicateRanks  = "duplicate_ranks"
 	CheckDependencyCycle = "dependency_cycle"
+	CheckRefusedBlocks   = "refused_blocks"
 )
 
 // HealthReport is what an engine found when it examined itself: the structural
@@ -62,6 +63,11 @@ type HealthReport struct {
 	// every dependency among them first, so their edges are not counted in
 	// RankInversions and the repair does not reorder them for those edges.
 	Interleaved [][]string `json:"interleaved"`
+	// RefusedBlocks lists the blocked-by edges between live issues that
+	// RejectBlocksWithinEpic would refuse to write today. They are named, not
+	// repaired: readiness reads them correctly, and which edge to drop is a
+	// judgment about what the work depends on.
+	RefusedBlocks []DependencyEdge `json:"refused_blocks"`
 	// ParentCycle names the members of a loop in the hierarchy, which the write
 	// boundary refuses but older data can still hold. It is reported rather
 	// than repaired because which edge to cut is a judgment about what the

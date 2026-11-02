@@ -49,13 +49,26 @@ func (t EpicTree) Place(child string, childType model.IssueType, epic string) {
 // Both engines call this where every blocked-by edge is written, and the file
 // gate calls it over a file's own hierarchy, so `lit dep add` and both import
 // formats meet the same rule. A reparent can still leave the shape behind;
-// readiness reads the workspace as it is and stays correct.
+// readiness reads the workspace as it is and stays correct, and lit doctor
+// names each such edge (RefusedBlocks).
 // [LAW:single-enforcer] [LAW:one-source-of-truth]
 func RejectBlocksWithinEpic(tree EpicTree, dependent, dependency string) error {
 	if climbsTo(tree, dependent, dependency) || climbsTo(tree, dependency, dependent) || leafSiblings(tree, dependent, dependency) {
 		return model.ValidationError{Message: SameEpicBlocksRejectionMessage}
 	}
 	return nil
+}
+
+// RefusedBlocks returns the edges RejectBlocksWithinEpic would refuse over
+// tree: the shapes a store holds when an edge was written before the rule, by
+// an import that predates it, or sat still while `lit parent set` moved an
+// endpoint. [LAW:single-enforcer] The rule is RejectBlocksWithinEpic's alone;
+// this asks it of each edge, so a store is never reported on a reading the
+// write boundary does not share.
+func RefusedBlocks(tree EpicTree, edges []DependencyEdge) []DependencyEdge {
+	return slices.DeleteFunc(slices.Clone(edges), func(e DependencyEdge) bool {
+		return RejectBlocksWithinEpic(tree, e.Dependent, e.Dependency) == nil
+	})
 }
 
 // leafSiblings reports whether a and b are two leaves directly under one

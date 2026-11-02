@@ -149,7 +149,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		// The checks below never run, and the report says so rather than leaving
 		// their zero values to be read as findings of nothing.
 		// [LAW:no-silent-failure]
-		report.Unchecked = []string{storage.CheckRankInversions, storage.CheckDuplicateRanks, storage.CheckDependencyCycle}
+		report.Unchecked = []string{storage.CheckRankInversions, storage.CheckDuplicateRanks, storage.CheckDependencyCycle, storage.CheckRefusedBlocks}
 		// An error, not a warning: this is reported through the arm that makes
 		// `lit doctor` exit nonzero, so the zeros left on the unrun checks below
 		// can never be read as a clean bill of health. [LAW:no-silent-failure]
@@ -232,6 +232,21 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if cycle := blocksCycle(order, live); len(cycle) > 0 {
 		report.DependencyCycle = cycle
 		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
+	}
+	// A blocked-by edge the same-epic rule now refuses is one the store came to
+	// hold without that rule's write boundary standing in front of it: a
+	// reparent moved an endpoint under the other's epic, or an import wrote it
+	// before the rule. A warning, not an error: an older lit's store holds
+	// these legitimately, and an error also fails the recovery gate.
+	// [LAW:single-enforcer] storage.RefusedBlocks asks the write boundary's own
+	// rule, so this names exactly the edges `lit dep add` would refuse.
+	tree, err := loadEpicTree(ctx, s.db)
+	if err != nil {
+		return report, fmt.Errorf("blocks hierarchy check: %w", err)
+	}
+	report.RefusedBlocks = storage.RefusedBlocks(tree, live)
+	for _, edge := range report.RefusedBlocks {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by edge within one epic's work: %s blocked by %s (%s; remove it with 'lit dep rm %s --blocked-by %s')", edge.Dependent, edge.Dependency, storage.SameEpicBlocksRejectionMessage, edge.Dependent, edge.Dependency))
 	}
 	return report, nil
 }
