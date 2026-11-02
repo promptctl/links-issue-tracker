@@ -112,11 +112,10 @@ that. The gate's failure message says the same thing when it fires.
 ## Non-losslessly-invertible migrations
 
 Options A and B below are what released migrations shipped with.
-`design-docs/schema-reversibility.md` supersedes them and the gates in this
-file; until it is implemented, the gates here are what CI enforces. Under it,
-a released lossy Down is fixed in place (the pin already covers only the
-Up), and a migration written now has a lossless Down through the stash
-carrier.
+`design-docs/schema-reversibility.md` supersedes them. Its first half is
+enforced now: the pin covers only the Up, so a released lossy Down is fixed in
+place. Its second half, a lossless Down through the stash carrier, is not yet
+implemented; until it is, a new lossy migration uses option A or B.
 
 Some up-migrations lose information by design — dropping a column, narrowing
 a type, collapsing rows. The `+goose Down` section is still mandatory; what

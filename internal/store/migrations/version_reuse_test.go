@@ -64,7 +64,7 @@ type migrationFile struct {
 type reuseKind int
 
 const (
-	kindContentChanged reuseKind = iota // a pinned version's bytes no longer match its pin
+	kindContentChanged reuseKind = iota // a pinned version's Up section no longer matches its pin
 	kindRenamed                         // a pinned version's content matches but its filename changed
 	kindUnpinned                        // an on-disk non-baseline version has no pin
 	kindDeleted                         // a pinned version is gone from disk
@@ -222,28 +222,36 @@ func migrationFileOf(version int64, name string, data []byte) migrationFile {
 	return migrationFile{version: version, name: name, upSHA256: hex.EncodeToString(sum[:])}
 }
 
-// upSection returns data without its Down sections: every line from a
-// `+goose Down` directive up to the next `+goose Up` directive or EOF is
-// dropped, and every other line is kept byte for byte, header comments and the
-// Up directive included. Directives are recognized exactly as hasDownSection
-// recognizes them, so a directive inside a block comment ends no section.
-// [LAW:one-source-of-truth]
+// upSection returns the bytes goose runs as the Up: every line before the
+// Down annotation, byte for byte, plus any `NO TRANSACTION` annotation after
+// it, since goose applies that one to the whole file. Annotations are
+// recognized as goose's sqlparser recognizes them, with no comment or quote
+// tracking, so the split lands where goose's does.
+// [LAW:one-source-of-truth] the producer is goose; this mirrors its parser.
 func upSection(data []byte) []byte {
 	var kept []string
-	inBlock, inDown := false, false
+	inDown := false
 	for _, line := range strings.Split(string(data), "\n") {
-		_, exitedBlock := lineContent(line, inBlock)
-		if !inBlock && isGooseDirective(line, "down") {
+		annotation, ok := gooseAnnotation(line)
+		switch {
+		case ok && strings.EqualFold(annotation, "Down"):
 			inDown = true
-		} else if !inBlock && isGooseDirective(line, "up") {
-			inDown = false
-		}
-		inBlock = exitedBlock
-		if !inDown {
+		case !inDown, ok && strings.EqualFold(annotation, "NO TRANSACTION"):
 			kept = append(kept, line)
 		}
 	}
 	return []byte(strings.Join(kept, "\n"))
+}
+
+// gooseAnnotation returns the annotation a line carries as goose v3's
+// sqlparser reads it: a line whose trimmed text starts with `--` and that
+// contains `+goose`, with every `--` and the first `+goose` removed.
+func gooseAnnotation(line string) (string, bool) {
+	if !strings.HasPrefix(strings.TrimSpace(line), "--") || !strings.Contains(line, "+goose") {
+		return "", false
+	}
+	cmd := strings.Replace(strings.ReplaceAll(line, "--", ""), "+goose", "", 1)
+	return strings.TrimSpace(cmd), true
 }
 
 // TestUpSection pins what the Up-section hash sees: a Down edit is invisible
@@ -260,8 +268,9 @@ func TestUpSection(t *testing.T) {
 		{"Down section removed", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n", true},
 		{"Up byte changed", "-- header\n-- +goose Up\nALTER TABLE t ADD d INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n", false},
 		{"header comment changed", "-- header!\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n", false},
-		{"Down directive hidden in a block comment", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n/*\n-- +goose Down\n*/\n-- +goose Down\nALTER TABLE t DROP c;\n", false},
-		{"Up statement after a second Up directive", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\nALTER TABLE t DROP c;\n-- +goose Up\nSELECT 1;\n", false},
+		{"Down directive spelled without spaces", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n--+goose Down\nALTER TABLE t DROP c;\n", true},
+		// goose reads NO TRANSACTION anywhere in the file and runs the Up by it.
+		{"NO TRANSACTION added under Down", "-- header\n-- +goose Up\nALTER TABLE t ADD c INT;\n\n-- +goose Down\n-- +goose NO TRANSACTION\nALTER TABLE t DROP c;\n", false},
 	}
 	want := string(upSection([]byte(released)))
 	for _, tc := range cases {
@@ -284,17 +293,18 @@ func TestReleasedDownIsFixableInPlace(t *testing.T) {
 	}
 	pins := map[int64]pinnedMigration{2: pinnedVersionContent[2]}
 	text := string(data)
-	downAt := strings.Index(text, "-- +goose Down")
-	if downAt < 0 {
-		t.Fatalf("%s has no Down directive", name)
+	upAt := strings.Index(text, "-- +goose Up\n")
+	downAt := strings.Index(text, "-- +goose Down\n")
+	if upAt < 0 || downAt < upAt {
+		t.Fatalf("%s lacks an Up directive followed by a Down directive", name)
 	}
 
-	downEdited := text + "SELECT 1;\n"
+	downEdited := text[:downAt] + "-- +goose Down\nSELECT 1;\n"
 	if findings := detectVersionReuse(pins, []migrationFile{migrationFileOf(2, name, []byte(downEdited))}); len(findings) != 0 {
-		t.Errorf("editing the Down of %s failed the pin: %s", name, findings[0].explain())
+		t.Errorf("rewriting the Down of %s failed the pin: %s", name, findings[0].explain())
 	}
 
-	upAt := strings.Index(text, "-- +goose Up") + len("-- +goose Up\n")
+	upAt += len("-- +goose Up\n")
 	upEdited := text[:upAt] + " " + text[upAt:]
 	findings := detectVersionReuse(pins, []migrationFile{migrationFileOf(2, name, []byte(upEdited))})
 	if len(findings) != 1 || findings[0].kind != kindContentChanged {
