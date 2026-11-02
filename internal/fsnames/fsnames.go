@@ -12,7 +12,8 @@
 // A name is traced through variables assigned exactly once.
 //
 // WHAT IT DOES NOT COVER: a name built inside a helper such as pathspec's
-// Join, or in a variable assigned more than once.
+// Join, or in a variable assigned more than once, or a name or pattern handed
+// to a reader outside io/fs, such as template.ParseFS.
 package fsnames
 
 import (
