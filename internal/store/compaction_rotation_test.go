@@ -3,10 +3,14 @@ package store
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dolthub/dolt/go/store/chunks"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -94,9 +98,10 @@ func TestAPassAfterAPushRotatesTheEngineAndTheNextPushLands(t *testing.T) {
 
 // The backstop's hold is routine because its pass ends on its own: writers wait
 // behind it for as long as it runs, so this deadline is what ends their wait
-// while a collection marks. Doubling it walks the cut from before DOLT_GC starts,
+// while a collection marks. Stepping it walks the cut from before DOLT_GC starts,
 // which proves nothing, into marking, which Dolt's error names by its SaveHashes
-// step. A Dolt that lost the cut runs the pass to its end here instead. A cut
+// step. The step is shorter than marking, so a slow start cannot carry the cut
+// past it. A Dolt that lost the cut runs the pass to its end here instead. A cut
 // pass leaves the journal uncollected, and the store then takes a write.
 func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	t.Parallel()
@@ -113,7 +118,7 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	}
 
 	err = nil
-	for deadline := time.Millisecond; err == nil || !strings.Contains(err.Error(), "SaveHashes"); deadline *= 2 {
+	for deadline := time.Millisecond; err == nil || !strings.Contains(err.Error(), "SaveHashes"); deadline += 5 * time.Millisecond {
 		cut, cancel := context.WithTimeout(ctx, deadline)
 		var outcome storage.CompactionOutcome
 		outcome, err = s.SyncCompact(cut, GCFull)
@@ -184,6 +189,32 @@ func TestAFailedRotationIsNotReportedAsOne(t *testing.T) {
 	}
 	if got, err := s.rotateAfterGC(ctx); got != "" || err == nil {
 		t.Fatalf("rotateAfterGC() on a closed pool = %q, %v; want no rotation and the failure", got, err)
+	}
+}
+
+// A pass owed and refused before it reached the store did not find nothing owed:
+// [] would tell a reader the opposite of what happened on the store that needed
+// a pass. It writes no key, and the caller has the refusal as an error.
+func TestARefusedPassIsNotALookThatOwedNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+	s, err := OpenMaintenance(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenMaintenance() error = %v", err)
+	}
+	defer s.Close()
+	if err := os.Truncate(filepath.Join(nomsDir(doltRoot), chunks.JournalFileID), journalDueBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	past, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := s.MaintainIfDue(past); !errors.Is(err, context.Canceled) {
+		t.Fatalf("MaintainIfDue() with a pass owed past the cancel error = %v, want it refused", err)
+	}
+	if passes, looked := s.CompactionPasses(); looked || len(passes) != 0 {
+		t.Fatalf("CompactionPasses() after a refused pass = %+v, %t; want none and no look", passes, looked)
 	}
 }
 

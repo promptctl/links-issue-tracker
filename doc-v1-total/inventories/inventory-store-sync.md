@@ -184,7 +184,7 @@ Tests: `TestSyncPullStateTransitions` (`sync_reconcile_schema_skew_test.go`), `T
 
 `SyncCompactAndPush(...)` (`sync.go`) — both args required (`requireSyncArg`) before anything runs, so a blank one is refused before the compaction (`TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork`, `sync_test.go`); then the first attempt is one `runSyncMutation`:
 1. `depth, depthErr = s.chooseCompactionDepth()` measured **inside** the lock (`sync.go`).
-2. `attempt, swept, compactErr = s.compactWithinLock(ctx, depth)`; `sweep = sweep.plus(swept)` (`sync.go`).
+2. `pass, swept, compactErr := s.compactWithinLock(ctx, depth)`; `attempt = attempt.Plus(pass)`; `sweep = sweep.plus(swept)` (`sync.go`).
 3. `s.pushWithinLock(...)` (`sync.go`).
 The attempt's outcome goes through `retryPushAfterFollow`, so a refusal over a re-root it follows pushes again without compacting, and any other failure stands with nothing fetched; the outcome is `joinFollowFailure(err, followErr)`.
 After all attempts, whether or not they failed, and **outside** the commit lock (`sync.go`):
@@ -347,13 +347,13 @@ Test `TestDueModeSelectsDepthByFootprint` (`compaction_test.go`).
 `compactWithinLock(ctx, mode)` (`sync.go`) — caller must already hold the commit lock:
 1. `gcProcedureArgs(mode)`.
 2. `CALL DOLT_GC(args…)`; error `"compact dolt store (%s): %w"`.
-3. `s.reconnect(ctx)` — mandatory, because online GC poisons the active SQL connection (`sync.go`); a failure returns with an empty sweep outcome.
+3. `s.rotateAfterGC(ctx)` — mandatory, because online GC poisons the active SQL connection: `replaceConnection` on an engine that reached no remote, `reconnect` on one that did, and neither cut by the caller's deadline or cancel (`sync.go`); a failure returns with an empty sweep outcome and no rotation recorded.
 4. `s.sweepOrphanedInstanceRefs(ctx)` — the orphaned instance-ref sweep (`inventory-store-core.md` 7.7), returned as the second value (`sync.go`).
 
 `SyncCompact(ctx, mode)` (`sync.go`):
 1. **Door guard**: `!mode.Valid()` → `"compact: illegal depth %d (want %q or %q)"` with `storage.GCNewGen`/`storage.GCFull` named (`sync.go`). Test `TestSyncCompactRefusesAnIllegalDepth` (`sync_test.go`).
 2. `before, beforeErr := s.measureCompactionSignals()` — **outside** the lock.
-3. `runSyncMutation(compactWithinLock(mode))`, the sweep outcomes of every run joined with `plus`.
+3. `runSyncMutation(compactWithinLock(mode))`, the passes of every run joined with `Plus` and their sweep outcomes with `plus`.
 4. `after, afterErr := s.measureCompactionSignals()` — also outside the lock.
 5. Returns `CompactionOutcome{Ran: true, Depth: mode, Detail: joinMaintenance(signalsDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report())}`; a failure is annotated with `joinMaintenance(compactionReport(attempt, nil), sweep.Report())`.
 Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).

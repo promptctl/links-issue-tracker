@@ -131,7 +131,7 @@ type Store struct {
 	// (collectOwedCut); Collections is its one reader.
 	collections []storage.Collection
 	// compactionPasses is every compaction attempted since the store opened,
-	// and compactionLooked whether compactIfDue measured whether one was owed;
+	// and compactionLooked whether compactIfDue found none owed;
 	// CompactionPasses is their one reader.
 	compactionPasses []storage.CompactionPass
 	compactionLooked bool

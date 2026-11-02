@@ -901,9 +901,9 @@ func (s *Store) compactIfDue(ctx context.Context) (storage.CompactionOutcome, er
 		// [LAW:no-silent-failure]
 		return storage.CompactionOutcome{}, fmt.Errorf("measure compaction signals: %w", err)
 	}
-	s.compactionLooked = true
 	mode, due := dueMode(signals)
 	if !due {
+		s.compactionLooked = true
 		return storage.CompactionOutcome{}, nil
 	}
 	return s.SyncCompact(ctx, mode)
