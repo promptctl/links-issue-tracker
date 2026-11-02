@@ -143,3 +143,53 @@ func TestOnlyGoreleaserClaimsReleaseProvenance(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryProducerStampsTheReleasedSchema pins the released-schema ceiling at
+// every producer. A producer that forgets it builds a lit with ceiling 0, which
+// migrates no existing workspace and pushes nothing; one that stamped the
+// tree's own schema would let an unreleased migration reach a real workspace.
+// The from-source producers carry the number the one shared script reads from
+// the newest release tag; goreleaser states that a release's schema is its own.
+func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
+	t.Parallel()
+
+	ldflags := repoFile(t, "scripts/version-ldflags.sh")
+	if !strings.Contains(ldflags, "tools/schema-release-check -released-schema") {
+		t.Error("scripts/version-ldflags.sh does not read LIT_BUILD_RELEASED_SCHEMA from tools/schema-release-check -released-schema")
+	}
+	if !exportedNames(ldflags)["LIT_BUILD_RELEASED_SCHEMA"] {
+		t.Error("scripts/version-ldflags.sh never exports LIT_BUILD_RELEASED_SCHEMA, so neither caller would receive it")
+	}
+	for _, file := range []string{"Justfile", "scripts/install.sh", ".github/actions/report-to-lit/action.yml"} {
+		if !strings.Contains(repoFile(t, file), "${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA}") {
+			t.Errorf("%s does not pass ${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA} to the linker — a lit it builds would have released-schema ceiling 0", file)
+		}
+	}
+	const releaseStamp = "internal/version.ReleasedSchema=" + ReleasedSchemaCarried
+	if !strings.Contains(repoFile(t, ".goreleaser.yml"), releaseStamp) {
+		t.Errorf(".goreleaser.yml does not stamp %s — released binaries would refuse every migration and push", releaseStamp)
+	}
+}
+
+// TestReleasedSchemaCeilingReadsTheStamp pins the stamp's grammar: unstamped
+// fails closed at 0, the release stamp is the carried schema, a number is
+// itself, and anything else is a broken producer.
+func TestReleasedSchemaCeilingReadsTheStamp(t *testing.T) {
+	saved := ReleasedSchema
+	t.Cleanup(func() { ReleasedSchema = saved })
+	carried, err := CarriedSchemaSupport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		stamp string
+		want  int64
+		ok    bool
+	}{{"", 0, true}, {ReleasedSchemaCarried, carried.Max, true}, {"11", 11, true}, {"-1", 0, false}, {"v11", 0, false}} {
+		ReleasedSchema = tc.stamp
+		got, err := ReleasedSchemaCeiling()
+		if (err == nil) != tc.ok || got != tc.want {
+			t.Errorf("ReleasedSchemaCeiling() with stamp %q = %d, %v; want %d, ok=%v", tc.stamp, got, err, tc.want, tc.ok)
+		}
+	}
+}

@@ -137,11 +137,16 @@ checkout with no release tag of its own (exit 1). A tree that adds a migration
 stays refused until the epic's release ships it. Until then:
 
 - Develop the migration with `go test`.
-- Run a `go build` or `just build` binary only in a scratch workspace: `lit
-  init` in a temporary git repo. Never run it inside a real workspace, this
-  checkout included. lit opens the store of whatever repo your cwd is in, and
-  this binary would migrate it to a schema no release can open. Nothing
-  enforces this rule. The install guard covers only `install.sh`.
+- Try a `go build` or `just build` binary in a scratch workspace: `lit init`
+  in a temporary git repo.
+
+Every lit carries a released-schema ceiling: the highest migration in the
+newest release tag (`just build`, `install.sh`), the schema it embeds (a
+release), or 0 (a bare `go build`). lit never migrates an existing workspace
+past its ceiling and never pushes a commit whose schema is above it, so no
+remote is ever moved to a schema no release carries. A new store is created at
+the binary's full schema, which is what makes a scratch workspace work; that
+store cannot be pushed until a release carries its schema.
 
 The guard reads local tags and trusts every `vX.Y.Z` tag as a published release;
 only the release pipeline makes one, so never make one by hand. A stale tag list

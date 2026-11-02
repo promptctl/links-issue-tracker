@@ -648,6 +648,11 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	if !state.willMutate() {
 		return pruneErr, nil
 	}
+	// Before anything is written for the schema move: an existing workspace
+	// is never moved to a schema no release carries.
+	if fail := attempt(stepRefuseUnreleased, func() error { return s.refuseUnreleasedMigration(state) }); fail != nil {
+		return pruneErr, fail
+	}
 	// Fast-fail before the snapshot guard so a permanently-quarantined workspace
 	// does not accumulate recovery snapshots on every Open.
 	if fail := s.quarantineGate(ctx, state); fail != nil {

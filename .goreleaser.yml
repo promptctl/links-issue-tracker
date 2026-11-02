@@ -149,6 +149,9 @@ builds:
       # The value is a literal, not a template, because the fact it records is
       # about this producer rather than about any particular build of it.
       - -X github.com/promptctl/links-issue-tracker/internal/version.Origin=release
+      # A release carries only released migrations, by definition: its
+      # released-schema ceiling is the schema it embeds.
+      - -X github.com/promptctl/links-issue-tracker/internal/version.ReleasedSchema=carried
 
 archives:
   - id: lit

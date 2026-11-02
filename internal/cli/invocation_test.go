@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"io"
 	"os"
 	"path/filepath"
@@ -27,7 +28,16 @@ func dirInvocation(dir string, stdout, stderr io.Writer, args []string) Invocati
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the run it starts; links-testperf-xxsx.2.1 hands
 // those tests an environment of their own instead.
-func testEnv() environ.Env { return environ.Of(os.Environ()) }
+// testEnv is the process environment with the released-schema ceiling at this
+// tree's own highest migration, so the suite exercises every migration the
+// tree carries, unreleased ones included.
+func testEnv() environ.Env {
+	max, err := migrations.MaxVersion()
+	if err != nil {
+		panic("read the migration registry: " + err.Error())
+	}
+	return environ.Of(os.Environ()).WithReleasedSchema(max)
+}
 
 // A literal that leaves Env out holds the zero Env. Run refuses it, where the
 // same invocation given an environment runs.

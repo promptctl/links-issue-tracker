@@ -45,4 +45,19 @@ LIT_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 # and Date, for the reason they do: one string, two callers, no way to drift.
 # [LAW:one-source-of-truth]
 LIT_BUILD_ORIGIN="source"
-export LIT_BUILD_COMMIT LIT_BUILD_DATE LIT_BUILD_ORIGIN
+# The released-schema ceiling: the highest migration in the newest local
+# release tag's registry, read by tools/schema-release-check, the same reading
+# install.sh's guard makes. A lit built from a tree ahead of every release
+# carries the release's ceiling, so it migrates no existing workspace past it
+# and pushes no commit above it. With no local release tag the ceiling is 0.
+# A stale tag list can only lower it, which fails closed.
+# shellcheck source=scripts/release-tags.sh
+. "$(dirname "${BASH_SOURCE[0]}")/release-tags.sh"
+_lit_newest_tag="$(git tag --list | newest_release_tag)"
+if ! LIT_BUILD_RELEASED_SCHEMA="$(GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go run ./tools/schema-release-check -released-schema "$_lit_newest_tag")"; then
+    echo "version-ldflags: could not read the released schema of tag '${_lit_newest_tag}'" >&2
+    unset _lit_newest_tag LIT_BUILD_RELEASED_SCHEMA
+    return 1
+fi
+unset _lit_newest_tag
+export LIT_BUILD_COMMIT LIT_BUILD_DATE LIT_BUILD_ORIGIN LIT_BUILD_RELEASED_SCHEMA

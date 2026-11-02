@@ -57,7 +57,17 @@ runs:
         git config --global user.name 'github-actions[bot]'
         git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
         lit="$RUNNER_TEMP/lit"
-        go build -o "$lit" ./cmd/lit
+        # Stamped as `just build` stamps: an unstamped lit has released-schema
+        # ceiling 0 and would refuse to migrate the adopted store or push it.
+        # The ceiling is read from the newest release tag, so fetch the tags a
+        # shallow checkout lacks.
+        git fetch --quiet --tags origin
+        . scripts/cgo-env.sh
+        . scripts/version-ldflags.sh
+        pkg=github.com/promptctl/links-issue-tracker/internal/version
+        go build -buildvcs=false \
+          -ldflags "-X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE} -X ${pkg}.Origin=${LIT_BUILD_ORIGIN} -X ${pkg}.ReleasedSchema=${LIT_BUILD_RELEASED_SCHEMA}" \
+          -o "$lit" ./cmd/lit
         # A fresh clone adopts the remote's backlog here (first-receive).
         "$lit" init
         existing=$("$lit" ls --labels "$LABEL" --status open,in_progress --limit 1 --columns id)

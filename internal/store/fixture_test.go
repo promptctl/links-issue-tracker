@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"io"
 	"os"
 	"testing"
@@ -84,7 +85,16 @@ func TestMain(m *testing.M) {
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the store it opens runs.
-func testEnv() environ.Env { return environ.Of(os.Environ()) }
+// testEnv is the process environment with the released-schema ceiling at this
+// tree's own highest migration, so the suite exercises every migration the
+// tree carries, unreleased ones included.
+func testEnv() environ.Env {
+	max, err := migrations.MaxVersion()
+	if err != nil {
+		panic("read the migration registry: " + err.Error())
+	}
+	return environ.Of(os.Environ()).WithReleasedSchema(max)
+}
 
 // testStderr is where a store a test opens prints its notices: the test
 // binary's own stderr, which go test shows beside a failure.

@@ -15,6 +15,8 @@
 package version
 
 import (
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
@@ -43,7 +45,48 @@ var (
 	// provenance is carried as its own fact, never guessed from another one.
 	// [LAW:types-are-the-program]
 	Origin string
+	// ReleasedSchema is the highest schema version a published release of lit
+	// carries, as the producer of this binary knew it: the ceiling this binary
+	// may move an existing workspace's schema to, and the highest schema a
+	// commit it pushes may be at. See ReleasedSchemaCeiling for its grammar.
+	ReleasedSchema string
 )
+
+// ReleasedSchemaCarried is goreleaser's stamp for ReleasedSchema: every
+// migration a release binary carries is released, because the binary is the
+// release. The from-source producers stamp a number instead, read from the
+// newest release tag's registry by tools/schema-release-check.
+const ReleasedSchemaCarried = "carried"
+
+// ReleasedSchemaCeiling is the schema ceiling ReleasedSchema stamps.
+//
+// An unstamped binary (a bare `go build`, `go run`) has ceiling 0: nothing
+// says which of its migrations a release carries, so it moves no existing
+// workspace's schema and pushes no commit with a schema. Unknown fails closed.
+// A stamp that is neither ReleasedSchemaCarried nor a non-negative decimal is a
+// broken producer, reported rather than read as some ceiling.
+// [LAW:no-silent-failure] [LAW:parse-dont-validate]
+//
+// cmd/lit reads this once and hands it down on the run's environ.Env; no code
+// below the composition root reads the stamp, so tests construct stores with
+// whatever ceiling they are about.
+func ReleasedSchemaCeiling() (int64, error) {
+	switch ReleasedSchema {
+	case "":
+		return 0, nil
+	case ReleasedSchemaCarried:
+		support, err := CarriedSchemaSupport()
+		if err != nil {
+			return 0, err
+		}
+		return support.Max, nil
+	}
+	n, err := strconv.ParseInt(ReleasedSchema, 10, 64)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("this lit was built with released-schema stamp %q, which is neither %q nor a schema version", ReleasedSchema, ReleasedSchemaCarried)
+	}
+	return n, nil
+}
 
 // OriginRelease is the only value meaning "this binary will not be refreshed
 // by rebuilding a working tree". Every other value — including the empty

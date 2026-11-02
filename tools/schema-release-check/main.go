@@ -19,6 +19,12 @@
 // does not; 1, the tree cannot be shown released (no release tag, or the
 // comparison could not be made). CI's install step accepts 3 and nothing else,
 // because a merged migration leaves master ahead until its release is cut.
+//
+// With -released-schema, it instead prints the highest migration version in the
+// tag's registry and nothing else: the released-schema ceiling every from-source
+// build stamps into internal/version.ReleasedSchema (scripts/version-ldflags.sh).
+// An empty tag prints 0: with no release known, no schema is released. It exits
+// 1 when the tag's registry cannot be read.
 package main
 
 import (
@@ -44,6 +50,9 @@ const (
 )
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "-released-schema" {
+		os.Exit(printReleasedSchema(os.Args[2], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: schema-release-check <newest release tag, or \"\" when there is none>")
 		os.Exit(exitUnknown)
@@ -101,6 +110,22 @@ func compare(tag string, stderr io.Writer) outcome {
 	return o
 }
 
+// printReleasedSchema prints tag's released schema: its registry's highest
+// migration version, 0 for no tag.
+func printReleasedSchema(tag string, stdout, stderr io.Writer) int {
+	if tag == "" {
+		fmt.Fprintln(stdout, 0)
+		return exitInstall
+	}
+	release, err := releaseRegistry(tag, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: schema-release-check: %v\n", err)
+		return exitUnknown
+	}
+	fmt.Fprintln(stdout, release.MaxVersion())
+	return exitInstall
+}
+
 func or(s, empty string) string {
 	if s == "" {
 		return empty
@@ -111,27 +136,53 @@ func or(s, empty string) string {
 // releaseSchema is the highest migration version in tag's registry, and the
 // migrations this tree embeds that tag's registry does not hold byte for byte.
 func releaseSchema(tag string, embedded migrations.Registry, stderr io.Writer) (int64, []string, error) {
-	var out bytes.Buffer
-	cmd := exec.Command("git", "ls-tree", "-z", "refs/tags/"+tag, "--", registryInTree)
-	cmd.Stdout, cmd.Stderr = &out, stderr
-	if err := cmd.Run(); err != nil {
-		return 0, nil, fmt.Errorf("list %s at %s: %w", registryInTree, tag, err)
-	}
-	release, err := parseLsTree(out.String())
+	release, err := releaseBlobs(tag, stderr)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
+		return 0, nil, err
 	}
-	// [LAW:one-source-of-truth] the release's registry is read by the rule the
-	// runner's is: migrations.ParseRegistry.
-	releaseRegistry, err := migrations.ParseRegistry(slices.Collect(maps.Keys(release)))
+	registry, err := parseReleaseRegistry(tag, release)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
+		return 0, nil, err
 	}
 	tree, err := treeRegistry(embedded, stderr)
 	if err != nil {
 		return 0, nil, err
 	}
-	return releaseRegistry.MaxVersion(), unreleasedMigrations(tree, release), nil
+	return registry.MaxVersion(), unreleasedMigrations(tree, release), nil
+}
+
+// releaseRegistry is tag's migration registry.
+func releaseRegistry(tag string, stderr io.Writer) (migrations.Registry, error) {
+	release, err := releaseBlobs(tag, stderr)
+	if err != nil {
+		return migrations.Registry{}, err
+	}
+	return parseReleaseRegistry(tag, release)
+}
+
+// releaseBlobs is the blob id of every migration file in tag's registry.
+func releaseBlobs(tag string, stderr io.Writer) (blobIDs, error) {
+	var out bytes.Buffer
+	cmd := exec.Command("git", "ls-tree", "-z", "refs/tags/"+tag, "--", registryInTree)
+	cmd.Stdout, cmd.Stderr = &out, stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("list %s at %s: %w", registryInTree, tag, err)
+	}
+	release, err := parseLsTree(out.String())
+	if err != nil {
+		return nil, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
+	}
+	return release, nil
+}
+
+// parseReleaseRegistry reads release's file names by the rule the runner reads
+// its own: migrations.ParseRegistry. [LAW:one-source-of-truth]
+func parseReleaseRegistry(tag string, release blobIDs) (migrations.Registry, error) {
+	registry, err := migrations.ParseRegistry(slices.Collect(maps.Keys(release)))
+	if err != nil {
+		return migrations.Registry{}, fmt.Errorf("%s at %s: %w", registryInTree, tag, err)
+	}
+	return registry, nil
 }
 
 // blobIDs maps a migration file's name to its git blob id.

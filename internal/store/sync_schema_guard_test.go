@@ -49,7 +49,11 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL s
 		t.Fatalf("Close(seed): %v", err)
 	}
 
-	sync := openSyncOrFatal(t, ctx, root)
+	// The newer binary's release carries the schema it pushes.
+	sync, err := OpenSync(ctx, testEnv().WithReleasedSchema(future), testStderr(), root, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync(seed): %v", err)
+	}
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(seed): %v", err)
 	}
@@ -278,7 +282,11 @@ func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id str
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close(advance): %v", err)
 	}
-	sync := openSyncOrFatal(t, ctx, root)
+	// The newer binary's release carries the schema it pushes.
+	sync, err := OpenSync(ctx, testEnv().WithReleasedSchema(registryMax+1), testStderr(), root, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync(advance): %v", err)
+	}
 	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush(advance): %v", err)
 	}

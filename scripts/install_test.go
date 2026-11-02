@@ -163,7 +163,7 @@ func runSourceInstall(t *testing.T, built string, releases []release, checkout s
 	}
 	writeFile(t, filepath.Join(scriptDir, "cgo-env.sh"), ":\n", 0o644)
 	writeFile(t, filepath.Join(scriptDir, "version-ldflags.sh"),
-		"export LIT_BUILD_COMMIT=test LIT_BUILD_DATE=test LIT_BUILD_ORIGIN=source\n", 0o644)
+		"export LIT_BUILD_COMMIT=test LIT_BUILD_DATE=test LIT_BUILD_ORIGIN=source LIT_BUILD_RELEASED_SCHEMA=0\n", 0o644)
 	buildLog := filepath.Join(root, "go-builds")
 	writeFile(t, filepath.Join(stubBin, "go"), `#!/bin/sh
 for a; do

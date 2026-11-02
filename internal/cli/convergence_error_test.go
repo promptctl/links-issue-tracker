@@ -24,6 +24,7 @@ var convergenceStepReasons = map[string]string{
 	"classify":                        "migration_failed",
 	"verify_content":                  "migration_failed",
 	"refuse_unwritable":               "migration_failed",
+	"refuse_unreleased":               "migration_failed",
 	"drift_checkpoint":                "migration_failed",
 	"drift_repair":                    "migration_failed",
 	"drift_repair_reset":              "migration_failed",
