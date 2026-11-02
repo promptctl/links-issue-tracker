@@ -101,7 +101,13 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	mergedIssues := make([]model.Issue, 0, len(allIDs))
 	pending := make([]ProsePending, 0)
 	collisions := make([]Collision, 0)
-	narrowed := map[string]side{}
+	scope := make(issueScope, len(allIDs))
+	// [LAW:types-are-the-program] a ticket is kept together with the sides whose
+	// child rows describe it, so no branch can keep one and forget to say.
+	keep := func(issue model.Issue, from side) {
+		mergedIssues = append(mergedIssues, issue)
+		scope[issue.ID] = from
+	}
 
 	for _, id := range allIDs {
 		baseIssue, hasBase := baseMap[id]
@@ -117,15 +123,15 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		switch {
 		case !localChanged && !remoteChanged:
 			if hasBase {
-				mergedIssues = append(mergedIssues, baseIssue)
+				keep(baseIssue, bothSides)
 			}
 		case localChanged && !remoteChanged:
 			if hasLocal {
-				mergedIssues = append(mergedIssues, localIssue)
+				keep(localIssue, bothSides)
 			}
 		case !localChanged && remoteChanged:
 			if hasRemote {
-				mergedIssues = append(mergedIssues, remoteIssue)
+				keep(remoteIssue, bothSides)
 			}
 		default:
 			// Both sides changed. A field-aware merge needs both rows present; a
@@ -146,37 +152,27 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 					// [LAW:parse-dont-validate] No accessor hands out the export while
 					// this is unresolved, so the surviving row is never a silent pick.
 					collisions = append(collisions, *collision)
-					narrowed[id] = fromLocal
-					mergedIssues = append(mergedIssues, localIssue)
+					keep(localIssue, fromLocal)
 					continue
 				}
 				resolution := ResolveIssue(same)
-				mergedIssues = append(mergedIssues, resolution.Provisional())
+				keep(resolution.Provisional(), bothSides)
 				pending = append(pending, resolution.Pending...)
 			case hasLocal:
 				// remote removed it, local edited -> preserve the surviving edit,
 				// and with it the surviving side's child rows: the side that
 				// dropped the row has none, which against a base that had them
 				// would read as removing every edge and label of a live ticket.
-				mergedIssues = append(mergedIssues, localIssue)
-				narrowed[id] = fromLocal
+				keep(localIssue, fromLocal)
 			case hasRemote:
 				// local removed it, remote edited -> preserve the surviving edit.
-				mergedIssues = append(mergedIssues, remoteIssue)
-				narrowed[id] = fromRemote
+				keep(remoteIssue, fromRemote)
 				// both removed a base-only row -> converged removal, append nothing.
 			}
 		}
 	}
 
 	sort.Slice(mergedIssues, func(i, j int) bool { return mergedIssues[i].ID < mergedIssues[j].ID })
-	scope := make(issueScope, len(mergedIssues))
-	for _, issue := range mergedIssues {
-		scope[issue.ID] = bothSides
-	}
-	for id, from := range narrowed {
-		scope[id] = from
-	}
 
 	merged := model.Export{
 		Version:     model.ExportVersion,
