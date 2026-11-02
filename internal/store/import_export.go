@@ -142,7 +142,8 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	if err != nil {
 		return report, fmt.Errorf("containment check: %w", err)
 	}
-	report.Warnings = append(report.Warnings, containment...)
+	report.OutsideEpic, report.UnderNonEpic = containment.loose, containment.underLeaf
+	report.Warnings = append(report.Warnings, containment.warnings...)
 	// ORDERING IS LOAD-BEARING: this check must precede every hydrating read in
 	// Doctor, and the rank and dependency checks below are hydrating reads. Do
 	// not move it down for readability and do not hoist a shared listing above
@@ -247,8 +248,9 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	for i, issue := range order {
 		keys[i] = issue.rank
 	}
-	if tied := rank.PrefixTied(keys); tied > 0 {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("rank keys tied on the index prefix: %d (reads return these pairs in the wrong order — 'lit doctor --fix=rank' separates them without changing the order)", tied))
+	report.TiedRankKeys = rank.PrefixTied(keys)
+	if report.TiedRankKeys > 0 {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("rank keys tied on the index prefix: %d (reads return these pairs in the wrong order — 'lit doctor --fix=rank' separates them without changing the order)", report.TiedRankKeys))
 	}
 	// A blocked-by dependency cycle is work none of which can start, and it
 	// refuses the rank repair as a whole. Surface the members so the operator
@@ -309,12 +311,20 @@ func (s *Store) FixIntegrity(ctx context.Context) (storage.HealthReport, error) 
 	return s.Doctor(ctx)
 }
 
+// containment is what containmentFindings found: how many tickets each fault
+// holds, and the warning lines that name them. The count and the line come from
+// the same lists, so the event's count and the printed warning cannot disagree.
+type containment struct {
+	loose, underLeaf int
+	warnings         []string
+}
+
 // containmentFindings names every ticket the containment rule does not hold
 // for (storage.RejectLeafWithoutParent, storage.RejectParentThatIsNotAContainer):
 // a task, bug, feature or chore with no parent, and a ticket under a parent
 // that is not an epic. Each finding names the one repair that fixes both, the
 // `lit parent set` that replaces every parent of its child.
-func containmentFindings(ctx context.Context, q rowQueryer) ([]string, error) {
+func containmentFindings(ctx context.Context, q rowQueryer) (containment, error) {
 	rows, err := q.QueryContext(ctx, `
 SELECT i.id, i.issue_type, '' FROM issues i
 WHERE i.issue_type <> 'epic'
@@ -324,14 +334,14 @@ SELECT r.src_id, p.issue_type, r.dst_id FROM relations r JOIN issues p ON p.id =
 WHERE r.type = 'parent-child' AND p.issue_type <> 'epic'
 ORDER BY 1, 3`)
 	if err != nil {
-		return nil, err
+		return containment{}, err
 	}
 	defer rows.Close()
 	var loose, underLeaf []string
 	for rows.Next() {
 		var id, issueType, parentID string
 		if err := rows.Scan(&id, &issueType, &parentID); err != nil {
-			return nil, err
+			return containment{}, err
 		}
 		if parentID == "" {
 			loose = append(loose, fmt.Sprintf("%s (%s)", id, issueType))
@@ -340,17 +350,17 @@ ORDER BY 1, 3`)
 		underLeaf = append(underLeaf, fmt.Sprintf("%s under %s (%s)", id, parentID, issueType))
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return containment{}, err
 	}
 	const repair = "move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>'"
-	var findings []string
+	found := containment{loose: len(loose), underLeaf: len(underLeaf)}
 	if len(loose) > 0 {
-		findings = append(findings, fmt.Sprintf("tickets outside an epic: %s (every ticket except an epic lives inside one; %s)", strings.Join(loose, ", "), repair))
+		found.warnings = append(found.warnings, fmt.Sprintf("tickets outside an epic: %s (every ticket except an epic lives inside one; %s)", strings.Join(loose, ", "), repair))
 	}
 	if len(underLeaf) > 0 {
-		findings = append(findings, fmt.Sprintf("tickets under a parent that is not an epic: %s (only an epic contains tickets; %s)", strings.Join(underLeaf, ", "), repair))
+		found.warnings = append(found.warnings, fmt.Sprintf("tickets under a parent that is not an epic: %s (only an epic contains tickets; %s)", strings.Join(underLeaf, ", "), repair))
 	}
-	return findings, nil
+	return found, nil
 }
 
 // ReplaceFromExport is the restore: it clears the live tables and rewrites them

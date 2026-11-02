@@ -456,9 +456,12 @@ func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storag
 	if err != nil {
 		return doctorRun{}, err
 	}
+	// Always recorded, [] when nothing was withheld, so a --fix a loop refused
+	// and one that ran in full are told apart on the event.
+	// [LAW:nothing-unseen]
+	withheld := []string{}
 	if len(report.ParentCycle) > 0 {
 		var runnable []doctorFix
-		var withheld []string
 		for _, fix := range fixes {
 			if fix.climbsHierarchy {
 				withheld = append(withheld, fix.name)
@@ -474,14 +477,21 @@ func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storag
 		}
 		fixes = runnable
 	}
-	if len(fixes) == 0 {
-		return doctorRun{report: report}, nil
-	}
+	telemetry.Set(ctx, "doctor.fix_withheld", withheld)
 	var repairErr error
+	var failed *string // nil, as telemetry.ErrorText's, when no repair failed
 	for _, fix := range fixes {
 		if repairErr = fix.run(ctx, progress, repairer); repairErr != nil {
+			failed = &fix.name
 			break
 		}
+	}
+	// A refused --fix and a clean one print the same report; these two are what
+	// separate them. [LAW:nothing-unseen]
+	telemetry.Set(ctx, "doctor.repair_failed", failed)
+	telemetry.Set(ctx, "doctor.repair_error", telemetry.ErrorText(repairErr))
+	if len(fixes) == 0 {
+		return doctorRun{report: report}, nil
 	}
 	// Re-read, so the report describes the state the repairs left behind.
 	report, err = repairer.Doctor(ctx)
@@ -546,6 +556,17 @@ func doctorLeaf() appLeaf {
 		telemetry.Set(ctx, "doctor.dependency_cycle", doctorFieldValue(report, storage.CheckDependencyCycle, joinCycle(report.DependencyCycle)))
 		telemetry.Set(ctx, "doctor.interleaved", doctorFieldValue(report, storage.CheckRankInversions, strconv.Itoa(len(report.Interleaved))))
 		telemetry.Set(ctx, "doctor.refused_blocks", doctorFieldValue(report, storage.CheckRefusedBlocks, strconv.Itoa(len(report.RefusedBlocks))))
+		// The tied count is computed from the rank order the duplicate-key check
+		// reads, so a parent cycle leaves it unchecked with that check.
+		telemetry.Set(ctx, "doctor.tied_rank_keys", doctorFieldValue(report, storage.CheckDuplicateRanks, strconv.Itoa(report.TiedRankKeys)))
+		telemetry.Set(ctx, "doctor.invalid_related_rows", strconv.Itoa(report.InvalidRelatedRows))
+		telemetry.Set(ctx, "doctor.orphan_history_rows", strconv.Itoa(report.OrphanHistoryRows))
+		telemetry.Set(ctx, "doctor.outside_epic", strconv.Itoa(report.OutsideEpic))
+		telemetry.Set(ctx, "doctor.under_non_epic", strconv.Itoa(report.UnderNonEpic))
+		// The warning lines printed, zero included: a reader holding a nonzero
+		// count with every kind fact at zero has found a warning with no fact of
+		// its own. [LAW:nothing-unseen]
+		telemetry.Count(ctx, "doctor.warnings", len(report.Warnings))
 		telemetry.Set(ctx, "doctor.footprint_bytes", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.GovernedBytes(), 10)))
 		telemetry.Set(ctx, "doctor.footprint_ceiling", footprintFieldValue(report.Footprint, strconv.FormatInt(report.Footprint.Ceiling, 10)))
 		telemetry.Set(ctx, "doctor.over_ceiling", footprintFieldValue(report.Footprint, overCeilingPart(report.Footprint)))

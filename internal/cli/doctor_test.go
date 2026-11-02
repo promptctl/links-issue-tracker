@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -194,6 +196,13 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	if strings.Contains(clean.String(), "warning: ") {
 		t.Fatalf("doctor on a contained hierarchy should print no warning; got:\n%s", clean.String())
 	}
+	// The event of a clean run writes each warning fact as a zero, so "found
+	// none" is on the record rather than an absent key.
+	cleanEvent, _ := runDoctorEvent(t, h)
+	assertWarningFacts(t, cleanEvent, 0, map[string]string{
+		"doctor.outside_epic": "0", "doctor.under_non_epic": "0", "doctor.tied_rank_keys": "0",
+		"doctor.invalid_related_rows": "0", "doctor.orphan_history_rows": "0",
+	})
 
 	raw, err := storage.TestSupport.Of(h.ap.Store)
 	if err != nil {
@@ -246,6 +255,14 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	}
 	assertWarnings(t, buf.String())
 
+	// The event counts what the warnings name: the two containment faults and
+	// the cycle are three lines, and the facts say which three.
+	warnedEvent, _ := runDoctorEvent(t, h)
+	assertWarningFacts(t, warnedEvent, 3, map[string]string{
+		"doctor.outside_epic": "1", "doctor.under_non_epic": "1", "doctor.tied_rank_keys": "0",
+		"doctor.invalid_related_rows": "0", "doctor.orphan_history_rows": "0",
+	})
+
 	// The rank repair refuses on the cycle. The refusal is the command's
 	// outcome, and the report it would otherwise have cost is still printed.
 	var fixed bytes.Buffer
@@ -254,6 +271,21 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 		t.Fatalf("runDoctor(--fix=rank) error = %v, want the rank repair's refusal on the cycle", err)
 	}
 	assertWarnings(t, fixed.String())
+
+	// A refused --fix and a clean one print the same report; the event names
+	// the repair that failed and why.
+	var refused bytes.Buffer
+	refusalEvent, err := recordLeaf(doctorLeaf(), h.ctx, cwdInvocation(&refused, &refused, nil), h.ap, []string{"--fix=rank"})
+	if err == nil {
+		t.Fatal("doctor --fix=rank on a dependency cycle: want the rank repair's refusal")
+	}
+	refusedFacts := writtenFacts(t, refusalEvent)
+	if refusedFacts["doctor.repair_failed"] != "rank" {
+		t.Errorf("event fact doctor.repair_failed = %v, want \"rank\"", refusedFacts["doctor.repair_failed"])
+	}
+	if reason, _ := refusedFacts["doctor.repair_error"].(string); !strings.Contains(reason, "lit dep rm") {
+		t.Errorf("event fact doctor.repair_error = %v, want the repair's refusal naming 'lit dep rm'", refusedFacts["doctor.repair_error"])
+	}
 
 	// A report cut short by its own write failure still carries the repair's.
 	err = runDoctor(h.ctx, refusingWriter{}, h.ap, []string{"--fix=rank"})
@@ -266,12 +298,19 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 // invocation's event carries beside what it printed.
 func runDoctorRecorded(t *testing.T, h readyTestHarness, args ...string) (map[string]any, string) {
 	t.Helper()
+	ev, out := runDoctorEvent(t, h, args...)
+	return writtenFacts(t, ev), out
+}
+
+// runDoctorEvent is runDoctorRecorded's whole event, counts beside the facts.
+func runDoctorEvent(t *testing.T, h readyTestHarness, args ...string) (telemetry.Event, string) {
+	t.Helper()
 	var out bytes.Buffer
 	ev, err := recordLeaf(doctorLeaf(), h.ctx, cwdInvocation(&out, &out, nil), h.ap, args)
 	if err != nil {
 		t.Fatalf("doctor %v error = %v\n%s", args, err, out.String())
 	}
-	return writtenFacts(t, ev), out.String()
+	return ev, out.String()
 }
 
 // A key two live tickets hold is named on the status line, in a warning line,
@@ -481,4 +520,46 @@ func TestDoctorNamesABlockedByEdgeBetweenTwoLeavesOfOneEpic(t *testing.T) {
 	if !strings.Contains(out, want) || !strings.Contains(out, repair) {
 		t.Errorf("doctor output missing the warning %q naming %q:\n%s", want, repair, out)
 	}
+}
+
+// assertWarningFacts reads the warning facts off a doctor event: the count of
+// warning lines it printed, written even at zero, and each warning-bearing
+// fact by name.
+func assertWarningFacts(t *testing.T, ev telemetry.Event, wantLines int, want map[string]string) {
+	t.Helper()
+	written := writtenEvent(t, ev)
+	if got, present := written.Counts["doctor.warnings"]; !present || got != wantLines {
+		t.Errorf("event count doctor.warnings = %d (present %v), want %d", got, present, wantLines)
+	}
+	for fact, value := range want {
+		if got := fmt.Sprint(written.Facts[fact]); got != value {
+			t.Errorf("event fact %s = %v, want %q", fact, written.Facts[fact], value)
+		}
+	}
+}
+
+// A looped hierarchy stops the rank-order checks, and the tied-key count is
+// one of them: its fact reads "unchecked", never a clean "0", while the
+// containment counts, which are column reads, still name a number.
+func TestDoctorEventSaysTiedKeysUncheckedOnAStoredParentCycle(t *testing.T) {
+	h := newReadyTestHarness(t)
+	top := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
+	sub := h.createIssue(storage.CreateIssueInput{Title: "S", Topic: "loop", IssueType: "epic", ParentID: top.ID})
+	raw, err := storage.TestSupport.Of(h.ap.Store)
+	if err != nil {
+		t.Fatalf("TestSupport: %v", err)
+	}
+	if err := raw.ExecRawForTest(h.ctx,
+		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
+		top.ID, sub.ID, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("plant parent cycle: %v", err)
+	}
+	var out bytes.Buffer
+	ev, err := recordLeaf(doctorLeaf(), h.ctx, cwdInvocation(&out, &out, nil), h.ap, nil)
+	if !errors.As(err, new(CorruptionError)) {
+		t.Fatalf("doctor error = %v, want the parent cycle's CorruptionError", err)
+	}
+	assertWarningFacts(t, ev, 0, map[string]string{
+		"doctor.tied_rank_keys": "unchecked", "doctor.outside_epic": "0", "doctor.under_non_epic": "0",
+	})
 }

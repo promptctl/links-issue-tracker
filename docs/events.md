@@ -661,7 +661,14 @@ write waited for the config lock.
 
 Doctor sets its keys once the report it prints is read, after any `--fix`
 repairs have run, so they describe the state the command left behind. The
-exception is `doctor.reranked`, which the repair sets as it runs.
+exceptions are `doctor.reranked`, `doctor.repair_failed` and
+`doctor.repair_error`, which the repairs set as they run, and
+`doctor.fix_withheld`, which is set from the first report, before any repair.
+
+Every warning line the report prints has a fact of its own: the rank, cycle,
+interleaved, refused-block and footprint facts below, or one of the counts here.
+`doctor.warnings` is how many warning lines were printed, so a count above zero
+that none of those facts accounts for is a warning that has no fact.
 
 | Key | Meaning |
 | --- | --- |
@@ -673,7 +680,18 @@ exception is `doctor.reranked`, which the repair sets as it runs.
 | `doctor.footprint_bytes` | The store's size on disk that its size ceiling counts, in bytes: every part but the remote cache; `"unmeasured"` when its size could not be read. |
 | `doctor.footprint_ceiling` | The store's size ceiling, in bytes; `"unmeasured"` when its size could not be read. |
 | `doctor.over_ceiling` | The part holding the most bytes when the store is over its ceiling, such as `chunk store` or `automatic snapshots`, `"none"` when it is within it, or `"unmeasured"` when its size could not be read. |
+| `doctor.tied_rank_keys` | The pairs of rank keys that tie on the index prefix, so reads return the pair in the wrong order: a count such as `"0"`, or `"unchecked"` when a parent cycle kept the check from running. |
+| `doctor.invalid_related_rows` | The related-to rows whose ids are not in ascending order, as the status line prints it, a count such as `"0"`. |
+| `doctor.orphan_history_rows` | The issue event rows with no issue or event to belong to, as the status line prints it, a count such as `"0"`. |
+| `doctor.outside_epic` | The tickets that are not an epic and have no parent, a count such as `"0"`. |
+| `doctor.under_non_epic` | The parent links from a ticket to a parent that is not an epic, one per entry the warning line names, a count such as `"0"`. |
+| `doctor.fix_withheld` | The `--fix` repairs a parent cycle withheld, such as `["rank"]`; `[]` when none was. Set whether or not `--fix` was given. |
+| `doctor.repair_failed` | The repair that failed, such as `"rank"`; null when none did. |
+| `doctor.repair_error` | The failed repair's error text; null when no repair failed. |
 | `doctor.reranked` | The issues `--fix=rank` gave a new rank key, as an integer. Present only when that repair runs. |
+
+`doctor.warnings`, among the event's counts, is the number of `warning:` lines
+the report printed, written when it is `0`.
 
 ## Reading the file
 
