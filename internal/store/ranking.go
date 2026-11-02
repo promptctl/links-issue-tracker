@@ -99,8 +99,18 @@ func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, 
 	if err != nil {
 		return storage.RankAncestry{}, err
 	}
-	rankObserverFrom(ctx).ReadParentEdges(len(links))
-	return storage.NewRankAncestry(links), nil
+	observer := rankObserverFrom(ctx)
+	observer.ReadParentEdges(len(links))
+	return observedAncestry(observer, links), nil
+}
+
+// observedAncestry builds the ancestry a read's edges make and tells observer
+// its shape, whether or not the write around the read stands: a refused repair
+// still met the damage it refused over.
+func observedAncestry(observer RankObserver, links []storage.ParentLink) storage.RankAncestry {
+	ancestry := storage.NewRankAncestry(links)
+	observer.Ancestry(ancestry.Shape())
+	return ancestry
 }
 
 // rankClimbQuery reads the framing edges of frontier. The hint keeps it a run of
@@ -142,7 +152,7 @@ func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (sto
 			}
 		}
 	}
-	return storage.NewRankAncestry(links), nil
+	return observedAncestry(observer, links), nil
 }
 
 // sortInTreeOrder puts each group in tree order, reading the ancestry of the
@@ -759,6 +769,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 			return storage.RankSetResult{}, err
 		}
 		result := storage.RankSetResult{Resolutions: resolutions, Frame: f}
+		account := RankSetAccount{Frame: f, Named: len(ids)}
+		observer := rankObserverFrom(ctx)
 		ranked := make([]string, len(resolutions))
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
@@ -771,6 +783,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// An order that has arrived writes nothing: its issues stand where they
 		// were asked to, and a stamp would say otherwise.
 		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id string) bool { return row.id == id }) {
+			hear(ctx, func() { observer.RankSet(account) })
 			return result, nil
 		}
 		if err := refuseReversedTie(head[:min(len(ranked), len(head))], ranked); err != nil {
@@ -810,6 +823,9 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 			moved := !inHead || stood != i
 			if moved || slots[i] != held[id] {
 				writes = append(writes, rankWrite{id: id, rank: slots[i], touched: moved})
+				if moved {
+					account.Touched++
+				}
 			}
 		}
 		if err := writeRanksTx(ctx, tx, writes, now); err != nil {
@@ -820,8 +836,37 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 				return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 			}
 		}
+		account.Minted = len(minted)
+		account.Rewritten = len(writes)
+		hear(ctx, func() { observer.RankSet(account) })
 		return result, nil
 	})
+}
+
+// ReversedTieError is the refusal of a rank set that would write Above directly
+// over Below while the two share Key, against their ids. Its record names the
+// pair on the event of whichever command ran the rank set.
+type ReversedTieError struct {
+	Above, Below, Key string
+}
+
+func (e ReversedTieError) Error() string {
+	return fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
+		e.Above, e.Below, e.Key, e.Above, e.Below, e.Above, e.Below)
+}
+
+// RefusesCommand marks ReversedTieError as a Refusal.
+func (ReversedTieError) RefusesCommand() {}
+
+var (
+	_ model.Refusal       = ReversedTieError{}
+	_ model.RecordedError = ReversedTieError{}
+)
+
+// EventRecord puts the refused pair on the failed command's event, the one it
+// would have written above first.
+func (e ReversedTieError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{"rank_set.refused_tie": []string{e.Above, e.Below}}, nil
 }
 
 // refuseReversedTie refuses an order that sets one of the issues standing in the
@@ -837,8 +882,7 @@ func refuseReversedTie(places []rankedIssue, ranked []string) error {
 	for i := 1; i < len(ranked); i++ {
 		above, below := ranked[i-1], ranked[i]
 		if key, stands := held[above]; stands && held[below] == key && below < above {
-			return model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`",
-				above, below, key, above, below, above, below)}
+			return ReversedTieError{Above: above, Below: below, Key: key}
 		}
 	}
 	return nil

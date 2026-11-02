@@ -131,6 +131,8 @@ func (w *rankWatch) on(ctx context.Context) context.Context {
 		Wrote:           func(longestKey int) { w.wrote = append(w.wrote, longestKey) },
 		Respaced:        func(r Respace) { w.respaces = append(w.respaces, r) },
 		ReadParentEdges: func(int) {},
+		Ancestry:        func(storage.AncestryShape) {},
+		RankSet:         func(RankSetAccount) {},
 	})
 }
 

@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -68,7 +70,9 @@ func beginInvocation(now time.Time, dir WorkingDir) *telemetry.Recorder {
 // every write engine's hold of Dolt's LOCK with what it told the writers
 // behind it. A fourth puts there what a write that stood did to rank keys: each
 // respace, and the longest key written, and what reads paid to learn tree order:
-// the queries of parent edges they ran and the edges those returned. Each key
+// the queries of parent edges they ran and the edges those returned, the
+// deepest chain an ancestry built from them held, and every child it placed
+// past a second parent or a loop. And what a rank set decided. Each key
 // starts empty so an invocation that met none says so, not nothing.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
 func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
@@ -81,16 +85,28 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	telemetry.Max(event, "rank.longest_key", 0)
 	telemetry.Count(event, "rank.ancestry_levels", 0)
 	telemetry.Count(event, "rank.ancestry_links", 0)
+	telemetry.Max(event, "rank.ancestry_deepest", 0)
+	telemetry.Append(event, "rank.ancestry_conflicts")
+	telemetry.Append(event, "rank.ancestry_loops")
 	ctx = store.WithLockObserver(event, store.LockObserver{
 		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
 		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
 	})
+	met := newAncestryMet(event)
 	ctx = store.WithRankObserver(ctx, store.RankObserver{
 		Wrote:    func(longestKey int) { telemetry.Max(event, "rank.longest_key", longestKey) },
 		Respaced: func(respace store.Respace) { telemetry.Append(event, "rank.respaces", rankRespaceValue(respace)) },
 		ReadParentEdges: func(links int) {
 			telemetry.Add(event, "rank.ancestry_levels", 1)
 			telemetry.Add(event, "rank.ancestry_links", links)
+		},
+		Ancestry: met.record,
+		RankSet: func(account store.RankSetAccount) {
+			telemetry.Set(event, "rank_set.frame", string(account.Frame))
+			telemetry.Set(event, "rank_set.named", account.Named)
+			telemetry.Set(event, "rank_set.rewritten", account.Rewritten)
+			telemetry.Set(event, "rank_set.touched", account.Touched)
+			telemetry.Set(event, "rank_set.minted", account.Minted)
 		},
 	})
 	ctx = nbs.WithJournalWarningObserver(ctx, func(warning nbs.JournalWarning) {
@@ -99,6 +115,56 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
 		telemetry.Append(event, "git.cancels", gitCancelValue(cancelled))
 	})
+}
+
+// ancestryMet puts on event what each ancestry build met. A command can build
+// tree order several times over the same damage, so each damaged ticket goes
+// on the event once.
+type ancestryMet struct {
+	event     context.Context
+	mu        sync.Mutex
+	conflicts map[string]struct{}
+	loops     map[string]struct{}
+}
+
+func newAncestryMet(event context.Context) *ancestryMet {
+	return &ancestryMet{event: event, conflicts: map[string]struct{}{}, loops: map[string]struct{}{}}
+}
+
+func (m *ancestryMet) record(shape storage.AncestryShape) {
+	telemetry.Max(m.event, "rank.ancestry_deepest", shape.Deepest)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var conflicts, loops []any
+	for _, conflict := range shape.Conflicts {
+		if firstMeeting(m.conflicts, conflict.ChildID) {
+			conflicts = append(conflicts, map[string]any{
+				"rank.ancestry_conflict.child":   conflict.ChildID,
+				"rank.ancestry_conflict.parents": slices.Clone(conflict.Parents),
+			})
+		}
+	}
+	for _, child := range shape.Loops {
+		if firstMeeting(m.loops, child) {
+			loops = append(loops, map[string]any{"rank.ancestry_loop.child": child})
+		}
+	}
+	// One append a key per build: each append copies what the key holds.
+	if len(conflicts) > 0 {
+		telemetry.Append(m.event, "rank.ancestry_conflicts", conflicts...)
+	}
+	if len(loops) > 0 {
+		telemetry.Append(m.event, "rank.ancestry_loops", loops...)
+	}
+}
+
+// firstMeeting marks child seen and says whether it was not already.
+func firstMeeting(seen map[string]struct{}, child string) bool {
+	if _, ok := seen[child]; ok {
+		return false
+	}
+	seen[child] = struct{}{}
+	return true
 }
 
 // rankRespaceValue is one rank.respaces occurrence.

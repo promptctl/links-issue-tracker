@@ -1623,9 +1623,9 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 				}
 				// The tie stays until a different command separates it, so the
 				// refusal is a deterministic one, never advice to retry.
-				var refused model.ValidationError
+				var refused model.Refusal
 				if !errors.As(err, &refused) {
-					t.Fatalf("RankSet(%v) error = %T, want model.ValidationError", named, err)
+					t.Fatalf("RankSet(%v) error = %T, want a model.Refusal", named, err)
 				}
 				for i := range after {
 					if after[i].ID != before[i].ID || after[i].Rank != before[i].Rank {

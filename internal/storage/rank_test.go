@@ -290,3 +290,31 @@ func TestDependencyOrderGroupsInterleavedFrameMates(t *testing.T) {
 		t.Errorf("Inverted(c.1.x blocked by c.1.y) = false, want true")
 	}
 }
+
+// Shape names what building the ancestry placed past, the second parent and the
+// loop, and the deepest chain it held; a clean tree names neither.
+func TestAnAncestryShapeNamesWhatItPlacedPast(t *testing.T) {
+	t.Parallel()
+	clean := NewRankAncestry([]ParentLink{
+		{ChildID: "e.1", ParentID: "e", ParentRank: "a"},
+		{ChildID: "e.1.x", ParentID: "e.1", ParentRank: "b"},
+	}).Shape()
+	if clean.Deepest != 2 || len(clean.Conflicts) != 0 || len(clean.Loops) != 0 {
+		t.Errorf("clean tree shape = %+v, want deepest 2 and nothing placed past", clean)
+	}
+
+	shape := NewRankAncestry([]ParentLink{
+		{ChildID: "c", ParentID: "p2", ParentRank: "a"},
+		{ChildID: "c", ParentID: "p1", ParentRank: "b"},
+		{ChildID: "l1", ParentID: "l2", ParentRank: "a"},
+		{ChildID: "l2", ParentID: "l1", ParentRank: "b"},
+		{ChildID: "x", ParentID: "l1", ParentRank: "c"},
+		{ChildID: "y", ParentID: "x", ParentRank: "d"},
+	}).Shape()
+	if len(shape.Conflicts) != 1 || shape.Conflicts[0].ChildID != "c" || !slices.Equal(shape.Conflicts[0].Parents, []string{"p1", "p2"}) {
+		t.Errorf("conflicts = %+v, want c under p1 and p2", shape.Conflicts)
+	}
+	if !slices.Equal(shape.Loops, []string{"l1", "l2"}) {
+		t.Errorf("loops = %v, want [l1 l2]: x and y sit below the loop, not on it", shape.Loops)
+	}
+}

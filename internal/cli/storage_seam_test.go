@@ -91,12 +91,13 @@ var doltWorkspaceMachinery = map[string][]string{
 		"WithLockObserver", "LockObserver", "LockWait", "LockHold",
 	},
 	// What a write did to rank keys, for the command's event: the longest key it
-	// wrote and each respace. WithRankObserver rides the invocation's context as
-	// WithLockObserver does (RankObserver, Respace), so no engine handle crosses.
+	// wrote, each respace, and what a rank set decided. WithRankObserver rides the
+	// invocation's context as WithLockObserver does (RankObserver, Respace,
+	// RankSetAccount), so no engine handle crosses.
 	// A key's limit is idx_issues_rank's prefix and the memory engine holds no
 	// keys, so this is no contract, and design.md §rank makes keys relative
 	// intents, which deletes it with them.
-	"rank key reporting": {"WithRankObserver", "RankObserver", "Respace"},
+	"rank key reporting": {"WithRankObserver", "RankObserver", "Respace", "RankSetAccount"},
 	// The detached mirror's cross-process handshake. Named in design.md §migration
 	// as mirror-flock machinery, deleted at S4.
 	"mirror beacons": {
