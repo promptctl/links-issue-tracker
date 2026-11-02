@@ -332,7 +332,7 @@ type Migrated struct {
 	SchemaAhead    SchemaAhead
 	TempTableFiles *TempTableFilesCollection
 	// Probed is what the migrations the open committed read before they ran,
-	// as event facts under their own keys; nil when none had a probe.
+	// as event facts under their own keys; empty when none had a probe.
 	Probed map[string]any
 }
 

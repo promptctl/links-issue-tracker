@@ -3206,7 +3206,12 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 			storage.BulkIssueSpec{ID: existing.ID, Title: &renamed},
 			storage.BulkIssueSpec{ID: crosser.ID, IssueType: &epicType})},
 	} {
-		assertRefused(t, imp.do(), imp.what)
+		// The file breaks a field rule or an edge rule, so the refusal is any
+		// Refusal, not one type.
+		var refused model.Refusal
+		if err := imp.do(); !errors.As(err, &refused) {
+			t.Errorf("%s error = %v, want a model.Refusal", imp.what, err)
+		}
 		assertWroteNothing(t, ctx, st, before, imp.what)
 	}
 }
@@ -3540,7 +3545,7 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 	assertHierarchyBlocksRefused(t, err, "AddRelation(a leaf blocked by the leaf beside it)")
 	// A leaf is not its own sibling: its self-edge is refused as a self-edge.
 	_, err = st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: first.ID, Type: model.RelBlockedBy})
-	assertRefused(t, err, "AddRelation(a leaf blocked by itself)")
+	assertRuleRefused(t, err, storage.RuleSelfLoop, "AddRelation(a leaf blocked by itself)")
 	if want := first.ID + " cannot be blocked by itself"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("AddRelation(a leaf blocked by itself) error = %v, want it to carry %q", err, want)
 	}
@@ -3616,7 +3621,7 @@ func assertHierarchyBlocksRefused(t *testing.T, err error, what string) {
 		t.Errorf("%s succeeded; want the same-epic refusal", what)
 		return
 	}
-	assertRefused(t, err, what)
+	assertRuleRefused(t, err, storage.RuleSameEpic, what)
 	if !strings.Contains(err.Error(), storage.SameEpicBlocksRejectionMessage) {
 		t.Errorf("%s error = %q, want it to carry %q", what, err, storage.SameEpicBlocksRejectionMessage)
 	}
@@ -4220,9 +4225,20 @@ func assertWroteNothing(t *testing.T, ctx context.Context, st storage.Store, bef
 // retrying.
 func assertRefused(t *testing.T, err error, what string) {
 	t.Helper()
-	var refused model.Refusal
+	var refused model.ValidationError
 	if !errors.As(err, &refused) {
-		t.Errorf("%s error = %v, want a model.Refusal", what, err)
+		t.Errorf("%s error = %v, want model.ValidationError", what, err)
+	}
+}
+
+// assertRuleRefused pins a refused edge to the rule that refused it: the rule,
+// not the message, is what every engine must agree on, since dep's event
+// records it.
+func assertRuleRefused(t *testing.T, err error, rule storage.RelationRule, what string) {
+	t.Helper()
+	var refused storage.RelationRuleError
+	if !errors.As(err, &refused) || refused.Rule != rule {
+		t.Errorf("%s error = %v, want a storage.RelationRuleError for rule %s", what, err, rule)
 	}
 }
 
