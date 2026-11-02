@@ -128,3 +128,33 @@ func TestDoctorGivesAnOrphanAuditRowOneVerdict(t *testing.T) {
 		t.Errorf("FixIntegrity().OrphanHistoryRows = %d, want 0 after the repair", fixed.OrphanHistoryRows)
 	}
 }
+
+// The verification covers every table but the audit log, not the one table a
+// first test happened to seed: a committed orphan row in any of them is named.
+func TestDoctorIntegrityCheckNamesAViolationInEveryNonAuditTable(t *testing.T) {
+	for name, insert := range map[string]string{
+		"comments":  `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES ('c', 'no-such-issue', 'b', '2026-01-01T00:00:00Z', 'import')`,
+		"labels":    `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES ('no-such-issue', 'l', '2026-01-01T00:00:00Z', 'import')`,
+		"relations": `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES ('no-such-src', 'no-such-dst', 'blocked-by', '2026-01-01T00:00:00Z', 'import')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st := openIssueStore(t, ctx)
+			for _, q := range []string{`SET FOREIGN_KEY_CHECKS = 0`, insert, `SET FOREIGN_KEY_CHECKS = 1`} {
+				if _, err := st.db.ExecContext(ctx, q); err != nil {
+					t.Fatalf("seed orphan %s row (%s): %v", name, q, err)
+				}
+			}
+			if err := st.commitWorkingSet(ctx, "seed a constraint violation"); err != nil {
+				t.Fatalf("commit orphan %s row: %v", name, err)
+			}
+			report, err := st.Doctor(ctx)
+			if err != nil {
+				t.Fatalf("Doctor() error = %v", err)
+			}
+			if report.IntegrityCheck != "constraint_violations" {
+				t.Errorf("Doctor().IntegrityCheck = %q for an orphan %s row, want constraint_violations", report.IntegrityCheck, name)
+			}
+		})
+	}
+}
