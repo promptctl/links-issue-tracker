@@ -55,7 +55,11 @@ type HealthReport struct {
 	// DuplicateRanks counts the rank keys more than one non-deleted issue holds. The
 	// order between the holders of one falls to the id tiebreak instead of to
 	// anything a caller ranked.
-	DuplicateRanks  int      `json:"duplicate_ranks"`
+	DuplicateRanks int `json:"duplicate_ranks"`
+	// TiedRankKeys counts the pairs of rank keys that tie on the index prefix, so
+	// reads return the pair in the wrong order with no error. It is computed from
+	// the same rank order as DuplicateRanks, so it is unchecked with it.
+	TiedRankKeys    int      `json:"tied_rank_keys"`
 	DependencyCycle []string `json:"dependency_cycle"`
 	// Interleaved names the groups of frame-mates whose issues wait on one
 	// another both ways through no loop of their own edges
@@ -63,6 +67,12 @@ type HealthReport struct {
 	// every dependency among them first, so their edges are not counted in
 	// RankInversions and the repair does not reorder them for those edges.
 	Interleaved [][]string `json:"interleaved"`
+	// OutsideEpic counts the tickets that are not an epic and have no parent;
+	// UnderNonEpic counts the tickets whose parent is not an epic. Containment is
+	// refused at every write, so these are what a rebuild or a pre-v7 source
+	// brought in. Each is a column read, so a looped hierarchy does not stop it.
+	OutsideEpic  int `json:"outside_epic"`
+	UnderNonEpic int `json:"under_non_epic"`
 	// RefusedBlocks lists the blocked-by edges between live issues that
 	// RejectBlocksWithinEpic would refuse to write today. They are named, not
 	// repaired: readiness reads them correctly, and which edge to drop is a

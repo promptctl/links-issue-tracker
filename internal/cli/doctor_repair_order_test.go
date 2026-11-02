@@ -8,9 +8,20 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
+
+// diagnoseRecorded runs diagnoseThenRepair under an open event, as cli.Run
+// hands every command one, and returns the facts the event reads back with.
+func diagnoseRecorded(t *testing.T, progress io.Writer, repairer storage.Repairer, fixes []doctorFix) (doctorRun, map[string]any, error) {
+	t.Helper()
+	recorder := telemetry.Begin(telemetry.Event{})
+	run, err := diagnoseThenRepair(telemetry.With(context.Background(), recorder), progress, repairer, fixes)
+	return run, writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), err, nil))), err
+}
 
 // cycleRepairer reports whatever health it is given and records how many times
 // it was asked, so a test can tell a diagnosis that ran before the repairs from
@@ -58,7 +69,7 @@ func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 	}
 
 	var progress bytes.Buffer
-	run, err := diagnoseThenRepair(context.Background(), &progress, repairer, fixes)
+	run, facts, err := diagnoseRecorded(t, &progress, repairer, fixes)
 	if err != nil {
 		t.Fatalf("diagnoseThenRepair() error = %v, want the cycle reported", err)
 	}
@@ -75,6 +86,14 @@ func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 	if !strings.Contains(progress.String(), "skipping --fix rank") {
 		t.Errorf("progress = %q, want it to name the repair withheld and why", progress.String())
 	}
+	// The same skip is on the event, where a refused --fix and a clean one are
+	// told apart without the stderr text.
+	if withheld := facts["doctor.fix_withheld"]; !slices.Equal(anyStrings(withheld), []string{"rank"}) {
+		t.Errorf("event fact doctor.fix_withheld = %v, want [rank]", withheld)
+	}
+	if facts["doctor.repair_failed"] != nil || facts["doctor.repair_error"] != nil {
+		t.Errorf("event facts repair_failed=%v repair_error=%v, want null: the withheld repair never ran", facts["doctor.repair_failed"], facts["doctor.repair_error"])
+	}
 }
 
 // The anti-vacuity half: on a clean hierarchy the same call must still run every
@@ -88,11 +107,20 @@ func TestDoctorStillRunsRepairsOnACleanHierarchy(t *testing.T) {
 		{name: "integrity", run: func(context.Context, io.Writer, storage.Repairer) error { ran++; return nil }},
 	}
 
-	if _, err := diagnoseThenRepair(context.Background(), io.Discard, repairer, fixes); err != nil {
+	_, facts, err := diagnoseRecorded(t, io.Discard, repairer, fixes)
+	if err != nil {
 		t.Fatalf("diagnoseThenRepair() error = %v", err)
 	}
 	if ran != len(fixes) {
 		t.Errorf("%d of %d repairs ran on a clean hierarchy", ran, len(fixes))
+	}
+	// Anti-vacuity for the withheld fact: a clean run writes the empty list, not
+	// an absent key.
+	if withheld, present := facts["doctor.fix_withheld"]; !present || len(anyStrings(withheld)) != 0 {
+		t.Errorf("event fact doctor.fix_withheld = %v (present %v), want the empty list", withheld, present)
+	}
+	if facts["doctor.repair_failed"] != nil || facts["doctor.repair_error"] != nil {
+		t.Errorf("event facts repair_failed=%v repair_error=%v, want null on a clean run", facts["doctor.repair_failed"], facts["doctor.repair_error"])
 	}
 	// Once to decide, once to describe what the repairs left behind.
 	if repairer.doctorCalls != 2 {
@@ -140,7 +168,7 @@ func TestDoctorKeepsTheReportWhenARepairFails(t *testing.T) {
 		{name: "integrity", run: func(context.Context, io.Writer, storage.Repairer) error { after = true; return nil }},
 	}
 
-	run, err := diagnoseThenRepair(context.Background(), io.Discard, repairer, fixes)
+	run, facts, err := diagnoseRecorded(t, io.Discard, repairer, fixes)
 	if err != nil {
 		t.Fatalf("diagnoseThenRepair() error = %v, want the report returned with the repair's failure beside it", err)
 	}
@@ -156,4 +184,17 @@ func TestDoctorKeepsTheReportWhenARepairFails(t *testing.T) {
 	if repairer.doctorCalls != 2 {
 		t.Errorf("Doctor called %d times, want 2: the report describes what the repairs before the failure left behind", repairer.doctorCalls)
 	}
+	if facts["doctor.repair_failed"] != "rank" || facts["doctor.repair_error"] != refusal.Error() {
+		t.Errorf("event facts repair_failed=%v repair_error=%v, want rank and %q", facts["doctor.repair_failed"], facts["doctor.repair_error"], refusal.Error())
+	}
+}
+
+// anyStrings is a fact read back from the events file, a list of strings.
+func anyStrings(v any) []string {
+	items, _ := v.([]any)
+	out := make([]string, len(items))
+	for i, item := range items {
+		out[i], _ = item.(string)
+	}
+	return out
 }
