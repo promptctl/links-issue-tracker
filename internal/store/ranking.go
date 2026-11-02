@@ -858,6 +858,11 @@ func (e ReversedTieError) Error() string {
 // RefusesCommand marks ReversedTieError as a Refusal.
 func (ReversedTieError) RefusesCommand() {}
 
+var (
+	_ model.Refusal       = ReversedTieError{}
+	_ model.RecordedError = ReversedTieError{}
+)
+
 // EventRecord puts the refused pair on the failed command's event, the one it
 // would have written above first.
 func (e ReversedTieError) EventRecord() (map[string]any, map[string]int) {
