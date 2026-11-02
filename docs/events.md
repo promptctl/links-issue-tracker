@@ -330,19 +330,18 @@ A read that lists a ticket's blockers, dependents, related tickets or follow-ups
 
 `rank.ancestry_levels`, in `counts`, is how many of those queries the command ran, and `0` when it ran none. `rank.ancestry_links` is the parent edges they returned. Together they are what tree order cost the command: a climb grows with the tickets ordered, and a query that returns every parent edge grows with the store.
 
-Each read builds tree order from the edges it returned, and records what it met. `rank.ancestry_deepest`, in `counts`, is the most ancestors any one ticket had, and `0` when the command built none. A store the write boundary guards holds neither of the next two shapes, but restored or imported data can, and tree order places each rather than refusing. `rank.ancestry_conflicts` has one entry per ticket two or more parent edges claim, with `rank.ancestry_conflict.child` and `rank.ancestry_conflict.parents`, sorted; it lists under the lowest. `rank.ancestry_loops` has one entry per ticket whose parent chain loops, with `rank.ancestry_loop.child`; its chain ends where it repeats. Both are `[]` when none was met, and a command that builds tree order more than once records each build's entries.
+Each read builds tree order from the edges it returned, and records what it met. `rank.ancestry_deepest`, in `counts`, is the most ancestors any one ticket had, and `0` when the command built none. A store the write boundary guards holds neither of the next two shapes, but restored or imported data can, and tree order places each rather than refusing. `rank.ancestry_conflicts` has one entry per ticket two or more parent edges claim, with `rank.ancestry_conflict.child` and `rank.ancestry_conflict.parents`, sorted; it lists under the lowest. `rank.ancestry_loops` has one entry per ticket on a loop of parent edges, with `rank.ancestry_loop.child`; a ticket below a loop is placed under it and not listed, since cutting one of the loop's edges repairs it too. Both are `[]` when none was met, and a command that builds tree order more than once records each build's entries.
 
 ## What `lit rank set` records
 
-A `lit rank set` that decided its write records these facts. One refused before it decides, such as one naming a missing ticket, records none of them.
+A `lit rank set` that decided its write records these facts, and so does a `lit import` whose file ranks tickets at the top, which runs the same rank set. One refused before it decides, such as one naming a missing ticket, records none of them.
 
 | Key | Meaning |
 | --- | --- |
 | `rank_set.frame` | The epic whose children it ordered, or `""` for the top level. |
 | `rank_set.named` | How many tickets it was given. |
-| `rank_set.rewritten` | How many rank keys it wrote. `0` when the order had already arrived. |
-| `rank_set.touched` | How many of those were a named ticket moving to a new place, and stamped as updated. |
-| `rank_set.displaced` | How many were a key rewritten under a ticket that stays where it stood, not stamped. |
+| `rank_set.rewritten` | How many rank keys it wrote for the named tickets. `0` when the order had already arrived. Keys a respace rewrote to make room are in `rank.respaces`. |
+| `rank_set.touched` | How many of those were a named ticket moving to a new place, and stamped as updated; the rest were rewritten under a ticket that stays where it stood. |
 | `rank_set.minted` | How many named tickets took a new key above the frame's top, rather than a key handed round among the tickets already leading it. |
 
 A `lit rank set` refused because two tickets share a key and the order would write the higher id above the lower records only `rank_set.refused_tie`: the pair, the one it would have written above first.

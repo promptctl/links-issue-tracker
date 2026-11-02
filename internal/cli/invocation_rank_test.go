@@ -117,7 +117,7 @@ func TestARankSetSaysWhatItWrote(t *testing.T) {
 	facts = lastEvent(t).Facts
 	for key, want := range map[string]any{
 		"rank_set.frame": "", "rank_set.named": float64(3), "rank_set.rewritten": float64(0),
-		"rank_set.touched": float64(0), "rank_set.displaced": float64(0), "rank_set.minted": float64(0),
+		"rank_set.touched": float64(0), "rank_set.minted": float64(0),
 	} {
 		if facts[key] != want {
 			t.Errorf("a repeated set: %s = %#v, want %#v", key, facts[key], want)

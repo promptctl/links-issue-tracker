@@ -101,22 +101,25 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 		},
 		Ancestry: func(shape storage.AncestryShape) {
 			telemetry.Max(event, "rank.ancestry_deepest", shape.Deepest)
-			for _, conflict := range shape.Conflicts {
-				telemetry.Append(event, "rank.ancestry_conflicts", map[string]any{
+			conflicts := make([]any, len(shape.Conflicts))
+			for i, conflict := range shape.Conflicts {
+				conflicts[i] = map[string]any{
 					"rank.ancestry_conflict.child":   conflict.ChildID,
 					"rank.ancestry_conflict.parents": slices.Clone(conflict.Parents),
-				})
+				}
 			}
-			for _, child := range shape.Loops {
-				telemetry.Append(event, "rank.ancestry_loops", map[string]any{"rank.ancestry_loop.child": child})
+			telemetry.Append(event, "rank.ancestry_conflicts", conflicts...)
+			loops := make([]any, len(shape.Loops))
+			for i, child := range shape.Loops {
+				loops[i] = map[string]any{"rank.ancestry_loop.child": child}
 			}
+			telemetry.Append(event, "rank.ancestry_loops", loops...)
 		},
 		RankSet: func(account store.RankSetAccount) {
 			telemetry.Set(event, "rank_set.frame", string(account.Frame))
 			telemetry.Set(event, "rank_set.named", account.Named)
 			telemetry.Set(event, "rank_set.rewritten", account.Rewritten)
 			telemetry.Set(event, "rank_set.touched", account.Touched)
-			telemetry.Set(event, "rank_set.displaced", account.Displaced)
 			telemetry.Set(event, "rank_set.minted", account.Minted)
 		},
 	})

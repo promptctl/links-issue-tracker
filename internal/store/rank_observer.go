@@ -18,9 +18,9 @@ type Respace struct {
 }
 
 // RankSetAccount is what one rank set decided: the frame it wrote in, how many
-// issues it was named, and the keys it wrote. Rewritten splits into Touched, a
-// named issue that moved and is stamped, and Displaced, a key rewritten under
-// an issue that stays where it stood. Minted is how many named issues took a
+// issues it was named, and the keys it wrote for them. Touched is how many of
+// those were a named issue that moved and is stamped; the rest were rewritten
+// under an issue that stays where it stood. Minted is how many named issues took a
 // new key past the frame's top rather than one handed round from the head. An
 // order that had already arrived writes nothing and says 0 to each.
 type RankSetAccount struct {
@@ -28,7 +28,6 @@ type RankSetAccount struct {
 	Named     int
 	Rewritten int
 	Touched   int
-	Displaced int
 	Minted    int
 }
 

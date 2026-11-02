@@ -308,11 +308,13 @@ func TestAnAncestryShapeNamesWhatItPlacedPast(t *testing.T) {
 		{ChildID: "c", ParentID: "p1", ParentRank: "b"},
 		{ChildID: "l1", ParentID: "l2", ParentRank: "a"},
 		{ChildID: "l2", ParentID: "l1", ParentRank: "b"},
+		{ChildID: "x", ParentID: "l1", ParentRank: "c"},
+		{ChildID: "y", ParentID: "x", ParentRank: "d"},
 	}).Shape()
 	if len(shape.Conflicts) != 1 || shape.Conflicts[0].ChildID != "c" || !slices.Equal(shape.Conflicts[0].Parents, []string{"p1", "p2"}) {
 		t.Errorf("conflicts = %+v, want c under p1 and p2", shape.Conflicts)
 	}
 	if !slices.Equal(shape.Loops, []string{"l1", "l2"}) {
-		t.Errorf("loops = %v, want [l1 l2]", shape.Loops)
+		t.Errorf("loops = %v, want [l1 l2]: x and y sit below the loop, not on it", shape.Loops)
 	}
 }

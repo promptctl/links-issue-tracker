@@ -147,7 +147,7 @@ type RankAncestry struct {
 
 // AncestryShape is what building an ancestry met: its deepest chain, counted in
 // ancestors, and the two shapes it placed past without refusing — every child
-// more than one framing edge claims, and every child whose chain loops.
+// more than one framing edge claims, and every child on a loop of parent edges.
 type AncestryShape struct {
 	Deepest   int
 	Conflicts []ParentConflict
@@ -207,10 +207,10 @@ func NewRankAncestry(links []ParentLink) RankAncestry {
 	var loops []string
 	deepest := 0
 	for child := range parentOf {
-		chain, looped := placesOf(child, parentOf)
+		chain, onLoop := placesOf(child, parentOf)
 		places[child] = chain
 		deepest = max(deepest, len(chain))
-		if looped {
+		if onLoop {
 			loops = append(loops, child)
 		}
 	}
@@ -219,19 +219,20 @@ func NewRankAncestry(links []ParentLink) RankAncestry {
 }
 
 // placesOf walks child's chain up to its root, or to the first container it
-// would revisit, and says which of the two ended it.
-func placesOf(child string, parentOf map[string]ParentLink) (places []rankPlace, looped bool) {
+// would revisit, and says whether child is itself on the loop: a ticket below a
+// loop reaches it too, but cutting one of the loop's own edges repairs both.
+func placesOf(child string, parentOf map[string]ParentLink) (places []rankPlace, onLoop bool) {
 	visited := map[string]struct{}{child: {}}
 	for link, ok := parentOf[child]; ok; link, ok = parentOf[link.ParentID] {
 		if _, seen := visited[link.ParentID]; seen {
-			looped = true
+			onLoop = link.ParentID == child
 			break
 		}
 		visited[link.ParentID] = struct{}{}
 		places = append(places, rankPlace{rank: link.ParentRank, id: link.ParentID})
 	}
 	slices.Reverse(places)
-	return places, looped
+	return places, onLoop
 }
 
 // Shape is what this ancestry met while it was built.

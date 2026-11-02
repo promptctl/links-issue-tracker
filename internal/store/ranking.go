@@ -102,7 +102,8 @@ func loadRankAncestry(ctx context.Context, q rowQueryer) (storage.RankAncestry, 
 	observer := rankObserverFrom(ctx)
 	observer.ReadParentEdges(len(links))
 	ancestry := storage.NewRankAncestry(links)
-	observer.Ancestry(ancestry.Shape())
+	shape := ancestry.Shape()
+	hear(ctx, func() { observer.Ancestry(shape) })
 	return ancestry, nil
 }
 
@@ -146,7 +147,8 @@ func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (sto
 		}
 	}
 	ancestry := storage.NewRankAncestry(links)
-	observer.Ancestry(ancestry.Shape())
+	shape := ancestry.Shape()
+	hear(ctx, func() { observer.Ancestry(shape) })
 	return ancestry, nil
 }
 
@@ -777,7 +779,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		// An order that has arrived writes nothing: its issues stand where they
 		// were asked to, and a stamp would say otherwise.
 		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id string) bool { return row.id == id }) {
-			rankObserverFrom(ctx).RankSet(account)
+			observer := rankObserverFrom(ctx)
+			hear(ctx, func() { observer.RankSet(account) })
 			return result, nil
 		}
 		if err := refuseReversedTie(head[:min(len(ranked), len(head))], ranked); err != nil {
@@ -834,8 +837,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 				account.Touched++
 			}
 		}
-		account.Displaced = account.Rewritten - account.Touched
-		rankObserverFrom(ctx).RankSet(account)
+		observer := rankObserverFrom(ctx)
+		hear(ctx, func() { observer.RankSet(account) })
 		return result, nil
 	})
 }
