@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -48,6 +49,31 @@ func TestResolvingTheWorkspaceSaysWhatItDidToConfig(t *testing.T) {
 	rewriteStoredPrefix(t, info.ConfigPath, "  "+string(info.IssuePrefix.Stored())+"  ")
 	runCLIInDir(t, repo, "workspace")
 	settle("renormalized")
+
+	rewriteStoredPrefix(t, info.ConfigPath, "")
+	runCLIInDir(t, repo, "workspace")
+	settle("prefixed")
+}
+
+// A resolution that fails holding the config lock still says how long it
+// queued for it, and records no settle, since it settled nothing.
+func TestAFailedResolutionStillSaysItQueuedForTheConfigLock(t *testing.T) {
+	isolateEvents(t)
+	repo := newInitTestRepo(t)
+	info := resolveForTest(t, repo)
+	if err := os.WriteFile(info.ConfigPath, []byte("{not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+	if _, err := runCLIInDirAllowError(t, repo, "workspace"); err == nil {
+		t.Fatal("Run(workspace) over a corrupt config.json succeeded, want a failure")
+	}
+	facts := lastEvent(t).Facts
+	if _, ok := facts["workspace.config_lock_wait_ms"].(float64); !ok {
+		t.Errorf("workspace.config_lock_wait_ms = %#v, want a number", facts["workspace.config_lock_wait_ms"])
+	}
+	if settle, ok := facts["workspace.config_settle"]; ok {
+		t.Errorf("workspace.config_settle = %#v, want absent", settle)
+	}
 }
 
 // A stored prefix the rules refuse puts the workspace in the refused arm, and a
@@ -60,8 +86,8 @@ func TestAMintRefusalIsOnTheEvent(t *testing.T) {
 		t.Fatal("Run(new) over a stored illegal prefix succeeded, want a refusal")
 	}
 	facts := lastEvent(t).Facts
-	if facts["workspace.prefix_state"] != "refused" || facts["prefix.mintable_refused"] != true {
-		t.Errorf("facts = %v, want prefix_state refused and mintable_refused true", facts)
+	if facts["workspace.prefix_state"] != "refused" {
+		t.Errorf("workspace.prefix_state = %#v, want refused", facts["workspace.prefix_state"])
 	}
 	if text, _ := facts["prefix.mintable_error"].(string); text == "" {
 		t.Errorf("prefix.mintable_error = %#v, want the refusal", facts["prefix.mintable_error"])
@@ -71,8 +97,8 @@ func TestAMintRefusalIsOnTheEvent(t *testing.T) {
 	repo := newInitTestRepo(t)
 	newEpicInDir(t, repo, "minted")
 	facts = lastEvent(t).Facts
-	if facts["prefix.mintable_refused"] != false || facts["prefix.mintable_error"] != nil {
-		t.Errorf("lit new facts = %v / %v, want not refused and no error", facts["prefix.mintable_refused"], facts["prefix.mintable_error"])
+	if text, ok := facts["prefix.mintable_error"]; !ok || text != nil {
+		t.Errorf("prefix.mintable_error = %#v (present %v), want null", text, ok)
 	}
 }
 

@@ -89,10 +89,6 @@ type Info struct {
 	RootDir     string
 	WorkspaceID string
 	IssuePrefix PrefixState
-	// Settlement is what resolving did to config.json under its lock; the zero
-	// value on a workspace that was handed rather than resolved, which takes no
-	// lock and settles nothing.
-	Settlement Settlement
 	// PrivateGitDir is this CHECKOUT's own git directory, and it lives on Info
 	// rather than on the embedded Location for a reason that is easy to get
 	// backwards: Location is per-REPOSITORY geometry, identical from every
@@ -353,7 +349,8 @@ func upstreamRemote(ctx context.Context, env environ.Env, cwd string) (string, e
 // Resolve finds the workspace containing cwd, creating its config on first
 // sight, with no prefix of its own to offer — the repository name supplies one.
 func Resolve(env environ.Env, cwd string) (Info, error) {
-	return ResolveWithPrefix(env, cwd, PrefixRequest{})
+	ws, _, err := ResolveWithPrefix(env, cwd, PrefixRequest{})
+	return ws, err
 }
 
 // ResolveWithPrefix is Resolve for the one caller that may carry an explicit
@@ -363,14 +360,16 @@ func Resolve(env environ.Env, cwd string) (Info, error) {
 // it crosses this boundary as a value, instead of being parked somewhere
 // ambient for this function to read back. [LAW:no-shared-mutable-globals]
 // [LAW:effects-at-boundaries] the request reaches the one write that consumes it.
-func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (Info, error) {
+// The Settlement comes back on failure too: a resolution refused at or under
+// the config lock still queued for it. [LAW:nothing-unseen]
+func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (Info, Settlement, error) {
 	geo, err := askGeometry(env, cwd)
 	if err != nil {
-		return Info{}, err
+		return Info{}, Settlement{}, err
 	}
 	loc, err := locationOf(geo)
 	if err != nil {
-		return Info{}, err
+		return Info{}, Settlement{}, err
 	}
 	// Resolved here as pure geometry — the path only. Minting the token that
 	// lives in it is deliberately NOT done here: Resolve runs for read-only
@@ -378,29 +377,28 @@ func ResolveWithPrefix(env environ.Env, cwd string, requested PrefixRequest) (In
 	// identity. The mint hangs off the access mode instead, in app.Open.
 	privateGitDir, err := canonicalGitDir(geo.gitDir)
 	if err != nil {
-		return Info{}, err
+		return Info{}, Settlement{}, err
 	}
 	// [LAW:effects-at-boundaries] Locate is pure geometry; store
 	// creation is the one mutation, gathered here where the write is intended.
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
-		return Info{}, fmt.Errorf("create storage dir: %w", err)
+		return Info{}, Settlement{}, fmt.Errorf("create storage dir: %w", err)
 	}
 	cfg, prefix, settlement, err := loadOrCreateConfig(geo.root, loc.ConfigPath, requested)
 	if err != nil {
-		return Info{}, err
+		return Info{}, settlement, err
 	}
 	return Info{
 		Location:      loc,
 		RootDir:       geo.root,
 		WorkspaceID:   cfg.WorkspaceID,
 		IssuePrefix:   prefix,
-		Settlement:    settlement,
 		PrivateGitDir: privateGitDir,
 		// git prints --show-toplevel absolute with every symlink resolved, so its
 		// answer is a CheckoutRoot as it stands.
 		Remotes: NewRemotes(env, loc.Repository(), CheckoutRoot{path: geo.root}),
 		Project: config.CheckoutProject(env, pathspec.New(geo.root)),
-	}, nil
+	}, settlement, nil
 }
 
 // Handed is the workspace a detached worker runs against: the store at loc,
@@ -808,11 +806,14 @@ type ConfigSettle string
 const (
 	// ConfigCreated wrote config.json where there was none.
 	ConfigCreated ConfigSettle = "created"
-	// ConfigRead found config.json holding what it should and left it alone.
+	// ConfigRead left config.json as found: it held what it should, or a prefix
+	// the rules refuse, which only `lit prefix set` repairs.
 	ConfigRead ConfigSettle = "read"
 	// ConfigRenormalized rewrote the prefix config.json carried into the form
 	// the rules normalize it to.
 	ConfigRenormalized ConfigSettle = "renormalized"
+	// ConfigPrefixed wrote the first prefix into a config.json that carried none.
+	ConfigPrefixed ConfigSettle = "prefixed"
 )
 
 // Settlement is what one resolution did to config.json: how long it waited
@@ -847,12 +848,16 @@ func settleConfig(rootDir string, path string, requested PrefixRequest) (Config,
 		if string(prefix.Stored()) == cfg.IssuePrefix {
 			return cfg, prefix, ConfigRead, nil
 		}
+		settle := ConfigRenormalized
+		if cfg.IssuePrefix == "" {
+			settle = ConfigPrefixed
+		}
 		cfg.IssuePrefix = string(prefix.Stored())
 		cfg, err = writeConfig(path, cfg)
 		if err != nil {
 			return Config{}, PrefixState{}, "", err
 		}
-		return cfg, prefix, ConfigRenormalized, nil
+		return cfg, prefix, settle, nil
 	}
 	// [LAW:no-silent-failure] A missing config is the ordinary "not yet
 	// initialized" case that this create path handles; a parse error, an empty

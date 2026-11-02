@@ -251,7 +251,8 @@ func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, di
 	if err != nil {
 		return workspace.Info{}, fmt.Errorf("get cwd: %w", err)
 	}
-	ws, err := workspace.ResolveWithPrefix(env, cwd, requested)
+	ws, settlement, err := workspace.ResolveWithPrefix(env, cwd, requested)
+	recordConfigSettlement(ctx, settlement)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			// [LAW:types-are-the-program] Typed error carries classification; message preserved for surface display.
@@ -264,13 +265,20 @@ func resolveWorkspace(ctx context.Context, stderr io.Writer, env environ.Env, di
 	return ws, nil
 }
 
-// recordWorkspaceResolution puts what resolving the workspace decided on the
-// invocation's event: how long it queued for the config lock, what it did to
-// config.json holding it, and which arm of PrefixState the prefix took.
-// [LAW:nothing-unseen]
+// recordConfigSettlement puts how long resolving queued for the config lock,
+// and what it did to config.json holding it, on the invocation's event — a
+// resolution that failed included, so a timed-out queue is seen. One that
+// failed before it settled records no settle. [LAW:nothing-unseen]
+func recordConfigSettlement(ctx context.Context, settlement workspace.Settlement) {
+	telemetry.Set(ctx, "workspace.config_lock_wait_ms", settlement.Waited.Milliseconds())
+	if settlement.Settle != "" {
+		telemetry.Set(ctx, "workspace.config_settle", string(settlement.Settle))
+	}
+}
+
+// recordWorkspaceResolution puts which arm of PrefixState the resolved prefix
+// took on the invocation's event. [LAW:nothing-unseen]
 func recordWorkspaceResolution(ctx context.Context, ws workspace.Info) {
-	telemetry.Set(ctx, "workspace.config_lock_wait_ms", ws.Settlement.Waited.Milliseconds())
-	telemetry.Set(ctx, "workspace.config_settle", string(ws.Settlement.Settle))
 	state := "legal"
 	if _, err := ws.IssuePrefix.Mintable(); err != nil {
 		state = "refused"
@@ -284,7 +292,6 @@ func recordWorkspaceResolution(ctx context.Context, ws workspace.Info) {
 // mint under reads it here, so none can be refused without the event saying so.
 func mintablePrefix(ctx context.Context, state workspace.PrefixState) (workspace.PrefixSpec, error) {
 	spec, err := state.Mintable()
-	telemetry.Set(ctx, "prefix.mintable_refused", err != nil)
 	telemetry.Set(ctx, "prefix.mintable_error", telemetry.ErrorText(err))
 	return spec, err
 }
