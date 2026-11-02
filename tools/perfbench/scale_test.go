@@ -8,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-
-	"github.com/promptctl/links-issue-tracker/internal/issueid"
 )
 
 // Ten times on both axes, from the one census: the store is ten times the
@@ -60,10 +58,9 @@ func TestParseSizesTakesEveryNamedScalePoint(t *testing.T) {
 	}
 }
 
-// A limit key is the label and the topic of the ticket the nightly lane files,
-// so lit must take it as a topic unchanged, and two limits must never share
-// one: their nights would land on one ticket.
-func TestEveryLimitKeyIsADistinctLitTopic(t *testing.T) {
+// The nightly verdict groups breaches by limit key, so two limits must never
+// share one: their measurements would merge under one limit.
+func TestEveryLimitKeyIsDistinct(t *testing.T) {
 	seen := map[string]string{}
 	for _, sz := range namedSizes {
 		var whats []string
@@ -76,10 +73,6 @@ func TestEveryLimitKeyIsADistinctLitTopic(t *testing.T) {
 		whats = append(whats, "storm")
 		for _, what := range whats {
 			key := limitKey(sz, what)
-			topic, err := issueid.NormalizeTopicForCreate(key)
-			if err != nil || topic != key {
-				t.Errorf("limit key %q (%s, %s) is not a lit topic as written: (%q, %v)", key, sz.name, what, topic, err)
-			}
 			if other, dup := seen[key]; dup {
 				t.Errorf("limit key %q names both %s and %s/%s", key, other, sz.name, what)
 			}

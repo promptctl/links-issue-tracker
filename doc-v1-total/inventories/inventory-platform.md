@@ -920,7 +920,7 @@ Justfile or any workflow in `.github/workflows/`.
 .
 - Six jobs, all in parallel:
   1. **`build-and-test`**: checkout@v4 → setup-go@v5 (`go-version-file: go.mod`) →
-     `./.github/actions/install-claude` (§11.8) →
+     `./.github/actions/install-claude` (§11.7) →
      `go build ./cmd/lit` → `go test -short -json ./... | go run ./tools/testbudget` →
      `go -C internal/vendor/dolthub-driver test -short -json ./... | go run ./tools/testbudget`
      (the vendored driver is its own module, so `./...` never reaches it), both under
@@ -1114,7 +1114,7 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
   failing `gh release create` prints a recovery instruction naming
   `gh release delete $TAG --repo … --cleanup-tag --yes`.
 
-### 11.7 `.github/workflows/release-watchdog.yml` — "Release watchdog"
+### 11.6 `.github/workflows/release-watchdog.yml` — "Release watchdog"
 
 - Triggers: `schedule: cron '23 * * * *'` and `workflow_dispatch`.
 - `permissions: contents: read`. Concurrency group `release-watchdog`,
@@ -1129,7 +1129,7 @@ setup-go@v5 (`cache: true`) → `go mod download` → `go run ./tools/licenses -
   verdict is `::error::unrecognized verdict from scripts/release-kind.sh: '<verdict>'`
   and exit 1.
 
-### 11.8 `.github/actions/install-claude/action.yml`
+### 11.7 `.github/actions/install-claude/action.yml`
 
 Composite action; installs the pinned Claude Code CLI used as a **test-only** oracle
 for `claude plugin validate --json` (`.github/actions/install-claude/action.yml`):

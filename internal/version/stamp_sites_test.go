@@ -1,22 +1,28 @@
 package version
 
 import (
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // repoFile reads a path relative to the repository root. Tests run with cwd set
 // to the package directory, so the root is two levels up.
 func repoFile(t *testing.T, rel string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("..", "..", rel))
+	b, err := os.ReadFile(repoPath(rel))
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
 	return string(b)
+}
+
+// repoPath joins elems onto the repository root.
+func repoPath(elems ...string) string {
+	return filepath.Join(append([]string{"..", ".."}, elems...)...)
 }
 
 // exportedNames returns the variable names carried on a shell script's `export`
@@ -182,31 +188,66 @@ func TestEveryProducerStampsTheReleasedSchema(t *testing.T) {
 }
 
 // TestNoCIJobWritesToTheTracker pins the owner's ruling that CI holds no
-// write access to the lit backlog: no workflow or action under .github syncs a
-// lit store or touches its refs/dolt/data ref. A scheduled job that did could
-// write the backlog at any hour with nobody present, and one did migrate the
-// shared store to a schema no release carries.
+// write access to the lit backlog. The backlog is the refs/dolt/data ref of
+// this repository, so any job holding a contents write grant can push it,
+// whatever it runs. The guard is on the grant, not on what a job's steps say:
+// every workflow declares its top-level permissions, none of them writes
+// contents, and the one job that may is release-validate.yml's publisher,
+// which creates the release tag. A scheduled job that held the grant once
+// migrated the shared store to a schema no release carries.
 func TestNoCIJobWritesToTheTracker(t *testing.T) {
 	t.Parallel()
-	root := filepath.Join("..", "..", ".github")
-	forbidden := []string{"lit sync", "refs/dolt", "report-to-lit"}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		for _, f := range forbidden {
-			if strings.Contains(string(b), f) {
-				t.Errorf("%s contains %q — CI never writes to the lit tracker", path, f)
-			}
-		}
-		return nil
-	})
+	const publisher = "release-validate.yml"
+	dir := repoPath(".github", "workflows")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	type permissioned struct {
+		Permissions any `yaml:"permissions"`
+	}
+	var workflow struct {
+		Permissions *yaml.Node              `yaml:"permissions"`
+		Jobs        map[string]permissioned `yaml:"jobs"`
+	}
+	writesContents := func(p any) bool {
+		switch v := p.(type) {
+		case string:
+			return v == "write-all"
+		case map[string]any:
+			return v["contents"] == "write"
+		}
+		return false
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !(strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml")) {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		workflow.Permissions, workflow.Jobs = nil, nil
+		if err := yaml.Unmarshal(b, &workflow); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if workflow.Permissions == nil {
+			t.Errorf("%s declares no top-level permissions, so its jobs get the repository's default token", name)
+		} else {
+			var top any
+			if err := workflow.Permissions.Decode(&top); err != nil {
+				t.Fatalf("%s permissions: %v", name, err)
+			}
+			if writesContents(top) {
+				t.Errorf("%s grants contents write to every job", name)
+			}
+		}
+		for job, j := range workflow.Jobs {
+			if writesContents(j.Permissions) && name != publisher {
+				t.Errorf("%s job %s grants contents write — CI never writes to the lit tracker", name, job)
+			}
+		}
 	}
 }
 

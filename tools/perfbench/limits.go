@@ -11,19 +11,18 @@ import (
 // Limits: each verdict as a record a machine files, written the moment the
 // verdict is reached.
 //
-// A red nightly run is the design reaching a limit, and the answer is a ticket
-// naming which limit broke at what scale and by how much. The report on stdout
+// A red nightly run is the design reaching a limit, and the answer is work on
+// that limit: which one broke, at what scale and by how much. The report on stdout
 // says all of that, but only once every size has finished and only if the run
 // got that far; a run that times out, or whose second scale point fails, would
 // take every verdict it had already reached down with it. So each verdict is
 // also appended to --limits as it is logged, keyed by the limit it breaks, and
-// the nightly lane files one ticket per key from that file.
+// the nightly lane's verdict fails the run naming every key in that file.
 // [LAW:no-silent-failure]
 
-// limitRecord is one verdict as the lane files it: limit is the key one
-// ticket collects every night's breach of this limit under, and a lit topic
-// slug, because the reporter labels and topics the ticket by it; measured is
-// the verdict the log printed, without its tag.
+// limitRecord is one verdict as the lane's verdict reads it: limit is the key
+// every scale point's breach of this limit is grouped under; measured is the
+// verdict the log printed, without its tag.
 type limitRecord struct {
 	Limit    string `json:"limit"`
 	Title    string `json:"title"`
@@ -46,8 +45,8 @@ func limitKey(s size, what string) string {
 
 // logVerdict writes v to progress and its record to records, together, so a
 // verdict reached is in both or the run fails. The record carries what the log
-// line does, a failed writer's stderr included: the ticket is where a night's
-// evidence outlives the run's log. [LAW:one-source-of-truth]
+// line does, a failed writer's stderr included: the record is where a night's
+// evidence survives a run that dies before its report. [LAW:one-source-of-truth]
 func logVerdict(progress, records io.Writer, v limitVerdict) error {
 	fmt.Fprintln(progress, v.logLine())
 	line, err := json.Marshal(v.limit())

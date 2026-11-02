@@ -388,7 +388,7 @@ exit 0
 	if !strings.Contains(progress.String(), "OVER BUDGET: store one (1 rows): next took") {
 		t.Errorf("the store's verdict on next was not logged before the compaction failed:\n%s", progress.String())
 	}
-	// The record is what the nightly lane files from, so it must survive the
+	// The record is what the nightly verdict reads, so it must survive the
 	// same failure the log line does, saying the same thing.
 	var rec limitRecord
 	if err := json.Unmarshal([]byte(recorded.String()), &rec); err != nil {

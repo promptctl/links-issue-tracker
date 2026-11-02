@@ -7,9 +7,9 @@
 # workflow watches for that state and goes red while it persists.
 # [LAW:no-silent-failure]
 #
-# A detection is reported by the red run itself, whose log names the stuck
-# version and the recovery path (RELEASING.md, 'Re-running the pipeline on
-# demand'). No job here writes to the lit backlog.
+# A detection is reported by the failed run itself, whose ::error line names
+# what it found and the recovery path (RELEASING.md, 'Re-running the pipeline
+# on demand'). No job here writes to the lit backlog.
 name: Release watchdog
 
 on:
@@ -20,8 +20,7 @@ on:
 permissions:
   contents: read
 
-# A dispatched run overlapping the scheduled one queues rather than races. Never cancel-in-progress — a cancelled watchdog is a skipped
-# watchdog.
+# Never cancel-in-progress — a cancelled watchdog is a skipped watchdog.
 concurrency:
   group: release-watchdog
   cancel-in-progress: false
@@ -63,7 +62,7 @@ jobs:
               VER=${verdict#pending }
               ;;
             *)
-              echo "::error::unrecognized verdict from scripts/release-kind.sh: '$verdict'" >&2
+              echo "::error::unrecognized verdict from scripts/release-kind.sh: '$verdict' — the release state could not be determined; RELEASING.md describes the states it should report." >&2
               exit 1
               ;;
           esac
@@ -78,7 +77,7 @@ jobs:
           # [LAW:one-source-of-truth]
           promoted_at=$(git log -1 --format=%ct -S "## [$VER]" -- CHANGELOG.md)
           if [ -z "$promoted_at" ]; then
-            echo "::error::v$VER is pending but no commit introducing '## [$VER]' exists in CHANGELOG.md history — cannot measure how long; treating as stuck rather than guessing." >&2
+            echo "::error::v$VER is pending but no commit introducing '## [$VER]' exists in CHANGELOG.md history — cannot measure how long; treating as stuck rather than guessing. Recovery: \`gh workflow run release-validate.yml --ref master\` (RELEASING.md, 'Re-running the pipeline on demand')." >&2
             exit 1
           fi
           age_minutes=$(( ( $(date +%s) - promoted_at ) / 60 ))
@@ -86,5 +85,5 @@ jobs:
             echo "v$VER pending for ${age_minutes}m — inside the ${GRACE_MINUTES}m publish window; release-validate should still be working on it."
             exit 0
           fi
-          echo "::error::v$VER has been pending for ${age_minutes}m (grace: ${GRACE_MINUTES}m) — the promotion merged but no release-validate run has published its tag, and no master push has arrived to re-trigger the gate. Recovery: \`gh workflow run release-validate.yml --ref master\` (RELEASING.md, 'Re-running the pipeline on demand')." >&2
+          echo "::error::v$VER has been pending for ${age_minutes}m (grace: ${GRACE_MINUTES}m) — the promotion merged but no release-validate run has published its tag, and no master push has arrived to re-trigger the gate. Usual cause: the promotion's run was evicted from release-validate's concurrency queue by later master pushes. Recovery: \`gh workflow run release-validate.yml --ref master\` (RELEASING.md, 'Re-running the pipeline on demand')." >&2
           exit 1
