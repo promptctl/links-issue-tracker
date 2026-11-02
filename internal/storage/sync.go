@@ -410,6 +410,37 @@ func (m GCMode) String() string {
 	return fmt.Sprintf("unknown(%d)", int(m))
 }
 
+// CompactionRotation is how a compaction pass got a usable connection back.
+// Empty on a pass that never ran.
+type CompactionRotation string
+
+const (
+	// CompactionRotationConnection replaced the connection on the same engine,
+	// so the pass never let go of the store.
+	CompactionRotationConnection CompactionRotation = "connection"
+	// CompactionRotationEngine closed the engine and opened another, which
+	// lets a writer in between the two.
+	CompactionRotationEngine CompactionRotation = "engine"
+)
+
+// CompactionPass is one compaction an engine attempted: its depth, whether it
+// ran, and how it rotated. A list, because one invocation can compact more than
+// once.
+type CompactionPass struct {
+	Depth    GCMode
+	Ran      bool
+	Rotation CompactionRotation
+}
+
+// EventValue is the pass as one value of the event's compaction.passes list.
+func (p CompactionPass) EventValue() map[string]any {
+	return map[string]any{
+		"compaction.depth":    p.Depth.String(),
+		"compaction.ran":      p.Ran,
+		"compaction.rotation": string(p.Rotation),
+	}
+}
+
 // CompactionOutcome reports what a compaction pass did, in terms every engine
 // can speak.
 type CompactionOutcome struct {

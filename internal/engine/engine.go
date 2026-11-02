@@ -57,6 +57,14 @@ const (
 	// Sync is the exchange contract: a handle held across network operations,
 	// whose locking admits the mirror running beside it.
 	Sync Mode = "sync"
+
+	// Maintenance is Sync for the compaction backstop, which every writing
+	// command may run and nobody asked for. Its hold tells the writers waiting
+	// behind it that it is still working (store.OpenMaintenance). It is Sync's
+	// open rather than ReadWriteRoutine because a pass must never migrate: `lit
+	// downgrade` reaches the backstop with the newer registry still in its
+	// process, and a migrating open would lift the store straight back up.
+	Maintenance Mode = "maintenance"
 )
 
 // openers is the whole meaning of Mode, and the only place in lit above
@@ -70,6 +78,7 @@ var openers = map[Mode]func(ctx context.Context, env environ.Env, stderr io.Writ
 	ReadWriteRoutine: store.OpenRoutine,
 	ReadOnly:         store.OpenForRead,
 	Sync:             store.OpenSync,
+	Maintenance:      store.OpenMaintenance,
 }
 
 // Open constructs the engine backing the workspace at doltRootDir.

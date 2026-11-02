@@ -50,7 +50,7 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteN
 	}
 	args := []string{"--force-with-lease=" + trimmedBranch + ":" + trimmedExpected, remote.String(), trimmedSource + ":" + trimmedBranch}
 	query := buildProcedureCall("DOLT_PUSH", len(args))
-	pushErr := runRemoteIO(ctx, func(ctx context.Context) error {
+	pushErr := s.runRemoteIO(ctx, func(ctx context.Context) error {
 		var status int64
 		var message *string
 		return s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&status, &message)

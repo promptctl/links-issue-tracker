@@ -39,13 +39,14 @@ import (
 // engine and outside any transaction, so it stops the heartbeat by
 // construction, with no list of such waits to keep complete.
 //
-// Only a routine hold heartbeats (engineWriteRoutine): a command whose work
-// does not grow with its input. A long hold (engineWrite) keeps the contract
-// it always had: its waiters fail after the wait, naming it. A routine hold
-// wedged inside a Dolt statement heartbeats like a slow one, because from
-// outside the two are indistinguishable at any finite time; its waiters wait
-// with a notice naming it every lockWaitNoticeInterval. That is the one place
-// a writer's wait on LOCK has no bound, and it needs a Dolt bug; the
+// Only a routine hold heartbeats (engineWriteRoutine; engineAccess says which
+// holds are). A long hold (engineWrite) keeps the contract it always had: its
+// waiters fail after the wait, naming it. A routine hold wedged inside a Dolt
+// statement heartbeats like a slow one, because from outside the two are
+// indistinguishable at any finite time; its waiters wait with a notice naming
+// it every lockWaitNoticeInterval. A compaction backstop's pass is cut at its
+// deadline, which DOLT_GC honours. Otherwise that is the one place a writer's
+// wait on LOCK has no bound, and it needs a Dolt bug; the
 // bootstrap lock, which is not LOCK, waits out its builder with no bound by
 // design (acquireBootstrapLock).
 

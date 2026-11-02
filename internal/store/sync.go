@@ -24,7 +24,23 @@ import (
 const minEmbeddedDoltVersion = "v0.40.5-0.20260314011441-62975ef6bf36"
 const minEmbeddedDriverVersion = "v0.2.1-0.20260314000741-0fe74e7ee31a"
 
-func OpenSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (_ *Store, err error) {
+// OpenSync opens the store for a sync session: a long hold (engineWrite) that
+// applies no migration.
+func OpenSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (*Store, error) {
+	return openSync(ctx, env, stderr, doltRootDir, workspaceID, engineWrite)
+}
+
+// OpenMaintenance opens the store for the compaction backstop: a sync open
+// whose hold is routine (engineWriteRoutine), since its caller runs the pass
+// under a deadline and no writer behind it asked for it. DOLT_GC is engine work,
+// so the hold heartbeats through it, and a writer waits out a pass however long
+// a loaded machine stretches it, as far as that deadline.
+func OpenMaintenance(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (*Store, error) {
+	return openSync(ctx, env, stderr, doltRootDir, workspaceID, engineWriteRoutine)
+}
+
+// openSync is the one sync open, for either hold.
+func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string, access engineAccess) (_ *Store, err error) {
 	// [LAW:single-enforcer] Route through the one argument-validation boundary
 	// rather than re-inlining the same two checks, so OpenSync cannot drift from
 	// the rest of the store's exported entry points on what an acceptable path or
@@ -70,7 +86,7 @@ func OpenSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 	// earlier mirror's) still-live engine instead of colliding with it — the
 	// wait happens inside the eager engine open, on Dolt's own journal lock,
 	// bounded by coResidentHolderWait.
-	s, err := openStoreConnection(ctx, env, stderr, doltRootDir, workspaceID, engineWrite)
+	s, err := openStoreConnection(ctx, env, stderr, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, err
 	}
@@ -319,7 +335,7 @@ func (s *Store) SyncFetch(ctx context.Context, remote storage.RemoteName) error 
 		// [LAW:single-enforcer] Remote transport retry wraps the one network-touching
 		// call, inside the mutation's own GC-contention retry: the two loops recover
 		// unrelated failures under separate budgets (see remote_io.go).
-		err = runRemoteIO(ctx, func(ctx context.Context) error {
+		err = s.runRemoteIO(ctx, func(ctx context.Context) error {
 			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", "--prune", remote.String())
 			return err
 		})
@@ -718,9 +734,9 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.Rem
 // sees one error and cannot tell a pass that never ran from a pass that ran and
 // was followed by a failure. [LAW:types-are-the-program]
 //
-// The sweep is here, after the reconnect, because this is the one moment
-// orphaned instance refs can be told from live ones: the reconnect just closed
-// every remote database this process held, nothing has opened one since, and
+// The sweep is here, after the rotation, because this is the one moment
+// orphaned instance refs can be told from live ones: this process holds no
+// remote database open (rotationAfterGC), nothing has opened one since, and
 // Dolt's LOCK and the commit lock keep every other writer of the mirrors —
 // another write engine, a receive's landing — off the store. So every path that
 // compacts collects the refs, and none can sweep without that moment.
@@ -728,6 +744,8 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.Rem
 // rather than failing the compaction that already rewrote the store.
 func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionAttempt, refSweepOutcome, error) {
 	attempt := compactionAttempt{Depth: mode}
+	s.compactionLooked = true
+	defer func() { s.compactionPasses = append(s.compactionPasses, attempt.pass()) }()
 	args, err := gcProcedureArgs(mode)
 	if err != nil {
 		return attempt, refSweepOutcome{}, err
@@ -735,16 +753,42 @@ func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionA
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC", args...); err != nil {
 		return attempt, refSweepOutcome{}, fmt.Errorf("compact dolt store (%s): %w", mode, err)
 	}
-	// Recorded here, before the reconnect below and not after it: DOLT_GC has
+	// Recorded here, before the rotation below and not after it: DOLT_GC has
 	// returned, so the store on disk is already rewritten and nothing that
-	// follows can un-rewrite it. A reconnect failure must not read as a pass
+	// follows can un-rewrite it. A rotation failure must not read as a pass
 	// that never happened. [LAW:no-silent-failure]
 	attempt.Ran = true
+	var rotate connectionRotator
+	attempt.Rotation, rotate = s.rotationAfterGC()
 	// [LAW:single-enforcer] Online GC poisons the active SQL connection; the Store rotates it here so every downstream query contract is restored before lock release.
-	if err := s.reconnect(ctx); err != nil {
+	if err := rotate(ctx); err != nil {
 		return attempt, refSweepOutcome{}, err
 	}
 	return attempt, s.sweepOrphanedInstanceRefs(ctx), nil
+}
+
+// rotationAfterGC is how a pass gets a usable connection back, which also owes
+// the sweep after it a second thing: no remote database open in this process.
+//
+// Replacing the connection answers the first and keeps Dolt's LOCK, so no
+// writer can take it in a gap and stand the queue behind it still
+// (replaceConnection). It answers the second only on an engine that has reached
+// no remote: a pushed remote stays open until its engine closes, and a sweep
+// beside it removes the push's live refs. Only Store.reconnect closes that. So
+// the Store's own fact picks the rotation, and no caller does. A fetch closes
+// its remote and counts anyway; that costs one rotation of the engine.
+// [LAW:no-ambient-temporal-coupling]
+func (s *Store) rotationAfterGC() (storage.CompactionRotation, connectionRotator) {
+	if s.reachedRemote {
+		return storage.CompactionRotationEngine, s.reconnect
+	}
+	return storage.CompactionRotationConnection, s.replaceConnection
+}
+
+// CompactionPasses is every compaction attempted on this store since it opened,
+// oldest first, and whether anything looked to see if one was owed.
+func (s *Store) CompactionPasses() ([]storage.CompactionPass, bool) {
+	return slices.Clone(s.compactionPasses), s.compactionLooked
 }
 
 // SyncCompact compacts the store at the requested depth, with no remote
@@ -845,6 +889,7 @@ func (s *Store) compactIfDue(ctx context.Context) (storage.CompactionOutcome, er
 		// [LAW:no-silent-failure]
 		return storage.CompactionOutcome{}, fmt.Errorf("measure compaction signals: %w", err)
 	}
+	s.compactionLooked = true
 	mode, due := dueMode(signals)
 	if !due {
 		return storage.CompactionOutcome{}, nil
@@ -1157,7 +1202,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	// retry absorbs it, and only a failure that survives the budget reaches the
 	// caller — as RemoteUnreachableError naming the transport symptom, never as
 	// the backend's misrendered authentication failure.
-	pushErr := runRemoteIO(ctx, func(ctx context.Context) error {
+	pushErr := s.runRemoteIO(ctx, func(ctx context.Context) error {
 		return s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message)
 	})
 	if pushErr != nil {

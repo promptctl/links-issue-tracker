@@ -60,10 +60,18 @@ type compactionAttempt struct {
 	// attempt that Ran without a depth is not a state this can be in.
 	Depth GCMode
 	// Ran is whether DOLT_GC itself completed. It is set the instant the
-	// procedure returns and BEFORE the reconnect that follows, which is the
-	// whole point: a reconnect failure leaves behind a store that really was
+	// procedure returns and BEFORE the rotation that follows, which is the
+	// whole point: a rotation failure leaves behind a store that really was
 	// rewritten, and the rewrite is what a caller must not lose.
 	Ran bool
+	// Rotation is how the pass got its connection back (rotationAfterGC),
+	// empty on a pass that never ran, which poisons nothing.
+	Rotation storage.CompactionRotation
+}
+
+// pass is this attempt as the event records it.
+func (a compactionAttempt) pass() storage.CompactionPass {
+	return storage.CompactionPass{Depth: a.Depth, Ran: a.Ran, Rotation: a.Rotation}
 }
 
 // outcome renders this attempt in the contract's terms, given the engine's

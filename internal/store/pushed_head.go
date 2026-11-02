@@ -264,7 +264,7 @@ func refuseLOCKUnderCommitLock(ctx context.Context) error {
 //
 // access is the hold's kind (engineAccess), the caller's to state because only
 // the caller knows its write: a ref write is routine and heartbeats while it
-// works, a landing or a re-root grows with what it carries and is long.
+// works, a landing or a re-root grows with what it carries and stays long.
 // [LAW:types-are-the-program]
 //
 // The handle has no SQL connection for executingConnector to watch, so the

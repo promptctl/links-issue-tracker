@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -62,6 +63,10 @@ const (
 	// this pass runs after the on-change mirror has been spawned, so it is a
 	// term in parentPostSpawnTail and every second here is a second the mirror
 	// must be willing to wait for a healthy parent. [LAW:carrying-cost]
+	//
+	// It is also the longest a writer waits behind a pass. This deadline is what
+	// lets the backstop's hold be routine (store.OpenMaintenance): a pass ends on
+	// its own, finished or cut, so the writers behind it wait rather than fail.
 	compactTimeout = 45 * time.Second
 )
 
@@ -112,20 +117,24 @@ func maintainInline(ctx context.Context, stderr io.Writer, env environ.Env, ws w
 // maintainer is all the backstop asks of the engine. The backstop runs after a
 // command that is not a sync command, so it holds no sync session: nothing it
 // holds can follow, fetch or settle, and the command's event carries none of
-// a sync session's lists, whose [] says a sync looked and found none.
+// a sync session's lists but compaction.passes, the one thing a probe does.
 // [LAW:types-are-the-program] [LAW:nothing-unseen]
 type maintainer interface {
 	MaintainIfDue(ctx context.Context) (storage.MaintenanceOutcome, error)
 }
 
 // openMaintainer opens the workspace's sync engine for maintenance alone. The
-// returned close is the caller's to defer; it releases the workspace lock.
+// returned close is the caller's to defer; it reports the passes and releases
+// the workspace lock.
 func openMaintainer(ctx context.Context, env environ.Env, stderr io.Writer, ws workspace.Info) (maintainer, func() error, error) {
-	st, syncer, err := openSyncEngineAt(ctx, env, stderr, ws.DatabasePath, ws.WorkspaceID)
+	st, syncer, err := openSyncEngineAt(ctx, env, stderr, engine.Maintenance, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		return nil, nil, err
 	}
-	return syncer, st.Close, nil
+	return syncer, func() error {
+		reportCompactionPasses(ctx, syncer)
+		return st.Close()
+	}, nil
 }
 
 // maintainThrough asks the engine for its maintenance probe and records what

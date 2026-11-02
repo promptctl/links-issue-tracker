@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"io"
@@ -37,14 +38,24 @@ const doltDatabaseName = "links"
 // The contract is a typed input to the one connection assembly point, not a
 // per-callsite improvisation.
 //
-// A write open is one of two holds of Dolt's LOCK. engineWrite is the long
-// hold: an open whose work can grow with its input or run past the engine
-// (an import, a restore, a sync session), judged by its waiters as it always
-// was, failing them after coResidentHolderWait. engineWriteRoutine is the
-// routine hold: a command that makes a fixed number of issue changes, whose
-// hold sends a heartbeat while its engine works (lockHold), so a hold slowed
-// by a loaded machine is waited out rather than failing every writer behind
-// it. There is no routine read: a read engine never holds LOCK.
+// A write open is one of two holds of Dolt's LOCK, and long is the default.
+// engineWrite is the long hold (an import, a restore, a sync session), judged
+// by its waiters as it always was, failing them after coResidentHolderWait.
+// engineWriteRoutine is the routine hold, which sends a heartbeat while its
+// engine works (lockHold), so a hold slowed by a loaded machine is waited out
+// rather than failing every writer behind it. There is no routine read: a read
+// engine never holds LOCK.
+//
+// A hold may opt into routine only if its work ends on its own: fixed in size,
+// or cut by a deadline. Three do: a command that makes a fixed number of issue
+// changes, the pushed-head ref write, and the compaction backstop's pass, cut
+// by the deadline the backstop runs it under. That is a precondition and not a
+// classifier: a hold that meets it stays long until writers are seen failing
+// behind it, so a receive's landing and a re-root, cut by their own budgets,
+// are long. What fails it stays long whoever asked for it: a migration runs
+// under no deadline and cannot be cut at one (longPhase), and `lit sync
+// compact` is a backstop's pass with no deadline, so its `--full` runs to
+// completion however large the store is.
 type engineAccess int
 
 const (
@@ -97,6 +108,9 @@ type Store struct {
 	// checkedOut is the branch checkout or checkoutNewAt last put the session
 	// on, "" before either ran; resumeCheckedOut is its one reader.
 	checkedOut string
+	// reachedRemote is whether this engine has run a remote transfer: runRemoteIO
+	// sets it, closeEngine clears it, and rotationAfterGC is its one reader.
+	reachedRemote bool
 	// scratchDeletes is every scratch branch deleteBranch deleted or failed to
 	// delete since the store opened, and scratchLooked whether anything
 	// looked for one; ScratchDeletes is their one reader.
@@ -114,6 +128,11 @@ type Store struct {
 	// collections is every collection below a cut since the store opened
 	// (collectOwedCut); Collections is its one reader.
 	collections []storage.Collection
+	// compactionPasses is every compaction attempted since the store opened,
+	// and compactionLooked whether anything asked if one was owed;
+	// CompactionPasses is their one reader.
+	compactionPasses []storage.CompactionPass
+	compactionLooked bool
 	// declined is every re-root cut moveOntoRemoteReRoot recognized and could
 	// not follow since the store opened; DeclinedReRoots is its one reader.
 	declined []storage.DeclinedReRoot
@@ -227,10 +246,11 @@ func Open(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir st
 	return openWrite(ctx, env, stderr, doltRootDir, workspaceID, engineWrite)
 }
 
-// OpenRoutine opens the store for a routine write hold (engineWriteRoutine):
-// a command that makes a fixed number of issue changes. Its hold heartbeats
-// while its engine works (lockHold), so a hold slowed by a loaded machine is
-// waited out rather than failing the writers behind it.
+// OpenRoutine opens the store for a routine write hold (engineWriteRoutine),
+// which engineAccess says who may take: here, a command that makes a fixed
+// number of issue changes. Its hold heartbeats while its engine works
+// (lockHold), so a hold slowed by a loaded machine is waited out rather than
+// failing the writers behind it.
 func OpenRoutine(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (*Store, error) {
 	return openWrite(ctx, env, stderr, doltRootDir, workspaceID, engineWriteRoutine)
 }
@@ -515,6 +535,7 @@ func (s *Store) closeEngine() error {
 	err := release()
 	closeErr := s.db.Close()
 	s.hold.end()
+	s.reachedRemote = false
 	if errors.Is(closeErr, context.Canceled) {
 		closeErr = nil
 	}
@@ -634,8 +655,10 @@ func openHeldPool(ctx context.Context, stderr io.Writer, doltRootDir, workspaceI
 // contract. Dolt's online garbage collection invalidates any SQL connection
 // that was open when it ran ("this connection can no longer be used. please
 // reconnect."), so callers that invoke DOLT_GC must rotate the pooled
-// connection before any subsequent query. Must be called while the commit lock
-// is held so no concurrent caller observes a torn s.db pointer.
+// connection before any subsequent query; rotationAfterGC says when that takes
+// a new engine and not only a new connection (replaceConnection). Must be
+// called while the commit lock is held so no concurrent caller observes a torn
+// s.db pointer.
 //
 // The new handle is opened and configured before the old one is closed, and
 // its ENGINE opens only at the ping below — after prev.Close() has released
@@ -693,6 +716,28 @@ func (s *Store) reconnect(ctx context.Context) error {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
 	s.releaseEngineRecord = hold.record(ctx)
+	return s.resumeCheckedOut(ctx)
+}
+
+// replaceConnection retires the pool's one connection and has it make another
+// on the same engine. Online GC poisons the session that called it and nothing
+// else, so this is all a pass needs of a rotation, and it gives up neither the
+// engine nor Dolt's LOCK: no writer can take LOCK under the commit lock's hold,
+// which is the gap Store.reconnect leaves. [LAW:no-ambient-temporal-coupling]
+//
+// Raw returning ErrBadConn is database/sql's own way to drop a connection; the
+// pool closes it before Raw returns.
+func (s *Store) replaceConnection(ctx context.Context) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reach the poisoned connection: %w", err)
+	}
+	if err := conn.Raw(func(any) error { return driver.ErrBadConn }); !errors.Is(err, driver.ErrBadConn) {
+		return errors.Join(fmt.Errorf("retire the poisoned connection: %w", err), conn.Close())
+	}
+	if err := s.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("replace the poisoned connection: %w", err)
+	}
 	return s.resumeCheckedOut(ctx)
 }
 
@@ -3552,10 +3597,10 @@ const (
 // new` at once serialize on this store at tens of milliseconds each and every
 // one lands, because each one's arrival is progress; a holder that stands
 // still for this long is the one that fails the contender. A routine write
-// hold (engineWriteRoutine) also shows progress while its engine works, by
-// heartbeat (lockHold), so it is waited out however long a loaded machine
-// stretches it; this figure is then the longest it may go without engine
-// work. Every hold that sends no heartbeat (the long holds above, a foreign
+// hold (engineWriteRoutine; engineAccess says which holds are) also shows
+// progress while its engine works, by heartbeat (lockHold), so it is waited out
+// however long a loaded machine stretches it; this figure is then the longest
+// it may go without engine work. Every hold that sends no heartbeat (the long holds above, a foreign
 // dolt, a lit older than heartbeats) is judged by this figure exactly as
 // before. A package variable so
 // tests can set it: contention tests shrink it rather than sleep through the

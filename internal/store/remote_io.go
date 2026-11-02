@@ -182,6 +182,11 @@ func remoteIORetryDelay(attempt int) time.Duration {
 // runRemoteIO is the production spelling of retryTransientRemoteIO — one place
 // binds the real delay schedule and sleeper, so the remote-touching call sites
 // (push, fetch) cannot drift on retry policy. [LAW:one-source-of-truth]
-func runRemoteIO(ctx context.Context, operation retryOperation) error {
+//
+// It is also where a transfer marks the engine as having reached a remote: every
+// transfer passes through here, so one added later cannot miss it.
+// [LAW:single-enforcer]
+func (s *Store) runRemoteIO(ctx context.Context, operation retryOperation) error {
+	s.reachedRemote = true
 	return retryTransientRemoteIO(ctx, operation, remoteIORetryDelay, waitWithContext)
 }
