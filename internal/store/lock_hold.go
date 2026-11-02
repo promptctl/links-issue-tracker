@@ -45,9 +45,9 @@ import (
 // statement heartbeats like a slow one, because from outside the two are
 // indistinguishable at any finite time; its waiters wait with a notice naming
 // it every lockWaitNoticeInterval. A compaction backstop's pass is cut at its
-// deadline, which DOLT_GC honours. Otherwise that is the one place a writer's
-// wait on LOCK has no bound, and it needs a Dolt bug; the
-// bootstrap lock, which is not LOCK, waits out its builder with no bound by
+// deadline while DOLT_GC marks, and finishes on local disk once it has. Otherwise
+// that is the one place a writer's wait on LOCK has no bound, and it needs a Dolt
+// bug; the bootstrap lock, which is not LOCK, waits out its builder with no bound by
 // design (acquireBootstrapLock).
 
 // LockWaitOutcome is how one acquisition's wait for a held lock ended.

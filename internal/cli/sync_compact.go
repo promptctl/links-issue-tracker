@@ -64,9 +64,10 @@ const (
 	// term in parentPostSpawnTail and every second here is a second the mirror
 	// must be willing to wait for a healthy parent. [LAW:carrying-cost]
 	//
-	// It is also the longest a writer waits behind a pass. This deadline is what
+	// It also bounds how long a writer waits behind a pass. This deadline is what
 	// lets the backstop's hold be routine (store.OpenMaintenance): a pass ends on
-	// its own, finished or cut, so the writers behind it wait rather than fail.
+	// its own, so the writers behind it wait rather than fail. It cuts DOLT_GC's
+	// marking; a collection past marking finishes its local disk work first.
 	compactTimeout = 45 * time.Second
 )
 
@@ -155,7 +156,7 @@ func maintainThrough(ctx context.Context, stderr io.Writer, env environ.Env, ws 
 	outcome, err := m.MaintainIfDue(ctx)
 	if err != nil {
 		// The outcome goes with the error rather than being dropped for it: a
-		// pass whose reconnect failed still rewrote the store, a prune that
+		// pass whose rotation failed still rewrote the store, a prune that
 		// failed partway still retired what it named, and the depth is known
 		// here even when the pass never got that far. None of it survives
 		// anywhere else once this returns. [LAW:no-silent-failure]
@@ -241,7 +242,7 @@ func compactionDepthMetadata(depth storage.GCMode) map[string]string {
 // It takes the outcome rather than the error alone because a failure still knows
 // things. The engine reports the depth whenever one was chosen, and reports Ran
 // when the pass itself completed and only the work after it failed — so a
-// reconnect that failed behind a finished deep collection is recorded as the
+// rotation that failed behind a finished deep collection is recorded as the
 // rewrite it was, rather than as an error that reads like nothing happened.
 // [LAW:no-silent-failure]
 func recordCompactFailure(stderr io.Writer, env environ.Env, ws workspace.Info, command string, outcome storage.CompactionOutcome, cause error) {

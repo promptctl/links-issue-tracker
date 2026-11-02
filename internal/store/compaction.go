@@ -41,53 +41,6 @@ const (
 	GCFull   = storage.GCFull
 )
 
-// compactionAttempt is what a compaction request knows about itself however the
-// work around it ended: which depth was asked for, and whether the mutating call
-// actually landed.
-//
-// It exists because "did the pass run" is observable only inside
-// compactWithinLock, and a bare error cannot carry it. The domain has three
-// outcomes — the pass never ran; the pass ran and the work after it failed; the
-// pass ran clean — while an error has two. A caller left to reconstruct the
-// missing third would have to assume, and an assumption is worse than a branch
-// here, because a branch leaves something to read and an assumption leaves
-// nothing.
-// [LAW:types-are-the-program] the discriminator is a value handed out by the one
-// function that can observe it, not a guess each caller makes from its own
-// position in the control flow. [LAW:dataflow-not-control-flow]
-type compactionAttempt struct {
-	// Depth is the depth asked for, set before anything can fail — so an
-	// attempt that Ran without a depth is not a state this can be in.
-	Depth GCMode
-	// Ran is whether DOLT_GC itself completed. It is set the instant the
-	// procedure returns and BEFORE the rotation that follows, which is the
-	// whole point: a rotation failure leaves behind a store that really was
-	// rewritten, and the rewrite is what a caller must not lose.
-	Ran bool
-	// Rotation is how the pass got its connection back (rotationAfterGC),
-	// empty on a pass that never ran, which poisons nothing.
-	Rotation storage.CompactionRotation
-}
-
-// pass is this attempt as the event records it.
-func (a compactionAttempt) pass() storage.CompactionPass {
-	return storage.CompactionPass{Depth: a.Depth, Ran: a.Ran, Rotation: a.Rotation}
-}
-
-// outcome renders this attempt in the contract's terms, given the engine's
-// account of what changed.
-//
-// An attempt that did not run reports no detail: there is no reclaim to
-// describe, and the contract reserves an empty Detail for exactly the outcome
-// that did nothing. It still reports its depth, because "the deep pass is the
-// one failing" is the fact an operator needs and the only place it survives.
-func (a compactionAttempt) outcome(detail string) storage.CompactionOutcome {
-	if !a.Ran {
-		return storage.CompactionOutcome{Depth: a.Depth}
-	}
-	return storage.CompactionOutcome{Ran: true, Depth: a.Depth, Detail: detail}
-}
-
 // gcProcedureArgs renders a depth as DOLT_GC's own arguments. The flag spelling
 // comes from the constant Dolt's argument parser reads, so a rename breaks the
 // build here instead of silently selecting the wrong depth. It lives in this
@@ -290,7 +243,7 @@ func signalsDelta(before, after compactionSignals, measureErr error) string {
 // behind it. A filter every caller has to remember is a filter one of them will
 // forget.
 // [LAW:one-source-of-truth] [LAW:single-enforcer]
-func compactionReport(attempt compactionAttempt, measureErr error) string {
+func compactionReport(attempt storage.CompactionPass, measureErr error) string {
 	switch {
 	case !attempt.Ran:
 		return ""

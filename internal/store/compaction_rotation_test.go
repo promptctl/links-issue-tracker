@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,10 +93,12 @@ func TestAPassAfterAPushRotatesTheEngineAndTheNextPushLands(t *testing.T) {
 }
 
 // The backstop's hold is routine because its pass ends on its own: writers wait
-// behind it for as long as it runs, so this deadline is the only end their wait
-// has. A cut pass leaves the journal uncollected, which tells a collection that
-// stopped from one that ran on past its caller; the store then takes a write.
-func TestARunningCollectionStopsAtItsDeadline(t *testing.T) {
+// behind it for as long as it runs, so this deadline is what ends their wait
+// while a collection marks. Doubling it walks the cut from before DOLT_GC starts,
+// which proves nothing, into marking, which Dolt's error names by its SaveHashes
+// step. A Dolt that lost the cut runs the pass to its end here instead. A cut
+// pass leaves the journal uncollected, and the store then takes a write.
+func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
@@ -109,11 +112,15 @@ func TestARunningCollectionStopsAtItsDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cut, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
-	defer cancel()
-	outcome, err := s.SyncCompact(cut, GCFull)
-	if !errors.Is(err, context.DeadlineExceeded) || outcome.Ran {
-		t.Fatalf("SyncCompact() past its deadline = %+v, %v; want a pass that did not run, cut by its deadline", outcome, err)
+	err = nil
+	for deadline := time.Millisecond; err == nil || !strings.Contains(err.Error(), "SaveHashes"); deadline *= 2 {
+		cut, cancel := context.WithTimeout(ctx, deadline)
+		var outcome storage.CompactionOutcome
+		outcome, err = s.SyncCompact(cut, GCFull)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || outcome.Ran {
+			t.Fatalf("SyncCompact() under %s = %+v, %v; want a pass that did not run, cut by its deadline", deadline, outcome, err)
+		}
 	}
 	after, err := s.measureCompactionSignals()
 	if err != nil {
@@ -132,6 +139,30 @@ func TestARunningCollectionStopsAtItsDeadline(t *testing.T) {
 	}
 	defer reopened.Close()
 	commitPayload(t, ctx, reopened, "after")
+}
+
+// A deadline can land after DOLT_GC returned, when the store is rewritten and its
+// connection poisoned. Nothing is left to cut: the connection still has to come
+// back, or the pass reads as failed and every statement after it fails.
+func TestADeadlineAfterTheCollectionStillReplacesTheConnection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s, err := OpenMaintenance(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenMaintenance() error = %v", err)
+	}
+	defer s.Close()
+	commitPayload(t, ctx, s, "before")
+	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC"); err != nil {
+		t.Fatalf("DOLT_GC error = %v", err)
+	}
+
+	past, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := s.replaceConnection(past); err != nil {
+		t.Fatalf("replaceConnection() past the deadline error = %v", err)
+	}
+	commitPayload(t, ctx, s, "after")
 }
 
 // A store that looked and owed nothing says so, a store that could not measure

@@ -5389,7 +5389,7 @@ Dolt's git blobstore names two refs per open instance with the instance's UUID �
 3. `git gc --prune=now --quiet`. Failure → `git gc after removing %d orphaned ref(s): %w: <output>`, reported with the removed count.
 4. `Reclaimed` = `bytesUnder(gitDir)` before step 2 minus after step 3.
 
-Called only from `compactWithinLock`, after its `reconnect` succeeds (closing every remote database the previous engine held), under the commit lock — so `SyncCompact` (`lit sync compact`, the backstop's `MaintainIfDue`) and `SyncCompactAndPush` both sweep (`sync.go`).
+Called only from `compactWithinLock`, after its rotation succeeds (`rotationAfterGC`: no remote database is open, because the engine reached none or `reconnect` closed the one it had), under the commit lock — so `SyncCompact` (`lit sync compact`, the backstop's `MaintainIfDue`) and `SyncCompactAndPush` both sweep (`sync.go`).
 
 `refSweepOutcome` is a named type over `remoteCacheCollection`; `Report()` renders through `report("remote-cache ref sweep", "orphaned ref", "orphaned refs")`. `plus(next)` sums `Removed` and `Reclaimed` and joins non-empty problems with `"; "`, so a second run of the mutation body under the GC-contention retry does not replace the first run's account (`remotecache_refs.go`).
 

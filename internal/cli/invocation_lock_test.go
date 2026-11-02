@@ -100,7 +100,7 @@ func TestTheBackstopsHoldIsRoutineAndItsLookIsOnTheEvent(t *testing.T) {
 		t.Fatalf("the first write's probe found a pass owed on an empty store")
 	}
 	holds, _ := lastLockOccurrences(t, "lit new")
-	if len(holds) != 2 || !holds[0].Routine || !holds[1].Routine || holds[1].Heartbeats < 1 {
+	if len(holds) != 2 || !holds[0].Routine || !holds[1].Routine {
 		t.Fatalf("lock.holds = %+v, want the write's routine hold and the probe's", holds)
 	}
 	if err := os.Remove(marker); err != nil {

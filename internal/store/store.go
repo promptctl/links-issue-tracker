@@ -48,9 +48,11 @@ const doltDatabaseName = "links"
 //
 // A hold may opt into routine only if its work ends on its own: fixed in size,
 // or cut by a deadline. Three do: a command that makes a fixed number of issue
-// changes, the pushed-head ref write, and the compaction backstop's pass, cut
-// by the deadline the backstop runs it under. That is a precondition and not a
-// classifier: a hold that meets it stays long until writers are seen failing
+// changes, the pushed-head ref write, and the compaction backstop's pass, whose
+// marking is cut by the deadline the backstop runs it under; what a mark has
+// already copied is finished on local disk, past the deadline if it must be.
+// That is a precondition and not a classifier: a hold that meets it stays long
+// until writers are seen failing
 // behind it, so a receive's landing and a re-root, cut by their own budgets,
 // are long. What fails it stays long whoever asked for it: a migration runs
 // under no deadline and cannot be cut at one (longPhase), and `lit sync
@@ -129,7 +131,7 @@ type Store struct {
 	// (collectOwedCut); Collections is its one reader.
 	collections []storage.Collection
 	// compactionPasses is every compaction attempted since the store opened,
-	// and compactionLooked whether anything asked if one was owed;
+	// and compactionLooked whether compactIfDue measured whether one was owed;
 	// CompactionPasses is their one reader.
 	compactionPasses []storage.CompactionPass
 	compactionLooked bool
@@ -727,7 +729,13 @@ func (s *Store) reconnect(ctx context.Context) error {
 //
 // Raw returning ErrBadConn is database/sql's own way to drop a connection; the
 // pool closes it before Raw returns.
+//
+// [LAW:single-enforcer] This restores the store rather than doing the caller's
+// work, so a deadline that lands after DOLT_GC returned does not cut it, as it
+// does not cut withEngineClosed's reopen: the collection is done, and leaving
+// the poisoned connection in the pool would fail every statement after it.
 func (s *Store) replaceConnection(ctx context.Context) error {
+	ctx = context.WithoutCancel(ctx)
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("reach the poisoned connection: %w", err)

@@ -460,7 +460,7 @@ func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
 	}
 	defer syncStore.Close()
 
-	var landed compactionAttempt
+	var landed storage.CompactionPass
 	if err := syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
 		var compactErr error
 		landed, _, compactErr = syncStore.compactWithinLock(ctx, GCNewGen)
@@ -475,7 +475,7 @@ func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
 		t.Fatalf("attempt depth = %v, want %v", landed.Depth, GCNewGen)
 	}
 
-	var refused compactionAttempt
+	var refused storage.CompactionPass
 	err = syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
 		var compactErr error
 		refused, _, compactErr = syncStore.compactWithinLock(ctx, GCMode(99))

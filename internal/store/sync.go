@@ -34,7 +34,8 @@ func OpenSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 // whose hold is routine (engineWriteRoutine), since its caller runs the pass
 // under a deadline and no writer behind it asked for it. DOLT_GC is engine work,
 // so the hold heartbeats through it, and a writer waits out a pass however long
-// a loaded machine stretches it, as far as that deadline.
+// a loaded machine stretches it: to that deadline, and through the disk work of
+// a collection that had finished marking by then.
 func OpenMaintenance(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (*Store, error) {
 	return openSync(ctx, env, stderr, doltRootDir, workspaceID, engineWriteRoutine)
 }
@@ -742,10 +743,9 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.Rem
 // compacts collects the refs, and none can sweep without that moment.
 // [LAW:no-ambient-temporal-coupling] A sweep that fails reports in its outcome
 // rather than failing the compaction that already rewrote the store.
-func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionAttempt, refSweepOutcome, error) {
-	attempt := compactionAttempt{Depth: mode}
-	s.compactionLooked = true
-	defer func() { s.compactionPasses = append(s.compactionPasses, attempt.pass()) }()
+func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (storage.CompactionPass, refSweepOutcome, error) {
+	attempt := storage.CompactionPass{Depth: mode}
+	defer func() { s.compactionPasses = append(s.compactionPasses, attempt) }()
 	args, err := gcProcedureArgs(mode)
 	if err != nil {
 		return attempt, refSweepOutcome{}, err
@@ -788,7 +788,7 @@ func (s *Store) rotationAfterGC() (storage.CompactionRotation, connectionRotator
 // CompactionPasses is every compaction attempted on this store since it opened,
 // oldest first, and whether anything looked to see if one was owed.
 func (s *Store) CompactionPasses() ([]storage.CompactionPass, bool) {
-	return slices.Clone(s.compactionPasses), s.compactionLooked
+	return slices.Clone(s.compactionPasses), s.compactionLooked || len(s.compactionPasses) > 0
 }
 
 // SyncCompact compacts the store at the requested depth, with no remote
@@ -810,7 +810,7 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 		return storage.CompactionOutcome{}, fmt.Errorf("compact: illegal depth %d (want %q or %q)", int(mode), storage.GCNewGen, storage.GCFull)
 	}
 	before, beforeErr := s.measureCompactionSignals()
-	var attempt compactionAttempt
+	var attempt storage.CompactionPass
 	var sweep refSweepOutcome
 	// [LAW:single-enforcer] Dolt garbage collection is exposed through a single Store entrypoint so every caller routes through the same commit-lock and retry wrapper.
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
@@ -821,17 +821,17 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 		return compactErr
 	})
 	// Measured on both paths, because a pass that ran and then failed to
-	// reconnect rewrote the store exactly as much as one that succeeded. The
+	// rotate rewrote the store exactly as much as one that succeeded. The
 	// reading survives a dead connection: measureCompactionSignals is one Stat and one
 	// ReadDir against the filesystem, with no engine and no lock involved.
 	after, afterErr := s.measureCompactionSignals()
 	// The sweep's line joins the signals': both are this pass's account of
 	// what it changed on disk, and Detail is where that account goes.
-	outcome := attempt.outcome(joinMaintenance(signalsDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report()))
+	outcome := attempt.Outcome(joinMaintenance(signalsDelta(before, after, errors.Join(beforeErr, afterErr)), sweep.Report()))
 	if err != nil {
 		// The outcome is returned populated ALONGSIDE the error, because it
 		// describes the compaction and the compaction may well have happened —
-		// compactWithinLock's last act is a reconnect, and a failure there
+		// compactWithinLock ends on a rotation, and a failure there
 		// leaves a store that really was collected. Reporting Ran: false would
 		// be this value lying about its own subject, and it is the one thing a
 		// caller must not conclude from a maintenance failure.
@@ -1095,7 +1095,7 @@ func (s *Store) compactAndPush(ctx context.Context, remote storage.RemoteName, b
 	if err != nil {
 		return storage.SyncPushResult{}, err
 	}
-	var attempt compactionAttempt
+	var attempt storage.CompactionPass
 	var depthErr error
 	var sweep refSweepOutcome
 	var result storage.SyncPushResult

@@ -423,13 +423,42 @@ const (
 	CompactionRotationEngine CompactionRotation = "engine"
 )
 
-// CompactionPass is one compaction an engine attempted: its depth, whether it
-// ran, and how it rotated. A list, because one invocation can compact more than
-// once.
+// CompactionPass is one compaction an engine attempted, however the work around
+// it ended: its depth, whether it ran, and how it rotated. A list, because one
+// invocation can compact more than once.
+//
+// "Did the pass run" is observable only inside the compaction, and a bare error
+// cannot carry it. The domain has three outcomes (the pass never ran; it ran and
+// the work after it failed; it ran clean) while an error has two.
+// [LAW:types-are-the-program] the discriminator is a value handed out by the one
+// function that can observe it, not a guess each caller makes from its own
+// position in the control flow. [LAW:dataflow-not-control-flow]
 type CompactionPass struct {
-	Depth    GCMode
-	Ran      bool
+	// Depth is the depth asked for, set before anything can fail, so a pass that
+	// Ran without a depth is not a state this can be in.
+	Depth GCMode
+	// Ran is whether the collection itself completed. It is set the instant the
+	// collection returns and BEFORE the rotation that follows: a rotation failure
+	// leaves behind a store that really was rewritten, and the rewrite is what a
+	// caller must not lose.
+	Ran bool
+	// Rotation is how the pass got its connection back, empty on a pass that
+	// never ran, which poisons nothing.
 	Rotation CompactionRotation
+}
+
+// Outcome renders this pass in the contract's terms, given the engine's account
+// of what changed.
+//
+// A pass that did not run reports no detail: there is no reclaim to describe,
+// and an empty Detail is reserved for exactly the outcome that did nothing. It
+// still reports its depth, because "the deep pass is the one failing" is the
+// fact an operator needs and the only place it survives.
+func (p CompactionPass) Outcome(detail string) CompactionOutcome {
+	if !p.Ran {
+		return CompactionOutcome{Depth: p.Depth}
+	}
+	return CompactionOutcome{Ran: true, Depth: p.Depth, Detail: detail}
 }
 
 // EventValue is the pass as one value of the event's compaction.passes list.

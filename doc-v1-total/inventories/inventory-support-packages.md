@@ -63,6 +63,7 @@ above `internal/store` that names the Dolt engine's construction surface (packag
   | `read-write` | `store.Open` | bootstraps an absent database; exclusive workspace lock |
   | `read-only` | `store.OpenForRead` | requires an initialized database; shared lock; never creates a workspace |
   | `sync` | `store.OpenSync` | handle held across network operations; locking admits the mirror beside it |
+  | `maintenance` | `store.OpenMaintenance` | `sync`'s open for the compaction backstop, with a routine hold |
 
 - The mode→constructor mapping is the package-level `openers` table (`engine.go`).
 - `Open(ctx, mode, doltRootDir, workspaceID)` (`engine.go`): unknown mode —
