@@ -83,8 +83,8 @@ var (
 	_ model.RecordedError     = (*UnquarantineCommitError)(nil)
 )
 
-// Unquarantine clears the quarantine every write open of this workspace is
-// refused on, so the next open runs that migration again, and commits the
+// Unquarantine clears the quarantine this lit's write opens of this workspace
+// are refused on, so the next open runs that migration again, and commits the
 // clear as one Dolt commit.
 //
 // [LAW:locality-or-seam] This is a below-the-gate entry point like DumpRaw:

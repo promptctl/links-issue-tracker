@@ -1111,21 +1111,21 @@ func (s *Store) quarantineGate(ctx context.Context, state migrationState) *Schem
 	if state.phase == phaseAdopt {
 		effectiveApplied = baselineVersion
 	}
-	return attempt(stepCheckQuarantine, func() error { return s.checkPendingQuarantine(ctx, effectiveApplied, state.support.Max) })
+	return attempt(stepCheckQuarantine, func() error { return s.checkPendingQuarantine(ctx, effectiveApplied, state.support) })
 }
 
 // checkPendingQuarantine returns a QuarantineBlockError for the lowest
 // quarantined version among those pending, above appliedVersion up to
-// registryMax, its Next the one after it, and nil when none is quarantined.
+// support.Max, its Next the one after it, and nil when none is quarantined.
 //
-// A row above registryMax names a migration this binary does not have and will
+// A row above support.Max names a migration this binary does not have and will
 // never run. It refuses nothing here, and it stays to refuse the lit that has
-// that migration. [LAW:one-source-of-truth] registryMax is the head willMutate
+// that migration. [LAW:one-source-of-truth] support is the range willMutate
 // measures pending against, so "pending" means one thing to both.
-func (s *Store) checkPendingQuarantine(ctx context.Context, appliedVersion, registryMax int64) error {
+func (s *Store) checkPendingQuarantine(ctx context.Context, appliedVersion int64, support version.SchemaSupport) error {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT version, name, error_text FROM migration_quarantine WHERE version > ? AND version <= ? ORDER BY version LIMIT 2`,
-		appliedVersion, registryMax,
+		appliedVersion, support.Max,
 	)
 	if err != nil {
 		return fmt.Errorf("check pending quarantine: %w", err)

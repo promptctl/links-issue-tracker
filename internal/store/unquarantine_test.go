@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"path/filepath"
 	"testing"
 )
@@ -201,7 +202,7 @@ func assertRefusesLitWithMigration(t *testing.T, ctx context.Context, doltRoot s
 	t.Helper()
 	observeDolt(t, ctx, doltRoot, "test-workspace-id", func(s *Store) {
 		var blocked *QuarantineBlockError
-		if err := s.checkPendingQuarantine(ctx, applied, beyond); !errors.As(err, &blocked) || blocked.Version != beyond {
+		if err := s.checkPendingQuarantine(ctx, applied, version.SchemaSupport{Max: beyond}); !errors.As(err, &blocked) || blocked.Version != beyond {
 			t.Errorf("a lit with v%d pending got %v; want the quarantine of v%d in force", beyond, err, beyond)
 		}
 	})

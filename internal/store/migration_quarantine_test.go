@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -93,7 +94,7 @@ func TestCheckPendingQuarantineBlocksPendingVersion(t *testing.T) {
 	}
 
 	// Applied = 1 → v2 is pending and quarantined.
-	err = st.checkPendingQuarantine(ctx, 1, headVersion(t))
+	err = st.checkPendingQuarantine(ctx, 1, version.SchemaSupport{Max: headVersion(t)})
 	var qErr *QuarantineBlockError
 	if !errors.As(err, &qErr) {
 		t.Fatalf("checkPendingQuarantine(applied=1) = %v (%T), want *QuarantineBlockError", err, err)
@@ -130,7 +131,7 @@ func TestCheckPendingQuarantineAllowsAlreadyApplied(t *testing.T) {
 	}
 
 	// Applied = 1 → v1 is not pending (already applied). Should be nil.
-	if err := st.checkPendingQuarantine(ctx, 1, headVersion(t)); err != nil {
+	if err := st.checkPendingQuarantine(ctx, 1, version.SchemaSupport{Max: headVersion(t)}); err != nil {
 		t.Fatalf("checkPendingQuarantine(applied=1, quarantine_version=1) = %v, want nil", err)
 	}
 }
@@ -254,9 +255,9 @@ func TestQuarantineRowInsertedAfterReset(t *testing.T) {
 // TestMigrationFailureCheckpointPath pins the full failure path: a simulated
 // migration failure creates a Dolt checkpoint, resets the working set, records
 // a quarantine row, and returns the migration step's SchemaConvergenceError,
-// whose cause is the CheckpointResetError. A subsequent Open succeeds (phaseManaged,
-// appliedVersion=registryMax, willMutate=false), and the test verifies the
-// checkpoint branch and quarantine commit persisted across the reset.
+// whose cause is the CheckpointResetError. A subsequent Open is refused on the
+// quarantine, and the test verifies the checkpoint branch and quarantine commit
+// persisted across the reset.
 func TestMigrationFailureCheckpointPath(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
 	// hook.
@@ -417,7 +418,7 @@ func TestTransientMigrationFailureIsNotQuarantined(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
 	// hook.
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
-	failVersion := headVersion(t) + 1
+	failVersion := headVersion(t)
 	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
 		return nil, &goose.PartialError{
 			Failed: &goose.MigrationResult{Source: &goose.Source{Version: failVersion, Path: fmt.Sprintf("%05d_test.sql", failVersion)}},
@@ -516,7 +517,7 @@ func TestMigrationFailureResetSurvivesCallerCancel(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
 	// hook.
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
-	failVersion := headVersion(t) + 1
+	failVersion := headVersion(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	migrationUpByOneForTest = func(ctx context.Context, _ *sql.DB, _ *goose.Provider) (*goose.MigrationResult, error) {
@@ -540,7 +541,7 @@ func TestMigrationCommitCancelResetsWithoutQuarantine(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
 	// hook.
 	doltRoot := migratedWorkspaceWithGooseHistoryDropped(t)
-	failVersion := headVersion(t) + 1
+	failVersion := headVersion(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	migrationUpByOneForTest = func(context.Context, *sql.DB, *goose.Provider) (*goose.MigrationResult, error) {
