@@ -68,6 +68,9 @@ see the [README](../README.md) and the [docs](../docs/) site.
   the code, one condition-to-action rule type, and a ticket's column computed
   from the facts on every read with nothing stored. *Draft / proposal,
   2026-10-30.*
+- **[schema-reversibility.md](schema-reversibility.md)** — every schema raise
+  steps back losslessly, local or remote, and only a release build raises a
+  remote's schema. *Accepted design, 2026-11-02.*
 - **[MINIMAL-LIT-SKETCH-2026-09-29.md](MINIMAL-LIT-SKETCH-2026-09-29.md)** — the
   core value proposition, the smallest lit that still delivers it, and every
   other feature sorted by why it can go, measured before the event-store
