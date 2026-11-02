@@ -96,6 +96,8 @@ func TestAGroupOfOneClimbsNothing(t *testing.T) {
 			levels++
 			links += n
 		},
+		Ancestry: func(storage.AncestryShape) {},
+		RankSet:  func(RankSetAccount) {},
 	})
 	st := openIssueStore(t, ctx)
 	first := parentChain(t, ctx, st, "first", "first child")
