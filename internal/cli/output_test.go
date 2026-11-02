@@ -2,11 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
 // TestShowOmitsHistoryTrailWhileHistoryViewRendersIt pins the split: fed one
@@ -76,7 +78,7 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 	}
 
 	var history bytes.Buffer
-	if err := printIssueHistory(&history, detail); err != nil {
+	if err := printIssueHistory(telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{})), &history, detail); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	if !strings.Contains(history.String(), changeLine) {

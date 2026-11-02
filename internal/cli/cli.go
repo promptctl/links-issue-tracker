@@ -1358,13 +1358,17 @@ func historyLeaf() appLeaf {
 			if err != nil {
 				return err
 			}
-			render = func(w io.Writer, detail model.IssueDetail) error { return printFieldVersion(w, detail, ref) }
+			telemetry.Set(ctx, "history.version_field", ref.field.Name)
+			telemetry.Set(ctx, "history.version_number", ref.number)
+			render = func(ctx context.Context, w io.Writer, detail model.IssueDetail) error {
+				return printFieldVersion(ctx, w, detail, ref)
+			}
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 		if err != nil {
 			return err
 		}
-		return render(inv.Stdout, detail)
+		return render(ctx, inv.Stdout, detail)
 	}}
 }
 

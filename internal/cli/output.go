@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"gopkg.in/yaml.v3"
 )
 
@@ -445,7 +446,10 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 //
 // Every value on a row goes through singleLine, so each event is one row and
 // each change one row beneath it, whatever text the event carries.
-func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.PlanReview, versions map[string][]string) error {
+//
+// It returns, per long text field, how many change rows it rendered as vN → vM.
+func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.PlanReview, versions map[string][]string) (map[string]int, error) {
+	versionChanges := map[string]int{}
 	// One timed row per event and per review, sorted stably by time: on a tie
 	// the event, written first, stays first.
 	type row struct {
@@ -465,6 +469,7 @@ func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.P
 			from, to := emptyDash(change.From), emptyDash(change.To)
 			if texts, long := versions[change.Field]; long {
 				from, to = versionLabel(texts, change.From), versionLabel(texts, change.To)
+				versionChanges[change.Field]++
 			}
 			text += fmt.Sprintf("    %s: %s → %s\n", singleLine(change.Field), singleLine(from), singleLine(to))
 		}
@@ -478,10 +483,10 @@ func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.P
 	slices.SortStableFunc(rows, func(a, b row) int { return a.at.Compare(b.at) })
 	for _, row := range rows {
 		if _, err := io.WriteString(w, row.text); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return versionChanges, nil
 }
 
 // singleLine holds a value to the one row it is printed on: its printable
@@ -505,7 +510,7 @@ func singleLine(s string) string {
 // least its "created" event, so the trail is never empty in practice; an
 // empty Events slice honestly prints just the header rather than fabricating
 // a line.
-func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
+func printIssueHistory(ctx context.Context, w io.Writer, detail model.IssueDetail) error {
 	id := singleLine(detail.Issue.ID)
 	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", id, singleLine(detail.Issue.Title)); err != nil {
 		return err
@@ -515,18 +520,23 @@ func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
 	for _, field := range storage.LongTextFields() {
 		texts := storage.TextVersions(detail.Issue, detail.Events, field)
 		versions[field.Name] = texts
+		telemetry.Count(ctx, "history.versions."+field.Name, len(texts))
 		current := field.Current(detail.Issue)
 		if slices.ContainsFunc(texts, func(text string) bool { return text != current }) {
 			superseded = append(superseded, fmt.Sprintf("    %s: %s — lit history %s --version %s@<n> prints one\n", field.Name, storage.DescribeVersions(len(texts)), id, field.Name))
 		}
 	}
-	if err := printHistoryTrail(w, detail.Events, detail.PlanReviews, versions); err != nil {
+	versionChanges, err := printHistoryTrail(w, detail.Events, detail.PlanReviews, versions)
+	if err != nil {
 		return err
+	}
+	for _, field := range storage.LongTextFields() {
+		telemetry.Count(ctx, "history.version_changes."+field.Name, versionChanges[field.Name])
 	}
 	if len(superseded) == 0 {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "\nversions:\n%s", strings.Join(superseded, ""))
+	_, err = fmt.Fprintf(w, "\nversions:\n%s", strings.Join(superseded, ""))
 	return err
 }
 
@@ -621,9 +631,12 @@ func parseVersionRef(raw string) (versionRef, error) {
 // printFieldVersion prints the text one version of a long text field held,
 // bare, so it round-trips into `lit update --description` the way
 // `lit show --field` output does.
-func printFieldVersion(w io.Writer, detail model.IssueDetail, ref versionRef) error {
+func printFieldVersion(ctx context.Context, w io.Writer, detail model.IssueDetail, ref versionRef) error {
 	texts := storage.TextVersions(detail.Issue, detail.Events, ref.field)
-	if ref.number > len(texts) {
+	found := ref.number <= len(texts)
+	telemetry.Set(ctx, "history.version_found", found)
+	telemetry.Count(ctx, "history.version_held", len(texts))
+	if !found {
 		return storage.VersionNotFoundError{IssueID: detail.Issue.ID, Field: ref.field.Name, Number: ref.number, Held: len(texts)}
 	}
 	_, err := fmt.Fprintln(w, texts[ref.number-1])

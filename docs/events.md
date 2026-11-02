@@ -503,6 +503,17 @@ Those keys never appear at the event's top level.
 | --- | --- |
 | `followup.parent_source` | Where the follow-up's parent came from: `flag` (`--parent`), `on_parent` (the parent of the `--on` ticket), or `none` (the `--on` ticket is top-level and `--parent` was not given). |
 
+## What `lit history` records
+
+| Key | Meaning |
+| --- | --- |
+| `counts.history.versions.<field>` | A count, per long text field (`description`, `prompt`, `plan`), recorded when the trail prints: how many texts the field has held, each numbered once. |
+| `counts.history.version_changes.<field>` | A count recorded with `counts.history.versions.<field>`: how many of the trail's changes to that field printed as `vN → vM`. |
+| `history.version_field` | The field `--version <field>@<n>` named. A malformed reference is a usage error and records none of the `--version` keys. |
+| `history.version_number` | The version number `--version` asked for. |
+| `history.version_found` | `true` when the field holds that version and its text printed; `false` when the command refused it as a version the field never held. Absent when the issue could not be read. |
+| `counts.history.version_held` | A count recorded with `history.version_found`: how many versions the field holds. |
+
 ## What `lit verdict` records
 
 A recorded verdict sets these keys; a refused one has none of them.

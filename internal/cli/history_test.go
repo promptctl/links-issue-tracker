@@ -217,7 +217,7 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := printIssueHistory(&stdout, detail); err != nil {
+	if err := printIssueHistory(telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{})), &stdout, detail); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	var steps []string
@@ -240,7 +240,7 @@ func TestHistoryNumbersEachTextOnce(t *testing.T) {
 			t.Fatalf("parseVersionRef(%s) error = %v", ref, err)
 		}
 		var out bytes.Buffer
-		if err := printFieldVersion(&out, detail, parsed); err != nil || out.String() != want {
+		if err := printFieldVersion(telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{})), &out, detail, parsed); err != nil || out.String() != want {
 			t.Fatalf("printFieldVersion(%s) = %q, %v; want %q", ref, out.String(), err, want)
 		}
 	}
@@ -269,7 +269,7 @@ func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := printIssueHistory(&stdout, detail); err != nil {
+	if err := printIssueHistory(telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{})), &stdout, detail); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
 	stamp, br := formatHistoryTimestamp(time.Time{}), quotedBreak
@@ -373,5 +373,60 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 			t.Fatalf("lit history does not list %q after the edits before it:\n%s", want, out)
 		}
 		rest = rest[index+len(want):]
+	}
+}
+
+// lit history's event says how many texts each long text field holds and how
+// many trail changes it rendered as vN → vM, and a --version lookup says which
+// ref it asked for and whether the field held it.
+func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	epic := seedEpicRaw(t, ctx, ap, "History", "history")
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Edited", Topic: "history", IssueType: model.TypeTask, Description: "first", ParentID: epic,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := runUpdate(ctx, io.Discard, ap, []string{issue.ID, "--description", "second"}); err != nil {
+		t.Fatalf("update error = %v", err)
+	}
+
+	ev, err := recordLeaf(historyLeaf(), ctx, cwdInvocation(io.Discard, io.Discard, nil), ap, []string{issue.ID})
+	if err != nil {
+		t.Fatalf("history error = %v", err)
+	}
+	for key, want := range map[string]int{
+		"history.versions.description":        2,
+		"history.version_changes.description": 1,
+		"history.versions.prompt":             0,
+		"history.version_changes.prompt":      0,
+	} {
+		if got, ok := ev.Counts[key]; !ok || got != want {
+			t.Errorf("trail: counts[%s] = %v (present %v), want %d", key, got, ok, want)
+		}
+	}
+
+	for _, tc := range []struct {
+		ref   string
+		found bool
+	}{{"description@2", true}, {"description@3", false}} {
+		ev, err := recordLeaf(historyLeaf(), ctx, cwdInvocation(io.Discard, io.Discard, nil), ap, []string{issue.ID, "--version", tc.ref})
+		if tc.found != (err == nil) {
+			t.Fatalf("history --version %s error = %v, want found %v", tc.ref, err, tc.found)
+		}
+		if got := ev.Facts["history.version_field"]; got != "description" {
+			t.Errorf("%s: history.version_field = %v, want description", tc.ref, got)
+		}
+		if got, want := ev.Facts["history.version_number"], map[bool]int{true: 2, false: 3}[tc.found]; got != want {
+			t.Errorf("%s: history.version_number = %v, want %d", tc.ref, got, want)
+		}
+		if got := ev.Facts["history.version_found"]; got != tc.found {
+			t.Errorf("%s: history.version_found = %v, want %v", tc.ref, got, tc.found)
+		}
+		if got := ev.Counts["history.version_held"]; got != 2 {
+			t.Errorf("%s: history.version_held = %d, want 2", tc.ref, got)
+		}
 	}
 }
