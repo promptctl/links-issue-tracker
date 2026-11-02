@@ -590,9 +590,9 @@ func TestTheThreeCasesAreToldApart(t *testing.T) {
 // an unrelated reason — a `lit doctor` subcommand that reports manifest health,
 // say — would disable the gate with no failing test anywhere.
 func TestTheGateIsNotItsOwnEvidence(t *testing.T) {
-	dirs, err := shippedPackages(os.DirFS(repoRoot))
+	dirs, err := ShippedPackages(os.DirFS(repoRoot))
 	if err != nil {
-		t.Fatalf("shippedPackages: %v", err)
+		t.Fatalf("ShippedPackages: %v", err)
 	}
 	// Both registries of verbatim document text, not just this one.
 	// internal/docsclaims stores quotations from design-docs as Go literals.
