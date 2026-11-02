@@ -108,7 +108,7 @@ func (o refSweepOutcome) plus(next refSweepOutcome) refSweepOutcome {
 // do: every blobstore on a mirror belongs to an engine on this store, and a
 // write engine holds Dolt's LOCK, which no second write engine shares; and
 // within this process no remote database is open, because the engine has either
-// reached no remote or just been rotated (rotationAfterGC). So at the one call
+// reached no remote or just been rotated (rotateAfterGC). So at the one call
 // site, between compaction's rotation and the push, every instance ref on disk
 // is an orphan. [LAW:no-ambient-temporal-coupling] the precondition is that call
 // site's, and it is stated there too.

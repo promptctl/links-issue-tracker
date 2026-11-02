@@ -141,10 +141,37 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	commitPayload(t, ctx, reopened, "after")
 }
 
-// A deadline can land after DOLT_GC returned, when the store is rewritten and its
-// connection poisoned. Nothing is left to cut: the connection still has to come
-// back, or the pass reads as failed and every statement after it fails.
-func TestADeadlineAfterTheCollectionStillReplacesTheConnection(t *testing.T) {
+// A deadline or a cancel can land after DOLT_GC returned, when the store is
+// rewritten and its connection poisoned. Nothing is left to cut: whichever way
+// the pass rotates, the connection still has to come back, or the pass reads as
+// failed and every statement after it fails.
+func TestACancelAfterTheCollectionStillRotates(t *testing.T) {
+	t.Parallel()
+	for _, want := range []storage.CompactionRotation{storage.CompactionRotationConnection, storage.CompactionRotationEngine} {
+		ctx := context.Background()
+		s, err := OpenMaintenance(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
+		if err != nil {
+			t.Fatalf("OpenMaintenance() error = %v", err)
+		}
+		defer s.Close()
+		commitPayload(t, ctx, s, "before")
+		s.reachedRemote = want == storage.CompactionRotationEngine
+		if err := s.ExecRawForTest(ctx, "CALL DOLT_GC()"); err != nil {
+			t.Fatalf("DOLT_GC error = %v", err)
+		}
+
+		past, cancel := context.WithCancel(ctx)
+		cancel()
+		if got, err := s.rotateAfterGC(past); got != want || err != nil {
+			t.Fatalf("rotateAfterGC() past the cancel = %q, %v; want %q", got, err, want)
+		}
+		commitPayload(t, ctx, s, "after")
+	}
+}
+
+// A rotation that failed left no usable connection, so the pass says none: the
+// event is what an operator reads to learn whether the store recovered.
+func TestAFailedRotationIsNotReportedAsOne(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	s, err := OpenMaintenance(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
@@ -152,17 +179,12 @@ func TestADeadlineAfterTheCollectionStillReplacesTheConnection(t *testing.T) {
 		t.Fatalf("OpenMaintenance() error = %v", err)
 	}
 	defer s.Close()
-	commitPayload(t, ctx, s, "before")
-	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC"); err != nil {
-		t.Fatalf("DOLT_GC error = %v", err)
+	if err := s.db.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
-
-	past, cancel := context.WithCancel(ctx)
-	cancel()
-	if err := s.replaceConnection(past); err != nil {
-		t.Fatalf("replaceConnection() past the deadline error = %v", err)
+	if got, err := s.rotateAfterGC(ctx); got != "" || err == nil {
+		t.Fatalf("rotateAfterGC() on a closed pool = %q, %v; want no rotation and the failure", got, err)
 	}
-	commitPayload(t, ctx, s, "after")
 }
 
 // A store that looked and owed nothing says so, a store that could not measure

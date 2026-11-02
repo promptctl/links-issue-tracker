@@ -411,7 +411,7 @@ func (m GCMode) String() string {
 }
 
 // CompactionRotation is how a compaction pass got a usable connection back.
-// Empty on a pass that never ran.
+// Empty on a pass that never ran or whose rotation failed.
 type CompactionRotation string
 
 const (
@@ -442,9 +442,17 @@ type CompactionPass struct {
 	// leaves behind a store that really was rewritten, and the rewrite is what a
 	// caller must not lose.
 	Ran bool
-	// Rotation is how the pass got its connection back, empty on a pass that
-	// never ran, which poisons nothing.
+	// Rotation is how the pass got its connection back, set once it has: empty
+	// on a pass that never ran, which poisons nothing, and on one that Ran and
+	// could not rotate.
 	Rotation CompactionRotation
+}
+
+// Plus is this pass followed by a retry of it, which runs the body twice. A
+// rewrite the retry could not repeat is still a rewrite, so Ran stays once set.
+func (p CompactionPass) Plus(next CompactionPass) CompactionPass {
+	next.Ran = next.Ran || p.Ran
+	return next
 }
 
 // Outcome renders this pass in the contract's terms, given the engine's account

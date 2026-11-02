@@ -274,6 +274,21 @@ func TestCompactionPassRendersOnlyWhatHappened(t *testing.T) {
 	}
 }
 
+// A retry that could not repeat a rewrite does not erase it: the outcome and the
+// trail must agree with the event's pass list that the store was rewritten.
+func TestAPassPlusItsRetryKeepsTheRewrite(t *testing.T) {
+	t.Parallel()
+
+	rewrote := storage.CompactionPass{Depth: GCFull, Ran: true}
+	failed := storage.CompactionPass{Depth: GCFull}
+	if got := rewrote.Plus(failed); !got.Ran || got.Depth != GCFull {
+		t.Fatalf("a rewrite followed by a failed retry = %+v, want it to have run", got)
+	}
+	if got := failed.Plus(failed); got.Ran {
+		t.Fatalf("two passes that never ran = %+v, want none to have run", got)
+	}
+}
+
 func TestJoinMaintenanceDropsSilentReports(t *testing.T) {
 	t.Parallel()
 

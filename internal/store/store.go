@@ -111,7 +111,7 @@ type Store struct {
 	// on, "" before either ran; resumeCheckedOut is its one reader.
 	checkedOut string
 	// reachedRemote is whether this engine has run a remote transfer: runRemoteIO
-	// sets it, closeEngine clears it, and rotationAfterGC is its one reader.
+	// sets it, closeEngine clears it, and rotateAfterGC is its one reader.
 	reachedRemote bool
 	// scratchDeletes is every scratch branch deleteBranch deleted or failed to
 	// delete since the store opened, and scratchLooked whether anything
@@ -657,7 +657,7 @@ func openHeldPool(ctx context.Context, stderr io.Writer, doltRootDir, workspaceI
 // contract. Dolt's online garbage collection invalidates any SQL connection
 // that was open when it ran ("this connection can no longer be used. please
 // reconnect."), so callers that invoke DOLT_GC must rotate the pooled
-// connection before any subsequent query; rotationAfterGC says when that takes
+// connection before any subsequent query; rotateAfterGC says when that takes
 // a new engine and not only a new connection (replaceConnection). Must be
 // called while the commit lock is held so no concurrent caller observes a torn
 // s.db pointer.
@@ -729,13 +729,7 @@ func (s *Store) reconnect(ctx context.Context) error {
 //
 // Raw returning ErrBadConn is database/sql's own way to drop a connection; the
 // pool closes it before Raw returns.
-//
-// [LAW:single-enforcer] This restores the store rather than doing the caller's
-// work, so a deadline that lands after DOLT_GC returned does not cut it, as it
-// does not cut withEngineClosed's reopen: the collection is done, and leaving
-// the poisoned connection in the pool would fail every statement after it.
 func (s *Store) replaceConnection(ctx context.Context) error {
-	ctx = context.WithoutCancel(ctx)
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("reach the poisoned connection: %w", err)
