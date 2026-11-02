@@ -67,6 +67,7 @@ func takeBackup(ctx context.Context, ws workspace.Info, keep int, read func() (m
 	}
 	telemetry.Set(ctx, "backup.snapshot", written.Name)
 	telemetry.Set(ctx, "backup.refreshed", written.Refreshed)
+	telemetry.Set(ctx, "backup.restamped", written.Restamped)
 	telemetry.Set(ctx, "backup.pruned", written.Pruned)
 	return written, err
 }

@@ -73,10 +73,13 @@ type Taken struct {
 }
 
 // Written is the snapshot a take wrote, whether a snapshot of the same content
-// already stood at its name, and how many older snapshots its prune removed.
+// already stood at its name, whether its mtime was moved past the filesystem
+// clock's to keep it the newest (a burst of takes, or a clock stepped back),
+// and how many older snapshots its prune removed. [LAW:nothing-unseen]
 type Written struct {
 	Snapshot
 	Refreshed bool
+	Restamped bool
 	Pruned    int
 }
 
@@ -123,8 +126,12 @@ func takeHeld(storageDir string, keep int, read func() (model.Export, error)) (T
 }
 
 // write reads an export, writes it into the set and prunes the set to keep. A
-// nil Written means its read or its create failed; a prune that fails after
-// the create returns the Written with an error naming it.
+// nil Written means its read or its create wrote nothing; a create that
+// stamped nothing, or a prune that fails after it, returns the Written with an
+// error naming it. A create that stamped nothing skips the prune: it removes
+// the oldest by order, and this take's place in that order was never set, so
+// it could remove the take itself. Taking again is safe: the same content
+// lands on the same name and is stamped then.
 func write(storageDir string, keep int, read func() (model.Export, error)) (*Written, error) {
 	export, err := read()
 	if err != nil {
@@ -132,13 +139,13 @@ func write(storageDir string, keep int, read func() (model.Export, error)) (*Wri
 	}
 	written, err := create(storageDir, export)
 	if err != nil {
-		return nil, err
+		return written, err
 	}
 	written.Pruned, err = prune(storageDir, keep)
 	if err != nil {
-		return &written, fmt.Errorf("prune backups after writing %s: %w", written.Path, err)
+		return written, fmt.Errorf("prune backups after writing %s: %w", written.Path, err)
 	}
-	return &written, nil
+	return written, nil
 }
 
 // removeResidue removes the temp files of takes killed mid-write (a SIGKILL
@@ -183,6 +190,38 @@ func removeResidue(backupsDir string) (removed, stuck int, err error) {
 	return removed, len(errs), errors.Join(errs...)
 }
 
+// orderStep is how far past the newest other snapshot a take's mtime is
+// stamped: the coarsest mtime granularity of a filesystem a workspace may sit
+// on (FAT's two seconds), so rounding cannot return a stamp to a tie. It only
+// moves a take that came within it of the newest, a burst of takes or a clock
+// stepped back. A burst's Created runs ahead of the wall clock by at most the
+// burst times orderStep, and a take after a clock step forward stays stamped
+// past the snapshot it follows until the prune drops that one.
+const orderStep = 2 * time.Second
+
+// nextStamp is the mtime a take is stamped with: its written mtime, or
+// orderStep past the newest other snapshot's when that is later, so the take
+// is strictly the newest. newestOther is the zero time for a set holding no
+// other snapshot. Pure. [LAW:effects-at-boundaries]
+func nextStamp(newestOther, written time.Time) time.Time {
+	if floor := newestOther.Add(orderStep); floor.After(written) {
+		return floor
+	}
+	return written
+}
+
+// newestOtherMTime is the latest mtime among the snapshots but the one at
+// path: a refreshed snapshot must not be held to its own old mtime.
+func newestOtherMTime(snapshots []Snapshot, path string) time.Time {
+	var newest time.Time
+	for _, snapshot := range snapshots {
+		if snapshot.Path != path && snapshot.Created.After(newest) {
+			newest = snapshot.Created
+		}
+	}
+	return newest
+}
+
 // create writes export as the snapshot named by its content digest, the one
 // restore.digest records: exported_at is left out, so two takes of an unchanged
 // store share a name. Content the set already holds lands on that name and
@@ -190,31 +229,59 @@ func removeResidue(backupsDir string) (removed, stuck int, err error) {
 // content once, and a path handed out earlier still holds its content. export
 // must come from a store (syncfile.ContentHash). [LAW:one-source-of-truth]
 // [LAW:dataflow-not-control-flow]
-func create(storageDir string, export model.Export) (Written, error) {
+//
+// A snapshot's mtime is the only record of the order takes were made in, and
+// a filesystem clock ties two takes inside one tick (Windows) or orders a take
+// before an earlier one after a step back. create is the one place order is
+// minted [LAW:single-enforcer]: it stamps every take strictly after every
+// other snapshot, always, with the stamp equal to the written mtime when the
+// clock already put it there.
+//
+// The stamp follows the rename, so a take killed between them, or a power
+// loss before the stamp reaches the disk, leaves the wall-clock mtime. The
+// take was never reported, and the next take stamps past it. A stamp that
+// fails returns the Written beside the error: the snapshot is in the set, and
+// its order is the wall clock's.
+func create(storageDir string, export model.Export) (*Written, error) {
 	backupsDir := dir(storageDir)
 	if err := os.MkdirAll(backupsDir, 0o755); err != nil {
-		return Written{}, fmt.Errorf("create backups dir: %w", err)
+		return nil, fmt.Errorf("create backups dir: %w", err)
 	}
 	digest, err := syncfile.ContentHash(export)
 	if err != nil {
-		return Written{}, err
+		return nil, err
 	}
 	path := filepath.Join(backupsDir, digest+snapshotExt)
+	// Listed before the write: a list that fails after the rename would leave
+	// a snapshot nothing stamped.
+	others, err := List(storageDir)
+	if err != nil {
+		return nil, err
+	}
 	// Whether the name was already taken is recorded, never acted on: the
 	// write below is the same either way.
 	_, err = os.Stat(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return Written{}, fmt.Errorf("stat backup snapshot: %w", err)
+		return nil, fmt.Errorf("stat backup snapshot: %w", err)
 	}
 	refreshed := err == nil
 	if _, err := syncfile.WriteAtomic(path, export); err != nil {
-		return Written{}, err
+		return nil, err
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return Written{}, fmt.Errorf("stat backup snapshot: %w", err)
+		return nil, fmt.Errorf("stat backup snapshot: %w", err)
 	}
-	return Written{
+	clock := info.ModTime()
+	stamp := nextStamp(newestOtherMTime(others, path), clock)
+	stampErr := os.Chtimes(path, stamp, stamp)
+	// Stat again so Created is the mtime List will read, rounding included.
+	if stampErr == nil {
+		if info, err = os.Stat(path); err != nil {
+			return nil, fmt.Errorf("stat backup snapshot: %w", err)
+		}
+	}
+	written := &Written{
 		Snapshot: Snapshot{
 			Path:    path,
 			Name:    info.Name(),
@@ -222,7 +289,12 @@ func create(storageDir string, export model.Export) (Written, error) {
 			Size:    info.Size(),
 		},
 		Refreshed: refreshed,
-	}, nil
+		Restamped: stampErr == nil && !stamp.Equal(clock),
+	}
+	if stampErr != nil {
+		return written, fmt.Errorf("order backup %s after the snapshots it follows: %w", path, stampErr)
+	}
+	return written, nil
 }
 
 func List(storageDir string) ([]Snapshot, error) {
@@ -250,7 +322,16 @@ func List(storageDir string) ([]Snapshot, error) {
 			Size:    info.Size(),
 		})
 	}
-	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Created.After(snapshots[j].Created) })
+	// A total order, so List and prune agree: newest mtime first, ties by name
+	// descending. Takes by this lit never tie (create); an older lit's names
+	// are timestamps, so descending puts its later take first. A digest name
+	// orders a tie arbitrarily but consistently.
+	sort.Slice(snapshots, func(i, j int) bool {
+		if !snapshots[i].Created.Equal(snapshots[j].Created) {
+			return snapshots[i].Created.After(snapshots[j].Created)
+		}
+		return snapshots[i].Name > snapshots[j].Name
+	})
 	return snapshots, nil
 }
 

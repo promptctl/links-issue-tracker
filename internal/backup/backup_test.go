@@ -3,8 +3,10 @@ package backup
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,27 +26,14 @@ func take(t *testing.T, storageDir string, keep int, export model.Export) *Writt
 	return taken.Written
 }
 
-// age sets a snapshot's mtime ago into the past. A take's mtime is the
-// filesystem's clock, which on Linux ticks coarsely enough that two takes
-// microseconds apart can tie, so a test that depends on their order sets it.
-func age(t *testing.T, path string, ago time.Duration) {
-	t.Helper()
-	at := time.Now().Add(-ago)
-	if err := os.Chtimes(path, at, at); err != nil {
-		t.Fatalf("age %s: %v", path, err)
-	}
-}
-
 func TestTakeListLatestAndPrune(t *testing.T) {
 	t.Parallel()
 
 	storageDir := t.TempDir()
 	export := model.Export{Version: 1, WorkspaceID: "ws-test", ExportedAt: time.Now().UTC()}
 	first := take(t, storageDir, Budget, export)
-	age(t, first.Path, 2*time.Hour)
 	export.WorkspaceID = "ws-test-2"
 	second := take(t, storageDir, Budget, export)
-	age(t, second.Path, time.Hour)
 	export.WorkspaceID = "ws-test-3"
 	third := take(t, storageDir, 2, export)
 	if first.Pruned != 0 || second.Pruned != 0 || third.Pruned != 1 {
@@ -136,12 +125,10 @@ func TestTakeHoldsEachContentOnce(t *testing.T) {
 	storageDir := t.TempDir()
 	export := model.Export{Version: 1, WorkspaceID: "ws-test", ExportedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	first := take(t, storageDir, Budget, export)
-	age(t, first.Path, 2*time.Hour)
 	if first.Refreshed {
 		t.Errorf("Take(first).Refreshed = true, want false: the set held nothing")
 	}
 	other := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-other", ExportedAt: time.Now().UTC()})
-	age(t, other.Path, time.Hour)
 	if other.Refreshed || other.Path == first.Path {
 		t.Fatalf("Take(other) = %+v, want a new snapshot beside %s", other, first.Path)
 	}
@@ -183,7 +170,7 @@ func TestPruneAgesOutAnOlderLitsSnapshot(t *testing.T) {
 	if _, err := syncfile.WriteAtomic(legacy, export); err != nil {
 		t.Fatalf("write legacy snapshot: %v", err)
 	}
-	age(t, legacy, time.Hour)
+	setMTime(t, legacy, time.Now().Add(-time.Hour))
 	taken := take(t, storageDir, Budget, export)
 	if taken.Path == legacy {
 		t.Fatalf("Take landed on the older lit's snapshot %s", legacy)
@@ -198,5 +185,151 @@ func TestPruneAgesOutAnOlderLitsSnapshot(t *testing.T) {
 	take(t, storageDir, 1, export)
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Errorf("older lit's snapshot survived a prune past it: stat error = %v", err)
+	}
+}
+
+// setMTime sets a snapshot's mtime: the way a test makes a filesystem clock
+// the take must beat, whatever the real one's resolution.
+func setMTime(t *testing.T, path string, at time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, at, at); err != nil {
+		t.Fatalf("set mtime of %s: %v", path, err)
+	}
+}
+
+// takeN takes n distinct exports in a row and returns their snapshots in the
+// order taken.
+func takeN(t *testing.T, storageDir string, keep, n int) []*Written {
+	t.Helper()
+	taken := make([]*Written, 0, n)
+	for i := range n {
+		taken = append(taken, take(t, storageDir, keep, model.Export{Version: 1, WorkspaceID: fmt.Sprintf("ws-%d", i)}))
+	}
+	return taken
+}
+
+// Takes made back to back are all kept, listed newest-first in the order they
+// were taken, and a prune removes the oldest taken, whatever the clock
+// resolution: the snapshot seeded an hour ahead is what a clock stepped back
+// looks like, and a take made now must still be newer than it.
+func TestTakesKeepTheOrderTheyWereTaken(t *testing.T) {
+	t.Parallel()
+
+	storageDir := t.TempDir()
+	stale := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-before-the-step"})
+	setMTime(t, stale.Path, time.Now().Add(time.Hour))
+	const n, keep = 6, 4
+	taken := takeN(t, storageDir, keep, n)
+
+	list, err := List(storageDir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var got, want []string
+	for _, s := range list {
+		got = append(got, s.Path)
+	}
+	for i := n - 1; i >= n-keep; i-- {
+		want = append(want, taken[i].Path)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("List = %v, want the last %d takes newest-first %v", got, keep, want)
+	}
+	latest, err := Latest(storageDir)
+	if err != nil || latest == nil || latest.Path != taken[n-1].Path {
+		t.Fatalf("Latest = %+v, %v; want the last take %s", latest, err, taken[n-1].Path)
+	}
+	if _, err := os.Stat(stale.Path); !os.IsNotExist(err) {
+		t.Errorf("the snapshot from before the step survived a prune past it: stat error = %v", err)
+	}
+	if !taken[n-1].Created.Equal(list[0].Created) {
+		t.Errorf("Take reported Created %v, List reads %v", taken[n-1].Created, list[0].Created)
+	}
+}
+
+// A take of content the set holds becomes the newest even when its own old
+// mtime is the latest in the set: it is stamped against the snapshots beside
+// it, never against itself.
+func TestARefreshedTakeIsTheNewest(t *testing.T) {
+	t.Parallel()
+
+	storageDir := t.TempDir()
+	take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-b"})
+	first := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-a"})
+	ahead := time.Now().Add(time.Hour)
+	setMTime(t, first.Path, ahead)
+	again := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-a"})
+	latest, err := Latest(storageDir)
+	if err != nil || latest == nil || latest.Path != first.Path || !again.Refreshed {
+		t.Fatalf("Latest = %+v, %v; want the refreshed %s", latest, err, first.Path)
+	}
+	if !again.Created.Before(ahead) {
+		t.Errorf("the refresh was stamped %v, held to its own old mtime %v", again.Created, ahead)
+	}
+}
+
+// Snapshots whose mtimes tie (copied by a tool that rounds them) list by name
+// descending, the same order a prune removes from the tail of.
+func TestListOrdersTiedMTimesByNameDescending(t *testing.T) {
+	t.Parallel()
+
+	storageDir := t.TempDir()
+	at := time.Now().Add(-time.Hour)
+	for _, name := range []string{"20260101-000000.json", "20260102-000000.json", "20260103-000000.json"} {
+		path := filepath.Join(storageDir, "backups", name)
+		if _, err := syncfile.WriteAtomic(path, model.Export{Version: 1, WorkspaceID: name}); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+		setMTime(t, path, at)
+	}
+	list, err := List(storageDir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var names []string
+	for _, s := range list {
+		names = append(names, s.Name)
+	}
+	if want := []string{"20260103-000000.json", "20260102-000000.json", "20260101-000000.json"}; !slices.Equal(names, want) {
+		t.Errorf("List = %v, want %v", names, want)
+	}
+}
+
+// nextStamp puts a take strictly after the newest other snapshot and leaves a
+// mtime the clock already put there alone.
+func TestNextStamp(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name         string
+		newestOther  time.Time
+		written, out time.Time
+	}{
+		{"no other snapshot", time.Time{}, at, at},
+		{"the clock is well past it", at.Add(-time.Hour), at, at},
+		{"the same tick", at, at, at.Add(orderStep)},
+		{"inside the step", at.Add(-orderStep / 2), at, at.Add(orderStep / 2)},
+		{"exactly a step past", at.Add(-orderStep), at, at},
+		{"the clock stepped back", at.Add(time.Hour), at, at.Add(time.Hour + orderStep)},
+	}
+	for _, c := range cases {
+		if got := nextStamp(c.newestOther, c.written); !got.Equal(c.out) {
+			t.Errorf("%s: nextStamp(%v, %v) = %v, want %v", c.name, c.newestOther, c.written, got, c.out)
+		}
+	}
+}
+
+// A take reports whether its mtime was moved past the clock's: not when the
+// set holds nothing newer, and so when it holds a snapshot dated ahead.
+func TestTakeReportsWhetherItWasRestamped(t *testing.T) {
+	t.Parallel()
+
+	storageDir := t.TempDir()
+	first := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-a"})
+	setMTime(t, first.Path, time.Now().Add(time.Hour))
+	second := take(t, storageDir, Budget, model.Export{Version: 1, WorkspaceID: "ws-b"})
+	if first.Restamped || !second.Restamped {
+		t.Errorf("Restamped = %v, %v; want false, true", first.Restamped, second.Restamped)
 	}
 }

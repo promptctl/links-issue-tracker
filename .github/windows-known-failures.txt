@@ -7,7 +7,6 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-links-windows-qr8l.fkh internal/backup TestCreateListLatestAndPrune
 links-windows-qr8l.bc1 internal/cli TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere
 links-windows-qr8l.bc1 internal/cli TestAPushRecordsTheAdvertisementItLeft
 links-windows-qr8l.bc1 internal/cli TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt
