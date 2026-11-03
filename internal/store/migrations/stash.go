@@ -67,6 +67,11 @@ func RestoreSQL(c StashColumn) []string {
 // so a released Down is made lossless without touching its Up.
 var Restores = map[int64][]StashColumn{
 	2: {{Table: "issues", Column: "lane", Key: []string{"id"}}},
+	3: {{Table: "issues", Column: "resolution", Key: []string{"id"}}},
+	5: {
+		{Table: "issue_events", Column: "stream_id", Key: []string{"id"}},
+		{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}},
+	},
 }
 
 // Execer is the one method ReplayStash needs from a database handle.
