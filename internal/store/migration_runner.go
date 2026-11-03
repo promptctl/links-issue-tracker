@@ -929,9 +929,11 @@ func stepResult(result *goose.MigrationResult, err error) (*goose.MigrationResul
 // liftWorkingSetToRegistry advances the live working set to the registry's max
 // schema version by applying every pending migration's DDL through goose — the
 // same registry, the same stepper (upByOne) the durable startup path uses. It
-// commits nothing to Dolt, takes no checkpoint, and takes no snapshot: its sole
-// caller is the reconcile, which runs it on a THROWAWAY scratch branch that is
-// hard-reset away or discarded immediately after the working set is read. It
+// commits nothing to Dolt itself, takes no checkpoint, and takes no snapshot:
+// its sole caller is the reconcile (resetAndLift), on a scratch branch. A lift
+// on the read branch is discarded once the working set is exported; the lift
+// of the fetched head on the spine is committed by the reconcile as the base
+// of the replay, and a push carries it. It
 // exists because reconcile must read/write a remote or base commit written by
 // an older binary (a schema behind this binary's registry); before the lift the
 // working set at that commit lacks columns this binary's SQL names, so reads
@@ -947,10 +949,10 @@ func stepResult(result *goose.MigrationResult, err error) (*goose.MigrationResul
 // local head is always current).
 //
 // hold is the schema hold that bounds this lift beside the released-schema
-// ceiling: the lifted commit's own hold when what is lifted will be pushed (the
-// fetched head the reconcile's spine adopts), the unbounded ceiling when the
-// lift is a projection read and discarded. The caller decides, since only it
-// knows what the lifted working set is for (resetAndLift, sync_reconcile.go).
+// ceiling: the fetched head's own when that head is lifted, since what the
+// spine lands on it is pushed (fetchedHead, sync_reconcile.go); the unbounded
+// ceiling for a commit lifted only to be read. The caller decides, since only
+// it knows which commit the working set holds.
 // [LAW:dataflow-not-control-flow] the binding enters as a value; the lift runs
 // the same loop under whatever ceiling it is handed.
 func (s *Store) liftWorkingSetToRegistry(ctx context.Context, hold version.SchemaCeiling) error {
@@ -1448,7 +1450,7 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 	}
 	// The store's schema hold is read once, here, and rides the state to
 	// every raise the open decides on (migrationState.ceiling).
-	hold, err := s.schemaHold(ctx, "this store")
+	hold, err := s.schemaHold(ctx)
 	if err != nil {
 		return migrationState{}, err
 	}

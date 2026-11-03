@@ -205,11 +205,7 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 	if result.State != storage.SyncReceiveFastForwarded || result.Behind != 1 {
 		t.Fatalf("SyncSettleReceived() = %+v, want fast-forwarded from behind by 1", result)
 	}
-	var titles int
-	if err := st.db.QueryRowContext(f.ctx, `SELECT COUNT(*) FROM issues WHERE title = 'peer-ticket'`).Scan(&titles); err != nil {
-		t.Fatalf("read the peer's issue after the settle: %v", err)
-	}
-	if titles != 1 {
+	if titles := issuesTitled(t, f.ctx, st, "peer-ticket"); titles != 1 {
 		t.Fatalf("the live store holds %d peer-ticket row(s) after the settle, want 1", titles)
 	}
 }

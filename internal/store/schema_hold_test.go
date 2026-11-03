@@ -37,20 +37,20 @@ func TestASchemaHoldReadsAsACeiling(t *testing.T) {
 	ctx := context.Background()
 	st, _ := openWorkspaceForDowngrade(t)
 
-	hold, err := st.schemaHold(ctx, "this store")
+	hold, err := st.schemaHold(ctx)
 	if err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() of an unheld store = %+v, %v; want the unbounded ceiling", hold, err)
 	}
 
 	mustExec(t, ctx, st, `INSERT INTO meta (meta_key, meta_value) VALUES (?, '7')`, schemaHoldKey)
-	hold, err = st.schemaHold(ctx, "this store")
+	hold, err = st.schemaHold(ctx)
 	if err != nil || hold != holdBy("this store", 7) {
 		t.Fatalf("schemaHold() of a held store = %+v, %v; want %+v", hold, err, holdBy("this store", 7))
 	}
 
 	for _, raw := range []string{"seven", "0", "-1"} {
 		mustExec(t, ctx, st, `UPDATE meta SET meta_value = ? WHERE meta_key = ?`, raw, schemaHoldKey)
-		if _, err := st.schemaHold(ctx, "this store"); err == nil || !strings.Contains(err.Error(), fmt.Sprintf(`meta schema_hold = %q is not a schema version`, raw)) {
+		if _, err := st.schemaHold(ctx); err == nil || !strings.Contains(err.Error(), fmt.Sprintf(`meta schema_hold = %q is not a schema version`, raw)) {
 			t.Fatalf("schemaHold() of hold %q = %v, want the malformed row named", raw, err)
 		}
 	}
@@ -129,7 +129,7 @@ func TestTheReconcileLiftRefusesToRaisePastAHold(t *testing.T) {
 	}
 	holdStore(t, ctx, st, max-1)
 
-	hold, err := st.schemaHold(ctx, "this store")
+	hold, err := st.schemaHold(ctx)
 	if err != nil {
 		t.Fatalf("schemaHold() = %v", err)
 	}
@@ -331,7 +331,7 @@ func TestARemoteDowngradeHoldsTheStoreInItsLastCommit(t *testing.T) {
 	if logAfter := commitMessages(t, ctx, st); len(logAfter) != len(logBefore)+1 {
 		t.Fatalf("the reverse added %d commits, want 1:\n%q", len(logAfter)-len(logBefore), logAfter)
 	}
-	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != holdBy("this store", max-1) {
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
 		t.Fatalf("schemaHold() after the reverse = %+v, %v; want %+v", hold, err, holdBy("this store", max-1))
 	}
 	if hold, err := st.schemaHoldAt(ctx, before, "the head before"); err != nil || hold != version.UnboundedSchemaCeiling() {
@@ -364,7 +364,7 @@ func TestARemoteDowngradeAtTheTargetHoldsInACommitOfItsOwn(t *testing.T) {
 	if _, err := st.Downgrade(ctx, max-1); err != nil {
 		t.Fatalf("Downgrade(%d) = %v", max-1, err)
 	}
-	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != version.UnboundedSchemaCeiling() {
+	if hold, err := st.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() after a plain downgrade = %+v, %v; want the unbounded ceiling", hold, err)
 	}
 	logBefore := commitMessages(t, ctx, st)
@@ -380,7 +380,7 @@ func TestARemoteDowngradeAtTheTargetHoldsInACommitOfItsOwn(t *testing.T) {
 	if want := append([]string{fmt.Sprintf("downgrade: hold schema at %d", max-1)}, logBefore...); !slices.Equal(logAfter, want) {
 		t.Fatalf("commit log after the hold:\n%q\nwant\n%q", logAfter, want)
 	}
-	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != holdBy("this store", max-1) {
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
 		t.Fatalf("schemaHold() = %+v, %v; want %+v", hold, err, holdBy("this store", max-1))
 	}
 }
@@ -412,7 +412,7 @@ func TestLiftSchemaHoldRemovesTheHoldInOneCommitAndTheStoreRisesAgain(t *testing
 	if want := append([]string{fmt.Sprintf("upgrade: lift the schema hold at %d", max-1)}, logHeld...); !slices.Equal(logLifted, want) {
 		t.Fatalf("commit log after the lift:\n%q\nwant\n%q", logLifted, want)
 	}
-	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != version.UnboundedSchemaCeiling() {
+	if hold, err := st.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() after the lift = %+v, %v; want the unbounded ceiling", hold, err)
 	}
 
@@ -529,7 +529,7 @@ func TestTheHoldMovesWithTheHeadAndNeverRises(t *testing.T) {
 	if done.From != max || done.Reversed != 1 || done.Hold != max-2 {
 		t.Fatalf("done = %+v, want From %d, Reversed 1, Hold %d left where it was", *done, max, max-2)
 	}
-	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != holdBy("this store", max-2) {
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-2) {
 		t.Fatalf("schemaHold() = %+v, %v; want %+v", hold, err, holdBy("this store", max-2))
 	}
 
@@ -634,11 +634,11 @@ func TestADivergedRemoteLoweringPulledAndRunAgainLandsAHeldHead(t *testing.T) {
 	if got, err := a.recordedMigrationVersion(ctx); err != nil || got != max {
 		t.Fatalf("recorded version after the pull = %d, %v; want %d, the remote head's schema the replay landed on", got, err, max)
 	}
-	if hold, err := a.schemaHold(ctx, "this store"); err != nil || hold != version.UnboundedSchemaCeiling() {
+	if hold, err := a.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() after the pull = %+v, %v; want none, since the hold that never landed folds to nothing", hold, err)
 	}
-	if !hasIssueTitled(t, ctx, a, "B's ticket") {
-		t.Fatalf("B's ticket is missing from A after the pull")
+	if n := issuesTitled(t, ctx, a, "B's ticket"); n != 1 {
+		t.Fatalf("A holds %d rows of B's ticket after the pull, want 1", n)
 	}
 
 	again, err := a.DowngradeAndHold(ctx, max-1)
@@ -664,21 +664,21 @@ func TestADivergedRemoteLoweringPulledAndRunAgainLandsAHeldHead(t *testing.T) {
 	}
 	remote := openSyncOrFatal(t, ctx, verify)
 	defer func() { _ = remote.Close() }()
-	if !hasIssueTitled(t, ctx, remote, "B's ticket") {
-		t.Fatalf("B's ticket is missing from the remote's held head")
+	if n := issuesTitled(t, ctx, remote, "B's ticket"); n != 1 {
+		t.Fatalf("the remote's held head holds %d rows of B's ticket, want 1", n)
 	}
 }
 
-// hasIssueTitled reports whether st holds an issue titled title. It reads the
-// row itself rather than exporting: a held store sits below this lit's
-// schema, where the export names a column the reversed migration removed.
-func hasIssueTitled(t *testing.T, ctx context.Context, st *Store, title string) bool {
+// issuesTitled is how many issues st holds titled title. It reads the rows
+// rather than exporting: a held store sits below this lit's schema, where the
+// export names a column the reversed migration removed.
+func issuesTitled(t *testing.T, ctx context.Context, st *Store, title string) int {
 	t.Helper()
 	var n int
 	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE title = ?`, title).Scan(&n); err != nil {
 		t.Fatalf("count issues titled %q: %v", title, err)
 	}
-	return n == 1
+	return n
 }
 
 // parentCommit is the hash of the commit before HEAD on st's checked-out branch.
