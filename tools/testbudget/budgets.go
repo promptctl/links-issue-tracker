@@ -40,8 +40,10 @@ import "time"
 var budgets = map[string]time.Duration{
 	// 291s (EPYC 9V74); 151-210s on the other CPUs. CI measured 58.5s at the
 	// 2026-08-26 calibration, more than the runner pool's ~1.5x spread
-	// explains, so where the rest went is unmeasured. Approaching this budget
-	// means fixture tax is back.
+	// explains. One known share is the migration round-trip gate
+	// (migration_round_trip_test.go), whose cost IS what it pins: every
+	// migration's Down proven lossless. The rest is unmeasured. Approaching
+	// this budget means fixture tax is back.
 	"github.com/promptctl/links-issue-tracker/internal/store": 440 * time.Second,
 
 	// 385s (EPYC 7763); 249-358s on the other CPUs, most of it the serial e2e

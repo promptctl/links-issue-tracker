@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
+	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -151,6 +153,42 @@ func TestTheRoundTripGateCatchesALossyDown(t *testing.T) {
 	}
 }
 
+// TestAFailedFreshUpFailsEveryCallerOfItsShape breaks v2's Up and asks the
+// shape cache for v2 from several callers at once: every one of them gets the
+// one build's error, none an empty shape that would read as a schema diff.
+func TestAFailedFreshUpFailsEveryCallerOfItsShape(t *testing.T) {
+	t.Parallel()
+	const v = 2
+	prefix := fmt.Sprintf("%05d_", v)
+	cache := &shapeCache{fsys: os.DirFS(copyRegistry(t, func(name, body string) string {
+		if !strings.HasPrefix(name, prefix) {
+			return body
+		}
+		_, down, ok := strings.Cut(body, "-- +goose Down")
+		if !ok {
+			t.Fatalf("%s has no Down section", name)
+		}
+		return "-- +goose Up\nTHIS IS NOT SQL;\n-- +goose Down" + down
+	}))}
+	shapes := make([]string, 3)
+	errs := make([]error, 3)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Go(func() { shapes[i], errs[i] = cache.shape(v) })
+	}
+	wg.Wait()
+	var partial *goose.PartialError
+	if !errors.As(errs[0], &partial) || partial.Failed.Source.Version != v {
+		t.Fatalf("shape(%d) = %q, %v; want v%d's failed Up", v, shapes[0], errs[0], v)
+	}
+	// One build: every caller holds the very error it returned.
+	for i, err := range errs[1:] {
+		if err != errs[0] {
+			t.Errorf("caller %d got %v, not the one build's error %v", i+1, err, errs[0])
+		}
+	}
+}
+
 // roundTripFrom: seed at v, export, Down to below, compare the shape with a
 // fresh Up to below, Up to v, compare the export.
 func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error {
@@ -201,18 +239,55 @@ func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v in
 
 // freshShapes caches freshShape per version: one Up-only store per version
 // for the whole package, not one per round trip.
-var freshShapes sync.Map // int64 -> func() string
+var freshShapes = &shapeCache{fsys: migrations.FS}
 
 // freshShape is the schema shape a fresh Up of the embedded registry to v
 // produces. A mutant registry differs from it only in a Down, so its fresh
-// Ups give the same shape.
+// Ups give the same shape. A failed build fails every caller, each against its
+// own test.
 func freshShape(t *testing.T, v int64) string {
 	t.Helper()
-	build, _ := freshShapes.LoadOrStore(v, sync.OnceValue(func() string {
-		st, _ := storeAtVersion(t, migrations.FS, v)
-		return schemaShape(t, st.db)
+	shape, err := freshShapes.shape(v)
+	if err != nil {
+		t.Fatalf("fresh shape at v%d: %v", v, err)
+	}
+	return shape
+}
+
+// shapeCache builds each version's fresh shape once and hands every caller
+// the same result, error included. The build reads no caller's testing.T, so
+// no caller's failure or cleanup is borrowed by another.
+type shapeCache struct {
+	fsys   fs.FS
+	builds sync.Map // int64 -> func() (string, error)
+}
+
+func (c *shapeCache) shape(v int64) (string, error) {
+	build, _ := c.builds.LoadOrStore(v, sync.OnceValues(func() (string, error) {
+		return buildFreshShape(c.fsys, v)
 	}))
-	return build.(func() string)()
+	return build.(func() (string, error))()
+}
+
+func buildFreshShape(fsys fs.FS, v int64) (shape string, err error) {
+	ctx := context.Background()
+	base, err := dirtemplate.MkdirTemp()
+	if err != nil {
+		return "", err
+	}
+	defer func() { err = errors.Join(err, os.RemoveAll(base)) }()
+	dir := filepath.Join(base, "dolt")
+	if err := storeTemplate.CopyTo(dir); err != nil {
+		return "", err
+	}
+	st, _, err := openAtVersion(ctx, dir, fsys, v)
+	if st != nil {
+		defer func() { err = errors.Join(err, st.Close()) }()
+	}
+	if err != nil {
+		return "", err
+	}
+	return comparedShape(ctx, st.db)
 }
 
 // roundTripBelow: seed at below, export, Up to v, Down to below, compare the
@@ -324,26 +399,48 @@ func expectExempt(t *testing.T, v int64, exempt map[int64]string, err error) {
 func storeAtVersion(t *testing.T, fsys fs.FS, v int64) (*Store, *goose.Provider) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
+	st, provider, err := openAtVersion(ctx, migratedDoltDir(t), fsys, v)
+	if st != nil {
+		t.Cleanup(func() { _ = st.Close() })
+	}
 	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	tables := allTables(t, st.db)
-	stmts := append([]string{"SET FOREIGN_KEY_CHECKS = 0"}, mapQuoted("DROP TABLE ", tables)...)
-	for _, stmt := range append(stmts, "SET FOREIGN_KEY_CHECKS = 1") {
-		if _, err := st.db.ExecContext(ctx, stmt); err != nil {
-			t.Fatalf("empty the store (%s): %v", stmt, err)
-		}
-	}
-	provider, err := goose.NewProvider(goose.DialectMySQL, st.db, fsys)
-	if err != nil {
-		t.Fatalf("goose.NewProvider: %v", err)
-	}
-	if _, err := provider.UpTo(ctx, v); err != nil {
-		t.Fatalf("Up to v%d: %v", v, err)
+		t.Fatal(err)
 	}
 	return st, provider
+}
+
+// openAtVersion opens the store copy at dir and leaves it at fsys's v by Ups
+// alone. A store it opened comes back even when the Ups fail, for its caller
+// to close.
+func openAtVersion(ctx context.Context, dir string, fsys fs.FS, v int64) (*Store, *goose.Provider, error) {
+	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
+	if err != nil {
+		return nil, nil, fmt.Errorf("Open: %w", err)
+	}
+	provider, err := upOnly(ctx, st.db, fsys, v)
+	return st, provider, err
+}
+
+// upOnly drops every table in db and runs fsys's Ups to v.
+func upOnly(ctx context.Context, db *sql.DB, fsys fs.FS, v int64) (*goose.Provider, error) {
+	tables, err := listTables(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
+	stmts := append([]string{"SET FOREIGN_KEY_CHECKS = 0"}, mapQuoted("DROP TABLE ", tables)...)
+	for _, stmt := range append(stmts, "SET FOREIGN_KEY_CHECKS = 1") {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return nil, fmt.Errorf("empty the store (%s): %w", stmt, err)
+		}
+	}
+	provider, err := goose.NewProvider(goose.DialectMySQL, db, fsys)
+	if err != nil {
+		return nil, fmt.Errorf("goose.NewProvider: %w", err)
+	}
+	if _, err := provider.UpTo(ctx, v); err != nil {
+		return nil, fmt.Errorf("Up to v%d: %w", v, err)
+	}
+	return provider, nil
 }
 
 // exportTables is every application table's rows as JSON, in catalog order.
@@ -368,7 +465,7 @@ func exportTables(t *testing.T, db *sql.DB) string {
 // schemaShape is every compared table's SHOW CREATE TABLE, in name order.
 func schemaShape(t *testing.T, db *sql.DB) string {
 	t.Helper()
-	ddl, err := tablesDDL(context.Background(), db, comparedTables(t, db))
+	ddl, err := comparedShape(context.Background(), db)
 	if err != nil {
 		t.Fatalf("schema shape: %v", err)
 	}
@@ -379,11 +476,29 @@ func schemaShape(t *testing.T, db *sql.DB) string {
 // bookkeeping and the stash carrier.
 func comparedTables(t *testing.T, db *sql.DB) []string {
 	t.Helper()
-	tables, err := applicationTables(context.Background(), db)
+	tables, err := comparedTableNames(context.Background(), db)
 	if err != nil {
-		t.Fatalf("list tables: %v", err)
+		t.Fatal(err)
 	}
-	return slices.DeleteFunc(tables, func(name string) bool { return name == schemaStashTable })
+	return tables
+}
+
+func comparedTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
+	tables, err := applicationTables(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
+	return slices.DeleteFunc(tables, func(name string) bool { return name == schemaStashTable }), nil
+}
+
+// comparedShape is schemaShape without a testing.T, so the shared fresh-shape
+// build can compute it too.
+func comparedShape(ctx context.Context, db *sql.DB) (string, error) {
+	tables, err := comparedTableNames(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	return tablesDDL(ctx, db, tables)
 }
 
 func allTables(t *testing.T, db *sql.DB) []string {

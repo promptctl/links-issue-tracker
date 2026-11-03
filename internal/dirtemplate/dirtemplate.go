@@ -63,17 +63,26 @@ func (tp *Template) Dir() (string, error) {
 // so the copy vanishes with the test and no two tests ever share a path.
 func (tp *Template) Copy(t testing.TB) string {
 	t.Helper()
+	dst := filepath.Join(t.TempDir(), tp.name)
+	if err := tp.CopyTo(dst); err != nil {
+		t.Fatal(err)
+	}
+	return dst
+}
+
+// CopyTo builds the template if it has not been built, then copies it to dst,
+// a path that must not exist yet.
+func (tp *Template) CopyTo(dst string) error {
 	dir, err := tp.Dir()
 	if err != nil {
-		t.Fatalf("build the %s template: %v", tp.name, err)
+		return fmt.Errorf("build the %s template: %w", tp.name, err)
 	}
-	dst := filepath.Join(t.TempDir(), tp.name)
 	// os.CopyFS re-derives file modes (0o666 before umask), so the copy is
 	// writable even though the template's own files are frozen read-only.
 	if err := os.CopyFS(dst, os.DirFS(dir)); err != nil {
-		t.Fatalf("copy the %s template: %v", tp.name, err)
+		return fmt.Errorf("copy the %s template: %w", tp.name, err)
 	}
-	return dst
+	return nil
 }
 
 // Run is the TestMain body of a package whose tests copy templates: it sweeps
@@ -105,8 +114,14 @@ func (tp *Template) remove() error {
 	return removeBase(filepath.Dir(tp.dir))
 }
 
+// MkdirTemp makes a scratch base in os.TempDir() that a later run's sweep
+// removes if this binary dies holding it. The caller removes it otherwise.
+func MkdirTemp() (string, error) {
+	return os.MkdirTemp("", fmt.Sprintf("%s%d-*", basePrefix, os.Getpid()))
+}
+
 func (tp *Template) buildFrozen() (_ string, err error) {
-	base, err := os.MkdirTemp("", fmt.Sprintf("%s%d-*", basePrefix, os.Getpid()))
+	base, err := MkdirTemp()
 	if err != nil {
 		return "", err
 	}
