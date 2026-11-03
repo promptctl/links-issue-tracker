@@ -71,10 +71,10 @@ var _ model.RecordedError = (*SchemaConvergenceError)(nil)
 type ConvergenceStep int
 
 const (
-	stepUndoInterruptedStep ConvergenceStep = iota
-	stepClassify
+	stepClassify ConvergenceStep = iota
 	stepVerifyContent
 	stepRefuseUnwritable
+	stepUndoInterruptedStep
 	stepRefuseUnreleased
 	stepDriftCheckpoint
 	stepDriftRepair
@@ -132,12 +132,12 @@ var convergenceSteps = [convergenceStepCount]struct {
 	token string
 	act   ConvergenceAct
 }{
-	// The reset left the working set as it found it or at HEAD, and the
-	// next open looks again.
+	stepClassify:         {"classify", ActClearCause},
+	stepVerifyContent:    {"verify_content", ActClearCause},
+	stepRefuseUnwritable: {"refuse_unwritable", ActClearCause},
+	// The step stays recorded above HEAD until the reset lands, so the next
+	// open finds it and undoes it again.
 	stepUndoInterruptedStep: {"undo_interrupted_step", ActClearCause},
-	stepClassify:            {"classify", ActClearCause},
-	stepVerifyContent:       {"verify_content", ActClearCause},
-	stepRefuseUnwritable:    {"refuse_unwritable", ActClearCause},
 	// Cleared by a lit whose released-schema ceiling reaches the target: a
 	// release that carries it.
 	stepRefuseUnreleased: {"refuse_unreleased", ActClearCause},

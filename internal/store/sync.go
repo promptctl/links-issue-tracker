@@ -568,6 +568,19 @@ func resetHardToRef(ctx context.Context, db *sql.DB, ref string) error {
 	return nil
 }
 
+// resetExactlyToRef leaves the working set exactly ref's. A hard reset drops
+// the tables staged since ref but keeps the unstaged ones it lacks, such as a
+// migration's Up creates, so DOLT_CLEAN drops those first. In that order a
+// failure between the two leaves the reset's own state still to do, for the
+// caller to run again. [LAW:single-enforcer] every reset that must not keep
+// tables ref lacks.
+func resetExactlyToRef(ctx context.Context, db *sql.DB, ref string) error {
+	if err := execProcedureDiscard(ctx, db, "DOLT_CLEAN"); err != nil {
+		return fmt.Errorf("clean before the reset to %q: %w", ref, err)
+	}
+	return resetHardToRef(ctx, db, ref)
+}
+
 // SyncReceive fetches the remote and, only when the local branch is strictly
 // behind, lands it on the remote head. It is purely lossless: it never creates
 // a merge commit, never merges a divergence, and never leaves a dirty or
