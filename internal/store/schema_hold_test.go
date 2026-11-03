@@ -295,3 +295,223 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 		t.Fatalf("remote head after the refused reconcile = %s, want %s untouched", got, heldHead)
 	}
 }
+
+// heldCommitLog is every commit message on st's checked-out branch, newest first.
+func heldCommitLog(t *testing.T, ctx context.Context, st *Store) []string {
+	t.Helper()
+	rows, err := st.db.QueryContext(ctx, `SELECT message FROM dolt_log()`)
+	if err != nil {
+		t.Fatalf("read commit log: %v", err)
+	}
+	defer rows.Close()
+	var messages []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			t.Fatalf("read commit log: %v", err)
+		}
+		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read commit log: %v", err)
+	}
+	return messages
+}
+
+// A remote downgrade's hold rides in the commit of the last reversed
+// migration: the head before it carries no hold, the new head carries the
+// hold at the target, and the reverse added exactly its reversal commits. Run
+// again at the target, it reverses nothing and commits nothing.
+func TestARemoteDowngradeHoldsTheStoreInItsLastCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	max := registryMax(t)
+	st, _ := openWorkspaceForDowngrade(t)
+	before := headCommit(t, ctx, st)
+	logBefore := heldCommitLog(t, ctx, st)
+
+	done, err := st.DowngradeAndHold(ctx, max-1)
+	if err != nil {
+		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
+	}
+	if done.From != max || done.Reversed != 1 || done.Hold != max-1 {
+		t.Fatalf("done = %+v, want From %d, Reversed 1, Hold %d", *done, max, max-1)
+	}
+	if facts, _ := done.EventRecord(); facts["downgrade.schema_hold"] != max-1 {
+		t.Errorf("downgrade.schema_hold = %v, want %d", facts["downgrade.schema_hold"], max-1)
+	}
+	if logAfter := heldCommitLog(t, ctx, st); len(logAfter) != len(logBefore)+1 {
+		t.Fatalf("the reverse added %d commits, want 1:\n%q", len(logAfter)-len(logBefore), logAfter)
+	}
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
+		t.Fatalf("schemaHold() after the reverse = %+v, %v; want %+v", hold, err, holdBy("this store", max-1))
+	}
+	if hold, err := st.schemaHoldAt(ctx, before, "the head before"); err != nil || hold != version.UnboundedSchemaCeiling() {
+		t.Fatalf("schemaHoldAt(head before the reverse) = %+v, %v; want the unbounded ceiling", hold, err)
+	}
+	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != max-1 {
+		t.Fatalf("recorded version = %d, %v; want %d", got, err, max-1)
+	}
+
+	logHeld := heldCommitLog(t, ctx, st)
+	again, err := st.DowngradeAndHold(ctx, max-1)
+	if err != nil {
+		t.Fatalf("second DowngradeAndHold(%d) = %v", max-1, err)
+	}
+	if again.From != max-1 || again.Reversed != 0 || again.Hold != max-1 {
+		t.Fatalf("second done = %+v, want From %d, Reversed 0, Hold %d", *again, max-1, max-1)
+	}
+	if logAgain := heldCommitLog(t, ctx, st); !slices.Equal(logAgain, logHeld) {
+		t.Fatalf("a repeated remote downgrade committed:\nbefore %q\nafter  %q", logHeld, logAgain)
+	}
+}
+
+// A store already at the target has no reversal commit for the hold to ride
+// in, so the hold lands in a commit of its own.
+func TestARemoteDowngradeAtTheTargetHoldsInACommitOfItsOwn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	max := registryMax(t)
+	st, _ := openWorkspaceForDowngrade(t)
+	if _, err := st.Downgrade(ctx, max-1); err != nil {
+		t.Fatalf("Downgrade(%d) = %v", max-1, err)
+	}
+	if hold, err := st.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
+		t.Fatalf("schemaHold() after a plain downgrade = %+v, %v; want the unbounded ceiling", hold, err)
+	}
+	logBefore := heldCommitLog(t, ctx, st)
+
+	done, err := st.DowngradeAndHold(ctx, max-1)
+	if err != nil {
+		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
+	}
+	if done.From != max-1 || done.Reversed != 0 || done.Hold != max-1 {
+		t.Fatalf("done = %+v, want From %d, Reversed 0, Hold %d", *done, max-1, max-1)
+	}
+	logAfter := heldCommitLog(t, ctx, st)
+	if want := append([]string{fmt.Sprintf("downgrade: hold schema at %d", max-1)}, logBefore...); !slices.Equal(logAfter, want) {
+		t.Fatalf("commit log after the hold:\n%q\nwant\n%q", logAfter, want)
+	}
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
+		t.Fatalf("schemaHold() = %+v, %v; want %+v", hold, err, holdBy("this store", max-1))
+	}
+}
+
+// The lift removes the hold in one commit and reports it; a store with no
+// hold lifts nothing and commits nothing; and once lifted, the store rises
+// to the registry again.
+func TestLiftSchemaHoldRemovesTheHoldInOneCommitAndTheStoreRisesAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	max := registryMax(t)
+	st, _ := openWorkspaceForDowngrade(t)
+	if _, err := st.DowngradeAndHold(ctx, max-1); err != nil {
+		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
+	}
+	logHeld := heldCommitLog(t, ctx, st)
+
+	lifted, err := st.LiftSchemaHold(ctx)
+	if err != nil {
+		t.Fatalf("LiftSchemaHold() = %v", err)
+	}
+	if lifted.Lifted != max-1 {
+		t.Fatalf("Lifted = %d, want %d", lifted.Lifted, max-1)
+	}
+	if facts, _ := lifted.EventRecord(); facts["schema_hold.lifted"] != max-1 {
+		t.Errorf("schema_hold.lifted = %v, want %d", facts["schema_hold.lifted"], max-1)
+	}
+	logLifted := heldCommitLog(t, ctx, st)
+	if want := append([]string{fmt.Sprintf("upgrade: lift the schema hold at %d", max-1)}, logHeld...); !slices.Equal(logLifted, want) {
+		t.Fatalf("commit log after the lift:\n%q\nwant\n%q", logLifted, want)
+	}
+	if hold, err := st.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
+		t.Fatalf("schemaHold() after the lift = %+v, %v; want the unbounded ceiling", hold, err)
+	}
+
+	none, err := st.LiftSchemaHold(ctx)
+	if err != nil || none.Lifted != 0 {
+		t.Fatalf("LiftSchemaHold() of an unheld store = %+v, %v; want Lifted 0", none, err)
+	}
+	if logAgain := heldCommitLog(t, ctx, st); !slices.Equal(logAgain, logLifted) {
+		t.Fatalf("a lift of an unheld store committed:\nbefore %q\nafter  %q", logLifted, logAgain)
+	}
+
+	if err := st.liftWorkingSetToRegistry(ctx); err != nil {
+		t.Fatalf("lift of the working set after the hold was lifted = %v", err)
+	}
+	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != max {
+		t.Fatalf("recorded version after the rise = %d, %v; want %d", got, err, max)
+	}
+}
+
+// A push that would lower a remote with a head carrying no schema hold is
+// refused, naming both schemas, and the remote keeps its head; the same head
+// held at its schema lands, and the remote reads as held there. The hold is
+// what makes a lowering stick, so it is what a lowering must carry.
+func TestAnUnheldLoweringPushSendsNothingAndAHeldOneLands(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	producer, consumer := migratedDoltDir(t), migratedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+	origin := remoteName(t, "origin")
+	max := registryMax(t)
+
+	seed := openSyncOrFatal(t, ctx, producer)
+	if err := seed.SyncAddRemote(ctx, origin, remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(seed) = %v", err)
+	}
+	if _, err := seed.SyncPush(ctx, origin, "master", true, false); err != nil {
+		t.Fatalf("SyncPush(seed) = %v", err)
+	}
+	remoteHead := headCommit(t, ctx, seed)
+	if err := seed.Close(); err != nil {
+		t.Fatalf("Close(seed) = %v", err)
+	}
+
+	st := openSyncOrFatal(t, ctx, consumer)
+	defer func() { _ = st.Close() }()
+	if err := st.SyncAddRemote(ctx, origin, remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(consumer) = %v", err)
+	}
+	if err := st.SyncFetch(ctx, origin); err != nil {
+		t.Fatalf("SyncFetch(consumer) = %v", err)
+	}
+	if _, err := st.Downgrade(ctx, max-1); err != nil {
+		t.Fatalf("Downgrade(%d) = %v", max-1, err)
+	}
+	_, err := st.SyncPush(ctx, origin, "master", false, false)
+	var refused *SchemaLoweringRequiresHoldError
+	if !errors.As(err, &refused) {
+		t.Fatalf("SyncPush of an unheld head at %d over a remote at %d = %v, want a SchemaLoweringRequiresHoldError", max-1, max, err)
+	}
+	if want := (SchemaLoweringRequiresHoldError{Remote: "origin", Branch: "master", RemoteSchema: max, CommitSchema: max - 1}); *refused != want {
+		t.Errorf("refusal = %+v, want %+v", *refused, want)
+	}
+	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+		t.Fatalf("clone after the refused push = %v", err)
+	}
+	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != remoteHead {
+		t.Fatalf("remote head after the refused push = %s, want %s untouched", got, remoteHead)
+	}
+
+	done, err := st.DowngradeAndHold(ctx, max-1)
+	if err != nil {
+		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
+	}
+	if done.Reversed != 0 || done.Hold != max-1 {
+		t.Fatalf("done = %+v, want Reversed 0, Hold %d", *done, max-1)
+	}
+	if _, err := st.SyncPush(ctx, origin, "master", false, false); err != nil {
+		t.Fatalf("SyncPush of the held head = %v", err)
+	}
+	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone-held"), "ws", origin, remoteURL, "master"); err != nil {
+		t.Fatalf("clone after the held push = %v", err)
+	}
+	if got, want := headAt(t, ctx, filepath.Join(base, "clone-held")), headCommit(t, ctx, st); got != want {
+		t.Fatalf("remote head after the held push = %s, want %s", got, want)
+	}
+	if head := trackingSchema(t, ctx, st); head.version != max-1 || head.hold != holdBy("origin/master's head", max-1) {
+		t.Fatalf("remote after the held push = %+v, want schema %d held there", head, max-1)
+	}
+}

@@ -309,8 +309,30 @@ type SchemaMigrator interface {
 	// a failure part-way alike — and nil only when it failed before that read.
 	Downgrade(ctx context.Context, targetSchemaVersion int64) (*Downgraded, error)
 
+	// DowngradeAndHold is Downgrade with the store then held at the target:
+	// its schema hold is set in the same commit as the last reversed
+	// migration, so no binary that reads the hold raises the store, or a
+	// remote it is pushed to, past the target again until LiftSchemaHold.
+	DowngradeAndHold(ctx context.Context, targetSchemaVersion int64) (*Downgraded, error)
+
+	// LiftSchemaHold removes the store's schema hold in one commit and reports
+	// the hold it lifted; a store with no hold lifts nothing and commits
+	// nothing.
+	LiftSchemaHold(ctx context.Context) (SchemaHoldLifted, error)
+
 	// Migrated reports what opening this handle did to the store on disk.
 	Migrated() Migrated
+}
+
+// SchemaHoldLifted is what a LiftSchemaHold did: the hold it removed, or 0
+// when the store carried none and nothing was committed.
+type SchemaHoldLifted struct {
+	Lifted int64
+}
+
+// EventRecord is the lift as event facts: the hold lifted, 0 for none.
+func (l SchemaHoldLifted) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{"schema_hold.lifted": l.Lifted}, nil
 }
 
 // Migrated is what an open did to the store on disk: whether it had to build
@@ -516,6 +538,10 @@ type Downgraded struct {
 	Reversed int
 	Snapshot *RecoverySnapshot
 	PruneErr error
+	// Hold is the schema hold the downgrade leaves the store with: the target
+	// under DowngradeAndHold, 0 under Downgrade, as Migrated.SchemaHold reads
+	// a store with none.
+	Hold int64
 }
 
 // EventRecord is the downgrade as event facts and counts, so the success and
@@ -523,6 +549,7 @@ type Downgraded struct {
 func (d Downgraded) EventRecord() (map[string]any, map[string]int) {
 	facts := recoveryFacts("downgrade", d.Snapshot)
 	facts["downgrade.workspace_schema"] = d.From
+	facts["downgrade.schema_hold"] = d.Hold
 	facts["downgrade.snapshot_prune_error"] = telemetry.ErrorText(d.PruneErr)
 	return facts, map[string]int{"downgrade.reversed": d.Reversed}
 }

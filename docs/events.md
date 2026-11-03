@@ -408,7 +408,7 @@ block it was, since every divergence class shares one reason.
 
 | Key | Meaning |
 | --- | --- |
-| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `schema_ceiling` (a push refused because the commit's schema is above the schema ceiling for that remote: this lit's released-schema ceiling or the hold the remote's head carries, whichever is lower), or `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release). |
+| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `schema_ceiling` (a push refused because the commit's schema is above the schema ceiling for that remote: this lit's released-schema ceiling or the hold the remote's head carries, whichever is lower), `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release), or `schema_lowering_requires_hold` (a push refused because it would lower the remote's schema with a head that carries no schema hold; a remote is lowered only by `lit downgrade --remote`). |
 
 ## What `lit init` records
 
@@ -594,6 +594,13 @@ carries the ones it had.
 | `upgrade.already_current` | `true` when a bare run kept this binary because it is already on the latest release; `false` when the command went on to install. |
 | `upgrade.installed_path` | The path the release was installed to. Absent when nothing was installed. |
 
+`lit upgrade --remote <name>` resolves no release: it lifts this backlog's schema hold and pushes the lifted head, so its keys are these instead, beside the push's own.
+
+| Key | Meaning |
+| --- | --- |
+| `upgrade.remote` | The remote named by `--remote`. |
+| `schema_hold.lifted` | The schema hold the lift removed, or `0` when the backlog held none and nothing was committed. |
+
 ## What `lit downgrade` records
 
 A downgrade reverses the workspace's schema from its applied version down to the
@@ -616,6 +623,9 @@ the ones it had.
 | `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
 | `downgrade.snapshot_prune_error` | Why lit's older recovery snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
+| `downgrade.schema_hold` | The schema hold the reverse left the workspace with: the target under `--remote`, `0` under `--to`. Set with `downgrade.workspace_schema`. |
+
+`lit downgrade --schema <v> --remote <name>` resolves no release and installs nothing: it steps this backlog to `v`, holds it there, and pushes the held head. It records `downgrade.target_schema_max` as `v`, the running schema range, the reverse's keys above, and `downgrade.remote`, the remote named by `--remote`; the push's own keys ride beside them. `downgrade.tag` and `downgrade.installed_path` are absent.
 
 ## What `lit unquarantine` records
 

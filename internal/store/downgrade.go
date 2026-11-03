@@ -223,10 +223,27 @@ func (e *DowngradeIncompleteError) Error() string {
 // authority for both directions; this loop reads it via recordedMigrationVersion
 // and lets goose mutate it the same way Up does.
 func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error) {
+	return s.downgrade(ctx, targetSchemaVersion, holdNone)
+}
+
+// DowngradeAndHold is Downgrade with the store held at the target: the hold
+// row meta.schema_hold = target lands in the commit of the last reversed
+// migration, so no head exists that is lowered and not held. A store already
+// at the target is held in a commit of its own, and one already held there
+// commits nothing. Its one caller is `lit downgrade --remote`, which pushes
+// the held head (design-docs/schema-reversibility.md, "Lowering a remote, and
+// making it stay lowered"). [LAW:one-type-per-behavior] one reverse; the hold
+// policy is the value that differs.
+func (s *Store) DowngradeAndHold(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error) {
+	return s.downgrade(ctx, targetSchemaVersion, holdAtTarget)
+}
+
+// downgrade is the one reverse, under the commit lock, for either hold policy.
+func (s *Store) downgrade(ctx context.Context, targetSchemaVersion int64, hold holdPolicy) (*storage.Downgraded, error) {
 	var done *storage.Downgraded
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		var err error
-		done, err = s.downgradeLocked(ctx, targetSchemaVersion)
+		done, err = s.downgradeLocked(ctx, targetSchemaVersion, hold)
 		return err
 	})
 	return done, err
@@ -235,7 +252,7 @@ func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) (*stor
 // downgradeLocked is the body of Downgrade executed under the commit lock.
 // Split out so the lock acquisition stays a thin wrapper and the pipeline
 // itself reads as the residue of its constraints.
-func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) (*storage.Downgraded, error) {
+func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, hold holdPolicy) (*storage.Downgraded, error) {
 	state, err := s.classifyMigrationState(ctx)
 	if err != nil {
 		return nil, err
@@ -247,9 +264,15 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	}
 	// [LAW:dataflow-not-control-flow] the report fills in as the pipeline
 	// advances; every return from here carries it, at whatever step it stopped.
-	done := &storage.Downgraded{From: state.appliedVersion}
+	done := &storage.Downgraded{From: state.appliedVersion, Hold: hold.at(targetSchemaVersion)}
 	if targetSchemaVersion == done.From {
-		return done, nil
+		// Nothing to reverse, so the hold has no reversal commit to ride in
+		// and lands in one of its own; already held there, nothing is written.
+		written, err := s.holdWorkingSet(ctx, targetSchemaVersion, hold)
+		if err != nil || !written {
+			return done, err
+		}
+		return done, s.commitWorkingSet(ctx, schemaHoldCommitMessage(targetSchemaVersion))
 	}
 	if targetSchemaVersion > done.From {
 		return done, &DowngradeTargetAheadError{Current: done.From, Target: targetSchemaVersion}
@@ -271,7 +294,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 	}
 	done.Snapshot = recoverySnapshot(snap)
 
-	done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion)
+	done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion, hold)
 	if err != nil {
 		return done, &DowngradeRollbackError{Snapshot: snap.Snapshot, Cause: err}
 	}
@@ -302,7 +325,11 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 // registry-vs-target mismatch, not a successful exit; it raises
 // DowngradeIncompleteError so the operator sees that the target was never
 // reached.
-func (s *Store) applyDownMigrations(ctx context.Context, target int64) (int, error) {
+//
+// The hold the policy asks for is written into the working set of the step
+// that lands at target, before that step's commit, so the lowered head and
+// its hold are one commit: no commit is lowered and not held.
+func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold holdPolicy) (int, error) {
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
 		return 0, fmt.Errorf("construct downgrade provider: %w", err)
@@ -336,6 +363,15 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64) (int, err
 		if result.Source == nil {
 			return reversed, fmt.Errorf("down-migrate v%d: goose result has nil Source", current)
 		}
+		landed, err := s.recordedMigrationVersion(ctx)
+		if err != nil {
+			return reversed, err
+		}
+		if landed <= target {
+			if _, err := s.holdWorkingSet(ctx, target, hold); err != nil {
+				return reversed, fmt.Errorf("hold the schema at %d: %w", target, err)
+			}
+		}
 		if err := s.commitWorkingSet(ctx, downgradeCommitMessage(result)); err != nil {
 			return reversed, fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)
 		}
@@ -347,6 +383,12 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64) (int, err
 // migrationCommitMessage's `migrate: v<N> <file>` shape.
 func downgradeCommitMessage(result *goose.MigrationResult) string {
 	return fmt.Sprintf("downgrade: revert v%d %s", result.Source.Version, filepath.Base(result.Source.Path))
+}
+
+// schemaHoldCommitMessage is the Dolt commit message of a hold written with
+// no reversal to ride in: `downgrade: hold schema at <v>`.
+func schemaHoldCommitMessage(v int64) string {
+	return fmt.Sprintf("downgrade: hold schema at %d", v)
 }
 
 // formatDowngradeSnapshotLabel returns the label used for downgrade-recovery

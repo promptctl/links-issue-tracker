@@ -1221,6 +1221,7 @@ new issues onto a new one. It is also the repair for a stored prefix that is not
 
 ```text
 lit upgrade [--to <vX.Y.Z>]
+lit upgrade --remote <name>
 ```
 
 Atomically installs a `lit` binary, checksum-verified against the release manifest.
@@ -1236,16 +1237,37 @@ before anything is installed, with both schema ranges named. Upgrade never touch
 the workspace schema: the installed binary migrates the workspace forward on its
 next run if it trails.
 
+`lit upgrade --remote <name>` installs nothing: it lifts the schema hold a
+`lit downgrade --schema <v> --remote <name>` left on this backlog, in one commit, and
+pushes that head to the remote. The pushed head is at the hold's schema, so the push
+is no raise; the remote rises when a lit at a higher schema opens this backlog and a
+release's `lit sync push` sends it. A backlog with no hold lifts nothing and still
+pushes, so a lift whose push failed is run again as it was. `--remote` and `--to` do
+not combine.
+
 ### `lit downgrade`
 
 ```text
 lit downgrade --to <vX.Y.Z>
+lit downgrade --schema <v> --remote <name>
 ```
 
 Reverses schema migrations and atomically installs the prior `lit` binary for the given
 release tag (`vX.Y.Z`) — the rollback path for a bad upgrade. Unlike `lit upgrade`, the
 target is always explicit: a backward move stays deliberate, so there is no "latest"
 to resolve.
+
+`lit downgrade --schema <v> --remote <name>` lowers a shared remote to schema `v` and
+makes it stay lowered: it steps this backlog down to `v`, writes the schema hold
+(`meta.schema_hold = v`) in the same commit as the last reversed migration, and pushes
+that head to the remote. Every lit that reads the hold migrates no store past `v`,
+lifts no fetched head past it, and pushes no head above it, until
+`lit upgrade --remote <name>` lifts it. It installs nothing; the binary that works a
+held backlog is the release at the hold, which `--to` installs. The form opens the
+backlog without migrating it, so it runs again on a backlog already held at `v` — a
+re-run after a failed push commits nothing and pushes. `--schema` and `--remote` go
+together, and neither combines with `--to`. A push that would lower a remote with a
+head that holds no schema hold is refused: a remote is lowered only this way.
 
 ### `lit version`
 
