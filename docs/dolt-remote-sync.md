@@ -409,10 +409,12 @@ The in-band surfaces above talk to whoever runs the next command — usually an
 agent. The party who can actually *lose work* when sync degrades is the OWNER,
 so lit also carries the event out of the terminal: when it detects a real
 divergence (no common ancestor, a reconcile it could not converge, a held
-prose conflict, an id naming two different tickets), when the automatic receive
-has kept failing to bring fetched history into the checkout for 10 minutes, or
-when a push attempt fails,
-it runs a shell command you configure — e.g. a push to an
+prose conflict, an id naming two different tickets), when a schema refusal
+stops the checkout from settling against the remote (the remote's schema is
+ahead of this lit, or a schema hold refuses the reconcile's lift), when the
+automatic receive has kept failing to bring fetched history into the checkout
+for 10 minutes, or when a push attempt fails, it runs a shell command you
+configure — e.g. a push to an
 [ntfy](https://ntfy.sh) topic — at detection time:
 
 ```toml

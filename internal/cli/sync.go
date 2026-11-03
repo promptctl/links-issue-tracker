@@ -417,7 +417,7 @@ func syncPullLeaf() syncLeaf {
 		recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 		// A pull that completed without a held state converged (or found nothing to
 		// converge): the divergence episode, if one was notified, is over.
-		endDivergenceEpisode(inv.Stderr, ws)
+		endSettleEndedEpisodes(inv.Stderr, ws)
 		return printSyncPullOutcome(inv.Stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State, landing: result.Landing}, *verbose)
 	}}
 }

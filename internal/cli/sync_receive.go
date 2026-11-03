@@ -433,7 +433,7 @@ func surfaceReceiveOutcome(ctx context.Context, stderr io.Writer, env environ.En
 		return
 	}
 	if outcome.settledCleanly() {
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 	}
 }
 
@@ -451,14 +451,14 @@ func receiveBlockProvenance(path string, now time.Time) string {
 		humanizeCoarseDuration(now.Sub(info.ModTime())), info.ModTime().UTC().Format(time.RFC3339))
 }
 
-// endDivergenceEpisode is what every surface does when a divergence has
-// converged — this receive, `lit sync pull`, `lit sync reconcile` and its
-// take and combine: the owner-notify markers for divergence reset, so the next
-// divergence is a new episode, and a sync-failure block still waiting for a
-// command is retired, since the divergence it describes is gone.
-// [LAW:single-enforcer] one ending, whichever surface converged.
-func endDivergenceEpisode(stderr io.Writer, ws workspace.Info) {
-	clearOwnerNotify(stderr, ws, ownerNotifyDivergenceKinds...)
+// endSettleEndedEpisodes is what every surface does when it has settled against
+// the remote — this receive, `lit sync pull`, `lit sync reconcile` and its
+// take and combine: the owner-notify markers a settle ends reset, so the next
+// divergence or schema refusal is a new episode, and a sync-failure block still
+// waiting for a command is retired, since the condition it describes is gone.
+// [LAW:single-enforcer] one ending, whichever surface settled.
+func endSettleEndedEpisodes(stderr io.Writer, ws workspace.Info) {
+	clearOwnerNotify(stderr, ws, ownerNotifySettleEndedKinds...)
 	if err := os.Remove(receiveBlockPendingPath(ws)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		fmt.Fprintf(stderr, "lit: stale sync-failure block not retired: %v\n", err)
 	}

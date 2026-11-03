@@ -73,25 +73,39 @@ func TestOwnerNotifyDue(t *testing.T) {
 	}
 }
 
-// TestOwnerNotifyEventForFailure pins the trigger set to the ticket's "real
-// divergence" definition: every divergence class notifies with the failure's own
-// domain sentence; a remote-schema-ahead block (a version condition, not a
-// divergence) does not. The list is spelled out rather than counted, so adding a
-// class to the switch without adding it here is the failure this test exists to
-// catch.
+// TestOwnerNotifyEventForFailure pins the trigger set: every divergence class
+// and every schema refusal the receive side detects notifies with the failure's
+// own domain sentence; a push class does not, because the push half of the
+// channel pages it as push_failed. The list is spelled out rather than counted,
+// so adding a class to the switch without adding it here is the failure this
+// test exists to catch.
 func TestOwnerNotifyEventForFailure(t *testing.T) {
 	t.Parallel()
-	for _, class := range []syncFailureClass{syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision} {
-		ev, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"})
+	// The schema classes carry the store's typed refusal, which their summary
+	// reads, so they are built as a surface would build them.
+	paging := []SyncFailure{
+		{Class: syncFailureProseHeld, Remote: "origin", Branch: "master"},
+		{Class: syncFailureDivergedUnresolved, Remote: "origin", Branch: "master"},
+		{Class: syncFailureUnrelatedHistories, Remote: "origin", Branch: "master"},
+		{Class: syncFailureIDCollision, Remote: "origin", Branch: "master"},
+		{Class: syncFailureRemoteSchemaAhead, Remote: "origin", Branch: "master",
+			RemoteAhead: &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}},
+		{Class: syncFailureSchemaCeilingLift, Remote: "origin", Branch: "master",
+			LiftRefused: &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}}},
+	}
+	for _, failure := range paging {
+		ev, ok := ownerNotifyEventForFailure(failure)
 		if !ok {
-			t.Fatalf("class %q did not map to an owner notification", class)
+			t.Fatalf("class %q did not map to an owner notification", failure.Class)
 		}
-		if ev.Kind != ownerNotifyKind(class) || ev.Remote != "origin" || ev.Branch != "master" || ev.Summary == "" {
-			t.Fatalf("class %q mapped to %+v, want its own kind/target and a summary", class, ev)
+		if ev.Kind != ownerNotifyKind(failure.Class) || ev.Remote != "origin" || ev.Branch != "master" || ev.Summary == "" {
+			t.Fatalf("class %q mapped to %+v, want its own kind/target and a summary", failure.Class, ev)
 		}
 	}
-	if _, ok := ownerNotifyEventForFailure(SyncFailure{Class: syncFailureRemoteSchemaAhead}); ok {
-		t.Fatal("remote-schema-ahead mapped to an owner notification; it is not a divergence")
+	for _, class := range []syncFailureClass{syncFailurePushDiverged, syncFailureForcedPushStale, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease, syncFailureSchemaLoweringRequiresHold} {
+		if _, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"}); ok {
+			t.Fatalf("push class %q mapped to an owner notification; the push half already pages it as push_failed", class)
+		}
 	}
 }
 

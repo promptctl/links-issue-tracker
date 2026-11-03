@@ -362,7 +362,7 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 	ref := remote.String() + "/" + branch
 	switch result.State {
 	case storage.SyncReconcileTookRemote:
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		state := "the local backlog now equals " + ref + " and sync is clean (no push needed)"
 		if result.CarriedPurges > 0 {
 			state = fmt.Sprintf("the local backlog now equals %s less what you purged, with %d purge record(s) carried onto it; run `lit sync push` (or let auto-sync) to deliver them", ref, result.CarriedPurges)
@@ -374,7 +374,7 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "the adopted backlog", result.Landing)
 	case storage.SyncReconcileTookLocal:
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		if _, err := fmt.Fprintf(stdout,
 			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\nDROPPED the issue(s) a purge on either side names: %s\n",
 			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)), describeIDSet(purgedIDs(result.Unrelated))); err != nil {
@@ -382,7 +382,7 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "your backlog", result.Landing)
 	case storage.SyncReconcileNotDiverged:
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
@@ -528,7 +528,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}
 	case storage.SyncReconcileLinearized:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
 			return err
 		}
@@ -541,7 +541,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileCombined:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		// Report what the union KEPT from each side, so "nothing dropped" is evidenced, not
 		// asserted: the both-sides partition names the kept-local, kept-remote, and
 		// field-merged shared ids. A defensively-absent inventory reads as empty sides, which
@@ -570,7 +570,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:

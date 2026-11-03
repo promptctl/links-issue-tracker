@@ -17,11 +17,11 @@ import (
 )
 
 // This file is the owner's out-of-band channel: when sync detects a real
-// divergence or a failing push, the OWNER — the human whose work the backlog
-// carries — hears about it the day it happens, through a hook they configured
-// (sync.owner_notify_cmd), not days later through an agent's archaeology. The
-// agent-facing blocks stay the in-band surface; this is the copy that leaves
-// the terminal.
+// divergence, a schema refusal that stops the receive, or a failing push, the
+// OWNER — the human whose work the backlog carries — hears about it the day it
+// happens, through a hook they configured (sync.owner_notify_cmd), not days
+// later through an agent's archaeology. The agent-facing blocks stay the
+// in-band surface; this is the copy that leaves the terminal.
 
 const (
 	// ownerNotifyHookTimeout bounds the hook run so a hung notifier (an
@@ -48,23 +48,28 @@ const (
 )
 
 // ownerNotifyKind is the closed set of owner-relevant degraded states. The
-// receive's kinds ARE its sync-failure classes — the divergence classes and the
-// unsettled receive — one vocabulary, so the trace, the failure block, and the
-// notification can never spell the same condition two ways; plus the push
-// kind, whose detection point (a completed push attempt) has no SyncFailure.
+// receive's kinds ARE its sync-failure classes — the divergence classes, the
+// unsettled receive, and the schema refusals that stop a settle — one
+// vocabulary, so the trace, the failure block, and the notification can never
+// spell the same condition two ways; plus the push kind, whose detection point
+// (a completed push attempt) has no SyncFailure.
 // [LAW:one-source-of-truth]
 type ownerNotifyKind string
 
 const ownerNotifyPushFailed ownerNotifyKind = "push_failed"
 
-// ownerNotifyDivergenceKinds is the group cleared together when a divergence
-// episode ends: any converged state (fast-forwarded, linearized, combined,
-// taken, not-diverged) resolves them, whichever was notified.
-var ownerNotifyDivergenceKinds = []ownerNotifyKind{
+// ownerNotifySettleEndedKinds is the group one settle ends: any converged state
+// (fast-forwarded, linearized, combined, taken, not-diverged) resolves a
+// divergence, and a settle against the remote is exactly what a lifted hold or
+// an upgraded binary makes possible, so both schema refusals end with it too,
+// whichever was notified.
+var ownerNotifySettleEndedKinds = []ownerNotifyKind{
 	ownerNotifyKind(syncFailureProseHeld),
 	ownerNotifyKind(syncFailureDivergedUnresolved),
 	ownerNotifyKind(syncFailureUnrelatedHistories),
 	ownerNotifyKind(syncFailureIDCollision),
+	ownerNotifyKind(syncFailureRemoteSchemaAhead),
+	ownerNotifyKind(syncFailureSchemaCeilingLift),
 }
 
 // ownerNotifyEvent is one owner-relevant occurrence: what degraded (Kind), the
@@ -102,13 +107,20 @@ func (ev ownerNotifyEvent) fingerprint() string {
 }
 
 // ownerNotifyEventForFailure maps a surfaced sync failure to its owner
-// notification: the divergence classes and an unsettled receive notify, and a
-// remote-schema-ahead block, a version condition only an upgrade clears, is
-// ok=false. [LAW:dataflow-not-control-flow] every surface calls this
-// unconditionally; the class value decides.
+// notification: the divergence classes, an unsettled receive, and the schema
+// refusals that stop the receive side (a remote schema ahead of this lit, a
+// lift refused by the ceiling) notify — a checkout that cannot settle against
+// the remote is off the shared backlog, and only the owner, who wrote the hold
+// or cut the release, can clear that. The push classes are ok=false: they are
+// detected at a completed push attempt, and observePushOutcomeForOwner pages
+// them as push_failed, so mapping them here would page one refusal twice.
+// [LAW:single-enforcer] each class pages from one half of the channel.
+// [LAW:dataflow-not-control-flow] every surface calls this unconditionally;
+// the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	switch failure.Class {
-	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision:
+	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision,
+		syncFailureRemoteSchemaAhead, syncFailureSchemaCeilingLift:
 		return ownerNotifyEvent{
 			Kind:    ownerNotifyKind(failure.Class),
 			Summary: failure.whatLine(),
