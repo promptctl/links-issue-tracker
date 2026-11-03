@@ -306,6 +306,121 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 	}
 }
 
+// withSyncOpened runs body against a sync-opened store at root (no migration,
+// so a held or lowered store opens as it is) and closes it after, whether body
+// returns or fails the test.
+func withSyncOpened(t *testing.T, ctx context.Context, root string, body func(*Store)) {
+	t.Helper()
+	st := openSyncOrFatal(t, ctx, root)
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close(%s) = %v", root, err)
+		}
+	}()
+	body(st)
+}
+
+// A reconcile whose three-way base carries a schema hold settles when the
+// fetched head carries none: the owner lowered and held the remote, the
+// consumer pulled that head and diverged past it, the owner lifted the hold and
+// rose again, and the base the consumer's reconcile reads is the held commit.
+// The consumer's own head carries that hold too, as it never lifted. Only the
+// fetched head's hold binds the lift, so the stale hold at the base and at the
+// local head refuses nothing, and the consumer lands at the remote's schema
+// with both sides' work and no hold. The consumer diverges by retitling the
+// epic in SQL: a lit at this schema cannot write a row at the held one, and
+// the reconcile replays the issue model, not meta rows.
+func TestAReconcileOverAHeldBaseAgainstAnUnheldRemoteSettles(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	max := registryMax(t)
+	origin := remoteName(t, "origin")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+	owner := migratedDoltDir(t)
+	epicID := seedSyncEpic(t, ctx, owner, "ws")
+	pushSyncFrom(t, ctx, owner, remoteURL, "seed")
+	consumer := cloneStoreTree(t, ctx, owner, base)
+
+	// The owner lowers and holds the remote.
+	withSyncOpened(t, ctx, owner, func(o *Store) {
+		if _, err := o.DowngradeAndHold(ctx, max-1); err != nil {
+			t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
+		}
+		if _, err := o.SyncPush(ctx, origin, "master", false, false); err != nil {
+			t.Fatalf("SyncPush of the lowering = %v", err)
+		}
+	})
+
+	// The consumer pulls the held head and diverges past it.
+	c := openSyncOrFatal(t, ctx, consumer)
+	defer func() {
+		if err := c.Close(); err != nil {
+			t.Errorf("Close(consumer) = %v", err)
+		}
+	}()
+	if _, err := c.SyncPull(ctx, origin, "master"); err != nil {
+		t.Fatalf("SyncPull of the held head = %v", err)
+	}
+	if hold, err := c.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
+		t.Fatalf("schemaHold() after pulling the held head = %+v, %v; want the hold at %d", hold, err, max-1)
+	}
+	held := headCommit(t, ctx, c)
+	mustExec(t, ctx, c, `UPDATE issues SET title = 'the consumer retitled the epic' WHERE id = ?`, epicID)
+	mustCommit(t, ctx, c, "test: the consumer's work past the held head")
+
+	// The owner lifts the hold and pushes the lift.
+	withSyncOpened(t, ctx, owner, func(o *Store) {
+		if lifted, err := o.LiftSchemaHold(ctx); err != nil || lifted.Lifted != max-1 {
+			t.Fatalf("LiftSchemaHold() = %+v, %v; want Lifted %d", lifted, err, max-1)
+		}
+		if _, err := o.SyncPush(ctx, origin, "master", false, false); err != nil {
+			t.Fatalf("SyncPush of the lift = %v", err)
+		}
+	})
+	// The owner rises again and pushes a head at this lit's schema: the base
+	// of the consumer's next reconcile is now the held commit, between the
+	// lowering and the lift.
+	commitTitled(t, ctx, owner, epicID, "owner's ticket")
+	pushSyncFrom(t, ctx, owner, "", "the rise")
+	if head := trackingSchema(t, ctx, c); head.version != max || head.hold != version.UnboundedSchemaCeiling() {
+		t.Fatalf("remote after the rise = %+v, want schema %d unheld", head, max)
+	}
+	// The premise, proven rather than assumed from the setup's shape: after a
+	// fetch of its own, the reconcile's base is the held commit, and that
+	// commit carries the hold.
+	if err := c.SyncFetch(ctx, origin); err != nil {
+		t.Fatalf("SyncFetch before the premise check = %v", err)
+	}
+	trackingRef := fmt.Sprintf("remotes/%s/master", origin)
+	if mb, err := mergeBase(ctx, c.db, "HEAD", trackingRef); err != nil || !mb.hasBase || mb.commit != held {
+		t.Fatalf("mergeBase(HEAD, %s) = %+v, %v; want the held commit %s", trackingRef, mb, err, held)
+	}
+	if hold, err := c.schemaHoldAt(ctx, held, "the base"); err != nil || hold != holdBy("the base", max-1) {
+		t.Fatalf("schemaHoldAt(base) = %+v, %v; want the hold at %d", hold, err, max-1)
+	}
+
+	pulled, err := c.SyncPull(ctx, origin, "master")
+	if err != nil {
+		t.Fatalf("SyncPull over the held base = %v, want the reconcile to settle: only the fetched head's hold binds the lift", err)
+	}
+	if pulled.State != storage.SyncPullLinearized {
+		t.Fatalf("SyncPull state = %q, want %q", pulled.State, storage.SyncPullLinearized)
+	}
+	if got, err := c.recordedMigrationVersion(ctx); err != nil || got != max {
+		t.Fatalf("recorded version after the pull = %d, %v; want %d, the remote head's schema", got, err, max)
+	}
+	if hold, err := c.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
+		t.Fatalf("schemaHold() after the pull = %+v, %v; want none, as the remote head carries none", hold, err)
+	}
+	if n := issuesTitled(t, ctx, c, "owner's ticket"); n != 1 {
+		t.Fatalf("consumer holds %d rows of the owner's ticket after the pull, want 1", n)
+	}
+	if n := issuesTitled(t, ctx, c, "the consumer retitled the epic"); n != 1 {
+		t.Fatalf("consumer holds %d rows of its retitled epic after the pull, want 1", n)
+	}
+}
+
 // A remote downgrade's hold rides in the commit of the last reversed
 // migration: the head before it carries no hold, the new head carries the
 // hold at the target, and the reverse added exactly its reversal commits. Run
