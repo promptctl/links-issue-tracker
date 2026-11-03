@@ -107,3 +107,47 @@ func TestAWritingOpenReportsAnEmptyReplay(t *testing.T) {
 		t.Fatalf("%s = %#v, want an empty list", stashReplayedFact, done.Probed[stashReplayedFact])
 	}
 }
+
+// TestAStepThatDiedBeforeItsReplayRunsAgain is the store a process left when
+// it died between v11's Up and its stash replay: stepped down to v10 and
+// committed there, then settled and raised by goose with nothing replayed or
+// committed. The next open writes the stash back, the carrier is empty, and
+// the open's event names the replay, not a hold.
+func TestAStepThatDiedBeforeItsReplayRunsAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	seeds := seedsByVersion(t, registryMigrations(t))
+	st, provider := storeAtVersion(t, migrations.FS, 11)
+	applySeed(t, st.db, seeds[11])
+	stashed := queryOne(t, st.db, `SELECT id FROM issues WHERE work_plan <> '' ORDER BY id LIMIT 1`)
+	plan := queryOne(t, st.db, `SELECT work_plan FROM issues WHERE id = '`+stashed+`'`)
+	if _, err := provider.DownTo(ctx, 10); err != nil {
+		t.Fatalf("Down to v10: %v", err)
+	}
+	if err := st.commitWorkingSet(ctx, "stepped down to v10"); err != nil {
+		t.Fatalf("commit v10: %v", err)
+	}
+	if _, err := migrations.SettleStash(ctx, st.db, 11); err != nil {
+		t.Fatalf("settle v11: %v", err)
+	}
+	if _, err := provider.UpByOne(ctx); err != nil {
+		t.Fatalf("Up to v11: %v", err)
+	}
+
+	done := migrateLocked(t, ctx, st)
+	if got := queryOne(t, st.db, `SELECT COALESCE(work_plan, '') FROM issues WHERE id = '`+stashed+`'`); got != plan {
+		t.Fatalf("work_plan of %s = %q, want the stashed %q", stashed, got, plan)
+	}
+	if got := queryOne(t, st.db, `SELECT CAST(COUNT(*) AS CHAR) FROM schema_stash`); got != "0" {
+		t.Fatalf("the carrier holds %s entries, want none", got)
+	}
+	replayed, _ := done.Probed[stashReplayedFact].([]map[string]any)
+	if !slices.ContainsFunc(replayed, func(r map[string]any) bool {
+		return r["version"] == int64(11) && r["stash"] == "issues.work_plan"
+	}) {
+		t.Fatalf("%s = %v, want v11's issues.work_plan", stashReplayedFact, done.Probed[stashReplayedFact])
+	}
+	if held, _ := done.Probed[stashHeldFact].([]map[string]any); len(held) != 0 {
+		t.Fatalf("%s = %v, want none", stashHeldFact, held)
+	}
+}

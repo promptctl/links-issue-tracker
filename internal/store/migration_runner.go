@@ -631,6 +631,9 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
 func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, probed probedFacts) (state migrationState, op operability, pruneErr error, fail *SchemaConvergenceError) {
+	if fail := attempt(stepUndoInterruptedStep, func() error { return s.undoInterruptedStep(ctx) }); fail != nil {
+		return migrationState{}, operability{}, nil, fail
+	}
 	state, op, fail = s.checkWritable(ctx)
 	if fail != nil {
 		return migrationState{}, operability{}, nil, fail
@@ -785,6 +788,39 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 		}
 	}
 	return s.applyPendingMigrations(ctx, p, state.ceiling(s.env.ReleasedSchema()), probed)
+}
+
+// undoInterruptedStep resets the working set to HEAD when it holds a forward
+// step goose recorded and no commit versioned: a process that died between a
+// step's Up and its commit, its stash replay among the work between. Read as
+// applied, that step's stash would be held for good, and the next Down of its
+// version would overwrite the units the entries were never written back to.
+// The dead process held the commit lock from the step's settle on, so the
+// working set holds that step and nothing written since; undone, it runs
+// again through upByOne, settle, Up and replay, as one step. It runs before
+// the open classifies, on every write open: an interrupted step at the top of
+// the registry leaves nothing pending to run it.
+func (s *Store) undoInterruptedStep(ctx context.Context) error {
+	_, working, err := s.appliedVersions(ctx)
+	if err != nil {
+		return err
+	}
+	committed, err := s.schemaVersionAtCommit(ctx, "HEAD")
+	if err != nil {
+		return err
+	}
+	if working <= committed {
+		return nil
+	}
+	// A hard reset keeps the tables HEAD does not have, which the step's Up
+	// created; the clean drops them, or the Up run again meets them.
+	if err := resetHardToRef(ctx, s.db, "HEAD"); err != nil {
+		return fmt.Errorf("undo the uncommitted step to v%d: %w", working, err)
+	}
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_CLEAN"); err != nil {
+		return fmt.Errorf("undo the uncommitted step to v%d: %w", working, err)
+	}
+	return nil
 }
 
 // upByOne applies the single next pending migration via goose. It is the ONE

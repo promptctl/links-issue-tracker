@@ -71,7 +71,8 @@ var _ model.RecordedError = (*SchemaConvergenceError)(nil)
 type ConvergenceStep int
 
 const (
-	stepClassify ConvergenceStep = iota
+	stepUndoInterruptedStep ConvergenceStep = iota
+	stepClassify
 	stepVerifyContent
 	stepRefuseUnwritable
 	stepRefuseUnreleased
@@ -131,9 +132,12 @@ var convergenceSteps = [convergenceStepCount]struct {
 	token string
 	act   ConvergenceAct
 }{
-	stepClassify:         {"classify", ActClearCause},
-	stepVerifyContent:    {"verify_content", ActClearCause},
-	stepRefuseUnwritable: {"refuse_unwritable", ActClearCause},
+	// The reset left the working set as it found it or at HEAD, and the
+	// next open looks again.
+	stepUndoInterruptedStep: {"undo_interrupted_step", ActClearCause},
+	stepClassify:            {"classify", ActClearCause},
+	stepVerifyContent:       {"verify_content", ActClearCause},
+	stepRefuseUnwritable:    {"refuse_unwritable", ActClearCause},
 	// Cleared by a lit whose released-schema ceiling reaches the target: a
 	// release that carries it.
 	stepRefuseUnreleased: {"refuse_unreleased", ActClearCause},
@@ -178,7 +182,7 @@ var convergenceSteps = [convergenceStepCount]struct {
 	// every later open runs the step again on top of them.
 	stepMigrationReset: {"migration_reset", ActRestoreSnapshot},
 	// goose applied and recorded the step before its commit failed, so the
-	// working set holds a complete step the next open reads as applied.
+	// working set holds a step the next open undoes and runs again.
 	stepCommitMigrationReset: {"commit_migration_reset", ActClearCause},
 	stepRecordQuarantine:     {"record_quarantine", ActClearCause},
 	// The uncommitted quarantine row stays in force, and the cause carries it.
