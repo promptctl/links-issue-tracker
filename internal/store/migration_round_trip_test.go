@@ -47,8 +47,6 @@ var pendingLosslessDown = map[int64]string{
 	4:  "its Down re-materializes redirects as related-to edges, so the next Up reads a lone manual peer edge as a redirect",
 	6:  "its Down drops follows_up without stashing it",
 	7:  "its Down deletes the unfiled epic with what hangs on it and resets every lane spelled as its ticket's id",
-	9:  "its Down drops purges without stashing it",
-	11: "its Down drops work_plan and plan_reviews without stashing them",
 }
 
 // releasedDestructiveUp lists the released migrations whose Up destroyed data

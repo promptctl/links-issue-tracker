@@ -32,10 +32,32 @@ CREATE TABLE plan_reviews (
 -- +goose StatementEnd
 
 -- +goose Down
--- LOSS CONTRACT: this Down drops every plan and every plan review. A store
--- stepped back below this version holds no record that a ticket was planned or
--- that a plan passed review. Operators who need them must restore from a
--- pre-downgrade dbsnapshot.
+-- Plans and plan reviews are stashed before the drop; the next Up's
+-- restore (migrations.Restores) writes them back.
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'work_plan', JSON_ARRAY(SUBSTRING(t.work_plan, 1)) FROM issues t;
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'plan_reviews', CAST(t.id AS CHAR), '*', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.issue_id, 1), SUBSTRING(t.plan_digest, 1), SUBSTRING(t.verdict, 1), SUBSTRING(t.laws, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM plan_reviews t;
+-- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE plan_reviews;
 -- +goose StatementEnd

@@ -18,12 +18,20 @@ CREATE TABLE purges (
 -- +goose StatementEnd
 
 -- +goose Down
--- LOSS CONTRACT: this Down drops the purge records. The purged issues stay
--- gone — their rows were deleted by the purge, not by this migration — but a
--- store stepped back below this version no longer knows which ids were
--- purged, so a sync with a store that still holds one of them can bring it
--- back, and minting can hand a purged id out again. Operators who need the
--- records must restore from a pre-downgrade dbsnapshot.
+-- The purge records are stashed before the drop; the next Up's restore
+-- (migrations.Restores) re-inserts them.
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'purges', CONCAT_WS(CHAR(31), CAST(t.issue_id AS CHAR), CAST(t.issue_created_at AS CHAR)), '*', JSON_ARRAY(SUBSTRING(t.issue_id, 1), SUBSTRING(t.issue_created_at, 1), SUBSTRING(t.purged_at, 1), SUBSTRING(t.purged_by, 1)) FROM purges t;
+-- +goose StatementEnd
 -- +goose StatementBegin
 DROP TABLE purges;
 -- +goose StatementEnd
