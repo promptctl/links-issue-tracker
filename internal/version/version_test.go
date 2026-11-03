@@ -231,6 +231,34 @@ func TestStaleSourceBuildShapeTable(t *testing.T) {
 	}
 }
 
+// Lower is the lower ceiling with its own source, the argument on a tie, and
+// the unbounded ceiling is its identity on either side.
+func TestSchemaCeilingLowerKeepsTheLowerBoundAndItsSource(t *testing.T) {
+	t.Parallel()
+	released := SchemaCeiling{Max: 12, Source: "release"}
+	hold := SchemaCeiling{Max: 11, Source: "hold"}
+	tie := SchemaCeiling{Max: 12, Source: "hold at the same version"}
+	tests := []struct {
+		name      string
+		got, want SchemaCeiling
+	}{
+		{"hold below", released.Lower(hold), hold},
+		{"hold above", hold.Lower(released), hold},
+		{"tie takes the argument", released.Lower(tie), tie},
+		{"unbounded on the right", released.Lower(UnboundedSchemaCeiling()), released},
+		{"unbounded on the left", UnboundedSchemaCeiling().Lower(released), released},
+		{"both unbounded", UnboundedSchemaCeiling().Lower(UnboundedSchemaCeiling()), UnboundedSchemaCeiling()},
+	}
+	for _, tc := range tests {
+		if tc.got != tc.want {
+			t.Errorf("%s: Lower = %+v, want %+v", tc.name, tc.got, tc.want)
+		}
+	}
+	if zero := (SchemaCeiling{}); zero.Lower(released) != zero {
+		t.Errorf("the zero ceiling is not unbounded: it must hold everything, not nothing")
+	}
+}
+
 // Covers holds exactly when both ends of the span fall inside the support:
 // each bound is checked at the edge it allows and one step past it.
 func TestSchemaSupportCoversOnlyASpanInsideBothBounds(t *testing.T) {

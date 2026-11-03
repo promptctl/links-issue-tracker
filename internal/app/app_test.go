@@ -251,7 +251,7 @@ func testEnv() environ.Env {
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.ReleasedSchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
+	return environ.Of(os.Environ()).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
 }
 
 // Writes is the mutation marker the staleness banner, the on-change mirror

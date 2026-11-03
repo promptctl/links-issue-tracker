@@ -126,14 +126,25 @@ func TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps(t *testing.T) {
 // TestAMinWriterSchemaThatIsNotAVersionRefusesWritesOnly pins that a
 // declaration lit cannot parse leaves the minimum unknown: the write open
 // refuses with the reason named, never reading it as no declaration, and the
-// read open still serves the workspace, since reading obeys no write rule.
+// read open still serves the workspace, since reading obeys no write rule. A
+// row of 0 is not a version either: no migration is at 0, and 0 is what a
+// reader reports for no declaration, never a declaration.
 func TestAMinWriterSchemaThatIsNotAVersionRefusesWritesOnly(t *testing.T) {
 	t.Parallel()
+	for _, raw := range []string{"v12", "0"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Parallel()
+			minWriterSchemaThatIsNotAVersionRefusesWritesOnly(t, raw)
+		})
+	}
+}
+
+func minWriterSchemaThatIsNotAVersionRefusesWritesOnly(t *testing.T, raw string) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, "v12")
+	ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, raw)
 
-	want := `meta min_writer_schema = "v12" is not a schema version`
+	want := fmt.Sprintf(`meta min_writer_schema = %q is not a schema version`, raw)
 	_, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	var unsupported *UnsupportedSchemaVersionError
 	if !errors.As(err, &unsupported) || unsupported.WorkspaceVersion != ahead || unsupported.MinWriterSchemaErr == nil {

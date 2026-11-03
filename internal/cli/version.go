@@ -18,7 +18,7 @@ import (
 // released is the run's released-schema ceiling, the one its store opens are
 // bound by, handed down from cmd/lit on the run's Env; it is printed as given
 // rather than read from the build stamp a second time.
-func runVersion(stdout io.Writer, released version.ReleasedSchemaCeiling, args []string) error {
+func runVersion(stdout io.Writer, released version.SchemaCeiling, args []string) error {
 	fs := newCobraFlagSet("version")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err

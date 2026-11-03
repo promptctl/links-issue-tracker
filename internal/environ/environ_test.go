@@ -70,7 +70,7 @@ func TestWithoutAndWithDeriveAChildsEnvironment(t *testing.T) {
 	if got, want := parent.List(), []string{"A=1", "B=2", "a=3"}; !slices.Equal(got, want) {
 		t.Errorf("deriving changed the parent: List() = %q, want %q", got, want)
 	}
-	ceiling := version.ReleasedSchemaCeiling{Max: 7, Source: "test"}
+	ceiling := version.SchemaCeiling{Max: 7, Source: "test"}
 	policy := version.RaisePolicy{Release: true}
 	derived := parent.WithReleasedSchema(ceiling).WithRaisePolicy(policy).Without("A").With("C=4")
 	if derived.ReleasedSchema() != ceiling || derived.RaisePolicy() != policy {

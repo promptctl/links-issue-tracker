@@ -32,7 +32,7 @@ func TestVersionHumanSurfacesAllInfoFields(t *testing.T) {
 	version.Date = "2026-05-24T15:21:00Z"
 
 	var stdout bytes.Buffer
-	if err := runVersion(&stdout, version.ReleasedSchemaCeiling{}, nil); err != nil {
+	if err := runVersion(&stdout, version.SchemaCeiling{}, nil); err != nil {
 		t.Fatalf("runVersion (human) error = %v", err)
 	}
 	out := stdout.String()
@@ -71,7 +71,7 @@ func TestVersionHumanLabelsDevBuild(t *testing.T) {
 	version.Date = ""
 
 	var stdout bytes.Buffer
-	if err := runVersion(&stdout, version.ReleasedSchemaCeiling{}, nil); err != nil {
+	if err := runVersion(&stdout, version.SchemaCeiling{}, nil); err != nil {
 		t.Fatalf("runVersion (dev) error = %v", err)
 	}
 	out := stdout.String()
@@ -89,7 +89,7 @@ func TestVersionHumanLabelsDevBuild(t *testing.T) {
 func TestVersionRejectsPositionalArgs(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
-	err := runVersion(&stdout, version.ReleasedSchemaCeiling{}, []string{"v0.1.0"})
+	err := runVersion(&stdout, version.SchemaCeiling{}, []string{"v0.1.0"})
 	if err == nil {
 		t.Fatal("runVersion with positional arg returned nil, want usage error")
 	}
@@ -112,7 +112,7 @@ func TestVersionReportsBuildAgeWhenDateStamped(t *testing.T) {
 	version.Date = time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339)
 
 	var stdout bytes.Buffer
-	if err := runVersion(&stdout, version.ReleasedSchemaCeiling{}, nil); err != nil {
+	if err := runVersion(&stdout, version.SchemaCeiling{}, nil); err != nil {
 		t.Fatalf("runVersion error = %v", err)
 	}
 	out := stdout.String()
@@ -138,7 +138,7 @@ func TestVersionFlagsStaleBuild(t *testing.T) {
 	version.Date = time.Now().Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339)
 
 	var stdout bytes.Buffer
-	if err := runVersion(&stdout, version.ReleasedSchemaCeiling{}, nil); err != nil {
+	if err := runVersion(&stdout, version.SchemaCeiling{}, nil); err != nil {
 		t.Fatalf("runVersion error = %v", err)
 	}
 	out := stdout.String()
@@ -164,7 +164,7 @@ func TestVersionOmitsBuildAgeWithoutDate(t *testing.T) {
 	version.Date = ""
 
 	var stdout bytes.Buffer
-	if err := runVersion(&stdout, version.ReleasedSchemaCeiling{}, nil); err != nil {
+	if err := runVersion(&stdout, version.SchemaCeiling{}, nil); err != nil {
 		t.Fatalf("runVersion error = %v", err)
 	}
 	out := stdout.String()
@@ -173,13 +173,13 @@ func TestVersionOmitsBuildAgeWithoutDate(t *testing.T) {
 	}
 }
 
-// TestVersionHumanSurfacesTheReleasedSchemaCeiling pins that `lit version`
+// TestVersionHumanSurfacesTheSchemaCeiling pins that `lit version`
 // prints the run's released-schema ceiling, the one its store opens are bound
 // by, and where it came from.
-func TestVersionHumanSurfacesTheReleasedSchemaCeiling(t *testing.T) {
+func TestVersionHumanSurfacesTheSchemaCeiling(t *testing.T) {
 	t.Parallel()
 	var stdout bytes.Buffer
-	ceiling := version.ReleasedSchemaCeiling{Max: 7, Source: "stamped at build time from release tag v9.8.7"}
+	ceiling := version.SchemaCeiling{Max: 7, Source: "stamped at build time from release tag v9.8.7"}
 	if err := runVersion(&stdout, ceiling, nil); err != nil {
 		t.Fatalf("runVersion error = %v", err)
 	}

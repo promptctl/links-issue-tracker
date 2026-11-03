@@ -425,6 +425,31 @@ type migrationState struct {
 	appliedVersion int64
 	// support is this binary's schema support as the classified state saw it.
 	support version.SchemaSupport
+	// hold is the store's schema hold as the classified state read it
+	// (schema_hold.go): the unbounded ceiling when the store has none.
+	hold version.SchemaCeiling
+}
+
+// ceiling is the ceiling a migrating open of this state may raise its
+// workspace to: the binary's own schema for a fresh workspace, which is
+// created rather than raised, and otherwise the lower of the released-schema
+// ceiling and the store's hold. [LAW:dataflow-not-control-flow] the hold
+// lowers unconditionally; a store with none holds the unbounded ceiling.
+func (st migrationState) ceiling(released version.SchemaCeiling) version.SchemaCeiling {
+	if st.phase == phaseFresh {
+		return version.SchemaCeiling{Max: st.support.Max, Source: "a new store is created at the schema this lit carries", Bound: version.BoundCarried}
+	}
+	return released.Lower(st.hold)
+}
+
+// schemaHold is the store's hold as the open reports it: the held version,
+// 0 when the store holds none. No hold is at 0: a schema version starts at
+// the baseline, so 0 is "none" and not a hold. [LAW:nothing-unseen]
+func (st migrationState) schemaHold() int64 {
+	if st.hold.Bound != version.BoundHold {
+		return 0
+	}
+	return st.hold.Max
 }
 
 // willMutate reports whether this Open will write. Fresh and adopt always
@@ -451,12 +476,12 @@ func (st migrationState) willMutate() bool {
 func (s *Store) migrate(ctx context.Context) (storage.Migrated, error) {
 	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatMigrationSnapshotLabel(time.Now()))
 	probed := probedFacts{}
-	op, pruneErr, fail := s.runMigration(ctx, guard, probed)
+	state, op, pruneErr, fail := s.runMigration(ctx, guard, probed)
 	if fail != nil {
 		fail.PruneErr = pruneErr
 		return storage.Migrated{}, fail
 	}
-	done := storage.Migrated{SchemaAhead: op.schemaAhead(), PruneErr: pruneErr, Probed: probed}
+	done := storage.Migrated{SchemaAhead: op.schemaAhead(), SchemaHold: state.schemaHold(), PruneErr: pruneErr, Probed: probed}
 	snap, ok := guard.took()
 	if !ok {
 		return done, nil
@@ -605,17 +630,17 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 // [LAW:dataflow-not-control-flow] The same assess -> repair -> snapshot ->
 // adopt -> apply sequence runs every Open; variability lives in the phase and
 // the set of pending versions, not in whether stages execute.
-func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, probed probedFacts) (op operability, pruneErr error, fail *SchemaConvergenceError) {
-	state, op, fail := s.checkWritable(ctx)
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, probed probedFacts) (state migrationState, op operability, pruneErr error, fail *SchemaConvergenceError) {
+	state, op, fail = s.checkWritable(ctx)
 	if fail != nil {
-		return operability{}, nil, fail
+		return migrationState{}, operability{}, nil, fail
 	}
 	assessment, fail := s.assessContent(ctx, state, op)
 	if fail != nil {
-		return operability{}, nil, fail
+		return migrationState{}, operability{}, nil, fail
 	}
 	pruneErr, fail = s.applyMigration(ctx, guard, assessment, probed)
-	return op, pruneErr, fail
+	return state, op, pruneErr, fail
 }
 
 // applyMigration is runMigration's work on a workspace this binary may write,
@@ -643,8 +668,9 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	// repairing (as opposed to detecting) still aborts Open loudly; only a
 	// clean repair is swallowed into a routine commit.
 	// Before anything is written, drift repair included: an existing workspace
-	// is never moved to a schema no release carries.
-	if fail := attempt(stepRefuseUnreleased, func() error { return s.refuseUnreleasedRaise(ctx, state, assessment.drift) }); fail != nil {
+	// is never moved above the schema ceiling, a schema no release carries or
+	// one the store's hold keeps it below.
+	if fail := attempt(stepRefuseUnreleased, func() error { return s.refuseCeilingRaise(ctx, state, assessment.drift) }); fail != nil {
 		return nil, fail
 	}
 	if assessment.drift != nil {
@@ -746,7 +772,7 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 			return nil, fail
 		}
 	}
-	return s.applyPendingMigrations(ctx, p, raiseCeiling(state, s.env.ReleasedSchema()), probed)
+	return s.applyPendingMigrations(ctx, p, state.ceiling(s.env.ReleasedSchema()), probed)
 }
 
 // upByOne applies the single next pending migration via goose. It is the ONE
@@ -761,15 +787,16 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 // consume the same embedded registry via newGooseProvider, so neither mints a
 // second schema-adaptation path.
 //
-// It is also the one enforcer of the released-schema ceiling over every raise
-// of a schema: no step applies a migration above ceiling. The migrating open
-// refuses the whole raise earlier, before it writes anything, through the same
-// predicate (refuseUnreleasedRaise); the reconcile's lift meets it here.
+// It is also the one enforcer of the schema ceiling over every raise of a
+// schema: no step applies a migration above ceiling, whether the released-
+// schema ceiling or a store's hold set it. The migrating open refuses the
+// whole raise earlier, before it writes anything, through the same predicate
+// (refuseCeilingRaise); the reconcile's lift meets it here.
 //
 // probes holds the probes to run before the step they read for; the lift,
 // which reports nothing, passes nil. What a probe read comes back beside the
 // step's result, and the probe of a step the ceiling refuses never runs.
-func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise SchemaRaise, ceiling version.ReleasedSchemaCeiling, probes map[int64]migrationProbe) (*goose.MigrationResult, probeOutcome, error) {
+func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise SchemaRaise, ceiling version.SchemaCeiling, probes map[int64]migrationProbe) (*goose.MigrationResult, probeOutcome, error) {
 	next, err := s.nextStepWithinCeiling(ctx, raise, ceiling)
 	if err != nil {
 		return nil, probeOutcome{}, err
@@ -821,8 +848,16 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("construct schema-lift provider: %w", err)
 	}
+	// The working set is the commit being lifted, so its hold is that
+	// commit's: a fetched head lowered under a hold is lifted no further than
+	// the hold, whatever this binary's registry carries.
+	hold, err := s.schemaHold(ctx)
+	if err != nil {
+		return fmt.Errorf("lift working set to registry schema: %w", err)
+	}
+	ceiling := s.env.ReleasedSchema().Lower(hold)
 	for {
-		result, _, err := s.upByOne(ctx, provider, RaiseLift, s.env.ReleasedSchema(), nil)
+		result, _, err := s.upByOne(ctx, provider, RaiseLift, ceiling, nil)
 		if errors.Is(err, goose.ErrNoNextVersion) {
 			return nil
 		}
@@ -858,7 +893,7 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 // [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
 // → prune) runs on every call; variability lives in the applied-vs-registry
 // set, not in whether stages execute.
-func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceiling version.ReleasedSchemaCeiling, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceiling version.SchemaCeiling, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	// Construct the provider before creating the checkpoint so a provider
 	// construction failure leaves no orphaned branch behind.
 	var provider *goose.Provider
@@ -1295,6 +1330,12 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 	if err != nil {
 		return migrationState{}, err
 	}
+	// The store's schema hold is read once, here, and rides the state to
+	// every raise the open decides on (migrationState.ceiling).
+	hold, err := s.schemaHold(ctx)
+	if err != nil {
+		return migrationState{}, err
+	}
 	// [LAW:types-are-the-program] Disk shape outranks goose bookkeeping
 	// when the two disagree. issue_history is a pre-goose-only table —
 	// the canonical baseline does not create it; reconcileToBaseline
@@ -1315,7 +1356,7 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		return migrationState{}, err
 	}
 	if legacyMarker {
-		return migrationState{phase: phaseAdopt, support: support}, nil
+		return migrationState{phase: phaseAdopt, support: support, hold: hold}, nil
 	}
 	gooseManaged, err := s.tableExists(ctx, gooseVersionTable)
 	if err != nil {
@@ -1326,16 +1367,16 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		if err != nil {
 			return migrationState{}, err
 		}
-		return migrationState{phase: phaseManaged, appliedVersion: applied, support: support}, nil
+		return migrationState{phase: phaseManaged, appliedVersion: applied, support: support, hold: hold}, nil
 	}
 	present, _, err := s.verifyBaselineShape(ctx)
 	if err != nil {
 		return migrationState{}, err
 	}
 	if present == 0 {
-		return migrationState{phase: phaseFresh, support: support}, nil
+		return migrationState{phase: phaseFresh, support: support, hold: hold}, nil
 	}
-	return migrationState{phase: phaseAdopt, support: support}, nil
+	return migrationState{phase: phaseAdopt, support: support, hold: hold}, nil
 }
 
 // migrationColumnAdds is one registry migration's version/name plus the

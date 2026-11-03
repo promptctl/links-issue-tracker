@@ -356,7 +356,7 @@ func OpenForRead(ctx context.Context, env environ.Env, stderr io.Writer, doltRoo
 		return nil, errors.Join(fail, s.Close())
 	}
 	if !assessment.needsWrite() {
-		s.migrated = storage.Migrated{SchemaAhead: assessment.op.schemaAhead()}
+		s.migrated = storage.Migrated{SchemaAhead: assessment.op.schemaAhead(), SchemaHold: assessment.state.schemaHold()}
 		return s, nil
 	}
 	// The schema trails this binary. A read never applies a migration — its

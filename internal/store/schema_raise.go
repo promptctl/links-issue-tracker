@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -16,26 +17,46 @@ import (
 // count as a raise. The policy enters at the composition root on environ.Env,
 // beside the released-schema ceiling, and refuseSchemaRaise below is its only
 // reader. [LAW:single-enforcer] How far a release may raise a remote is the
-// ceiling's refusal (refuseUnreleasedSchema), which every push runs first.
+// ceiling's refusal (refuseSchemaAboveCeiling), which every push runs first.
 
-// remoteSchema is the schema of the remote head a push is judged against, or
-// the fact that this store has none to judge against: no tracking ref for the
-// branch, because it was never fetched or the push creates it.
-// [LAW:types-are-the-program] "unknown" is a variant, not a 0 that would read
-// as a pre-goose remote.
+// remoteSchema is the schema of the remote head a push is judged against and
+// the schema hold that head carries, or the fact that this store has none to
+// judge against: no tracking ref for the branch, because it was never fetched
+// or the push creates it. [LAW:types-are-the-program] "unknown" is a variant,
+// not a 0 that would read as a pre-goose remote; a head with no hold carries
+// the unbounded ceiling, which lowers nothing.
 type remoteSchema struct {
 	version int64
 	known   bool
+	// hold is the schema hold recorded at the head (schema_hold.go): the
+	// ceiling a push to this remote may not send a commit above.
+	hold version.SchemaCeiling
 }
 
-// knownRemoteSchema is the remote head's schema, read from its commit.
-func knownRemoteSchema(version int64) remoteSchema {
-	return remoteSchema{version: version, known: true}
+// knownRemoteSchema is a remote head at schema with no schema hold.
+func knownRemoteSchema(schema int64) remoteSchema {
+	return remoteSchema{version: schema, known: true, hold: version.UnboundedSchemaCeiling()}
 }
 
 // unknownRemoteSchema is a remote this store holds no head of.
 func unknownRemoteSchema() remoteSchema {
-	return remoteSchema{}
+	return remoteSchema{hold: version.UnboundedSchemaCeiling()}
+}
+
+// remoteHeadAt is the remote head at commitHash as a push judges it: its
+// schema and its hold, both read AS OF that one commit, so the two cannot
+// come from different heads. The hold's source names the head as
+// "<remote>/<branch>'s head". [LAW:one-source-of-truth]
+func (s *Store) remoteHeadAt(ctx context.Context, commitHash string, remote storage.RemoteName, branch string) (remoteSchema, error) {
+	remoteVersion, err := s.remoteHeadSchema(ctx, commitHash)
+	if err != nil {
+		return remoteSchema{}, err
+	}
+	hold, err := s.schemaHoldAt(ctx, commitHash, fmt.Sprintf("%s/%s's head", remote, branch))
+	if err != nil {
+		return remoteSchema{}, err
+	}
+	return remoteSchema{version: remoteVersion, known: true, hold: hold}, nil
 }
 
 // SchemaRaiseRequiresReleaseError refuses a push that would raise a remote's

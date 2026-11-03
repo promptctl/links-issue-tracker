@@ -16,6 +16,7 @@ package version
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -66,11 +67,58 @@ const (
 	releasedLabelNoTag    = "none"
 )
 
-// ReleasedSchemaCeiling is this binary's released-schema ceiling and where it
-// came from, in words a refusal or `lit version` can print as they are.
-type ReleasedSchemaCeiling struct {
+// SchemaCeiling is the highest schema version a raise may put in place, and
+// where that bound came from, in words a refusal or `lit version` can print
+// as they are. Two producers make one: the released-schema ceiling this
+// binary's build stamp carries (ReadReleasedSchemaCeiling), and a store's
+// schema hold (internal/store, meta.schema_hold). A raise is bound by the
+// lower of the two, which Lower picks. [LAW:one-type-per-behavior] a bound
+// with a reason is one type however it was produced.
+type SchemaCeiling struct {
 	Max    int64
 	Source string
+	// Bound is which bound this is, so a reader acts on the kind and never
+	// parses Source: a refusal's remedy differs by what set the ceiling.
+	// [LAW:types-are-the-program]
+	Bound SchemaBound
+}
+
+// SchemaBound is what set a SchemaCeiling: the bound's producer, named as a
+// value so every reader selects on it, never on the Source prose.
+type SchemaBound string
+
+const (
+	// BoundReleased is the released-schema ceiling the build stamp carries;
+	// only a published release has one reaching a newer schema.
+	BoundReleased SchemaBound = "released"
+	// BoundHold is a store's schema hold, meta.schema_hold, which a remote
+	// downgrade set and only `lit upgrade --remote` lifts.
+	BoundHold SchemaBound = "hold"
+	// BoundCarried is this lit's own schema: the ceiling a store created
+	// empty is made at, which no raise exceeds.
+	BoundCarried SchemaBound = "carried"
+	// BoundNone is the unbounded ceiling, Lower's identity.
+	BoundNone SchemaBound = "none"
+)
+
+// Lower is the lower of c and other: other when its Max is at or below c's,
+// c otherwise. A tie takes other: every site lowers this lit's own bound by a
+// store's hold, and at a tie the hold is the bound whose remedy clears both,
+// since a release the released ceiling's remedy installs is refused by the
+// equal hold again.
+func (c SchemaCeiling) Lower(other SchemaCeiling) SchemaCeiling {
+	if other.Max <= c.Max {
+		return other
+	}
+	return c
+}
+
+// UnboundedSchemaCeiling is the ceiling no schema exceeds: Lower's identity,
+// the value a store with no schema hold yields so every site lowers by the
+// hold unconditionally. [LAW:dataflow-not-control-flow] The zero value is not
+// used for "no hold": a ceiling of 0 would hold every store.
+func UnboundedSchemaCeiling() SchemaCeiling {
+	return SchemaCeiling{Max: math.MaxInt64, Source: "no schema hold", Bound: BoundNone}
 }
 
 // ReadReleasedSchemaCeiling reads the ReleasedSchema stamp:
@@ -89,29 +137,29 @@ type ReleasedSchemaCeiling struct {
 // cmd/lit reads this once and hands it down on the run's environ.Env; no code
 // below the composition root reads the stamp, so tests construct stores with
 // whatever ceiling they are about.
-func ReadReleasedSchemaCeiling() (ReleasedSchemaCeiling, error) {
+func ReadReleasedSchemaCeiling() (SchemaCeiling, error) {
 	switch ReleasedSchema {
 	case "":
-		return ReleasedSchemaCeiling{Source: "this lit was built without a released-schema stamp"}, nil
+		return SchemaCeiling{Source: "this lit was built without a released-schema stamp", Bound: BoundReleased}, nil
 	case ReleasedSchemaCarried:
 		support, err := CarriedSchemaSupport()
 		if err != nil {
-			return ReleasedSchemaCeiling{}, err
+			return SchemaCeiling{}, err
 		}
-		return ReleasedSchemaCeiling{Max: support.Max, Source: "this lit is a release, and carries only released migrations"}, nil
+		return SchemaCeiling{Max: support.Max, Source: "this lit is a release, and carries only released migrations", Bound: BoundReleased}, nil
 	}
 	digits, label, ok := strings.Cut(ReleasedSchema, "@")
 	n, err := strconv.ParseInt(digits, 10, 64)
 	if !ok || label == "" || err != nil || n < 0 {
-		return ReleasedSchemaCeiling{}, fmt.Errorf("this lit was built with released-schema stamp %q, which is neither %q nor <schema version>@<label>", ReleasedSchema, ReleasedSchemaCarried)
+		return SchemaCeiling{}, fmt.Errorf("this lit was built with released-schema stamp %q, which is neither %q nor <schema version>@<label>", ReleasedSchema, ReleasedSchemaCarried)
 	}
 	switch label {
 	case releasedLabelSnapshot:
-		return ReleasedSchemaCeiling{Max: n, Source: "this lit is a snapshot build, which no release vouches for"}, nil
+		return SchemaCeiling{Max: n, Source: "this lit is a snapshot build, which no release vouches for", Bound: BoundReleased}, nil
 	case releasedLabelNoTag:
-		return ReleasedSchemaCeiling{Max: n, Source: "the checkout this lit was built from had no release tag"}, nil
+		return SchemaCeiling{Max: n, Source: "the checkout this lit was built from had no release tag", Bound: BoundReleased}, nil
 	}
-	return ReleasedSchemaCeiling{Max: n, Source: "stamped at build time from release tag " + label + " in the checkout this lit was built from"}, nil
+	return SchemaCeiling{Max: n, Source: "stamped at build time from release tag " + label + " in the checkout this lit was built from", Bound: BoundReleased}, nil
 }
 
 // OriginRelease is the only value meaning "this binary will not be refreshed
