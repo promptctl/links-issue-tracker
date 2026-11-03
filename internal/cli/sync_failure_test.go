@@ -313,8 +313,9 @@ func TestAnUnreleasedSchemaPushRendersTheSyncFailureContract(t *testing.T) {
 
 // The same block renders a refusal the remote's schema hold made: the hold is
 // the ceiling, its source names the remote head, and the remedy is a fetch,
-// for a hold since lifted, then the release at the hold, never an upgrade a
-// hold would refuse too.
+// for a hold since lifted, then the release at the hold, then the remote
+// downgrade and lift a backlog that rose above the hold runs to lift it;
+// never an install, which a hold would refuse too.
 func TestASchemaHoldPushRefusalRendersTheHoldAsTheCeiling(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaCeilingPushError{
@@ -331,14 +332,16 @@ func TestASchemaHoldPushRefusalRendersTheHoldAsTheCeiling(t *testing.T) {
 		"lit sync fetch --remote origin",
 		"lit downgrade --to <tag>",
 		"release at schema v11",
+		"lit downgrade --schema 11 --remote origin",
+		"`lit upgrade --remote origin` after it lifts the hold",
 		"ESCALATION — BLOCKED",
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("block lacks %q:\n%s", want, block)
 		}
 	}
-	if strings.Contains(block, "lit upgrade") {
-		t.Errorf("block names an upgrade, which a hold refuses too:\n%s", block)
+	if strings.Contains(strings.ReplaceAll(block, "lit upgrade --remote", ""), "lit upgrade") {
+		t.Errorf("block names an install, which a hold refuses too:\n%s", block)
 	}
 }
 

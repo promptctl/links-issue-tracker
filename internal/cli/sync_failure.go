@@ -85,6 +85,13 @@ const (
 	// fetch and one more push; a push still refused after that waits for a
 	// release, which alone raises a remote.
 	syncFailureSchemaRaiseRequiresRelease syncFailureClass = "schema_raise_requires_release"
+	// syncFailureSchemaLoweringRequiresHold: the push was refused because it
+	// would lower the remote's schema with a head that carries no schema
+	// hold. A remote is lowered only by `lit downgrade --remote`, whose head
+	// holds the remote there; an unheld lowering is re-raised by the next
+	// client, and is what a lift sends when the lowering before it never
+	// landed.
+	syncFailureSchemaLoweringRequiresHold syncFailureClass = "schema_lowering_requires_hold"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -148,6 +155,10 @@ type SyncFailure struct {
 	// syncFailureSchemaRaiseRequiresRelease: the remote's schema (or that it
 	// is unknown), the commit's, and the ceiling that chooses the remedy.
 	RaiseRefused *store.SchemaRaiseRequiresReleaseError
+	// LoweringRefused is the store's refusal, populated only for
+	// syncFailureSchemaLoweringRequiresHold: the remote's schema and the
+	// unheld commit's below it.
+	LoweringRefused *store.SchemaLoweringRequiresHoldError
 	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
 	// on-both), populated only for syncFailureUnrelatedHistories. Before choosing to
 	// take one side wholesale or union the two, the operator must see what each side
@@ -282,6 +293,21 @@ func pushDivergedRemedy(remote string) []remedyStep {
 	}
 }
 
+// schemaLoweringRemedy is how a push refused for lowering the remote with an
+// unheld head clears. The verdict compares schemas, not histories, so a
+// backlog that is only behind a release's raise reads the same as one that
+// stepped down: the pull comes first, as the fetch does for a raise, and
+// brings a backlog that was behind up to this lit's schema on the way. A
+// push still below the remote after the pull is a lowering, and a remote is
+// lowered by the remote downgrade alone, whose head holds it there.
+func schemaLoweringRemedy(refused *store.SchemaLoweringRequiresHoldError) []remedyStep {
+	return []remedyStep{
+		{"lit sync pull --remote " + refused.Remote, "settles this backlog against the remote's head; a backlog that was only behind rises to this lit's schema on the way, and the push after it lands"},
+		{"lit sync push --remote " + refused.Remote, "lands when this backlog is at or above the remote's schema"},
+		{fmt.Sprintf("lit downgrade --schema %d --remote %s", refused.CommitSchema, refused.Remote), fmt.Sprintf("only when the user means to lower %s: lowers it to schema v%d and holds it there, in one head this lit pushes", refused.Remote, refused.CommitSchema)},
+	}
+}
+
 // schemaRaiseRemedy is how a push refused for raising the remote's schema
 // clears. The push judged the remote's schema from the tracking ref as of the
 // last fetch, so a fetch comes first: a release may have raised the remote
@@ -313,6 +339,7 @@ func schemaCeilingRemedy(refused *store.SchemaCeilingPushError) []remedyStep {
 			{"lit sync fetch --remote " + refused.Remote, "reads the remote's current head; a hold lifted on the remote since the last fetch clears this"},
 			{"lit sync push --remote " + refused.Remote, "lands when the remote no longer holds its schema below this backlog's"},
 			{"lit downgrade --to <tag>", fmt.Sprintf("only when the user directs it: install the release at schema v%d, which steps this backlog down to the hold", refused.Ceiling.Max)},
+			{fmt.Sprintf("lit downgrade --schema %d --remote %s", refused.Ceiling.Max, refused.Remote), fmt.Sprintf("only when the user means to lift %s's hold from a backlog that has risen above it: holds this backlog at v%d again, and `lit upgrade --remote %s` after it lifts the hold", refused.Remote, refused.Ceiling.Max, refused.Remote)},
 		}
 	default:
 		return []remedyStep{
@@ -351,7 +378,26 @@ func schemaRefusalFailure(err error) (SyncFailure, bool) {
 	if failure, ok := schemaCeilingFailure(err); ok {
 		return failure, true
 	}
-	return schemaRaiseFailure(err)
+	if failure, ok := schemaRaiseFailure(err); ok {
+		return failure, true
+	}
+	return schemaLoweringFailure(err)
+}
+
+// schemaLoweringFailure builds the sync-failure contract for a store
+// *SchemaLoweringRequiresHoldError, or ok=false when err is not one.
+func schemaLoweringFailure(err error) (SyncFailure, bool) {
+	var refused *store.SchemaLoweringRequiresHoldError
+	if !errors.As(err, &refused) {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:           syncFailureSchemaLoweringRequiresHold,
+		Remote:          refused.Remote,
+		Branch:          refused.Branch,
+		LoweringRefused: refused,
+		BuildNote:       resolveBuildStatusNote(time.Now()),
+	}, true
 }
 
 // persistent reports whether the divergence has crossed from "reconcile still in
@@ -402,6 +448,8 @@ func (e SyncFailureError) Unwrap() error {
 		return e.Failure.AboveCeiling
 	case e.Failure.RaiseRefused != nil:
 		return e.Failure.RaiseRefused
+	case e.Failure.LoweringRefused != nil:
+		return e.Failure.LoweringRefused
 	}
 	return nil
 }
@@ -483,6 +531,8 @@ func (f SyncFailure) headline() string {
 		return "lit sync push was refused because this backlog is at a schema above the remote's schema ceiling, and needs you."
 	case syncFailureSchemaRaiseRequiresRelease:
 		return "lit sync push was refused because it would raise the remote's schema and this lit is not a release, and needs you."
+	case syncFailureSchemaLoweringRequiresHold:
+		return "lit sync push was refused because it would lower the remote's schema with a head that holds no schema hold, and needs you."
 	default:
 		return fmt.Sprintf("lit sync hit an unrecognized sync-failure class %q — this is a bug; please report it.", f.Class)
 	}
@@ -542,6 +592,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the commit this push would send to %s is at schema version %d, and %s was at schema version %d when last fetched. Only a release raises a remote's schema, and this lit is not a release, so nothing was written to %s.",
 			ref, f.RaiseRefused.CommitSchema, ref, f.RaiseRefused.RemoteSchema, ref)
+	case syncFailureSchemaLoweringRequiresHold:
+		return fmt.Sprintf(
+			"the commit this push would send to %s is at schema version %d, below the schema version %d %s was at when last fetched, and it carries no schema hold. A remote is lowered only by a head that holds it at the lowered schema, which `lit downgrade --remote` writes; an unheld lowering is raised again by the next client that syncs, so nothing was written to %s.",
+			ref, f.LoweringRefused.CommitSchema, f.LoweringRefused.RemoteSchema, ref, ref)
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -614,6 +668,8 @@ func (f SyncFailure) resolutionSteps() []string {
 		return remedyLines(schemaCeilingRemedy(f.AboveCeiling))
 	case syncFailureSchemaRaiseRequiresRelease:
 		return remedyLines(schemaRaiseRemedy(f.RaiseRefused))
+	case syncFailureSchemaLoweringRequiresHold:
+		return remedyLines(schemaLoweringRemedy(f.LoweringRefused))
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -651,6 +707,8 @@ func (f SyncFailure) escalationLine() string {
 		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying from this lit; the ceiling's source above says which bound refused, a released-schema ceiling or the remote's schema hold, and what set it. " + installReplacesLit + ": run the install above only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailureSchemaRaiseRequiresRelease:
 		return "ESCALATION — resolve now: run the fetch and the push above once. A push refused again after the fetch is a raise, or the first push to a branch the remote does not have yet; a lit that is no release makes neither, and that will not clear by waiting or retrying from this lit. " + installReplacesLit + ": run the upgrade only when the user directs it, and until then surface this to the user as blocking."
+	case syncFailureSchemaLoweringRequiresHold:
+		return "ESCALATION — resolve now: run the pull and the push above once. A push refused again after the pull is a lowering of the remote, which only the remote downgrade makes, and that is the user's to decide: run it only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailurePushDiverged:
 		// The push path reads no divergence age or span, so the line is fixed.
 		// It names what clears the refusal and when it stops being the agent's

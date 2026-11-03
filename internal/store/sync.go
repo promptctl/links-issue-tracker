@@ -1247,15 +1247,21 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	return result, nil
 }
 
-// refuseSchemaSend is the two verdicts on the schema of the head a push
+// refuseSchemaSend is the three verdicts on the schema of the head a push
 // sends, H, against the remote head it read, R: a schema above the ceiling
 // never leaves this store (refuseSchemaAboveCeiling), where the ceiling is
-// the lower of this lit's released-schema ceiling and the hold R carries; and
-// a schema above R is a raise only a release makes (refuseSchemaRaise). One
-// read of H serves both. Every DOLT_PUSH runs it: the plain push here and the
-// leased push in push_lease.go. [LAW:single-enforcer] [LAW:one-source-of-truth]
+// the lower of this lit's released-schema ceiling and the hold R carries; a
+// schema above R is a raise only a release makes (refuseSchemaRaise); and a
+// schema below R is a lowering only a held head makes
+// (refuseSchemaLowering). One read of H and of the hold H carries serves all
+// three. Every DOLT_PUSH runs it: the plain push here and the leased push in
+// push_lease.go. [LAW:single-enforcer] [LAW:one-source-of-truth]
 func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName, branch string, remoteHead remoteSchema, commitHash string) error {
 	commitSchema, err := s.remoteHeadSchema(ctx, commitHash)
+	if err != nil {
+		return err
+	}
+	commitHold, err := s.schemaHoldAt(ctx, commitHash, "the head this push sends")
 	if err != nil {
 		return err
 	}
@@ -1263,7 +1269,10 @@ func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName,
 	if err := refuseSchemaAboveCeiling(remote, branch, commitSchema, ceiling); err != nil {
 		return err
 	}
-	return refuseSchemaRaise(remote, branch, remoteHead, commitSchema, s.env.RaisePolicy())
+	if err := refuseSchemaRaise(remote, branch, remoteHead, commitSchema, s.env.RaisePolicy()); err != nil {
+		return err
+	}
+	return refuseSchemaLowering(remote, branch, remoteHead, commitSchema, commitHold)
 }
 
 // headCommitWithinLock reads HEAD's hash under the commit lock the caller

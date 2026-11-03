@@ -100,9 +100,90 @@ var _ model.Refusal = (*UpgradeTargetBehindError)(nil)
 // store before this code runs. It also never writes the store — the only write
 // is to the binary on disk — so read-only best-effort access is exactly right.
 func upgradeLeaf() wsLeaf {
-	return withWorkspaceSchema(func() upgradeLeafShape {
+	return withWorkspaceSchema(func() upgradeDeclaration {
 		return upgradeLeafWith(&release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
 	})()
+}
+
+// upgradeForm is which of `lit upgrade`'s two forms the flags asked for: the
+// install of a release (bare, or `--to`), or `--remote`, the lift of a
+// remote's schema hold, which installs nothing. [LAW:types-are-the-program]
+// a closed enum the parse produces once.
+type upgradeForm int
+
+const (
+	upgradeInstall upgradeForm = iota
+	upgradeLiftRemote
+)
+
+// upgradeFormOf reads the parsed flag set as one form; `--remote` beside
+// `--to` is refused here, the one place the combination rule lives.
+// [LAW:single-enforcer]
+func upgradeFormOf(fs *cobraFlagSet) (upgradeForm, error) {
+	to, remote := fs.Changed("to"), fs.Changed("remote")
+	switch {
+	case remote && !to:
+		return upgradeLiftRemote, nil
+	case !remote:
+		return upgradeInstall, nil
+	}
+	return 0, model.ValidationError{Message: "upgrade: --remote lifts a remote's schema hold and installs nothing; give it without --to"}
+}
+
+// upgradeDeclaration is `lit upgrade` declared: its one flag set, carried by
+// the install form's leaf, and the lift form's remote read from that same
+// parse.
+type upgradeDeclaration struct {
+	leaf   upgradeLeafShape
+	remote func() (string, error)
+}
+
+// schemaHoldLifter is the schema-side dependency the lift form calls. The
+// production implementation is the engine's storage.SchemaMigrator; tests
+// substitute a fake.
+type schemaHoldLifter interface {
+	LiftSchemaHold(ctx context.Context) (storage.SchemaHoldLifted, error)
+}
+
+// liftScope is what the lift form's work runs against: the lift, and the push
+// of the lifted head, which closes over the sync session the form opened.
+type liftScope struct {
+	holder schemaHoldLifter
+	push   func(ctx context.Context, inv Invocation) error
+}
+
+// liftRemoteHoldWork lifts this backlog's schema hold and pushes the lifted
+// head. The push sends a head at the hold's schema, which is the remote's, so
+// it is no raise; the remote rises when a migrating open brings this backlog
+// forward and a release's `lit sync push` sends it. A backlog with no hold
+// lifts nothing and still pushes: a lift whose push failed is run again and
+// pushes the lift it already committed.
+func liftRemoteHoldWork(ctx context.Context, inv Invocation, remote string, scope liftScope) error {
+	telemetry.Set(ctx, "upgrade.remote", remote)
+	lifted, err := scope.holder.LiftSchemaHold(ctx)
+	if err != nil {
+		return err
+	}
+	facts, counts := lifted.EventRecord()
+	telemetry.Record(ctx, facts, counts)
+	if _, err := fmt.Fprintf(inv.Stdout, "%s; pushing to %s\n%s\n", liftedLine(lifted), remote, liftRiseLine); err != nil {
+		return err
+	}
+	return scope.push(ctx, inv)
+}
+
+// liftRiseLine is how a lifted remote rises: in two pushes, the lift's and a
+// release's, because a lifting push that also raised would be refused as a
+// raise past the hold the remote still carries.
+const liftRiseLine = "the remote rises when a lit at a higher schema opens this backlog and a release's `lit sync push` sends it."
+
+// liftedLine is the lift's result as a sentence: the hold it removed, or that
+// there was none.
+func liftedLine(lifted storage.SchemaHoldLifted) string {
+	if lifted.Lifted == 0 {
+		return "this backlog holds no schema hold"
+	}
+	return fmt.Sprintf("lifted this backlog's schema hold at v%d", lifted.Lifted)
 }
 
 // upgradeScope is what an upgrade leaf's work runs against: the target
@@ -124,15 +205,43 @@ type upgradeLeafShape = leaf[upgradeScope]
 // the best-effort schema reader for the resolved workspace to this binary's
 // version info. [LAW:no-ambient-temporal-coupling] Only the WORK is wrapped, so
 // the declaration — and therefore `lit upgrade --help` — precedes both.
-func withWorkspaceSchema(declare func() upgradeLeafShape) wsLeafFn {
+func withWorkspaceSchema(declare func() upgradeDeclaration) wsLeafFn {
 	return func() wsLeaf {
-		l := declare()
-		return adaptLeaf[upgradeScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
+		d := declare()
+		return adaptLeaf[upgradeScope, workspace.Info](d.leaf, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
+			form, err := upgradeFormOf(d.leaf.fs)
+			if err != nil {
+				return err
+			}
+			if form == upgradeLiftRemote {
+				// The sync open never migrates, which is what lets this binary
+				// open a backlog held below its registry — the state a lift is
+				// for — where the migrating open would refuse it.
+				remote, err := d.remote()
+				if err != nil {
+					return err
+				}
+				command := []string{"upgrade"}
+				return runWithSyncSession(ctx, inv, ws, func(ctx context.Context, session syncSession) error {
+					migrator, err := storage.SchemaMigration.Of(session.engine)
+					if err != nil {
+						return err
+					}
+					// The remote is resolved before the hold is lifted, so a
+					// remote the push would skip leaves the store held.
+					if err := requireLivePushTarget(ctx, inv, ws, session, remote, command); err != nil {
+						return err
+					}
+					return liftRemoteHoldWork(ctx, inv, remote, liftScope{holder: migrator, push: func(ctx context.Context, inv Invocation) error {
+						return pushLiveStore(ctx, inv, ws, session, remote, livePushOptions{command: command})
+					}})
+				})
+			}
 			current, err := version.Get()
 			if err != nil {
 				return fmt.Errorf("upgrade: read this binary's version info: %w", err)
 			}
-			return l.work(ctx, inv, upgradeScope{schema: workspaceSchemaReader{ws: ws, env: inv.Env}, current: current}, positional)
+			return d.leaf.work(ctx, inv, upgradeScope{schema: workspaceSchemaReader{ws: ws, env: inv.Env}, current: current}, positional)
 		})
 	}
 }
@@ -240,11 +349,12 @@ func upgradeLeafWith(
 	resolver upgradeResolver,
 	installer release.Installer,
 	binPathFn func() (string, error),
-) upgradeLeafShape {
+) upgradeDeclaration {
 	fs := newCobraFlagSet("upgrade")
 	to := fs.String("to", "", "Target binary version (release tag vX.Y.Z, e.g. v0.9.0); omit to upgrade to the latest release")
-	const usageLine = "usage: lit upgrade [--to <version>]"
-	return upgradeLeafShape{fs: fs, usage: usageLine, positionals: 0, work: func(ctx context.Context, inv Invocation, scope upgradeScope, _ []string) error {
+	remote := fs.String("remote", "", "Lift the schema hold a remote downgrade set on this remote, and install nothing")
+	const usageLine = "usage: lit upgrade [--to <version>] | lit upgrade --remote <name>"
+	return upgradeDeclaration{remote: func() (string, error) { return requireRemoteFlag("upgrade", *remote) }, leaf: upgradeLeafShape{fs: fs, usage: usageLine, positionals: 0, work: func(ctx context.Context, inv Invocation, scope upgradeScope, _ []string) error {
 		// [LAW:parse-dont-validate] --to's default value is the latest published
 		// release. The flag set carries omitted-vs-given as typed data (Changed),
 		// so only a truly omitted flag selects the feed as the tag's source — an
@@ -346,7 +456,7 @@ func upgradeLeafWith(
 			fromLabel(scope.current), tag, target.Manifest.Schema.Max, binPath,
 		)
 		return err
-	}}
+	}}}
 }
 
 // fromLabel renders the running binary's identity for the from → to line: the

@@ -937,7 +937,7 @@ func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env enviro
 	// this one is in flight, and the rejection that follows is judged by
 	// whether the remote carries the clone's head, not reported as a failure
 	// over a remote that is fully up to date.
-	outcome, err := performSyncPush(ctx, completionCtx, stderr, env, session, ws, "", false, false, session.syncer.SyncPushFromClone)
+	outcome, err := performSyncPush(ctx, completionCtx, stderr, env, session, ws, "", syncPushCommand, false, false, session.syncer.SyncPushFromClone)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
 		// own deferred completion already recorded the outcome, but no trace,

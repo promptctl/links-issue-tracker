@@ -186,7 +186,7 @@ func runUpgradeWith(
 	installer release.Installer,
 	binPathFn func() (string, error),
 ) error {
-	l := upgradeLeafWith(resolver, installer, binPathFn)
+	l := upgradeLeafWith(resolver, installer, binPathFn).leaf
 	return runLeaf(l, ctx, stdout, upgradeScope{schema: schema, current: current}, args)
 }
 
@@ -199,7 +199,7 @@ func runDowngradeWith(
 	installer release.Installer,
 	binPathFn func() (string, error),
 ) error {
-	l := downgradeLeafWith(resolver, installer, binPathFn)
+	l := downgradeLeafWith(resolver, installer, binPathFn).leaf
 	return runLeaf(l, ctx, stdout, scope, args)
 }
 

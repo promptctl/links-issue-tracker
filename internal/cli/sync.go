@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -183,18 +184,30 @@ func withSyncStore(declare syncLeafFn) wsLeafFn {
 	return func() wsLeaf {
 		l := declare()
 		return adaptLeaf[syncScope, workspace.Info](l, func(ctx context.Context, inv Invocation, ws workspace.Info, positional []string) error {
-			session, closeStore, err := openSyncSession(ctx, inv.Env, inv.Stderr, ws)
-			if err != nil {
-				// The open boundary stamps holder contention so Run's trace can
-				// tell a starved OPEN from a handler-traced mid-command contention.
-				return markEngineOpenContention(err, ws)
-			}
-			return runThenMeasure(ctx, ws.DatabasePath, closeStore, func() error {
-				reportOpenMigration(ctx, inv.Stderr, storage.OpenMigration(session.engine))
+			return runWithSyncSession(ctx, inv, ws, func(ctx context.Context, session syncSession) error {
 				return l.work(ctx, inv, syncScope{ws: ws, session: session}, positional)
 			})
 		})
 	}
+}
+
+// runWithSyncSession opens the workspace's sync session, runs work in it,
+// and closes it, measuring the store: the acquisition of every command that
+// works in the sync open — the `lit sync` family, and the remote downgrade
+// and the lift, whose open must not migrate. [LAW:single-enforcer] one
+// acquisition, so no command opens a sync session without its close reporting
+// what the engine did.
+func runWithSyncSession(ctx context.Context, inv Invocation, ws workspace.Info, work func(ctx context.Context, session syncSession) error) error {
+	session, closeStore, err := openSyncSession(ctx, inv.Env, inv.Stderr, ws)
+	if err != nil {
+		// The open boundary stamps holder contention so Run's trace can
+		// tell a starved OPEN from a handler-traced mid-command contention.
+		return markEngineOpenContention(err, ws)
+	}
+	return runThenMeasure(ctx, ws.DatabasePath, closeStore, func() error {
+		reportOpenMigration(ctx, inv.Stderr, storage.OpenMigration(session.engine))
+		return work(ctx, session)
+	})
 }
 
 var syncFamily = commandFamily[wsSubcommand]{
@@ -515,48 +528,109 @@ func syncPushLeaf() syncLeaf {
 	force := fs.Bool("force", false, "Pass --force to dolt push")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
-		ws, session := scope.ws, scope.session
-		// This push answers for every mutation committed before this engine
-		// session opened: clear the mirror-pending marker so their commands (and
-		// later ones observing it) stop counting on a further mirror
-		// (links-sync-pgct.12). Sound only because session IS the live path's
-		// one read-write engine — every command that could have observed the
-		// marker committed and closed before this session opened, so its commit
-		// is inside this push's HEAD. Cleared at entry, not on success: if the
-		// attempt then skips or fails, that ending is loudly recorded, and the
-		// next mutation re-claims and re-spawns rather than a stale "covered"
-		// promise papering over a push that never landed.
-		// [LAW:no-ambient-temporal-coupling]
-		clearMirrorPending(inv.Stderr, ws)
-		// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
-		// backs) compacts atomically with the push; the on-change mirror pushes
-		// without compaction. The choice is the push step passed as a value, so
-		// performSyncPush has no compaction branch and a skipped push never compacts.
-		outcome, err := performSyncPush(ctx, ctx, inv.Stderr, inv.Env, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
-		if err != nil {
-			// A could-not-attempt failure (performSyncPush returned before reaching
-			// its own trace-recording push attempt) — traced here, matching the
-			// coverage recordMirrorTraceError already gives this exact failure class on
-			// the on-change mirror path that shares performSyncPush.
-			// [LAW:no-silent-failure]
-			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync push", "error", err, nil)
-			return err
-		}
-		// [LAW:no-silent-failure] The push error surfaces as the command's exit
-		// status only after its trace has been recorded inside performSyncPush —
-		// the skipped/ok outcome is never printed over a failed push.
-		recordPushedAdvertisement(inv.Stderr, ws, outcome.proven)
-		if outcome.pushErr != nil {
-			// A remote schema ahead of this binary, and a push refused over a
-			// peer's commits, surface as the one sync-failure contract rather
-			// than the raw non-fast-forward/refusal string: the first exits
-			// ExitValidation as the schema-ahead refusal it wraps, naming `lit
-			// upgrade`, the second exits 5 naming the pull that merges the peer's
-			// commits. [LAW:single-enforcer]
-			return asSyncFailure(outcome.pushErr)
-		}
-		return printSyncPushOutcome(inv.Stdout, outcome, *verbose)
+		return pushLiveStore(ctx, inv, scope.ws, scope.session, strings.TrimSpace(*remote), livePushOptions{command: syncPushCommand, setUpstream: *setUpstream, force: *force, verbose: *verbose})
 	}}
+}
+
+// syncPushCommand is `lit sync push`'s own argv after `lit`, as its traces
+// and the on-change mirror's name it.
+var syncPushCommand = []string{"sync", "push"}
+
+// livePushOptions is what the command running a live-store push adds to it:
+// the command's argv after `lit`, which every trace the push records names,
+// and `lit sync push`'s flags.
+type livePushOptions struct {
+	// command is the invoking command's argv after `lit`, before the remote:
+	// `sync push`, `downgrade --schema 7`, `upgrade`. The push appends the
+	// resolved remote and its flags. [LAW:nothing-unseen] a trace names the
+	// command the user ran, not the push it ran through.
+	command     []string
+	setUpstream bool
+	force       bool
+	verbose     bool
+}
+
+// requireLivePushTarget resolves the remote a command is about to change the
+// live store for, fetches it, and refuses the command while the store is
+// untouched when the push would not land: a remote with nothing on it, which
+// the push would skip, or one holding commits this backlog lacks, which would
+// refuse the push as diverged and leave a held or lifted backlog to merge
+// across a schema gap. A name no git remote carries is resolution's own
+// error. The push resolves the target and fetches again (performSyncPush),
+// under its own completion marker; this runs them first, a second resolution
+// and fetch on a command an operator runs by hand, so a hold or a lift is
+// committed only for a push that has somewhere to land.
+// [LAW:no-ambient-temporal-coupling] the store changes after the target is
+// known, not before. [LAW:single-enforcer] resolveSyncTarget is the one
+// resolution and SyncFreshness the one divergence read; this asks them, it
+// decides nothing itself.
+func requireLivePushTarget(ctx context.Context, inv Invocation, ws workspace.Info, session syncSession, remote string, command []string) error {
+	target, err := resolveSyncTarget(ctx, inv.Stderr, inv.Env, session, ws, remote)
+	if err != nil {
+		return err
+	}
+	if target.skip != syncTargetReady {
+		return model.ValidationError{Message: fmt.Sprintf("%s: %s has no backlog to push to (%s); this backlog is changed only for a push that lands", formatCommand(command), remote, target.skip)}
+	}
+	if err := session.syncer.SyncFetch(ctx, target.remote); err != nil {
+		return err
+	}
+	fresh, err := session.syncer.SyncFreshness(ctx, target.remote, target.branch)
+	if err != nil {
+		return err
+	}
+	if fresh.Behind > 0 {
+		return model.ValidationError{Message: fmt.Sprintf("%s: %s/%s holds %d commit(s) this backlog lacks, so the push would be refused as diverged; run `lit sync pull --remote %s` first, then this command", formatCommand(command), remote, target.branch, fresh.Behind, remote)}
+	}
+	return nil
+}
+
+// pushLiveStore is the push of the live store's HEAD to remote, as `lit sync
+// push` runs it, for every command that pushes from the live store: `lit sync
+// push` itself, `lit downgrade --remote` with its held head, and `lit upgrade
+// --remote` with its lifted one. [LAW:single-enforcer] one live push, so each
+// gets the one sync-failure contract, trace, and advertisement proof.
+func pushLiveStore(ctx context.Context, inv Invocation, ws workspace.Info, session syncSession, remote string, options livePushOptions) error {
+	// This push answers for every mutation committed before this engine
+	// session opened: clear the mirror-pending marker so their commands (and
+	// later ones observing it) stop counting on a further mirror. Sound only
+	// because session IS the live path's one read-write engine — every
+	// command that could have observed the marker committed and closed before
+	// this session opened, so its commit is inside this push's HEAD. Cleared
+	// at entry, not on success: if the attempt then skips or fails, that
+	// ending is loudly recorded, and the next mutation re-claims and re-spawns
+	// rather than a stale "covered" promise papering over a push that never
+	// landed.
+	// [LAW:no-ambient-temporal-coupling]
+	clearMirrorPending(inv.Stderr, ws)
+	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
+	// backs) compacts atomically with the push; the on-change mirror pushes
+	// without compaction. The choice is the push step passed as a value, so
+	// performSyncPush has no compaction branch and a skipped push never compacts.
+	outcome, err := performSyncPush(ctx, ctx, inv.Stderr, inv.Env, session, ws, remote, options.command, options.setUpstream, options.force, session.syncer.SyncCompactAndPush)
+	if err != nil {
+		// A could-not-attempt failure (performSyncPush returned before reaching
+		// its own trace-recording push attempt) — traced here, matching the
+		// coverage recordMirrorTraceError already gives this exact failure class on
+		// the on-change mirror path that shares performSyncPush.
+		// [LAW:no-silent-failure]
+		recordSyncCommandTrace(inv.Stderr, inv.Env, ws, formatCommand(options.command), "error", err, nil)
+		return err
+	}
+	// [LAW:no-silent-failure] The push error surfaces as the command's exit
+	// status only after its trace has been recorded inside performSyncPush —
+	// the skipped/ok outcome is never printed over a failed push.
+	recordPushedAdvertisement(inv.Stderr, ws, outcome.proven)
+	if outcome.pushErr != nil {
+		// A remote schema ahead of this binary, and a push refused over a
+		// peer's commits, surface as the one sync-failure contract rather
+		// than the raw non-fast-forward/refusal string: the first exits
+		// ExitValidation as the schema-ahead refusal it wraps, naming `lit
+		// upgrade`, the second exits 5 naming the pull that merges the peer's
+		// commits. [LAW:single-enforcer]
+		return asSyncFailure(outcome.pushErr)
+	}
+	return printSyncPushOutcome(inv.Stdout, outcome, options.verbose)
 }
 
 // syncPushOutcome is the result of one push attempt, independent of CLI
@@ -675,7 +749,9 @@ func syncPushTraceMetadata(remoteName storage.RemoteName, syncBranch string, res
 // owner-notify hook — which must not inherit an operation budget that has, by
 // definition, already expired whenever a cut push needs them most.
 // A foreground caller passes the same context twice: its one lifetime is both.
-func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+// command is the invoking command's argv after `lit`, before the remote
+// (livePushOptions.command); every trace the attempt records names it.
+func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, remote string, command []string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
@@ -705,7 +781,7 @@ func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env e
 	if target.skip != syncTargetReady {
 		// traceMetadata is nil before a remote was selected, so the no-remote and
 		// empty-remote skips trace exactly what resolution established.
-		recordSyncCommandTrace(stderr, env, ws, "lit sync push", string(target.skip), nil, target.traceMetadata())
+		recordSyncCommandTrace(stderr, env, ws, formatCommand(command), string(target.skip), nil, target.traceMetadata())
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
 		return syncPushOutcome{skip: target.skip, remote: target.remote}, nil
 	}
@@ -755,7 +831,7 @@ func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env e
 		traceStatus = "error"
 		traceReason = pushErr.Error()
 	}
-	syncCommandArgs := []string{"sync", "push", "--remote", remoteName.String()}
+	syncCommandArgs := append(append([]string{}, command...), "--remote", remoteName.String())
 	if setUpstream {
 		syncCommandArgs = append(syncCommandArgs, "--set-upstream")
 	}

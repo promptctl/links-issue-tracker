@@ -308,16 +308,18 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 		syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureRemoteSchemaAhead,
 		syncFailureUnrelatedHistories, syncFailureIDCollision, syncFailureReceiveUnsettled,
 		syncFailurePushDiverged, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease,
+		syncFailureSchemaLoweringRequiresHold,
 	}
 	for _, class := range classes {
 		failure := SyncFailure{
 			Class: class, Remote: "origin", Branch: "master",
-			RemoteAhead:    &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8},
-			AboveCeiling:   &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9},
-			RaiseRefused:   &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9},
-			StoppedAt:      receiveStepSettle,
-			UnsettledSince: time.Now().Add(-time.Hour),
-			Age:            time.Hour,
+			RemoteAhead:     &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8},
+			AboveCeiling:    &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9},
+			RaiseRefused:    &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9},
+			LoweringRefused: &store.SchemaLoweringRequiresHoldError{Remote: "origin", Branch: "master", RemoteSchema: 9, CommitSchema: 8},
+			StoppedAt:       receiveStepSettle,
+			UnsettledSince:  time.Now().Add(-time.Hour),
+			Age:             time.Hour,
 		}
 		if block := failure.blockString(); strings.Contains(block, "unrecognized") {
 			t.Errorf("class %q renders an unrecognized-class arm:\n%s", class, block)

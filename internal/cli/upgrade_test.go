@@ -81,7 +81,7 @@ func runUpgradeRecorded(
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	l := upgradeLeafWith(resolver, installer, fixedBinPath("/p/lit", nil))
+	l := upgradeLeafWith(resolver, installer, fixedBinPath("/p/lit", nil)).leaf
 	var out bytes.Buffer
 	positional, err := parseLeaf(ctx, l, args, cwdInvocation(&out, &out, nil))
 	if err != nil {

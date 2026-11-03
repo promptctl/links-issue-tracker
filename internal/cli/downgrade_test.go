@@ -107,7 +107,7 @@ func runDowngradeRecorded(t *testing.T, scope downgradeScope, res release.Resolv
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	l := downgradeLeafWith(res, inst, binPath)
+	l := downgradeLeafWith(res, inst, binPath).leaf
 	var out bytes.Buffer
 	positional, err := parseLeaf(ctx, l, []string{"--to", "v0.4.1"}, cwdInvocation(&out, &out, nil))
 	if err != nil {
@@ -211,6 +211,7 @@ func TestRunDowngradeRecordsWhatItReversedAndInstalled(t *testing.T) {
 		"downgrade.tag":                  "v0.4.1",
 		"downgrade.installed_path":       "/p/lit",
 		"downgrade.workspace_schema":     float64(4),
+		"downgrade.schema_hold":          float64(0),
 		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
 		"downgrade.snapshot_left_out":    []any{"links/.dolt/git-remote-cache"},
 		"downgrade.snapshot_prune_error": nil,
@@ -237,6 +238,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 	afterTheReverse := errors.New("commit downgrade revert of v4: connection reset")
 	reversed := map[string]any{
 		"downgrade.workspace_schema":     float64(4),
+		"downgrade.schema_hold":          float64(0),
 		"downgrade.snapshot":             "1700000000000000000-lit-downgrade-1700000000000000001",
 		"downgrade.snapshot_left_out":    []any{"links/.dolt/git-remote-cache"},
 		"downgrade.snapshot_prune_error": nil,
@@ -254,6 +256,7 @@ func TestRunDowngradeRecordsWhatTheReverseReportedOnEveryOutcome(t *testing.T) {
 			inst: &stubInstaller{},
 			wantFacts: map[string]any{
 				"downgrade.workspace_schema":     float64(3),
+				"downgrade.schema_hold":          float64(0),
 				"downgrade.snapshot":             "",
 				"downgrade.snapshot_left_out":    nil,
 				"downgrade.snapshot_prune_error": nil,
@@ -369,6 +372,7 @@ func TestRunDowngradeOnAWorkspacePastRunningSupportIsSchemaAhead(t *testing.T) {
 	want := map[string]any{
 		"downgrade.tag":                  "v0.4.1",
 		"downgrade.workspace_schema":     float64(ahead),
+		"downgrade.schema_hold":          float64(0),
 		"downgrade.snapshot":             "",
 		"downgrade.snapshot_left_out":    nil,
 		"downgrade.snapshot_prune_error": nil,

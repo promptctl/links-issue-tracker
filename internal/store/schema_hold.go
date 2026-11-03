@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -76,16 +77,108 @@ func (m metaSchemaVersion) ceiling(holder string) (version.SchemaCeiling, error)
 	}, nil
 }
 
+// readSchemaHold is the working set's schema hold row as read.
+func (s *Store) readSchemaHold(ctx context.Context) (metaSchemaVersion, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT meta_value FROM meta WHERE meta_key = ?`, schemaHoldKey)
+	return metaSchemaVersionRow(schemaHoldKey, row)
+}
+
 // schemaHold is the working set's schema hold as a ceiling: the live store's
 // at a migrating open, and the fetched head's when the reconcile's scratch
 // branch has been reset to it (resetAndLift).
 func (s *Store) schemaHold(ctx context.Context) (version.SchemaCeiling, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT meta_value FROM meta WHERE meta_key = ?`, schemaHoldKey)
-	read, err := metaSchemaVersionRow(schemaHoldKey, row)
+	read, err := s.readSchemaHold(ctx)
 	if err != nil {
 		return version.SchemaCeiling{}, err
 	}
 	return read.ceiling("this store")
+}
+
+// holdPolicy is what a downgrade does about the hold once its head is at the
+// target: leave the store free to be raised again (holdNone, `lit downgrade
+// --to`), or hold it at the target (holdAtTarget, `lit downgrade --remote`).
+// [LAW:types-are-the-program] a closed enum, not a bool selecting a behavior.
+type holdPolicy int
+
+const (
+	holdNone holdPolicy = iota
+	holdAtTarget
+)
+
+// holdWorkingSet writes the hold a downgrade to target leaves the working set
+// with, and reports that hold (0 for none) and whether it wrote: target under
+// holdAtTarget; under holdNone, the hold the store already carries, moved
+// down to target when it was above it, or none. A hold never sits above the
+// head that carries it, which the lowering verdict (schema_lowering.go) would
+// read as a head holding the remote at a schema it is not at; and a release
+// downgrade never raises one, since a hold below the head (a binary from
+// before the row raised the store past it) is the operator's hold and stays.
+// A row already reading the hold is left as it is, so a repeated remote
+// downgrade commits nothing; a row that is not a schema version is an error,
+// as it is everywhere the hold is read. The caller commits.
+// [LAW:single-enforcer] the one writer of meta.schema_hold; the lift
+// (LiftSchemaHold) is its one remover. [LAW:types-are-the-program] the
+// invariant lives in the one writer, not in every reader.
+func (s *Store) holdWorkingSet(ctx context.Context, target int64, policy holdPolicy) (int64, bool, error) {
+	read, err := s.readSchemaHold(ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	if read.malformed != nil {
+		return 0, false, read.malformed
+	}
+	if policy == holdNone && !read.present {
+		return 0, false, nil
+	}
+	if policy == holdNone {
+		target = min(target, read.version)
+	}
+	if read.present && read.version == target {
+		return target, false, nil
+	}
+	if err := s.setMeta(ctx, nil, schemaHoldKey, strconv.FormatInt(target, 10)); err != nil {
+		return 0, false, err
+	}
+	return target, true, nil
+}
+
+// LiftSchemaHold removes the store's schema hold in one commit and reports the
+// hold it lifted. A store with no hold lifts nothing and commits nothing: the
+// lift's caller pushes the head either way, so a lift whose push failed is run
+// again without inventing a second commit. Writes a failed commit left in the
+// working set are versioned first, as the downgrade does: the sync open runs
+// no standing-writes gate, so a removal a crash left uncommitted would
+// otherwise read as "no hold" while HEAD still carries it. A row that is not
+// a schema version is an error, as it is everywhere the hold is read. Its one
+// caller is `lit upgrade --remote`. [LAW:no-silent-failure]
+// [LAW:single-enforcer] commitStrandedWrites is the one place a stranded
+// write lands.
+func (s *Store) LiftSchemaHold(ctx context.Context) (storage.SchemaHoldLifted, error) {
+	var lifted storage.SchemaHoldLifted
+	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		if err := s.commitStrandedWrites(ctx, strandedWritesCommitMessage); err != nil {
+			return err
+		}
+		read, err := s.readSchemaHold(ctx)
+		if err != nil {
+			return err
+		}
+		if read.malformed != nil {
+			return read.malformed
+		}
+		if !read.present {
+			return nil
+		}
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM meta WHERE meta_key = ?`, schemaHoldKey); err != nil {
+			return fmt.Errorf("remove meta %s: %w", schemaHoldKey, err)
+		}
+		if err := s.commitWorkingSet(ctx, fmt.Sprintf("upgrade: lift the schema hold at %d", read.version)); err != nil {
+			return fmt.Errorf("commit the lift of the schema hold at %d: %w", read.version, err)
+		}
+		lifted.Lifted = read.version
+		return nil
+	})
+	return lifted, err
 }
 
 // schemaHoldAt is the schema hold recorded at a commit, as a ceiling held by

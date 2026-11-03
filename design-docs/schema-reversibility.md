@@ -129,6 +129,20 @@ no release tag. The remedy is a release at the hold (`lit downgrade --to
 <tag>`), whose store steps down with it, which rule 1 makes lossless. The row
 is removed only by `lit upgrade --remote <name>`.
 
+A lowering reaches a remote only as a held head. A push whose head is below R
+and carries no hold is refused (`SchemaLoweringRequiresHoldError`, the third
+verdict beside the ceiling's and the raise's): an unheld lowering is re-raised
+by the next client that syncs, and it is what a lift would send when the
+lowering before it never landed. The verdict compares schemas, not histories,
+so a backlog that is only behind a release's raise is refused the same way; its
+remedy, like the raise's, is the pull first, and the remote downgrade only when
+the lowering is meant. `lit downgrade --schema <v> --remote <name>` and
+`lit upgrade --remote <name>` both run in the sync open, which never migrates:
+that is what lets a binary above the hold open a held store to lift it, or to
+run the lowering again after a push that failed. The lift's push sends a head
+at the hold's schema and so raises nothing; the remote rises when a migrating
+open brings a store forward and a release's `lit sync push` sends it.
+
 Binaries released before the row existed do not read it. The guarantee holds
 from the first release that does.
 
