@@ -147,12 +147,13 @@ func TestOnlyTheJustfileOmitsVersion(t *testing.T) {
 //
 // The one exception is scripts/cross-version-check.sh: it builds a release
 // stand-in into a temporary directory it removes on exit, to step a store down
-// and raise it back as a release would. Every build site in the Justfile, .goreleaser.yml,
-// scripts/, .github/, tools/ and build/ is scanned, so a further claimant fails here.
+// and raise it back as a release would. The non-Go build sites (the Justfile,
+// scripts/, .github/, tools/ and build/) are scanned, so a further claimant
+// there fails here.
 func TestOnlyGoreleaserClaimsReleaseProvenance(t *testing.T) {
 	t.Parallel()
-	allowed := map[string]bool{".goreleaser.yml": true, "scripts/cross-version-check.sh": true}
-	sites := []string{"Justfile", ".goreleaser.yml"}
+	allowed := map[string]bool{"scripts/cross-version-check.sh": true}
+	sites := []string{"Justfile"}
 	for _, dir := range []string{"scripts", ".github", "tools", "build"} {
 		err := filepath.WalkDir(repoPath(dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
@@ -299,17 +300,29 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A script a workflow runs is CI too. The cross-version check is the one
-	// that syncs, and only to a throwaway remote it fences before any push.
+	// that writes a remote, and every line of it that does runs through
+	// fenced, which refuses any origin but the script's throwaway remote.
 	const crossVersion = "scripts/cross-version-check.sh"
-	const fence = `[ "$(git remote get-url origin)" = "$work/remote.git" ] || fail`
+	writesRemote := regexp.MustCompile(`sync\s+push|refs/dolt|report-to-lit|git\s+push|--remote`)
 	for rel := range scripts {
 		body := repoFile(t, rel)
-		m := pushes.FindString(body)
-		switch {
-		case m != "" && rel != crossVersion:
-			t.Errorf("%s, which CI runs, contains %q — CI never writes to the lit tracker", rel, m)
-		case rel == crossVersion && !strings.Contains(body, fence):
-			t.Errorf("%s syncs without fencing its origin to its throwaway remote", rel)
+		if rel != crossVersion {
+			if m := pushes.FindString(body); m != "" {
+				t.Errorf("%s, which CI runs, contains %q — CI never writes to the lit tracker", rel, m)
+			}
+			continue
+		}
+		if !strings.Contains(body, `[ "$(git remote get-url origin)" = "$work/remote.git" ] ||`) {
+			t.Errorf("%s no longer defines fenced over its throwaway remote", rel)
+		}
+		for i, line := range strings.Split(body, "\n") {
+			code := strings.TrimSpace(line)
+			if strings.HasPrefix(code, "#") || !writesRemote.MatchString(code) {
+				continue
+			}
+			if !strings.HasPrefix(code, "fenced ") {
+				t.Errorf("%s:%d writes a remote outside fenced: %s", rel, i+1, code)
+			}
 		}
 	}
 }

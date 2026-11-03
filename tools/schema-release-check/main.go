@@ -54,6 +54,9 @@ func main() {
 	if len(os.Args) == 3 && os.Args[1] == "-released-schema" {
 		os.Exit(printReleasedSchema(os.Args[2], os.Stdout, os.Stderr))
 	}
+	if len(os.Args) == 3 && os.Args[1] == "-schema-max" {
+		os.Exit(printSchemaMax(os.Args[2], os.Stdout, os.Stderr))
+	}
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: schema-release-check <newest release tag, or \"\" when there is none>")
 		os.Exit(exitUnknown)
@@ -131,6 +134,39 @@ func printReleasedSchema(tag string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, ceiling)
 	return exitInstall
+}
+
+// printSchemaMax prints the highest migration version in a registry: this
+// tree's embedded one for an empty tag, else tag's, each read through
+// migrations.ParseRegistry, so a registry the runner would refuse is refused
+// here too (scripts/cross-version-check.sh). It exits 1 when it cannot read one.
+func printSchemaMax(tag string, stdout, stderr io.Writer) int {
+	max, err := schemaMax(tag, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: schema-release-check: %v\n", err)
+		return exitUnknown
+	}
+	fmt.Fprintln(stdout, max)
+	return exitInstall
+}
+
+func schemaMax(tag string, stderr io.Writer) (int64, error) {
+	if tag == "" {
+		embedded, err := migrations.Embedded()
+		if err != nil {
+			return 0, err
+		}
+		return embedded.MaxVersion(), nil
+	}
+	release, err := releaseUps(tag, stderr)
+	if err != nil {
+		return 0, err
+	}
+	registry, err := parseReleaseRegistry(tag, release)
+	if err != nil {
+		return 0, err
+	}
+	return registry.MaxVersion(), nil
 }
 
 // releasedCeiling is printReleasedSchema's number.

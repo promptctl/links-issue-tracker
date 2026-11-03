@@ -726,9 +726,8 @@ jobs:
   # it from a local machine.
   publish:
     # needs all three: validate builds the artifact; license-gate is the
-    # publish-blocking freedom check (links-supply-chain-w6m9.5); cross-version
-    # proves the newest older release survives this commit's Downs. If either
-    # gate fails, this job is skipped and nothing is tagged or published — the release
+    # publish-blocking freedom check; cross-version proves the newest older
+    # release survives this commit's Downs. If any of them fails, this job is skipped and nothing is tagged or published — the release
     # aborts before any asset ships. If validate is skipped (snapshot), the `if`
     # below keeps publish off anyway. [LAW:no-silent-failure] a non-free posture
     # cannot reach a published release.

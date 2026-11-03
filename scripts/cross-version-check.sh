@@ -43,27 +43,23 @@ fail() {
     exit 1
 }
 
-# registry_max prints the highest migration version in a registry listing:
-# one path per line, `.../000NN_<name>.sql`.
-registry_max() {
-    sed -n 's|.*/0*\([0-9][0-9]*\)_[^/]*\.sql$|\1|p' | sort -n | tail -1
-}
+# schema_max prints a registry's highest version: this tree's for "", else the
+# tag's. One reader, migrations.ParseRegistry, reads both.
+schema_max() { (cd "$root" && "$work/schema-release-check" -schema-max "$1"); }
 
 # --- 1. the candidate -------------------------------------------------------
 pkg=github.com/promptctl/links-issue-tracker/internal/version
 candidate="$work/candidate/lit"
 (cd "$root" && go build -ldflags "-X $pkg.Origin=release -X $pkg.ReleasedSchema=carried" -o "$candidate" ./cmd/lit)
-# The directory the build embeds, untracked migrations included, read the same
-# way as each tag's registry below.
-tree_max="$(ls "$root"/internal/store/migrations/*.sql | registry_max)"
-[ -n "$tree_max" ] || fail "no migrations found in internal/store/migrations"
+(cd "$root" && go build -o "$work/schema-release-check" ./tools/schema-release-check)
+tree_max="$(schema_max "")"
 
 # --- 2. the target release --------------------------------------------------
 tag=""
 target=""
 while read -r candidate_tag; do
-    max="$(cd "$root" && git ls-tree --name-only "$candidate_tag" internal/store/migrations/ | registry_max)"
-    if [ -n "$max" ] && [ "$max" -lt "$tree_max" ]; then
+    max="$(schema_max "$candidate_tag")"
+    if [ "$max" -lt "$tree_max" ]; then
         tag="$candidate_tag"
         target="$max"
         break
@@ -82,7 +78,7 @@ esac
 archive="lit_${tag#v}_${platform}.tar.gz"
 mkdir -p "$work/release"
 gh release download "$tag" --repo promptctl/links-issue-tracker --dir "$work/release" --pattern "$archive" --pattern checksums.txt
-(cd "$work/release" && grep " $archive\$" checksums.txt | shasum -a 256 -c -)
+(cd "$work/release" && awk -v a="$archive" '$2 == a' checksums.txt | shasum -a 256 -c -)
 tar -xzf "$work/release/$archive" -C "$work/release" lit
 previous="$work/release/lit"
 
@@ -91,24 +87,29 @@ previous="$work/release/lit"
 # binaries read config from and log events to $work alone, and every command
 # names its actor with --by. Auto-sync is off so no detached worker outlives a
 # command and contends with the next one for the store.
-while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^LIT_' || true)
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(LIT|LINKS|LNKS)_' || true)
 unset CLAUDE_CODE_SESSION_ID
 export XDG_CONFIG_HOME="$work/config" XDG_STATE_HOME="$work/state"
 export LIT_DISABLE_AUTO_SYNC=1
 # Nor the caller's git config: no signing prompt, hooks path or template.
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
+# CI never writes to the lit tracker. Every command that writes a remote runs
+# through fenced, which first proves the checkout's origin is the throwaway
+# remote; TestNoCIJobWritesToTheTracker holds every such line to it.
+fenced() {
+    [ "$(git remote get-url origin)" = "$work/remote.git" ] ||
+        fail "refusing to write $(pwd)'s origin: it is not the fixture's throwaway remote"
+    "$@"
+}
 git init -q --bare "$work/remote.git"
 git clone -q "$work/remote.git" "$work/producer" 2>/dev/null
 cd "$work/producer"
-# CI never writes to the lit tracker: every push below goes to this throwaway
-# remote, and this line is the fence TestNoCIJobWritesToTheTracker pins.
-[ "$(git remote get-url origin)" = "$work/remote.git" ] || fail "the fixture's origin is not its own throwaway remote"
 git config user.email ci@example.invalid
 git config user.name cross-version-check
 echo seed > readme.md
 git add readme.md
 git commit -qm seed
-git push -q origin HEAD
+fenced git push -q origin HEAD
 "$candidate" init --skip-hooks
 
 first_word() { awk '{print $1; exit}'; }
@@ -132,12 +133,12 @@ digest="$("$candidate" show "$planned" | sed -n 's/.*digest \([0-9a-f]*\)).*/\1/
     "$candidate" close "$duplicate" --resolution duplicate --of "$open" --by ci
     "$candidate" purge "$purged" --yes --by ci
 } >/dev/null
-"$candidate" sync push --set-upstream
+fenced "$candidate" sync push --set-upstream
 "$candidate" export > "$work/before.json"
 # A table the fixture leaves empty would pass the comparison below vacuously.
 empty="$(jq -r 'to_entries[] | select((.value | type) == "array" and (.value | length) == 0) | .key' "$work/before.json")"
 [ -z "$empty" ] || fail "the fixture leaves exported tables empty, so a Down could drop them unseen: $empty"
-"$candidate" downgrade --schema "$target" --remote origin
+fenced "$candidate" downgrade --schema "$target" --remote origin
 
 # --- 4. the release reads, writes and syncs ---------------------------------
 # The release's `new` predates --by; with no session id it records its default
@@ -146,15 +147,15 @@ empty="$(jq -r 'to_entries[] | select((.value | type) == "array" and (.value | l
 "$previous" show "$open"
 written="$("$previous" new --title written-by-the-release --topic demo --parent "$epic" | first_word)"
 [ -n "$written" ] || fail "$tag created no ticket"
-"$previous" sync push
+fenced "$previous" sync push
 git clone -q "$work/remote.git" "$work/consumer"
 (cd "$work/consumer" && "$previous" init --skip-hooks && "$previous" show "$written")
 
 # --- 5. back up, and compare ------------------------------------------------
-"$candidate" upgrade --remote origin
-"$candidate" sync push
+fenced "$candidate" upgrade --remote origin
+fenced "$candidate" sync push
 "$candidate" export > "$work/after.json"
-# The raise must reach the remote too: a fresh clone exports the same store.
+# The remote holds the same store: a fresh clone exports it.
 git clone -q "$work/remote.git" "$work/raised"
 (cd "$work/raised" && "$candidate" init --skip-hooks >/dev/null && "$candidate" export) > "$work/raised.json"
 
