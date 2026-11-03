@@ -44,8 +44,8 @@ These are settled. Do not reopen them in the design.
    object database under the code repo's git common dir and syncs as git refs
    to the same remote the code uses. The remote stays a dumb replicated store;
    all intelligence is client-side. (Inherits access-control charter constraints 1–2.)
-2. **Writes are appends; state is a fold.** Every mutation is an immutable,
-   content-addressed event. Current state is a deterministic pure function of
+2. **Writes are appends; state is a fold.** Every mutation is a content-addressed
+   event, changed afterward only by a rewrite (#7). Current state is a deterministic pure function of
    the event set — same events, same backlog, on every machine, every time. No
    locks, no write engines, no merge/reconcile machinery. The only shared
    mutable state permitted outside the event log is a cache that any process
@@ -76,14 +76,18 @@ These are settled. Do not reopen them in the design.
    access-control layers and the user-defined hierarchy feature; retrofitting
    any of them is a fleet migration, so they ship in v1 even where v1 leaves
    them inert.
-7. **The audit log is complete, except for purge.** Signed events are never
-   truncated, compacted away, or rewritten, with one exception: an explicit
-   purge permanently removes one ticket's own events, the way a git history
-   rewrite removes content, and that removal has to reach every store that
-   holds them. Purge never edits other tickets' events, so a mention of the
-   purged id elsewhere stays. Apart from purge, storage growth is monotone and
-   bounded by budget, not by deletion, and erasing content within a ticket is
-   cryptographic (key destruction), never physical.
+7. **Rewriting history is a first-class, common operation.** Any event may
+   be dropped, have its content replaced, or be squashed with others into one,
+   by a rewrite: itself an event, authorized like any write, that names what
+   it changes, so every replica converges on the rewritten history and can
+   tell it from corruption. Erasure, purge and compaction are rewrites, not
+   separate mechanisms. An append-only audit trail is a guarantee layered on
+   top for the stores that want it — a policy that refuses rewrites, and a
+   verifier that proves none happened — never a property of the substrate. A
+   strict guarantee can be added to a store that rewrites; rewriting cannot
+   be added to a store built to forbid it without fighting the whole design.
+   Rewriting reaches every replica that syncs; content in copies that never
+   sync again is reached only by key destruction.
 8. **No heartbeats, no liveness probes.** The standing owner ban applies to
    this store as to all of lit, mechanism-wide, storage and locking included
    (design-docs/work-claims.md records the ban).
@@ -131,3 +135,5 @@ is a second thing to keep true.
 - 2026-10-09: owner amendments: #1 and #10 keep lit's data out of the code
   repo's refs and object database; #4 forbids running the `git` binary or any
   subprocess; #7 admits purge.
+- 2026-11-03: owner amendment: #7 makes rewriting history first-class and
+  the append-only audit trail an opt-in guarantee; #2 follows.
