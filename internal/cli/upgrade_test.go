@@ -609,6 +609,11 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	if err := raw.ExecRawForTest(ctx, "INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)", ahead); err != nil {
 		t.Fatalf("stamp ahead version: %v", err)
 	}
+	// Committed, as a newer lit's finished step is: left uncommitted, the stamp
+	// is a step that died before its commit, which the next open undoes.
+	if err := raw.ExecRawForTest(ctx, "CALL DOLT_COMMIT('-Am', 'a newer lit migrated ahead')"); err != nil {
+		t.Fatalf("commit ahead version: %v", err)
+	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("store.Close() error = %v", err)
 	}
