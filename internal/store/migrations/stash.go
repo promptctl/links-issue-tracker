@@ -24,12 +24,22 @@ type Stash interface {
 	Name() string
 }
 
-// Column is one string column of an existing table: its table, its name, and
-// the table's primary key in key order.
+// Column is one string column of an existing table: its table, its name, the
+// table's primary key in key order, and the slice's tag. An entry's
+// column_name is the column and the tag, so two versions' Downs that stash one
+// column never overwrite each other's entries.
 type Column struct {
 	Table  string
 	Column string
 	Key    []string
+	Slice  string
+}
+
+func (c Column) entry() string {
+	if c.Slice == "" {
+		return c.Column
+	}
+	return c.Column + "@" + c.Slice
 }
 
 // Rows is the rows of a table a Down drops or rewrites, each entry carrying
@@ -38,6 +48,11 @@ type Column struct {
 // columns that reference issues(id), whose rows die with their issue. An
 // entry's column_name is '*' and the tag, so two slices of one table, stashed
 // by two versions' Downs, never replay each other's rows.
+//
+// Prune, when set, picks the rows (over the table by its name) that the Up
+// re-derived from what the Down left: the replay deletes each one the stash
+// does not hold byte for byte before it puts the stashed rows back. A row with
+// a stashed key and other values is the Up's rewrite of it, and goes too.
 type Rows struct {
 	Table   string
 	Columns []string
@@ -45,43 +60,30 @@ type Rows struct {
 	Where   string
 	Slice   string
 	Refs    []string
+	Prune   string
 }
 
 func (r Rows) entry() string { return "*" + r.Slice }
 
-// ParentEdges is the parent-child edges of the tickets Where picks (over
+var relationColumns = []string{"src_id", "dst_id", "type", "created_at", "created_by"}
+
+var relationKey = []string{"src_id", "dst_id", "type"}
+
+// parentEdges is the parent-child edges of the tickets where picks (over
 // issues aliased i), which a Down rewrites. The replay makes each stashed
 // ticket's parent edges exactly the stashed ones: the Up re-derives them from
 // what the Down left, and only the stash knows what they were.
-type ParentEdges struct {
-	Where string
-}
-
-var relationColumns = []string{"src_id", "dst_id", "type", "created_at", "created_by"}
-
-func (e ParentEdges) rows() Rows {
-	return Rows{
+func parentEdges(where string) Rows {
+	r := Rows{
 		Table:   "relations",
 		Columns: relationColumns,
-		Key:     []string{"src_id", "dst_id", "type"},
-		Where:   fmt.Sprintf("t.type = 'parent-child' AND t.src_id IN (SELECT i.id FROM issues i WHERE %s)", e.Where),
+		Key:     relationKey,
+		Where:   fmt.Sprintf("t.type = 'parent-child' AND t.src_id IN (SELECT i.id FROM issues i WHERE %s)", where),
 		Slice:   "parent-child",
 		Refs:    []string{"src_id", "dst_id"},
 	}
-}
-
-func (e ParentEdges) Name() string       { return "relations.parent-child" }
-func (e ParentEdges) StashSQL() []string { return e.rows().StashSQL() }
-
-// RestoreSQL first deletes every parent edge of a stashed ticket that the
-// stash does not hold byte for byte, then puts the stashed ones back. An edge
-// with a stashed key and other stamps is the Up's move of it, and goes too.
-func (e ParentEdges) RestoreSQL() ([]string, int) {
-	r := e.rows()
-	stmts, writes := r.RestoreSQL()
-	prune := fmt.Sprintf("DELETE FROM relations WHERE type = 'parent-child' AND src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '%s') AND NOT EXISTS (SELECT 1 FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '%s' AND s.row_key = %s AND s.value = %s);",
-		element(0), r.entry(), r.entry(), rowKey(r.Key, "relations"), value(r.Columns, "relations"))
-	return append([]string{stmts[0], prune}, stmts[1:]...), writes + 1
+	r.Prune = fmt.Sprintf("relations.type = 'parent-child' AND relations.src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '%s')", element(0), r.entry())
+	return r
 }
 
 // rowKey is an entry's row_key over the table aliased as alias. A one-column
@@ -119,13 +121,13 @@ func element(i int) string {
 
 func carrier() string { return strings.TrimSpace(StashCarrierDDL) }
 
-func (c Column) Name() string { return c.Table + "." + c.Column }
+func (c Column) Name() string { return c.Table + "." + c.entry() }
 
 func (c Column) StashSQL() []string {
 	return []string{
 		carrier(),
 		fmt.Sprintf("REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '%s', %s, '%s', %s FROM %s t;",
-			c.Table, rowKey(c.Key, "t"), c.Column, value([]string{c.Column}, "t"), c.Table),
+			c.Table, rowKey(c.Key, "t"), c.entry(), value([]string{c.Column}, "t"), c.Table),
 	}
 }
 
@@ -134,7 +136,7 @@ func (c Column) StashSQL() []string {
 // a row deleted below is indistinguishable from a key spelled differently,
 // and only the second is a loss.
 func (c Column) RestoreSQL() ([]string, int) {
-	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", c.Table, c.Column, rowKey(c.Key, "t"))
+	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", c.Table, c.entry(), rowKey(c.Key, "t"))
 	return []string{
 		carrier(),
 		// Single-table: Dolt refuses the joined form, UPDATE issues JOIN
@@ -142,7 +144,7 @@ func (c Column) RestoreSQL() ([]string, int) {
 		fmt.Sprintf("UPDATE %s t SET t.%s = (SELECT %s FROM schema_stash s WHERE %s) WHERE EXISTS (SELECT 1 FROM schema_stash s WHERE %s);",
 			c.Table, c.Column, element(0), match, match),
 		fmt.Sprintf("DELETE s FROM schema_stash s JOIN %s t ON %s WHERE s.table_name = '%s' AND s.column_name = '%s';",
-			c.Table, match, c.Table, c.Column),
+			c.Table, match, c.Table, c.entry()),
 	}, 1
 }
 
@@ -174,12 +176,16 @@ func (r Rows) RestoreSQL() ([]string, int) {
 	for _, ref := range r.Refs {
 		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM issues p WHERE p.id = %s)", element(indexOf(r.Columns, ref)))
 	}
-	return []string{
-		carrier(),
-		insert + ";",
+	stmts := []string{carrier()}
+	if r.Prune != "" {
+		stmts = append(stmts, fmt.Sprintf("DELETE FROM %s WHERE %s AND NOT EXISTS (SELECT 1 FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s AND s.value = %s);",
+			r.Table, r.Prune, r.Table, r.entry(), rowKey(r.Key, r.Table), value(r.Columns, r.Table)))
+	}
+	writes := len(stmts)
+	return append(stmts, insert+";",
 		fmt.Sprintf("DELETE s FROM schema_stash s JOIN %s t ON %s WHERE s.table_name = '%s' AND s.column_name = '%s';",
 			r.Table, match, r.Table, r.entry()),
-	}, 1
+	), writes
 }
 
 func indexOf(cols []string, c string) int {
@@ -207,13 +213,47 @@ var Restores = map[int64][]Stash{
 	},
 	6: {
 		Column{Table: "issues", Column: "follows_up", Key: []string{"id"}},
-		ParentEdges{Where: "i.follows_up IS NOT NULL"},
+		parentEdges("i.follows_up IS NOT NULL"),
 	},
+	7: unfiledEpic(),
 	9: {Rows{Table: "purges", Columns: []string{"issue_id", "issue_created_at", "purged_at", "purged_by"}, Key: []string{"issue_id", "issue_created_at"}}},
 	11: {
 		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}},
 		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Refs: []string{"issue_id"}},
 	},
+}
+
+// unfiledEpic is v7's stash: the unfiled epic its Up minted, whole, with
+// everything that hangs on it, and every lane, which its Up rewrites to the
+// ticket's id and its Down resets. The replay runs one path whatever the Up
+// minted again: it prunes every unfiled epic the stash does not hold byte for
+// byte, its rows going with it by cascade, then puts the stashed epic back
+// under its own id with what hung on it.
+func unfiledEpic() []Stash {
+	const epic = "issue_type = 'epic' AND topic = 'unfiled' AND title = 'Unfiled tickets'"
+	of := func(col string) string {
+		return fmt.Sprintf("t.%s IN (SELECT e.id FROM issues e WHERE e.%s)", col, strings.ReplaceAll(epic, " AND ", " AND e."))
+	}
+	return []Stash{
+		Rows{
+			Table:   "issues",
+			Columns: []string{"id", "title", "description", "agent_prompt", "status", "priority", "issue_type", "topic", "assignee", "item_rank", "lane", "created_at", "updated_at", "closed_at", "archived_at", "deleted_at", "resolution", "redirect_target", "follows_up"},
+			Key:     []string{"id"},
+			Where:   "t." + strings.ReplaceAll(epic, " AND ", " AND t."),
+			Slice:   "unfiled",
+			Prune:   "issues." + strings.ReplaceAll(epic, " AND ", " AND issues."),
+		},
+		Rows{Table: "comments", Columns: []string{"id", "issue_id", "body", "created_at", "created_by"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}},
+		Rows{Table: "labels", Columns: []string{"issue_id", "label", "created_at", "created_by"}, Key: []string{"issue_id", "label"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}},
+		Rows{Table: "issue_events", Columns: []string{"id", "issue_id", "action", "reason", "actor", "created_at", "stream_id", "workspace_id"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}},
+		Rows{Table: "issue_event_changes", Columns: []string{"event_id", "field", "from_value", "to_value"}, Key: []string{"event_id", "field"}, Where: fmt.Sprintf("t.event_id IN (SELECT v.id FROM issue_events v WHERE %s)", strings.ReplaceAll(of("issue_id"), "t.issue_id", "v.issue_id")), Slice: "unfiled"},
+		Rows{
+			Table: "relations", Columns: relationColumns, Key: relationKey,
+			Where: of("dst_id"), Slice: "unfiled", Refs: []string{"src_id", "dst_id"},
+			Prune: "relations.dst_id IN (SELECT e.id FROM issues e WHERE e." + strings.ReplaceAll(epic, " AND ", " AND e.") + ")",
+		},
+		Column{Table: "issues", Column: "lane", Key: []string{"id"}, Slice: "unfiled"},
+	}
 }
 
 // Execer is the one method ReplayStash needs from a database handle.

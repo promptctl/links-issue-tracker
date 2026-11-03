@@ -226,17 +226,94 @@ WHERE id = @unfiled AND @minted
 -- +goose StatementEnd
 
 -- +goose Down
--- LOSS CONTRACT: down removes the unfiled epic and lets its children — the
--- leaves this Up homed there and any filed under it since — go back to the
--- top level, where the pre-upgrade reader wrote them. A child that Up moved
--- from a parent that is not an epic to the epic above it stays where Up put
--- it: nothing records which parent it had, and the epic above is a parent
--- the pre-upgrade reader accepts. A lane spelled as the ticket's own id is
--- reset to the default lane, since that is the spelling Up wrote; a lane an
--- agent set to the id by hand is reset with it. Comments, labels and events
--- on the unfiled epic itself go with its row. The epic is recognized by its
--- type, topic and title as Up wrote them; one renamed since is an ordinary
--- epic and stays.
+-- The unfiled epic, everything on it and every lane are stashed before the
+-- Down hands the reader below the shape it wrote: the epic gone, its children
+-- at the top level, and a lane spelled as its ticket's id back to the
+-- default. The next Up's restore (migrations.Restores) puts them back.
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), '*unfiled', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.title, 1), SUBSTRING(t.description, 1), SUBSTRING(t.agent_prompt, 1), SUBSTRING(t.status, 1), SUBSTRING(t.priority, 1), SUBSTRING(t.issue_type, 1), SUBSTRING(t.topic, 1), SUBSTRING(t.assignee, 1), SUBSTRING(t.item_rank, 1), SUBSTRING(t.lane, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.updated_at, 1), SUBSTRING(t.closed_at, 1), SUBSTRING(t.archived_at, 1), SUBSTRING(t.deleted_at, 1), SUBSTRING(t.resolution, 1), SUBSTRING(t.redirect_target, 1), SUBSTRING(t.follows_up, 1)) FROM issues t WHERE t.issue_type = 'epic' AND t.topic = 'unfiled' AND t.title = 'Unfiled tickets';
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'comments', CAST(t.id AS CHAR), '*unfiled', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.issue_id, 1), SUBSTRING(t.body, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM comments t WHERE t.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'labels', CONCAT_WS(CHAR(31), CAST(t.issue_id AS CHAR), CAST(t.label AS CHAR)), '*unfiled', JSON_ARRAY(SUBSTRING(t.issue_id, 1), SUBSTRING(t.label, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM labels t WHERE t.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', CAST(t.id AS CHAR), '*unfiled', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.issue_id, 1), SUBSTRING(t.action, 1), SUBSTRING(t.reason, 1), SUBSTRING(t.actor, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.stream_id, 1), SUBSTRING(t.workspace_id, 1)) FROM issue_events t WHERE t.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_event_changes', CONCAT_WS(CHAR(31), CAST(t.event_id AS CHAR), CAST(t.field AS CHAR)), '*unfiled', JSON_ARRAY(SUBSTRING(t.event_id, 1), SUBSTRING(t.field, 1), SUBSTRING(t.from_value, 1), SUBSTRING(t.to_value, 1)) FROM issue_event_changes t WHERE t.event_id IN (SELECT v.id FROM issue_events v WHERE v.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets'));
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*unfiled', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.dst_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'lane@unfiled', JSON_ARRAY(SUBSTRING(t.lane, 1)) FROM issues t;
+-- +goose StatementEnd
 -- +goose StatementBegin
 UPDATE issues
 SET lane = ''

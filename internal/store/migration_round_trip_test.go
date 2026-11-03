@@ -40,13 +40,6 @@ const schemaStashTable = "schema_stash"
 // passes both round trips.
 const lastVersionBeforeTheGate = 11
 
-// pendingLosslessDown lists the released migrations whose Down fails the
-// round trip from their own version today. Each is fixed in place, and the
-// list empties as they are.
-var pendingLosslessDown = map[int64]string{
-	7: "its Down deletes the unfiled epic with what hangs on it and resets every lane spelled as its ticket's id",
-}
-
 // releasedDestructiveUp lists the released migrations whose Up destroyed data
 // on every store it ran on, so a Down has nothing to return and the round trip
 // from the version below is not theirs to pass. Permanent.
@@ -72,12 +65,10 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 	for i, m := range registry {
 		versions[i] = m.Version
 	}
-	for _, exempt := range []map[int64]string{pendingLosslessDown, releasedDestructiveUp} {
-		for v, reason := range exempt {
-			if v > lastVersionBeforeTheGate {
-				t.Fatalf("v%d is exempt (%s), but only migrations up to v%d may be; make its round trip lossless instead",
-					v, reason, lastVersionBeforeTheGate)
-			}
+	for v, reason := range releasedDestructiveUp {
+		if v > lastVersionBeforeTheGate {
+			t.Fatalf("v%d is exempt (%s), but only migrations up to v%d may be; make its round trip lossless instead",
+				v, reason, lastVersionBeforeTheGate)
 		}
 	}
 
@@ -87,7 +78,9 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 			t.Parallel()
 			t.Run("from_its_own_version", func(t *testing.T) {
 				t.Parallel()
-				expectExempt(t, v, pendingLosslessDown, roundTripFrom(t, migrations.FS, v, below, seeds[v]))
+				if err := roundTripFrom(t, migrations.FS, v, below, seeds[v]); err != nil {
+					t.Fatal(err)
+				}
 			})
 			t.Run("from_the_version_below", func(t *testing.T) {
 				t.Parallel()
@@ -109,6 +102,23 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 // TestTheRoundTripGateCatchesALossyDown runs the gate's own checks against a
 // registry with one Down broken, the two ways a Down can lose: leaving the
 // structure its Up added in place, and dropping seeded data without stashing it.
+// TestV7RoundTripsAnUnfiledEpicAtTheIdItsUpMints runs v7's round trip with
+// the seed's unfiled epic at the id the Up mints again (no seed id carries a
+// prefix, so it mints lit-unfiled-<sha256("lit-unfiled")[:4]>). The replay
+// then meets a minted epic under the stashed id and must leave the stashed
+// one, not the minted one.
+func TestV7RoundTripsAnUnfiledEpicAtTheIdItsUpMints(t *testing.T) {
+	t.Parallel()
+	seeds := seedsByVersion(t, registryMigrations(t))
+	seed := strings.ReplaceAll(seeds[7], "lit-unfiled-a1b2", "lit-unfiled-e2be")
+	if seed == seeds[7] {
+		t.Fatal("the v7 seed no longer holds lit-unfiled-a1b2; point this test at its unfiled epic")
+	}
+	if err := roundTripFrom(t, migrations.FS, 7, 6, seed); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTheRoundTripGateCatchesALossyDown(t *testing.T) {
 	t.Parallel()
 	const v, below = 11, 10

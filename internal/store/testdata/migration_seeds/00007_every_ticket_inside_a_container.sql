@@ -19,3 +19,6 @@ INSERT INTO issues (id, title, description, agent_prompt, status, priority, issu
 INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t4', 'lit-unfiled-a1b2', 'parent-child', '2026-01-05T00:00:00Z', 'links');
 INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES ('seed-t5', 'seed-epic', 'parent-child', '2026-01-05T00:00:00Z', 'seed');
 INSERT INTO comments (id, issue_id, body, created_at, created_by) VALUES ('seed-c2', 'lit-unfiled-a1b2', 'a comment on the unfiled epic', '2026-10-13T00:00:00Z', 'alice');
+INSERT INTO labels (issue_id, label, created_at, created_by) VALUES ('lit-unfiled-a1b2', 'triage', '2026-10-13T00:00:00Z', 'alice');
+INSERT INTO issue_events (id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES ('seed-e2', 'lit-unfiled-a1b2', 'update', 'renamed nothing', 'alice', '2026-10-13T00:00:00Z', 'stream-2', 'ws-2');
+INSERT INTO issue_event_changes (event_id, field, from_value, to_value) VALUES ('seed-e2', 'description', 'before', 'after');
