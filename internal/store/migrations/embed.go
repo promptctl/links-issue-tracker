@@ -13,3 +13,11 @@ import "embed"
 //
 //go:embed *.sql
 var FS embed.FS
+
+// StashCarrierDDL is the one definition of the stash carrier, schema_stash
+// (README.md, "The stash carrier"). Every step that stashes or restores runs
+// it first, byte for byte; TestEveryStashCarrierCopyIsTheCanonicalDDL holds
+// every copy in the registry to it. [LAW:one-source-of-truth]
+//
+//go:embed stash_carrier.ddl
+var StashCarrierDDL string

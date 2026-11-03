@@ -149,7 +149,40 @@ drops it, and the gate's comparisons leave it out.
 - A step applies the stash on top of the current data and deletes the entries
   it used. Entries whose row is gone are dropped with it.
 
-The table itself has not landed yet; until it does, no migration can stash.
+The table's one definition is `stash_carrier.ddl`, embedded as
+`migrations.StashCarrierDDL`. Every step that stashes or restores runs it
+first, copied byte for byte, so whichever step a store meets first creates the
+table. A test fails on any other definition, alteration, or drop of
+`schema_stash`.
+
+The carrier admits string columns (`VARCHAR`, `TEXT`), which is every column
+a released Down drops. The design asks for the canonical export's encoding,
+but that encoder is Go and a goose step is SQL. So the step encodes in SQL,
+and the round-trip gate proves the result against the export. A column of
+another type needs its encoding here and a seeded column of that type in
+`TestTheStashCarrierRoundTripsAColumnItsDownDrops` first.
+
+For table `<t>`, column `<c>`, and `<key>` =
+`CAST(JSON_OBJECT('<pk1>', <t>.<pk1>, ...) AS CHAR)` over the primary key in
+key order:
+
+```sql
+-- Stash: in a Down before it drops <c>, or in an Up before it destroys <c>.
+REPLACE INTO schema_stash SELECT '<t>', <key>, '<c>', JSON_ARRAY(SUBSTRING(<c>, 1)) FROM <t>;
+
+-- Restore: once <c> exists again, in the Up that re-adds it or the Down of a destructive Up.
+UPDATE <t> JOIN schema_stash s ON s.table_name = '<t>' AND s.column_name = '<c>' AND s.row_key = <key>
+  SET <t>.<c> = IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]')));
+DELETE FROM schema_stash WHERE table_name = '<t>' AND column_name = '<c>';
+```
+
+- Each statement is its own goose statement.
+- The one-element array keeps a NULL (`[null]`) apart from a missing entry.
+- `SUBSTRING(<c>, 1)` is load-bearing. Dolt's `JSON_ARRAY` over a `TEXT` column
+  encodes the column's storage address instead of its text, and
+  `CAST(... AS CHAR)` does not avoid it.
+- `REPLACE` lets a later stash of the same row overwrite an earlier one.
+- An entry whose row is gone matches nothing and is deleted with the rest.
 
 ### Exemptions
 

@@ -170,7 +170,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 		return fmt.Errorf("%w: export after Up(Down) differs from the seeded export:\n%s", errDataLost,
 			unifiedSchemaDiff("seeded", "after Up(Down)", before, after))
 	}
-	return nil
+	return stashDrained(t, st.db)
 }
 
 // freshShapes caches freshShape per version: one Up-only store per version
@@ -209,6 +209,28 @@ func roundTripBelow(t *testing.T, fsys fs.FS, v, below int64, seed string) error
 	}
 	return nil
 }
+
+// stashDrained fails an Up(Down) that leaves entries in the stash carrier: the
+// Up deletes every entry it restores from, and the export leaves the carrier
+// out, so an entry left behind is caught here or never. A Down(Up) rightly
+// ends with entries, the values the next Up returns.
+func stashDrained(t *testing.T, db *sql.DB) error {
+	t.Helper()
+	if !slices.Contains(allTables(t, db), schemaStashTable) {
+		return nil
+	}
+	var left int
+	if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM "+schemaStashTable).Scan(&left); err != nil {
+		t.Fatalf("count stash entries: %v", err)
+	}
+	if left != 0 {
+		return fmt.Errorf("%w: %d stash entries left after the round trip", errStashNotDrained, left)
+	}
+	return nil
+}
+
+// errStashNotDrained marks a round trip whose steps left stash entries behind.
+var errStashNotDrained = errors.New("stash not drained")
 
 // errDataLost marks the one failure an exemption covers: the round trip ran
 // and the export came back different. A wrong shape or a failing step is
