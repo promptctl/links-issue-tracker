@@ -44,7 +44,8 @@ jobs:
       # The same commit runs ~1.5-2x slower on one runner CPU than another
       # (tools/testbudget/budgets.go records the spread). Budgets absorb the
       # slowest CPU, so a red budget is the code's. This step prints the CPU
-      # just before the Test step, so a slow number can be read against it. lscpu's output varies by runner image, so it cannot fail the job.
+      # just before the Test step, so a slow number can be read against it.
+      # lscpu's output varies by runner image, so it cannot fail the job.
       - name: Runner CPU
         run: |
           nproc
