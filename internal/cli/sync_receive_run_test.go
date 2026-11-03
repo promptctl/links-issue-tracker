@@ -308,7 +308,7 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 		syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureRemoteSchemaAhead,
 		syncFailureUnrelatedHistories, syncFailureIDCollision, syncFailureReceiveUnsettled,
 		syncFailurePushDiverged, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease,
-		syncFailureSchemaLoweringRequiresHold,
+		syncFailureSchemaLoweringRequiresHold, syncFailureForcedPushStale,
 	}
 	for _, class := range classes {
 		failure := SyncFailure{
@@ -317,6 +317,7 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 			AboveCeiling:    &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9},
 			RaiseRefused:    &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9},
 			LoweringRefused: &store.SchemaLoweringRequiresHoldError{Remote: "origin", Branch: "master", RemoteSchema: 9, CommitSchema: 8},
+			LeaseLost:       &storage.ForcedPushLeaseError{Remote: remoteName(t, "origin"), Branch: "master", Expected: "abcdef0123456789abcdef0123456789"},
 			StoppedAt:       receiveStepSettle,
 			UnsettledSince:  time.Now().Add(-time.Hour),
 			Age:             time.Hour,

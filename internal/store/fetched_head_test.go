@@ -123,6 +123,13 @@ func (f *landFixture) push(root string, force bool) {
 	f.t.Helper()
 	st := f.openSync(root)
 	defer f.close(st)
+	// A forced push replaces only the head it last fetched, so the fixture
+	// fetches first: these pushes mean to overwrite whatever the remote holds.
+	if force {
+		if err := st.SyncFetch(f.ctx, remoteName(f.t, "origin")); err != nil {
+			f.t.Fatalf("SyncFetch before the forced push error = %v", err)
+		}
+	}
 	if _, err := st.SyncPush(f.ctx, remoteName(f.t, "origin"), "master", false, force); err != nil {
 		f.t.Fatalf("SyncPush(force=%t) error = %v", force, err)
 	}

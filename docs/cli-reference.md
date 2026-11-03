@@ -974,6 +974,9 @@ lit sync reconcile take local|remote [--owner-approved TOKEN]   # unrelated hist
 Mirrors issue data through git remotes so one backlog is shared across clones — see
 [Sync and remotes](dolt-remote-sync.md). `pull`/`push` default the remote to the
 upstream remote, then to the single configured remote. A merge conflict exits 5.
+`push --force` replaces only the remote head this checkout last fetched: a
+remote that moved since, or a branch never fetched here, refuses it. Fetch, then
+force again; a plain push creates a branch the remote lacks.
 
 `compact` reclaims local storage and contacts no remote, so a solo workspace can
 run it. Two depths: the default collects recent history, while `--full` also

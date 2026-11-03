@@ -296,6 +296,67 @@ func TestALiftPushesTheLiftedHead(t *testing.T) {
 	}
 }
 
+// asSyncFailure routes a forced push its lease refused into the sync-failure
+// contract: the fetch first, then the force, and a plain push last only when
+// this checkout held no head of the branch, since the remote may lack it.
+func TestALostForceLeaseRendersTheSyncFailureContract(t *testing.T) {
+	t.Parallel()
+	origin, err := storage.ParseRemoteName("origin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		lost      storage.ForcedPushLeaseError
+		wants     []string
+		plainPush bool
+	}{
+		{"the remote moved since the fetch", storage.ForcedPushLeaseError{Remote: origin, Branch: "master", Expected: "abcdefghijklmnopqrstuvwxyz012345"}, []string{
+			"needs you to fetch before forcing.",
+			"origin/master no longer names abcdefghijklmnopqrstuvwxyz012345",
+			"lit sync fetch --remote origin",
+			"lit sync push --force --remote origin",
+			"ESCALATION — resolve now",
+		}, false},
+		{"no tracking ref", storage.ForcedPushLeaseError{Remote: origin, Branch: "master"}, []string{
+			"needs you to fetch, then force or push plainly.",
+			"holds no head of origin/master (no tracking ref)",
+			"lit sync fetch --remote origin",
+			"lit sync push --force --remote origin",
+			"lit sync push --remote origin",
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var syncFailure SyncFailureError
+			if !errors.As(asSyncFailure(tc.lost), &syncFailure) {
+				t.Fatalf("asSyncFailure(%v) is not a SyncFailureError", tc.lost)
+			}
+			if syncFailure.Failure.Class != syncFailureForcedPushStale || *syncFailure.Failure.LeaseLost != tc.lost {
+				t.Fatalf("mapped failure = %+v", syncFailure.Failure)
+			}
+			var unwrapped storage.ForcedPushLeaseError
+			if !errors.As(syncFailure, &unwrapped) || unwrapped != tc.lost {
+				t.Fatalf("the sync failure does not unwrap to the store refusal: %v", syncFailure)
+			}
+			if _, schema := schemaRefusalFailure(tc.lost); schema {
+				t.Fatalf("the mirror's schema-refusal adapter claims a lost lease, which a fetch clears")
+			}
+			block := syncFailure.Error()
+			for _, want := range tc.wants {
+				if !strings.Contains(block, want) {
+					t.Errorf("block lacks %q:\n%s", want, block)
+				}
+			}
+			if plain := strings.Contains(block, "a plain push creates it"); plain != tc.plainPush {
+				t.Errorf("plain-push step present = %v, want %v:\n%s", plain, tc.plainPush, block)
+			}
+			if fetch, force := strings.Index(block, "lit sync fetch --remote origin"), strings.Index(block, "lit sync push --force --remote origin"); fetch > force {
+				t.Errorf("the force comes before the fetch in the remedy:\n%s", block)
+			}
+		})
+	}
+}
+
 // asSyncFailure routes the store's lowering refusal into the sync-failure
 // contract: the pull first, since a backlog that is only behind reads the
 // same as one that stepped down, and the remote downgrade last, as the

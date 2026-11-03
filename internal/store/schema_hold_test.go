@@ -235,7 +235,7 @@ func TestALeasedPushAboveTheRemotesHoldSendsNothing(t *testing.T) {
 	var outcome storage.LeaseOutcome
 	err := st.runSyncMutation(ctx, func(ctx context.Context) error {
 		var err error
-		outcome, err = st.pushLeasedWithinLock(ctx, origin, "master", "master", heldHead)
+		outcome, _, err = st.pushLeasedWithinLock(ctx, origin, "master", "master", heldHead, false)
 		return err
 	})
 	var refused *SchemaCeilingPushError
