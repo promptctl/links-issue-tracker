@@ -261,18 +261,23 @@ func forcedPushStaleFailure(err error) (SyncFailure, bool) {
 // forcedPushStaleRemedy is how a forced push its lease refused clears. The
 // fetch comes first either way: it reads the head the next force will lease
 // on. A branch this checkout holds no head of may not exist on the remote
-// at all, and then nothing exists for a force to replace: a plain push
+// at all, and then nothing exists for a force to replace, so the force and
+// the plain push are alternatives on what the fetch brought: a force is
+// refused again on a branch the fetch found no head of, and a plain push
 // creates it. [LAW:one-source-of-truth] the steps render from the refusal.
 func forcedPushStaleRemedy(lost *storage.ForcedPushLeaseError) []remedyStep {
 	remote := lost.Remote.String()
-	steps := []remedyStep{
+	if lost.Expected == "" {
+		return []remedyStep{
+			{"lit sync fetch --remote " + remote, "reads the remote's head of the branch, if the remote has one"},
+			{"lit sync push --force --remote " + remote, "if the fetch brought a head: replaces it, if overwriting it is still what the user means"},
+			{"lit sync push --remote " + remote, "if the fetch brought no head of the branch: the remote lacks it, and a plain push creates it"},
+		}
+	}
+	return []remedyStep{
 		{"lit sync fetch --remote " + remote, "reads the remote's current head, which the next forced push leases on"},
 		{"lit sync push --force --remote " + remote, "replaces that head, if overwriting it is still what the user means"},
 	}
-	if lost.Expected == "" {
-		steps = append(steps, remedyStep{"lit sync push --remote " + remote, "if the fetch brought no head of the branch: the remote lacks it, and a plain push creates it"})
-	}
-	return steps
 }
 
 // schemaCeilingFailure builds the sync-failure contract for a store
@@ -584,6 +589,9 @@ func (f SyncFailure) headline() string {
 	case syncFailureSchemaLoweringRequiresHold:
 		return "lit sync push was refused because it would lower the remote's schema with a head that holds no schema hold, and needs you."
 	case syncFailureForcedPushStale:
+		if f.LeaseLost.Expected == "" {
+			return "lit sync push --force was refused because this checkout holds no head of the remote's branch to replace, and needs you to fetch, then force or push plainly."
+		}
 		return "lit sync push --force was refused because the remote's head is not the one this checkout last fetched, and needs you to fetch before forcing."
 	default:
 		return fmt.Sprintf("lit sync hit an unrecognized sync-failure class %q — this is a bug; please report it.", f.Class)

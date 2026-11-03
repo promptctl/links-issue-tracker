@@ -312,12 +312,14 @@ func TestALostForceLeaseRendersTheSyncFailureContract(t *testing.T) {
 		plainPush bool
 	}{
 		{"the remote moved since the fetch", storage.ForcedPushLeaseError{Remote: origin, Branch: "master", Expected: "abcdefghijklmnopqrstuvwxyz012345"}, []string{
+			"needs you to fetch before forcing.",
 			"origin/master no longer names abcdefghijklmnopqrstuvwxyz012345",
 			"lit sync fetch --remote origin",
 			"lit sync push --force --remote origin",
 			"ESCALATION — resolve now",
 		}, false},
 		{"no tracking ref", storage.ForcedPushLeaseError{Remote: origin, Branch: "master"}, []string{
+			"needs you to fetch, then force or push plainly.",
 			"holds no head of origin/master (no tracking ref)",
 			"lit sync fetch --remote origin",
 			"lit sync push --force --remote origin",

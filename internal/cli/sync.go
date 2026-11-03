@@ -525,7 +525,7 @@ func syncPushLeaf() syncLeaf {
 	fs := newCobraFlagSet("sync push")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
-	force := fs.Bool("force", false, "Pass --force to dolt push")
+	force := fs.Bool("force", false, "Replace the remote head this checkout last fetched (a lease on it; refused if the remote moved or the branch was never fetched here)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
 	return syncLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, scope syncScope, positional []string) error {
 		return pushLiveStore(ctx, inv, scope.ws, scope.session, strings.TrimSpace(*remote), livePushOptions{command: syncPushCommand, setUpstream: *setUpstream, force: *force, verbose: *verbose})
