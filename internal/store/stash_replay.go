@@ -26,7 +26,8 @@ var stashReplay = repairSteps{
 // entries. Each version's replay runs after its own forward step, so these
 // are a store a lit that never replays raised past its stash: a release
 // older than the stash, whose Ups this one shares byte for byte. It reads
-// one grouped count over the carrier, and nothing on a store without one.
+// the carrier's distinct table and column pairs, and nothing on a store
+// without one.
 func (s *Store) pendingStash(ctx context.Context, applied int64) ([]int64, error) {
 	present, err := migrations.CarrierPresent(ctx, s.db)
 	if err != nil || !present {
@@ -68,12 +69,12 @@ func (s *Store) pendingStash(ctx context.Context, applied int64) ([]int64, error
 // wrote. It runs late, onto data written since a later Up derived it
 // without the stash, so it writes a column back only where the value is
 // still unset; the event says what it replayed.
-func (s *Store) replayPendingStash(ctx context.Context, versions []int64, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
+func (s *Store) replayPendingStash(ctx context.Context, versions []int64, applied int64, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	var replayed []migrations.Replayed
 	pruneErr, fail = s.repairWithRollback(ctx, stashReplay, func() (string, error) {
 		names := make([]string, 0, len(versions))
 		for _, v := range versions {
-			r, err := migrations.ReplayStash(ctx, s.db, v, true)
+			r, err := migrations.ReplayStash(ctx, s.db, v, applied, true)
 			if err != nil {
 				return "", err
 			}

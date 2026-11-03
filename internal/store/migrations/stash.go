@@ -22,9 +22,10 @@ type Stash interface {
 	// again: every one but the last writes rows it counts, and the last
 	// deletes every entry the stash holds, so a replay leaves none behind. It
 	// never creates the carrier: a store no Down stashed in has none, and
-	// holds nothing to replay. late is a replay that runs after an Up that did
+	// holds nothing to replay. version is the stash's, at the version the store
+	// is at. A late replay runs after an Up that did
 	// not replay, onto data written since.
-	RestoreSQL(late bool) []string
+	RestoreSQL(version, at int64, late bool) []string
 	// Name is the stash's table and column, as the replay reports it.
 	Name() string
 	// Entry is the table_name and column_name of every entry it writes.
@@ -162,7 +163,7 @@ func (c Column) StashSQL() []string {
 // RestoreSQL writes c's entries onto the rows that still exist, guarded as
 // the type says, then deletes every entry: one whose row was deleted below,
 // or holds a newer value, has nothing left to restore.
-func (c Column) RestoreSQL(late bool) []string {
+func (c Column) RestoreSQL(_, _ int64, late bool) []string {
 	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", c.Table, c.entry(), rowKey(c.Key, "t"))
 	guard := ""
 	if late || c.Kept {
@@ -205,11 +206,16 @@ func (r Rows) StashSQL() []string {
 // inserts each stashed row the table does not hold, then deletes every entry.
 // A row whose issue was deleted below died with it, as the table's cascade
 // would have done. A late replay only inserts: a live row, and one the Up
-// derived, may carry a write made since.
-func (r Rows) RestoreSQL(late bool) []string {
+// derived, may carry a write made since. It inserts each row as the Ups up
+// to at rewrote it.
+func (r Rows) RestoreSQL(version, at int64, late bool) []string {
 	elems := make([]string, len(r.Columns))
-	for i := range r.Columns {
-		elems[i] = element(i)
+	for i, col := range r.Columns {
+		elems[i] = rewritten(r.Table, col, element(i), version, at)
+	}
+	held := make([]string, len(r.Key))
+	for i, k := range r.Key {
+		held[i] = fmt.Sprintf("t.%s = %s", k, elems[slices.Index(r.Columns, k)])
 	}
 	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", r.Table, r.entry(), rowKey(r.Key, "t"))
 	var sets []string
@@ -219,9 +225,9 @@ func (r Rows) RestoreSQL(late bool) []string {
 		}
 	}
 	insert := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '%s' AND NOT EXISTS (SELECT 1 FROM %s t WHERE %s)",
-		r.Table, strings.Join(r.Columns, ", "), strings.Join(elems, ", "), r.Table, r.entry(), r.Table, match)
+		r.Table, strings.Join(r.Columns, ", "), strings.Join(elems, ", "), r.Table, r.entry(), r.Table, strings.Join(held, " AND "))
 	for _, ref := range r.Refs {
-		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM issues p WHERE p.id = %s)", element(indexOf(r.Columns, ref)))
+		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM issues p WHERE p.id = %s)", element(slices.Index(r.Columns, ref)))
 	}
 	var stmts []string
 	if late {
@@ -237,13 +243,26 @@ func (r Rows) RestoreSQL(late bool) []string {
 	return append(stmts, insert+";", dropEntries(r.Table, r.entry()))
 }
 
-func indexOf(cols []string, c string) int {
-	for i, x := range cols {
-		if x == c {
-			return i
+// laterRewrites is each value a released Up rewrites in place, by the
+// version that rewrites it. A late replay carries a row it stashed below that
+// version through the rewrite, as the Up would have.
+var laterRewrites = []struct {
+	version       int64
+	table, column string
+	from, to      string
+}{
+	{8, "relations", "type", "blocks", "blocked-by"},
+}
+
+// rewritten is expr, the stashed value of table.column, as the Ups above
+// version and up to at leave it.
+func rewritten(table, column, expr string, version, at int64) string {
+	for _, rw := range laterRewrites {
+		if rw.table == table && rw.column == column && rw.version > version && rw.version <= at {
+			expr = fmt.Sprintf("IF(%s = '%s', '%s', %s)", expr, rw.from, rw.to, expr)
 		}
 	}
-	panic(fmt.Sprintf("migrations: %q is not among %v", c, cols))
+	return expr
 }
 
 // Restores is each version's stash: what that version's Up re-adds and its
@@ -251,13 +270,15 @@ func indexOf(cols []string, c string) int {
 // released Down is made lossless without touching its Up.
 var Restores = map[int64][]Stash{
 	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Left: "t.lane = ''"}},
-	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Left: "t.resolution IS NULL"}},
+	// A ticket reopened below holds no resolution.
+	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Left: "t.resolution IS NULL",
+		When: "t.closed_at IS NOT NULL OR " + element(0) + " IS NULL"}},
 	4: {
 		// issues_redirect_target_check: a ticket reopened below holds no
 		// redirect.
 		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Left: "t.redirect_target IS NULL",
 			When: "t.resolution IN ('duplicate','superseded') OR " + element(0) + " IS NULL"},
-		Rows{Table: "relations", Columns: relationColumns, Key: []string{"src_id", "dst_id", "type"}, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}},
+		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}},
 	},
 	5: {
 		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}, Left: "t.stream_id IS NULL"},
@@ -344,7 +365,7 @@ type Replayed struct {
 // runner calls it after every forward step, and late for a stash an Up that
 // did not replay left, and the round-trip gate steps through it the same
 // way. [LAW:single-enforcer]
-func ReplayStash(ctx context.Context, db Querier, version int64, late bool) ([]Replayed, error) {
+func ReplayStash(ctx context.Context, db Querier, version, at int64, late bool) ([]Replayed, error) {
 	if len(Restores[version]) == 0 {
 		return nil, nil
 	}
@@ -357,7 +378,7 @@ func ReplayStash(ctx context.Context, db Querier, version int64, late bool) ([]R
 	}
 	var replayed []Replayed
 	for _, st := range Restores[version] {
-		stmts := st.RestoreSQL(late)
+		stmts := st.RestoreSQL(version, at, late)
 		r := Replayed{Version: version, Name: st.Name()}
 		for i, stmt := range stmts {
 			res, err := db.ExecContext(ctx, stmt)

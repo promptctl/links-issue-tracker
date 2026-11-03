@@ -161,6 +161,45 @@ func TestARedirectReopenedBelowStaysUnwritten(t *testing.T) {
 	}
 }
 
+// TestALateReplayCarriesARowThroughTheUpsAboveIt is a blocked-by edge on the
+// unfiled epic, stashed by v7's Down as the 'blocks' edge v8's Down made it,
+// and replayed late at v11: the open writes it back as the blocked-by edge
+// v8's Up would have made, which relations_type_check admits.
+func TestALateReplayCarriesARowThroughTheUpsAboveIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	seeds := seedsByVersion(t, registryMigrations(t))
+	st, provider := storeAtVersion(t, migrations.FS, 11)
+	applySeed(t, st.db, seeds[11])
+	const epic = "lit-unfiled-test"
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO issues (id, title, description, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at)
+		SELECT ?, 'Unfiled tickets', '', status, 0, 'epic', 'unfiled', '', 'a0', '', created_at, updated_at FROM issues WHERE issue_type = 'epic' ORDER BY id LIMIT 1`, epic); err != nil {
+		t.Fatalf("file an unfiled epic: %v", err)
+	}
+	var other string
+	if err := st.db.QueryRowContext(ctx, `SELECT id FROM issues WHERE id <> ? AND issue_type = 'epic' ORDER BY id LIMIT 1`, epic).Scan(&other); err != nil {
+		t.Fatalf("v11's seed holds no other epic: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `INSERT INTO relations (src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', '2026-10-12T00:00:00Z', 'test')`, epic, other); err != nil {
+		t.Fatalf("block the unfiled epic: %v", err)
+	}
+	if _, err := provider.DownTo(ctx, 6); err != nil {
+		t.Fatalf("Down to v6: %v", err)
+	}
+	if _, err := provider.UpTo(ctx, 11); err != nil {
+		t.Fatalf("Up to v11 without replay: %v", err)
+	}
+
+	migrateLocked(t, ctx, st)
+	var n int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relations WHERE src_id = ? AND dst_id = ? AND type = 'blocked-by'`, epic, other).Scan(&n); err != nil {
+		t.Fatalf("read the edge: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("the late replay restored %d blocked-by edges from %s to %s, want 1", n, epic, other)
+	}
+}
+
 // TestAWritingOpenReportsAnEmptyReplay is a raise with an empty stash: the
 // open writes, replays nothing, and reports the empty list, so "nothing to
 // replay" reads apart from "the replay never ran".

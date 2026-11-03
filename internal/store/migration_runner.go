@@ -692,7 +692,7 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	}
 	probed.replayed(nil)
 	if len(assessment.stash) > 0 {
-		stashPruneErr, fail := s.replayPendingStash(ctx, assessment.stash, probed)
+		stashPruneErr, fail := s.replayPendingStash(ctx, assessment.stash, state.appliedVersion, probed)
 		pruneErr = errors.Join(pruneErr, stashPruneErr)
 		if fail != nil {
 			return pruneErr, fail
@@ -831,7 +831,7 @@ func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise Sch
 	}
 	// The step's restore runs before the next step reads what it puts back:
 	// v7's body reads the edges and lanes v6's restore returns.
-	if probed.replayedStash, err = migrations.ReplayStash(ctx, s.db, result.Source.Version, false); err != nil {
+	if probed.replayedStash, err = migrations.ReplayStash(ctx, s.db, result.Source.Version, result.Source.Version, false); err != nil {
 		return result, probed, &stashReplayError{err: err}
 	}
 	return result, probed, nil

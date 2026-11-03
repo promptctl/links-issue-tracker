@@ -193,7 +193,7 @@ func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v in
 		if err != nil {
 			return err
 		}
-		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version, false); err != nil {
+		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version, result.Source.Version, false); err != nil {
 			return err
 		}
 	}
