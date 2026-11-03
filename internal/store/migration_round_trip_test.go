@@ -18,6 +18,7 @@ import (
 
 	"github.com/pressly/goose/v3"
 
+	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -153,8 +154,8 @@ func TestTheRoundTripGateCatchesALossyDown(t *testing.T) {
 }
 
 // TestAFailedFreshUpFailsEveryCallerOfItsShape breaks v2's Up and asks the
-// shape cache for v2 from several tests at once: every one of them gets the
-// build's error, none an empty shape that would read as a schema diff.
+// shape cache for v2 from several callers at once: every one of them gets the
+// one build's error, none an empty shape that would read as a schema diff.
 func TestAFailedFreshUpFailsEveryCallerOfItsShape(t *testing.T) {
 	t.Parallel()
 	const v = 2
@@ -169,16 +170,22 @@ func TestAFailedFreshUpFailsEveryCallerOfItsShape(t *testing.T) {
 		}
 		return "-- +goose Up\nTHIS IS NOT SQL;\n-- +goose Down" + down
 	}))}
-	for i := range 3 {
-		t.Run(fmt.Sprintf("caller %d", i), func(t *testing.T) {
-			t.Parallel()
-			shape, err := cache.shape(v)
-			// goose names the version; the driver, the injected statement.
-			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("version:%d)", v)) ||
-				!strings.Contains(err.Error(), "near 'THIS'") {
-				t.Fatalf("shape(%d) = %q, %v; want the failed Up's error", v, shape, err)
-			}
-		})
+	shapes := make([]string, 3)
+	errs := make([]error, 3)
+	var wg sync.WaitGroup
+	for i := range errs {
+		wg.Go(func() { shapes[i], errs[i] = cache.shape(v) })
+	}
+	wg.Wait()
+	var partial *goose.PartialError
+	if !errors.As(errs[0], &partial) || partial.Failed.Source.Version != v {
+		t.Fatalf("shape(%d) = %q, %v; want v%d's failed Up", v, shapes[0], errs[0], v)
+	}
+	// One build: every caller holds the very error it returned.
+	for i, err := range errs[1:] {
+		if err != errs[0] {
+			t.Errorf("caller %d got %v, not the one build's error %v", i+1, err, errs[0])
+		}
 	}
 }
 
@@ -264,7 +271,7 @@ func (c *shapeCache) shape(v int64) (string, error) {
 
 func buildFreshShape(fsys fs.FS, v int64) (shape string, err error) {
 	ctx := context.Background()
-	base, err := os.MkdirTemp("", "fresh-shape-")
+	base, err := dirtemplate.MkdirTemp()
 	if err != nil {
 		return "", err
 	}
@@ -273,12 +280,11 @@ func buildFreshShape(fsys fs.FS, v int64) (shape string, err error) {
 	if err := storeTemplate.CopyTo(dir); err != nil {
 		return "", err
 	}
-	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
-	if err != nil {
-		return "", fmt.Errorf("Open: %w", err)
+	st, _, err := openAtVersion(ctx, dir, fsys, v)
+	if st != nil {
+		defer func() { err = errors.Join(err, st.Close()) }()
 	}
-	defer func() { err = errors.Join(err, st.Close()) }()
-	if _, err := upOnly(ctx, st.db, fsys, v); err != nil {
+	if err != nil {
 		return "", err
 	}
 	return comparedShape(ctx, st.db)
@@ -393,16 +399,26 @@ func expectExempt(t *testing.T, v int64, exempt map[int64]string, err error) {
 func storeAtVersion(t *testing.T, fsys fs.FS, v int64) (*Store, *goose.Provider) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
+	st, provider, err := openAtVersion(ctx, migratedDoltDir(t), fsys, v)
+	if st != nil {
+		t.Cleanup(func() { _ = st.Close() })
 	}
-	t.Cleanup(func() { _ = st.Close() })
-	provider, err := upOnly(ctx, st.db, fsys, v)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return st, provider
+}
+
+// openAtVersion opens the store copy at dir and leaves it at fsys's v by Ups
+// alone. A store it opened comes back even when the Ups fail, for its caller
+// to close.
+func openAtVersion(ctx context.Context, dir string, fsys fs.FS, v int64) (*Store, *goose.Provider, error) {
+	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
+	if err != nil {
+		return nil, nil, fmt.Errorf("Open: %w", err)
+	}
+	provider, err := upOnly(ctx, st.db, fsys, v)
+	return st, provider, err
 }
 
 // upOnly drops every table in db and runs fsys's Ups to v.

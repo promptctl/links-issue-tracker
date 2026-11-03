@@ -114,8 +114,14 @@ func (tp *Template) remove() error {
 	return removeBase(filepath.Dir(tp.dir))
 }
 
+// MkdirTemp makes a scratch base in os.TempDir() that a later run's sweep
+// removes if this binary dies holding it. The caller removes it otherwise.
+func MkdirTemp() (string, error) {
+	return os.MkdirTemp("", fmt.Sprintf("%s%d-*", basePrefix, os.Getpid()))
+}
+
 func (tp *Template) buildFrozen() (_ string, err error) {
-	base, err := os.MkdirTemp("", fmt.Sprintf("%s%d-*", basePrefix, os.Getpid()))
+	base, err := MkdirTemp()
 	if err != nil {
 		return "", err
 	}
