@@ -19,12 +19,32 @@ ALTER TABLE issue_events ADD COLUMN workspace_id VARCHAR(191) NULL;
 -- +goose StatementEnd
 
 -- +goose Down
--- LOSS CONTRACT: this Down drops both columns and does NOT restore the
--- attribution collected while the workspace was on this version. The loss is
--- benign by construction — an unattributed event is the shape every event had
--- before this migration, and the claim predicate reads unattributed history as
--- zero claims, which is the conservative behavior the whole design falls back
--- to. Operators needing the stamps must restore from a pre-downgrade dbsnapshot.
+-- Both stamps are stashed before the drop; the next Up's restore
+-- (migrations.Restores) writes them back.
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', CAST(t.id AS CHAR), 'stream_id', JSON_ARRAY(SUBSTRING(t.stream_id, 1)) FROM issue_events t;
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', CAST(t.id AS CHAR), 'workspace_id', JSON_ARRAY(SUBSTRING(t.workspace_id, 1)) FROM issue_events t;
+-- +goose StatementEnd
 -- +goose StatementBegin
 ALTER TABLE issue_events DROP COLUMN stream_id;
 -- +goose StatementEnd

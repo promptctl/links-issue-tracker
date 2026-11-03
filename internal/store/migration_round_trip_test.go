@@ -40,20 +40,6 @@ const schemaStashTable = "schema_stash"
 // passes both round trips.
 const lastVersionBeforeTheGate = 11
 
-// pendingLosslessDown lists the released migrations whose Down fails the
-// round trip from their own version today. Each is fixed in place, and the
-// list empties as they are.
-var pendingLosslessDown = map[int64]string{
-	2:  "its Down drops lane without stashing it",
-	3:  "its Down drops resolution without stashing it",
-	4:  "its Down re-materializes redirects as related-to edges, so the next Up reads a lone manual peer edge as a redirect",
-	5:  "its Down drops stream_id and workspace_id without stashing them",
-	6:  "its Down drops follows_up without stashing it",
-	7:  "its Down deletes the unfiled epic with what hangs on it and resets every lane spelled as its ticket's id",
-	9:  "its Down drops purges without stashing it",
-	11: "its Down drops work_plan and plan_reviews without stashing them",
-}
-
 // releasedDestructiveUp lists the released migrations whose Up destroyed data
 // on every store it ran on, so a Down has nothing to return and the round trip
 // from the version below is not theirs to pass. Permanent.
@@ -79,12 +65,10 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 	for i, m := range registry {
 		versions[i] = m.Version
 	}
-	for _, exempt := range []map[int64]string{pendingLosslessDown, releasedDestructiveUp} {
-		for v, reason := range exempt {
-			if v > lastVersionBeforeTheGate {
-				t.Fatalf("v%d is exempt (%s), but only migrations up to v%d may be; make its round trip lossless instead",
-					v, reason, lastVersionBeforeTheGate)
-			}
+	for v, reason := range releasedDestructiveUp {
+		if v > lastVersionBeforeTheGate {
+			t.Fatalf("v%d is exempt (%s), but only migrations up to v%d may be; make its round trip lossless instead",
+				v, reason, lastVersionBeforeTheGate)
 		}
 	}
 
@@ -94,7 +78,9 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 			t.Parallel()
 			t.Run("from_its_own_version", func(t *testing.T) {
 				t.Parallel()
-				expectExempt(t, v, pendingLosslessDown, roundTripFrom(t, migrations.FS, v, below, seeds[v]))
+				if err := roundTripFrom(t, migrations.FS, v, below, seeds[v]); err != nil {
+					t.Fatal(err)
+				}
 			})
 			t.Run("from_the_version_below", func(t *testing.T) {
 				t.Parallel()
@@ -111,6 +97,23 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 		}
 		assertBaselineTablesAbsent(t, ctx, st)
 	})
+}
+
+// TestV7RoundTripsAnUnfiledEpicAtTheIdItsUpMints runs v7's round trip with
+// the seed's unfiled epic at the id the Up mints again (no seed id carries a
+// prefix, so it mints lit-unfiled-<sha256("lit-unfiled")[:4]>). The replay
+// then meets a minted epic under the stashed id and must leave the stashed
+// one, not the minted one.
+func TestV7RoundTripsAnUnfiledEpicAtTheIdItsUpMints(t *testing.T) {
+	t.Parallel()
+	seeds := seedsByVersion(t, registryMigrations(t))
+	seed := strings.ReplaceAll(seeds[7], "lit-unfiled-a1b2", "lit-unfiled-e2be")
+	if seed == seeds[7] {
+		t.Fatal("the v7 seed no longer holds lit-unfiled-a1b2; point this test at its unfiled epic")
+	}
+	if err := roundTripFrom(t, migrations.FS, 7, 6, seed); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestTheRoundTripGateCatchesALossyDown runs the gate's own checks against a
@@ -165,7 +168,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 			unifiedSchemaDiff("fresh Up", "after Down", want, got))
 	}
 	stashed := stashedSince(t, st.db, held)
-	if _, err := provider.UpTo(ctx, v); err != nil {
+	if err := upReplaying(ctx, provider, st.db, v); err != nil {
 		return fmt.Errorf("Up to v%d after Down: %w", v, err)
 	}
 	if after := exportTables(t, st.db); after != before {
@@ -173,6 +176,27 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 			unifiedSchemaDiff("seeded", "after Up(Down)", before, after))
 	}
 	return stashConsumed(t, st.db, stashed)
+}
+
+// upReplaying steps provider up to v the way upByOne does: one goose step,
+// then that version's stash replay.
+func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v int64) error {
+	for {
+		current, err := provider.GetDBVersion(ctx)
+		if err != nil {
+			return err
+		}
+		if current >= v {
+			return nil
+		}
+		result, err := provider.UpByOne(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version, result.Source.Version, false); err != nil {
+			return err
+		}
+	}
 }
 
 // freshShapes caches freshShape per version: one Up-only store per version
@@ -200,7 +224,7 @@ func roundTripBelow(t *testing.T, fsys fs.FS, v, below int64, seed string) error
 	applySeed(t, st.db, seed)
 	before := exportTables(t, st.db)
 	held := stashEntries(t, st.db)
-	if _, err := provider.UpTo(ctx, v); err != nil {
+	if err := upReplaying(ctx, provider, st.db, v); err != nil {
 		return fmt.Errorf("Up to v%d: %w", v, err)
 	}
 	stashed := stashedSince(t, st.db, held)

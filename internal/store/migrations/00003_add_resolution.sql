@@ -15,11 +15,20 @@ ALTER TABLE issues ADD CONSTRAINT issues_resolution_check CHECK (resolution IS N
 -- +goose StatementEnd
 
 -- +goose Down
--- LOSS CONTRACT: this Down drops resolution and does NOT preserve recorded close
--- reasons. The loss is benign by construction — with no resolution column every
--- closed ticket falls back to "closed with no recorded resolution", the same
--- state a legacy or `done` close already occupies. Operators needing the exact
--- resolutions must restore from a pre-upgrade dbsnapshot.
+-- Resolution is stashed before the drop; the next Up's restore
+-- (migrations.Restores) writes it back.
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'resolution', JSON_ARRAY(SUBSTRING(t.resolution, 1)) FROM issues t;
+-- +goose StatementEnd
 -- +goose StatementBegin
 ALTER TABLE issues DROP CONSTRAINT issues_resolution_check;
 -- +goose StatementEnd

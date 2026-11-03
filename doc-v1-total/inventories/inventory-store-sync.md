@@ -1490,7 +1490,7 @@ sha256 `9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75`.
 
 **Up** — one statement: `ALTER TABLE issues ADD COLUMN lane text NOT NULL DEFAULT '';` — column `lane`, type lowercase `text`, `NOT NULL`, `DEFAULT ''`. No index, no constraint, no backfill statement (the default populates existing rows). Comment: lane partitions an epic's children into parallel rank-ordered sub-sequences; children sharing a lane are sequenced by rank, different lanes run in parallel; the empty-string default is "one lane value like any other"; lane is meaningful only within an epic and the gate predicate enforces that scoping, not the column.
 
-**Down** — one statement: `ALTER TABLE issues DROP COLUMN lane;`. Declared LOSS CONTRACT: the down does not restore per-child lane assignments; with no lane column every child falls back to the shared default lane (fully-sequential epic gate); exact lane values require restoring from a pre-upgrade dbsnapshot.
+**Down** — one statement: `ALTER TABLE issues DROP COLUMN lane;`. Before it, the Down stashes every lane into `schema_stash`; the next Up's replay writes each back. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left.
 
 ### 12.4 `00003_add_resolution.sql`
 
@@ -1502,7 +1502,7 @@ sha256 `47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563`.
 
 No index, no backfill. Comment: resolution is the sealed close reason; NULL on every non-closed row and on a `done` close; the CHECK seals the value set at the DB boundary, mirroring `relations_type_check`, with `ParseResolution` as the primary gate and this as defense in depth.
 
-**Down** — two statements, constraint first: `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check;`, then `ALTER TABLE issues DROP COLUMN resolution;`. LOSS CONTRACT: recorded close reasons are not preserved; every closed ticket falls back to "closed with no recorded resolution".
+**Down** — two statements, constraint first: `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check;`, then `ALTER TABLE issues DROP COLUMN resolution;`. Before them, the Down stashes every recorded resolution; the next Up's replay writes each back. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left.
 
 ### 12.5 `00004_add_redirect_target.sql`
 
@@ -1550,7 +1550,7 @@ WHERE i.redirect_target IS NOT NULL;
 2. `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check;`
 3. `ALTER TABLE issues DROP COLUMN redirect_target;`
 
-LOSS CONTRACT: the redirect-vs-manual-peer distinction is lost; edge `created_at` is approximated by the close timestamp (fallback `updated_at`) and `created_by` by `'unknown'`; original stamps are not preserved. `INSERT IGNORE` tolerates two enumerated benign classes — (a) a manual edge already linking the same pair, (b) an FK-gap row: since `redirect_target` has no FK, a redirect whose canonical row was hard-deleted cannot re-materialize (relations' FK would reject it) and is silently skipped. The comment explicitly calls this "a silent skip, accepted here only because a migration has no per-row reporting channel".
+Before them, the Down stashes every `redirect_target` and every `related-to` edge; the next Up's replay writes each redirect back onto a ticket still closed as a duplicate or superseded, gives a live edge under a stashed key its stashed stamps, and inserts each stashed edge whose two issues still exist. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left. `INSERT IGNORE` tolerates two enumerated benign classes — (a) a manual edge already linking the same pair, (b) an FK-gap row: since `redirect_target` has no FK, a redirect whose canonical row was hard-deleted cannot re-materialize (relations' FK would reject it) and is silently skipped. The comment explicitly calls this "a silent skip, accepted here only because a migration has no per-row reporting channel".
 
 ### 12.6 `00005_add_event_attribution.sql`
 
@@ -1558,7 +1558,7 @@ sha256 `ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70`.
 
 **Up** — two statements: `ALTER TABLE issue_events ADD COLUMN stream_id VARCHAR(64) NULL;` and `ALTER TABLE issue_events ADD COLUMN workspace_id VARCHAR(191) NULL;`. Both nullable, no default, no index, no constraint, **no backfill** — the comment states attribution "is historical fact, never backfilled", so a freshly upgraded repository derives zero claims. Claims are DERIVED from these stamps at read time with no claim table, and "Nothing user-, host-, or path-shaped may ever enter these columns; the database syncs to shared remotes".
 
-**Down** — `ALTER TABLE issue_events DROP COLUMN stream_id;` and `ALTER TABLE issue_events DROP COLUMN workspace_id;`. LOSS CONTRACT: attribution collected on this version is not restored; the claim predicate reads unattributed history as zero claims.
+**Down** — `ALTER TABLE issue_events DROP COLUMN stream_id;` and `ALTER TABLE issue_events DROP COLUMN workspace_id;`. Before them, the Down stashes every `stream_id` and `workspace_id`; the next Up's replay writes each back. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left.
 
 ### 12.6a `00006_add_follows_up.sql`
 
@@ -1575,7 +1575,7 @@ sha256 `f01b4b1ef42071526c8c97bc0acf4bfa4451e0b95981576e63d8170080441b45`.
 
 Rank keys are untouched: a moved row sorts among its new siblings by the key it has. Test: `TestFollowsUpMigrationBackfill` (`internal/store/migration_follows_up_backfill_test.go`).
 
-**Down** — three statements: `DELETE FROM relations` every `parent-child` edge of an issue whose `follows_up` names an existing issue; `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) SELECT i.id, i.follows_up, 'parent-child', i.created_at, 'links'` for the same issues; `ALTER TABLE issues DROP COLUMN follows_up;`. LOSS CONTRACT: every follow-up is re-nested under the ticket it follows up and loses its place among its epic's children; one whose followed-up ticket has been purged keeps its current parent; a restored second parent is lost; a later Up backfills from closed non-epics alone, so a follow-up filed on an open ticket or an epic returns from a downgrade-then-upgrade as an ordinary child with no `follows_up`.
+**Down** — three statements: `DELETE FROM relations` every `parent-child` edge of an issue whose `follows_up` names an existing issue; `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) SELECT i.id, i.follows_up, 'parent-child', i.created_at, 'links'` for the same issues; `ALTER TABLE issues DROP COLUMN follows_up;`. Before them, the Down stashes every `follows_up` and the `parent-child` edges of every ticket that has one; the next Up's replay writes each `follows_up` back and makes each stashed ticket's parent edges exactly the stashed ones. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left.
 
 ### 12.6b `00007_every_ticket_inside_a_container.sql`
 
@@ -1594,7 +1594,7 @@ No column change. Brings stored data under containment: every task, bug, feature
 
 Tests: `TestContainmentMigrationHomesEveryLeaf` and `TestContainmentMigrationIsIdempotentAcrossCheckouts` (`internal/store/migration_containment_test.go`).
 
-**Down** — three statements: `UPDATE issues SET lane = '' WHERE lane = id;`; `DELETE r FROM relations r` every `parent-child` edge onto an epic with `topic = 'unfiled'` and `title = 'Unfiled tickets'`; `DELETE FROM issues` the epics matching the same three columns. LOSS CONTRACT: the unfiled epic's children return to the top level; a child Up moved from a non-epic parent to the epic above it stays there (nothing records its old parent); a lane an agent set to the ticket's own id by hand is reset too; comments, labels and events on the epic go with its row; an unfiled epic renamed since is an ordinary epic and stays.
+**Down** — three statements: `UPDATE issues SET lane = '' WHERE lane = id;`; `DELETE r FROM relations r` every `parent-child` edge onto an epic with `topic = 'unfiled'` and `title = 'Unfiled tickets'`; `DELETE FROM issues` the epics matching the same three columns. Before them, the Down stashes the unfiled epic whole with its comments, labels, events, event changes and edges, the lane of each of its children, and every lane spelled as its ticket's id; the next Up's replay gives the epic the Up minted again under the stashed id the stashed values, inserts what is missing, writes each lane back onto a ticket whose lane is still empty or its own id, and removes an unfiled epic the Up minted at another id only when every child it holds is a stashed ticket, so a ticket filed under one after the Down stays filed. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left.
 
 ### 12.6c `00008_blocked_by_edge.sql`
 
@@ -1618,7 +1618,7 @@ sha256 `f3af8e534e5b7fd3d09b310574f4b8925ca281bb942e040c83d25ebd64fdf852`.
 
 **Up** — one statement: `CREATE TABLE purges (issue_id VARCHAR(191) NOT NULL, issue_created_at VARCHAR(64) NOT NULL, purged_at VARCHAR(64) NOT NULL, purged_by TEXT NOT NULL, PRIMARY KEY (issue_id, issue_created_at));`. Bare (no `IF NOT EXISTS`), no index beyond the primary key, no constraint, **no foreign key**, no backfill. The comment states one row per purged issue — the id and the instant the issue was created, which together name the ticket, and when and by whom it was purged, never the content — kept so that a merge drops the ticket from every side, a restore does not bring it back, and id minting never hands its id out again; neither key column carries a foreign key because the issue it names no longer exists.
 
-**Down** — `DROP TABLE purges;` (no `IF EXISTS`). LOSS CONTRACT: the purged issues stay gone (their rows were deleted by the purge, not by this migration), but a store stepped back below this version no longer knows which ids were purged, so a sync with a store that still holds one of them can bring it back, and minting can hand a purged id out again; operators who need the records must restore from a pre-downgrade dbsnapshot.
+**Down** — `DROP TABLE purges;` (no `IF EXISTS`). Before it, the Down stashes every `purges` row; the next Up's replay inserts each one back. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left.
 
 ### 12.6e `00010_history_can_be_re_rooted.sql`
 
@@ -1634,7 +1634,7 @@ sha256 `285fb3de85af1b19f541b4093af21a6c7c924b838cebeae09c8bc034b49e528e`.
 
 **Up** — two statements, both bare: `ALTER TABLE issues ADD COLUMN work_plan text NOT NULL DEFAULT '';` and `CREATE TABLE plan_reviews (id VARCHAR(191) NOT NULL, issue_id VARCHAR(191) NOT NULL, plan_digest VARCHAR(64) NOT NULL, verdict VARCHAR(16) NOT NULL, laws TEXT NOT NULL, created_at VARCHAR(64) NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (id), KEY idx_plan_reviews_issue_created (issue_id, created_at), CONSTRAINT plan_reviews_issue FOREIGN KEY (issue_id) REFERENCES issues (id) ON DELETE CASCADE, CONSTRAINT plan_reviews_verdict_check CHECK (verdict IN ('pass','fail')));`. No backfill. The comments state that `work_plan` is the ticket's plan — how its work will be done, written before the work starts so a reviewer can judge it against the laws — that the empty text is a ticket with no plan, that each edit is recorded in the history like any field's and those recorded texts are the plan's versions, and that the column is not named `plan` because PLAN is a reserved word in the SQL dialect; and that `plan_reviews` holds one row per law review of a ticket's plan, `plan_digest` the hex SHA-256 of the plan text the review judged — naming the text rather than its version number because the numbers follow the history's order and a sync that merges in an older edit renumbers the versions after it — `laws` the cited law tokens sorted and joined by commas (a token holds no comma), a review never edited, and cascading away with its issue on a purge.
 
-**Down** — `DROP TABLE plan_reviews;` then `ALTER TABLE issues DROP COLUMN work_plan;` (no `IF EXISTS`). LOSS CONTRACT: this Down drops every plan and every plan review; a store stepped back below this version holds no record that a ticket was planned or that a plan passed review; operators who need them must restore from a pre-downgrade dbsnapshot.
+**Down** — `DROP TABLE plan_reviews;` then `ALTER TABLE issues DROP COLUMN work_plan;` (no `IF EXISTS`). Before them, the Down stashes every `work_plan` and every `plan_reviews` row; the next Up's replay writes each plan back and inserts each review whose issue still exists. The stash and its replay are `migrations.Restores` (`internal/store/migrations/stash.go`); the replay runs after the version's Up and deletes every entry it read; a replay that runs late, after an Up that did not replay, writes a column only where it still holds the value the Up left.
 
 ### 12.7 `embed.go`
 

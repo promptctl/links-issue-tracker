@@ -95,3 +95,36 @@ func TestStashCarrierDriftNamesEveryOtherDefinition(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryReleasedDownStashesWhatItsUpReplays holds each version's Down to
+// its declared stash: the Down carries every Restores entry's StashSQL as
+// generated.
+func TestEveryReleasedDownStashesWhatItsUpReplays(t *testing.T) {
+	entries, err := fs.ReadDir(FS, ".")
+	if err != nil {
+		t.Fatalf("read registry: %v", err)
+	}
+	seen := map[int64]bool{}
+	for _, e := range entries {
+		v, ok := ParseVersion(e.Name())
+		if !ok || len(Restores[v]) == 0 {
+			continue
+		}
+		seen[v] = true
+		b, err := fs.ReadFile(FS, e.Name())
+		if err != nil {
+			t.Fatalf("read %s: %v", e.Name(), err)
+		}
+		_, down, _ := strings.Cut(string(b), "-- +goose Down")
+		for _, st := range Restores[v] {
+			if want := GooseStatements(st.StashSQL()); !strings.Contains(down, want) {
+				t.Errorf("%s: its Down does not stash %s as migrations generates it:\n%s", e.Name(), st.Name(), want)
+			}
+		}
+	}
+	for v := range Restores {
+		if !seen[v] {
+			t.Errorf("Restores declares v%d, which is not in the registry", v)
+		}
+	}
+}

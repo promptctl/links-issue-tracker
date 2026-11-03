@@ -41,8 +41,9 @@ A migration can add structure whose content is derivable from vN-1 data, as
 v12's `is_top_level_id` is. It can add structure that holds new user data only
 if the data has somewhere to live at vN-1. That place is the **stash
 carrier**: a `schema_stash (table_name, row_key, column_name, value)` table
-that sits outside the versioned schema. `row_key` is the row's primary key,
-composite keys included, as canonical JSON; `value` is the value in the same
+that sits outside the versioned schema. `row_key` is the row's primary key as
+text, a composite key's parts joined by `CHAR(31)` so no engine's JSON
+formatting enters it; `value` is the value in the same
 type-faithful encoding the canonical export uses. Whichever step first needs it creates
 it, no Down drops it, and the shape comparison ignores it, so it serves the
 released versions below any migration that could have added it and survives

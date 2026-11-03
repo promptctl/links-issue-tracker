@@ -1837,9 +1837,9 @@ goose_db_version` and commits. `assertReachedBaseline` asserts
 - v3 Down: `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check` then `DROP COLUMN resolution` (`00003_add_resolution.sql`).
 - v4 Down: `INSERT IGNORE INTO relations(src_id, dst_id, type, created_at, created_by)` re-materializing one `related-to` edge per non-NULL `redirect_target` with `LEAST/GREATEST` ordering, `created_at = COALESCE(closed_at, updated_at)`, `created_by = 'unknown'` (`00004_add_redirect_target.sql`); then `DROP CONSTRAINT issues_redirect_target_check` and `DROP COLUMN redirect_target`.
 - v5 Down: `ALTER TABLE issue_events DROP COLUMN stream_id` then `DROP COLUMN workspace_id` (`00005_add_event_attribution.sql`).
-- v9 Down: `DROP TABLE purges` (`00009_purges.sql`); the LOSS CONTRACT comment: purged issues stay gone, but the store no longer knows which ids were purged, so a sync can bring one back and minting can reissue one.
+- v9 Down: `DROP TABLE purges` (`00009_purges.sql`); it first stashes every `purges` row into `schema_stash`, and the next Up's replay (`migrations.Restores`) inserts each back.
 - v10 Down: `SELECT 1;` (`00010_history_can_be_re_rooted.sql`); the LOSS CONTRACT comment: the `producer_binary_version` row the Up deleted is not restored.
-- v11 Down: `DROP TABLE plan_reviews` then `ALTER TABLE issues DROP COLUMN work_plan` (`00011_plans_and_plan_reviews.sql`); the LOSS CONTRACT comment: every plan and every plan review is dropped, so a store stepped back below this version holds no record that a ticket was planned or that a plan passed review; operators who need them must restore from a pre-downgrade dbsnapshot.
+- v11 Down: `DROP TABLE plan_reviews` then `ALTER TABLE issues DROP COLUMN work_plan` (`00011_plans_and_plan_reviews.sql`); it first stashes every `work_plan` and every `plan_reviews` row into `schema_stash`, and the next Up's replay (`migrations.Restores`) writes each plan back and inserts each review whose issue still exists.
 - v1 Down: `DROP TABLE IF EXISTS` for `issue_event_changes`, `issue_events`, `labels`, `comments`, `relations`, `issues`, `meta` — in that FK-safe order (`00001_baseline.sql`).
 
 v4 Up also performs data mutations that change `relations` content: a backfill

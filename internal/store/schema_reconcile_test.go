@@ -217,12 +217,13 @@ func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
 	}
-	// Pre-rename shape: rename agent_prompt back to `prompt`.
-	if err := first.ExecRawForTest(ctx, "ALTER TABLE issues RENAME COLUMN agent_prompt TO `prompt`"); err != nil {
-		_ = first.Close()
-		t.Fatalf("rename to legacy `prompt` error = %v", err)
-	}
-	hijackToPreGoose(t, first)
+	// Pre-rename shape: rename agent_prompt back to `prompt`, after the
+	// revert, since v7's Down stashes the column by its name.
+	hijackToPreGooseReshaping(t, first, func() {
+		if err := first.ExecRawForTest(ctx, "ALTER TABLE issues RENAME COLUMN agent_prompt TO `prompt`"); err != nil {
+			t.Fatalf("rename to legacy `prompt` error = %v", err)
+		}
+	})
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}

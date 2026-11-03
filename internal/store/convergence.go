@@ -78,6 +78,10 @@ const (
 	stepDriftCheckpoint
 	stepDriftRepair
 	stepDriftRepairReset
+	stepStashRead
+	stepStashCheckpoint
+	stepStashReplay
+	stepStashReplayReset
 	stepCommitStandingWrites
 	stepEnsureQuarantineTable
 	stepQuarantineTableShape
@@ -140,6 +144,12 @@ var convergenceSteps = [convergenceStepCount]struct {
 	// The next open probes the live schema and repairs whatever is still
 	// missing, whether or not the reset held.
 	stepDriftRepairReset: {"drift_repair_reset", ActClearCause},
+	stepStashRead:        {"stash_read", ActClearCause},
+	stepStashCheckpoint:  {"stash_checkpoint", ActClearCause},
+	stepStashReplay:      {"stash_replay", ActClearCause},
+	// A replay deletes its entries in the commit that writes them back, so
+	// the next open finds whatever the reset left and replays it.
+	stepStashReplayReset: {"stash_replay_reset", ActClearCause},
 	// Writes already in the working set when the gate runs, versioned before
 	// the gate commits its own table. The next open runs it again.
 	stepCommitStandingWrites:  {"commit_standing_writes", ActClearCause},
@@ -203,12 +213,14 @@ type pruneStep int
 const (
 	pruneMigrationCheckpoints pruneStep = iota
 	pruneDriftCheckpoints
+	pruneStashCheckpoints
 	pruneMigrationSnapshots
 )
 
 var pruneStepTokens = [...]string{
 	pruneMigrationCheckpoints: "migration_checkpoint_prune",
 	pruneDriftCheckpoints:     "drift_checkpoint_prune",
+	pruneStashCheckpoints:     "stash_checkpoint_prune",
 	pruneMigrationSnapshots:   "snapshot_prune",
 }
 
