@@ -84,10 +84,11 @@ the one to resolve.
     it. It runs for migrations written from now on; a released Up that
     destroyed data, as v4's and v7's did, already destroyed it on every store
     it ran on, so there is nothing for a Down to return.
-- **Cross-version release check.** On every PR that adds or changes a
-  migration, CI builds the candidate with its own registry max as its
-  released ceiling, migrates a fixture with it, steps it down to the previous release's
-  `Schema.Max` — across every migration the candidate adds, however many —
+- **Cross-version release check.** On every PR, and before every publish,
+  CI builds the candidate with its own registry max as its
+  released ceiling, migrates a fixture with it, steps it down to the `Schema.Max`
+  of the newest release whose max is below the candidate's — across every
+  migration the candidate adds, however many —
   then runs the previous release's published `lit` against it — read, write,
   sync — and steps it back up with the candidate. This is the only check that
   proves rule 1 against code that actually shipped rather than against our own Down SQL.

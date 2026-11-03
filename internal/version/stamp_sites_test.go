@@ -144,12 +144,36 @@ func TestOnlyTheJustfileOmitsVersion(t *testing.T) {
 // from-source entrypoints, and any build that stamps nothing at all — must land
 // on the side that reports its age, because an unknown producer is a binary
 // nobody can vouch for and silence is the wrong answer for it.
+//
+// The one exception is scripts/cross-version-check.sh: it builds a release
+// stand-in into a temporary directory it removes on exit, to step a store down
+// and raise it back as a release would. The non-Go build sites (the Justfile,
+// scripts/, .github/, tools/ and build/) are scanned, so a further claimant
+// there fails here.
 func TestOnlyGoreleaserClaimsReleaseProvenance(t *testing.T) {
 	t.Parallel()
-	for _, rel := range []string{"Justfile", "scripts/install.sh", "scripts/version-ldflags.sh"} {
-		if strings.Contains(repoFile(t, rel), "Origin="+OriginRelease) {
-			t.Errorf("%s stamps Origin=%s — only goreleaser may claim release provenance", rel, OriginRelease)
+	allowed := map[string]bool{"scripts/cross-version-check.sh": true}
+	sites := []string{"Justfile"}
+	for _, dir := range []string{"scripts", ".github", "tools", "build"} {
+		err := filepath.WalkDir(repoPath(dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			rel, err := filepath.Rel(repoPath(), path)
+			sites = append(sites, filepath.ToSlash(rel))
+			return err
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
 		}
+	}
+	for _, rel := range sites {
+		if !allowed[rel] && strings.Contains(repoFile(t, rel), ".Origin="+OriginRelease) {
+			t.Errorf("%s stamps Origin=%s — only goreleaser, and the cross-version check's throwaway build, may claim release provenance", rel, OriginRelease)
+		}
+	}
+	if !strings.Contains(repoFile(t, "scripts/cross-version-check.sh"), ".Origin="+OriginRelease) {
+		t.Error("scripts/cross-version-check.sh no longer stamps release provenance; drop its exception here")
 	}
 }
 
@@ -249,6 +273,8 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 	}
 	pushes := regexp.MustCompile(`sync\s+push|refs/dolt|report-to-lit`)
 	secret := regexp.MustCompile(`secrets\.([A-Za-z0-9_]+)`)
+	called := regexp.MustCompile(`scripts/[A-Za-z0-9_.-]+\.sh`)
+	scripts := map[string]bool{}
 	err = filepath.WalkDir(repoPath(".github"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -256,6 +282,9 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return err
+		}
+		for _, m := range called.FindAll(b, -1) {
+			scripts[string(m)] = true
 		}
 		if m := pushes.Find(b); m != nil {
 			t.Errorf("%s contains %q — CI never writes to the lit tracker", path, m)
@@ -269,6 +298,32 @@ func TestNoCIJobWritesToTheTracker(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// A script a workflow runs is CI too. The cross-version check is the one
+	// that writes a remote, and every line of it that does runs through
+	// fenced, which refuses any origin but the script's throwaway remote.
+	const crossVersion = "scripts/cross-version-check.sh"
+	writesRemote := regexp.MustCompile(`sync\s+push|refs/dolt|report-to-lit|git\s+push|--remote`)
+	for rel := range scripts {
+		body := repoFile(t, rel)
+		if rel != crossVersion {
+			if m := pushes.FindString(body); m != "" {
+				t.Errorf("%s, which CI runs, contains %q — CI never writes to the lit tracker", rel, m)
+			}
+			continue
+		}
+		if !strings.Contains(body, `[ "$(git remote get-url origin)" = "$work/remote.git" ] ||`) {
+			t.Errorf("%s no longer defines fenced over its throwaway remote", rel)
+		}
+		for i, line := range strings.Split(body, "\n") {
+			code := strings.TrimSpace(line)
+			if strings.HasPrefix(code, "#") || !writesRemote.MatchString(code) {
+				continue
+			}
+			if !strings.HasPrefix(code, "fenced ") {
+				t.Errorf("%s:%d writes a remote outside fenced: %s", rel, i+1, code)
+			}
+		}
 	}
 }
 

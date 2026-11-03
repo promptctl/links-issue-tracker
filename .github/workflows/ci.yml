@@ -175,6 +175,29 @@ jobs:
           go build -o "$RUNNER_TEMP/perfbench" ./tools/perfbench
           "$RUNNER_TEMP/perfbench" --sizes 700
 
+  # A published release reads, writes and syncs a store this tree stepped down
+  # to its schema, and the raise back loses nothing: the one check that runs
+  # code that actually shipped against our Downs. release-validate.yml runs the
+  # same script before it publishes. A cgo build plus a release download puts it
+  # over the 5-minute job target, hence its own timeout.
+  cross-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The script reads each release tag's migration registry.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: A published release runs on a store this tree stepped down
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/cross-version-check.sh
+
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart
   # from build-and-test ([LAW:decomposition]) and run in parallel with it.

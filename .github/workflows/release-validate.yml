@@ -102,6 +102,29 @@ jobs:
       - name: License-policy gate (publish-blocking)
         run: go run ./tools/licenses -check -pkg ./cmd/lit
 
+  # Publish-blocking, in parallel with validate like license-gate: a published
+  # release still reads, writes and syncs a store this commit stepped down, and
+  # the raise back loses nothing. ci.yml runs the same script on every PR.
+  cross-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # It runs a downloaded release and a fresh build; neither needs more than read.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The script reads each release tag's migration registry.
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: A published release runs on a store this commit stepped down
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/cross-version-check.sh
+
   validate:
     runs-on: ubuntu-latest
     # Surfaced to the publish job: whether this commit is a pending release and,
@@ -702,13 +725,13 @@ jobs:
   # it can only publish what validate built. The tag is cut BY CI; nothing pushes
   # it from a local machine.
   publish:
-    # needs BOTH: validate builds the artifact; license-gate is the
-    # publish-blocking freedom check (links-supply-chain-w6m9.5). If license-gate
-    # fails, this job is skipped and nothing is tagged or published — the release
+    # needs all three: validate builds the artifact; license-gate is the
+    # publish-blocking freedom check; cross-version proves the newest older
+    # release survives this commit's Downs. If any of them fails, this job is skipped and nothing is tagged or published — the release
     # aborts before any asset ships. If validate is skipped (snapshot), the `if`
     # below keeps publish off anyway. [LAW:no-silent-failure] a non-free posture
     # cannot reach a published release.
-    needs: [validate, license-gate]
+    needs: [validate, license-gate, cross-version]
     if: needs.validate.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
