@@ -53,19 +53,43 @@ type Unit struct {
 // writes is legal on only as they were.
 func row(table string, key, cols []string) Unit {
 	return Unit{key: "s.row_key", image: func(k string) string {
-		return fmt.Sprintf("(SELECT %s FROM %s u WHERE %s = %s)", value(cols, "u"), table, rowKey(key, "u"), k)
+		// A one-column key is compared bare, so the lookup uses its index.
+		match := fmt.Sprintf("u.%s = %s", key[0], k)
+		if len(key) > 1 {
+			match = fmt.Sprintf("%s = %s", rowKey(key, "u"), k)
+		}
+		return fmt.Sprintf("(SELECT %s FROM %s u WHERE %s)", value(cols, "u"), table, match)
 	}}
 }
 
 // ticket is the issues row under the entry's key, as cols of it.
 func ticket(cols ...string) Unit { return row("issues", []string{"id"}, cols) }
 
-// parents is a ticket's parent edges, whole, the ticket being key: filing,
-// reparenting, or re-creating an edge below changes them.
-func parents(key string) Unit {
+// both is a and b over a's key: a write below that changes either changes it.
+func both(a, b Unit) Unit {
+	return Unit{key: a.key, image: func(k string) string { return fmt.Sprintf("JSON_ARRAY(%s, %s)", a.image(k), b.image(k)) }}
+}
+
+// edges is the edges of type where (over relations aliased u) picks for a
+// ticket, whole, each with its other end's status and type: what an Up
+// derives a ticket's follow-up, redirect, or place from.
+func edges(key, typ string, where func(k string) string) Unit {
 	return Unit{key: key, image: func(k string) string {
-		return fmt.Sprintf("(SELECT GROUP_CONCAT(%s ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = %s AND u.type = 'parent-child')", rowKey(relationColumns, "u"), k)
+		return fmt.Sprintf("(SELECT GROUP_CONCAT(CONCAT_WS(CHAR(31), %s, CAST(o.status AS CHAR), CAST(o.issue_type AS CHAR)) ORDER BY u.src_id, u.dst_id SEPARATOR ',') FROM relations u LEFT JOIN issues o ON o.id = IF(u.src_id = %s, u.dst_id, u.src_id) WHERE u.type = '%s' AND %s)",
+			rowKey(relationColumns, "u"), k, typ, where(k))
 	}}
+}
+
+// parents is a ticket's parent edges, the ticket being key: filing,
+// reparenting, re-creating an edge, or closing a parent below changes them.
+func parents(key string) Unit {
+	return edges(key, "parent-child", func(k string) string { return "u.src_id = " + k })
+}
+
+// related is a ticket's related-to edges, either way round: a v3 redirect is
+// one of them.
+func related(key string) Unit {
+	return edges(key, "related-to", func(k string) string { return fmt.Sprintf("(u.src_id = %[1]s OR u.dst_id = %[1]s)", k) })
 }
 
 // undisputed is a row of a table the version below does not have, so no
@@ -295,10 +319,11 @@ func (r Rows) RestoreSQL() []string {
 var Restores = map[int64][]Stash{
 	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Unit: ticket("id")}},
 	// A resolution is legal on a ticket's closure only as it was, and a
-	// redirect on its resolution too: issues_redirect_target_check.
+	// redirect on its resolution too (issues_redirect_target_check); at v3 a
+	// redirect is a related-to edge, which the Up derives it from.
 	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Unit: ticket("status", "closed_at")}},
 	4: {
-		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Unit: ticket("status", "closed_at", "resolution")},
+		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Unit: both(ticket("status", "closed_at", "resolution"), related("s.row_key"))},
 		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}, Unit: row("relations", relationKey, relationColumns)},
 	},
 	5: {
@@ -347,17 +372,20 @@ func unfiledEpic() []Stash {
 		Rows{Table: "issue_event_changes", Columns: []string{"event_id", "field", "from_value", "to_value"}, Key: []string{"event_id", "field"}, Where: fmt.Sprintf("t.event_id IN (SELECT v.id FROM issue_events v WHERE %s)", strings.ReplaceAll(of("issue_id"), "t.issue_id", "v.issue_id")), Slice: "unfiled", Unit: row("issue_event_changes", []string{"event_id", "field"}, []string{"event_id", "field", "from_value", "to_value"})},
 		Rows{
 			Table: "relations", Columns: relationColumns, Key: relationKey,
-			Where: of("dst_id"), Slice: "unfiled", Refs: []string{"src_id", "dst_id"},
+			Where: "t.type = 'parent-child' AND " + of("dst_id"), Slice: "unfiled", Refs: []string{"src_id", "dst_id"},
 			Prune: fmt.Sprintf("relations.type = 'parent-child' AND relations.src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled') AND relations.dst_id IN (SELECT e.id FROM issues e WHERE e.%s)", element(0), strings.ReplaceAll(epic, " AND ", " AND e.")),
 			Unit:  parents(element(0)),
 		},
+		// Every other edge onto the epic: no write below reaches an epic the
+		// version below does not hold but by re-creating the edge.
+		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: "t.type <> 'parent-child' AND " + of("dst_id"), Slice: "unfiled-dst", Refs: []string{"src_id", "dst_id"}, Unit: row("relations", relationKey, relationColumns)},
 		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: of("src_id"), Slice: "unfiled-src", Refs: []string{"src_id", "dst_id"}, Unit: row("relations", relationKey, relationColumns)},
-		// The Down resets a lane spelled as its ticket's id, and the Up spells
-		// the lane of every child it leaves at the top level so: whatever lane
-		// a write below sets, the Up spells it again, so it is not the unit.
+		// The Down resets a lane spelled as its ticket's id. The Up spells
+		// again only the lane of a ticket it moves, so a lane written below on
+		// a ticket left where it was is the write that stands.
 		Column{Table: "issues", Column: "lane", Key: []string{"id"}, Slice: "unfiled",
 			Where: fmt.Sprintf("(t.lane = t.id OR t.id IN (SELECT c.src_id FROM relations c WHERE c.type = 'parent-child' AND %s))", strings.ReplaceAll(of("dst_id"), "t.dst_id", "c.dst_id")),
-			Unit:  parents("s.row_key")},
+			Unit:  both(parents("s.row_key"), ticket("lane"))},
 	}
 }
 

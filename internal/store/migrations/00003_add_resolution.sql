@@ -43,5 +43,5 @@ ALTER TABLE issues DROP COLUMN resolution;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'resolution#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.status, 1), SUBSTRING(u.closed_at, 1)) FROM issues u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'resolution';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'resolution#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.status, 1), SUBSTRING(u.closed_at, 1)) FROM issues u WHERE u.id = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'resolution';
 -- +goose StatementEnd

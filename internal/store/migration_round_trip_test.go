@@ -227,7 +227,13 @@ func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v in
 		if current >= v {
 			return nil
 		}
-		if _, err := migrations.SettleStash(ctx, db, current+1); err != nil {
+		next := int64(-1)
+		for _, src := range provider.ListSources() {
+			if src.Version > current && (next < 0 || src.Version < next) {
+				next = src.Version
+			}
+		}
+		if _, err := migrations.SettleStash(ctx, db, next); err != nil {
 			return err
 		}
 		result, err := provider.UpByOne(ctx)

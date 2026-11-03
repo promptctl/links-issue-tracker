@@ -80,7 +80,39 @@ func TestARaiseKeepsWhatWasWrittenBelowTheDown(t *testing.T) {
 				}
 			}
 		}},
-		{"a store written nothing below v4 comes back whole", 4,func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
+		{"a redirect unlinked below v4 does not come back", 4, func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
+			redirected := queryOne(t, db, `SELECT s.row_key FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'redirect_target' AND JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) <> 'NULL' ORDER BY s.row_key LIMIT 1`)
+			target := queryOne(t, db, `SELECT JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]')) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'redirect_target' AND s.row_key = '`+redirected+`'`)
+			execSQL(t, db, `DELETE FROM relations WHERE type = 'related-to' AND (src_id = '`+redirected+`' OR dst_id = '`+redirected+`')`)
+			return func(t *testing.T, db *sql.DB) {
+				if got := queryOne(t, db, `SELECT redirect_target FROM issues WHERE id = '`+redirected+`'`); got == target {
+					t.Errorf("redirect_target of %s = %q, the redirect unlinked below", redirected, got)
+				}
+			}
+		}},
+		{"a follow-up whose ticket was reopened below v6 is no follow-up", 6, func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
+			followUp := queryOne(t, db, `SELECT s.row_key FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'follows_up' AND JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) <> 'NULL' ORDER BY s.row_key LIMIT 1`)
+			followed := queryOne(t, db, `SELECT JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]')) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'follows_up' AND s.row_key = '`+followUp+`'`)
+			execSQL(t, db, `UPDATE issues SET status = 'open', closed_at = NULL, resolution = NULL WHERE id = '`+followed+`'`)
+			return func(t *testing.T, db *sql.DB) {
+				if got := queryOne(t, db, `SELECT follows_up FROM issues WHERE id = '`+followUp+`'`); got != "" {
+					t.Errorf("follows_up of %s = %q, want none: %s was reopened below", followUp, got, followed)
+				}
+			}
+		}},
+		{"a lane set below v7 on a ticket the Up leaves in place keeps that lane", 7, func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
+			placed := queryOne(t, db, `SELECT s.row_key FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'lane@unfiled' AND EXISTS (SELECT 1 FROM relations r WHERE r.src_id = s.row_key AND r.type = 'parent-child') ORDER BY s.row_key LIMIT 1`)
+			if placed == "" {
+				t.Fatal("the v7 seed stashes no lane of a ticket that keeps a parent below")
+			}
+			execSQL(t, db, `UPDATE issues SET lane = 'below-lane' WHERE id = '`+placed+`'`)
+			return func(t *testing.T, db *sql.DB) {
+				if got := queryOne(t, db, `SELECT lane FROM issues WHERE id = '`+placed+`'`); got != "below-lane" {
+					t.Errorf("lane of %s = %q, want below-lane", placed, got)
+				}
+			}
+		}},
+		{"a store written nothing below v4 comes back whole", 4, func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
 			return func(t *testing.T, db *sql.DB) {
 				ref, _ := storeAtVersion(t, migrations.FS, 4)
 				applySeed(t, ref.db, seeds[4])
