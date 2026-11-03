@@ -156,7 +156,11 @@ table. A test fails on any other definition, alteration, or drop of
 `schema_stash`.
 
 The carrier admits string columns (`VARCHAR`, `TEXT`), which is every column
-a released Down drops. The design asks for the canonical export's encoding,
+a released Down drops. The template below restores columns of rows that still
+exist. A Down that drops a whole table (v9 `purges`, v11 `plan_reviews`) meets
+an Up that re-creates it empty, where the `UPDATE ... JOIN` matches nothing
+and the `DELETE` then discards every entry; its rows need re-inserting from
+the stash instead. The design asks for the canonical export's encoding,
 but that encoder is Go and a goose step is SQL. So the step encodes in SQL,
 and the round-trip gate proves the result against the export. A column of
 another type needs its encoding here and a seeded column of that type in
@@ -168,7 +172,7 @@ key order:
 
 ```sql
 -- Stash: in a Down before it drops <c>, or in an Up before it destroys <c>.
-REPLACE INTO schema_stash SELECT '<t>', <key>, '<c>', JSON_ARRAY(SUBSTRING(<c>, 1)) FROM <t>;
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '<t>', <key>, '<c>', JSON_ARRAY(SUBSTRING(<c>, 1)) FROM <t>;
 
 -- Restore: once <c> exists again, in the Up that re-adds it or the Down of a destructive Up.
 UPDATE <t> JOIN schema_stash s ON s.table_name = '<t>' AND s.column_name = '<c>' AND s.row_key = <key>

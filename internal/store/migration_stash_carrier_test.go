@@ -30,7 +30,7 @@ func carrierMigration() (up, down []string) {
 	down = []string{migrations.StashCarrierDDL}
 	for _, c := range carrierColumns {
 		up = append(up, fmt.Sprintf("ALTER TABLE issues ADD COLUMN %s %s;", c.name, c.ddl))
-		down = append(down, fmt.Sprintf("REPLACE INTO schema_stash SELECT 'issues', %s, '%s', JSON_ARRAY(SUBSTRING(%s, 1)) FROM issues;", key, c.name, c.name))
+		down = append(down, fmt.Sprintf("REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', %s, '%s', JSON_ARRAY(SUBSTRING(%s, 1)) FROM issues;", key, c.name, c.name))
 	}
 	for _, c := range carrierColumns {
 		up = append(up,
@@ -42,8 +42,8 @@ func carrierMigration() (up, down []string) {
 }
 
 // carrierSeed fills the carrier columns with the values a string stash must
-// return exactly: quotes, a backslash, an escaped newline, non-ASCII, ”,
-// NULL, and strings that read as JSON.
+// return exactly: quotes, a backslash, an escaped newline, non-ASCII, the
+// empty string, NULL, and strings that read as JSON.
 const carrierSeed = `UPDATE issues SET stash_note = CONCAT('x"y\\z ünï 😀\n', id), stash_label = CONCAT('q''r 中 ', id);
 UPDATE issues SET stash_note = NULL ORDER BY id LIMIT 1;
 UPDATE issues SET stash_label = '' ORDER BY id LIMIT 1;
@@ -55,20 +55,7 @@ UPDATE issues SET stash_note = 'null', stash_label = '[1]' ORDER BY id DESC LIMI
 // migration, one version above the registry's top.
 func registryWithCarrier(t *testing.T, up, down []string) (fsys fs.FS, v int64) {
 	t.Helper()
-	dir := t.TempDir()
-	entries, err := fs.ReadDir(migrations.FS, ".")
-	if err != nil {
-		t.Fatalf("read registry: %v", err)
-	}
-	for _, e := range entries {
-		b, err := fs.ReadFile(migrations.FS, e.Name())
-		if err != nil {
-			t.Fatalf("read %s: %v", e.Name(), err)
-		}
-		if err := os.WriteFile(path.Join(dir, e.Name()), b, 0o644); err != nil {
-			t.Fatalf("write %s: %v", e.Name(), err)
-		}
-	}
+	dir := copyRegistry(t, func(_, body string) string { return body })
 	registry := registryMigrations(t)
 	v = registry[len(registry)-1].Version + 1
 	body := "-- +goose Up\n" + gooseStatements(up) + "-- +goose Down\n" + gooseStatements(down)

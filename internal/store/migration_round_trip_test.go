@@ -163,6 +163,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 		return fmt.Errorf("shape after Down differs from a fresh Up to v%d:\n%s", below,
 			unifiedSchemaDiff("fresh Up", "after Down", want, got))
 	}
+	stashed := stashEntries(t, st.db)
 	if _, err := provider.UpTo(ctx, v); err != nil {
 		return fmt.Errorf("Up to v%d after Down: %w", v, err)
 	}
@@ -170,7 +171,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 		return fmt.Errorf("%w: export after Up(Down) differs from the seeded export:\n%s", errDataLost,
 			unifiedSchemaDiff("seeded", "after Up(Down)", before, after))
 	}
-	return stashDrained(t, st.db)
+	return stashConsumed(t, st.db, stashed)
 }
 
 // freshShapes caches freshShape per version: one Up-only store per version
@@ -200,6 +201,7 @@ func roundTripBelow(t *testing.T, fsys fs.FS, v, below int64, seed string) error
 	if _, err := provider.UpTo(ctx, v); err != nil {
 		return fmt.Errorf("Up to v%d: %w", v, err)
 	}
+	stashed := stashEntries(t, st.db)
 	if _, err := provider.DownTo(ctx, below); err != nil {
 		return fmt.Errorf("Down to v%d after Up: %w", below, err)
 	}
@@ -207,24 +209,49 @@ func roundTripBelow(t *testing.T, fsys fs.FS, v, below int64, seed string) error
 		return fmt.Errorf("%w: export after Down(Up) differs from the seeded export:\n%s", errDataLost,
 			unifiedSchemaDiff("seeded", "after Down(Up)", before, after))
 	}
-	return nil
+	return stashConsumed(t, st.db, stashed)
 }
 
-// stashDrained fails an Up(Down) that leaves entries in the stash carrier: the
-// Up deletes every entry it restores from, and the export leaves the carrier
-// out, so an entry left behind is caught here or never. A Down(Up) rightly
-// ends with entries, the values the next Up returns.
-func stashDrained(t *testing.T, db *sql.DB) error {
+// stashEntries is the stash carrier's keys, empty when no step has created it.
+func stashEntries(t *testing.T, db *sql.DB) map[string]bool {
 	t.Helper()
+	keys := map[string]bool{}
 	if !slices.Contains(allTables(t, db), schemaStashTable) {
-		return nil
+		return keys
 	}
-	var left int
-	if err := db.QueryRowContext(context.Background(), "SELECT COUNT(*) FROM "+schemaStashTable).Scan(&left); err != nil {
-		t.Fatalf("count stash entries: %v", err)
+	rows, err := db.QueryContext(context.Background(), "SELECT table_name, row_key, column_name FROM "+schemaStashTable)
+	if err != nil {
+		t.Fatalf("read stash entries: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var table, row, column string
+		if err := rows.Scan(&table, &row, &column); err != nil {
+			t.Fatalf("scan stash entry: %v", err)
+		}
+		keys[table+"\x00"+row+"\x00"+column] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read stash entries: %v", err)
+	}
+	return keys
+}
+
+// stashConsumed fails a round trip whose return step left behind an entry the
+// outbound step wrote. Whichever direction stashes, the step back restores
+// from and deletes every entry it was handed; what it stashes itself is the
+// next step's to restore. The export leaves the carrier out, so a stale entry
+// is caught here or never.
+func stashConsumed(t *testing.T, db *sql.DB, stashed map[string]bool) error {
+	t.Helper()
+	left := 0
+	for key := range stashEntries(t, db) {
+		if stashed[key] {
+			left++
+		}
 	}
 	if left != 0 {
-		return fmt.Errorf("%w: %d stash entries left after the round trip", errStashNotDrained, left)
+		return fmt.Errorf("%w: %d stash entries the round trip handed back were left behind", errStashNotDrained, left)
 	}
 	return nil
 }
@@ -424,36 +451,38 @@ func seedsByVersion(t *testing.T, registry []migrations.Migration) map[int64]str
 // replaced, for proving the gate rejects a lossy Down.
 func registryWithDown(t *testing.T, v int64, down string) fs.FS {
 	t.Helper()
+	prefix := fmt.Sprintf("%05d_", v)
+	return os.DirFS(copyRegistry(t, func(name, body string) string {
+		if !strings.HasPrefix(name, prefix) {
+			return body
+		}
+		up, _, ok := strings.Cut(body, "-- +goose Down")
+		if !ok {
+			t.Fatalf("%s has no Down section", name)
+		}
+		return up + "-- +goose Down\n" + gooseStatements(strings.Split(down, "\n"))
+	}))
+}
+
+// copyRegistry writes the embedded registry into a temp dir, each file's body
+// passed through edit, and returns the dir.
+func copyRegistry(t *testing.T, edit func(name, body string) string) string {
+	t.Helper()
 	dir := t.TempDir()
 	entries, err := fs.ReadDir(migrations.FS, ".")
 	if err != nil {
 		t.Fatalf("read registry: %v", err)
 	}
-	prefix := fmt.Sprintf("%05d_", v)
 	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
 		b, err := fs.ReadFile(migrations.FS, e.Name())
 		if err != nil {
 			t.Fatalf("read %s: %v", e.Name(), err)
 		}
-		body := string(b)
-		if strings.HasPrefix(e.Name(), prefix) {
-			up, _, ok := strings.Cut(body, "-- +goose Down")
-			if !ok {
-				t.Fatalf("%s has no Down section", e.Name())
-			}
-			body = up + "-- +goose Down\n"
-			for _, stmt := range strings.Split(down, "\n") {
-				body += "-- +goose StatementBegin\n" + stmt + "\n-- +goose StatementEnd\n"
-			}
-		}
-		if err := os.WriteFile(path.Join(dir, e.Name()), []byte(body), 0o644); err != nil {
+		if err := os.WriteFile(path.Join(dir, e.Name()), []byte(edit(e.Name(), string(b))), 0o644); err != nil {
 			t.Fatalf("write %s: %v", e.Name(), err)
 		}
 	}
-	return os.DirFS(dir)
+	return dir
 }
 
 // assertBaselineTablesAbsent checks that every table the baseline creates is

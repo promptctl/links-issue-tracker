@@ -8,22 +8,34 @@ import (
 	"testing"
 )
 
-// stashCarrierDDLStatement is any statement that defines or changes the stash
-// carrier, whatever its spelling.
-var stashCarrierDDLStatement = regexp.MustCompile(`(?i)\b(create|alter|drop|rename)\s+table\s+(if\s+(not\s+)?exists\s+)?` + "`?" + `schema_stash\b`)
+// stashCarrierName is any mention of the carrier, quoted or schema-qualified.
+var stashCarrierName = regexp.MustCompile(`(?i)\bschema_stash\b`)
 
-// stashCarrierDrift names the first statement in a migration that defines or
-// changes schema_stash other than as StashCarrierDDL, byte for byte. With
-// IF NOT EXISTS, whichever copy runs first on a store wins and a differing
-// copy is skipped without a word, so a drifted copy is caught here or never.
-// [LAW:single-enforcer]
+// stashCarrierDML is the leading keyword of a statement that only reads or
+// writes the carrier's rows.
+var stashCarrierDML = regexp.MustCompile(`(?i)^(replace|insert|update|delete|select)\b`)
+
+// stashCarrierDrift names the first statement in a migration that mentions
+// schema_stash and is neither row access nor StashCarrierDDL byte for byte.
+// Anything else (an alter, drop, truncate, rename, or index) changes the
+// carrier. With IF NOT EXISTS, whichever copy runs first on a store wins and a
+// differing copy is skipped without a word, so a drifted copy is caught here
+// or never. [LAW:single-enforcer]
 func stashCarrierDrift(body string) error {
-	for _, loc := range stashCarrierDDLStatement.FindAllStringIndex(body, -1) {
-		if !strings.HasPrefix(body[loc[0]:], StashCarrierDDL) {
-			line := body[loc[0]:]
-			line, _, _ = strings.Cut(line, "\n")
-			return fmt.Errorf("%q is not migrations.StashCarrierDDL (stash_carrier.ddl) byte for byte", line)
+	var code strings.Builder
+	for _, line := range strings.SplitAfter(body, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "--") {
+			code.WriteString(line)
 		}
+	}
+	canonical := strings.TrimSpace(StashCarrierDDL)
+	for _, stmt := range strings.SplitAfter(code.String(), ";") {
+		stmt = strings.TrimSpace(stmt)
+		if !stashCarrierName.MatchString(stmt) || stashCarrierDML.MatchString(stmt) || stmt == canonical {
+			continue
+		}
+		first, _, _ := strings.Cut(stmt, "\n")
+		return fmt.Errorf("%q is not migrations.StashCarrierDDL (stash_carrier.ddl) byte for byte", first)
 	}
 	return nil
 }
@@ -56,6 +68,13 @@ func TestStashCarrierDriftNamesEveryOtherDefinition(t *testing.T) {
 		{"a create without IF NOT EXISTS", "CREATE TABLE schema_stash (x INT);\n", true},
 		{"an alter", StashCarrierDDL + "ALTER TABLE schema_stash ADD COLUMN y INT;\n", true},
 		{"a drop", "drop table if exists `schema_stash`;\n", true},
+		{"a drop in a list", "DROP TABLE plan_reviews, schema_stash;\n", true},
+		{"a truncate", "TRUNCATE TABLE schema_stash;\n", true},
+		{"a rename onto it", "RENAME TABLE tmp TO schema_stash;\n", true},
+		{"an index", "CREATE INDEX i ON schema_stash (value);\n", true},
+		{"a qualified drop", "DROP TABLE `db`.`schema_stash`;\n", true},
+		{"row access", "DELETE FROM schema_stash WHERE table_name = 'issues';\n", false},
+		{"a comment naming a drop", "-- No Down ever does DROP TABLE schema_stash;\n", false},
 	}
 	for _, tc := range cases {
 		if err := stashCarrierDrift(tc.body); (err != nil) != tc.drift {
