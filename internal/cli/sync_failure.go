@@ -271,7 +271,7 @@ func forcedPushStaleRemedy(lost *storage.ForcedPushLeaseError) []remedyStep {
 		return []remedyStep{
 			{"lit sync fetch --remote " + remote, "reads the remote's head of the branch, if the remote has one"},
 			{"lit sync push --force --remote " + remote, "if the fetch brought a head: replaces it, if overwriting it is still what the user means"},
-			{"lit sync push --remote " + remote, "if the fetch brought no head of the branch: the remote lacks it, and a plain push creates it"},
+			{"lit sync push --remote " + remote, "if the fetch brought no head of the branch: the remote lacks it, and a plain push creates it; a lit that is no release is refused there, and that block names the upgrade"},
 		}
 	}
 	return []remedyStep{
@@ -663,7 +663,7 @@ func (f SyncFailure) whatLine() string {
 				ref, ref)
 		}
 		return fmt.Sprintf(
-			"%s no longer names %s, the head it had when this checkout last fetched it. A forced push replaces only that head, since the schema verdicts it passed were judged against it, so the remote kept its head and nothing was written to %s.",
+			"%s no longer names %s, the head it had when this checkout last fetched it: a peer moved the branch since, or deleted it. A forced push replaces only that head, since the schema verdicts it passed were judged against it, so nothing was written to %s.",
 			ref, f.LeaseLost.Expected, ref)
 	default:
 		// A class this renderer does not know must not render as a bland,
@@ -781,6 +781,9 @@ func (f SyncFailure) escalationLine() string {
 	case syncFailureSchemaLoweringRequiresHold:
 		return "ESCALATION — resolve now: run the pull and the push above once. A push refused again after the pull is a lowering of the remote, which only the remote downgrade makes, and that is the user's to decide: run it only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailureForcedPushStale:
+		if f.LeaseLost.Expected == "" {
+			return "ESCALATION — resolve now: run the fetch above, then read what it brought. A head means the remote has the branch, and overwriting it is the user's to decide: force only when the user means to overwrite it, and otherwise merge it with `lit sync pull` and push plainly. No head means the remote lacks the branch: push plainly to create it."
+		}
 		return "ESCALATION — resolve now: run the fetch above, then read what it brought before forcing again. A forced push overwrites the remote's head, so a head a peer pushed since the last fetch is the user's to overwrite or keep: force again only when the user means to overwrite it, and otherwise merge it with `lit sync pull` and push plainly."
 	case syncFailurePushDiverged:
 		// The push path reads no divergence age or span, so the line is fixed.
