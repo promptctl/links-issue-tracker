@@ -220,10 +220,16 @@ var doltWorkspaceMachinery = map[string][]string{
 	// ConvergenceStep and the step's act (ActClearCause, ActRestoreSnapshot,
 	// ActEscalate) travel with it: the CLI reads the reason off the act, and
 	// its tests walk ConvergenceSteps to hold every step to a reason.
+	//
+	// SchemaCeilingLiftError carries the lift's own refusal, a
+	// SchemaCeilingError at RaiseLift, by value: the CLI reads the schemas and
+	// the ceiling through it, and its tests build it, so the two travel with
+	// the lift refusal as ConvergenceStep travels with the convergence one.
 	"typed engine failures": {
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
 		"RemoteUnreachableError", "ErrWorkspaceNotInitialized",
-		"UnsupportedSchemaVersionError", "QuarantineBlockError", "RemoteSchemaAheadError", "SchemaCeilingPushError", "SchemaCeilingLiftError",
+		"UnsupportedSchemaVersionError", "QuarantineBlockError", "RemoteSchemaAheadError", "SchemaCeilingPushError",
+		"SchemaCeilingLiftError", "SchemaCeilingError", "RaiseLift",
 		"SchemaRaiseRequiresReleaseError", "SchemaLoweringRequiresHoldError", "DowngradeTargetAheadError",
 		"OwnerApprovalRequiredError",
 		"SchemaConvergenceError", "ConvergenceStep", "ConvergenceSteps",
