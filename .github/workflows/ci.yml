@@ -41,10 +41,10 @@ jobs:
       - name: Build
         run: go build ./cmd/lit
 
-      # The same commit runs up to ~1.5x slower on one runner CPU than another
-      # (tools/testbudget/budgets.go records the spread), so a red budget is the code's fault or the hardware's.
-      # The runner's CPU, printed by this step just before the Test step, says
-      # which. lscpu's output varies by runner image, so it cannot fail the job.
+      # The same commit runs ~1.5-2x slower on one runner CPU than another
+      # (tools/testbudget/budgets.go records the spread). Budgets absorb the
+      # slowest CPU, so a red budget is the code's. This step prints the CPU
+      # just before the Test step, so a slow number can be read against it. lscpu's output varies by runner image, so it cannot fail the job.
       - name: Runner CPU
         run: |
           nproc
@@ -128,8 +128,7 @@ jobs:
       # The ceiling is sized from the binding budget, internal/cli's 580s,
       # which is already set from the slowest runner the pool hands out:
       # x2.6 under the detector (median of 79 paired runs to 2026-09-28)
-      # ≈ 25m. Any lower value can
-      # fire before testbudget does. The cost is paid only by a real hang,
+      # ≈ 25m. Any lower value can fire before testbudget does. The cost is paid only by a real hang,
       # which now takes ~30m instead of ~10m to be named.
       - name: Test with race detector
         run: go test -short -race -timeout 30m ./cmd/... ./internal/...

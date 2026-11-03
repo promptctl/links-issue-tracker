@@ -14,7 +14,7 @@ import "time"
 // `go test -short -json ./...` run it is piped, and the enforcing one is CI's
 // concurrent run on ubuntu-latest, whose 4-vCPU runners are drawn from a pool
 // of different CPUs (AMD EPYC 7763, 9V45, 9V74; Intel Xeon 6973P/6975P) that
-// differ by up to ~1.5x on one commit, on top of noisy-neighbor variance within
+// differ by ~1.5-2x on one commit, on top of noisy-neighbor variance within
 // one CPU model: commit 70feabb3 took internal/cli 262s on a Xeon 6975P
 // and 378s on an EPYC 7763. So the worst environment is the slowest runner the
 // pool hands out, not a median. Calibration record: the per-package maximum
