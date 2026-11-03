@@ -20,8 +20,8 @@ import (
 // TestMain is the one place that sets them, once, before any test runs.
 // [LAW:no-shared-mutable-globals] [LAW:single-enforcer]
 var processWrites = map[string][]string{
-	"os":      {"Chdir", "Setenv", "Unsetenv", "Clearenv"},
-	"syscall":              {"Chdir", "Fchdir", "Setenv", "Unsetenv", "Clearenv"},
+	"os":                    {"Chdir", "Setenv", "Unsetenv", "Clearenv"},
+	"syscall":               {"Chdir", "Fchdir", "Setenv", "Unsetenv", "Clearenv"},
 	"golang.org/x/sys/unix": {"Chdir", "Fchdir", "Setenv", "Unsetenv", "Clearenv"},
 }
 
