@@ -9,6 +9,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // The skew tests in this file build their stores from nothing on purpose:
@@ -59,7 +60,7 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	}
 
 	// The lift replays 00003/00004 over the working set, uncommitted.
-	if err := st.liftWorkingSetToRegistry(ctx, "this store"); err != nil {
+	if err := st.liftWorkingSetToRegistry(ctx, version.UnboundedSchemaCeiling()); err != nil {
 		t.Fatalf("liftWorkingSetToRegistry: %v", err)
 	}
 

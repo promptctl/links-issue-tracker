@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // reconcileCommitMessage labels the marker commit that settles a reconcile's
@@ -904,7 +905,18 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	if err := s.checkout(ctx, scratch.spine); err != nil {
 		return replayLanding{}, fmt.Errorf("switch to reconcile spine branch %q: %w", scratch.spine, err)
 	}
-	remoteCut, err := s.resetAndLift(ctx, remoteHead)
+	// The fetched head is the one commit the reconcile lifts whose result a
+	// push can carry, so its hold bounds its lift: a head a remote downgrade
+	// lowered is adopted no higher than its hold, whatever this lit's registry
+	// carries, and a refusal names that head as the holder. Read AS OF the
+	// pinned commit, as the push judges the remote head's hold.
+	// [LAW:one-source-of-truth] the hold the spine binds by and the hold the
+	// push judges are one read of one commit.
+	remoteHold, err := s.schemaHoldAt(ctx, remoteHead, fmt.Sprintf("the commit %s the reconcile read", remoteHead))
+	if err != nil {
+		return replayLanding{}, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
+	}
+	remoteCut, err := s.resetAndLift(ctx, remoteHead, remoteHold)
 	if err != nil {
 		return replayLanding{}, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
 	}
@@ -1062,7 +1074,18 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 // and every read of a commit hydrates, which a loop refuses — so without the
 // cut, one looped commit anywhere in the history a sync reads would refuse that
 // sync on every attempt, and a repair at the head could not reach it.
-func (s *Store) resetAndLift(ctx context.Context, commit string) ([]storage.Unlooped, error) {
+//
+// hold is the schema hold that bounds the lift beside the released-schema
+// ceiling. The hold exists so a head a remote downgrade lowered is not
+// re-raised and pushed back over the remote (schema_hold.go), so it binds the
+// one lift whose result a push can carry: the fetched head the spine adopts
+// (commitReplayAndAdvance hands that head's own hold). A commit read on the
+// scratch read branch is exported and discarded, so its hold binds nothing
+// there and exportAtCommit hands the unbounded ceiling: bound by its own hold,
+// a checkout whose head is held, or whose base was held before the remote was
+// lifted, could never settle. [LAW:dataflow-not-control-flow] the ceiling is a
+// value the caller holds, not a mode the lift reads off the working set.
+func (s *Store) resetAndLift(ctx context.Context, commit string, hold version.SchemaCeiling) ([]storage.Unlooped, error) {
 	// An earlier lift on this branch leaves the tables its migrations created
 	// untracked in the working set (the lift commits nothing). The exact reset
 	// drops them: kept, the next lift re-runs a CREATE TABLE against a table
@@ -1071,9 +1094,7 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) ([]storage.Unlo
 	if err := resetExactlyToRef(ctx, s.db, commit); err != nil {
 		return nil, fmt.Errorf("reset scratch: %w", err)
 	}
-	// The hold the lift reads is this commit's, so a refusal names the commit
-	// as its holder: which head the reconcile read is what the refusal is about.
-	if err := s.liftWorkingSetToRegistry(ctx, fmt.Sprintf("the commit %s the reconcile read", commit)); err != nil {
+	if err := s.liftWorkingSetToRegistry(ctx, hold); err != nil {
 		return nil, fmt.Errorf("lift %q to current schema: %w", commit, err)
 	}
 	unlooped, err := cutParentLoops(ctx, s.db)
@@ -1118,7 +1139,9 @@ func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string) (
 	if err := s.checkout(ctx, readBranch); err != nil {
 		return model.Export{}, nil, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
 	}
-	unlooped, err := s.resetAndLift(ctx, commit)
+	// A projection: lifted to be exported and discarded, never pushed, so no
+	// hold binds it (resetAndLift).
+	unlooped, err := s.resetAndLift(ctx, commit, version.UnboundedSchemaCeiling())
 	if err != nil {
 		return model.Export{}, nil, fmt.Errorf("read export at %q: %w", commit, err)
 	}

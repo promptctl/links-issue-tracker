@@ -84,10 +84,10 @@ func (s *Store) readSchemaHold(ctx context.Context) (metaSchemaVersion, error) {
 }
 
 // schemaHold is the working set's schema hold as a ceiling held by the head
-// the caller names (holder): the live store's at a migrating open, and a
-// commit the reconcile read when the scratch branch has been reset to it
-// (resetAndLift), so a refusal names whose hold refused, never "this store"
-// for a head the reconcile fetched.
+// the caller names (holder), the live store's at a migrating open; the
+// reconcile reads the fetched head's at its pinned commit (schemaHoldAt), so a
+// refusal names whose hold refused, never "this store" for a head the
+// reconcile fetched.
 func (s *Store) schemaHold(ctx context.Context, holder string) (version.SchemaCeiling, error) {
 	read, err := s.readSchemaHold(ctx)
 	if err != nil {

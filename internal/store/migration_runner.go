@@ -945,18 +945,18 @@ func stepResult(result *goose.MigrationResult, err error) (*goose.MigrationResul
 // version at the reset commit decides how many migrations goose has to apply
 // (zero when the commit is already at registry max — the common case, since the
 // local head is always current).
-func (s *Store) liftWorkingSetToRegistry(ctx context.Context, holder string) error {
+//
+// hold is the schema hold that bounds this lift beside the released-schema
+// ceiling: the lifted commit's own hold when what is lifted will be pushed (the
+// fetched head the reconcile's spine adopts), the unbounded ceiling when the
+// lift is a projection read and discarded. The caller decides, since only it
+// knows what the lifted working set is for (resetAndLift, sync_reconcile.go).
+// [LAW:dataflow-not-control-flow] the binding enters as a value; the lift runs
+// the same loop under whatever ceiling it is handed.
+func (s *Store) liftWorkingSetToRegistry(ctx context.Context, hold version.SchemaCeiling) error {
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
 		return fmt.Errorf("construct schema-lift provider: %w", err)
-	}
-	// The working set is the commit being lifted, so its hold is that
-	// commit's: a fetched head lowered under a hold is lifted no further than
-	// the hold, whatever this binary's registry carries. holder names that
-	// commit in the ceiling a refusal carries.
-	hold, err := s.schemaHold(ctx, holder)
-	if err != nil {
-		return fmt.Errorf("lift working set to registry schema: %w", err)
 	}
 	ceiling := s.env.ReleasedSchema().Lower(hold)
 	for {
