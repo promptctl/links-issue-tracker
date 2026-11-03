@@ -559,7 +559,7 @@ func (a migrationAssessment) String() string {
 	case a.drift != nil:
 		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
 	case a.state.undoDue(a.op):
-		return fmt.Sprintf("a step to v%d that died before its commit", a.state.appliedVersion)
+		return fmt.Sprintf("a step to v%d not yet committed", a.state.appliedVersion)
 	case a.state.phase == phaseManaged:
 		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.support.Max)
 	case a.state.phase == phaseAdopt:
@@ -620,8 +620,23 @@ func (s *Store) checkWritable(ctx context.Context) (migrationState, operability,
 	if fail != nil || !state.undoDue(op) {
 		return state, op, fail
 	}
+	// The classify ran outside the commit lock, where a live writer's step
+	// reads the same as a dead one's, so the lock's holder decides again: a
+	// writer holds the lock from a step's settle to its commit, and a step
+	// still uncommitted under it is a dead process's. A mutation commits
+	// inside its own transaction, so the reset discards that step and nothing
+	// written since.
 	if fail := attempt(stepUndoInterruptedStep, func() error {
-		return s.withCommitLock(ctx, func(ctx context.Context) error { return s.undoInterruptedStep(ctx, state.appliedVersion) })
+		return s.withCommitLock(ctx, func(ctx context.Context) error {
+			state, op, err := s.assessOperability(ctx)
+			if err != nil || !state.undoDue(op) {
+				return err
+			}
+			if err := resetExactlyToRef(ctx, s.db, "HEAD"); err != nil {
+				return fmt.Errorf("undo the uncommitted step to v%d: %w", state.appliedVersion, err)
+			}
+			return nil
+		})
 	}); fail != nil {
 		return migrationState{}, operability{}, fail
 	}
@@ -829,17 +844,6 @@ func (s *Store) applySnapshotted(ctx context.Context, p snapshotted, guard *snap
 		}
 	}
 	return s.applyPendingMigrations(ctx, p, state.ceiling(s.env.ReleasedSchema()), probed)
-}
-
-// undoInterruptedStep resets the working set to HEAD, discarding the
-// interrupted step to working. The dead process held the commit lock from the
-// step's settle on, and a mutation commits inside its own transaction, so the
-// working set holds that step and nothing written since.
-func (s *Store) undoInterruptedStep(ctx context.Context, working int64) error {
-	if err := resetExactlyToRef(ctx, s.db, "HEAD"); err != nil {
-		return fmt.Errorf("undo the uncommitted step to v%d: %w", working, err)
-	}
-	return nil
 }
 
 // upByOne applies the single next pending migration via goose. It is the ONE
