@@ -471,21 +471,22 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 // no concurrent fetch can shift the decision between guard and replay.
 // A lift the body refuses at the ceiling leaves as SchemaCeilingLiftError, named for this
 // remote and branch (nameLiftRefusal), as the schema-ahead refusal above is.
-// The fetched head's hold is read here, once, AS OF the same pinned commit the
-// schema-ahead guard reads, and rides into the body as the head's own value
-// (fetchedHead): the first lift of that head refuses under it, before any
-// merge or prose hold asks the operator for work a refusal would discard.
-// [LAW:one-source-of-truth] one read of the hold per reconcile, however many
-// attempts and branches lift the head.
+// The fetched head's schema and hold are read here, once, AS OF the captured
+// commit, with the reader the push judges a remote head by (remoteHeadAt), so
+// a refusal here and one at the push name the head the same way. The hold
+// rides into the body as the head's own value (fetchedHead): the first lift of
+// that head refuses under it, before any merge or prose hold asks the operator
+// for work a refusal would discard. [LAW:one-source-of-truth] one read of the
+// hold per reconcile, however many attempts and branches lift the head.
 func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch, head fetchedHead) error) error {
-	if err := s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead); err != nil {
+	remoteSchema, err := s.remoteHeadAt(ctx, remoteHead, remote, branch)
+	if err != nil {
 		return err
 	}
-	hold, err := s.schemaHoldAt(ctx, remoteHead, fmt.Sprintf("the commit %s the reconcile read", remoteHead))
-	if err != nil {
-		return fmt.Errorf("read the hold of remote head %q: %w", remoteHead, err)
+	if err := refuseSchemaAhead(remote, branch, remoteSchema); err != nil {
+		return err
 	}
-	head := fetchedHead{hash: remoteHead, hold: hold}
+	head := fetchedHead{hash: remoteHead, hold: remoteSchema.hold}
 	// A leftover scratch branch is inert to a reconcile — never the data
 	// branch, never pushed — so a sweep that fails is reported and the
 	// reconcile goes on. [LAW:no-silent-failure]

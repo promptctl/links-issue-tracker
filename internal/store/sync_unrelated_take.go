@@ -82,7 +82,7 @@ func (e OwnerApprovalRequiredError) Error() string {
 // It is snapshot-guarded and GC-retry-wrapped like the three-way reconcile — the take
 // is destructive, so a pre-mutation recovery point matters even more here. take-local,
 // which authors replay commits on the remote head, also shares the three-way path's
-// schema-ahead refusal (guardCommitSchemaAhead), and so does a take-remote that carries
+// schema-ahead refusal (replayUnderGuard), and so does a take-remote that carries
 // local purge records onto the remote head; a take-remote with none to carry adopts the
 // remote head wholesale, authors no commit, and is exempt. CONSTRAINT (embedded Dolt
 // one-RW-engine-per-path): runs INLINE/foreground on the caller's own engine, never a

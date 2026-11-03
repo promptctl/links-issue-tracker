@@ -356,7 +356,7 @@ func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
 	storeErr := &store.SchemaCeilingLiftError{
 		Remote: "origin", Branch: "master",
 		Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 11, TargetVersion: 12,
-			Ceiling: version.SchemaCeiling{Max: 11, Source: "the commit 1qvemmg4ijkfoad9kc5jsr9bl7p4ejrs the reconcile read holds its schema at 11 (meta.schema_hold), which a remote downgrade set", Bound: version.BoundHold}},
+			Ceiling: version.SchemaCeiling{Max: 11, Source: "origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set", Bound: version.BoundHold}},
 	}
 	var syncFailure SyncFailureError
 	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
@@ -370,7 +370,7 @@ func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
 	}
 	block := syncFailure.Error()
 	for _, want := range []string{
-		"a commit the reconcile against origin/master read is at schema version 11, and settling it here means lifting it toward this lit's schema, but the lift's next step, to schema version 12, is above the schema ceiling for this sync, 11 (the commit 1qvemmg4ijkfoad9kc5jsr9bl7p4ejrs the reconcile read holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
+		"a commit the reconcile against origin/master read is at schema version 11, and settling it here means lifting it toward this lit's schema, but the lift's next step, to schema version 12, is above the schema ceiling for this sync, 11 (origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
 		"lit downgrade --to <tag>",
 		"release at schema v11",
 		"ESCALATION — BLOCKED",
