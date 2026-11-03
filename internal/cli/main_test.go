@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,8 +11,10 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// Parallelism convention for this package: every test calls t.Parallel(). A
-// test hands lit its working directory and environment through the Invocation
+// Parallelism convention for this package: a test calls t.Parallel() unless it
+// swaps a package variable (a store deadline, time.Local, a seam function),
+// which every parallel reader of it would race. A test hands lit its working
+// directory and environment through the Invocation
 // (dirInvocation, setRunEnv) instead of the process's, so two runs overlapping
 // never see each other's workspace; TestNoTestChangesTheProcess keeps any test
 // from changing the process's.
@@ -69,14 +72,12 @@ func TestMain(m *testing.M) {
 	// in-process on every store open, from the process environment no run's
 	// Env reaches: directories the suite owns keep the developer's events
 	// file, settings and ~/.dolt out of every test, and the detached workers a
-	// test spawns inherit them. HOME is the suite's too: the git a test runs,
-	// and the git Dolt runs, read ~/.gitconfig from it.
+	// test spawns inherit them.
 	var suiteDirs []string
 	for _, home := range []struct{ key, prefix string }{
 		{"XDG_STATE_HOME", "lit-cli-state-"},
 		{"XDG_CONFIG_HOME", "lit-cli-config-"},
 		{"DOLT_ROOT_PATH", "lit-cli-dolt-"},
-		{"HOME", "lit-cli-home-"},
 	} {
 		dir, err := os.MkdirTemp("", home.prefix)
 		if err != nil {
@@ -87,9 +88,22 @@ func TestMain(m *testing.M) {
 		}
 		suiteDirs = append(suiteDirs, dir)
 	}
-	// The tests' repositories expect their first branch to be master, which
-	// git's built-in default no longer promises once ~/.gitconfig is out.
-	for key, value := range map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "init.defaultBranch", "GIT_CONFIG_VALUE_0": "master"} {
+	// The git a test runs, and the git Dolt runs, read the suite's git config
+	// in place of the machine's, so the developer's ~/.gitconfig (signing,
+	// hooks) never reaches a test. HOME itself stays, because the go toolchain
+	// a test runs finds its caches under it. The tests' repositories expect
+	// their first branch to be master, which git's built-in default does not
+	// promise.
+	gitDir, err := os.MkdirTemp("", "lit-cli-git-")
+	if err != nil {
+		panic("create isolated git config: " + err.Error())
+	}
+	suiteDirs = append(suiteDirs, gitDir)
+	gitConfig := filepath.Join(gitDir, "config")
+	if err := os.WriteFile(gitConfig, []byte("[init]\n\tdefaultBranch = master\n"), 0o644); err != nil {
+		panic("write isolated git config: " + err.Error())
+	}
+	for key, value := range map[string]string{"GIT_CONFIG_GLOBAL": gitConfig, "GIT_CONFIG_NOSYSTEM": "1"} {
 		if err := os.Setenv(key, value); err != nil {
 			panic("set " + key + ": " + err.Error())
 		}

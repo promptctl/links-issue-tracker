@@ -98,16 +98,20 @@ func processWritesIn(fset *token.FileSet, file *ast.File) []string {
 					}
 				}
 			}
+		case *ast.SelectorExpr:
+			// Any use of a package's write, called or held as a value.
+			if pkg, ok := n.X.(*ast.Ident); ok {
+				if path, isPackage := local[pkg.Name]; isPackage && slices.Contains(processWrites[path], n.Sel.Name) {
+					at(n.Pos(), path+"."+n.Sel.Name)
+				}
+			}
 		case *ast.CallExpr:
 			sel, ok := n.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return true
 			}
 			if pkg, ok := sel.X.(*ast.Ident); ok {
-				if path, isPackage := local[pkg.Name]; isPackage {
-					if slices.Contains(processWrites[path], sel.Sel.Name) {
-						at(sel.Pos(), path+"."+sel.Sel.Name)
-					}
+				if _, isPackage := local[pkg.Name]; isPackage {
 					return true
 				}
 			}
@@ -135,6 +139,7 @@ func TestProcessWritesScanFindsEverySpelling(t *testing.T) {
 		{"t.Setenv", `func f(t T) { t.Setenv("A", "b") }`, []string{"t.Setenv"}},
 		{"t.Chdir", `func f(tb T) { tb.Chdir("d") }`, []string{"tb.Chdir"}},
 		{"a field's t", `func f(h H) { h.t.Setenv("A", "b"); h.t.Chdir("d") }`, []string{"h.t.Setenv", "h.t.Chdir"}},
+		{"a write held as a value", `import "os"; func f() { set := os.Setenv; set("A", "b"); g(os.Chdir) }`, []string{"os.Setenv", "os.Chdir"}},
 		{"a call's t", `func f(s S) { s.T().Setenv("A", "b") }`, []string{"s.T().Setenv"}},
 		{"syscall", `import "syscall"; func f() { syscall.Setenv("A", "b"); syscall.Unsetenv("A"); syscall.Clearenv(); syscall.Chdir("d"); syscall.Fchdir(3) }`, []string{"syscall.Setenv", "syscall.Unsetenv", "syscall.Clearenv", "syscall.Chdir", "syscall.Fchdir"}},
 		{"stream assignment", `import "os"; func f() { os.Stderr = nil; os.Stdin, os.Stdout = nil, nil }`, []string{"os.Stderr assignment", "os.Stdin assignment", "os.Stdout assignment"}},
