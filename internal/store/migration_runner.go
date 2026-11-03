@@ -423,6 +423,9 @@ const (
 type migrationState struct {
 	phase          migrationPhase
 	appliedVersion int64
+	// committedVersion is the version HEAD records; above it, appliedVersion
+	// is a step that died before its commit (interrupted).
+	committedVersion int64
 	// support is this binary's schema support as the classified state saw it.
 	support version.SchemaSupport
 	// hold is the store's schema hold as the classified state read it
@@ -450,6 +453,23 @@ func (st migrationState) schemaHold() int64 {
 		return 0
 	}
 	return st.hold.Max
+}
+
+// interrupted reports a forward step goose recorded and no commit versioned:
+// a process that died between a step's Up and its commit, its stash replay
+// among the work between. Read as applied, that step's stash would be held
+// for good, and the next Down of its version would overwrite the units the
+// entries were never written back to.
+func (st migrationState) interrupted() bool {
+	return st.phase == phaseManaged && st.appliedVersion > st.committedVersion
+}
+
+// undoDue reports an interrupted step this binary undoes: any it may write
+// over, a newer lit's included, since the undo is a reset to HEAD and needs
+// no knowledge of the step, and left in place this binary's next commit
+// would version it. One it may not write over is the writer's to undo.
+func (st migrationState) undoDue(op operability) bool {
+	return st.interrupted() && op.writable()
 }
 
 // willMutate reports whether this Open will write. Fresh and adopt always
@@ -532,7 +552,7 @@ type migrationAssessment struct {
 // normalization, the default-branch rename, is not a schema fact and is not
 // assessed here.)
 func (a migrationAssessment) needsWrite() bool {
-	return a.drift != nil || a.state.willMutate()
+	return a.drift != nil || a.state.willMutate() || a.state.undoDue(a.op)
 }
 
 // String names what the assessment found, for the read open's handoff error.
@@ -540,6 +560,8 @@ func (a migrationAssessment) String() string {
 	switch {
 	case a.drift != nil:
 		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
+	case a.state.undoDue(a.op):
+		return fmt.Sprintf("a step to v%d not yet committed", a.state.appliedVersion)
 	case a.state.phase == phaseManaged:
 		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.support.Max)
 	case a.state.phase == phaseAdopt:
@@ -589,12 +611,51 @@ func (s *Store) classify(ctx context.Context) (migrationState, operability, *Sch
 // sets, for every open whose engine writes: the migrating open and the sync
 // open. [LAW:single-enforcer] one function, so both opens report a failure of
 // either step as the same step.
+//
+// An interrupted step is undone here, past the floor, so a binary refused
+// writes nothing, and before either open's first write, so neither versions
+// the half step: the sync open's stranded-write commit would make it HEAD's.
+// Undone, the workspace is classified again, and the step runs again through
+// upByOne, settle, Up and replay, as one step.
 func (s *Store) checkWritable(ctx context.Context) (migrationState, operability, *SchemaConvergenceError) {
+	state, op, fail := s.classifyWritable(ctx)
+	if fail != nil || !state.undoDue(op) {
+		return state, op, fail
+	}
+	// The classify ran outside the commit lock, where a live writer's step
+	// reads the same as a dead one's, so the lock's holder decides again: a
+	// writer holds the lock from a step's settle to its commit, and a step
+	// still uncommitted under it is a dead process's. A mutation commits
+	// inside its own transaction, so the reset discards that step and nothing
+	// written since.
+	if fail := attempt(stepUndoInterruptedStep, func() error {
+		return s.withCommitLock(ctx, func(ctx context.Context) error {
+			state, op, err := s.assessOperability(ctx)
+			if err != nil || !state.undoDue(op) {
+				return err
+			}
+			if err := resetExactlyToRef(ctx, s.db, "HEAD"); err != nil {
+				return fmt.Errorf("undo the uncommitted step to v%d: %w", state.appliedVersion, err)
+			}
+			return nil
+		})
+	}); fail != nil {
+		return migrationState{}, operability{}, fail
+	}
+	return s.classifyWritable(ctx)
+}
+
+// classifyWritable is checkWritable's classify and floor, run once before an
+// undo and once after it.
+func (s *Store) classifyWritable(ctx context.Context) (migrationState, operability, *SchemaConvergenceError) {
 	state, op, fail := s.classify(ctx)
 	if fail != nil {
 		return migrationState{}, operability{}, fail
 	}
-	return state, op, attempt(stepRefuseUnwritable, func() error { return s.refuseUnwritable(ctx, op) })
+	if fail := attempt(stepRefuseUnwritable, func() error { return s.refuseUnwritable(ctx, op) }); fail != nil {
+		return migrationState{}, operability{}, fail
+	}
+	return state, op, nil
 }
 
 // assessContent verifies a managed workspace's applied versions against the
@@ -1421,7 +1482,13 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		if err != nil {
 			return migrationState{}, err
 		}
-		return migrationState{phase: phaseManaged, appliedVersion: applied, support: support, hold: hold}, nil
+		// Read by goose's own rule, MAX(version_id), so the two sides of
+		// interrupted() compare like with like.
+		committed, err := s.schemaVersionAtCommit(ctx, "HEAD")
+		if err != nil {
+			return migrationState{}, err
+		}
+		return migrationState{phase: phaseManaged, appliedVersion: applied, committedVersion: committed, support: support, hold: hold}, nil
 	}
 	present, _, err := s.verifyBaselineShape(ctx)
 	if err != nil {
