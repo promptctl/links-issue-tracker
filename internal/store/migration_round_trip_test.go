@@ -44,7 +44,6 @@ const lastVersionBeforeTheGate = 11
 // round trip from their own version today. Each is fixed in place, and the
 // list empties as they are.
 var pendingLosslessDown = map[int64]string{
-	2:  "its Down drops lane without stashing it",
 	3:  "its Down drops resolution without stashing it",
 	4:  "its Down re-materializes redirects as related-to edges, so the next Up reads a lone manual peer edge as a redirect",
 	5:  "its Down drops stream_id and workspace_id without stashing them",
@@ -165,7 +164,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 			unifiedSchemaDiff("fresh Up", "after Down", want, got))
 	}
 	stashed := stashedSince(t, st.db, held)
-	if _, err := provider.UpTo(ctx, v); err != nil {
+	if err := upReplaying(ctx, provider, st.db, v); err != nil {
 		return fmt.Errorf("Up to v%d after Down: %w", v, err)
 	}
 	if after := exportTables(t, st.db); after != before {
@@ -173,6 +172,27 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 			unifiedSchemaDiff("seeded", "after Up(Down)", before, after))
 	}
 	return stashConsumed(t, st.db, stashed)
+}
+
+// upReplaying steps provider up to v the way upByOne does: one goose step,
+// then that version's stash replay.
+func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v int64) error {
+	for {
+		current, err := provider.GetDBVersion(ctx)
+		if err != nil {
+			return err
+		}
+		if current >= v {
+			return nil
+		}
+		result, err := provider.UpByOne(ctx)
+		if err != nil {
+			return err
+		}
+		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version); err != nil {
+			return err
+		}
+	}
 }
 
 // freshShapes caches freshShape per version: one Up-only store per version
@@ -200,7 +220,7 @@ func roundTripBelow(t *testing.T, fsys fs.FS, v, below int64, seed string) error
 	applySeed(t, st.db, seed)
 	before := exportTables(t, st.db)
 	held := stashEntries(t, st.db)
-	if _, err := provider.UpTo(ctx, v); err != nil {
+	if err := upReplaying(ctx, provider, st.db, v); err != nil {
 		return fmt.Errorf("Up to v%d: %w", v, err)
 	}
 	stashed := stashedSince(t, st.db, held)

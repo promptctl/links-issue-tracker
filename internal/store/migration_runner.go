@@ -806,7 +806,15 @@ func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise Sch
 		probed.facts, probed.err = probe(ctx, s.db)
 	}
 	result, err := stepResult(provider.UpByOne(ctx))
-	return result, probed, err
+	if err != nil {
+		return result, probed, err
+	}
+	// The step's restore runs before the next step reads what it puts back:
+	// v7's body reads the edges and lanes v6's restore returns.
+	if _, err := migrations.ReplayStash(ctx, s.db, result.Source.Version); err != nil {
+		return result, probed, err
+	}
+	return result, probed, nil
 }
 
 // stepResult is a goose step's outcome with the step's result beside its error
