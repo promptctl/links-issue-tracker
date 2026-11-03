@@ -675,13 +675,35 @@ func (s *Store) freshnessOverEveryWrite(ctx context.Context, remote storage.Remo
 // Anything about to hard-reset the branch runs it first, so the reset never
 // discards a write that is not its own. [LAW:single-enforcer] the one place a
 // stranded write is committed. [LAW:no-silent-failure] [LAW:nothing-unseen]
-// The caller holds the commit lock.
+// The caller holds the commit lock, so a step that reads interrupted is a dead
+// process's, and the commit would version it: one this binary may write over
+// is undone first, and one it may not is refused.
 func (s *Store) commitStrandedWrites(ctx context.Context, message string) error {
+	if err := s.undoDeadStep(ctx); err != nil {
+		return err
+	}
 	tables, err := s.strandedTables(ctx)
 	if err != nil {
 		return err
 	}
 	return s.landStrandedWrites(ctx, tables, message)
+}
+
+// undoDeadStep undoes the interrupted step the working set holds, if any.
+// Operability is read only for one, so a store with none commits as before.
+func (s *Store) undoDeadStep(ctx context.Context) error {
+	state, err := s.classifyMigrationState(ctx)
+	if err != nil || !state.interrupted() {
+		return err
+	}
+	state, op, err := s.assessOperability(ctx)
+	if err != nil {
+		return err
+	}
+	if !state.undoDue(op) {
+		return fmt.Errorf("the step from v%d stands uncommitted, and this lit may not write over it", state.committedVersion)
+	}
+	return s.undoInterruptedLocked(ctx, state)
 }
 
 // landStrandedWrites commits the working set over the tables a look at it
