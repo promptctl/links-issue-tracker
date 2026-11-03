@@ -5,7 +5,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestCommentRemove(t *testing.T) {
@@ -17,7 +16,7 @@ func TestCommentRemove(t *testing.T) {
 
 	run := func(args ...string) (bytes.Buffer, error) {
 		var stdout bytes.Buffer
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), suiteStallDeadline)
 		defer cancel()
 		errCh := make(chan error, 1)
 		go func() { errCh <- Run(ctx, dirInvocation(t, repo, &stdout, &stdout, args)) }()

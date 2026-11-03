@@ -65,7 +65,7 @@ func TestRunNewCompletesWithoutDeadlock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run(new) error = %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(suiteStallDeadline):
 		t.Fatal("Run(new) timed out; likely mutation lock context regression")
 	}
 }

@@ -36,6 +36,7 @@ func newAttributionIssue(t *testing.T, ap *app.App, title string) string {
 
 func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 	t.Parallel()
+	setRunEnv(t, "USER", "shell-user")
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", attributionSessionID)
 	ctx := context.Background()
 	want := attributionWantActor()

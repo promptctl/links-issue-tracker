@@ -27,8 +27,12 @@ func dirInvocation(t testing.TB, dir string, stdout, stderr io.Writer, args []st
 
 // runEnvs holds each test's own environment entries, keyed by test name, so a
 // test sets what its runs see without touching the process environment that
-// every parallel test shares.
-var runEnvs sync.Map // test name -> []string of KEY=value
+// every parallel test shares. stateHomes is each test's own XDG_STATE_HOME.
+var (
+	runEnvsMu  sync.Mutex
+	runEnvs    = map[string][]string{} // test name -> KEY=value entries
+	stateHomes = map[string]string{}   // test name -> its events directory
+)
 
 // setRunEnv gives every run t and its subtests start the entry key=value,
 // where t.Setenv would have set it for the whole process. It is undone when t
@@ -36,23 +40,39 @@ var runEnvs sync.Map // test name -> []string of KEY=value
 func setRunEnv(t testing.TB, key, value string) {
 	t.Helper()
 	name := t.Name()
-	prev, _ := runEnvs.Load(name)
-	entries, _ := prev.([]string)
-	runEnvs.Store(name, append(append([]string(nil), entries...), key+"="+value))
-	if prev == nil {
-		t.Cleanup(func() { runEnvs.Delete(name) })
+	runEnvsMu.Lock()
+	defer runEnvsMu.Unlock()
+	if _, ok := runEnvs[name]; !ok {
+		t.Cleanup(func() {
+			runEnvsMu.Lock()
+			defer runEnvsMu.Unlock()
+			delete(runEnvs, name)
+		})
 	}
+	runEnvs[name] = append(runEnvs[name], key+"="+value)
 }
 
 // runEnv is testEnv with the entries t and each test enclosing it set, the
-// innermost setting of a key winning.
+// innermost setting of a key winning. Under them all sits an XDG_STATE_HOME
+// of t's own, so the events one test's runs append are never another's.
 func runEnv(t testing.TB) environ.Env {
-	var set []string
-	parts := strings.Split(t.Name(), "/")
+	name := t.Name()
+	runEnvsMu.Lock()
+	defer runEnvsMu.Unlock()
+	state, ok := stateHomes[name]
+	if !ok {
+		state = t.TempDir()
+		stateHomes[name] = state
+		t.Cleanup(func() {
+			runEnvsMu.Lock()
+			defer runEnvsMu.Unlock()
+			delete(stateHomes, name)
+		})
+	}
+	set := []string{"XDG_STATE_HOME=" + state}
+	parts := strings.Split(name, "/")
 	for i := range parts {
-		if entries, ok := runEnvs.Load(strings.Join(parts[:i+1], "/")); ok {
-			set = append(set, entries.([]string)...)
-		}
+		set = append(set, runEnvs[strings.Join(parts[:i+1], "/")]...)
 	}
 	return testEnv().With(set...)
 }

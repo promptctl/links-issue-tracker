@@ -21,7 +21,8 @@ import (
 // [LAW:no-shared-mutable-globals] [LAW:single-enforcer]
 var processWrites = map[string][]string{
 	"os":      {"Chdir", "Setenv", "Unsetenv", "Clearenv"},
-	"syscall": {"Chdir", "Fchdir", "Setenv", "Unsetenv", "Clearenv"},
+	"syscall":              {"Chdir", "Fchdir", "Setenv", "Unsetenv", "Clearenv"},
+	"golang.org/x/sys/unix": {"Chdir", "Fchdir", "Setenv", "Unsetenv", "Clearenv"},
 }
 
 // processStreams are the os values a test may not assign.
@@ -99,24 +100,17 @@ func processWritesIn(fset *token.FileSet, file *ast.File) []string {
 				}
 			}
 		case *ast.SelectorExpr:
-			// Any use of a package's write, called or held as a value.
+			// Any use of a write, called or held as a value.
 			if pkg, ok := n.X.(*ast.Ident); ok {
-				if path, isPackage := local[pkg.Name]; isPackage && slices.Contains(processWrites[path], n.Sel.Name) {
-					at(n.Pos(), path+"."+n.Sel.Name)
-				}
-			}
-		case *ast.CallExpr:
-			sel, ok := n.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if pkg, ok := sel.X.(*ast.Ident); ok {
-				if _, isPackage := local[pkg.Name]; isPackage {
+				if path, isPackage := local[pkg.Name]; isPackage {
+					if slices.Contains(processWrites[path], n.Sel.Name) {
+						at(n.Pos(), path+"."+n.Sel.Name)
+					}
 					return true
 				}
 			}
-			if slices.Contains(testingProcessWrites, sel.Sel.Name) {
-				at(sel.Pos(), types.ExprString(sel))
+			if slices.Contains(testingProcessWrites, n.Sel.Name) {
+				at(n.Pos(), types.ExprString(n))
 			}
 		}
 		return true
@@ -140,6 +134,8 @@ func TestProcessWritesScanFindsEverySpelling(t *testing.T) {
 		{"t.Chdir", `func f(tb T) { tb.Chdir("d") }`, []string{"tb.Chdir"}},
 		{"a field's t", `func f(h H) { h.t.Setenv("A", "b"); h.t.Chdir("d") }`, []string{"h.t.Setenv", "h.t.Chdir"}},
 		{"a write held as a value", `import "os"; func f() { set := os.Setenv; set("A", "b"); g(os.Chdir) }`, []string{"os.Setenv", "os.Chdir"}},
+		{"a testing write held as a value", `func f(t T) { set := t.Setenv; set("A", "b") }`, []string{"t.Setenv"}},
+		{"x/sys/unix", `import "golang.org/x/sys/unix"; func f() { unix.Setenv("A", "b"); unix.Chdir("d") }`, []string{"golang.org/x/sys/unix.Setenv", "golang.org/x/sys/unix.Chdir"}},
 		{"a call's t", `func f(s S) { s.T().Setenv("A", "b") }`, []string{"s.T().Setenv"}},
 		{"syscall", `import "syscall"; func f() { syscall.Setenv("A", "b"); syscall.Unsetenv("A"); syscall.Clearenv(); syscall.Chdir("d"); syscall.Fchdir(3) }`, []string{"syscall.Setenv", "syscall.Unsetenv", "syscall.Clearenv", "syscall.Chdir", "syscall.Fchdir"}},
 		{"stream assignment", `import "os"; func f() { os.Stderr = nil; os.Stdin, os.Stdout = nil, nil }`, []string{"os.Stderr assignment", "os.Stdin assignment", "os.Stdout assignment"}},
