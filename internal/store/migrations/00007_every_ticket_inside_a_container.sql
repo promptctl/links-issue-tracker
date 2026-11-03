@@ -226,7 +226,8 @@ WHERE id = @unfiled AND @minted
 -- +goose StatementEnd
 
 -- +goose Down
--- The unfiled epic, everything on it and every lane are stashed before the
+-- The unfiled epic, everything on it and every lane spelled as its ticket's id
+-- are stashed before the
 -- Down hands the reader below the shape it wrote: the epic gone, its children
 -- at the top level, and a lane spelled as its ticket's id back to the
 -- default. The next Up's restore (migrations.Restores) puts them back.
@@ -312,7 +313,7 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'lane@unfiled', JSON_ARRAY(SUBSTRING(t.lane, 1)) FROM issues t;
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'lane@unfiled', JSON_ARRAY(SUBSTRING(t.lane, 1)) FROM issues t WHERE t.lane = t.id;
 -- +goose StatementEnd
 -- +goose StatementBegin
 UPDATE issues

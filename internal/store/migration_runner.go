@@ -621,7 +621,7 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 		return migrationAssessment{}, fail
 	}
 	var stash []int64
-	if fail := attempt(stepVerifyContent, func() (err error) {
+	if fail := attempt(stepStashRead, func() (err error) {
 		stash, err = s.pendingStash(ctx, state.appliedVersion)
 		return err
 	}); fail != nil {
@@ -831,11 +831,19 @@ func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise Sch
 	}
 	// The step's restore runs before the next step reads what it puts back:
 	// v7's body reads the edges and lanes v6's restore returns.
-	if probed.replayedStash, err = migrations.ReplayStash(ctx, s.db, result.Source.Version); err != nil {
-		return result, probed, err
+	if probed.replayedStash, err = migrations.ReplayStash(ctx, s.db, result.Source.Version, false); err != nil {
+		return result, probed, &stashReplayError{err: err}
 	}
 	return result, probed, nil
 }
+
+// stashReplayError is a forward step whose Up applied and whose stash replay
+// failed.
+type stashReplayError struct{ err error }
+
+func (e *stashReplayError) Error() string { return e.err.Error() }
+
+func (e *stashReplayError) Unwrap() error { return e.err }
 
 // stepResult is a goose step's outcome with the step's result beside its error
 // even when the step failed: goose returns a nil result on failure and names
@@ -989,6 +997,12 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 			// failed Open, and neither can a prune that fails, which is
 			// reported on the open's outcome. [LAW:no-ambient-temporal-coupling]
 			return pruneCheckpoints(context.WithoutCancel(ctx)), nil
+		}
+		var replayFailed *stashReplayError
+		if errors.As(gooseErr, &replayFailed) {
+			// The version's Up applied; its stash did not go back. A
+			// quarantine would name a migration body that ran.
+			return recoverFrom(stepStashReplay, stepMigrationReset, result, gooseErr, false)
 		}
 		if gooseErr != nil {
 			return recoverFrom(stepMigration, stepMigrationReset, result, gooseErr, earnsQuarantine(ctx, result, gooseErr))

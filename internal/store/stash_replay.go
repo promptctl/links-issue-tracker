@@ -28,13 +28,9 @@ var stashReplay = repairSteps{
 // older than the stash, whose Ups this one shares byte for byte. It reads
 // one grouped count over the carrier, and nothing on a store without one.
 func (s *Store) pendingStash(ctx context.Context, applied int64) ([]int64, error) {
-	var present int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables
-		WHERE table_schema = DATABASE() AND table_name = 'schema_stash'`).Scan(&present); err != nil {
-		return nil, fmt.Errorf("look for the stash carrier: %w", err)
-	}
-	if present == 0 {
-		return nil, nil
+	present, err := migrations.CarrierPresent(ctx, s.db)
+	if err != nil || !present {
+		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT table_name, column_name FROM schema_stash`)
 	if err != nil {
@@ -69,15 +65,15 @@ func (s *Store) pendingStash(ctx context.Context, applied int64) ([]int64, error
 }
 
 // replayPendingStash replays versions, lowest first, and commits what they
-// wrote. It writes back what the stash holds onto data a later Up already
-// derived without it, so it cannot undo what that Up decided; the event says
-// what it replayed.
+// wrote. It runs late, onto data written since a later Up derived it
+// without the stash, so it writes a column back only where the value is
+// still unset; the event says what it replayed.
 func (s *Store) replayPendingStash(ctx context.Context, versions []int64, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	var replayed []migrations.Replayed
 	pruneErr, fail = s.repairWithRollback(ctx, stashReplay, func() (string, error) {
 		names := make([]string, 0, len(versions))
 		for _, v := range versions {
-			r, err := migrations.ReplayStash(ctx, s.db, v)
+			r, err := migrations.ReplayStash(ctx, s.db, v, true)
 			if err != nil {
 				return "", err
 			}

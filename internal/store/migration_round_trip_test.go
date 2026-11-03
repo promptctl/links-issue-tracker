@@ -99,9 +99,6 @@ func TestEveryMigrationRoundTripsLosslessly(t *testing.T) {
 	})
 }
 
-// TestTheRoundTripGateCatchesALossyDown runs the gate's own checks against a
-// registry with one Down broken, the two ways a Down can lose: leaving the
-// structure its Up added in place, and dropping seeded data without stashing it.
 // TestV7RoundTripsAnUnfiledEpicAtTheIdItsUpMints runs v7's round trip with
 // the seed's unfiled epic at the id the Up mints again (no seed id carries a
 // prefix, so it mints lit-unfiled-<sha256("lit-unfiled")[:4]>). The replay
@@ -119,6 +116,9 @@ func TestV7RoundTripsAnUnfiledEpicAtTheIdItsUpMints(t *testing.T) {
 	}
 }
 
+// TestTheRoundTripGateCatchesALossyDown runs the gate's own checks against a
+// registry with one Down broken, the two ways a Down can lose: leaving the
+// structure its Up added in place, and dropping seeded data without stashing it.
 func TestTheRoundTripGateCatchesALossyDown(t *testing.T) {
 	t.Parallel()
 	const v, below = 11, 10
@@ -193,7 +193,7 @@ func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v in
 		if err != nil {
 			return err
 		}
-		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version); err != nil {
+		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version, false); err != nil {
 			return err
 		}
 	}
