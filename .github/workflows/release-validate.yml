@@ -120,6 +120,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # Before anything is built or tagged: a published release still reads,
+      # writes and syncs a store this commit stepped down, and the raise back
+      # loses nothing. ci.yml runs the same script on every PR.
+      - name: A published release runs on a store this commit stepped down
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/cross-version-check.sh
+
       # One definition of the seeded GOCACHE dir. Everything downstream — the
       # cache step's `path:`, the mkdir, the docker mount, the chown — reads this
       # single value, so the path exists in exactly one place. It lives here (not
