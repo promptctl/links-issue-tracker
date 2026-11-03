@@ -62,8 +62,7 @@ ALTER TABLE issues DROP COLUMN is_closed;
 -- +goose StatementEnd
 ```
 
-A column that holds new user data needs the stash carrier in its Down; see
-below.
+A column that holds new user data needs a stash in its Down; see below.
 
 ## A migration that changes a write rule
 
@@ -142,65 +141,62 @@ Data the other version cannot represent goes in `schema_stash (table_name,
 row_key, column_name, value)`, a table outside the versioned schema. No Down
 drops it, and the gate's comparisons leave it out.
 
-- A Down that drops a column holding user data copies it into the stash
-  first, and the next Up restores it to every row that still exists.
-- An Up that drops, narrows, or collapses data stashes what it destroys, and
-  its Down restores it.
-- A step applies the stash on top of the current data and deletes the entries
-  it used. Entries whose row is gone are dropped with it.
+- A Down that drops or rewrites user data copies it into the stash first.
+- The replay writes it back. It runs after each forward step, before the next
+  step reads the store, because v7's Up reads the edges and lanes v6's replay
+  returns. It writes onto the current data and deletes only the entries it
+  wrote; an entry that matched nothing stays.
 
 The table's one definition is `stash_carrier.ddl`, embedded as
-`migrations.StashCarrierDDL`. Every step that stashes or restores runs it
-first, copied byte for byte, so whichever step a store meets first creates the
-table. A test fails on any registry migration that defines `schema_stash`
-other than by that copy, or alters or drops it.
+`migrations.StashCarrierDDL`. Every stash a Down writes runs it first, so the
+first Down that stashes creates the table. A replay never creates it: a store
+without the carrier holds nothing to replay. A test
+fails on any registry migration that defines `schema_stash` other than by that
+copy, or alters or drops it.
 
-The carrier admits string columns (`VARCHAR`, `TEXT`), which is every column
-a released Down drops. The template below restores columns of rows that still
-exist. A Down that drops a whole table (v9 `purges`, v11 `plan_reviews`) meets
-an Up that re-creates it empty, where the `UPDATE ... JOIN` matches nothing
-and the `DELETE` then discards every entry; its rows need re-inserting from
-the stash instead. The design asks for the canonical export's encoding,
-but that encoder is Go and a goose step is SQL. So the step encodes in SQL,
-and the round-trip gate proves the result against the export. A column of
-another type needs its encoding here and a seeded column of that type in
-`TestTheStashCarrierRoundTripsAColumnItsDownDrops` first.
+### One source for the stash SQL
 
-For table `<t>`, column `<c>`, and `<key>` =
-`CAST(JSON_OBJECT('<pk1>', <t>.<pk1>, ...) AS CHAR)` over the primary key in
-key order:
+`stash.go` holds both halves:
 
-```sql
--- Stash: in a Down before it drops <c>, or in an Up before it destroys <c>.
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '<t>', <key>, '<c>', JSON_ARRAY(SUBSTRING(<c>, 1)) FROM <t>;
+- `Restores` declares each version's stash: a `Column`, a whole-table or
+  sliced `Rows`, or a slice whose rows the replay makes exact again (`Prune`).
+- Each stash generates its SQL. `StashSQL` is what the Down carries, and
+  `TestEveryReleasedDownStashesWhatItsUpReplays` fails unless the Down holds
+  it as generated. `RestoreSQL` is what `ReplayStash` runs.
+- `ReplayStash` is the one restorer. The runner's forward step (`upByOne`)
+  calls it, and so does the round-trip gate.
 
--- Restore: once <c> exists again, in the Up that re-adds it or the Down of a destructive Up.
-UPDATE <t> JOIN schema_stash s ON s.table_name = '<t>' AND s.column_name = '<c>' AND s.row_key = <key>
-  SET <t>.<c> = IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]')));
-DELETE FROM schema_stash WHERE table_name = '<t>' AND column_name = '<c>';
-```
+The replay lives outside the Up, so a released Down is made lossless without
+touching its pinned Up. A released lit raises a store with the same Up bytes
+and never replays. The next open by a lit that replays finds the leftover
+entries (`pendingStash`), replays them under a checkpoint, commits, and lists
+them on the command's event as `migration.stash_replayed`. That catch-up
+writes back what was stashed, but it cannot undo what a later Up derived
+while the data was missing.
 
-- Each statement is its own goose statement.
-- The one-element array keeps a NULL (`[null]`) apart from a missing entry.
-- `SUBSTRING(<c>, 1)` is load-bearing. Dolt's `JSON_ARRAY` over a `TEXT` column
-  encodes the column's storage address instead of its text, and
-  `CAST(... AS CHAR)` does not avoid it.
-- `REPLACE` lets a later stash of the same row overwrite an earlier one.
-- An entry whose row is gone matches nothing and is deleted with the rest.
+The carrier holds string columns (`VARCHAR`, `TEXT`) and `INT` columns read
+back as text. That covers every column a released Down stashes. The design
+asks for the canonical export's encoding, but that encoder is Go and a goose
+step is SQL, so the step encodes in SQL and the round-trip gate proves the
+result against the export.
+
+- A one-column key is that column's text. A composite key joins its parts with
+  `CHAR(31)`. Dolt's JSON formatting never enters a key.
+- An entry's `column_name` carries the slice's tag (`*unfiled`,
+  `lane@unfiled`). Two versions that stash the same table or column then never
+  replay or overwrite each other's entries.
+- `SUBSTRING(<c>, 1)` is load-bearing. Dolt's `JSON_ARRAY` over a `TEXT`
+  column encodes the column's storage address instead of its text.
+- The column restore is a single-table `UPDATE`. Dolt refuses
+  `UPDATE issues JOIN schema_stash` with `issues_status_check` on a valid row.
 
 ### Exemptions
 
-The gate holds two lists in `migration_round_trip_test.go`, each entry naming
-its reason:
-
-- `pendingLosslessDown`: released Downs that lose data today. They are fixed
-  in place (the pin covers only the Up), and the list empties as they are.
-- `releasedDestructiveUp`: released Ups that destroyed data on every store
-  they ran on (v4, v7, v10). No Down can return what is already gone, so the
-  check from the version below skips them. This list is permanent and closed.
-
-An exempt version that passes fails the gate, so the lists only shrink. A new
-migration is never added to either.
+`releasedDestructiveUp` in `migration_round_trip_test.go` lists the released
+Ups that destroyed data on every store they ran on (v4, v7, v10). No Down can
+return what is already gone, so the check from the version below skips them.
+The list is permanent and closed. An exempt version that passes fails the
+gate, and a new migration is never added to it.
 
 ## Why this lives at the registry, not at the call site
 

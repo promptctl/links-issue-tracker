@@ -519,6 +519,9 @@ type migrationAssessment struct {
 	// drift is nil when every applied version's registered content is
 	// present on the live schema.
 	drift *VersionContentMismatchError
+	// stash is the applied versions whose stash still holds entries, lowest
+	// first: what a lit that never replays left when it raised the store.
+	stash []int64
 }
 
 // needsWrite reports whether a migrate of this workspace would mutate it: a
@@ -532,7 +535,7 @@ type migrationAssessment struct {
 // normalization, the default-branch rename, is not a schema fact and is not
 // assessed here.)
 func (a migrationAssessment) needsWrite() bool {
-	return a.drift != nil || a.state.willMutate()
+	return a.drift != nil || len(a.stash) > 0 || a.state.willMutate()
 }
 
 // String names what the assessment found, for the read open's handoff error.
@@ -540,6 +543,8 @@ func (a migrationAssessment) String() string {
 	switch {
 	case a.drift != nil:
 		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
+	case len(a.stash) > 0:
+		return fmt.Sprintf("the stash of applied schema %v not replayed", a.stash)
 	case a.state.phase == phaseManaged:
 		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.support.Max)
 	case a.state.phase == phaseAdopt:
@@ -615,7 +620,14 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 	if fail != nil {
 		return migrationAssessment{}, fail
 	}
-	return migrationAssessment{state: state, op: op, drift: mismatch}, nil
+	var stash []int64
+	if fail := attempt(stepVerifyContent, func() (err error) {
+		stash, err = s.pendingStash(ctx, state.appliedVersion)
+		return err
+	}); fail != nil {
+		return migrationAssessment{}, fail
+	}
+	return migrationAssessment{state: state, op: op, drift: mismatch, stash: stash}, nil
 }
 
 // runMigration classifies the workspace once, refuses one this binary may not
@@ -675,6 +687,14 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 	}
 	if assessment.drift != nil {
 		if pruneErr, fail = s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, assessment.drift); fail != nil {
+			return pruneErr, fail
+		}
+	}
+	probed.replayed(nil)
+	if len(assessment.stash) > 0 {
+		stashPruneErr, fail := s.replayPendingStash(ctx, assessment.stash, probed)
+		pruneErr = errors.Join(pruneErr, stashPruneErr)
+		if fail != nil {
 			return pruneErr, fail
 		}
 	}
@@ -811,7 +831,7 @@ func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise Sch
 	}
 	// The step's restore runs before the next step reads what it puts back:
 	// v7's body reads the edges and lanes v6's restore returns.
-	if _, err := migrations.ReplayStash(ctx, s.db, result.Source.Version); err != nil {
+	if probed.replayedStash, err = migrations.ReplayStash(ctx, s.db, result.Source.Version); err != nil {
 		return result, probed, err
 	}
 	return result, probed, nil
@@ -1003,6 +1023,8 @@ var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge}
 type probeOutcome struct {
 	facts map[string]any
 	err   error
+	// replayedStash is what the step's stash replay wrote.
+	replayedStash []migrations.Replayed
 }
 
 // probedFacts gathers, for one migrating open, what the probes of the
@@ -1013,6 +1035,9 @@ type probedFacts map[string]any
 // record keeps a committed step's probe: the facts it read, or why it could
 // not read them.
 func (p probedFacts) record(o probeOutcome) {
+	if len(o.replayedStash) > 0 {
+		p.replayed(o.replayedStash)
+	}
 	if o.err != nil {
 		p["migration.probe_error"] = telemetry.ErrorText(o.err)
 		return
@@ -1567,38 +1592,75 @@ func migrationDriftRepairCommitMessage(repaired []string) string {
 // prune runs after the repair committed, so its failure is returned beside a
 // nil failure, for the open to report, not to fail on.
 func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appliedVersion int64, mismatch *VersionContentMismatchError) (pruneErr error, fail *SchemaConvergenceError) {
+	return s.repairWithRollback(ctx, driftRepair, func() (string, error) {
+		repair := func() ([]string, error) {
+			if hook := versionContentDriftRepairForTest; hook != nil {
+				return hook(ctx)
+			}
+			return s.repairVersionContentDrift(ctx, appliedVersion)
+		}
+		repaired, err := repair()
+		if err != nil {
+			return "", fmt.Errorf("repair version-content drift (detected at v%d %q): %w", mismatch.Version, mismatch.Name, err)
+		}
+		return migrationDriftRepairCommitMessage(repaired), nil
+	})
+}
+
+// repairSteps names one after-the-fact repair of an applied workspace: its
+// checkpoint prefix, the steps a failure is reported at, and its prune.
+type repairSteps struct {
+	prefix                    string
+	checkpoint, repair, reset ConvergenceStep
+	prune                     pruneStep
+	what                      string
+	// commitFailed wraps a failed commit of the repair, its text literal so
+	// the docs that quote it find it.
+	commitFailed string
+}
+
+var driftRepair = repairSteps{
+	prefix: migrationDriftRepairCheckpointPrefix, checkpoint: stepDriftCheckpoint, repair: stepDriftRepair, reset: stepDriftRepairReset,
+	prune: pruneDriftCheckpoints, what: "version-content drift repair",
+	commitFailed: "commit version-content drift repair: %w",
+}
+
+// repairWithRollback runs repair between a checkpoint and a commit of what it
+// wrote, under the message it returns, and resets to the checkpoint when
+// either fails, as applyPendingMigrations does for ordinary migrations.
+//
+// [LAW:no-silent-failure] A reset failure is itself surfaced, never silently
+// dropped, mirroring handleMigrationFailure's ordering below. The checkpoint
+// prune runs after the repair committed, so its failure is returned beside a
+// nil failure, for the open to report, not to fail on.
+// [LAW:single-enforcer] the one checkpoint-and-reset discipline for every
+// repair of an applied workspace.
+func (s *Store) repairWithRollback(ctx context.Context, r repairSteps, repair func() (string, error)) (pruneErr error, fail *SchemaConvergenceError) {
 	var checkpoint storage.Checkpoint
-	if fail := attempt(stepDriftCheckpoint, func() (err error) {
-		checkpoint, err = s.CreateCheckpoint(ctx, migrationDriftRepairCheckpointPrefix)
+	if fail := attempt(r.checkpoint, func() (err error) {
+		checkpoint, err = s.CreateCheckpoint(ctx, r.prefix)
 		return err
 	}); fail != nil {
 		return nil, fail
 	}
-	repair := func() ([]string, error) {
-		if hook := versionContentDriftRepairForTest; hook != nil {
-			return hook(ctx)
-		}
-		return s.repairVersionContentDrift(ctx, appliedVersion)
-	}
-	repaired, repairErr := repair()
+	message, repairErr := repair()
 	if repairErr == nil {
-		if commitErr := s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired)); commitErr != nil {
-			repairErr = fmt.Errorf("commit version-content drift repair: %w", commitErr)
+		if commitErr := s.commitWorkingSet(ctx, message); commitErr != nil {
+			repairErr = fmt.Errorf(r.commitFailed, commitErr)
 		}
 	}
 	if repairErr != nil {
-		repairErr = fmt.Errorf("repair version-content drift (detected at v%d %q): %w", mismatch.Version, mismatch.Name, repairErr)
 		// The reset runs to the end on a context the caller cannot cancel, as
 		// applyPendingMigrations' recovery does. [LAW:no-ambient-temporal-coupling]
-		if resetErr := atFailpoint(stepDriftRepairReset, func() error {
+		if resetErr := atFailpoint(r.reset, func() error {
 			return s.ResetToCheckpoint(context.WithoutCancel(ctx), checkpoint.Name)
 		}); resetErr != nil {
-			return nil, failAt(stepDriftRepairReset, &CheckpointResetFailedError{Checkpoint: checkpoint, Cause: repairErr, ResetErr: resetErr})
+			return nil, failAt(r.reset, &CheckpointResetFailedError{Checkpoint: checkpoint, Cause: repairErr, ResetErr: resetErr})
 		}
-		return nil, failAt(stepDriftRepair, &CheckpointResetError{Checkpoint: checkpoint, Cause: repairErr})
+		return nil, failAt(r.repair, &CheckpointResetError{Checkpoint: checkpoint, Cause: repairErr})
 	}
-	return prune(pruneDriftCheckpoints, "prune version-content drift repair checkpoints", func() error {
-		return s.PruneCheckpoints(context.WithoutCancel(ctx), migrationDriftRepairCheckpointPrefix, migrationCheckpointRetention)
+	return prune(r.prune, "prune "+r.what+" checkpoints", func() error {
+		return s.PruneCheckpoints(context.WithoutCancel(ctx), r.prefix, migrationCheckpointRetention)
 	}), nil
 }
 

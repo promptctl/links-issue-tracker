@@ -18,10 +18,14 @@ type Stash interface {
 	// DDL first.
 	StashSQL() []string
 	// RestoreSQL is the statements the replay runs once the structure exists
-	// again, and which of them writes the rows it counts.
+	// again, and which of them writes the rows it counts. It never creates the
+	// carrier: a store no Down stashed in has none, and holds nothing to
+	// replay.
 	RestoreSQL() (stmts []string, writes int)
 	// Name is the stash's table and column, as the replay reports it.
 	Name() string
+	// Entry is the table_name and column_name of every entry it writes.
+	Entry() (table, column string)
 }
 
 // Column is one string column of an existing table: its table, its name, the
@@ -123,6 +127,8 @@ func carrier() string { return strings.TrimSpace(StashCarrierDDL) }
 
 func (c Column) Name() string { return c.Table + "." + c.entry() }
 
+func (c Column) Entry() (string, string) { return c.Table, c.entry() }
+
 func (c Column) StashSQL() []string {
 	return []string{
 		carrier(),
@@ -138,17 +144,18 @@ func (c Column) StashSQL() []string {
 func (c Column) RestoreSQL() ([]string, int) {
 	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", c.Table, c.entry(), rowKey(c.Key, "t"))
 	return []string{
-		carrier(),
 		// Single-table: Dolt refuses the joined form, UPDATE issues JOIN
 		// schema_stash, with issues_status_check on a valid row.
 		fmt.Sprintf("UPDATE %s t SET t.%s = (SELECT %s FROM schema_stash s WHERE %s) WHERE EXISTS (SELECT 1 FROM schema_stash s WHERE %s);",
 			c.Table, c.Column, element(0), match, match),
 		fmt.Sprintf("DELETE s FROM schema_stash s JOIN %s t ON %s WHERE s.table_name = '%s' AND s.column_name = '%s';",
 			c.Table, match, c.Table, c.entry()),
-	}, 1
+	}, 0
 }
 
 func (r Rows) Name() string { return r.Table + "." + r.entry() }
+
+func (r Rows) Entry() (string, string) { return r.Table, r.entry() }
 
 func (r Rows) StashSQL() []string {
 	where := ""
@@ -176,7 +183,7 @@ func (r Rows) RestoreSQL() ([]string, int) {
 	for _, ref := range r.Refs {
 		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM issues p WHERE p.id = %s)", element(indexOf(r.Columns, ref)))
 	}
-	stmts := []string{carrier()}
+	var stmts []string
 	if r.Prune != "" {
 		stmts = append(stmts, fmt.Sprintf("DELETE FROM %s WHERE %s AND NOT EXISTS (SELECT 1 FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s AND s.value = %s);",
 			r.Table, r.Prune, r.Table, r.entry(), rowKey(r.Key, r.Table), value(r.Columns, r.Table)))
@@ -256,9 +263,10 @@ func unfiledEpic() []Stash {
 	}
 }
 
-// Execer is the one method ReplayStash needs from a database handle.
-type Execer interface {
+// Querier is what ReplayStash needs from a database handle.
+type Querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 // Replayed is one stash's replay: what it restored and how many rows.
@@ -271,7 +279,18 @@ type Replayed struct {
 // ReplayStash applies version's stash to db. It is the one restorer: the
 // runner calls it after every forward step and the round-trip gate steps
 // through it the same way. [LAW:single-enforcer]
-func ReplayStash(ctx context.Context, db Execer, version int64) ([]Replayed, error) {
+func ReplayStash(ctx context.Context, db Querier, version int64) ([]Replayed, error) {
+	if len(Restores[version]) == 0 {
+		return nil, nil
+	}
+	var present int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = DATABASE() AND table_name = 'schema_stash'`).Scan(&present); err != nil {
+		return nil, fmt.Errorf("replay v%d stash: look for the carrier: %w", version, err)
+	}
+	if present == 0 {
+		return nil, nil
+	}
 	var replayed []Replayed
 	for _, st := range Restores[version] {
 		stmts, writes := st.RestoreSQL()
