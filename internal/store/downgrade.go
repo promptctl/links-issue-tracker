@@ -376,9 +376,13 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold hold
 		if err != nil {
 			return reversed, held, err
 		}
-		if held, _, err = s.holdWorkingSet(ctx, landed, hold); err != nil {
+		// A write that fails leaves the hold the step before committed, so
+		// the report keeps it. [LAW:one-source-of-truth]
+		landedHold, _, err := s.holdWorkingSet(ctx, landed, hold)
+		if err != nil {
 			return reversed, held, fmt.Errorf("hold the schema at %d: %w", landed, err)
 		}
+		held = landedHold
 		if err := s.commitWorkingSet(ctx, downgradeCommitMessage(result)); err != nil {
 			return reversed, held, fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)
 		}
