@@ -456,12 +456,50 @@ func TestCycleChecksStayLocal(t *testing.T) {
 	}
 }
 
+// Closing a chain is refused, an edge along it is not, and a loop restored data
+// holds ends the read.
+func TestACycleCheckRefusesOnlyWhatClosesALoop(t *testing.T) {
+	const chain = 20
+	c := blockedChain(t, chain)
+	err, _ := c.check(c.link(0), c.link(chain-1))
+	assertCycleRefused(t, err)
+	if err, _ := c.check(c.link(chain-1), c.link(0)); err != nil {
+		t.Errorf("an edge along the chain: %v", err)
+	}
+	seedInsert(t, c.ctx, c.st, seedRelationsHead, []string{seedEdge(c.link(0), c.link(chain-1), model.RelBlockedBy)})
+	if err, _ := c.check(c.link(5), c.link(chain+1)); err != nil {
+		t.Errorf("an edge beside a loop: %v", err)
+	}
+}
+
 // A foundation ticket reaches everything waiting on it, and the second every
-// command gets holds that. A loop restored data holds ends the read.
+// command gets holds that.
 func TestACycleCheckReadsWhatItReachesInOneRead(t *testing.T) {
+	if testing.Short() {
+		t.Skip("a wall-clock bound over a 2,000-link chain")
+	}
+	const chain = 2000
+	c := blockedChain(t, chain)
+	err, took := c.check(c.link(0), c.link(chain-1))
+	assertCycleRefused(t, err)
+	if took > time.Second {
+		t.Errorf("a cycle check over %d links took %v, past a second", chain, took)
+	}
+}
+
+type chainStore struct {
+	t    *testing.T
+	ctx  context.Context
+	st   *Store
+	link func(int) string
+}
+
+// blockedChain seeds links 0..chain-1, each blocked by the one before, and a
+// link past the end blocked by the last.
+func blockedChain(t *testing.T, chain int) chainStore {
+	t.Helper()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	const chain = 2000
 	seedRows(t, ctx, st, 0, chain*5+10, false)
 	link := func(i int) string { return seededRow(i*5 + 1) }
 	edges := []string{seedEdge(link(chain+1), link(chain), model.RelBlockedBy)}
@@ -470,30 +508,26 @@ func TestACycleCheckReadsWhatItReachesInOneRead(t *testing.T) {
 	}
 	seedInsert(t, ctx, st, seedRelationsHead, edges)
 	seedCommit(t, ctx, st)
-	check := func(dependent, dependency string) (error, time.Duration) {
-		tx, err := st.db.BeginTx(ctx, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer tx.Rollback()
-		began := time.Now()
-		err = rejectBlocksCycle(ctx, tx, dependent, dependency)
-		return err, time.Since(began)
+	return chainStore{t: t, ctx: ctx, st: st, link: link}
+}
+
+// check times rejectBlocksCycle in a transaction it rolls back.
+func (c chainStore) check(dependent, dependency string) (error, time.Duration) {
+	tx, err := c.st.db.BeginTx(c.ctx, nil)
+	if err != nil {
+		c.t.Fatal(err)
 	}
-	err, took := check(link(0), link(chain-1))
+	defer tx.Rollback()
+	began := time.Now()
+	err = rejectBlocksCycle(c.ctx, tx, dependent, dependency)
+	return err, time.Since(began)
+}
+
+func assertCycleRefused(t *testing.T, err error) {
+	t.Helper()
 	var refused storage.RelationRuleError
 	if !errors.As(err, &refused) || refused.Rule != storage.RuleCycle {
-		t.Fatalf("closing a %d-link chain: %v, want the cycle refusal", chain, err)
-	}
-	if took > time.Second {
-		t.Errorf("a cycle check over %d links took %v, past a second", chain, took)
-	}
-	if err, _ := check(link(chain-1), link(0)); err != nil {
-		t.Errorf("an edge along the chain: %v", err)
-	}
-	seedInsert(t, ctx, st, seedRelationsHead, []string{seedEdge(link(0), link(chain-1), model.RelBlockedBy)})
-	if err, _ := check(link(5), link(chain+1)); err != nil {
-		t.Errorf("an edge beside a loop: %v", err)
+		t.Fatalf("closing a chain: %v, want the cycle refusal", err)
 	}
 }
 
