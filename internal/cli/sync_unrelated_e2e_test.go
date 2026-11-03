@@ -66,7 +66,7 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	if !strings.Contains(msg, "no common history") && !strings.Contains(msg, "no shared ancestor") {
 		t.Fatalf("reconcile error does not name unrelated histories:\n%s", msg)
 	}
-	if strings.Contains(msg, "no rows in result set") || strings.Contains(msg, `read export at ""`) {
+	if strings.Contains(msg, "no rows in result set") || strings.Contains(msg, `export at ""`) {
 		t.Fatalf("reconcile leaked the pre-fix obscure base-shaped error:\n%s", msg)
 	}
 

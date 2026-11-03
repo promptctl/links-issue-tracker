@@ -528,7 +528,7 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncRe
 	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// A loop the base held is history: the replay reports the cuts made to
 		// the two heads, whose content is what lands.
-		base, _, err := s.exportAtCommit(ctx, scratch.read, baseCommit, version.UnboundedSchemaCeiling())
+		base, _, err := s.exportAtCommit(ctx, scratch.read, "base", baseCommit, version.UnboundedSchemaCeiling())
 		if err != nil {
 			return err
 		}
@@ -689,7 +689,7 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 	c := f.chain[i]
 	// A loop a folded commit held is history the head has moved past or still
 	// holds; the head's cut is the one reported.
-	at, _, err := f.store.exportAtCommit(ctx, f.readBranch, c.hash, version.UnboundedSchemaCeiling())
+	at, _, err := f.store.exportAtCommit(ctx, f.readBranch, "folded commit", c.hash, version.UnboundedSchemaCeiling())
 	if err != nil {
 		return replayStep{}, err
 	}
@@ -820,14 +820,14 @@ func holdForCollisions(result *storage.SyncReconcileResult, collisions []merge.C
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/remoteSide/message/state are
 // values, not a branch duplicated through the replay.
 func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead string, remoteHead fetchedHead, remoteSide []string, base model.Export, message string, settledState storage.SyncReconcileState) error {
-	ours, oursCut, err := s.exportAtCommit(ctx, scratch.read, localHead, version.UnboundedSchemaCeiling())
+	ours, oursCut, err := s.exportAtCommit(ctx, scratch.read, "local head", localHead, version.UnboundedSchemaCeiling())
 	if err != nil {
 		return err
 	}
 	// The spine's lift of the same commit cuts and reports what this read cut.
 	// Bound by the head's hold, this read is where a held remote refuses, before
 	// the merge and any prose the operator would settle for nothing.
-	theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead.hash, remoteHead.hold)
+	theirs, _, err := s.exportAtCommit(ctx, scratch.read, "remote head", remoteHead.hash, remoteHead.hold)
 	if err != nil {
 		return err
 	}
@@ -1143,7 +1143,8 @@ func cutParentLoops(ctx context.Context, db *sql.DB) ([]storage.Unlooped, error)
 // exportAtCommit switches to the reconcile's READ branch, resets it to a
 // commit, lifts it to the current schema, and exports it, with the parent edges
 // the lift cut. Reading at a revision this way reuses the one canonical export
-// path. [LAW:single-enforcer]
+// path. role names which of the reconcile's commits this is, so a failed
+// read says which one could not be read. [LAW:single-enforcer]
 //
 // Taking the branch as a parameter and switching to it here — rather than
 // inheriting whatever branch the session happens to be on — is what makes the
@@ -1156,13 +1157,13 @@ func cutParentLoops(ctx context.Context, db *sql.DB) ([]storage.Unlooped, error)
 // hold bounds the lift (resetAndLift): the fetched head's own when the commit
 // is that head, so a held remote refuses at its first read; the unbounded
 // ceiling for every other commit, a projection no hold binds.
-func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string, hold version.SchemaCeiling) (model.Export, []storage.Unlooped, error) {
+func (s *Store) exportAtCommit(ctx context.Context, readBranch, role, commit string, hold version.SchemaCeiling) (model.Export, []storage.Unlooped, error) {
 	if err := s.checkout(ctx, readBranch); err != nil {
 		return model.Export{}, nil, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
 	}
 	unlooped, err := s.resetAndLift(ctx, commit, hold)
 	if err != nil {
-		return model.Export{}, nil, fmt.Errorf("read export at %q: %w", commit, err)
+		return model.Export{}, nil, fmt.Errorf("read the %s export at %q: %w", role, commit, err)
 	}
 	export, err := s.Export(ctx)
 	if err != nil {
