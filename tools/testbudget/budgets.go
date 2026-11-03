@@ -42,9 +42,8 @@ var budgets = map[string]time.Duration{
 	// 2026-08-26 calibration, more than the runner pool's ~1.5x spread
 	// explains. One known share is the migration round-trip gate
 	// (migration_round_trip_test.go), whose cost IS what it pins: every
-	// migration's Down proven lossless. Its PR's CI run took the package to
-	// 110s against 62s on master. The rest is unmeasured. Approaching this
-	// budget means fixture tax is back.
+	// migration's Down proven lossless. The rest is unmeasured. Approaching
+	// this budget means fixture tax is back.
 	"github.com/promptctl/links-issue-tracker/internal/store": 440 * time.Second,
 
 	// 385s (EPYC 7763); 249-358s on the other CPUs, most of it the serial e2e

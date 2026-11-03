@@ -152,12 +152,12 @@ func TestTheRoundTripGateCatchesALossyDown(t *testing.T) {
 	}
 }
 
-// TestAFailedFreshUpFailsEveryCallerOfItsShape breaks v11's Up and asks the
-// shape cache for v11 from several tests at once: every one of them gets the
+// TestAFailedFreshUpFailsEveryCallerOfItsShape breaks v2's Up and asks the
+// shape cache for v2 from several tests at once: every one of them gets the
 // build's error, none an empty shape that would read as a schema diff.
 func TestAFailedFreshUpFailsEveryCallerOfItsShape(t *testing.T) {
 	t.Parallel()
-	const v = 11
+	const v = 2
 	prefix := fmt.Sprintf("%05d_", v)
 	cache := &shapeCache{fsys: os.DirFS(copyRegistry(t, func(name, body string) string {
 		if !strings.HasPrefix(name, prefix) {
@@ -173,7 +173,9 @@ func TestAFailedFreshUpFailsEveryCallerOfItsShape(t *testing.T) {
 		t.Run(fmt.Sprintf("caller %d", i), func(t *testing.T) {
 			t.Parallel()
 			shape, err := cache.shape(v)
-			if err == nil || !strings.Contains(err.Error(), "Up to v11") {
+			// goose names the version; the driver, the injected statement.
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("version:%d)", v)) ||
+				!strings.Contains(err.Error(), "near 'THIS'") {
 				t.Fatalf("shape(%d) = %q, %v; want the failed Up's error", v, shape, err)
 			}
 		})
@@ -240,7 +242,7 @@ func freshShape(t *testing.T, v int64) string {
 	t.Helper()
 	shape, err := freshShapes.shape(v)
 	if err != nil {
-		t.Fatalf("fresh Up to v%d: %v", v, err)
+		t.Fatalf("fresh shape at v%d: %v", v, err)
 	}
 	return shape
 }
@@ -262,18 +264,14 @@ func (c *shapeCache) shape(v int64) (string, error) {
 
 func buildFreshShape(fsys fs.FS, v int64) (shape string, err error) {
 	ctx := context.Background()
-	template, err := storeTemplate.Dir()
-	if err != nil {
-		return "", fmt.Errorf("build the store template: %w", err)
-	}
 	base, err := os.MkdirTemp("", "fresh-shape-")
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(base)
+	defer func() { err = errors.Join(err, os.RemoveAll(base)) }()
 	dir := filepath.Join(base, "dolt")
-	if err := os.CopyFS(dir, os.DirFS(template)); err != nil {
-		return "", fmt.Errorf("copy the store template: %w", err)
+	if err := storeTemplate.CopyTo(dir); err != nil {
+		return "", err
 	}
 	st, err := Open(ctx, testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
@@ -283,12 +281,7 @@ func buildFreshShape(fsys fs.FS, v int64) (shape string, err error) {
 	if _, err := upOnly(ctx, st.db, fsys, v); err != nil {
 		return "", err
 	}
-	tables, err := applicationTables(ctx, st.db)
-	if err != nil {
-		return "", fmt.Errorf("list tables: %w", err)
-	}
-	tables = slices.DeleteFunc(tables, func(name string) bool { return name == schemaStashTable })
-	return tablesDDL(ctx, st.db, tables)
+	return comparedShape(ctx, st.db)
 }
 
 // roundTripBelow: seed at below, export, Up to v, Down to below, compare the
@@ -456,7 +449,7 @@ func exportTables(t *testing.T, db *sql.DB) string {
 // schemaShape is every compared table's SHOW CREATE TABLE, in name order.
 func schemaShape(t *testing.T, db *sql.DB) string {
 	t.Helper()
-	ddl, err := tablesDDL(context.Background(), db, comparedTables(t, db))
+	ddl, err := comparedShape(context.Background(), db)
 	if err != nil {
 		t.Fatalf("schema shape: %v", err)
 	}
@@ -467,11 +460,29 @@ func schemaShape(t *testing.T, db *sql.DB) string {
 // bookkeeping and the stash carrier.
 func comparedTables(t *testing.T, db *sql.DB) []string {
 	t.Helper()
-	tables, err := applicationTables(context.Background(), db)
+	tables, err := comparedTableNames(context.Background(), db)
 	if err != nil {
-		t.Fatalf("list tables: %v", err)
+		t.Fatal(err)
 	}
-	return slices.DeleteFunc(tables, func(name string) bool { return name == schemaStashTable })
+	return tables
+}
+
+func comparedTableNames(ctx context.Context, db *sql.DB) ([]string, error) {
+	tables, err := applicationTables(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("list tables: %w", err)
+	}
+	return slices.DeleteFunc(tables, func(name string) bool { return name == schemaStashTable }), nil
+}
+
+// comparedShape is schemaShape without a testing.T, so the shared fresh-shape
+// build can compute it too.
+func comparedShape(ctx context.Context, db *sql.DB) (string, error) {
+	tables, err := comparedTableNames(ctx, db)
+	if err != nil {
+		return "", err
+	}
+	return tablesDDL(ctx, db, tables)
 }
 
 func allTables(t *testing.T, db *sql.DB) []string {
