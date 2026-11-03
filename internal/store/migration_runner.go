@@ -426,6 +426,9 @@ type migrationState struct {
 	// committedVersion is the version HEAD records; above it, appliedVersion
 	// is a step that died before its commit (interrupted).
 	committedVersion int64
+	// stashUnsettled is a carrier left dirty at HEAD's own version: a step
+	// that died after its stash settle and before goose recorded its Up.
+	stashUnsettled bool
 	// support is this binary's schema support as the classified state saw it.
 	support version.SchemaSupport
 	// hold is the store's schema hold as the classified state read it
@@ -455,19 +458,46 @@ func (st migrationState) schemaHold() int64 {
 	return st.hold.Max
 }
 
-// interrupted reports a forward step goose recorded and no commit versioned:
-// a process that died between a step's Up and its commit, its stash replay
-// among the work between. Read as applied, that step's stash would be held
-// for good, and the next Down of its version would overwrite the units the
-// entries were never written back to.
+// interrupted reports a forward step no commit versioned: a process that died
+// between a step's settle and its commit. Read as applied, a step goose
+// recorded would hold its stash for good, and the next Down of its version
+// would overwrite the units the entries were never written back to. A step
+// that died before goose recorded it left only its settle, whose drops the
+// step's next run would neither make nor report.
 func (st migrationState) interrupted() bool {
-	return st.phase == phaseManaged && st.appliedVersion > st.committedVersion
+	return st.phase == phaseManaged && (st.appliedVersion > st.committedVersion || st.stashUnsettled)
+}
+
+// undoInterrupted puts the working set back where the interrupted step began:
+// HEAD for a step goose recorded, and HEAD's carrier for one that died at its
+// settle, which wrote nothing else, so a write any other table stands with
+// stays for the stranded-write commit.
+func (st migrationState) undoInterrupted(ctx context.Context, db *sql.DB) error {
+	if st.appliedVersion > st.committedVersion {
+		return resetExactlyToRef(ctx, db, "HEAD")
+	}
+	// Rows, not a checkout: DOLT_CHECKOUT of the carrier's name switches to a
+	// branch of that name when one exists.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin the restore of HEAD's schema_stash: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM schema_stash"); err != nil {
+		return fmt.Errorf("clear the half-settled schema_stash: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_stash SELECT * FROM schema_stash AS OF 'HEAD'"); err != nil {
+		return fmt.Errorf("restore HEAD's schema_stash: %w", err)
+	}
+	return tx.Commit()
 }
 
 // undoDue reports an interrupted step this binary undoes: any it may write
-// over, a newer lit's included, since the undo is a reset to HEAD and needs
-// no knowledge of the step, and left in place this binary's next commit
-// would version it. One it may not write over is the writer's to undo.
+// over, a newer lit's included, and left in place this binary's next commit
+// would version it. The undo knows one thing of the step: a settle writes only
+// the carrier, so a newer lit whose pre-Up work wrote another table leaves that
+// write for the stranded-write commit. One it may not write over is the
+// writer's to undo.
 func (st migrationState) undoDue(op operability) bool {
 	return st.interrupted() && op.writable()
 }
@@ -561,7 +591,7 @@ func (a migrationAssessment) String() string {
 	case a.drift != nil:
 		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
 	case a.state.undoDue(a.op):
-		return fmt.Sprintf("a step to v%d not yet committed", a.state.appliedVersion)
+		return fmt.Sprintf("a step from v%d not yet committed", a.state.committedVersion)
 	case a.state.phase == phaseManaged:
 		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.support.Max)
 	case a.state.phase == phaseAdopt:
@@ -634,15 +664,31 @@ func (s *Store) checkWritable(ctx context.Context) (migrationState, operability,
 			if err != nil || !state.undoDue(op) {
 				return err
 			}
-			if err := resetExactlyToRef(ctx, s.db, "HEAD"); err != nil {
-				return fmt.Errorf("undo the uncommitted step to v%d: %w", state.appliedVersion, err)
-			}
-			return nil
+			return s.undoInterruptedLocked(ctx, state)
 		})
 	}); fail != nil {
 		return migrationState{}, operability{}, fail
 	}
 	return s.classifyWritable(ctx)
+}
+
+// undoInterruptedLocked undoes state's interrupted step under the commit lock
+// and checks it took: still under the lock, a step that reads interrupted
+// after the undo is the undo's failure, not a live writer's.
+// [LAW:single-enforcer] every path that writes over an interrupted step under
+// the lock undoes it here first.
+func (s *Store) undoInterruptedLocked(ctx context.Context, state migrationState) error {
+	if err := state.undoInterrupted(ctx, s.db); err != nil {
+		return fmt.Errorf("undo the uncommitted step from v%d: %w", state.committedVersion, err)
+	}
+	after, err := s.classifyMigrationState(ctx)
+	if err != nil {
+		return err
+	}
+	if after.interrupted() {
+		return fmt.Errorf("the undo left the step from v%d interrupted (applied v%d, unsettled stash %t)", state.committedVersion, after.appliedVersion, after.stashUnsettled)
+	}
+	return nil
 }
 
 // classifyWritable is checkWritable's classify and floor, run once before an
@@ -1491,7 +1537,21 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		if err != nil {
 			return migrationState{}, err
 		}
-		return migrationState{phase: phaseManaged, appliedVersion: applied, committedVersion: committed, support: support, hold: hold}, nil
+		unsettled := false
+		if applied == committed {
+			// dolt_status diffs every table; a store with no carrier has
+			// nothing a settle wrote.
+			carried, err := migrations.CarrierPresent(ctx, s.db)
+			if err != nil {
+				return migrationState{}, err
+			}
+			if carried {
+				if unsettled, err = s.tableModified(ctx, "schema_stash"); err != nil {
+					return migrationState{}, err
+				}
+			}
+		}
+		return migrationState{phase: phaseManaged, appliedVersion: applied, committedVersion: committed, stashUnsettled: unsettled, support: support, hold: hold}, nil
 	}
 	present, _, err := s.verifyBaselineShape(ctx)
 	if err != nil {
@@ -1891,6 +1951,17 @@ func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool
 		return nil, fmt.Errorf("iterate columns of %q: %w", table, err)
 	}
 	return columns, nil
+}
+
+// tableModified reports whether table, as HEAD has it, stands changed in the
+// working set: a settle only deletes from the carrier HEAD holds, so a carrier
+// the working set created is some other step's, not a settle's.
+func (s *Store) tableModified(ctx context.Context, table string) (bool, error) {
+	var modified bool
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) > 0 FROM dolt_status WHERE table_name = ? AND status = 'modified'`, table).Scan(&modified); err != nil {
+		return false, fmt.Errorf("read whether %s is modified: %w", table, err)
+	}
+	return modified, nil
 }
 
 // tableExists reports whether a table is present in the active database.
