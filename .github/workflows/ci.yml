@@ -43,8 +43,8 @@ jobs:
 
       # The same commit has measured internal/store at 152s on one runner and
       # 266s on another, so a red budget is the code's fault or the hardware's.
-      # The runner's CPU, printed just above the table, says which. The step only
-      # reports, so a runner whose lscpu output looks different cannot fail it.
+      # The runner's CPU, printed by this step just before the Test step, says
+      # which. lscpu's output varies by runner image, so it cannot fail the job.
       - name: Runner CPU
         run: |
           nproc

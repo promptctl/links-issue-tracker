@@ -81,6 +81,13 @@ func TestMain(m *testing.M) {
 	// minute still cuts a hung hold inside the test that met it. A test about a
 	// deadline installs its own figure. [LAW:no-ambient-temporal-coupling]
 	MirrorHoldBudget, ReceiveDeadline = time.Minute, time.Minute
+	// The templates are built here, before any test runs, so a serial test
+	// that shortens a package wait cannot be the one whose first copy builds
+	// the template every other test inherits. A failed build is not lost:
+	// every Copy fails with its error. [LAW:no-ambient-temporal-coupling]
+	for _, tp := range []*dirtemplate.Template{storeTemplate, unrelatedStoreTemplate} {
+		_, _ = tp.Dir()
+	}
 	os.Exit(dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate))
 }
 
