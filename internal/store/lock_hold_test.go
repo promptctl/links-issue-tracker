@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 )
 
 // heldReports collects what a hold reports when it ends.
@@ -38,9 +40,7 @@ func (r *heldReports) snapshot() ([]LockHold, []LockWait) {
 // heartbeat ticker never fires inside a test, which then drives tick by hand.
 func liftWaitOutOfPlay(t *testing.T) {
 	t.Helper()
-	prev := coResidentHolderWait
-	coResidentHolderWait = time.Hour
-	t.Cleanup(func() { coResidentHolderWait = prev })
+	shrinkWait(t, time.Hour)
 }
 
 // takenHold is a hold of kind access on a fresh store root, told by hand that
@@ -330,8 +330,16 @@ func contend(t *testing.T, open func(context.Context, string) (*Store, error), w
 }
 
 // shrinkWait sets coResidentHolderWait for a contention test.
+//
+// It builds the store templates first, so the template every later test
+// copies is never built under a test's wait. [LAW:no-ambient-temporal-coupling]
 func shrinkWait(t *testing.T, wait time.Duration) {
 	t.Helper()
+	for _, tp := range []*dirtemplate.Template{storeTemplate, unrelatedStoreTemplate} {
+		if _, err := tp.Dir(); err != nil {
+			t.Fatalf("build a store template: %v", err)
+		}
+	}
 	prev := coResidentHolderWait
 	coResidentHolderWait = wait
 	t.Cleanup(func() { coResidentHolderWait = prev })

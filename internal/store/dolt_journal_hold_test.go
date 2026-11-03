@@ -59,9 +59,7 @@ func chunkJournalPath(doltRoot string) string {
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
 	// coResidentHolderWait budget.
-	prevBudget := coResidentHolderWait
-	coResidentHolderWait = 700 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevBudget })
+	shrinkWait(t, 700*time.Millisecond)
 
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)

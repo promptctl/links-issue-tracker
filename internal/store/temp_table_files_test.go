@@ -22,9 +22,7 @@ import (
 func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait
 	// budget, which the refused open below exhausts by design.
-	prevBudget := coResidentHolderWait
-	coResidentHolderWait = 700 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevBudget })
+	shrinkWait(t, 700*time.Millisecond)
 
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)

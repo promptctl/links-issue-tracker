@@ -57,6 +57,12 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
+	// The copy carries no snapshots, so give it the one its creating Open
+	// took: a no-op Open that removed or pruned it must change the count.
+	label := formatMigrationSnapshotLabel(time.Now())
+	if _, err := dbsnapshot.Take(ctx, testStderr(), doltRoot, label); err != nil {
+		t.Fatalf("Take migration snapshot error = %v", err)
+	}
 	snapsBefore, err := dbsnapshot.List(doltRoot)
 	if err != nil {
 		t.Fatalf("List snapshots before reopen error = %v", err)

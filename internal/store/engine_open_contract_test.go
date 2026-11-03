@@ -53,9 +53,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	prevBudget := coResidentHolderWait
-	coResidentHolderWait = 700 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevBudget })
+	shrinkWait(t, 700*time.Millisecond)
 
 	start := time.Now()
 	opened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -149,9 +147,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	prevBudget := coResidentHolderWait
-	coResidentHolderWait = 700 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevBudget })
+	shrinkWait(t, 700*time.Millisecond)
 
 	opened, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
@@ -340,9 +336,7 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	prevBudget := coResidentHolderWait
-	coResidentHolderWait = 300 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevBudget })
+	shrinkWait(t, 300*time.Millisecond)
 
 	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -391,9 +385,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	}
 	defer func() { _ = releaseJournal() }()
 
-	prevWait := coResidentHolderWait
-	coResidentHolderWait = 300 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevWait })
+	shrinkWait(t, 300*time.Millisecond)
 
 	start := time.Now()
 	opened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")

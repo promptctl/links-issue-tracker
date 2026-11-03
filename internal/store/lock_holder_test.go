@@ -888,9 +888,10 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 // Serial by construction: it shrinks the production waits the commit lock's
 // budget is derived from, which are package state. [LAW:no-shared-mutable-globals]
 func TestCommitContentionNamesTheHolder(t *testing.T) {
-	wait, closeReserve := coResidentHolderWait, rotationCloseReserve
-	coResidentHolderWait, rotationCloseReserve = 0, 0
-	t.Cleanup(func() { coResidentHolderWait, rotationCloseReserve = wait, closeReserve })
+	shrinkWait(t, 0)
+	closeReserve := rotationCloseReserve
+	rotationCloseReserve = 0
+	t.Cleanup(func() { rotationCloseReserve = closeReserve })
 
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
