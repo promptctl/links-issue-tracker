@@ -33,24 +33,27 @@ type Stash interface {
 
 // Column is one string column of an existing table: its table, its name, the
 // table's primary key in key order, the slice's tag, the rows it stashes
-// (Where over the table aliased t, empty for every row), Unset, the SQL value
-// the Down or the Up leaves in the column, and Kept, a column the Down leaves
-// in place. An entry's column_name is the column and the tag, so two
-// versions' Downs that stash one column never overwrite each other's entries.
+// (Where over the table aliased t, empty for every row), Left, true of a row
+// (aliased t) whose column still holds what the Down or the Up wrote there,
+// Kept, a column the Down leaves in place, and When, true of a row (t) and
+// its entry (s) the stashed value is legal on. An entry's column_name is the
+// column and the tag, so two versions' Downs that stash one column never
+// overwrite each other's entries.
 //
 // The replay that runs right after the Up writes a dropped column back
-// whole: nothing wrote it between the Up that re-added it and the replay. A
-// late replay, and every replay of a Kept column, which the store below
-// writes, writes onto a row only while it still holds Unset: a value
-// written since is newer than the stash and stays.
+// whole: the stash, taken at the Down, is the record of it. A late replay,
+// and every replay of a Kept column, which the store below writes, writes
+// onto a row only where Left holds: a value written since is newer than the
+// stash and stays.
 type Column struct {
 	Table  string
 	Column string
 	Key    []string
 	Slice  string
 	Where  string
-	Unset  string
+	Left   string
 	Kept   bool
+	When   string
 }
 
 func (c Column) entry() string {
@@ -163,13 +166,17 @@ func (c Column) RestoreSQL(late bool) []string {
 	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", c.Table, c.entry(), rowKey(c.Key, "t"))
 	guard := ""
 	if late || c.Kept {
-		guard = fmt.Sprintf("t.%s <=> %s AND ", c.Column, c.Unset)
+		guard = "(" + c.Left + ") AND "
+	}
+	legal := match
+	if c.When != "" {
+		legal += " AND (" + c.When + ")"
 	}
 	return []string{
 		// Single-table: Dolt refuses the joined form, UPDATE issues JOIN
 		// schema_stash, with issues_status_check on a valid row.
 		fmt.Sprintf("UPDATE %s t SET t.%s = (SELECT %s FROM schema_stash s WHERE %s) WHERE %sEXISTS (SELECT 1 FROM schema_stash s WHERE %s);",
-			c.Table, c.Column, element(0), match, guard, match),
+			c.Table, c.Column, element(0), match, guard, legal),
 		dropEntries(c.Table, c.entry()),
 	}
 }
@@ -197,8 +204,9 @@ func (r Rows) StashSQL() []string {
 // RestoreSQL gives each live row under a stashed key the stashed values,
 // inserts each stashed row the table does not hold, then deletes every entry.
 // A row whose issue was deleted below died with it, as the table's cascade
-// would have done.
-func (r Rows) RestoreSQL(bool) []string {
+// would have done. A late replay only inserts: a live row, and one the Up
+// derived, may carry a write made since.
+func (r Rows) RestoreSQL(late bool) []string {
 	elems := make([]string, len(r.Columns))
 	for i := range r.Columns {
 		elems[i] = element(i)
@@ -216,7 +224,9 @@ func (r Rows) RestoreSQL(bool) []string {
 		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM issues p WHERE p.id = %s)", element(indexOf(r.Columns, ref)))
 	}
 	var stmts []string
-	if r.Prune != "" {
+	if late {
+		sets = nil
+	} else if r.Prune != "" {
 		stmts = append(stmts, fmt.Sprintf("DELETE FROM %s WHERE %s AND NOT EXISTS (SELECT 1 FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s AND s.value = %s);",
 			r.Table, r.Prune, r.Table, r.entry(), rowKey(r.Key, r.Table), value(r.Columns, r.Table)))
 	}
@@ -240,24 +250,27 @@ func indexOf(cols []string, c string) int {
 // released Down stashed. It lives here, outside every pinned Up byte, so a
 // released Down is made lossless without touching its Up.
 var Restores = map[int64][]Stash{
-	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Unset: "''"}},
-	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Unset: "NULL"}},
+	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Left: "t.lane = ''"}},
+	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Left: "t.resolution IS NULL"}},
 	4: {
-		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Unset: "NULL"},
+		// issues_redirect_target_check: a ticket reopened below holds no
+		// redirect.
+		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Left: "t.redirect_target IS NULL",
+			When: "t.resolution IN ('duplicate','superseded') OR " + element(0) + " IS NULL"},
 		Rows{Table: "relations", Columns: relationColumns, Key: []string{"src_id", "dst_id", "type"}, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}},
 	},
 	5: {
-		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}, Unset: "NULL"},
-		Column{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}, Unset: "NULL"},
+		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}, Left: "t.stream_id IS NULL"},
+		Column{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}, Left: "t.workspace_id IS NULL"},
 	},
 	6: {
-		Column{Table: "issues", Column: "follows_up", Key: []string{"id"}, Unset: "NULL"},
+		Column{Table: "issues", Column: "follows_up", Key: []string{"id"}, Left: "t.follows_up IS NULL"},
 		parentEdges("i.follows_up IS NOT NULL"),
 	},
 	7: unfiledEpic(),
 	9: {Rows{Table: "purges", Columns: []string{"issue_id", "issue_created_at", "purged_at", "purged_by"}, Key: []string{"issue_id", "issue_created_at"}}},
 	11: {
-		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}, Unset: "''"},
+		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}, Left: "t.work_plan = ''"},
 		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Refs: []string{"issue_id"}},
 	},
 }
@@ -294,7 +307,12 @@ func unfiledEpic() []Stash {
 			Where: of("dst_id"), Slice: "unfiled", Refs: []string{"src_id", "dst_id"},
 			Prune: fmt.Sprintf("relations.type = 'parent-child' AND relations.src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled') AND relations.dst_id IN (SELECT e.id FROM issues e WHERE e.%s)", element(0), strings.ReplaceAll(epic, " AND ", " AND e.")),
 		},
-		Column{Table: "issues", Column: "lane", Key: []string{"id"}, Slice: "unfiled", Where: "t.lane = t.id", Unset: "''", Kept: true},
+		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: of("src_id"), Slice: "unfiled-src", Refs: []string{"src_id", "dst_id"}},
+		// The Down resets a lane spelled as its ticket's id, and the Up spells
+		// the lane of every child it leaves at the top level so.
+		Column{Table: "issues", Column: "lane", Key: []string{"id"}, Slice: "unfiled", Kept: true,
+			Where: fmt.Sprintf("(t.lane = t.id OR t.id IN (SELECT c.src_id FROM relations c WHERE c.type = 'parent-child' AND %s))", strings.ReplaceAll(of("dst_id"), "t.dst_id", "c.dst_id")),
+			Left:  "t.lane IN ('', t.id)"},
 	}
 }
 

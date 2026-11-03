@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -126,6 +127,37 @@ func TestALateReplayKeepsWhatWasWrittenSince(t *testing.T) {
 	}
 	if held != 0 {
 		t.Fatalf("the replay left %d stash entries, want none", held)
+	}
+}
+
+// TestARedirectReopenedBelowStaysUnwritten is a duplicate with a redirect,
+// stepped down below v4 and reopened there: the open that raises it again
+// writes no redirect onto an open ticket, which issues_redirect_target_check
+// refuses, so the raise completes.
+func TestARedirectReopenedBelowStaysUnwritten(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	seeds := seedsByVersion(t, registryMigrations(t))
+	st, provider := storeAtVersion(t, migrations.FS, 4)
+	applySeed(t, st.db, seeds[4])
+	var id string
+	if err := st.db.QueryRowContext(ctx, `SELECT id FROM issues WHERE redirect_target IS NOT NULL ORDER BY id LIMIT 1`).Scan(&id); err != nil {
+		t.Fatalf("v4's seed holds no redirect: %v", err)
+	}
+	if _, err := provider.DownTo(ctx, 3); err != nil {
+		t.Fatalf("Down to v3: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET status = 'open', resolution = NULL, closed_at = NULL WHERE id = ?`, id); err != nil {
+		t.Fatalf("reopen %s: %v", id, err)
+	}
+
+	migrateLocked(t, ctx, st)
+	var redirect sql.NullString
+	if err := st.db.QueryRowContext(ctx, `SELECT redirect_target FROM issues WHERE id = ?`, id).Scan(&redirect); err != nil {
+		t.Fatalf("read the redirect: %v", err)
+	}
+	if redirect.Valid {
+		t.Fatalf("redirect_target of reopened %s = %q, want none", id, redirect.String)
 	}
 }
 

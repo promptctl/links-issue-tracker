@@ -144,8 +144,12 @@ drops it, and the gate's comparisons leave it out.
 - A Down that drops or rewrites user data copies it into the stash first.
 - The replay writes it back. It runs after each forward step, before the next
   step reads the store, because v7's Up reads the edges and lanes v6's replay
-  returns. It writes onto the current data and deletes only the entries it
-  wrote; an entry that matched nothing stays.
+  returns. It deletes every entry it reads, so an entry whose row is gone
+  does not stay pending.
+- A replay that runs late, after an Up that did not replay (a store an older
+  release raised), writes a column back only where it still holds what the Up
+  left, and only inserts missing rows: data written since is newer than the
+  stash.
 
 The table's one definition is `stash_carrier.ddl`, embedded as
 `migrations.StashCarrierDDL`. Every stash a Down writes runs it first, so the

@@ -313,7 +313,19 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'lane@unfiled', JSON_ARRAY(SUBSTRING(t.lane, 1)) FROM issues t WHERE t.lane = t.id;
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*unfiled-src', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.src_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'lane@unfiled', JSON_ARRAY(SUBSTRING(t.lane, 1)) FROM issues t WHERE (t.lane = t.id OR t.id IN (SELECT c.src_id FROM relations c WHERE c.type = 'parent-child' AND c.dst_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets')));
 -- +goose StatementEnd
 -- +goose StatementBegin
 UPDATE issues
