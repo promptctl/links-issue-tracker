@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // reconcileCommitMessage labels the marker commit that settles a reconcile's
@@ -443,13 +444,13 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 			// two-way union; combineFromAnchors is the only difference from the shared path.
 			// [LAW:dataflow-not-control-flow] the handling value selects the export producer,
 			// not a duplicated engine.
-			return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
-				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
+			return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, head)
 			})
 		}
 
-		return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
-			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead, baseCommit)
+		return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, baseCommit, head)
 		})
 	})
 	if err != nil {
@@ -470,10 +471,22 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 // no concurrent fetch can shift the decision between guard and replay.
 // A lift the body refuses at the ceiling leaves as SchemaCeilingLiftError, named for this
 // remote and branch (nameLiftRefusal), as the schema-ahead refusal above is.
-func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch) error) error {
-	if err := s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead); err != nil {
+// The fetched head's schema and hold are read here, once, AS OF the captured
+// commit, with the reader the push judges a remote head by (remoteHeadAt), so
+// a refusal here and one at the push name the head the same way. The hold
+// rides into the body as the head's own value (fetchedHead): the first lift of
+// that head refuses under it, before any merge or prose hold asks the operator
+// for work a refusal would discard. [LAW:one-source-of-truth] one read of the
+// hold per reconcile, however many attempts and branches lift the head.
+func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch, head fetchedHead) error) error {
+	remoteSchema, err := s.remoteHeadAt(ctx, remoteHead, remote, branch)
+	if err != nil {
 		return err
 	}
+	if err := refuseSchemaAhead(remote, branch, remoteSchema); err != nil {
+		return err
+	}
+	head := fetchedHead{hash: remoteHead, hold: remoteSchema.hold}
 	// A leftover scratch branch is inert to a reconcile — never the data
 	// branch, never pushed — so a sweep that fails is reported and the
 	// reconcile goes on. [LAW:no-silent-failure]
@@ -483,8 +496,20 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 	scratchBranch := newReconcileScratch()
 	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
 	return nameLiftRefusal(retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
-		return body(ctx, guard, scratchBranch)
+		return body(ctx, guard, scratchBranch, head)
 	}, s.reconnect), remote, branch)
+}
+
+// fetchedHead is the remote head a reconcile adopts, with the schema hold
+// recorded at that commit. The hold exists so a head a remote downgrade
+// lowered is not re-raised and pushed back over the remote (schema_hold.go),
+// so it bounds every lift of this head: the projection the merge reads and
+// the spine the push can carry. [LAW:parse-dont-validate] the pair is read
+// once (replayUnderGuard) and travels together, so no lift of the head can
+// be handed another commit's hold.
+type fetchedHead struct {
+	hash string
+	hold version.SchemaCeiling
 }
 
 // reconcileFromAnchors reads the three exports at fixed commit hashes, runs the
@@ -499,15 +524,15 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
-func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead, baseCommit string) error {
+func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, baseCommit string, remoteHead fetchedHead) error {
 	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// A loop the base held is history: the replay reports the cuts made to
 		// the two heads, whose content is what lands.
-		base, _, err := s.exportAtCommit(ctx, scratch.read, baseCommit)
+		base, _, err := s.exportAtCommit(ctx, scratch.read, baseCommit, version.UnboundedSchemaCeiling())
 		if err != nil {
 			return err
 		}
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead, baseCommit}, base, reconcileCommitMessage, storage.SyncReconcileLinearized)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead.hash, baseCommit}, base, reconcileCommitMessage, storage.SyncReconcileLinearized)
 	})
 }
 
@@ -517,11 +542,11 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncRe
 // held for the agent). It reuses the identical scratch lifecycle and safe-replay — the only
 // difference from the shared path is the empty base and the labels — so nothing is dropped
 // and no side is picked. [LAW:one-source-of-truth] one merge-and-replay tail, two producers.
-func (s *Store) combineFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
+func (s *Store) combineFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead string, remoteHead fetchedHead) error {
 	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// [LAW:types-are-the-program] no merge-base is the empty export, which merge.ThreeWay
 		// reads as "both sides changed every field from empty" — exactly the two-way union.
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead}, model.Export{}, combineCommitMessage, storage.SyncReconcileCombined)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, []string{remoteHead.hash}, model.Export{}, combineCommitMessage, storage.SyncReconcileCombined)
 	})
 }
 
@@ -664,7 +689,7 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 	c := f.chain[i]
 	// A loop a folded commit held is history the head has moved past or still
 	// holds; the head's cut is the one reported.
-	at, _, err := f.store.exportAtCommit(ctx, f.readBranch, c.hash)
+	at, _, err := f.store.exportAtCommit(ctx, f.readBranch, c.hash, version.UnboundedSchemaCeiling())
 	if err != nil {
 		return replayStep{}, err
 	}
@@ -794,13 +819,15 @@ func holdForCollisions(result *storage.SyncReconcileResult, collisions []merge.C
 // written once.
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/remoteSide/message/state are
 // values, not a branch duplicated through the replay.
-func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string, remoteSide []string, base model.Export, message string, settledState storage.SyncReconcileState) error {
-	ours, oursCut, err := s.exportAtCommit(ctx, scratch.read, localHead)
+func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead string, remoteHead fetchedHead, remoteSide []string, base model.Export, message string, settledState storage.SyncReconcileState) error {
+	ours, oursCut, err := s.exportAtCommit(ctx, scratch.read, localHead, version.UnboundedSchemaCeiling())
 	if err != nil {
 		return err
 	}
 	// The spine's lift of the same commit cuts and reports what this read cut.
-	theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
+	// Bound by the head's hold, this read is where a held remote refuses, before
+	// the merge and any prose the operator would settle for nothing.
+	theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead.hash, remoteHead.hold)
 	if err != nil {
 		return err
 	}
@@ -900,13 +927,17 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 // intermediate because it is untouched until the single atomic reset.
 // [LAW:no-ambient-temporal-coupling] no observer sees a half-built state; it lives
 // only on the scratch branch.
-func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead, message string, export model.Export, stepper foldStepper, localCut []storage.Unlooped) (replayLanding, error) {
+func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead fetchedHead, message string, export model.Export, stepper foldStepper, localCut []storage.Unlooped) (replayLanding, error) {
 	if err := s.checkout(ctx, scratch.spine); err != nil {
 		return replayLanding{}, fmt.Errorf("switch to reconcile spine branch %q: %w", scratch.spine, err)
 	}
-	remoteCut, err := s.resetAndLift(ctx, remoteHead)
+	// The spine's lift is the one whose result a push carries, so it runs
+	// under the hold that rode in with the head (fetchedHead): a head a remote
+	// downgrade lowered is adopted no higher than its hold, whatever this lit's
+	// registry carries, and a refusal names that head as the holder.
+	remoteCut, err := s.resetAndLift(ctx, remoteHead.hash, remoteHead.hold)
 	if err != nil {
-		return replayLanding{}, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
+		return replayLanding{}, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead.hash, err)
 	}
 	// The lift's own changes (schema DDL, migration bookkeeping, the cut of a
 	// parent loop the remote head held) land as the machinery's own named
@@ -917,7 +948,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// below goes through replayDeltaOnScratch: a self-rotating retry would
 	// resume on the data branch (see replayDeltaOnScratch).
 	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: reconcileLiftCommitMessage}); err != nil {
-		return replayLanding{}, fmt.Errorf("commit schema lift of %q: %w", remoteHead, err)
+		return replayLanding{}, fmt.Errorf("commit schema lift of %q: %w", remoteHead.hash, err)
 	}
 	liftedBase, err := readDoltHead(ctx, s.db)
 	if err != nil {
@@ -1062,7 +1093,16 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 // and every read of a commit hydrates, which a loop refuses — so without the
 // cut, one looped commit anywhere in the history a sync reads would refuse that
 // sync on every attempt, and a repair at the head could not reach it.
-func (s *Store) resetAndLift(ctx context.Context, commit string) ([]storage.Unlooped, error) {
+//
+// hold is the schema hold that bounds the lift beside the released-schema
+// ceiling: the fetched head's own for every lift of that head (fetchedHead),
+// the unbounded ceiling for any other commit. The local head and the base
+// are lifted only to be read and discarded, so their holds bind nothing:
+// bound by its own hold, a checkout whose head is held, or whose base was
+// held before the remote was lifted, could never settle.
+// [LAW:dataflow-not-control-flow] the ceiling is a value the caller holds,
+// not a mode the lift reads off the working set.
+func (s *Store) resetAndLift(ctx context.Context, commit string, hold version.SchemaCeiling) ([]storage.Unlooped, error) {
 	// An earlier lift on this branch leaves the tables its migrations created
 	// untracked in the working set (the lift commits nothing). The exact reset
 	// drops them: kept, the next lift re-runs a CREATE TABLE against a table
@@ -1071,9 +1111,7 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) ([]storage.Unlo
 	if err := resetExactlyToRef(ctx, s.db, commit); err != nil {
 		return nil, fmt.Errorf("reset scratch: %w", err)
 	}
-	// The hold the lift reads is this commit's, so a refusal names the commit
-	// as its holder: which head the reconcile read is what the refusal is about.
-	if err := s.liftWorkingSetToRegistry(ctx, fmt.Sprintf("the commit %s the reconcile read", commit)); err != nil {
+	if err := s.liftWorkingSetToRegistry(ctx, hold); err != nil {
 		return nil, fmt.Errorf("lift %q to current schema: %w", commit, err)
 	}
 	unlooped, err := cutParentLoops(ctx, s.db)
@@ -1114,11 +1152,15 @@ func cutParentLoops(ctx context.Context, db *sql.DB) ([]storage.Unlooped, error)
 // never on the spine the replay is accumulating.
 // [LAW:no-ambient-temporal-coupling] the branch a reset lands on is an argument,
 // not a consequence of call order.
-func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string) (model.Export, []storage.Unlooped, error) {
+//
+// hold bounds the lift (resetAndLift): the fetched head's own when the commit
+// is that head, so a held remote refuses at its first read; the unbounded
+// ceiling for every other commit, a projection no hold binds.
+func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string, hold version.SchemaCeiling) (model.Export, []storage.Unlooped, error) {
 	if err := s.checkout(ctx, readBranch); err != nil {
 		return model.Export{}, nil, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
 	}
-	unlooped, err := s.resetAndLift(ctx, commit)
+	unlooped, err := s.resetAndLift(ctx, commit, hold)
 	if err != nil {
 		return model.Export{}, nil, fmt.Errorf("read export at %q: %w", commit, err)
 	}

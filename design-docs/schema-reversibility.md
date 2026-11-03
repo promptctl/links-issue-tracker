@@ -118,8 +118,11 @@ the **remote hold**, `meta.schema_hold = v`, in the same commit. `meta` exists f
 on, so a store at any version can hold the row. A binary reads the hold from the fetched remote head as well as from the
 local store, so a local store stepped down under a hold stays down. It
 migrates no store past the hold and refuses to push a raise past it. The check sits
-at the one migration entry that both opening a store and the sync reconcile's
-lift of a fetched head go through, so sync cannot re-raise what open would not.
+at the one migration stepper that both opening a store and the sync reconcile's
+lift go through. Open reads the live store's hold; the reconcile reads the
+fetched head's hold once, at that commit, and every lift of that head runs under
+it, so sync cannot re-raise what open would not. The reconcile's other lifts, of
+the local head and the merge base, are read and discarded, and no hold binds them.
 The hold enters each of those sites as a `version.SchemaCeiling`, the type
 the released-schema ceiling already is, and the lower of the two binds
 (`SchemaCeiling.Lower`); a store with no row yields the unbounded ceiling, so

@@ -83,19 +83,6 @@ func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteNam
 	return s.remoteHeadAt(ctx, head, remote, branch)
 }
 
-// guardCommitSchemaAhead reads the schema version recorded at commitHash as
-// data and refuses when it is above this binary's schema support. The
-// reconcile calls it with the remote head anchor it already captured (no
-// second read). [LAW:no-ambient-temporal-coupling] the version is read from a
-// fixed commit hash, so the decision cannot shift under a concurrent fetch.
-func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote storage.RemoteName, branch string, commitHash string) error {
-	remoteVersion, err := s.remoteHeadSchema(ctx, commitHash)
-	if err != nil {
-		return err
-	}
-	return refuseSchemaAhead(remote, branch, knownRemoteSchema(remoteVersion))
-}
-
 // refuseSchemaAhead is the schema-ahead verdict on a remote head's schema the
 // caller read: it refuses when that schema is above this binary's schema
 // support, so no push authors a commit below the remote head's schema. A

@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // takeLocalCommitMessage labels the marker commit that settles a take-local
@@ -81,7 +82,7 @@ func (e OwnerApprovalRequiredError) Error() string {
 // It is snapshot-guarded and GC-retry-wrapped like the three-way reconcile — the take
 // is destructive, so a pre-mutation recovery point matters even more here. take-local,
 // which authors replay commits on the remote head, also shares the three-way path's
-// schema-ahead refusal (guardCommitSchemaAhead), and so does a take-remote that carries
+// schema-ahead refusal (replayUnderGuard), and so does a take-remote that carries
 // local purge records onto the remote head; a take-remote with none to carry adopts the
 // remote head wholesale, authors no commit, and is exempt. CONSTRAINT (embedded Dolt
 // one-RW-engine-per-path): runs INLINE/foreground on the caller's own engine, never a
@@ -191,8 +192,8 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 			// and stays the reset below, which adopts a head at any schema. The
 			// branch is the domain's own: a take that writes, or one that does not.
 			// [LAW:single-enforcer] the same replayUnderGuard every replay runs in.
-			return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
-				if err := s.takeRemoteCarryingPurges(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead); err != nil {
+			return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+				if err := s.takeRemoteCarryingPurges(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, head); err != nil {
 					return err
 				}
 				result.CarriedPurges = len(carry)
@@ -217,8 +218,8 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// included: a replay below an ahead remote's schema would drop the newer fields and
 		// regress the shared remote on push.
 		// [LAW:single-enforcer] the same replayUnderGuard that wraps the three-way reconcile.
-		return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
-			return s.takeLocalOntoRemoteHead(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
+		return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+			return s.takeLocalOntoRemoteHead(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, head)
 		})
 	default:
 		// SyncResolveUnrelated already rejected an invalid value at its boundary, so this
@@ -261,16 +262,16 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 // (and a schema lift, when the remote head is older), which the next push
 // carries. [LAW:single-enforcer] the cut is ApplyPurges, as in the merge and the
 // restore.
-func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
+func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead string, remoteHead fetchedHead) error {
 	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
 		// Only local's purge records land, so a loop its hierarchy held is not
 		// part of what lands; the remote head's cut is reported by the spine's
 		// lift.
-		local, _, err := s.exportAtCommit(ctx, scratch.read, localHead)
+		local, _, err := s.exportAtCommit(ctx, scratch.read, localHead, version.UnboundedSchemaCeiling())
 		if err != nil {
 			return err
 		}
-		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
+		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead.hash, remoteHead.hold)
 		if err != nil {
 			return err
 		}
@@ -315,18 +316,18 @@ func (s *Store) purgesMissingAt(ctx context.Context, commit string) ([]model.Pur
 // three-way reconcile uses: scratch branch, snapshot-first, one atomic data-branch
 // advance. [LAW:single-enforcer] one safe-replay, one step builder, one scratch
 // lifecycle, shared with the field-aware path.
-func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
+func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead string, remoteHead fetchedHead) error {
 	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
-		local, localCut, err := s.exportAtCommit(ctx, scratch.read, localHead)
+		local, localCut, err := s.exportAtCommit(ctx, scratch.read, localHead, version.UnboundedSchemaCeiling())
 		if err != nil {
 			return err
 		}
 		// The spine's lift of the same commit cuts and reports what this read cut.
-		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
+		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead.hash, remoteHead.hold)
 		if err != nil {
 			return err
 		}
-		chain, err := readFoldedChain(ctx, s.db, localHead, remoteHead)
+		chain, err := readFoldedChain(ctx, s.db, localHead, remoteHead.hash)
 		if err != nil {
 			return err
 		}
