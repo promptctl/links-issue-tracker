@@ -73,6 +73,13 @@ const (
 	// lacks (storage.ErrPushDiverged). A retry is refused the same way until the
 	// peer's commits are merged here. Remedy: a foreground pull, then the push.
 	syncFailurePushDiverged syncFailureClass = "push_diverged"
+	// syncFailureForcedPushStale: `lit sync push --force` was refused by its
+	// lease (storage.ForcedPushLeaseError). A forced push replaces only the
+	// head this checkout last fetched, so a remote that moved since keeps
+	// its head, and a branch never fetched here has no head to replace.
+	// Remedy: a fetch, then the force again; a branch the remote lacks is
+	// created by a plain push.
+	syncFailureForcedPushStale syncFailureClass = "forced_push_stale"
 	// syncFailureSchemaCeiling: the push was refused because the commit it
 	// would send is at a schema above the schema ceiling for that remote: this
 	// lit's released-schema ceiling, or the hold the remote's head carries,
@@ -159,6 +166,10 @@ type SyncFailure struct {
 	// syncFailureSchemaLoweringRequiresHold: the remote's schema and the
 	// unheld commit's below it.
 	LoweringRefused *store.SchemaLoweringRequiresHoldError
+	// LeaseLost is the store's refusal, populated only for
+	// syncFailureForcedPushStale: the head the forced push leased on, or
+	// none when this checkout holds no head of the branch.
+	LeaseLost *storage.ForcedPushLeaseError
 	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
 	// on-both), populated only for syncFailureUnrelatedHistories. Before choosing to
 	// take one side wholesale or union the two, the operator must see what each side
@@ -228,6 +239,40 @@ func pushDivergedFailure(err error) (SyncFailure, bool) {
 		Cause:     diverged.Refusal,
 		BuildNote: resolveBuildStatusNote(time.Now()),
 	}, true
+}
+
+// forcedPushStaleFailure builds the sync-failure contract for a forced push
+// its lease refused, or ok=false when err is not one. The remote, the branch
+// and the head leased on all come off the store's refusal.
+func forcedPushStaleFailure(err error) (SyncFailure, bool) {
+	var lost storage.ForcedPushLeaseError
+	if !errors.As(err, &lost) {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:     syncFailureForcedPushStale,
+		Remote:    lost.Remote.String(),
+		Branch:    lost.Branch,
+		LeaseLost: &lost,
+		BuildNote: resolveBuildStatusNote(time.Now()),
+	}, true
+}
+
+// forcedPushStaleRemedy is how a forced push its lease refused clears. The
+// fetch comes first either way: it reads the head the next force will lease
+// on. A branch this checkout holds no head of may not exist on the remote
+// at all, and then nothing exists for a force to replace: a plain push
+// creates it. [LAW:one-source-of-truth] the steps render from the refusal.
+func forcedPushStaleRemedy(lost *storage.ForcedPushLeaseError) []remedyStep {
+	remote := lost.Remote.String()
+	steps := []remedyStep{
+		{"lit sync fetch --remote " + remote, "reads the remote's current head, which the next forced push leases on"},
+		{"lit sync push --force --remote " + remote, "replaces that head, if overwriting it is still what the user means"},
+	}
+	if lost.Expected == "" {
+		steps = append(steps, remedyStep{"lit sync push --remote " + remote, "if the fetch brought no head of the branch: the remote lacks it, and a plain push creates it"})
+	}
+	return steps
 }
 
 // schemaCeilingFailure builds the sync-failure contract for a store
@@ -362,6 +407,9 @@ func asSyncFailure(err error) error {
 	if failure, ok := pushDivergedFailure(err); ok {
 		return SyncFailureError{Failure: failure}
 	}
+	if failure, ok := forcedPushStaleFailure(err); ok {
+		return SyncFailureError{Failure: failure}
+	}
 	return err
 }
 
@@ -450,6 +498,8 @@ func (e SyncFailureError) Unwrap() error {
 		return e.Failure.RaiseRefused
 	case e.Failure.LoweringRefused != nil:
 		return e.Failure.LoweringRefused
+	case e.Failure.LeaseLost != nil:
+		return *e.Failure.LeaseLost
 	}
 	return nil
 }
@@ -533,6 +583,8 @@ func (f SyncFailure) headline() string {
 		return "lit sync push was refused because it would raise the remote's schema and this lit is not a release, and needs you."
 	case syncFailureSchemaLoweringRequiresHold:
 		return "lit sync push was refused because it would lower the remote's schema with a head that holds no schema hold, and needs you."
+	case syncFailureForcedPushStale:
+		return "lit sync push --force was refused because the remote's head is not the one this checkout last fetched, and needs you to fetch before forcing."
 	default:
 		return fmt.Sprintf("lit sync hit an unrecognized sync-failure class %q — this is a bug; please report it.", f.Class)
 	}
@@ -596,6 +648,15 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the commit this push would send to %s is at schema version %d, below the schema version %d %s was at when last fetched, and it carries no schema hold. A remote is lowered only by a head that holds it at the lowered schema, which `lit downgrade --remote` writes; an unheld lowering is raised again by the next client that syncs, so nothing was written to %s.",
 			ref, f.LoweringRefused.CommitSchema, f.LoweringRefused.RemoteSchema, ref, ref)
+	case syncFailureForcedPushStale:
+		if f.LeaseLost.Expected == "" {
+			return fmt.Sprintf(
+				"this checkout holds no head of %s (no tracking ref): either the branch was never fetched here, or it does not exist on the remote yet. A forced push replaces only the head this checkout last fetched, and there is none, so nothing was written to %s.",
+				ref, ref)
+		}
+		return fmt.Sprintf(
+			"%s no longer names %s, the head it had when this checkout last fetched it. A forced push replaces only that head, since the schema verdicts it passed were judged against it, so the remote kept its head and nothing was written to %s.",
+			ref, f.LeaseLost.Expected, ref)
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -670,6 +731,8 @@ func (f SyncFailure) resolutionSteps() []string {
 		return remedyLines(schemaRaiseRemedy(f.RaiseRefused))
 	case syncFailureSchemaLoweringRequiresHold:
 		return remedyLines(schemaLoweringRemedy(f.LoweringRefused))
+	case syncFailureForcedPushStale:
+		return remedyLines(forcedPushStaleRemedy(f.LeaseLost))
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -709,6 +772,8 @@ func (f SyncFailure) escalationLine() string {
 		return "ESCALATION — resolve now: run the fetch and the push above once. A push refused again after the fetch is a raise, or the first push to a branch the remote does not have yet; a lit that is no release makes neither, and that will not clear by waiting or retrying from this lit. " + installReplacesLit + ": run the upgrade only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailureSchemaLoweringRequiresHold:
 		return "ESCALATION — resolve now: run the pull and the push above once. A push refused again after the pull is a lowering of the remote, which only the remote downgrade makes, and that is the user's to decide: run it only when the user directs it, and until then surface this to the user as blocking."
+	case syncFailureForcedPushStale:
+		return "ESCALATION — resolve now: run the fetch above, then read what it brought before forcing again. A forced push overwrites the remote's head, so a head a peer pushed since the last fetch is the user's to overwrite or keep: force again only when the user means to overwrite it, and otherwise merge it with `lit sync pull` and push plainly."
 	case syncFailurePushDiverged:
 		// The push path reads no divergence age or span, so the line is fixed.
 		// It names what clears the refusal and when it stops being the agent's

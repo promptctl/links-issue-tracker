@@ -224,6 +224,9 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(other) error = %v", err)
 	}
+	if err := sync.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(other) error = %v", err)
+	}
 	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", true, true); err != nil {
 		t.Fatalf("force push of the other history error = %v", err)
 	}
@@ -274,6 +277,9 @@ func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, alpha)
+	if err := sync.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(alpha) error = %v", err)
+	}
 	if _, err := sync.SyncPush(ctx, remoteName(t, "origin"), "master", false, true); err != nil {
 		t.Fatalf("force push of alpha's re-rooted history error = %v", err)
 	}

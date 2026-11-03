@@ -34,6 +34,33 @@ func (e PushDivergedError) Error() string {
 // and an errors.As for the refusal's own type both still answer.
 func (e PushDivergedError) Unwrap() []error { return []error{ErrPushDiverged, e.Refusal} }
 
+// ForcedPushLeaseError is a forced push refused by its lease. A forced push
+// replaces only the head it judged: it sends --force-with-lease on the
+// tracking ref's head as of the last fetch, and the remote takes it only
+// while its branch still names that head. The error is the lease lost:
+// the remote moved since the last fetch (Expected names the head leased on),
+// or this checkout holds no head of the branch to lease on (Expected is
+// empty: the branch was never fetched here, or does not exist on the remote
+// yet). Nothing was written either way. It is not a push the remote refused
+// on its history, so no fetch-and-retry follows it: a retry as a plain push
+// would misjudge it diverged and tell the user to merge what --force meant to
+// overwrite. [LAW:parse-dont-validate] the stale verdict is classified once,
+// at the lease, and travels on as this type.
+type ForcedPushLeaseError struct {
+	Remote RemoteName
+	Branch string
+	// Expected is the head the lease named: the tracking ref's as of the last
+	// fetch. Empty when this checkout holds no head of the branch.
+	Expected string
+}
+
+func (e ForcedPushLeaseError) Error() string {
+	if e.Expected == "" {
+		return fmt.Sprintf("refusing to force-push to %s/%s: this checkout holds no head of %s/%s (no tracking ref), so there is nothing a force may replace; fetch first, or push without --force to create the branch", e.Remote, e.Branch, e.Remote, e.Branch)
+	}
+	return fmt.Sprintf("force-push to %s/%s refused: %s/%s no longer names %s, the head it had when last fetched; fetch, then force again", e.Remote, e.Branch, e.Remote, e.Branch, e.Expected)
+}
+
 // This file is the vocabulary the sync and reconcile capabilities speak. It
 // lives beside the contract rather than inside an engine because a capability
 // interface can only name types every engine can name.

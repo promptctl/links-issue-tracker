@@ -315,7 +315,7 @@ func cutIn(ctx context.Context, ddb *doltdb.DoltDB, head historyCommit, window h
 func (s *Store) publishReRoot(ctx context.Context, remote storage.RemoteName, branch string, head string) (storage.LeaseOutcome, error) {
 	var outcome storage.LeaseOutcome
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		attempt, err := s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head)
+		attempt, _, err := s.pushLeasedWithinLock(ctx, remote, reRootScratchPrefix+branch, branch, head, false)
 		outcome = cmp.Or(attempt, outcome)
 		return err
 	})

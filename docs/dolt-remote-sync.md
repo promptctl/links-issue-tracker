@@ -48,7 +48,7 @@ lit sync push
 - `lit sync remote ls`
 - `lit sync fetch [--remote <name>] [--verbose]`
 - `lit sync pull [--remote <name>] [--verbose]`
-- `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose]`
+- `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose]` — `--force` replaces only the remote head this checkout last fetched: it pushes under a lease on that head, so a remote that moved since refuses the force, and a branch never fetched here is refused before anything is sent. Fetch, then force again.
 - `lit sync reconcile` — merge a diverged clone into linear history; surfaces a concurrent free-text rewrite for the calling agent to merge
 - `lit sync reconcile resolve --resolve FINGERPRINT=TEXT …` — finalize the reconcile with the agent's merged text (one `--resolve` per pending field; the fingerprint, copied from that field's heading in the guidance, names the issue and field and pins the merge to the exact conflict)
 - `lit sync reconcile abort` — leave the clone diverged for now

@@ -984,7 +984,9 @@ func (e pushRefusedError) Unwrap() error { return e.cause }
 //     ancestor with the push.
 //
 // All come from the fast-forward check, which a forced push skips, so a
-// forced push is never refused.
+// forced push is never refused on its history: its lease is what refuses it
+// (pushForcedWithinLock), and a lost lease is storage.ForcedPushLeaseError,
+// never one of these.
 var pushRefusals = []error{doltdb.ErrIsAhead, actions.ErrCantFF, datas.ErrMergeNeeded, doltdb.ErrNoCommonAncestor}
 
 // classifyPushFailure is DOLT_PUSH's error as pushRefusedError when the remote
@@ -1197,11 +1199,14 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	if err != nil {
 		return storage.SyncPushResult{}, err
 	}
+	if force {
+		return s.pushForcedWithinLock(ctx, remote, trimmedBranch, setUpstream)
+	}
 	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote
 	// whose head is at a schema this binary cannot produce — otherwise a plain
-	// push is rejected with a raw non-fast-forward string and a --force push
-	// would REGRESS the shared remote to this binary's older schema. R is the
-	// tracking ref's head as of the last fetch, read once for every verdict.
+	// push is rejected with a raw non-fast-forward string. R is the tracking
+	// ref's head as of the last fetch, read once for every verdict; Dolt's
+	// fast-forward check then refuses the push if the remote moved past it.
 	remoteHead, err := s.trackingHeadSchema(ctx, remote, trimmedBranch)
 	if err != nil {
 		return storage.SyncPushResult{}, err
@@ -1225,9 +1230,6 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	if setUpstream {
 		args = append(args, "--set-upstream")
 	}
-	if force {
-		args = append(args, "--force")
-	}
 	args = append(args, remote.String(), fmt.Sprintf("HEAD:%s", trimmedBranch))
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	var result storage.SyncPushResult
@@ -1244,6 +1246,35 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	}
 	result.Message = nullStringValue(message)
 	result.Head = head
+	return result, nil
+}
+
+// pushForcedWithinLock is a forced push: it replaces only the head it judged.
+// R is the tracking ref's head as of the last fetch, and the push is the
+// leased push on that head, so the remote takes it only while its branch
+// still names R. A remote that moved since the last fetch keeps its head and
+// the push is refused as storage.ForcedPushLeaseError, as is a forced push to
+// a branch this checkout holds no head of: with no R there is nothing a force
+// may replace, and a plain push creates a branch the remote lacks. A bare
+// `--force` would skip Dolt's fast-forward check and overwrite a head the
+// verdicts never read: a schema-ahead head regressed, a held one re-raised.
+// [LAW:single-enforcer] the one leased push, with its one stale classifier,
+// serves the history bound's re-root and `lit sync push --force` alike.
+func (s *Store) pushForcedWithinLock(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool) (storage.SyncPushResult, error) {
+	expected, synced, err := s.trackingHeadHash(ctx, remote, branch)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
+	if !synced {
+		return storage.SyncPushResult{}, storage.ForcedPushLeaseError{Remote: remote, Branch: branch}
+	}
+	outcome, result, err := s.pushLeasedWithinLock(ctx, remote, "HEAD", branch, expected, setUpstream)
+	if err != nil {
+		return storage.SyncPushResult{}, err
+	}
+	if outcome == storage.LeaseStale {
+		return storage.SyncPushResult{}, storage.ForcedPushLeaseError{Remote: remote, Branch: branch, Expected: expected}
+	}
 	return result, nil
 }
 
