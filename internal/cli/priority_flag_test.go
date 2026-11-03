@@ -21,6 +21,7 @@ import (
 // one command: new, followup and update each declare the flag.
 // [LAW:behavior-not-structure] asserts the stored priority, not the parse call.
 func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Both spellings a read surface emits, carried as a value rather than
@@ -46,7 +47,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 				raw := spelling.of(want)
 
 				var newOut bytes.Buffer
-				if err := runNew(ctx, &newOut, ap, []string{
+				if err := runNew(t, ctx, &newOut, ap, []string{
 					"--title", "priority round trip",
 					"--topic", "priority",
 					"--type", "task",
@@ -81,7 +82,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 				other := priorityOtherThan(want)
 				otherRaw := spelling.of(other)
 				var updateOut bytes.Buffer
-				if err := runUpdate(ctx, &updateOut, ap, []string{createdID, "--priority", otherRaw}); err != nil {
+				if err := runUpdate(t, ctx, &updateOut, ap, []string{createdID, "--priority", otherRaw}); err != nil {
 					t.Fatalf("runUpdate(--priority %q) error = %v", otherRaw, err)
 				}
 				updated, err := ap.Store.GetIssue(ctx, createdID)
@@ -93,7 +94,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 				}
 
 				var followupOut bytes.Buffer
-				if err := runFollowup(ctx, &followupOut, ap, []string{
+				if err := runFollowup(t, ctx, &followupOut, ap, []string{
 					"--on", createdID,
 					"--title", "priority follow-up",
 					"--priority", raw,
@@ -132,6 +133,7 @@ func priorityOtherThan(p model.Priority) model.Priority {
 // — an agent that trusts remediation text over the error body loops forever on
 // a parse failure no retry can change.
 func TestPriorityFlagRefusesOutOfDomainValuesWithoutAdvisingRetry(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// "2" earns its place: the salvage normalizer coerces legacy 5-level values
@@ -141,7 +143,7 @@ func TestPriorityFlagRefusesOutOfDomainValuesWithoutAdvisingRetry(t *testing.T) 
 			ap := newTestCLIApp(t)
 
 			var stdout bytes.Buffer
-			err := runNew(ctx, &stdout, ap, []string{
+			err := runNew(t, ctx, &stdout, ap, []string{
 				"--title", "refused",
 				"--topic", "priority",
 				"--type", "task",
@@ -173,11 +175,12 @@ func TestPriorityFlagRefusesOutOfDomainValuesWithoutAdvisingRetry(t *testing.T) 
 // The flag's default is the same value the store would have applied on its own,
 // so omitting --priority is not a third spelling of the domain.
 func TestPriorityFlagDefaultsToNormal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{
+	if err := runNew(t, ctx, &stdout, ap, []string{
 		"--title", "no priority flag",
 		"--topic", "priority",
 		"--type", "task",
@@ -197,6 +200,7 @@ func TestPriorityFlagDefaultsToNormal(t *testing.T) {
 // Flag help and the usage strings are derived from the vocabulary, so they
 // cannot drift from the gate.
 func TestPriorityChoicesNamesExactlyTheVocabulary(t *testing.T) {
+	t.Parallel()
 	got := priorityChoices()
 	want := make([]string, 0, len(model.Priorities()))
 	for _, p := range model.Priorities() {
@@ -214,6 +218,7 @@ func TestPriorityChoicesNamesExactlyTheVocabulary(t *testing.T) {
 // Driven through runNew rather than through the parser directly: a test that
 // named the parser would pin its signature. [LAW:behavior-not-structure]
 func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	for _, raw := range []string{" urgent ", "URGENT", "Urgent"} {
@@ -221,7 +226,7 @@ func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
 			ap := newTestCLIApp(t)
 
 			var stdout bytes.Buffer
-			if err := runNew(ctx, &stdout, ap, []string{
+			if err := runNew(t, ctx, &stdout, ap, []string{
 				"--title", "pasted priority",
 				"--topic", "priority",
 				"--type", "task",

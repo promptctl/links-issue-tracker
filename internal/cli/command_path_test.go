@@ -3,22 +3,14 @@ package cli
 import (
 	"bytes"
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
+	t.Parallel()
 	nonRepo := t.TempDir()
-	if err := os.Chdir(nonRepo); err != nil {
-		t.Fatalf("Chdir(nonRepo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	cases := []struct {
 		args    []string
@@ -39,7 +31,7 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 
 	for _, tc := range cases {
 		var stdout bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&stdout, &stdout, tc.args))
+		err := Run(context.Background(), dirInvocation(t, nonRepo, &stdout, &stdout, tc.args))
 		if err == nil {
 			t.Fatalf("Run(%v) error = nil, want usage error", tc.args)
 		}
@@ -53,27 +45,19 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 }
 
 func TestRunNewCompletesWithoutDeadlock(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
 		var stdout bytes.Buffer
-		done <- Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"new", "--title", "deadlock guard", "--topic", "deadlock", "--type", "epic"}))
+		done <- Run(context.Background(), dirInvocation(t, repo, &stdout, &stdout, []string{"new", "--title", "deadlock guard", "--topic", "deadlock", "--type", "epic"}))
 	}()
 
 	select {
@@ -81,31 +65,23 @@ func TestRunNewCompletesWithoutDeadlock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run(new) error = %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(suiteStallDeadline):
 		t.Fatal("Run(new) timed out; likely mutation lock context regression")
 	}
 }
 
 func TestRunNestedHelpAfterValidSubcommandPassesThrough(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&initOut, &initOut, []string{"init"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &initOut, &initOut, []string{"init"})); err != nil {
 		t.Fatalf("Run(init) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"dep", "add", "--help"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stdout, []string{"dep", "add", "--help"})); err != nil {
 		t.Fatalf("Run(dep add --help) error = %v", err)
 	}
 	output := stdout.String()

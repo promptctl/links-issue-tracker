@@ -40,6 +40,7 @@ func statusSetFixture(t *testing.T) (h readyTestHarness, openID, inProgressID, c
 // first, so `--status closed --status in_progress` would answer with closed
 // work only and say nothing about the half it dropped. [LAW:no-silent-failure]
 func TestListStatusSetSpansBucketsInOneListing(t *testing.T) {
+	t.Parallel()
 	h, openID, inProgressID, closedID := statusSetFixture(t)
 
 	spellings := []struct {
@@ -76,6 +77,7 @@ func TestListStatusSetSpansBucketsInOneListing(t *testing.T) {
 // to the question the caller asked.
 // [LAW:no-silent-failure]
 func TestListStatusSetRejectsABadMemberLoudly(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := statusSetFixture(t)
 
 	for _, args := range [][]string{
@@ -89,7 +91,7 @@ func TestListStatusSetRejectsABadMemberLoudly(t *testing.T) {
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out strings.Builder
-			err := runListWithStore(h.ctx, &out, h.ap.Store, noReadyPolicy, args)
+			err := runListWithStore(t, h.ctx, &out, h.ap.Store, noReadyPolicy, args)
 			if err == nil {
 				t.Fatalf("lit ls %v returned no error; output:\n%s", args, out.String())
 			}

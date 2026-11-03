@@ -54,6 +54,7 @@ func setFlagFixture(t *testing.T) (h readyTestHarness, bugA, taskAB, featB strin
 // selects only the issue carrying both, and the overwrite regression shows up
 // as the b-only issue leaking back in.
 func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
+	t.Parallel()
 	h, bugA, taskAB, featB := setFlagFixture(t)
 
 	cases := []setFlagCase{
@@ -147,6 +148,7 @@ func TestListSetFlagsWidenAcrossEverySpelling(t *testing.T) {
 // A blank member is a bad member in every set, free-text or sealed: `--ids
 // "a,$MISSING"` must not quietly list only a.
 func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
+	t.Parallel()
 	h, bugA, _, _ := setFlagFixture(t)
 
 	for _, args := range [][]string{
@@ -177,7 +179,7 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			var out strings.Builder
-			err := runListWithStore(h.ctx, &out, h.ap.Store, noReadyPolicy, args)
+			err := runListWithStore(t, h.ctx, &out, h.ap.Store, noReadyPolicy, args)
 			if err == nil {
 				t.Fatalf("lit ls %v returned no error; output:\n%s", args, out.String())
 			}
@@ -193,6 +195,7 @@ func TestListSetFlagsRejectABadMemberLoudly(t *testing.T) {
 // none may exit as a generic failure and draw retry-and-doctor advice, and a
 // flag and its term must not fail differently for one malformed request.
 func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
+	t.Parallel()
 	h, _, _, _ := setFlagFixture(t)
 	for _, tc := range []struct {
 		args  []string
@@ -217,7 +220,7 @@ func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 		{[]string{"--has-comments=false", "--query", "has:comments"}, "has-comments"},
 		{[]string{"--query", "updated>=2026-03-01T00:00:00Z updated<=2026-01-01T00:00:00Z"}, "updated"},
 	} {
-		err := runListWithStore(h.ctx, &strings.Builder{}, h.ap.Store, noReadyPolicy, tc.args)
+		err := runListWithStore(t, h.ctx, &strings.Builder{}, h.ap.Store, noReadyPolicy, tc.args)
 		if got := ExitCode(err); got != ExitValidation {
 			t.Fatalf("lit ls %v exit = %d (error %#v), want %d", tc.args, got, err, ExitValidation)
 		}
@@ -231,6 +234,7 @@ func TestListSetFilterRefusalsAreValidationErrors(t *testing.T) {
 // way the name sets are, `--search "task,a"` would become the two terms task
 // and a and match "task ab"; kept whole, it is text no title contains.
 func TestListSearchKeepsACommaInsideItsTerm(t *testing.T) {
+	t.Parallel()
 	h, bugA, taskAB, featB := setFlagFixture(t)
 	got := runLs(t, h.ap, "--search", "task,a")
 	for _, id := range []string{bugA, taskAB, featB} {

@@ -10,6 +10,7 @@ import (
 )
 
 func TestParentSetRejectsBarePositionalArgs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -24,7 +25,7 @@ func TestParentSetRejectsBarePositionalArgs(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runAppFamily(parentFamily, ctx, &stdout, ap, []string{"set", child.ID, parent.ID})
+	err = runAppFamily(t, parentFamily, ctx, &stdout, ap, []string{"set", child.ID, parent.ID})
 	if _, ok := err.(UsageError); !ok {
 		t.Fatalf("parent set bare positional error = %v (%T), want UsageError", err, err)
 	}
@@ -34,6 +35,7 @@ func TestParentSetRejectsBarePositionalArgs(t *testing.T) {
 }
 
 func TestParentSetWithNamedFlags(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -48,7 +50,7 @@ func TestParentSetWithNamedFlags(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runAppFamily(parentFamily, ctx, &stdout, ap, []string{"set", "--child", child.ID, "--parent", parent.ID}); err != nil {
+	if err := runAppFamily(t, parentFamily, ctx, &stdout, ap, []string{"set", "--child", child.ID, "--parent", parent.ID}); err != nil {
 		t.Fatalf("parent set --child/--parent error = %v", err)
 	}
 	// `parent set` renders the parent-child edge through the same canonical

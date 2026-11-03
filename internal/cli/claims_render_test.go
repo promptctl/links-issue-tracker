@@ -60,6 +60,7 @@ func laneWithProgress(t *testing.T, done, total int, activeID string) (claims.Ev
 // TestFormatClaimLineUnclaimedLaneRendersNothing is the zero state: a lane
 // nobody holds carries no claim line.
 func TestFormatClaimLineUnclaimedLaneRendersNothing(t *testing.T) {
+	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	cc := claimContext{standings: claims.Standings{}, evidence: evidence}
 	if _, ok := formatClaimLine(cc, lane, renderNow); ok {
@@ -73,6 +74,7 @@ func TestFormatClaimLineUnclaimedLaneRendersNothing(t *testing.T) {
 // alone — no cc.addresses entry required, which is what a second clone that
 // only ever synced the shared database would have.
 func TestFormatClaimLineDossierNeedsNoLocalAddress(t *testing.T) {
+	t.Parallel()
 	evidence, lane := laneWithProgress(t, 1, 2, "active-ticket")
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{
 		By: elsewhereHolder, Since: renderNow.Add(-3 * time.Hour), LastActivity: renderNow.Add(-2 * time.Hour),
@@ -102,6 +104,7 @@ func TestFormatClaimLineDossierNeedsNoLocalAddress(t *testing.T) {
 // when cc.addresses resolves the holder to a live local worktree — never
 // invented, and never shown for a holder this machine cannot prove is here.
 func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
+	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{
 		By: hereHolder, Since: renderNow.Add(-time.Hour), LastActivity: renderNow.Add(-time.Hour),
@@ -144,6 +147,7 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 // The address map is populated on purpose: a renderer that consulted it before
 // the standing would still find something to say.
 func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T) {
+	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	cc := claimContext{
 		standings: claims.Standings{lane: claims.Unclaimed{}},
@@ -168,6 +172,7 @@ func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T
 // record carries an establishing event, so somebody demonstrably took this
 // ticket.
 func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
+	t.Parallel()
 	for _, row := range []struct {
 		name     string
 		claimant claims.Claimant
@@ -207,6 +212,7 @@ func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
 // sees for the handover Apply reports: the public checkout, with no assignee
 // beside it.
 func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "claims", IssueType: "epic"})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unattributed hold", Topic: "claims", IssueType: "task", ParentID: epic.ID})
@@ -243,6 +249,7 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 // is asking. An identified self must not make the public lane foreign, and an
 // absent self must not make it ours.
 func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
+	t.Parallel()
 	publicHolder := model.Attribution{}
 	for _, row := range []struct {
 		name     string
@@ -285,6 +292,7 @@ func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
 // on a Held lane, not a routing decision — the line names every contestant
 // alongside the holder.
 func TestFormatClaimLineContestedAppendsContestants(t *testing.T) {
+	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	contestant := model.NewAttribution("eeeeeeeeffff", "ws-local")
 	standings := claims.Standings{lane: claims.Held{

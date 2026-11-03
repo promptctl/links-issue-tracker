@@ -18,7 +18,7 @@ import (
 // spawns, built by the launcher's own function.
 func workerHandoffStdin(t testing.TB, dir string) string {
 	t.Helper()
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("resolve the workspace at %s: %v", dir, err)
 	}
@@ -37,7 +37,7 @@ func workerHandoffStdin(t testing.TB, dir string) string {
 // parent wait skipped.
 func workerArgv(t testing.TB, dir, subcommand string) []string {
 	t.Helper()
-	loc, err := workspace.Locate(testEnv(), dir)
+	loc, err := workspace.Locate(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("locate the store for %s: %v", dir, err)
 	}
@@ -91,8 +91,9 @@ func twoRemoteCheckout(t *testing.T) string {
 // A worker handed a handoff builds the workspace its launcher had, and a
 // worker that launches a worker hands on exactly what it was handed.
 func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
+	t.Parallel()
 	root := twoRemoteCheckout(t)
-	ws, err := workspace.Resolve(testEnv(), root)
+	ws, err := workspace.Resolve(runEnv(t), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	built := buildWorkerWorkspace(ctx, testStderr(t), testEnv(), ws.Location, strings.NewReader(string(payload)))
+	built := buildWorkerWorkspace(ctx, testStderr(t), runEnv(t), ws.Location, strings.NewReader(string(payload)))
 	if built.failed != nil {
 		t.Fatalf("buildWorkerWorkspace failed: %v", built.failed)
 	}
@@ -128,18 +129,19 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 // one it was handed, cycle after cycle: once the checkout that launched the
 // worker is gone, neither question touches it.
 func TestAHandedWorkspaceAsksNothingOfARemovedCheckout(t *testing.T) {
+	t.Parallel()
 	root := twoRemoteCheckout(t)
 	worktree := filepath.Join(filepath.Dir(root), "wt")
 	runGit(t, root, "worktree", "add", "-b", "wt", worktree, "origin/trunk")
 	payload := workerHandoffStdin(t, worktree)
-	loc, err := workspace.Locate(testEnv(), worktree)
+	loc, err := workspace.Locate(runEnv(t), worktree)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runGit(t, root, "worktree", "remove", "--force", worktree)
 
 	ctx := underInvocation(context.Background())
-	built := buildWorkerWorkspace(ctx, testStderr(t), testEnv(), loc, strings.NewReader(payload))
+	built := buildWorkerWorkspace(ctx, testStderr(t), runEnv(t), loc, strings.NewReader(payload))
 	if built.failed != nil {
 		t.Fatalf("buildWorkerWorkspace after the checkout was removed: %v", built.failed)
 	}
@@ -158,8 +160,9 @@ func TestAHandedWorkspaceAsksNothingOfARemovedCheckout(t *testing.T) {
 // deaths do: a failed push outcome, which the FAILING banner reads, and the
 // mirror-pending claim it was spawned for cleared.
 func TestAMirrorWithAnUnreadableHandoffRecordsAFailedPush(t *testing.T) {
+	t.Parallel()
 	root := twoRemoteCheckout(t)
-	ws, err := workspace.Resolve(testEnv(), root)
+	ws, err := workspace.Resolve(runEnv(t), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +188,7 @@ func TestAMirrorWithAnUnreadableHandoffRecordsAFailedPush(t *testing.T) {
 // decision, on its event, inside the lifetime its log accounts for. Its event
 // says it ran with no project layer.
 func TestAReceiveWithAnUnreadableHandoffRecordsAReceiveError(t *testing.T) {
+	t.Parallel()
 	root := twoRemoteCheckout(t)
 	out, err := runCLIInDirWithStdin(t, root, "not a handoff", workerArgv(t, root, backgroundReceiveSubcommand)...)
 	if err != nil {
@@ -206,9 +210,10 @@ func TestAReceiveWithAnUnreadableHandoffRecordsAReceiveError(t *testing.T) {
 // Which project layer a command read is on its event: the checkout's file for
 // a command run in a checkout, and the handed one for a worker.
 func TestTheEventNamesTheProjectLayerItRead(t *testing.T) {
+	t.Parallel()
 	root := twoRemoteCheckout(t)
 	runCLIInDir(t, root, "backlog")
-	ws, err := workspace.Resolve(testEnv(), root)
+	ws, err := workspace.Resolve(runEnv(t), root)
 	if err != nil {
 		t.Fatal(err)
 	}

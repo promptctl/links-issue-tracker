@@ -19,6 +19,7 @@ import (
 // Apply reports the handover it recorded; the lane names this checkout, so the
 // other one held nothing to hand over and the start owes no transfer line.
 func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	recorder := telemetry.Begin(telemetry.Event{})
 	h.ctx = telemetry.With(h.ctx, recorder)
@@ -35,11 +36,11 @@ func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing
 	// replace with a fresh one, so the event below is the start's.
 	var out bytes.Buffer
 	start := transitionLeaf(startSpec)
-	positional, err := parseLeaf(h.ctx, start, []string{finished.ID}, cwdInvocation(&out, &out, nil))
+	positional, err := parseLeaf(h.ctx, start, []string{finished.ID}, dirInvocation(t, t.TempDir(), &out, &out, nil))
 	if err != nil {
 		t.Fatalf("parse start %s error = %v", finished.ID, err)
 	}
-	if err := start.work(h.ctx, cwdInvocation(&out, &out, nil), h.ap, positional); err != nil {
+	if err := start.work(h.ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), h.ap, positional); err != nil {
 		t.Fatalf("start %s error = %v", finished.ID, err)
 	}
 	if strings.Contains(out.String(), "claim transferred") {
@@ -68,6 +69,7 @@ func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing
 // hold. That absence is the ruling of links-claims-y6yz, and it is pinned
 // where a reader would go looking for the missing row.
 func TestRelationOf(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		standing claims.Standing
@@ -86,6 +88,7 @@ func TestRelationOf(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			if got := relationOf(tc.standing, tc.self); got != tc.want {
 				t.Errorf("relationOf(%#v, %v) = %v, want %v", tc.standing, tc.self, got, tc.want)
 			}
@@ -96,6 +99,7 @@ func TestRelationOf(t *testing.T) {
 // Questions asked over one stdin each read their own answer, so a bulk start
 // prompting for two held lanes hears both of a piped pair of answers.
 func TestAskYesNoLeavesEachLaterAnswerForItsQuestion(t *testing.T) {
+	t.Parallel()
 	stdin := strings.NewReader("y\nn\ny\n")
 	var got []bool
 	for range 3 {

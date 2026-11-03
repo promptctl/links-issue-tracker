@@ -16,6 +16,7 @@ import (
 // name it unreadable, the fetch fails rather than skipping the re-root follow
 // as if no branch were known.
 func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	dir := filepath.Join(base, "solo")
@@ -30,7 +31,7 @@ func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *test
 	runGit(t, dir, "push", "origin", "HEAD")
 	runGit(t, dir, "remote", "rename", "origin", "gh")
 
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 
@@ -38,7 +39,7 @@ func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *test
 		t.Fatalf("`lit sync fetch --verbose` = %q, want %q", out, "fetched gh")
 	}
 
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

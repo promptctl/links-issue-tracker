@@ -15,6 +15,7 @@ import (
 // the consumer transparently ends up with BOTH edits and linear history that
 // fast-forward pushes. No manual `lit sync pull`, no merge commit.
 func TestAutomaticReconcileLinearizesDivergedClone(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")

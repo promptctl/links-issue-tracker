@@ -35,6 +35,7 @@ import (
 // The 10x case is the 1x case with ten times the rounds and nothing else
 // changed.
 func TestTwoCheckoutsSyncAcrossTheHistoryBound(t *testing.T) {
+	t.Parallel()
 	for _, scale := range []int{1, 10} {
 		t.Run(fmt.Sprintf("%dx", scale), func(t *testing.T) {
 			if scale > 1 && testing.Short() {
@@ -68,7 +69,7 @@ type boundCheckout struct {
 
 func newBoundCheckout(t *testing.T, name, dir, sink string) *boundCheckout {
 	t.Helper()
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", name, err)
 	}

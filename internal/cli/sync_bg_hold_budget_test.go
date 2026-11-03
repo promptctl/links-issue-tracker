@@ -56,18 +56,17 @@ func (l *lockedBuffer) String() string {
 // a seeded git+file remote with a real unpushed commit. A wedge marker written
 // by the shim pins that the push was genuinely mid-hang when the mutation ran,
 // so the pass cannot come from a push that short-circuited before touching git.
-//
-// Not parallel: it mutates PATH (t.Setenv) and store.MirrorPushDeadline.
 func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
-	base, root, gitPath, runInProcess, startInProcess := setupMirrorDeadlineRepo(t)
-	healthyCycle := measureHealthyMirrorCycle(t, root, runInProcess)
-	wedgedDeadline := shrinkMirrorPushDeadline(t, healthyCycle)
-	wedgeMarker := installGitWedge(t, base, gitPath, "push")
+	t.Parallel()
+	rig := setupMirrorDeadlineRepo(t)
+	healthyCycle := measureHealthyMirrorCycle(t, rig)
+	wedgedDeadline := shrinkMirrorPushDeadline(t, rig, healthyCycle)
+	wedgeMarker := installGitWedge(t, rig, "push")
 
 	// The mirror's own entrypoint, in the foreground of its own goroutine:
 	// parent-pid 0 skips the parent wait, then the cycle clones, releases, and
 	// pushes into the wedge.
-	mirror := startInProcess(unboundedRunTripwire(healthyCycle, wedgedDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
+	mirror := rig.start(unboundedRunTripwire(healthyCycle, wedgedDeadline), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	wedgedAt := awaitWedge(t, wedgeMarker, unboundedRunTripwire(healthyCycle, wedgedDeadline), mirror)
 
 	// The proof: with the push genuinely mid-hang, a foreground mutation on
@@ -75,7 +74,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 	// that waits out the wedged push is the defect, and it fails here instead
 	// of passing after the cut.
 	mutationStart := time.Now()
-	if out, err := runInProcess(wedgedDeadline, "new", "--type", "epic", "--title", "mid-push probe", "--topic", "demo"); err != nil {
+	if out, err := rig.run(wedgedDeadline, "new", "--type", "epic", "--title", "mid-push probe", "--topic", "demo"); err != nil {
 		t.Fatalf("foreground mutation during the wedged push failed — the live store is still held across the push: %v\noutput:\n%s", err, out.String())
 	}
 	mutationElapsed := time.Since(mutationStart)
@@ -95,7 +94,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 		t.Fatalf("cycle log does not report the deadline cut:\noutput:\n%s", res.out.String())
 	}
 	// The clone the push ran from is gone with the cycle — success or cut.
-	ws, err := workspace.Resolve(testEnv(), root)
+	ws, err := workspace.Resolve(runEnv(t), rig.root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -148,15 +147,14 @@ func assertOutcomeRecordsTheCut(t *testing.T, ws workspace.Info) {
 // resolve failure where the resolve returned. Exactly one record must carry
 // the deadline text, it must be the join, not a push record, and the
 // push-outcome record must read the same verdict.
-//
-// Not parallel: it mutates PATH (t.Setenv) and store.MirrorPushDeadline.
 func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
-	base, root, gitPath, runInProcess, _ := setupMirrorDeadlineRepo(t)
-	healthyCycle := measureHealthyMirrorCycle(t, root, runInProcess)
-	wedgedDeadline := shrinkMirrorPushDeadline(t, healthyCycle)
-	wedgeMarker := installGitWedge(t, base, gitPath, "ls-remote")
+	t.Parallel()
+	rig := setupMirrorDeadlineRepo(t)
+	healthyCycle := measureHealthyMirrorCycle(t, rig)
+	wedgedDeadline := shrinkMirrorPushDeadline(t, rig, healthyCycle)
+	wedgeMarker := installGitWedge(t, rig, "ls-remote")
 
-	mirrorOut, mirrorErr := runInProcess(unboundedRunTripwire(healthyCycle, wedgedDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
+	mirrorOut, mirrorErr := rig.run(unboundedRunTripwire(healthyCycle, wedgedDeadline), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	cycleEnded := time.Now()
 	if mirrorErr != nil {
 		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", mirrorErr, mirrorOut.String())
@@ -166,7 +164,7 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 		t.Fatalf("cycle log does not report the deadline cut:\noutput:\n%s", mirrorOut.String())
 	}
 
-	ws, err := workspace.Resolve(testEnv(), root)
+	ws, err := workspace.Resolve(runEnv(t), rig.root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -206,22 +204,19 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 // cycle log, the push-outcome record and its reason all read the one verdict.
 // The deadline is spent before the open starts, so the cut is certain, not a
 // race against the open's cost.
-//
-// Not parallel: it mutates store.MirrorPushDeadline.
 func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
-	_, root, _, runInProcess, _ := setupMirrorDeadlineRepo(t)
-	restore := store.MirrorPushDeadline
-	store.MirrorPushDeadline = time.Nanosecond
-	t.Cleanup(func() { store.MirrorPushDeadline = restore })
+	t.Parallel()
+	rig := setupMirrorDeadlineRepo(t)
+	rig.pushDeadline = time.Nanosecond
 
-	out, err := runInProcess(unboundedRunTripwire(0, restore), workerArgv(t, root, backgroundMirrorSubcommand)...)
+	out, err := rig.run(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	if err != nil {
 		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "attempted=false push_deadline_cut=true") {
 		t.Fatalf("cycle log does not report the open the deadline cut:\noutput:\n%s", out.String())
 	}
-	ws, err := workspace.Resolve(testEnv(), root)
+	ws, err := workspace.Resolve(runEnv(t), rig.root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -240,8 +235,9 @@ func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 // field check reads: each hold on the live store reports its own
 // elapsed time, and the cycle end carries the phases apart.
 func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
-	_, root, _, runInProcess, _ := setupMirrorDeadlineRepo(t)
-	ws, err := workspace.Resolve(testEnv(), root)
+	t.Parallel()
+	rig := setupMirrorDeadlineRepo(t)
+	ws, err := workspace.Resolve(runEnv(t), rig.root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -253,7 +249,7 @@ func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 		t.Fatalf("plant residue: %v", err)
 	}
 
-	out, err := runInProcess(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
+	out, err := rig.run(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	if err != nil {
 		t.Fatalf("mirror cycle: %v\noutput:\n%s", err, out.String())
 	}
@@ -320,40 +316,114 @@ func assertNoMirrorClone(t *testing.T, ws workspace.Info) {
 	}
 }
 
-// inProcessRun is a mirror started on its own goroutine, so a test can act
-// on the live store while the mirror's push is in flight.
-type inProcessRun struct {
-	done chan inProcessResult
+// mirrorRun is a run started on its own goroutine, so a test can act on the
+// live store while the mirror's push is in flight.
+type mirrorRun struct {
+	done chan mirrorResult
 }
 
-type inProcessResult struct {
+type mirrorResult struct {
 	out *lockedBuffer
 	err error
 }
 
 // wait blocks for the run's result; the run's own tripwire is what bounds it.
-func (r inProcessRun) wait(t *testing.T) inProcessResult {
+func (r mirrorRun) wait(t *testing.T) mirrorResult {
 	t.Helper()
 	return <-r.done
+}
+
+// mirrorRig is the field topology of the mirror deadline tests and the two
+// knobs a test turns on the mirror runs it starts: the push deadline they run
+// under and the git shim they resolve git through.
+//
+// The mirror runs as a child of the test binary (TestMain's worker branch),
+// the shape production gives it, because both knobs are process-level in the
+// mirror: Dolt resolves git through the process PATH, and the push deadline is
+// store.MirrorPushDeadline. Set in a child, neither reaches any other test.
+// Every other command runs in-process, in root, with the test's environment.
+type mirrorRig struct {
+	t                   *testing.T
+	base, root, gitPath string
+	// pushDeadline is the mirror runs' push deadline; zero runs them under
+	// the production one.
+	pushDeadline time.Duration
+	// gitShim is a directory put ahead of PATH for the mirror runs; empty
+	// puts nothing there.
+	gitShim string
+}
+
+// start starts args on its own goroutine under timeout, the unbounded-run
+// tripwire: a run still going at timeout returns an error that says so.
+func (r *mirrorRig) start(timeout time.Duration, args ...string) mirrorRun {
+	out := &lockedBuffer{}
+	done := make(chan mirrorResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		err := r.runUnder(ctx, out, args)
+		if err != nil && ctx.Err() != nil {
+			err = fmt.Errorf("Run(%v) still blocked after %s — the run is unbounded", args, timeout)
+		}
+		done <- mirrorResult{out: out, err: err}
+	}()
+	return mirrorRun{done: done}
+}
+
+// run is start's result, failing the test on a run the tripwire cut.
+func (r *mirrorRig) run(timeout time.Duration, args ...string) (*lockedBuffer, error) {
+	res := <-r.start(timeout, args...).done
+	if res.err != nil && strings.Contains(res.err.Error(), "the run is unbounded") {
+		r.t.Fatalf("%v:\noutput:\n%s", res.err, res.out.String())
+	}
+	return res.out, res.err
+}
+
+func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []string) error {
+	if len(args) == 0 || args[0] != backgroundMirrorSubcommand {
+		errCh := make(chan error, 1)
+		go func() { errCh <- Run(ctx, dirInvocation(r.t, r.root, out, out, args)) }()
+		select {
+		case err := <-errCh:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate the test binary: %w", err)
+	}
+	env := runEnv(r.t)
+	if r.gitShim != "" {
+		env = env.With("PATH=" + r.gitShim + string(os.PathListSeparator) + env.Get("PATH"))
+	}
+	if r.pushDeadline != 0 {
+		env = env.With(testMirrorPushDeadlineEnvVar + "=" + r.pushDeadline.String())
+	}
+	cmd := exec.CommandContext(ctx, self, args...)
+	cmd.Dir, cmd.Env = r.root, env.List()
+	cmd.Stdin = strings.NewReader(workerHandoffStdin(r.t, r.root))
+	cmd.Stdout, cmd.Stderr = out, out
+	// A descendant that outlives the kill holds the output pipes open; without
+	// a bound on that, Run never returns and the tripwire never fires.
+	cmd.WaitDelay = 5 * time.Second
+	return cmd.Run()
 }
 
 // setupMirrorDeadlineRepo seeds the shared field topology of the mirror
 // deadline tests: a workspace with a real git+file remote, lit initialized,
 // the remote's dolt ref established with real git, and one real unpushed
 // commit so a mirror cycle has work to reach the wedged subprocess.
-// It chdirs into the workspace for the test's duration and returns two
-// in-process Run wrappers: one that waits for the run under a timeout that is
-// the unbounded-run tripwire, and one that starts the run on its own goroutine
-// and hands back the channel its result arrives on.
-func setupMirrorDeadlineRepo(t *testing.T) (base, root, gitPath string, runInProcess func(time.Duration, ...string) (*lockedBuffer, error), startInProcess func(time.Duration, ...string) inProcessRun) {
+func setupMirrorDeadlineRepo(t *testing.T) *mirrorRig {
 	t.Helper()
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git not available")
 	}
 
-	base = t.TempDir()
-	root = filepath.Join(base, "workspace")
+	base := t.TempDir()
+	root := filepath.Join(base, "workspace")
 	if err := os.Mkdir(root, 0o755); err != nil {
 		t.Fatalf("mkdir workspace: %v", err)
 	}
@@ -370,73 +440,34 @@ func setupMirrorDeadlineRepo(t *testing.T) (base, root, gitPath string, runInPro
 	runGit(t, base, "init", "--bare", "remote.git")
 	runGit(t, root, "remote", "add", "origin", remoteGit)
 	runGit(t, root, "push", "-u", "origin", "HEAD")
+	setRunEnv(t, "HOME", base)
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(root); err != nil {
-		t.Fatalf("Chdir(root) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-	t.Setenv("HOME", base)
-	t.Setenv("CODEX_HOME", filepath.Join(base, ".codex-home"))
-
-	// The timeout branch reads the buffer while Run's goroutine may still be
-	// writing it, so every access goes through one lock.
-	startInProcess = func(timeout time.Duration, args ...string) inProcessRun {
-		out := &lockedBuffer{}
-		done := make(chan inProcessResult, 1)
-		inv := cwdInvocation(out, out, args)
-		if len(args) > 0 && args[0] == backgroundMirrorSubcommand {
-			inv.Stdin = strings.NewReader(workerHandoffStdin(t, root))
-		}
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-			errCh := make(chan error, 1)
-			go func() { errCh <- Run(ctx, inv) }()
-			select {
-			case runErr := <-errCh:
-				done <- inProcessResult{out: out, err: runErr}
-			case <-ctx.Done():
-				done <- inProcessResult{out: out, err: fmt.Errorf("Run(%v) still blocked after %s — the run is unbounded", args, timeout)}
-			}
-		}()
-		return inProcessRun{done: done}
-	}
-	runInProcess = func(timeout time.Duration, args ...string) (*lockedBuffer, error) {
-		res := <-startInProcess(timeout, args...).done
-		if res.err != nil && strings.Contains(res.err.Error(), "the run is unbounded") {
-			t.Fatalf("%v:\noutput:\n%s", res.err, res.out.String())
-		}
-		return res.out, res.err
-	}
-
-	if out, err := runInProcess(60*time.Second, "init", "--skip-hooks"); err != nil {
+	rig := &mirrorRig{t: t, base: base, root: root, gitPath: gitPath}
+	if out, err := rig.run(60*time.Second, "init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out.String())
 	}
 	// First dolt push establishes the remote's dolt ref and upstream, with real
 	// git, so the wedged run is the mirror's ordinary incremental push.
-	if out, err := runInProcess(60*time.Second, "sync", "push", "--set-upstream"); err != nil {
+	if out, err := rig.run(60*time.Second, "sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out.String())
 	}
 	// A real unpushed commit, so the mirror's push has work and must reach the
 	// wedged git subprocess rather than short-circuiting as up-to-date.
-	if out, err := runInProcess(60*time.Second, "new", "--type", "epic", "--title", "hold-budget probe", "--topic", "demo"); err != nil {
+	if out, err := rig.run(60*time.Second, "new", "--type", "epic", "--title", "hold-budget probe", "--topic", "demo"); err != nil {
 		t.Fatalf("lit new (pre-wedge): %v\noutput:\n%s", err, out.String())
 	}
-	return base, root, gitPath, runInProcess, startInProcess
+	return rig
 }
 
-// installGitWedge prepends a PATH shim wedging the named git subcommand in an
-// indefinite sleep — every other git call passes through to the real binary —
-// and stamps a marker first, so a test can prove the deadline cut a genuinely
-// hung subprocess rather than a call that never ran. Returns the marker path.
-func installGitWedge(t *testing.T, base, gitPath, subcommand string) (wedgeMarker string) {
+// installGitWedge gives the rig's mirror runs a git shim wedging the named git
+// subcommand in an indefinite sleep — every other git call passes through to
+// the real binary — and stamps a marker first, so a test can prove the deadline
+// cut a genuinely hung subprocess rather than a call that never ran. Returns
+// the marker path.
+func installGitWedge(t *testing.T, rig *mirrorRig, subcommand string) (wedgeMarker string) {
 	t.Helper()
-	wedgeMarker = filepath.Join(base, "wedge-engaged")
-	shimDir := filepath.Join(base, "git-shim")
+	wedgeMarker = filepath.Join(rig.base, "wedge-engaged")
+	shimDir := filepath.Join(rig.base, "git-shim")
 	if err := os.Mkdir(shimDir, 0o755); err != nil {
 		t.Fatalf("mkdir shim dir: %v", err)
 	}
@@ -450,31 +481,27 @@ for a in "$@"; do
   esac
 done
 exec %q "$@"
-`, subcommand, wedgeMarker, gitPath)
+`, subcommand, wedgeMarker, rig.gitPath)
 	if err := os.WriteFile(filepath.Join(shimDir, "git"), []byte(shim), 0o755); err != nil {
 		t.Fatalf("write git shim: %v", err)
 	}
-	t.Setenv("PATH", shimDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	rig.gitShim = shimDir
 	return wedgeMarker
 }
 
-// shrinkMirrorPushDeadline installs the wedged run's push deadline for the
-// test's duration — margin over the healthy cycle measured on this machine —
-// so a wedged push cuts in seconds, and restores the production figure at
-// cleanup.
+// shrinkMirrorPushDeadline sets the rig's mirror runs' push deadline to the
+// wedged run's — margin over the healthy cycle measured on this machine — so a
+// wedged push cuts in seconds.
 //
-// It is the one home of that derivation, and handing the installed deadline
-// back is what keeps it one: the tripwire and the ceiling below take the
-// deadline as data, so neither reads it back out of a global it would then
-// have to be called after. The ordering is a data dependency rather than a
-// line of prose asking for it. [LAW:one-source-of-truth]
-// [LAW:no-ambient-temporal-coupling]
-func shrinkMirrorPushDeadline(t *testing.T, healthyCycle time.Duration) time.Duration {
+// It is the one home of that derivation, and handing the deadline back is
+// what keeps it one: the tripwire and the ceiling below take the deadline as
+// data, so neither reads it back out of the rig it would then have to be
+// called after. The ordering is a data dependency rather than a line of prose
+// asking for it. [LAW:one-source-of-truth] [LAW:no-ambient-temporal-coupling]
+func shrinkMirrorPushDeadline(t *testing.T, rig *mirrorRig, healthyCycle time.Duration) time.Duration {
 	t.Helper()
 	deadline := wedgeDeadlineMargin * healthyCycle
-	restore := store.MirrorPushDeadline
-	store.MirrorPushDeadline = deadline
-	t.Cleanup(func() { store.MirrorPushDeadline = restore })
+	rig.pushDeadline = deadline
 	t.Logf("healthy mirror cycle measured at %s; wedged run's push deadline %s",
 		healthyCycle.Round(time.Millisecond), deadline.Round(time.Millisecond))
 	return deadline
@@ -518,12 +545,12 @@ const wedgeDeadlineMargin = 2
 // push-outcome marker, the one record of that fact, and the marker must be
 // this sample's rather than the bootstrap push's. [LAW:no-silent-failure]
 // [LAW:one-source-of-truth]
-func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time.Duration, ...string) (*lockedBuffer, error)) time.Duration {
+func measureHealthyMirrorCycle(t *testing.T, rig *mirrorRig) time.Duration {
 	t.Helper()
 	started := time.Now()
 	// The sample runs under the production deadline, so its hung bound is that
 	// deadline's, not a figure of this test's choosing. [LAW:one-source-of-truth]
-	out, err := runInProcess(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, root, backgroundMirrorSubcommand)...)
+	out, err := rig.run(unboundedRunTripwire(0, store.MirrorPushDeadline), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	healthyCycle := time.Since(started)
 	if err != nil {
 		t.Fatalf("unwedged mirror cycle failed, so there is no healthy cost to size the wedged run against: %v\noutput:\n%s", err, out.String())
@@ -531,7 +558,7 @@ func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time
 	if !strings.Contains(out.String(), "attempted=true push_deadline_cut=false") {
 		t.Fatalf("the sample cycle was cut or never attempted under the production deadline, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
 	}
-	ws, err := workspace.Resolve(testEnv(), root)
+	ws, err := workspace.Resolve(runEnv(t), rig.root)
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
@@ -541,7 +568,7 @@ func measureHealthyMirrorCycle(t *testing.T, root string, runInProcess func(time
 		t.Fatalf("the sample cycle did not land a push (outcome %+v, recorded %t, %s old against a %s sample), so its cost is not the cost of a healthy cycle:\noutput:\n%s",
 			outcome, recorded, age, now.Sub(started), out.String())
 	}
-	if probe, probeErr := runInProcess(90*time.Second, "new", "--type", "epic", "--title", "post-measurement probe", "--topic", "demo"); probeErr != nil {
+	if probe, probeErr := rig.run(90*time.Second, "new", "--type", "epic", "--title", "post-measurement probe", "--topic", "demo"); probeErr != nil {
 		t.Fatalf("re-seed the unpushed commit the sample cycle pushed: %v\noutput:\n%s", probeErr, probe.String())
 	}
 	return healthyCycle
@@ -560,7 +587,7 @@ func unboundedRunTripwire(healthyCycle, wedgedDeadline time.Duration) time.Durat
 // push began — or for the mirror to finish first, which proves nothing about a
 // push in flight and says so. Polling is the only way to observe another
 // process's file write; the bound is the run's own tripwire.
-func awaitWedge(t *testing.T, wedgeMarker string, tripwire time.Duration, mirror inProcessRun) time.Time {
+func awaitWedge(t *testing.T, wedgeMarker string, tripwire time.Duration, mirror mirrorRun) time.Time {
 	t.Helper()
 	deadline := time.Now().Add(tripwire)
 	for {

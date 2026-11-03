@@ -9,8 +9,7 @@ import "time"
 // measured environment, rounded up — far enough over the measurement to absorb
 // machine variance, close enough that sustained creep or a single expensive
 // test fails the build long before go test's 10-minute per-package default
-// turns it into a timeout panic on an innocent diff — every package but
-// internal/cli, whose note says why it has no such margin. The check reads whatever
+// turns it into a timeout panic on an innocent diff. The check reads whatever
 // `go test -short -json ./...` run it is piped, and the enforcing one is CI's
 // concurrent run on ubuntu-latest, whose 4-vCPU runners are drawn from a pool
 // of different CPUs (AMD EPYC 7763, 9V45, 9V74; Intel Xeon 6973P/6975P) that
@@ -46,12 +45,11 @@ var budgets = map[string]time.Duration{
 	// this budget means fixture tax is back.
 	"github.com/promptctl/links-issue-tracker/internal/store": 440 * time.Second,
 
-	// 385s (EPYC 7763); 249-358s on the other CPUs, most of it the serial e2e
-	// set. 1.5x leaves almost no room under go test's 600s per-package
-	// timeout, so this is the number with no slack left: its floor moves only
-	// when the e2e tests can run in parallel (Run taking cwd and env as
-	// parameters). Tighten it from the first runs after that lands.
-	"github.com/promptctl/links-issue-tracker/internal/cli": 580 * time.Second,
+	// 193.8s on CI (PR #880's run, a slow runner: store took 225s on it), the
+	// first measurement with the package's tests parallel; it was 249-385s
+	// across the runner pool while they ran serially. TestNoTestChangesTheProcess
+	// keeps them parallel-safe.
+	"github.com/promptctl/links-issue-tracker/internal/cli": 300 * time.Second,
 
 	// 31s (EPYC 7763 and 9V74), and the ~18.5s isolated number is a floor,
 	// not slack: the package's wall equals its one giant,

@@ -40,6 +40,7 @@ func TestTransitionBreadcrumbTopicsAreValidTokens(t *testing.T) {
 }
 
 func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -50,7 +51,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 
 	var newOut bytes.Buffer
-	if err := runNew(ctx, &newOut, ap, []string{"--title", "Crumb probe", "--topic", "crumbs", "--type", "task", "--parent", seedEpicRaw(t, ctx, ap, "Crumbs", "crumbs")}); err != nil {
+	if err := runNew(t, ctx, &newOut, ap, []string{"--title", "Crumb probe", "--topic", "crumbs", "--type", "task", "--parent", seedEpicRaw(t, ctx, ap, "Crumbs", "crumbs")}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
 	if got, want := lastLine(newOut.String()), quickstartBreadcrumb("new"); got != want {
@@ -59,7 +60,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	issueID := strings.Fields(newOut.String())[0]
 
 	var startOut bytes.Buffer
-	if err := runTransition(ctx, &startOut, ap, []string{issueID}, startSpec); err != nil {
+	if err := runTransition(t, ctx, &startOut, ap, []string{issueID}, startSpec); err != nil {
 		t.Fatalf("runTransition(start) error = %v", err)
 	}
 	if got, want := lastLine(startOut.String()), quickstartBreadcrumb("work"); got != want {
@@ -67,7 +68,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 
 	var labelOut bytes.Buffer
-	if err := runAppFamily(labelFamily, ctx, &labelOut, ap, []string{"add", issueID, "probe"}); err != nil {
+	if err := runAppFamily(t, labelFamily, ctx, &labelOut, ap, []string{"add", issueID, "probe"}); err != nil {
 		t.Fatalf("runLabel(add) error = %v", err)
 	}
 	if got, want := lastLine(labelOut.String()), quickstartBreadcrumb("update"); got != want {
@@ -75,7 +76,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 
 	var closeOut bytes.Buffer
-	if err := runTransition(ctx, &closeOut, ap, []string{issueID, "--resolution", "wontfix", "--reason", "probe done"}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &closeOut, ap, []string{issueID, "--resolution", "wontfix", "--reason", "probe done"}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close) error = %v", err)
 	}
 	if got, want := lastLine(closeOut.String()), quickstartBreadcrumb("done"); got != want {

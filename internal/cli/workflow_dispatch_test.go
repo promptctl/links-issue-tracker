@@ -10,6 +10,7 @@ import (
 // that fired, an empty list when none did. The transitions are covered by
 // TestPhaseMovesFireStateBoundWorkflows.
 func TestEveryDispatchingCommandRecordsItsOccasion(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, first, _ := statuslineCheckout(t)
 	epic := newEpicInDir(t, dir, "dispatch epic")

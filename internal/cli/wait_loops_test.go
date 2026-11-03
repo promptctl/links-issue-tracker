@@ -16,7 +16,7 @@ import (
 func (h readyTestHarness) doctorWaitLoopLine() (string, string) {
 	h.t.Helper()
 	var buf bytes.Buffer
-	if err := runDoctor(h.ctx, &buf, h.ap, nil); err != nil {
+	if err := runDoctor(h.t, h.ctx, &buf, h.ap, nil); err != nil {
 		h.t.Fatalf("runDoctor() error = %v", err)
 	}
 	got := buf.String()
@@ -36,9 +36,10 @@ func (h readyTestHarness) doctorWaitLoopLine() (string, string) {
 // depending on B: B waits on E1, E1 on C, C on B. lit next can start none of
 // them, and lit doctor names the loop by each of its three links.
 func TestDoctorNamesAWaitLoop(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	var buf bytes.Buffer
-	if err := runDoctor(h.ctx, &buf, h.ap, nil); err != nil {
+	if err := runDoctor(t, h.ctx, &buf, h.ap, nil); err != nil {
 		t.Fatalf("runDoctor() on an empty workspace error = %v", err)
 	}
 	if !strings.Contains(buf.String(), " wait_loops=0\n") {
@@ -68,6 +69,7 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 // The loop runs back through epic F's child, since the store refuses a loop
 // of blocked-by edges alone.
 func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	e := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
 	b := h.createIssue(storage.CreateIssueInput{Title: "B", Topic: "loop", IssueType: "task", ParentID: e.ID})
@@ -95,6 +97,7 @@ func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 // the wait-loop check as not run, and its exit names the loop's own repair
 // rather than --fix integrity, which does not touch a loop.
 func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	top := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
 	sub := h.createIssue(storage.CreateIssueInput{Title: "S", Topic: "loop", IssueType: "epic", ParentID: top.ID})
@@ -110,7 +113,7 @@ func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 		t.Fatalf("plant parent cycle: %v", err)
 	}
 	var buf bytes.Buffer
-	err = runDoctor(h.ctx, &buf, h.ap, nil)
+	err = runDoctor(t, h.ctx, &buf, h.ap, nil)
 	if !errors.As(err, new(CorruptionError)) {
 		t.Fatalf("runDoctor() error = %v, want the parent cycle's CorruptionError", err)
 	}
@@ -129,6 +132,7 @@ func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 // never a tail leading into it or a branch leading out: a is on a>b>a, and c,
 // which that loop misses, gets c>a>b>c; nothing names a loop twice.
 func TestLoopsInNamesEveryIssueOnALoop(t *testing.T) {
+	t.Parallel()
 	graph := map[string][]waitHop{}
 	for _, pair := range [][2]string{
 		{"a", "b"}, {"b", "a"}, {"b", "c"}, {"c", "a"},

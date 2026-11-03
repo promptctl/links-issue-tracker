@@ -17,7 +17,7 @@ func receiveEvent(t *testing.T, ws workspace.Info) (telemetry.Event, map[string]
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testStderr(t), testEnv(), ws)
+	receiveOnce(ctx, testStderr(t), runEnv(t), ws)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {
@@ -59,7 +59,7 @@ func receiveWorkspace(t *testing.T, doltRefs []string, remotes ...string) worksp
 		}
 		runGit(t, root, "remote", "add", name, bare)
 	}
-	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(base, "storage")), RootDir: root, Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
+	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(base, "storage")), RootDir: root, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
 }
 
 // Every way the automatic receive ends before it fetches is a decision, and
@@ -75,7 +75,7 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 	}{
 		{"git remotes unreadable", func(t *testing.T) workspace.Info {
 			root := t.TempDir()
-			return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), "storage")), RootDir: root, Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
+			return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), "storage")), RootDir: root, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
 		}, "error", ""},
 		{"no git remote", func(t *testing.T) workspace.Info {
 			return receiveWorkspace(t, nil)
@@ -101,7 +101,7 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 			if err != nil || !ok {
 				t.Fatalf("workspaceSyncRemote(origin) = %v, %v", ok, err)
 			}
-			observed, err := advertise(context.Background(), testEnv(), ws, remote)
+			observed, err := advertise(context.Background(), runEnv(t), ws, remote)
 			if err != nil {
 				t.Fatal(err)
 			}

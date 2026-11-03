@@ -19,6 +19,7 @@ import (
 // evidence that actually made the trip through sync, exactly as
 // claims_attribution_test.go's rationale states.
 func TestNextRoutesEachCheckoutToItsOwnClaimedWork(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")

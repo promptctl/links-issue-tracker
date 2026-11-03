@@ -27,6 +27,7 @@ const forged = "FORGED"
 // ESC; held to its row, a break prints as quotedBreak in front of it and the
 // ESC as U+FFFD. [LAW:behavior-not-structure]
 func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "epic", Topic: "demo", IssueType: model.TypeEpic})
 	open := h.createIssue(storage.CreateIssueInput{Title: "open", Topic: "demo", ParentID: epic.ID, Lane: "left"})
@@ -60,9 +61,9 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 		Contested: []model.Attribution{model.NewAttribution("eeeeeeeeffff", "ws-local")},
 	}}}
 
-	policy := workspaceReadyPolicy(testEnv(), h.ap)
-	command := func(run func(context.Context, io.Writer, *app.App, []string) error, args ...string) func(io.Writer) error {
-		return func(w io.Writer) error { return run(h.ctx, w, h.ap, args) }
+	policy := workspaceReadyPolicy(runEnv(t), h.ap)
+	command := func(run func(testing.TB, context.Context, io.Writer, *app.App, []string) error, args ...string) func(io.Writer) error {
+		return func(w io.Writer) error { return run(t, h.ctx, w, h.ap, args) }
 	}
 	// check runs one listing. held names the planted values it must print held
 	// to their row; with none named, any one planted value will do.
@@ -103,11 +104,11 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 		name  string
 		print func(io.Writer) error
 	}{
-		{"ls", func(w io.Writer) error { return runListWithStore(h.ctx, w, h.ap.Store, policy, nil) }},
+		{"ls", func(w io.Writer) error { return runListWithStore(t, h.ctx, w, h.ap.Store, policy, nil) }},
 		{"ls --format table", func(w io.Writer) error {
-			return runListWithStore(h.ctx, w, h.ap.Store, policy, []string{"--format", "table"})
+			return runListWithStore(t, h.ctx, w, h.ap.Store, policy, []string{"--format", "table"})
 		}},
-		{"backlog", func(w io.Writer) error { return runWorkable(h.ctx, w, h.ap, nil, backlogView) }},
+		{"backlog", func(w io.Writer) error { return runWorkable(t, h.ctx, w, h.ap, nil, backlogView) }},
 		{"children", command(runChildren, epic.ID)},
 		{"show (leaf)", command(runShow, stale.ID)},
 		{"show (lane)", command(runShow, open.ID)},

@@ -13,6 +13,7 @@ import (
 // the import updates exactly that one issue. Each invocation's event records
 // the format that printed and what the import held and moved.
 func TestListYAMLRoundTripsThroughImport(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", "local_id: epic\ntitle: epic\ntype: epic\ntopic: demo\n---\nlocal_id: full\ntitle: full\ntype: task\ntopic: demo\nparent: epic\ndescription: |-\n  first line\n\n  second paragraph\nassignee: ada\nlabels: [alpha, beta]\n---\nlocal_id: bare\ntitle: bare\ntype: task\ntopic: demo\nparent: epic\n"))
@@ -53,6 +54,7 @@ func TestListYAMLRoundTripsThroughImport(t *testing.T) {
 // so a projection asked of them is refused as a usage error before any row is
 // printed, rather than ignored.
 func TestListYAMLRefusesColumns(t *testing.T) {
+	t.Parallel()
 	dir := newInitTestRepo(t)
 	newEpicInDir(t, dir, "epic")
 	out, err := runCLIInDirAllowError(t, dir, "ls", "--format", "yaml", "--columns", "id,title")
@@ -68,6 +70,7 @@ func TestListYAMLRefusesColumns(t *testing.T) {
 // empty stream of update documents, printed as success, not a failure to
 // close a stream that never started.
 func TestListYAMLOfNoIssuesPrintsNothing(t *testing.T) {
+	t.Parallel()
 	dir := newInitTestRepo(t)
 	newEpicInDir(t, dir, "epic")
 	if out := runCLIInDir(t, dir, "ls", "--query", "label:matches-nothing", "--format", "yaml"); out != "" {
@@ -83,6 +86,7 @@ func TestListYAMLOfNoIssuesPrintsNothing(t *testing.T) {
 // another writer moves the lane, editing the lane too, is refused as a write
 // conflict that names the way on and writes nothing.
 func TestListYAMLKeepsWhatAnotherWriterChanged(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := newInitTestRepo(t)
 	seeded := runCLIInDir(t, dir, "import", "--path", writeImportFile(t, "seed.yaml", "local_id: epic\ntitle: epic\ntype: epic\ntopic: demo\n---\nlocal_id: other\ntitle: other\ntype: epic\ntopic: demo\n---\nlocal_id: issue\ntitle: issue\ntype: task\ntopic: demo\nparent: epic\n---\nlocal_id: blocker\ntitle: blocker\ntype: task\ntopic: demo\nparent: other\n"))

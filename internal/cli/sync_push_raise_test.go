@@ -17,8 +17,8 @@ import (
 func runSourceBuildInDir(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	inv := dirInvocation(dir, &out, &out, args)
-	inv.Env = testEnv().WithRaisePolicy(version.RaisePolicy{})
+	inv := dirInvocation(t, dir, &out, &out, args)
+	inv.Env = runEnv(t).WithRaisePolicy(version.RaisePolicy{})
 	return out.String(), Run(context.Background(), inv)
 }
 
@@ -80,6 +80,7 @@ func TestASchemaRaiseRefusalRendersTheSyncFailureContract(t *testing.T) {
 // raise. The rule stops raises, not source builds, and a raise never comes
 // out of this flow, so the store's tests are where the refusal is proven.
 func TestASourceBuildPushesAtTheRemotesSchema(t *testing.T) {
+	t.Parallel()
 	remote, _, consumer, _, epicID := twoClonesOverOneDoltRemote(t)
 	before := remoteDoltHead(t, remote)
 	runCLIInDir(t, consumer, "new", "--title", "from-source", "--topic", "demo", "--type", "task", "--parent", epicID)

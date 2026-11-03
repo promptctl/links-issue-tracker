@@ -53,7 +53,7 @@ func litRepoForCadence(t *testing.T) (dir, marker string) {
 	// own command did.
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(dir, ".git", "links")), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(dir, ".git", "links")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	marker = compactMarkerPath(ws)
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("probe marker existed before any auto-synced command: %s", marker)
@@ -73,8 +73,9 @@ func newTicket(t *testing.T, dir string) {
 // A mutating command runs the backstop: only a mutation grows the store, and a
 // workspace with no remote is exactly the one with nothing else to collect it.
 func TestWriteCommandRunsTheCompactionBackstop(t *testing.T) {
+	t.Parallel()
 	dir, marker := litRepoForCadence(t)
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 
 	newTicket(t, dir)
 
@@ -87,8 +88,9 @@ func TestWriteCommandRunsTheCompactionBackstop(t *testing.T) {
 // any command rather than on having written would put that work behind
 // `lit backlog`.
 func TestReadOnlyCommandDoesNotRunTheCompactionBackstop(t *testing.T) {
+	t.Parallel()
 	dir, marker := litRepoForCadence(t)
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 
 	runCLIInDir(t, dir, "backlog")
 
@@ -102,8 +104,9 @@ func TestReadOnlyCommandDoesNotRunTheCompactionBackstop(t *testing.T) {
 // TestMain relies on this one switch to keep automatic work out of unrelated
 // tests.
 func TestDisabledAutoSyncSuppressesTheCompactionBackstop(t *testing.T) {
+	t.Parallel()
 	dir, marker := litRepoForCadence(t)
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
 	newTicket(t, dir)
 
@@ -121,9 +124,10 @@ func TestDisabledAutoSyncSuppressesTheCompactionBackstop(t *testing.T) {
 // written before the store is opened: its presence is that proof, on a
 // workspace that has no real store at all.
 func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	root := t.TempDir()
-	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
+	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		t.Fatalf("make storage dir error = %v", err)
 	}
@@ -132,7 +136,7 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 		t.Fatalf("write broken config error = %v", err)
 	}
 
-	maybeAutoSyncAfterCommand(t.Context(), testStderr(t), testEnv(), app.AccessWrite, ws)
+	maybeAutoSyncAfterCommand(t.Context(), testStderr(t), runEnv(t), app.AccessWrite, ws)
 
 	if _, err := os.Stat(compactMarkerPath(ws)); err != nil {
 		t.Fatalf("the compaction backstop was never reached after a config failure (%v); a config nobody can read must cost the mirror, not the collection", err)
@@ -144,9 +148,10 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 // says a sync looked and found none, and no sync ran. This checkout has no
 // remote, so no mirror or receive runs either. [LAW:nothing-unseen]
 func TestTheCompactionBackstopLeavesNoSyncListsOnItsCommandsEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, marker := litRepoForCadence(t)
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 
 	newTicket(t, dir)
 
@@ -169,9 +174,10 @@ func TestTheCompactionBackstopLeavesNoSyncListsOnItsCommandsEvent(t *testing.T) 
 // straight back up, past the binary the downgrade is about to install, with the
 // command succeeding and nothing said. So the probe's open applies no migration.
 func TestTheBackstopLeavesADowngradedStoreAtItsTarget(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, marker := litRepoForCadence(t)
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	newTicket(t, dir)
 	if err := os.Remove(marker); err != nil {
 		t.Fatalf("remove marker: %v", err)
@@ -182,7 +188,7 @@ func TestTheBackstopLeavesADowngradedStoreAtItsTarget(t *testing.T) {
 	}
 	target := newest - 2
 	var out, errOut bytes.Buffer
-	inv := dirInvocation(dir, &out, &errOut, []string{"downgrade"})
+	inv := dirInvocation(t, dir, &out, &errOut, []string{"downgrade"})
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
 	if err := runWithApp(ctx, inv, app.AccessWrite, func(ctx context.Context, ap *app.App) error {
 		migrator, err := storage.SchemaMigration.Of(ap.Store)
@@ -223,6 +229,7 @@ func TestTheBackstopLeavesADowngradedStoreAtItsTarget(t *testing.T) {
 // A pull with no remote to pull from says which skip on its event, and
 // carries no base: it settled nothing. [LAW:nothing-unseen]
 func TestAPullWithNoRemoteRecordsItsSkip(t *testing.T) {
+	t.Parallel()
 	dir, _ := litRepoForCadence(t)
 	runCLIInDir(t, dir, "sync", "pull")
 	ev := lastEvent(t)

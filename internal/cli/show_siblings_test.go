@@ -9,6 +9,7 @@ import (
 // own position among them, exactly once — via the epic "Children:" block —
 // never through a separate "siblings:" group.
 func TestRunShowListsSiblingsExcludingSelfOnce(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Plan epic", "the why")
 	// A lane apiece. The duplication this test guards is counted by raw id
 	// occurrences, and in one shared lane a sibling's id legitimately appears a
@@ -52,6 +53,7 @@ func TestRunShowListsSiblingsExcludingSelfOnce(t *testing.T) {
 // identifies the parent epic and marks the ticket's own position, with no
 // separate siblings group.
 func TestRunShowOnlyChildRendersNoSiblingsGroup(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Solo epic", "the why")
 	only := f.addChild("Only child")
 
@@ -70,6 +72,7 @@ func TestRunShowOnlyChildRendersNoSiblingsGroup(t *testing.T) {
 
 // A parentless ticket (the epic itself) has no siblings group at all.
 func TestRunShowParentlessTicketRendersNoSiblingsGroup(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Epic", "the why")
 	// The epic itself is parentless.
 	if out := showOutput(t, f.ap, f.epicID); strings.Contains(out, "\nsiblings:\n") {

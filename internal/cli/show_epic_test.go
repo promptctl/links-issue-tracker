@@ -18,7 +18,7 @@ import (
 func showOutput(t *testing.T, ap *app.App, id string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := runShow(context.Background(), &buf, ap, []string{id}); err != nil {
+	if err := runShow(t, context.Background(), &buf, ap, []string{id}); err != nil {
 		t.Fatalf("runShow(%s) error = %v", id, err)
 	}
 	return buf.String()
@@ -27,6 +27,7 @@ func showOutput(t *testing.T, ap *app.App, id string) string {
 // A leaf under an epic renders its own body plus the epic plan block, with the
 // focused-child marker on its own row.
 func TestRunShowChildRendersEpicBlockWithFocus(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Plan epic", "# Why this exists\nthe shared why")
 	sibling := f.addChild("Sibling first")
 	focus := f.addChild("Focused child")
@@ -58,6 +59,7 @@ func TestRunShowChildRendersEpicBlockWithFocus(t *testing.T) {
 
 // An epic renders its own body plus the children list, with no focus marker.
 func TestRunShowEpicRendersChildrenNoFocus(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Top epic", "# Goal\nthe plan")
 	a := f.addChild("Child A")
 	b := f.addChild("Child B")
@@ -86,6 +88,7 @@ func TestRunShowEpicRendersChildrenNoFocus(t *testing.T) {
 // its own: a childless one shows its body plus an epic block with no child
 // rows and no focus marker.
 func TestRunShowTopLevelEpicRendersItsOwnBlock(t *testing.T) {
+	t.Parallel()
 	ap := newTestCLIApp(t)
 	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "epic", Priority: 0,
@@ -127,6 +130,7 @@ func writeUnrelatedlyBrokenConfig(t *testing.T, ap *app.App) {
 // it too, even with no children to classify. It arrives before the body is
 // written, for the reason the epic-member test below states.
 func TestRunShowTopLevelEpicFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T) {
+	t.Parallel()
 	ap := newTestCLIApp(t)
 	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "epic", Priority: 0,
@@ -137,7 +141,7 @@ func TestRunShowTopLevelEpicFailsBeforeWritingBodyOnUnreadableConfig(t *testing.
 	writeUnrelatedlyBrokenConfig(t, ap)
 
 	var buf bytes.Buffer
-	err = runShow(context.Background(), &buf, ap, []string{free.ID})
+	err = runShow(t, context.Background(), &buf, ap, []string{free.ID})
 	if err == nil {
 		t.Fatalf("show of a top-level epic under an unreadable config must fail, got nil; output:\n%s", buf.String())
 	}
@@ -155,12 +159,13 @@ func TestRunShowTopLevelEpicFailsBeforeWritingBodyOnUnreadableConfig(t *testing.
 // body-and-block or neither, not an empty stdout: the staleness banner and any
 // fired workflow body legitimately precede resolution.
 func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Plan epic", "the why")
 	child := f.addChild("A child")
 	writeUnrelatedlyBrokenConfig(t, f.ap)
 
 	var buf bytes.Buffer
-	err := runShow(context.Background(), &buf, f.ap, []string{child})
+	err := runShow(t, context.Background(), &buf, f.ap, []string{child})
 	if err == nil {
 		t.Fatalf("show of an epic member under an unreadable config must fail, got nil; output:\n%s", buf.String())
 	}
@@ -174,6 +179,7 @@ func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T)
 // An in_progress child inside an epic renders the in_progress marker in the
 // block — the show path classifies status from live state, same as the renderer.
 func TestRunShowInProgressChildRendersInProgressMarker(t *testing.T) {
+	t.Parallel()
 	f := newEpicFixture(t, "Active epic", "work underway")
 	working := f.addChild("In flight")
 	f.transition(working, model.Start{Assignee: "test"})

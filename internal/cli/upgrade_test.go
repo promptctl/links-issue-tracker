@@ -83,11 +83,11 @@ func runUpgradeRecorded(
 	ctx := telemetry.With(context.Background(), recorder)
 	l := upgradeLeafWith(resolver, installer, fixedBinPath("/p/lit", nil)).leaf
 	var out bytes.Buffer
-	positional, err := parseLeaf(ctx, l, args, cwdInvocation(&out, &out, nil))
+	positional, err := parseLeaf(ctx, l, args, dirInvocation(t, t.TempDir(), &out, &out, nil))
 	if err != nil {
 		t.Fatalf("parseLeaf: %v", err)
 	}
-	err = l.work(ctx, cwdInvocation(&out, &out, nil), upgradeScope{schema: schema, current: current}, positional)
+	err = l.work(ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), upgradeScope{schema: schema, current: current}, positional)
 	return writtenFacts(t, recorder.Finish(telemetry.End{})), err
 }
 
@@ -99,7 +99,7 @@ func TestRunUpgradeWithHappyPath(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/usr/local/bin/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/usr/local/bin/lit", nil))
 	if err != nil {
 		t.Fatalf("runUpgradeWith: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestRunUpgradeWithTargetBehindWithinRunningSupportNamesDowngrade(t *testing
 	current := version.Info{Version: "0.3.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, current, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, current, res, inst, fixedBinPath("/p/lit", nil))
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
@@ -162,7 +162,7 @@ func TestRunUpgradeWithTargetBehindPastRunningSupportNamesNewerTarget(t *testing
 	sr := &stubSchemaReader{version: 7}           // workspace past olderCurrentInfo's Schema.Max == 2
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
@@ -193,7 +193,7 @@ func TestRunUpgradeWithTargetBelowRunningBaselineNamesNewerTarget(t *testing.T) 
 	current := version.Info{Version: "0.3.0", Schema: version.SchemaSupport{Min: 4, Max: 9}}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, current, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, current, res, inst, fixedBinPath("/p/lit", nil))
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
@@ -219,7 +219,7 @@ func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
 	sr := &stubSchemaReader{version: 3}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	if err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil)); err != nil {
+	if err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil)); err != nil {
 		t.Fatalf("runUpgradeWith at equal schema: %v", err)
 	}
 	if !inst.called {
@@ -233,7 +233,7 @@ func TestRunUpgradeWithInstallFailureSurfacesRecovery(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{err: errors.New("network down")}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil {
 		t.Fatal("expected install failure to surface as error")
 	}
@@ -257,7 +257,7 @@ func TestRunUpgradeWithResolverErrorSkipsReadAndInstall(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil || !strings.Contains(err.Error(), "manifest 404") {
 		t.Fatalf("expected resolver error to propagate, got %v", err)
 	}
@@ -275,7 +275,7 @@ func TestRunUpgradeWithSchemaReadErrorSkipsInstall(t *testing.T) {
 	sr := &stubSchemaReader{err: errors.New("store closed")}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil || !strings.Contains(err.Error(), "read workspace schema version") {
 		t.Fatalf("expected schema-read error to propagate, got %v", err)
 	}
@@ -293,7 +293,7 @@ func TestRunUpgradeRefusesANonReleaseTagBeforeResolving(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.14.0.1"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.14.0.1"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if code := ExitCode(err); code != ExitValidation {
 		t.Fatalf("exit = %d (err %v); want %d", code, err, ExitValidation)
 	}
@@ -311,7 +311,7 @@ func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0", "extra"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.9.0", "extra"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	var usage UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("err = %v (%T); want UsageError for an extra positional arg", err, err)
@@ -335,7 +335,7 @@ func TestRunUpgradeBareResolvesLatestAndInstalls(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err != nil {
 		t.Fatalf("bare runUpgradeWith: %v", err)
 	}
@@ -362,7 +362,7 @@ func TestRunUpgradeBareAlreadyCurrentKeepsBinary(t *testing.T) {
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
 	if err != nil {
 		t.Fatalf("already-current must be a clean no-op, got %v", err)
 	}
@@ -387,7 +387,7 @@ func TestRunUpgradeBareBinaryAheadOfLatestKeepsBinary(t *testing.T) {
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.10.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
 	if err != nil {
 		t.Fatalf("binary ahead of latest must be a clean no-op, got %v", err)
 	}
@@ -409,7 +409,7 @@ func TestRunUpgradePinnedSameVersionStillInstalls(t *testing.T) {
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.4.1"}, current, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{"--to", "v0.4.1"}, current, res, inst, fixedBinPath("/p/lit", nil))
 	if err != nil {
 		t.Fatalf("pinned reinstall: %v", err)
 	}
@@ -429,7 +429,7 @@ func TestRunUpgradeBareLatestBehindWorkspaceRefused(t *testing.T) {
 	inst := &stubInstaller{}
 	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
@@ -501,7 +501,7 @@ func TestRunUpgradeBareEndToEndOverHTTP(t *testing.T) {
 	res := &release.HTTPResolver{BaseURL: srv.URL + "/dl", LatestURL: srv.URL + "/feed"}
 	sr := &stubSchemaReader{version: 2}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, &release.HTTPInstaller{}, fixedBinPath(binPath, nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, &release.HTTPInstaller{}, fixedBinPath(binPath, nil))
 	if err != nil {
 		t.Fatalf("bare end-to-end upgrade: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestRunUpgradeExplicitEmptyToIsRejected(t *testing.T) {
 		sr := &stubSchemaReader{version: 2}
 		inst := &stubInstaller{}
 		var out bytes.Buffer
-		err := runUpgradeWith(context.Background(), &out, sr, args, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+		err := runUpgradeWith(t, context.Background(), &out, sr, args, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 		if err == nil || !strings.Contains(err.Error(), "non-empty version") {
 			t.Fatalf("args %v: expected the non-empty-version validation error, got %v", args, err)
 		}
@@ -552,7 +552,7 @@ func TestRunUpgradeBareDevBuildAlwaysInstalls(t *testing.T) {
 	inst := &stubInstaller{}
 	current := version.Info{IsDev: true, Schema: version.SchemaSupport{Min: 1, Max: 5}}
 	var out bytes.Buffer
-	if err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
+	if err := runUpgradeWith(t, context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
 		t.Fatalf("bare dev-build upgrade: %v", err)
 	}
 	if !inst.called {
@@ -573,7 +573,7 @@ func TestRunUpgradeLatestTagErrorStopsPipeline(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(t, context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil || !strings.Contains(err.Error(), "feed unreachable") {
 		t.Fatalf("expected latest-lookup error to propagate, got %v", err)
 	}
@@ -590,6 +590,7 @@ func TestRunUpgradeLatestTagErrorStopsPipeline(t *testing.T) {
 // this also pins that a clean open yields the ahead version. The invocation's
 // event carries the schema versions the refusal was decided from.
 func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *testing.T) {
+	t.Parallel()
 	_, ws := initBootstrapTestRepo(t)
 	current, err := version.Get()
 	if err != nil {
@@ -597,7 +598,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	}
 	ahead := current.Schema.Max + 1
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -613,7 +614,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 	}
 	// The precondition the case is about: the ahead workspace opens cleanly, so
 	// the version below comes from a clean open, not from a schema-ahead refusal.
-	ro, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	ro, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("read-only open of the ahead workspace: %v; want a clean open", err)
 	}
@@ -623,7 +624,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 
 	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
 	inst := &stubInstaller{}
-	facts, err := runUpgradeRecorded(t, workspaceSchemaReader{ws: ws, env: testEnv()}, []string{"--to", "v0.9.0"}, current, res, inst)
+	facts, err := runUpgradeRecorded(t, workspaceSchemaReader{ws: ws, env: runEnv(t)}, []string{"--to", "v0.9.0"}, current, res, inst)
 
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {

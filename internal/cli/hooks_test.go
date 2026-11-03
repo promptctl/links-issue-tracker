@@ -17,13 +17,13 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := runWsFamily(hooksFamily, context.Background(), &stdout, ws, []string{"install"}); err != nil {
+	if err := runWsFamily(t, hooksFamily, context.Background(), &stdout, ws, []string{"install"}); err != nil {
 		t.Fatalf("hooks install error = %v", err)
 	}
 
@@ -54,7 +54,7 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -68,7 +68,7 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 		t.Fatalf("WriteFile(pre-push) error = %v", err)
 	}
 
-	if err := runHooksInstall(new(bytes.Buffer), ws, nil); err != nil {
+	if err := runHooksInstall(t, new(bytes.Buffer), ws, nil); err != nil {
 		t.Fatalf("runHooksInstall() error = %v", err)
 	}
 
@@ -89,7 +89,7 @@ func TestHooksInstallMigratesLegacyMarkers(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -104,7 +104,7 @@ func TestHooksInstallMigratesLegacyMarkers(t *testing.T) {
 		t.Fatalf("WriteFile(legacy pre-push) error = %v", err)
 	}
 
-	if err := runHooksInstall(new(bytes.Buffer), ws, nil); err != nil {
+	if err := runHooksInstall(t, new(bytes.Buffer), ws, nil); err != nil {
 		t.Fatalf("runHooksInstall() error = %v", err)
 	}
 
@@ -125,21 +125,12 @@ func TestHooksInstallMigratesLegacyMarkers(t *testing.T) {
 }
 
 func TestRunHooksViaCLI(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(prevWD)
-	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"hooks", "install"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stdout, []string{"hooks", "install"})); err != nil {
 		t.Fatalf("Run(hooks install) error = %v", err)
 	}
 	output := stdout.String()
@@ -165,23 +156,24 @@ func runGit(t *testing.T, dir string, args ...string) {
 // its first install and re-append the whole section on every install after,
 // growing an executable hook without bound.
 func TestHooksInstallMarkerlessOverrideConverges(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	writeProjectTemplateOverride(t, repo, templates.PrePushHookTemplateName, "echo house-hook\n")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
 
-	if _, err := installHooks(testEnv(), ws); err != nil {
+	if _, err := installHooks(runEnv(t), ws); err != nil {
 		t.Fatalf("installHooks() first run error = %v", err)
 	}
 	hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
 	first := readFileString(t, hookPath)
 
 	for run := 2; run <= 4; run++ {
-		result, err := installHooks(testEnv(), ws)
+		result, err := installHooks(runEnv(t), ws)
 		if err != nil {
 			t.Fatalf("installHooks() run %d error = %v", run, err)
 		}
@@ -204,12 +196,13 @@ func TestHooksInstallMarkerlessOverrideConverges(t *testing.T) {
 // A malformed hook override is refused by name, and the hook on disk is left
 // exactly as the user had it.
 func TestHooksInstallRejectsUnbalancedOverride(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	writeProjectTemplateOverride(t, repo, templates.PrePushHookTemplateName,
 		litHookMarkers.begin+"\necho house-hook\n"+litHookMarkers.end+"\necho trailer\n")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -223,7 +216,7 @@ func TestHooksInstallRejectsUnbalancedOverride(t *testing.T) {
 		t.Fatalf("WriteFile(pre-push) error = %v", err)
 	}
 
-	_, err = installHooks(testEnv(), ws)
+	_, err = installHooks(runEnv(t), ws)
 	if err == nil {
 		t.Fatalf("installHooks() succeeded on an unbalanced override")
 	}

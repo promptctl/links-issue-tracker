@@ -19,7 +19,7 @@ import (
 func notifyTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
-	return workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
+	return workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
 }
 
 // shPath spells path for a hook's sh command line: quoted, and with forward
@@ -36,8 +36,8 @@ func shPath(path string) string {
 // run.
 func enableOwnerNotify(t *testing.T, ws workspace.Info, hook string) {
 	t.Helper()
-	t.Setenv(DisableAutoSyncEnvVar, "0")
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		t.Fatalf("mkdir storage dir: %v", err)
 	}
@@ -118,13 +118,14 @@ func TestOwnerNotifyEventFingerprint(t *testing.T) {
 // the same episode is suppressed by the sent marker, and clearing the kind
 // makes the next detection a new episode that fires again.
 func TestMaybeNotifyOwnerRunsHookOncePerEpisode(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
 
 	ev := ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "push failing", Remote: "origin", Branch: "master"}
-	maybeNotifyOwner(context.Background(), testStderr(t), testEnv(), ws, ev)
-	maybeNotifyOwner(context.Background(), testStderr(t), testEnv(), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
 
 	payload, err := os.ReadFile(sink)
 	if err != nil {
@@ -135,7 +136,7 @@ func TestMaybeNotifyOwnerRunsHookOncePerEpisode(t *testing.T) {
 	}
 
 	clearOwnerNotify(testStderr(t), ws, ownerNotifyPushFailed)
-	maybeNotifyOwner(context.Background(), testStderr(t), testEnv(), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
 	payload, err = os.ReadFile(sink)
 	if err != nil {
 		t.Fatalf("read sink after clear: %v", err)
@@ -149,19 +150,20 @@ func TestMaybeNotifyOwnerRunsHookOncePerEpisode(t *testing.T) {
 // failing hook writes no sent marker, so the next detection retries instead of
 // silently considering the owner informed.
 func TestMaybeNotifyOwnerFailedHookRetries(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, "false")
 
 	ev := ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "push failing", Remote: "origin", Branch: "master"}
-	maybeNotifyOwner(context.Background(), testStderr(t), testEnv(), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
 	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a failed hook still wrote the sent marker (stat err=%v); the owner was never notified", err)
 	}
 
 	// The channel repaired: the very next detection sends.
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
-	maybeNotifyOwner(context.Background(), testStderr(t), testEnv(), ws, ev)
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
 	if _, err := os.Stat(sink); err != nil {
 		t.Fatalf("the detection after a failed hook did not retry: %v", err)
 	}
@@ -171,12 +173,13 @@ func TestMaybeNotifyOwnerFailedHookRetries(t *testing.T) {
 // under LIT_DISABLE_AUTO_SYNC (CI, sandboxes, this test suite's own default)
 // no hook runs, however the config is set.
 func TestMaybeNotifyOwnerHonorsAutoSyncKillSwitch(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
-	maybeNotifyOwner(context.Background(), testStderr(t), testEnv(), ws, ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "s", Remote: "o", Branch: "m"})
+	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "s", Remote: "o", Branch: "m"})
 	if _, err := os.Stat(sink); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the hook ran under the auto-sync kill switch (stat err=%v)", err)
 	}
@@ -189,13 +192,14 @@ func TestMaybeNotifyOwnerHonorsAutoSyncKillSwitch(t *testing.T) {
 // pushOutcomeOf, the real seam, so this also pins that the derivation (not
 // this observer) owns the cancellation class.
 func TestObservePushOutcomeForOwner(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	ctx := context.Background()
 
 	failed := pushOutcomeRecord{Decision: pushDecisionError, Reason: "remote unreachable", Remote: "origin", Branch: "master"}
-	observePushOutcomeForOwner(ctx, testStderr(t), testEnv(), ws, failed)
+	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, failed)
 	if payload, err := os.ReadFile(sink); err != nil || string(payload) != "push_failed\n" {
 		t.Fatalf("failed push did not notify exactly once: payload=%q err=%v", payload, err)
 	}
@@ -203,7 +207,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 		t.Fatalf("failed push left no episode marker: %v", err)
 	}
 
-	observePushOutcomeForOwner(ctx, testStderr(t), testEnv(), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
+	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
 	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a landed push did not end the episode (stat err=%v)", err)
 	}
@@ -212,7 +216,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	if cancelled.Decision != pushDecisionCanceled || cancelled.failed() {
 		t.Fatalf("pushOutcomeOf(canceled) = %+v, want the non-failed canceled decision", cancelled)
 	}
-	observePushOutcomeForOwner(ctx, testStderr(t), testEnv(), ws, cancelled)
+	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, cancelled)
 	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "push_failed") != 1 {
 		t.Fatalf("a cancelled push notified the owner: %q", payload)
 	}
@@ -220,12 +224,12 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	// A push refused over a peer's commits a receive merges neither notifies
 	// nor ends a live episode: the channel is not broken, and it has not been
 	// shown healthy.
-	observePushOutcomeForOwner(ctx, testStderr(t), testEnv(), ws, failed)
+	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, failed)
 	diverged := pushOutcomeOf(syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", receiveMerges: true, pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
 	if diverged.Decision != pushDecisionDiverged || diverged.failed() {
 		t.Fatalf("pushOutcomeOf(diverged) = %+v, want the non-failed diverged decision", diverged)
 	}
-	observePushOutcomeForOwner(ctx, testStderr(t), testEnv(), ws, diverged)
+	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, diverged)
 	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "push_failed") != 2 {
 		t.Fatalf("want the second failure's one notification and none for the diverged push: %q", payload)
 	}

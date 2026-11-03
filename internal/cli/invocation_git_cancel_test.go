@@ -18,6 +18,7 @@ import (
 // A git run on the context dispatch runs under, and ended by that context, is
 // one git.cancels occurrence on the invocation's event, whoever started it.
 func TestInvocationRecordsACancelledGit(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}

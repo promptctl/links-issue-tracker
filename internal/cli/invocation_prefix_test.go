@@ -9,7 +9,7 @@ import (
 
 func resolveForTest(t *testing.T, repo string) workspace.Info {
 	t.Helper()
-	info, err := workspace.Resolve(testEnv(), repo)
+	info, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -21,6 +21,7 @@ func resolveForTest(t *testing.T, repo string) workspace.Info {
 // rules write differently rewrote it. Each says how long it queued for the
 // lock, and which arm of PrefixState the prefix took.
 func TestResolvingTheWorkspaceSaysWhatItDidToConfig(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	settle := func(want string) map[string]any {
@@ -60,6 +61,7 @@ func TestResolvingTheWorkspaceSaysWhatItDidToConfig(t *testing.T) {
 // A resolution that fails holding the config lock still says how long it
 // queued for it, and records no settle, since it settled nothing.
 func TestAFailedResolutionStillSaysItQueuedForTheConfigLock(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	info := resolveForTest(t, repo)
@@ -90,6 +92,7 @@ func TestAFailedResolutionStillSaysItQueuedForTheConfigLock(t *testing.T) {
 // command that needed to mint says it was refused and why; one that minted
 // says it was not.
 func TestAMintRefusalIsOnTheEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	_, _, runLit := storedIllegalPrefixWorkspace(t)
 	if _, err := runLit("new", "--type", "epic", "--title", "probe", "--topic", "probe"); err == nil {
@@ -115,6 +118,7 @@ func TestAMintRefusalIsOnTheEvent(t *testing.T) {
 // doctor and prefix set put the id-prefix census they took on the event, and
 // prefix set --apply says how long it queued for the config lock.
 func TestTheIDPrefixCensusIsOnTheEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	newEpicInDir(t, repo, "counted")

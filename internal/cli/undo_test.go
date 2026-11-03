@@ -21,6 +21,7 @@ func listedWrite(t *testing.T, listing string) string {
 // what it put back and which writes undo the undo, and the command's event
 // carries what it decided.
 func TestUndoRevertPutsAReparentBackThroughTheCommandLine(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	from := newEpicInDir(t, repo, "from")
@@ -76,6 +77,7 @@ func landedWrites(t *testing.T, out string) []string {
 // nets to nothing, so the state asked for already holds; a lifecycle write is
 // refused as the command issued.
 func TestUndoRevertAnswersOnItsReasons(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "epic")
@@ -116,6 +118,7 @@ func TestUndoRevertAnswersOnItsReasons(t *testing.T) {
 
 // A --writes slot with no write id is refused in the flag's own terms.
 func TestUndoRevertRefusesAnEmptyWriteSlotByItsFlag(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	_, err := runCLIInDirAllowError(t, repo, "undo", "revert", "--writes", "abc,,def")

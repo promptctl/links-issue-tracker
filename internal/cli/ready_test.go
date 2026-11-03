@@ -22,13 +22,13 @@ import (
 
 func newTestCLIApp(t testing.TB) *app.App {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
-	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
+	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 	ctx := context.Background()
 	databasePath := storeTemplate.Copy(t)
 	workspaceRoot := filepath.Dir(databasePath)
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, databasePath, "test-workspace-id")
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, databasePath, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -44,7 +44,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 		RootDir:     workspaceRoot,
 		WorkspaceID: "test-workspace-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(testEnv(), repositoryOf(t, workspaceRoot), checkoutRoot(t, workspaceRoot)), Project: testProject(checkoutRoot(t, workspaceRoot)),
+		Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, workspaceRoot), checkoutRoot(t, workspaceRoot)), Project: testProject(t, checkoutRoot(t, workspaceRoot)),
 	}, st, stream)
 }
 
@@ -181,7 +181,7 @@ func (h readyTestHarness) addDependencyWithinEpic(dependentID, dependencyID stri
 // read real domain values rather than re-parsing text. [LAW:single-enforcer]
 func (h readyTestHarness) runWorkableAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, rf)
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(h.t), h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
@@ -191,7 +191,7 @@ func (h readyTestHarness) runWorkableAnnotated(rf workableFilter, limit int) []a
 func (h readyTestHarness) runWorkableText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runWorkable(h.ctx, &stdout, h.ap, args, backlogView); err != nil {
+	if err := runWorkable(h.t, h.ctx, &stdout, h.ap, args, backlogView); err != nil {
 		h.t.Fatalf("runBacklog(%v) error = %v", args, err)
 	}
 	return stdout.String()
@@ -200,7 +200,7 @@ func (h readyTestHarness) runWorkableText(args ...string) string {
 func (h readyTestHarness) runWorkableErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runWorkable(h.ctx, &stdout, h.ap, args, backlogView)
+	return runWorkable(h.t, h.ctx, &stdout, h.ap, args, backlogView)
 }
 
 func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (annotation.Annotation, bool) {
@@ -213,6 +213,7 @@ func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (
 }
 
 func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	// Each leaf in its own lane, so the dependency edge is the one thing that
@@ -284,6 +285,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 // — "is this ticket ready" through ClassifyReadiness — not the annotator's
 // internals, so any implementation honoring one definition of unfinished passes.
 func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
+	t.Parallel()
 	blocking := map[string]bool{"live": true, "closed": false, "archived": false, "deleted": false}
 	for _, tc := range []struct {
 		name   string
@@ -295,6 +297,7 @@ func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
 		{name: "deleted", action: model.Delete{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			h := newReadyTestHarness(t)
 			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 			// Distinct lanes: the edge, not lane order, is what gates the dependent.
@@ -340,6 +343,7 @@ func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
 }
 
 func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label string
 		kind  annotation.Kind
@@ -348,6 +352,7 @@ func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
 		{label: "external", kind: annotation.External},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
+			t.Parallel()
 			h := newReadyTestHarness(t)
 
 			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
@@ -394,6 +399,7 @@ func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
 }
 
 func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
@@ -427,6 +433,7 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 }
 
 func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("assignee")
 
@@ -461,6 +468,7 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 }
 
 func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("made_up_field")
 
@@ -477,6 +485,7 @@ func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
 }
 
 func TestRunReadyShowsInProgressSection(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
@@ -504,6 +513,7 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 }
 
 func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
@@ -530,6 +540,7 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 }
 
 func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
@@ -554,6 +565,7 @@ func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 }
 
 func TestRunReadyAnnotatesRankInversion(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	// first is created first (better rank), second is created second (worse rank).
@@ -606,6 +618,7 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 }
 
 func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	// first is created first (better rank), second is created second (worse rank).
@@ -644,6 +657,7 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 }
 
 func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
@@ -676,6 +690,7 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 }
 
 func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
@@ -704,6 +719,7 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 // Epics are never workable entries in `ready`: the data boundary excludes
 // them, so downstream annotation / sort / render code never sees them.
 func TestRunReadyExcludesEpics(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -761,6 +777,7 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 // in an epic, so every row carries one — and it is the epic directly over the
 // leaf: a leaf under a nested epic names the inner epic, not the outer.
 func TestRunReadyCarriesParentEpic(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -848,6 +865,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 // leaves under epic B when A ranks higher than B — even when the leaves were
 // created in interleaved order and their own ranks alternate between epics.
 func TestRunReadyOrdersLeavesInTreeOrder(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -907,6 +925,7 @@ func TestRunReadyOrdersLeavesInTreeOrder(t *testing.T) {
 }
 
 func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")
 
@@ -932,6 +951,7 @@ func (h readyTestHarness) setLabels(issueID string, labels ...string) {
 // prerequisite to start next, and the path auto-advances as each closes.
 // Focus never unblocks a gated path member.
 func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -999,6 +1019,7 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 // The path follows explicit dependency edges transitively: focusing a goal
 // that depends on A, which depends on B, surfaces B (the only ready member).
 func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	// A standing-urgent, unrelated item the focus scope must withhold — it would
@@ -1037,6 +1058,7 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 // Removing the focus label restores the whole pool, and urgent priority alone
 // never propagates to prerequisites.
 func TestFocusRemovalRestoresTheWholePoolAndUrgentDoesNotPropagate(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -1080,6 +1102,7 @@ func TestFocusRemovalRestoresTheWholePoolAndUrgentDoesNotPropagate(t *testing.T)
 // Focusing an epic surfaces its unfinished children: container expansion is a
 // prerequisite edge like any other.
 func TestFocusPathExpandsContainerChildren(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	// A standing-urgent, unrelated item the focus scope must withhold — it would

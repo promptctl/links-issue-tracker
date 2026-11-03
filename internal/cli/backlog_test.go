@@ -84,7 +84,7 @@ func (h backlogTestHarness) runBacklogIDs(args ...string) []string {
 func (h backlogTestHarness) runBacklogText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runWorkable(h.ctx, &stdout, h.ap, args, backlogView); err != nil {
+	if err := runWorkable(h.t, h.ctx, &stdout, h.ap, args, backlogView); err != nil {
 		h.t.Fatalf("runBacklog(%v) error = %v", args, err)
 	}
 	return stdout.String()
@@ -125,6 +125,7 @@ func rankInversionWarning(text string) string {
 // and --limit; one population fixes both, which is why they are pinned together
 // here.
 func TestBacklogUnblocksLinesSurviveTheFocusScope(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	// Creation order is rank order here, and it is load-bearing: offPath is
 	// created FIRST so it outranks the prerequisite it depends on, which is what
@@ -153,6 +154,7 @@ func TestBacklogUnblocksLinesSurviveTheFocusScope(t *testing.T) {
 }
 
 func TestBacklogUnblocksLinesSurviveLimit(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "lim", IssueType: "task", ParentID: epic, Lane: "first"})
@@ -169,6 +171,7 @@ func TestBacklogUnblocksLinesSurviveLimit(t *testing.T) {
 // Backlog must keep blocked items at their ranked position rather than push
 // them to the bottom — that's the whole reason it exists alongside `lit ready`.
 func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A urgent", Topic: "blk", IssueType: "task", Priority: 1, ParentID: epic, Lane: "a"})
@@ -189,6 +192,7 @@ func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 }
 
 func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	// Each in its own lane, so the reason printed is the one the row carries.
@@ -214,6 +218,7 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 }
 
 func TestBacklogTextShowsPreamble(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Anything", Topic: "any", IssueType: "task", Priority: 1, ParentID: epic})
@@ -234,6 +239,7 @@ func TestBacklogTextShowsPreamble(t *testing.T) {
 }
 
 func TestBacklogEmptyDataShowsMarker(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	text := h.runBacklogText()
 	if !strings.Contains(text, "(backlog empty)") {
@@ -242,6 +248,7 @@ func TestBacklogEmptyDataShowsMarker(t *testing.T) {
 }
 
 func TestBacklogRespectsLimit(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	for i := 0; i < 5; i++ {
@@ -255,6 +262,7 @@ func TestBacklogRespectsLimit(t *testing.T) {
 }
 
 func TestBacklogIncludesInProgressInline(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
 	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A", Topic: "inp", IssueType: "task", Priority: 1, ParentID: epic, Lane: "a"})
@@ -347,6 +355,7 @@ func isIssueIDToken(s string) bool {
 // next` will serve, so this pins both halves at once, the rendered reason and
 // the pick it explains.
 func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "gate", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "gate", IssueType: "task", Priority: 1, ParentID: epic})
@@ -357,7 +366,7 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 		t.Fatalf("backlog does not say why %s is held back: want %q; got:\n%s", second, want, text)
 	}
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(t), h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -380,6 +389,7 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 // that would pass for a kind nobody phrased.
 // [LAW:one-source-of-truth] [LAW:verifiable-goals]
 func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
+	t.Parallel()
 	for _, kind := range annotation.Kinds() {
 		if kind.ReadinessRole() != annotation.RoleBlocking {
 			continue
@@ -415,6 +425,7 @@ func (h backlogTestHarness) start(id string) {
 // a separate assertion that its own narrowing does not reach the fact, and a
 // mechanism that stops covering one of them fails by name.
 func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// build returns the prerequisite whose row must keep its leverage line,
@@ -491,6 +502,7 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 // whole repo, so it must not move with a flag that only decides what is on
 // screen.
 func TestRankInversionCountIsIndependentOfTheStoreSideNarrowings(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	// The dependent outranks its prerequisite, which is the inversion. It is a
 	// bug so --type task removes its row while leaving the inversion in place.

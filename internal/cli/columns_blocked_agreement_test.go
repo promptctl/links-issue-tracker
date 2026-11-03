@@ -28,7 +28,7 @@ import (
 func blockedCellFromLS(h readyTestHarness, id string) string {
 	h.t.Helper()
 	var out bytes.Buffer
-	if err := runListWithStore(h.ctx, &out, h.ap.Store, workspaceReadyPolicy(testEnv(), h.ap), []string{"--columns", "id,blocked"}); err != nil {
+	if err := runListWithStore(h.t, h.ctx, &out, h.ap.Store, workspaceReadyPolicy(runEnv(h.t), h.ap), []string{"--columns", "id,blocked"}); err != nil {
 		h.t.Fatalf("ls --columns id,blocked: %v", err)
 	}
 	cells := fieldsOf(lineForID(h.t, out.String(), id))
@@ -69,6 +69,7 @@ func blockedCellFromBacklog(h readyTestHarness, id string) (cell, out string) {
 // print `blocked` after a regression removed one of them, so the assertion
 // would survive the bug it exists to catch.
 func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("description")
 
@@ -170,6 +171,7 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 // question too, both surfaces would agree on "-" and only this assertion would
 // notice the column had quietly gone back to meaning less.
 func TestBlockedColumnOnListIsTheRegistrysVerdictNotTheEdges(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: "Epic", Topic: "edge", IssueType: "epic"})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: "First", Topic: "edge", IssueType: "task", ParentID: epic.ID})

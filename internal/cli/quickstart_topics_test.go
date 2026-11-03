@@ -9,33 +9,27 @@ import (
 	"testing"
 )
 
-func chdirTempRepo(t *testing.T) string {
+// tempRepo is a fresh git repo whose runs see an XDG_CONFIG_HOME of their own.
+func tempRepo(t *testing.T) string {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 	return repo
 }
 
-func runLit(t *testing.T, args ...string) (string, error) {
+func runLit(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	var stdout bytes.Buffer
-	err := Run(context.Background(), cwdInvocation(&stdout, &stdout, args))
+	err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stdout, args))
 	return stdout.String(), err
 }
 
 func TestQuickstartBareOutputIsRouter(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	repo := tempRepo(t)
 
-	output, err := runLit(t, "quickstart")
+	output, err := runLit(t, repo, "quickstart")
 	if err != nil {
 		t.Fatalf("Run(quickstart) error = %v", err)
 	}
@@ -55,7 +49,8 @@ func TestQuickstartBareOutputIsRouter(t *testing.T) {
 }
 
 func TestQuickstartTopicPrintsTaskGuidance(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	repo := tempRepo(t)
 
 	// Each topic's guidance must mention the command the topic is about.
 	wantByTopic := map[string]string{
@@ -67,7 +62,7 @@ func TestQuickstartTopicPrintsTaskGuidance(t *testing.T) {
 		"review": "lit verdict",
 	}
 	for topic, want := range wantByTopic {
-		output, err := runLit(t, "quickstart", topic)
+		output, err := runLit(t, repo, "quickstart", topic)
 		if err != nil {
 			t.Fatalf("Run(quickstart %s) error = %v", topic, err)
 		}
@@ -81,9 +76,10 @@ func TestQuickstartTopicPrintsTaskGuidance(t *testing.T) {
 }
 
 func TestQuickstartUnknownTopicErrors(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	repo := tempRepo(t)
 
-	_, err := runLit(t, "quickstart", "bogus")
+	_, err := runLit(t, repo, "quickstart", "bogus")
 	if err == nil {
 		t.Fatal("Run(quickstart bogus) expected error, got nil")
 	}
@@ -93,21 +89,23 @@ func TestQuickstartUnknownTopicErrors(t *testing.T) {
 }
 
 func TestQuickstartTopicRejectsFlags(t *testing.T) {
-	chdirTempRepo(t)
+	t.Parallel()
+	repo := tempRepo(t)
 
 	for _, args := range [][]string{
 		{"quickstart", "work", "--refresh"},
 		{"quickstart", "work", "--eject"},
 	} {
-		if _, err := runLit(t, args...); err == nil {
+		if _, err := runLit(t, repo, args...); err == nil {
 			t.Fatalf("Run(%v) expected error, got nil", args)
 		}
 	}
 }
 
 func TestQuickstartSoilSectionOnRouterOnly(t *testing.T) {
+	t.Parallel()
 	xdg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdg)
+	setRunEnv(t, "XDG_CONFIG_HOME", xdg)
 	configDir := filepath.Join(xdg, "links-issue-tracker")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(config dir) error = %v", err)
@@ -117,23 +115,15 @@ func TestQuickstartSoilSectionOnRouterOnly(t *testing.T) {
 	}
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
-	router, err := runLit(t, "quickstart")
+	router, err := runLit(t, repo, "quickstart")
 	if err != nil {
 		t.Fatalf("Run(quickstart) error = %v", err)
 	}
 	if !strings.Contains(router, "## Soil") {
 		t.Fatalf("router output with soil_mode=true missing Soil section:\n%s", router)
 	}
-	topic, err := runLit(t, "quickstart", "work")
+	topic, err := runLit(t, repo, "quickstart", "work")
 	if err != nil {
 		t.Fatalf("Run(quickstart work) error = %v", err)
 	}
@@ -143,7 +133,8 @@ func TestQuickstartSoilSectionOnRouterOnly(t *testing.T) {
 }
 
 func TestQuickstartTopicHonorsProjectOverride(t *testing.T) {
-	repo := chdirTempRepo(t)
+	t.Parallel()
+	repo := tempRepo(t)
 
 	overridePath := filepath.Join(repo, ".lit", "templates", "quickstart-work.md")
 	if err := os.MkdirAll(filepath.Dir(overridePath), 0o755); err != nil {
@@ -153,7 +144,7 @@ func TestQuickstartTopicHonorsProjectOverride(t *testing.T) {
 		t.Fatalf("WriteFile(override) error = %v", err)
 	}
 
-	output, err := runLit(t, "quickstart", "work")
+	output, err := runLit(t, repo, "quickstart", "work")
 	if err != nil {
 		t.Fatalf("Run(quickstart work) error = %v", err)
 	}

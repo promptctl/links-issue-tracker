@@ -20,6 +20,7 @@ import (
 // quadratically down the epic: the tenth child restating the nine facts its
 // nine predecessors had each already stated.
 func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "seq", IssueType: "epic", Priority: 1})
 	var children []string
@@ -56,6 +57,7 @@ func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
 // The epic line describes an epic, not a row. Ten siblings share one epic and
 // are owed one epic line.
 func TestBacklogNamesAnEpicOncePerRun(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Shared Epic", Topic: "run", IssueType: "epic", Priority: 1})
 	for _, title := range []string{"First", "Second", "Third"} {
@@ -73,6 +75,7 @@ func TestBacklogNamesAnEpicOncePerRun(t *testing.T) {
 // The claim line answers "who holds this lane and how is it going". That is one
 // fact about the lane.
 func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Claimed Epic", Topic: "claim", IssueType: "epic", Priority: 1})
 	for _, title := range []string{"First", "Second", "Third"} {
@@ -81,7 +84,7 @@ func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
 		})
 	}
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(t), h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -118,6 +121,7 @@ func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
 // guess at the second. The renderer is driven directly because the row ORDER is
 // the input under test, and it owes correct output for any order it is handed.
 func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "weave", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A one", Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicA})
@@ -125,7 +129,7 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "weave", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B one", Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicB})
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(t), h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -168,13 +172,14 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 // rank order — must state its own epic, or it reads as part of the one above.
 // It says so whether it follows another epic's run or opens the list.
 func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
+	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "solo", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A one", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicA})
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "solo", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B one, alone in its epic", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicB})
 
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(t), h.ap, workableFilter{})
 	if err != nil {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -213,6 +218,7 @@ func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
 // store will not mint an epic id containing "#": the point is that the
 // comparison cannot depend on that, not that the ids are reachable.
 func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
+	t.Parallel()
 	epicOne := model.Issue{ID: "AB", IssueType: model.TypeEpic, Title: "Epic AB"}
 	epicTwo := model.Issue{ID: "AB#C", IssueType: model.TypeEpic, Title: "Epic AB#C"}
 	rowOne := openLeaf(t, "one", "In lane C#D of AB", "C#D")
@@ -264,6 +270,7 @@ func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
 // every standalone row is a lane of one, and marking them all would put a line
 // back under almost every row.
 func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
+	t.Parallel()
 	epic := model.Issue{ID: "E", IssueType: model.TypeEpic, Title: "Two lanes"}
 	held := openLeaf(t, "held", "In the claimed lane", "one")
 	free := openLeaf(t, "free", "In the unclaimed lane", "two")

@@ -144,8 +144,8 @@ func taughtSurfaceOf(specs []CommandSpec) taughtSurface {
 }
 
 // registrySurface is taughtSurfaceOf over the real registry.
-func registrySurface() taughtSurface {
-	return taughtSurfaceOf(commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil)))
+func registrySurface(t *testing.T) taughtSurface {
+	return taughtSurfaceOf(commandSpecs(context.Background(), dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil)))
 }
 
 // TestTaughtSurfaceReadsRetiredNotHidden pins the field the projection reads,
@@ -153,6 +153,7 @@ func registrySurface() taughtSurface {
 // hidden-but-live rows do: a future filter on Hidden instead of Retired refuses
 // one of them and fails here.
 func TestTaughtSurfaceReadsRetiredNotHidden(t *testing.T) {
+	t.Parallel()
 	surface := taughtSurfaceOf([]CommandSpec{
 		{Name: "visible-live"},
 		{Name: "hidden-live", Hidden: true},
@@ -192,7 +193,8 @@ func TestTaughtSurfaceReadsRetiredNotHidden(t *testing.T) {
 // whose command is retired or unknown. Reintroducing `lit ready` into any
 // template turns this red.
 func TestShippedTemplatesNameOnlyDispatchedCommands(t *testing.T) {
-	surface := registrySurface()
+	t.Parallel()
+	surface := registrySurface(t)
 	for _, name := range templates.Names() {
 		content, err := templates.EmbeddedDefault(name)
 		if err != nil {
@@ -214,7 +216,8 @@ func TestShippedTemplatesNameOnlyDispatchedCommands(t *testing.T) {
 // unknown command are refused, while live commands and subcommands, a
 // positional where a family takes one, and prose mentions of lit pass.
 func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
-	surface := registrySurface()
+	t.Parallel()
+	surface := registrySurface(t)
 	cases := []struct {
 		name     string
 		template string
@@ -239,6 +242,7 @@ func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := undispatchedLitTokens(tc.template, []byte(tc.content), surface)
 			if err != nil {
 				t.Fatalf("undispatchedLitTokens(%q): %v", tc.content, err)
@@ -259,7 +263,8 @@ func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 // behavior — the retirement error naming the command — not which closure the
 // row happens to hold. [LAW:behavior-not-structure]
 func TestRetiredSpecsStayCoherent(t *testing.T) {
-	for _, spec := range commandSpecs(context.Background(), cwdInvocation(io.Discard, io.Discard, nil)) {
+	t.Parallel()
+	for _, spec := range commandSpecs(context.Background(), dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil)) {
 		if !spec.Retired {
 			continue
 		}

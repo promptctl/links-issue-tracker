@@ -24,33 +24,22 @@ func testIssuePrefix(t testing.TB, raw string) workspace.PrefixState {
 }
 
 // initRepoForPrefixTest stamps a fresh git repo + lit init in a temp dir and
-// returns the repo path. The returned cleanup restores cwd; tests run inside
-// the repo for the duration of the test.
+// returns the repo path and a runner that runs lit inside it.
 func initRepoForPrefixTest(t *testing.T) (repo string, runLit func(args ...string) (stdout string, err error)) {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex"))
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "HOME", t.TempDir())
 	repo = t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var initBuf bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&initBuf, &initBuf, []string{"init", "--skip-hooks"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &initBuf, &initBuf, []string{"init", "--skip-hooks"})); err != nil {
 		t.Fatalf("Run(init) error = %v\n%s", err, initBuf.String())
 	}
 
 	runLit = func(args ...string) (string, error) {
 		var buf bytes.Buffer
-		err := Run(context.Background(), cwdInvocation(&buf, &buf, args))
+		err := Run(context.Background(), dirInvocation(t, repo, &buf, &buf, args))
 		return buf.String(), err
 	}
 	return repo, runLit
@@ -79,6 +68,7 @@ func issueIDFromNew(out string) string {
 }
 
 func TestPrefixSetPreviewDoesNotWriteConfig(t *testing.T) {
+	t.Parallel()
 	repo, runLit := initRepoForPrefixTest(t)
 	configPath := filepath.Join(repo, ".git", "links", "config.json")
 	before, err := os.ReadFile(configPath)
@@ -107,6 +97,7 @@ func TestPrefixSetPreviewDoesNotWriteConfig(t *testing.T) {
 }
 
 func TestPrefixSetApplyWritesConfigAndOldIDsSurvive(t *testing.T) {
+	t.Parallel()
 	repo, runLit := initRepoForPrefixTest(t)
 	configPath := filepath.Join(repo, ".git", "links", "config.json")
 
@@ -167,6 +158,7 @@ func TestPrefixSetApplyWritesConfigAndOldIDsSurvive(t *testing.T) {
 }
 
 func TestPrefixSetIdempotentWhenAlreadyCurrent(t *testing.T) {
+	t.Parallel()
 	_, runLit := initRepoForPrefixTest(t)
 
 	wsOut, err := runLit("workspace")
@@ -196,8 +188,9 @@ func TestPrefixSetIdempotentWhenAlreadyCurrent(t *testing.T) {
 // prefix reports the prefix its own write replaced, not the one it resolved:
 // reporting the stale one names a value config.json no longer held.
 func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
+	t.Parallel()
 	repo, _ := initRepoForPrefixTest(t)
-	stale, err := workspace.Resolve(testEnv(), repo)
+	stale, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -212,7 +205,7 @@ func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 		t.Fatalf("Parse(--apply) error = %v", err)
 	}
 	var out bytes.Buffer
-	if err := leaf.work(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), stale, []string{"newproj"}); err != nil {
+	if err := leaf.work(underInvocation(context.Background()), dirInvocation(t, repo, &out, &out, nil), stale, []string{"newproj"}); err != nil {
 		t.Fatalf("prefix set --apply error = %v\n%s", err, out.String())
 	}
 	if want := "issue_prefix: between -> newproj (applied)"; !strings.Contains(out.String(), want) {
@@ -221,6 +214,7 @@ func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 }
 
 func TestPrefixSetRejectsInvalidPrefix(t *testing.T) {
+	t.Parallel()
 	_, runLit := initRepoForPrefixTest(t)
 
 	out, err := runLit("prefix", "set", "ab", "--apply")
@@ -246,6 +240,7 @@ func TestPrefixSetRejectsInvalidPrefix(t *testing.T) {
 }
 
 func TestPrefixSetRejectsExtraPositionalArgs(t *testing.T) {
+	t.Parallel()
 	_, runLit := initRepoForPrefixTest(t)
 
 	out, err := runLit("prefix", "set", "newproj", "typo", "--apply")

@@ -22,6 +22,7 @@ func seedTaskUnder(t *testing.T, ctx context.Context, ap *app.App, title, parent
 // still in play, related neighbors, and the dependents the close just unblocked
 // — and omits a sibling that is already closed.
 func TestCloseRendersLiveAdjacency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -43,12 +44,12 @@ func TestCloseRendersLiveAdjacency(t *testing.T) {
 	}
 	// Close the sibling that must not appear as live adjacency.
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{closedSibling}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{closedSibling}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done closedSibling) error = %v", err)
 	}
 
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{focal}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &out, ap, []string{focal}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done focal) error = %v", err)
 	}
 	text := out.String()
@@ -74,13 +75,14 @@ func TestCloseRendersLiveAdjacency(t *testing.T) {
 // ticket lives inside an epic — so that is the only group a lonely close
 // renders.
 func TestCloseWithNoAdjacencyPrintsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic := seedEpicRaw(t, ctx, ap, "Lonely epic", "redirect")
 	id := seedTaskUnder(t, ctx, ap, "Lonely ticket", epic)
 
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{id, "--resolution", "obsolete"}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &out, ap, []string{id, "--resolution", "obsolete"}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close obsolete) error = %v", err)
 	}
 	text := out.String()
@@ -97,6 +99,7 @@ func TestCloseWithNoAdjacencyPrintsNothing(t *testing.T) {
 // TestCloseAdjacencyOnlyOnFinish pins the gate: a non-closing transition
 // (reopen) renders no adjacency block even when the ticket has live neighbors.
 func TestCloseAdjacencyOnlyOnFinish(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -106,11 +109,11 @@ func TestCloseAdjacencyOnlyOnFinish(t *testing.T) {
 
 	// Drive focal to closed, then reopen it; only the reopen output is inspected.
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{focal}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{focal}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done focal) error = %v", err)
 	}
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{focal}, openSpec); err != nil {
+	if err := runTransition(t, ctx, &out, ap, []string{focal}, openSpec); err != nil {
 		t.Fatalf("runTransition(reopen focal) error = %v", err)
 	}
 	if strings.Contains(out.String(), "siblings:") {

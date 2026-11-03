@@ -28,6 +28,7 @@ func TestCutByPushDeadline(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := cutByPushDeadline(tc.ctx, tc.completionCtx, tc.err)
 			if pushDeadlineCutOf(got) != tc.wantCut {
 				t.Fatalf("cutByPushDeadline() = %v, cut = %t; want cut = %t", got, pushDeadlineCutOf(got), tc.wantCut)
@@ -63,12 +64,13 @@ func cutAtTheDeadline(err error) error {
 // command returns. The mirror's own trigger/reason are set; nothing else about
 // the parent environment is dropped.
 func TestMirrorEnvStripsInheritedTraceRefFile(t *testing.T) {
-	t.Setenv(automationTraceRefFileEnvVar, "/tmp/parent-trace-ref")
-	t.Setenv(automationTriggerEnvVar, "git-pre-push")
-	t.Setenv(automationReasonEnvVar, "parent reason")
-	t.Setenv("LIT_MIRROR_ENV_CANARY", "keep-me")
+	t.Parallel()
+	setRunEnv(t, automationTraceRefFileEnvVar, "/tmp/parent-trace-ref")
+	setRunEnv(t, automationTriggerEnvVar, "git-pre-push")
+	setRunEnv(t, automationReasonEnvVar, "parent reason")
+	setRunEnv(t, "LIT_MIRROR_ENV_CANARY", "keep-me")
 
-	env := mirrorEnv(testEnv()).List()
+	env := mirrorEnv(runEnv(t)).List()
 
 	var trigger, reason, canary string
 	for _, kv := range env {

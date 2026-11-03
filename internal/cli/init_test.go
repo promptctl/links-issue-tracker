@@ -32,6 +32,7 @@ func readFileString(t *testing.T, path string) string {
 // init's event says whether this run built the database: the first init in a
 // repository did, a second one found it there.
 func TestInitEventSaysWhetherItBuiltTheDatabase(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init")
@@ -52,6 +53,7 @@ func TestInitEventSaysWhetherItBuiltTheDatabase(t *testing.T) {
 // init nor a quickstart refresh creates AGENTS.md or CLAUDE.md, and a file the
 // user already owns is left byte-for-byte as it was.
 func TestInitAndRefreshLeaveAgentFilesAlone(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init")
@@ -77,11 +79,12 @@ func TestInitAndRefreshLeaveAgentFilesAlone(t *testing.T) {
 // its event, a write command and a sync command alike; a command that finds it
 // there says it built nothing.
 func TestAnOpenThatBuildsTheDatabaseSaysSoOnItsEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := t.TempDir()
 	runGit(t, dir, "init")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}

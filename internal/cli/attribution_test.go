@@ -35,68 +35,75 @@ func newAttributionIssue(t *testing.T, ap *app.App, title string) string {
 }
 
 func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
-	t.Setenv("USER", "shell-user")
-	t.Setenv("CLAUDE_CODE_SESSION_ID", attributionSessionID)
+	t.Parallel()
+	setRunEnv(t, "USER", "shell-user")
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", attributionSessionID)
 	ctx := context.Background()
 	want := attributionWantActor()
 
 	t.Run("label add", func(t *testing.T) {
+		t.Parallel()
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "label target")
 		var out bytes.Buffer
-		if err := runLabelAdd(ctx, &out, ap, []string{id, "urgent"}); err != nil {
+		if err := runLeaf(t, labelAddLeaf(), ctx, &out, ap, []string{id, "urgent"}); err != nil {
 			t.Fatalf("runLabelAdd error = %v", err)
 		}
 		assertLabelActor(t, ap, id, "urgent", want)
 	})
 
 	t.Run("parent set", func(t *testing.T) {
+		t.Parallel()
 		ap := newTestCLIApp(t)
 		child := newAttributionIssue(t, ap, "child")
 		parent := seedEpicRaw(t, context.Background(), ap, "parent", "attribution")
 		var out bytes.Buffer
-		if err := runParentSet(ctx, &out, ap, []string{"--child", child, "--parent", parent}); err != nil {
+		if err := runLeaf(t, parentSetLeaf(), ctx, &out, ap, []string{"--child", child, "--parent", parent}); err != nil {
 			t.Fatalf("runParentSet error = %v", err)
 		}
 		assertRelationActor(t, ap, child, model.RelParentChild, want)
 	})
 
 	t.Run("dep add", func(t *testing.T) {
+		t.Parallel()
 		ap := newTestCLIApp(t)
 		blocked := newAttributionIssue(t, ap, "blocked")
 		blocker := newAttributionIssue(t, ap, "blocker")
 		var out bytes.Buffer
-		if err := runDepAdd(ctx, &out, ap, []string{blocked, "--blocked-by", blocker}); err != nil {
+		if err := runLeaf(t, depAddLeaf(), ctx, &out, ap, []string{blocked, "--blocked-by", blocker}); err != nil {
 			t.Fatalf("runDepAdd error = %v", err)
 		}
 		assertRelationActor(t, ap, blocked, model.RelBlockedBy, want)
 	})
 
 	t.Run("bulk label add", func(t *testing.T) {
+		t.Parallel()
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "bulk label target")
 		var out bytes.Buffer
-		if err := runBulkLabel(ctx, &out, ap, []string{"add", "--ids", id, "--label", "urgent"}); err != nil {
+		if err := runLeaf(t, bulkLabelLeaf(), ctx, &out, ap, []string{"add", "--ids", id, "--label", "urgent"}); err != nil {
 			t.Fatalf("runBulkLabel error = %v", err)
 		}
 		assertLabelActor(t, ap, id, "urgent", want)
 	})
 
 	t.Run("bulk close", func(t *testing.T) {
+		t.Parallel()
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "bulk close target")
 		var out bytes.Buffer
-		if err := runBulkClose(ctx, &out, ap, []string{"--ids", id, "--resolution", "obsolete", "--reason", "done"}); err != nil {
+		if err := runLeaf(t, bulkTransitionLeaf(closeSpec)(), ctx, &out, ap, []string{"--ids", id, "--resolution", "obsolete", "--reason", "done"}); err != nil {
 			t.Fatalf("runBulkClose error = %v", err)
 		}
 		assertCloseEventActor(t, ap, id, want)
 	})
 
 	t.Run("bulk comment", func(t *testing.T) {
+		t.Parallel()
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "bulk comment target")
 		var out bytes.Buffer
-		if err := runLeaf(bulkCommentLeaf(), ctx, &out, ap, []string{"--ids", id, "--body", "note"}); err != nil {
+		if err := runLeaf(t, bulkCommentLeaf(), ctx, &out, ap, []string{"--ids", id, "--body", "note"}); err != nil {
 			t.Fatalf("bulk comment error = %v", err)
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, id)

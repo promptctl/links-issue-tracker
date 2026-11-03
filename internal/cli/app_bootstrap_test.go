@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -15,21 +14,13 @@ import (
 )
 
 func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	before := doltHead(t, ws)
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"ls"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stdout, []string{"ls"})); err != nil {
 		t.Fatalf("Run(ls) error = %v", err)
 	}
 
@@ -48,7 +39,7 @@ func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
 // migration gate.
 func doltHead(t *testing.T, ws workspace.Info) string {
 	t.Helper()
-	dump, err := store.DumpRaw(context.Background(), testEnv(), testStderr(t), ws.DatabasePath, ws.WorkspaceID)
+	dump, err := store.DumpRaw(context.Background(), runEnv(t), testStderr(t), ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("read HEAD of %s: %v", ws.DatabasePath, err)
 	}
@@ -60,25 +51,16 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"init", "--skip-hooks"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stdout, []string{"init", "--skip-hooks"})); err != nil {
 		t.Fatalf("Run(init --skip-hooks) error = %v", err)
 	}
 
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
-	st, err := engine.Open(context.Background(), testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -101,6 +83,7 @@ func TestResolveDoctorAccessMode(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := resolveDoctorAccessMode(tc.args)
 			if got != tc.want {
 				t.Fatalf("resolveDoctorAccessMode(%v) = %v, want %v", tc.args, got, tc.want)
@@ -141,6 +124,7 @@ func TestCommandFamilyResolve(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := tc.family.resolve(underInvocation(context.Background()), tc.args)
 			if tc.wantHelpUsage != "" {
 				var help HelpRequestedError

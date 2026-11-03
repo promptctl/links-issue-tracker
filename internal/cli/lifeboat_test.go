@@ -21,7 +21,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
 	canonical := filepath.Join(root, "dolt")
-	st, err := engine.Open(context.Background(), testEnv(), testStderr(t), engine.ReadWrite, canonical, "test-workspace-id")
+	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, canonical, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
@@ -33,7 +33,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 		RootDir:     root,
 		WorkspaceID: "test-workspace-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(testEnv(), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root)),
+		Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root)),
 	}
 }
 
@@ -45,7 +45,7 @@ func TestRunLifeboatRecoverPromotesRecognizedWorkspace(t *testing.T) {
 	ws := seedWorkspace(t)
 	var out bytes.Buffer
 
-	if err := runLifeboatRecover(context.Background(), &out, ws, nil); err != nil {
+	if err := runLifeboatRecover(t, context.Background(), &out, ws, nil); err != nil {
 		t.Fatalf("runLifeboatRecover: %v", err)
 	}
 	if !strings.Contains(out.String(), "recovered:") {
@@ -76,7 +76,7 @@ func TestRunLifeboatRecoverRejectsExtraArgs(t *testing.T) {
 	t.Parallel()
 	ws := seedWorkspace(t)
 	var out bytes.Buffer
-	if err := runLifeboatRecover(context.Background(), &out, ws, []string{"unexpected"}); err == nil {
+	if err := runLifeboatRecover(t, context.Background(), &out, ws, []string{"unexpected"}); err == nil {
 		t.Fatal("expected a usage error for extra arguments")
 	}
 }
@@ -121,7 +121,7 @@ func dropFieldFedBy(m *store.ShapeMapping, table, column string) bool {
 // a known-valid mapping to drive the operator path's wiring without hand-authoring.
 func mappingForWorkspace(t *testing.T, ws workspace.Info) store.ShapeMapping {
 	t.Helper()
-	dump, err := store.DumpRaw(context.Background(), testEnv(), testStderr(t), ws.DatabasePath, ws.WorkspaceID)
+	dump, err := store.DumpRaw(context.Background(), runEnv(t), testStderr(t), ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("dump workspace: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
 	path := writeMappingFile(t, mappingForWorkspace(t, ws))
 
 	var out bytes.Buffer
-	if err := runLifeboatRecover(context.Background(), &out, ws, []string{"--mapping", path}); err != nil {
+	if err := runLifeboatRecover(t, context.Background(), &out, ws, []string{"--mapping", path}); err != nil {
 		t.Fatalf("runLifeboatRecover --mapping: %v", err)
 	}
 	if !strings.Contains(out.String(), "recovered:") {
@@ -156,6 +156,7 @@ func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
 // parse, before the workspace opens: outside any workspace the refusal is the
 // same, and the invocation's event records the usage exit.
 func TestRunLifeboatRecoverMissingMappingFile(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	missing := filepath.Join(t.TempDir(), "absent.json")
 	_, err := runCLIInDirAllowError(t, t.TempDir(), "lifeboat", "recover", "--mapping", missing)
@@ -183,7 +184,7 @@ func TestRunLifeboatRecoverIncompleteMappingNamesGaps(t *testing.T) {
 	path := writeMappingFile(t, m)
 
 	var out bytes.Buffer
-	err := runLifeboatRecover(context.Background(), &out, ws, []string{"--mapping", path})
+	err := runLifeboatRecover(t, context.Background(), &out, ws, []string{"--mapping", path})
 	if err == nil {
 		t.Fatal("expected recovery to fail on a non-total mapping")
 	}

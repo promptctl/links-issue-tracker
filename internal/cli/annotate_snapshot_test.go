@@ -18,6 +18,7 @@ import (
 // the contract is "the row describes what the store says now", and a stale
 // input is that contract's observable case without timing to arrange.
 func TestAnnotateIssuesRowsComeFromTheRelationsFetch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{

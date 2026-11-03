@@ -17,7 +17,7 @@ import (
 func runLs(t *testing.T, ap *app.App, args ...string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := runListWithStore(context.Background(), &buf, ap.Store, noReadyPolicy, args); err != nil {
+	if err := runListWithStore(t, context.Background(), &buf, ap.Store, noReadyPolicy, args); err != nil {
 		t.Fatalf("runListWithStore(%v) error = %v", args, err)
 	}
 	return buf.String()
@@ -28,6 +28,7 @@ func runLs(t *testing.T, ap *app.App, args ...string) string {
 // return those issues, not an empty list, while a bare `lit ls` still shows
 // only active work. [LAW:no-silent-failure]
 func TestListClosedOnlyFilterIsNotSilentlyEmptied(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "filtering", IssueType: model.TypeEpic, Topic: "filtering"})
 	openBug := h.createIssue(storage.CreateIssueInput{Title: "still open", IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})

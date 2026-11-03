@@ -23,7 +23,7 @@ func parsedDowngradeFlags(t *testing.T, args []string) downgradeDeclaration {
 	t.Helper()
 	d := downgradeLeafWith(&stubResolver{}, &stubInstaller{}, fixedBinPath("/p/lit", nil))
 	var out bytes.Buffer
-	if _, err := parseLeaf(underInvocation(context.Background()), d.leaf, args, cwdInvocation(&out, &out, nil)); err != nil {
+	if _, err := parseLeaf(underInvocation(context.Background()), d.leaf, args, dirInvocation(t, t.TempDir(), &out, &out, nil)); err != nil {
 		t.Fatalf("parseLeaf(%q): %v", args, err)
 	}
 	return d
@@ -88,7 +88,7 @@ func TestUpgradeFormOfRefusesRemoteBesideTo(t *testing.T) {
 	parse := func(args []string) upgradeDeclaration {
 		d := upgradeLeafWith(&stubResolver{}, &stubInstaller{}, fixedBinPath("/p/lit", nil))
 		var out bytes.Buffer
-		if _, err := parseLeaf(underInvocation(context.Background()), d.leaf, args, cwdInvocation(&out, &out, nil)); err != nil {
+		if _, err := parseLeaf(underInvocation(context.Background()), d.leaf, args, dirInvocation(t, t.TempDir(), &out, &out, nil)); err != nil {
 			t.Fatalf("parseLeaf(%q): %v", args, err)
 		}
 		return d
@@ -154,7 +154,7 @@ func runRecorded(t *testing.T, out *bytes.Buffer, work func(ctx context.Context,
 	t.Helper()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	err := work(ctx, cwdInvocation(out, out, nil))
+	err := work(ctx, dirInvocation(t, t.TempDir(), out, out, nil))
 	ev := recorder.Finish(invocationEnd(time.Now(), err, nil))
 	return writtenFacts(t, ev), ev.Counts, err
 }

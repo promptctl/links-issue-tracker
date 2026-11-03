@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,14 +11,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// Parallelism convention for this package: a test calls t.Parallel() exactly
-// when it is transitively free of process-global mutation — no os.Chdir (the
-// runCLIInDir/chdirTempRepo helpers), no t.Setenv, no os.Stdout swap. The
-// in-process e2e tests fail that test by construction: they point the one
-// process-wide cwd and environment at a per-test repo before calling Run, so
-// two of them overlapping would silently run against each other's workspace.
-// They stay serial until Run accepts its working directory and environment as
-// parameters instead of reading process globals.
+// Parallelism convention for this package: a test calls t.Parallel() unless it
+// swaps a package variable (a store deadline, time.Local, a seam function),
+// which every parallel reader of it would race. A test hands lit its working
+// directory and environment through the Invocation
+// (dirInvocation, setRunEnv) instead of the process's, so two runs overlapping
+// never see each other's workspace; TestNoTestChangesTheProcess keeps any test
+// from changing the process's.
 // [LAW:no-shared-mutable-globals] the process cwd/env is exactly such a global.
 
 // suiteStallDeadline is the deadline this suite runs the mirror's hold and the
@@ -34,6 +34,11 @@ import (
 // figure.
 const suiteStallDeadline = time.Minute
 
+// testMirrorPushDeadlineEnvVar carries a test's push deadline to a mirror it
+// runs as a child of this binary, where store.MirrorPushDeadline is the
+// child's own and no other test reads it.
+const testMirrorPushDeadlineEnvVar = "LIT_TEST_MIRROR_PUSH_DEADLINE"
+
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
 // would spawn the on-change push mirror (via os.Executable(), which under
@@ -47,7 +52,14 @@ func TestMain(m *testing.M) {
 	// Run as that worker rather than as a second copy of the whole suite; the
 	// suite's tests call the receive body directly and never mean to spawn one.
 	if len(os.Args) > 1 && (os.Args[1] == backgroundReceiveSubcommand || os.Args[1] == backgroundMirrorSubcommand) {
-		if err := Run(context.Background(), cwdInvocation(os.Stdout, os.Stderr, os.Args[1:])); err != nil {
+		if deadline, ok := os.LookupEnv(testMirrorPushDeadlineEnvVar); ok {
+			d, err := time.ParseDuration(deadline)
+			if err != nil {
+				panic(testMirrorPushDeadlineEnvVar + ": " + err.Error())
+			}
+			store.MirrorPushDeadline = d
+		}
+		if err := Run(context.Background(), Invocation{Dir: WorkingDirOf(os.Getwd()), Args: os.Args[1:], Env: testEnv(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}); err != nil {
 			os.Exit(WriteCommandError(os.Stderr, err))
 		}
 		os.Exit(0)
@@ -55,27 +67,50 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
-	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cli-state-")
-	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cli-config-")
-	code := dirtemplate.Run(m, storeTemplate)
-	_ = os.RemoveAll(stateHome)
-	_ = os.RemoveAll(configHome)
-	os.Exit(code)
-}
-
-// isolateXDGHome points the XDG base directory key names at a fresh directory
-// for the rest of the process, and the detached workers a test spawns inherit
-// it. Every Run appends its invocation event under XDG_STATE_HOME: what a test
-// run writes belongs in a directory the suite owns, never in the developer's
-// own events file. Every workspace command reads the global config layer under
-// XDG_CONFIG_HOME, so the developer's own settings stay out of the suite too.
-func isolateXDGHome(key, prefix string) string {
-	dir, err := os.MkdirTemp("", prefix)
+	// Every Run appends its invocation event under XDG_STATE_HOME and reads the
+	// global config layer under XDG_CONFIG_HOME, and Dolt reads its own home
+	// in-process on every store open, from the process environment no run's
+	// Env reaches: directories the suite owns keep the developer's events
+	// file, settings and ~/.dolt out of every test, and the detached workers a
+	// test spawns inherit them.
+	var suiteDirs []string
+	for _, home := range []struct{ key, prefix string }{
+		{"XDG_STATE_HOME", "lit-cli-state-"},
+		{"XDG_CONFIG_HOME", "lit-cli-config-"},
+		{"DOLT_ROOT_PATH", "lit-cli-dolt-"},
+	} {
+		dir, err := os.MkdirTemp("", home.prefix)
+		if err != nil {
+			panic("create isolated " + home.key + ": " + err.Error())
+		}
+		if err := os.Setenv(home.key, dir); err != nil {
+			panic("set " + home.key + ": " + err.Error())
+		}
+		suiteDirs = append(suiteDirs, dir)
+	}
+	// The git a test runs, and the git Dolt runs, read the suite's git config
+	// in place of the machine's, so the developer's ~/.gitconfig (signing,
+	// hooks) never reaches a test. HOME itself stays, because the go toolchain
+	// a test runs finds its caches under it. The tests' repositories expect
+	// their first branch to be master, which git's built-in default does not
+	// promise.
+	gitDir, err := os.MkdirTemp("", "lit-cli-git-")
 	if err != nil {
-		panic("create isolated " + key + ": " + err.Error())
+		panic("create isolated git config: " + err.Error())
 	}
-	if err := os.Setenv(key, dir); err != nil {
-		panic("set " + key + ": " + err.Error())
+	suiteDirs = append(suiteDirs, gitDir)
+	gitConfig := filepath.Join(gitDir, "config")
+	if err := os.WriteFile(gitConfig, []byte("[init]\n\tdefaultBranch = master\n"), 0o644); err != nil {
+		panic("write isolated git config: " + err.Error())
 	}
-	return dir
+	for key, value := range map[string]string{"GIT_CONFIG_GLOBAL": gitConfig, "GIT_CONFIG_NOSYSTEM": "1"} {
+		if err := os.Setenv(key, value); err != nil {
+			panic("set " + key + ": " + err.Error())
+		}
+	}
+	code := dirtemplate.Run(m, storeTemplate)
+	for _, dir := range suiteDirs {
+		_ = os.RemoveAll(dir)
+	}
+	os.Exit(code)
 }

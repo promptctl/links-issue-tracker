@@ -35,6 +35,7 @@ func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, 
 // through. The gate is ranked below both children, so rank cannot be what holds
 // them.
 func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
 	laneA := h.createIssue(storage.CreateIssueInput{Title: "lane a", Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: "a"})
@@ -77,6 +78,7 @@ func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 // and a child that already depends on the gate directly is named once, by its
 // own edge, because the remedy for that edge is on the child.
 func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	outer := h.createIssue(storage.CreateIssueInput{Title: "Outer", Topic: "epic-block", IssueType: "epic"})
 	inner := h.createIssue(storage.CreateIssueInput{Title: "Inner", Topic: "epic-block", IssueType: "epic", ParentID: outer.ID})
@@ -121,6 +123,7 @@ func (h readyTestHarness) dependThenReparent(dependentID, dependencyID, childID,
 // a row to the one blocker it must inherit; every other row inherits none, and
 // pullable lists rows that must be startable.
 func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
+	t.Parallel()
 	// held is checked over every row, and again over the rows labeled view
 	// when it is set, so a blocker no row's epic names is settled too.
 	type expectation struct {
@@ -291,6 +294,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 // Focus on a leaf of a blocked epic puts the epic's gate on the path, so the
 // focused queue offers the gate instead of a goal nobody can start.
 func TestFocusOnAChildOfABlockedEpicReachesTheGate(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
 	goal := h.createIssue(storage.CreateIssueInput{Title: "goal", Topic: "epic-block", IssueType: "task", ParentID: epic.ID})
@@ -320,6 +324,7 @@ func TestFocusOnAChildOfABlockedEpicReachesTheGate(t *testing.T) {
 // the gate, and never the gated child it would have been handed before the gate
 // held.
 func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
 	done := h.createIssue(storage.CreateIssueInput{Title: "done", Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: "done"})
@@ -372,6 +377,7 @@ func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 // exhaustion naming the epic. Either way it never hops to the unrelated ready
 // ticket.
 func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
+	t.Parallel()
 	for depth := 1; depth <= 2; depth++ {
 		t.Run(fmt.Sprintf("the ready ticket %d epic(s) down", depth), func(t *testing.T) {
 			h := newReadyTestHarness(t)

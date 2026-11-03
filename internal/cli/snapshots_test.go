@@ -33,9 +33,9 @@ func firstSnapshotName(out string) string {
 // left out lands on the command's event: here the temp table file a dead Dolt
 // process left.
 func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 	temp := filepath.Join(ws.DatabasePath, "links", ".dolt", dbsnapshot.TempTableFilesDirName)
 	if err := os.MkdirAll(temp, 0o755); err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
 
 	before := countUserSnapshots(t, ws)
 
-	stderr := captureRun(t, "snapshots", "new")
+	stderr := captureRun(t, repo, "snapshots", "new")
 
 	if stderr.Len() != 0 {
 		t.Fatalf("happy path stderr should be empty, got: %q", stderr.String())
@@ -61,15 +61,15 @@ func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
 }
 
 func TestSnapshotsList_NewestFirst(t *testing.T) {
+	t.Parallel()
 	repo, _ := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	for i := 0; i < 3; i++ {
-		captureRun(t, "snapshots", "new")
+		captureRun(t, repo, "snapshots", "new")
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"snapshots", "list"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stdout, []string{"snapshots", "list"})); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
 	// Each row leads with the snapshot name ("<name> <created> <path>"). The
@@ -95,11 +95,11 @@ func TestSnapshotsList_NewestFirst(t *testing.T) {
 }
 
 func TestSnapshotsRestore_RoundTrip(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&newOut, &newOut, []string{"snapshots", "new"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &newOut, &newOut, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
 	// `snapshots new` text prints "<name> <path>".
@@ -114,7 +114,7 @@ func TestSnapshotsRestore_RoundTrip(t *testing.T) {
 		t.Fatalf("write marker: %v", err)
 	}
 
-	stderr := captureRun(t, "snapshots", "restore", snapName)
+	stderr := captureRun(t, repo, "snapshots", "restore", snapName)
 	if stderr.Len() != 0 {
 		t.Fatalf("restore stderr should be empty, got: %q", stderr.String())
 	}
@@ -135,8 +135,8 @@ func TestSnapshotsRestore_RoundTrip(t *testing.T) {
 }
 
 func TestSnapshotsCommands_SilentOnHappyPath(t *testing.T) {
+	t.Parallel()
 	repo, _ := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	cases := [][]string{
 		{"snapshots", "new"},
@@ -145,7 +145,7 @@ func TestSnapshotsCommands_SilentOnHappyPath(t *testing.T) {
 	for _, args := range cases {
 		var stderr bytes.Buffer
 		var stdout bytes.Buffer
-		if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
+		if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, args)); err != nil {
 			t.Fatalf("Run(%v): %v\nstderr=%s", args, err, stderr.String())
 		}
 		if stderr.Len() != 0 {
@@ -155,12 +155,12 @@ func TestSnapshotsCommands_SilentOnHappyPath(t *testing.T) {
 }
 
 func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
+	t.Parallel()
 	// Pin the contract that `lit snapshots new` serializes against the
 	// store-level commit lock. We hold the lock externally, then race a
 	// `snapshots new` against a lock release on a goroutine. If the command
 	// did not acquire the lock, it would complete before the release fires.
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	release, err := store.LockCommitPath(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
@@ -180,7 +180,7 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 
 	start := time.Now()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v\nstderr=%s", err, stderr.String())
 	}
 	elapsed := time.Since(start)
@@ -192,6 +192,7 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 }
 
 func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
+	t.Parallel()
 	// Pin the contract at the command level: the `snapshots new` copy
 	// serializes against engine-lifecycle I/O by holding Dolt's own journal
 	// lock. We hold that lock externally (an
@@ -201,7 +202,6 @@ func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
 	// milliseconds and could interleave with a concurrent open's journal
 	// crash-recovery.
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	release, err := store.LockDoltJournalExclusive(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
@@ -219,7 +219,7 @@ func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
 
 	start := time.Now()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v\nstderr=%s", err, stderr.String())
 	}
 	elapsed := time.Since(start)
@@ -230,13 +230,13 @@ func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
 }
 
 func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
+	t.Parallel()
 	// Pins the contract that the commit lock lives outside the rotated dolt
 	// directory. A lock inside it would be rotated away with the database dir
 	// during Restore, leaving the canonical path empty for another process to
 	// grab while the in-flight restore's release later deletes that other
 	// process's lock file.
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	lockPath := store.CommitLockPath(ws.DatabasePath)
 	if filepath.Dir(lockPath) == filepath.Clean(ws.DatabasePath) {
@@ -246,9 +246,9 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 	// Take a snapshot via the CLI, then restore it. The lock path should be
 	// stable across the rotation (no lock file there afterwards because the
 	// restore released the lock, but the path semantics are unchanged).
-	captureRun(t, "snapshots", "new")
+	captureRun(t, repo, "snapshots", "new")
 	var listOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&listOut, &listOut, []string{"snapshots", "list"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &listOut, &listOut, []string{"snapshots", "list"})); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
 	// `snapshots list` is newest-first; the first row's leading token is the
@@ -258,7 +258,7 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 		t.Fatal("expected at least one snapshot")
 	}
 
-	captureRun(t, "snapshots", "restore", firstName)
+	captureRun(t, repo, "snapshots", "restore", firstName)
 
 	if pathDir := filepath.Dir(store.CommitLockPath(ws.DatabasePath)); pathDir != filepath.Dir(lockPath) {
 		t.Fatalf("lock dir moved across Restore: was %q, now %q", filepath.Dir(lockPath), pathDir)
@@ -274,8 +274,8 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 }
 
 func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	// Baseline after bootstrap migration; data mutations below must not
 	// move this count. The only producers of snapshots are `lit snapshots
@@ -284,8 +284,8 @@ func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {
 	before := snapshotsOnDisk(t, ws)
 
 	// Drive a series of data mutations and reads that must not produce snapshots.
-	captureRun(t, "new", "--title", "test", "--type", "epic", "--topic", "test-topic")
-	captureRun(t, "ls")
+	captureRun(t, repo, "new", "--title", "test", "--type", "epic", "--topic", "test-topic")
+	captureRun(t, repo, "ls")
 
 	after := snapshotsOnDisk(t, ws)
 	for _, name := range after {
@@ -355,12 +355,12 @@ func countUserSnapshots(t *testing.T, ws workspace.Info) int {
 // mid-read or, depending on platform/timing, inconsistent results from mmap'd
 // inodes.
 func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	// Produce a snapshot to restore.
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&newOut, &newOut, []string{"snapshots", "new"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &newOut, &newOut, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
 	snapName := firstSnapshotName(newOut.String())
@@ -370,14 +370,14 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 
 	// Open a long-lived Store that holds the shared workspace lock — the
 	// concrete shape of an `lit ls`/`lit show` reader.
-	reader, err := engine.Open(context.Background(), testEnv(), testStderr(t), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
+	reader, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("OpenForRead: %v", err)
 	}
 	defer reader.Close()
 
 	var stdout, stderr bytes.Buffer
-	err = Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "restore", snapName}))
+	err = Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"snapshots", "restore", snapName}))
 	if err == nil {
 		t.Fatalf("snapshots restore succeeded while a reader was open; expected workspace-busy refusal\nstdout=%s", stdout.String())
 	}
@@ -407,8 +407,8 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 // budget elapses — the same grace every Store open extends to a transient
 // rotation — so this test intentionally takes ~5s of wall clock.
 func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
@@ -423,7 +423,7 @@ func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 	before := rawSnapshotDirEntries(t, ws)
 
 	var stdout, stderr bytes.Buffer
-	err = Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"}))
+	err = Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"snapshots", "new"}))
 	if err == nil {
 		t.Fatalf("snapshots new succeeded while the workspace was exclusively held; expected workspace-busy refusal\nstdout=%s", stdout.String())
 	}
@@ -466,8 +466,8 @@ func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 // as a "restorable" recovery point — worse, the retention prune would then
 // evict a good snapshot to keep it.
 func TestSnapshotsNew_RefusesOnPendingAdoptMarker(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	markerPath := store.AdoptPendingMarkerPath(ws.DatabasePath)
 	if err := os.WriteFile(markerPath, []byte(`{"remote":"origin","branch":"main"}`), 0o644); err != nil {
@@ -478,7 +478,7 @@ func TestSnapshotsNew_RefusesOnPendingAdoptMarker(t *testing.T) {
 	before := rawSnapshotDirEntries(t, ws)
 
 	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"}))
+	err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"snapshots", "new"}))
 	if err == nil {
 		t.Fatalf("snapshots new succeeded on a marker-condemned workspace; expected refusal\nstdout=%s", stdout.String())
 	}
@@ -497,13 +497,13 @@ func TestSnapshotsNew_RefusesOnPendingAdoptMarker(t *testing.T) {
 // since sibling restore takes its argument positionally) is a usage error —
 // not a silently unlabeled snapshot the operator can't find later.
 func TestSnapshotsNew_RejectsPositionalArgs(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	before := rawSnapshotDirEntries(t, ws)
 
 	var stdout, stderr bytes.Buffer
-	err := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new", "nightly-backup"}))
+	err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"snapshots", "new", "nightly-backup"}))
 	if err == nil {
 		t.Fatalf("snapshots new with a positional succeeded; expected usage error\nstdout=%s", stdout.String())
 	}
@@ -538,36 +538,22 @@ func rawSnapshotDirEntries(t *testing.T, ws workspace.Info) []string {
 }
 
 func TestSnapshotsRestore_RequiresName(t *testing.T) {
+	t.Parallel()
 	repo, _ := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	var stdout bytes.Buffer
-	err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"snapshots", "restore"}))
+	err := Run(context.Background(), dirInvocation(t, repo, &stdout, &stdout, []string{"snapshots", "restore"}))
 	if err == nil {
 		t.Fatal("snapshots restore with no name should error")
 	}
 }
 
-// chdir is a t.Helper wrapper that cd's into dir for the test and restores the
-// previous wd on cleanup. captureRun runs the CLI and returns stderr separately
-// so tests can assert silence.
-
-func chdir(t *testing.T, dir string) {
-	t.Helper()
-	prev, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir(%s): %v", dir, err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prev) })
-}
-
-func captureRun(t *testing.T, args ...string) *bytes.Buffer {
+// captureRun runs the CLI in dir and returns stderr separately so tests can
+// assert silence.
+func captureRun(t *testing.T, dir string, args ...string) *bytes.Buffer {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stderr, args)); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stderr, args)); err != nil {
 		t.Fatalf("Run(%v): %v\nstdout=%s\nstderr=%s", args, err, stdout.String(), stderr.String())
 	}
 	return &stderr
@@ -580,8 +566,8 @@ func captureRun(t *testing.T, args ...string) *bytes.Buffer {
 // whose retention tail runs the residue collection under the producer
 // beacon's liveness proof.
 func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	snapshotsDir := dbsnapshot.DirFor(ws.DatabasePath)
 	tmpResidue := filepath.Join(snapshotsDir, "1700000000000000001.tmp")
@@ -599,7 +585,7 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 	// The residue is invisible to the listing (nothing an operator can see or
 	// prune).
 	var listOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&listOut, &listOut, []string{"snapshots", "list"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &listOut, &listOut, []string{"snapshots", "list"})); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
 	if strings.Contains(listOut.String(), "1700000000000000001") {
@@ -607,7 +593,7 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 	}
 
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&newOut, &newOut, []string{"snapshots", "new"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, repo, &newOut, &newOut, []string{"snapshots", "new"})); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
 	if firstSnapshotName(newOut.String()) == "" {
@@ -647,14 +633,14 @@ func TestIsUserSnapshotName(t *testing.T) {
 // record still reaches stdout — hiding it would bait the operator into
 // retaking a snapshot that already sits in the listing.
 func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
+	t.Parallel()
 	repo, ws := initBootstrapTestRepo(t)
-	chdir(t, repo)
 
 	// Fill the user retention budget (default 5) so the next take's prune
 	// must delete the oldest user snapshot — then make that oldest snapshot
 	// undeletable.
 	for range 5 {
-		captureRun(t, "snapshots", "new")
+		captureRun(t, repo, "snapshots", "new")
 	}
 	dir := dbsnapshot.DirFor(ws.DatabasePath)
 	entries, err := os.ReadDir(dir)
@@ -678,7 +664,7 @@ func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
 	fsperm.RestoreTree(t, dir)
 
 	var stdout, stderr bytes.Buffer
-	runErr := Run(context.Background(), cwdInvocation(&stdout, &stderr, []string{"snapshots", "new"}))
+	runErr := Run(context.Background(), dirInvocation(t, repo, &stdout, &stderr, []string{"snapshots", "new"}))
 	if runErr == nil {
 		t.Fatal("expected the failed retention prune to surface as an error")
 	}

@@ -101,7 +101,7 @@ func evidenceIn(t testing.TB, ctx context.Context, ap *app.App) claims.Evidence 
 
 func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, map[string]storage.IssueRelations) {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(h.t), h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -113,6 +113,7 @@ func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]stor
 // would return B.1 (top of rank order); with the checkout's own claim on
 // epic A, it must not.
 func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -145,6 +146,7 @@ func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 // links-claims-1b0p acceptance 4: an expired hold is no hold at all, and a live
 // one must be left exactly where it was.
 func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -178,6 +180,7 @@ func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 // (TestRouteNextResumesOwnInFlightTicket), so epic continuation has to be
 // asked with the lane genuinely finished.
 func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -215,6 +218,7 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 //
 // This outcome is reachable only while the claim is live.
 func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -266,6 +270,7 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 // answer. Nothing blocks epic A here — its lane is merely done — so no route
 // stays: a new ticket would have nothing to clear.
 func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -296,6 +301,7 @@ func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 // nothing stops it. Nothing in it was done and nothing is underway, so the
 // message claims neither.
 func TestExhaustionOfAnEmptiedScopeClaimsNothingWasDone(t *testing.T) {
+	t.Parallel()
 	exhausted := Exhausted{Epics: []string{"test-epic"}}
 	want := "no ready work in epic(s) test-epic (0/0 done) — nothing in it is left to do; `lit next` has nothing ready outside it either"
 	if msg := exhausted.Error(); msg != want {
@@ -308,6 +314,7 @@ func TestExhaustionOfAnEmptiedScopeClaimsNothingWasDone(t *testing.T) {
 // the epic's own id — and make the blocker wait on it, since filing alone
 // leaves the blocked work waiting on what it waited on.
 func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -355,11 +362,11 @@ func followStayRoute(t *testing.T, h readyTestHarness, newFlags []string, blocke
 	t.Helper()
 	var out strings.Builder
 	args := append([]string{"--title", "Clears the blocker", "--topic", "next", "--type", "task"}, newFlags...)
-	if err := runNew(h.ctx, &out, h.ap, args); err != nil {
+	if err := runNew(t, h.ctx, &out, h.ap, args); err != nil {
 		t.Fatalf("lit new %v, as the stay route prints it: %v", newFlags, err)
 	}
 	newID := strings.Fields(out.String())[0]
-	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{blockerID, "--blocked-by", newID}); err != nil {
+	if err := runDepAdd(t, h.ctx, io.Discard, h.ap, []string{blockerID, "--blocked-by", newID}); err != nil {
 		t.Fatalf("lit dep add %s --blocked-by %s, as the stay route prints it: %v", blockerID, newID, err)
 	}
 	return newID
@@ -371,6 +378,7 @@ func followStayRoute(t *testing.T, h readyTestHarness, newFlags []string, blocke
 // blocker never holds back a child it waits on. Both halves are observed, the
 // new child held back before the edge and served after it.
 func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -397,7 +405,7 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	}
 
 	var out strings.Builder
-	if err := runNew(h.ctx, &out, h.ap, []string{"--title", "Clears the blocker", "--topic", "next", "--type", "task", "--parent", epicA.ID, "--top"}); err != nil {
+	if err := runNew(t, h.ctx, &out, h.ap, []string{"--title", "Clears the blocker", "--topic", "next", "--type", "task", "--parent", epicA.ID, "--top"}); err != nil {
 		t.Fatalf("lit new --parent %s --top: %v", epicA.ID, err)
 	}
 	unblocker := strings.Fields(out.String())[0]
@@ -406,7 +414,7 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 		t.Fatalf("%s under blocked epic %s is ready before the edge, want it held back by %s — else the edge below proves nothing", unblocker, epicA.ID, blocker.ID)
 	}
 
-	if err := runDepAdd(h.ctx, io.Discard, h.ap, []string{blocker.ID, "--blocked-by", unblocker}); err != nil {
+	if err := runDepAdd(t, h.ctx, io.Discard, h.ap, []string{blocker.ID, "--blocked-by", unblocker}); err != nil {
 		t.Fatalf("lit dep add %s --blocked-by %s: %v", blocker.ID, unblocker, err)
 	}
 	rows, details, epics = h.gather()
@@ -422,6 +430,7 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 // prints a `lit dep add` lit then refuses. Here the sibling is another
 // checkout's work, so the epic waits on work underway and no route stays.
 func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -451,6 +460,7 @@ func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
 // the epic, so the walk reaches past it to what holds it back, and the stay
 // route names that — an edge lit accepts, followed here as printed.
 func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -489,6 +499,7 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 // pick past the scope is new work: started here from a linked worktree, sent
 // out of the primary clone.
 func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -529,6 +540,7 @@ func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
 // about. They are named, with the way to ask — and our own epic's rows are
 // not among them, since steps 1-2b walk those whether focus is on or not.
 func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -575,6 +587,7 @@ func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 // stayed open, and with one checkout in the repository nothing could ever
 // release it.
 func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
@@ -610,6 +623,7 @@ func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 // either: that type is the global pool's, and sharing it would leave this pick
 // rendering the pool's line verbatim.
 func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -651,6 +665,7 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 // the rule and cannot be satisfied by a fixture that happens to order the two
 // rows the way the assertion guessed.
 func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
@@ -700,6 +715,7 @@ func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 // This is the promise `lit quickstart work` makes in writing — "a fresh
 // session here routes back to it automatically".
 func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -728,6 +744,7 @@ func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 // first here — but from the pool, never as a resumption of a lane this checkout
 // no longer holds.
 func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -759,6 +776,7 @@ func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 // hold, and an in_progress row is servable at all — and either alone leaves
 // the pick unreachable.
 func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -788,6 +806,7 @@ func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 // (TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane), so the live hold is
 // the case where "leave it" holds.
 func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -824,6 +843,7 @@ func onlyBugs(t *testing.T) storage.IssueCriteria {
 // out — so the bug elsewhere is served beneath the ticket it hid, and nothing
 // calls the epic out of work.
 func TestRouteNextNamesTheTicketAFilterHidFromTheHeldScope(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -847,6 +867,7 @@ func TestRouteNextNamesTheTicketAFilterHidFromTheHeldScope(t *testing.T) {
 // With nothing the filter selects ready anywhere, the answer is the hidden
 // ticket alone — still not an exhausted epic.
 func TestRouteNextNarrowedWhenNothingTheFilterSelectsIsReady(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -868,6 +889,7 @@ func TestRouteNextNarrowedWhenNothingTheFilterSelectsIsReady(t *testing.T) {
 // its blocker is classified from the whole queue: the task blocking it is held
 // by another checkout, which the filter does not make "outside this view".
 func TestRouteNextStillReportsAnExhaustedScopeUnderAFilter(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -901,6 +923,7 @@ func TestRouteNextStillReportsAnExhaustedScopeUnderAFilter(t *testing.T) {
 // the filter left out — not "nothing ready outside it". The control drops that
 // task, and the same run then truly has nothing ready outside the epic.
 func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		readyTask  bool
@@ -957,6 +980,7 @@ func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
 // rows it selects. Off the focus path lie a ready bug and a ready task; asked
 // for bugs, the exhausted epic names the bug and not the task.
 func TestRouteNextExhaustionUnderAFilterNamesOnlyWithheldRowsItSelects(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -987,6 +1011,7 @@ func TestRouteNextExhaustionUnderAFilterNamesOnlyWithheldRowsItSelects(t *testin
 // With nothing ready anywhere, NoWork under a filter names the rows it walked
 // past that the filter selects: the bug another checkout holds, not the task.
 func TestRouteNextNoWorkUnderAFilterNamesOnlyRowsItSelects(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
 	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their bug", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: "bug"})
@@ -1012,6 +1037,7 @@ func TestRouteNextNoWorkUnderAFilterNamesOnlyRowsItSelects(t *testing.T) {
 // ticket is a task: the filter emptied the pool, not the backlog, so the answer
 // is Narrowed naming the task. The control adds a ready bug, which is served.
 func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
 	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "task"})
@@ -1035,6 +1061,7 @@ func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
 // waits on a task, which waits on a ready bug. Under --type bug the task is
 // not servable, but the walk still goes through it to the bug it waits on.
 func TestRouteNextFindsADependencyThroughATicketTheFilterHides(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID})
@@ -1062,6 +1089,7 @@ func TestRouteNextFindsADependencyThroughATicketTheFilterHides(t *testing.T) {
 // out the first of them, the next one it selects is still work toward the
 // blocker and is served as such.
 func TestRouteNextServesTheTicketUnderAnEpicBlockerThatTheFilterSelects(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID})
@@ -1090,6 +1118,7 @@ func TestRouteNextServesTheTicketUnderAnEpicBlockerThatTheFilterSelects(t *testi
 // to do.
 // [LAW:no-silent-failure]
 func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1147,6 +1176,7 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 // the outside blocker, which clears when our own ticket does, draws no route
 // to stay.
 func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ranked first", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "x"})
@@ -1188,6 +1218,7 @@ func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.
 // first. It closes only when both do, and the second waits on that event
 // whatever is filed here, so no route to stay is offered against the epic.
 func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		// waitOutside makes E.1 wait on an outside event.
@@ -1236,6 +1267,7 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 // offers the out-of-view one first. Gathering the out-of-view blocker last
 // would push it past the cap on a busy scope, out of the agent's sight.
 func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
@@ -1289,6 +1321,7 @@ func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 // outside. Collected, it would draw a route to stay that files a ticket in our
 // epic and asks for a blocked-by edge lit refuses between two of its tickets.
 func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	earlier := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Earlier in our lane", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "ours"})
@@ -1328,6 +1361,7 @@ func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) 
 // task it never gathered. The diagnostic then knows the id and nothing else,
 // and saying anything about its standing would be invention.
 func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1391,6 +1425,7 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 // dependency as held. That end is held, not awaiting an outside event, so the
 // route to stay is still offered against it.
 func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1448,6 +1483,7 @@ func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 // sentence would be false; and a ticket inside the epic cannot take a blocks
 // edge, so no stay route is offered against it.
 func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		label string
 		note  string
@@ -1484,6 +1520,7 @@ func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
 // for the checkout that started it nor offers it to another as abandoned work,
 // and it serves the plain ticket ranked behind it instead.
 func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		ownsLane bool
@@ -1536,6 +1573,7 @@ func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
 // the outside event. Beside a blocker a ticket could clear, the route comes
 // back, and names that blocker alone.
 func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T) {
+	t.Parallel()
 	// path makes A.2 wait on upstream, the external ticket, by way of a ticket
 	// in epic Y when the row has one, and returns it.
 	type path func(h readyTestHarness, a2, upstream, epicY model.Issue) model.Issue
@@ -1624,6 +1662,7 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 // it still carries is named nowhere, and does not stop the route to stay from
 // offering to clear it.
 func TestExhaustionOffersToClearAStartedBlockerWhateverItStillDependsOn(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1661,6 +1700,7 @@ func TestExhaustionOffersToClearAStartedBlockerWhateverItStillDependsOn(t *testi
 // which is the case ServedFromEpicLane's doc comment actually asserts and the
 // only one whose announcement says the row is somebody's abandoned work.
 func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1696,6 +1736,7 @@ func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 // half of capacityFor that every other expired-foreign test in this file
 // reaches only through an in-progress row.
 func TestRouteNextServesOpenTicketInAnExpiredForeignLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
@@ -1723,6 +1764,7 @@ func TestRouteNextServesOpenTicketInAnExpiredForeignLane(t *testing.T) {
 // checkout's own epic whose claim has expired is nobody's, so step 2 continues
 // into it rather than declaring the epic exhausted.
 func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1778,6 +1820,7 @@ func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 // where a lane belongs, and a table is the only way to see all three shapes
 // fail at once.
 func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	named := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1836,6 +1879,7 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 // naming the lane at all. The lane is built directly, as in the table: no leaf
 // row derives one now that every leaf lives in an epic.
 func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1, read as a lane of one", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -1853,6 +1897,7 @@ func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 // says why ranking them against each other is wrong. Run in both rank orders:
 // a preference for either capacity fails one arm.
 func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		resumeFirst bool
@@ -1901,6 +1946,7 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 // lane, in flight in a lane nobody holds, is offered here even though the
 // global-pool step never sees it.
 func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
@@ -1945,6 +1991,7 @@ func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
 // row is abandoned, so the row is served on that fact alone; the orphan clock
 // does not enter routing at all (capacityFor).
 func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 	}{
@@ -1985,6 +2032,7 @@ func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 // separates this from TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog: same
 // expired own lane, opposite rank, and the pick follows the rank both times.
 func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
@@ -2018,6 +2066,7 @@ func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
 //
 // What must NOT come back is ResumedOwnWork; that is the load-bearing half.
 func TestRouteNextDoesNotAdoptExpiredPublicHistory(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -2045,6 +2094,7 @@ func TestRouteNextDoesNotAdoptExpiredPublicHistory(t *testing.T) {
 // work in flight — a binary older than attribution, or history from the hours
 // before an upgrade — and routing walks around it rather than resuming it.
 func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
@@ -2114,6 +2164,7 @@ func readingOf(t *testing.T, blocker blockerReach) rowReach {
 // message has to say that one row is somebody's live work and the other is
 // merely gated, because those call for different acts.
 func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID, Lane: "held"})
@@ -2170,6 +2221,7 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 // TestNextLeavesTheRowsItWentPastOnTheEvent; this reaches the fourth, a row
 // held by a label on itself.
 func TestNoWorkReportsARowHeldByItself(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
 	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "held", Labels: []string{NeedsDesignLabel}})
@@ -2193,6 +2245,7 @@ func TestNoWorkReportsARowHeldByItself(t *testing.T) {
 // byte-for-byte, because "no ready work" is still the whole truth when there is
 // nothing to say why about.
 func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	rows, details, epics := h.gather()

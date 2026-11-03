@@ -28,6 +28,7 @@ func verdictFacts(t *testing.T) map[string]any {
 // history places each review in the trail by the version it judged, and prints
 // no plan text, current or superseded.
 func TestAVerdictJudgesOnePlanVersion(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, id, _ := statuslineCheckout(t)
 	const first, second = "Add a retry around the push", "Drop the retry; the lease already bounds it"
@@ -89,6 +90,7 @@ func TestAVerdictJudgesOnePlanVersion(t *testing.T) {
 // lit verdict refuses what is not a review of a recorded plan version, and
 // says what it needs.
 func TestVerdictRefusesWhatIsNotAReview(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir, id, _ := statuslineCheckout(t)
 	runCLIInDir(t, dir, "update", id, "--plan", "Cut the pass", "--by", "author")

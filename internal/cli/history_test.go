@@ -23,6 +23,7 @@ import (
 // test [LAW:behavior-not-structure]: it drives genuine edits and asserts on the
 // transitions a reader sees, not on how the events are stored.
 func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -42,13 +43,13 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 		{issue.ID, "--priority", "1", "--by", "editor"},
 	}
 	for _, args := range edits {
-		if err := runUpdate(ctx, &bytes.Buffer{}, ap, args); err != nil {
+		if err := runUpdate(t, ctx, &bytes.Buffer{}, ap, args); err != nil {
 			t.Fatalf("runUpdate(%v) error = %v", args, err)
 		}
 	}
 
 	var stdout bytes.Buffer
-	if err := runHistory(ctx, &stdout, ap, []string{issue.ID}); err != nil {
+	if err := runHistory(t, ctx, &stdout, ap, []string{issue.ID}); err != nil {
 		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
@@ -97,7 +98,7 @@ func seedProseHistory(t *testing.T, ctx context.Context, ap *app.App) string {
 		{issue.ID, "--prompt", "new prompt", "--by", "editor"},
 	}
 	for _, args := range edits {
-		if err := runUpdate(ctx, &bytes.Buffer{}, ap, args); err != nil {
+		if err := runUpdate(t, ctx, &bytes.Buffer{}, ap, args); err != nil {
 			t.Fatalf("runUpdate(%v) error = %v", args, err)
 		}
 	}
@@ -109,12 +110,13 @@ func seedProseHistory(t *testing.T, ctx context.Context, ap *app.App) string {
 // superseded text — nor the current one — is printed in it. A short field
 // beside it keeps its from → to line. [LAW:behavior-not-structure]
 func TestRunHistoryShowsLongTextChangesAsVersions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedProseHistory(t, ctx, ap)
 
 	var stdout bytes.Buffer
-	if err := runHistory(ctx, &stdout, ap, []string{id}); err != nil {
+	if err := runHistory(t, ctx, &stdout, ap, []string{id}); err != nil {
 		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
@@ -142,6 +144,7 @@ func TestRunHistoryShowsLongTextChangesAsVersions(t *testing.T) {
 // numbers is retrievable by that number, bare, so it round-trips into
 // `lit update --description`. Version n+1 is what the n-th change wrote.
 func TestRunHistoryVersionPrintsTheTextThatVersionHeld(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedProseHistory(t, ctx, ap)
@@ -154,7 +157,7 @@ func TestRunHistoryVersionPrintsTheTextThatVersionHeld(t *testing.T) {
 		"prompt@2":      "new prompt\n",
 	} {
 		var stdout bytes.Buffer
-		if err := runHistory(ctx, &stdout, ap, []string{id, "--version", ref}); err != nil {
+		if err := runHistory(t, ctx, &stdout, ap, []string{id, "--version", ref}); err != nil {
 			t.Fatalf("runHistory(--version %s) error = %v", ref, err)
 		}
 		if got := stdout.String(); got != want {
@@ -167,6 +170,7 @@ func TestRunHistoryVersionPrintsTheTextThatVersionHeld(t *testing.T) {
 // one version, its current text, and a version past the ones a field holds is
 // a lookup miss (exit 4) that says how many it does hold.
 func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedProseHistory(t, ctx, ap)
@@ -179,7 +183,7 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runHistory(ctx, &stdout, ap, []string{untouched.ID, "--version", "description@1"}); err != nil || stdout.String() != "only draft\n" {
+	if err := runHistory(t, ctx, &stdout, ap, []string{untouched.ID, "--version", "description@1"}); err != nil || stdout.String() != "only draft\n" {
 		t.Fatalf("runHistory(%s --version description@1) = %q, %v; want the current text", untouched.ID, stdout.String(), err)
 	}
 	for _, tc := range []struct{ id, ref, want string }{
@@ -187,7 +191,7 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 		{untouched.ID, "description@2", "holds 1 version of description"},
 		{untouched.ID, "prompt@1", "holds 0 versions of prompt"},
 	} {
-		err := runHistory(ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
+		err := runHistory(t, ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
 		if ExitCode(err) != ExitNotFound || commandErrorReason(err) != reasonVersionNotFound || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("runHistory(%s --version %s) = exit %d %v, want exit %d naming %q", tc.id, tc.ref, ExitCode(err), err, ExitNotFound, tc.want)
 		}
@@ -203,6 +207,7 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 // from, the revert returns to its number, the emptied field shows -, and the
 // unrecorded current text is still a version --version prints.
 func TestHistoryNumbersEachTextOnce(t *testing.T) {
+	t.Parallel()
 	change := func(from, to string) model.IssueEvent {
 		return model.IssueEvent{Actor: "editor", Reason: "edit", Changes: []model.FieldChange{{Field: "description", From: from, To: to}}}
 	}
@@ -289,6 +294,7 @@ func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
 // and anything else is a usage error —
 // decided before the id is looked up, so it holds for an id that names nothing.
 func TestRunHistoryVersionRejectsAMalformedReference(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedProseHistory(t, ctx, ap)
@@ -304,7 +310,7 @@ func TestRunHistoryVersionRejectsAMalformedReference(t *testing.T) {
 		{id, ""},
 		{"test-missing", "status@1"},
 	} {
-		err := runHistory(ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
+		err := runHistory(t, ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
 		if ExitCode(err) != ExitUsage {
 			t.Fatalf("runHistory(%s --version %q) = exit %d %v, want exit %d", tc.id, tc.ref, ExitCode(err), err, ExitUsage)
 		}
@@ -316,8 +322,9 @@ func TestRunHistoryVersionRejectsAMalformedReference(t *testing.T) {
 // run's event says whether it moved the field: a re-add lands and records
 // nothing.
 func TestRunHistoryListsLabelVerbs(t *testing.T) {
+	t.Parallel()
 	// --by names the actor only when no session identity outranks it.
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -345,7 +352,7 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-re-adder"}, bulkItem, false},
 		{bulkLabelLeaf(), []string{"rm", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-remover"}, bulkItem, true},
 	} {
-		ev, err := recordLeaf(step.verb, ctx, cwdInvocation(&bytes.Buffer{}, io.Discard, nil), ap, step.args)
+		ev, err := recordLeaf(step.verb, ctx, dirInvocation(t, t.TempDir(), &bytes.Buffer{}, io.Discard, nil), ap, step.args)
 		if err != nil {
 			t.Fatalf("%v error = %v", step.args, err)
 		}
@@ -355,7 +362,7 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runHistory(ctx, &stdout, ap, []string{issue.ID}); err != nil {
+	if err := runLeaf(t, historyLeaf(), ctx, &stdout, ap, []string{issue.ID}); err != nil {
 		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
@@ -381,6 +388,7 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 // many trail changes it rendered as vN → vM, and a --version lookup says which
 // ref it asked for and whether the field held it.
 func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic := seedEpicRaw(t, ctx, ap, "History", "history")
@@ -390,11 +398,11 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if err := runUpdate(ctx, io.Discard, ap, []string{issue.ID, "--description", "second"}); err != nil {
+	if err := runUpdate(t, ctx, io.Discard, ap, []string{issue.ID, "--description", "second"}); err != nil {
 		t.Fatalf("update error = %v", err)
 	}
 
-	ev, err := recordLeaf(historyLeaf(), ctx, cwdInvocation(io.Discard, io.Discard, nil), ap, []string{issue.ID})
+	ev, err := recordLeaf(historyLeaf(), ctx, dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil), ap, []string{issue.ID})
 	if err != nil {
 		t.Fatalf("history error = %v", err)
 	}
@@ -414,7 +422,7 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 		number int
 		found  bool
 	}{{"description@2", 2, true}, {"description@3", 3, false}} {
-		ev, err := recordLeaf(historyLeaf(), ctx, cwdInvocation(io.Discard, io.Discard, nil), ap, []string{issue.ID, "--version", tc.ref})
+		ev, err := recordLeaf(historyLeaf(), ctx, dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil), ap, []string{issue.ID, "--version", tc.ref})
 		if tc.found != (err == nil) || (!tc.found && !errors.As(err, new(storage.VersionNotFoundError))) {
 			t.Fatalf("history --version %s error = %v, want found %v", tc.ref, err, tc.found)
 		}

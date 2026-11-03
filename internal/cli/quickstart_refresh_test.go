@@ -15,10 +15,11 @@ import (
 )
 
 func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Parallel()
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -31,31 +32,23 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 		t.Fatalf("WriteFile(pre-push) error = %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
-	first := runQuickstartRefresh(t)
+	first := runQuickstartRefresh(t, repo)
 	if !strings.Contains(first, "Refreshed: pre-push hook") {
 		t.Fatalf("quickstart refresh output = %q, want refreshed summary", first)
 	}
 
-	second := runQuickstartRefresh(t)
+	second := runQuickstartRefresh(t, repo)
 	if !strings.Contains(second, "Up to date: pre-push hook") {
 		t.Fatalf("second quickstart refresh output = %q, want unchanged summary", second)
 	}
 }
 
 func TestQuickstartRefreshReportsIncompatibleHookAsSkipped(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Parallel()
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -68,24 +61,16 @@ func TestQuickstartRefreshReportsIncompatibleHookAsSkipped(t *testing.T) {
 		t.Fatalf("WriteFile(pre-push) error = %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
-	output := runQuickstartRefresh(t)
+	output := runQuickstartRefresh(t, repo)
 	if !strings.Contains(output, "Skipped: pre-push hook (incompatible)") {
 		t.Fatalf("quickstart refresh output = %q, want skipped incompatible", output)
 	}
 }
 
 func TestQuickstartRefreshReportsStaleGlobalOverrideAsCustomizedWithoutOverwriting(t *testing.T) {
+	t.Parallel()
 	xdg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdg)
+	setRunEnv(t, "XDG_CONFIG_HOME", xdg)
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
@@ -98,16 +83,7 @@ func TestQuickstartRefreshReportsStaleGlobalOverrideAsCustomizedWithoutOverwriti
 		t.Fatalf("WriteFile(stale override) error = %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
-	output := runQuickstartRefresh(t)
+	output := runQuickstartRefresh(t, repo)
 	if !strings.Contains(output, "Skipped: quickstart template (customized)") {
 		t.Fatalf("quickstart refresh output = %q, want quickstart skipped customized", output)
 	}
@@ -122,8 +98,9 @@ func TestQuickstartRefreshReportsStaleGlobalOverrideAsCustomizedWithoutOverwriti
 }
 
 func TestQuickstartRefreshReportsCurrentGlobalOverrideAsUnchanged(t *testing.T) {
+	t.Parallel()
 	xdg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdg)
+	setRunEnv(t, "XDG_CONFIG_HOME", xdg)
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
@@ -139,24 +116,16 @@ func TestQuickstartRefreshReportsCurrentGlobalOverrideAsUnchanged(t *testing.T) 
 		t.Fatalf("WriteFile(current override) error = %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
-	output := runQuickstartRefresh(t)
+	output := runQuickstartRefresh(t, repo)
 	if !strings.Contains(output, "Up to date: quickstart template") {
 		t.Fatalf("quickstart refresh output = %q, want quickstart unchanged", output)
 	}
 }
 
 func TestQuickstartRefreshProjectOverrideMasksGlobal(t *testing.T) {
+	t.Parallel()
 	xdg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdg)
+	setRunEnv(t, "XDG_CONFIG_HOME", xdg)
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
@@ -181,24 +150,16 @@ func TestQuickstartRefreshProjectOverrideMasksGlobal(t *testing.T) {
 		t.Fatalf("WriteFile(project override) error = %v", err)
 	}
 
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
-	output := runQuickstartRefresh(t)
+	output := runQuickstartRefresh(t, repo)
 	if !strings.Contains(output, "Up to date: quickstart template") {
 		t.Fatalf("quickstart refresh output = %q, want quickstart unchanged (project layer wins)", output)
 	}
 }
 
 func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
+	t.Parallel()
 	xdg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdg)
+	setRunEnv(t, "XDG_CONFIG_HOME", xdg)
 	configDir := filepath.Join(xdg, "links-issue-tracker")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(config dir) error = %v", err)
@@ -210,7 +171,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	got, err := renderQuickstartGuidance(testEnv(), repo, config.CheckoutProject(testEnv(), pathspec.New(repo)))
+	got, err := renderQuickstartGuidance(runEnv(t), repo, config.CheckoutProject(runEnv(t), pathspec.New(repo)))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() error = %v", err)
 	}
@@ -223,8 +184,8 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 
 	// Verify default (no config) does not include the soil section.
 	xdg2 := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdg2)
-	gotDefault, err := renderQuickstartGuidance(testEnv(), repo, config.CheckoutProject(testEnv(), pathspec.New(repo)))
+	setRunEnv(t, "XDG_CONFIG_HOME", xdg2)
+	gotDefault, err := renderQuickstartGuidance(runEnv(t), repo, config.CheckoutProject(runEnv(t), pathspec.New(repo)))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() default error = %v", err)
 	}
@@ -233,10 +194,10 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	}
 }
 
-func runQuickstartRefresh(t *testing.T) string {
+func runQuickstartRefresh(t *testing.T, dir string) string {
 	t.Helper()
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), cwdInvocation(&stdout, &stdout, []string{"quickstart", "--refresh"})); err != nil {
+	if err := Run(context.Background(), dirInvocation(t, dir, &stdout, &stdout, []string{"quickstart", "--refresh"})); err != nil {
 		t.Fatalf("Run(quickstart --refresh) error = %v", err)
 	}
 	return stdout.String()

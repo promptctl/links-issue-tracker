@@ -39,7 +39,7 @@ func rowPosition(t *testing.T, text, issueID string) int {
 func (h readyTestHarness) runNextRowArgs(args ...string) annotation.AnnotatedIssue {
 	h.t.Helper()
 	text := h.runNextText(args...)
-	gathered, err := gatherWorkableAnnotated(h.ctx, testEnv(), h.ap, workableFilter{})
+	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(h.t), h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
@@ -59,6 +59,7 @@ func (h readyTestHarness) runNextRowArgs(args ...string) annotation.AnnotatedIss
 // derived from the predicate, which would restate the implementation and pass
 // for any implementation, including a wrong one.
 func TestFocusScopeHoldsExactly(t *testing.T) {
+	t.Parallel()
 	onPath := annotation.AnnotatedIssue{Annotations: []annotation.Annotation{{Kind: annotation.FocusPath, Message: "goal-1"}}}
 	offPath := annotation.AnnotatedIssue{Annotations: []annotation.Annotation{{Kind: annotation.OpenDependency, Message: "dep"}}}
 	bare := annotation.AnnotatedIssue{}
@@ -131,6 +132,7 @@ func TestFocusScopeHoldsExactly(t *testing.T) {
 // tell "there is no work" from "there is no work on your path". A partition
 // that dropped it would type-check and read fine.
 func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
+	t.Parallel()
 	row := func(id string, path bool) annotation.AnnotatedIssue {
 		out := annotation.AnnotatedIssue{}
 		out.ID = id
@@ -172,6 +174,7 @@ func rowIDsJoined(rows []annotation.AnnotatedIssue) string {
 // answers over the scope, so the rank a caller sets is the rank the view shows —
 // and the off-path row is named as withheld.
 func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -192,7 +195,7 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 
 	// Ranked to the top of the view it is aimed at, and it lands there.
 	var stdout bytes.Buffer
-	if err := runRank(h.ctx, &stdout, h.ap, []string{late.ID, "--top"}); err != nil {
+	if err := runRank(t, h.ctx, &stdout, h.ap, []string{late.ID, "--top"}); err != nil {
 		t.Fatalf("runRank(--top) error = %v", err)
 	}
 	text := h.runWorkableText()
@@ -208,6 +211,7 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 // The wants are literal sentences for the same reason the scope test uses them:
 // a want rebuilt from focusNotice would agree with whatever focusNotice said.
 func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -277,6 +281,7 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 // dropped row surfaces as a phantom --limit trim on a run that passed no
 // --limit at all.
 func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -297,7 +302,7 @@ func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runWorkable(h.ctx, &stdout, h.ap, nil, dropLast); err != nil {
+	if err := runWorkable(t, h.ctx, &stdout, h.ap, nil, dropLast); err != nil {
 		t.Fatalf("runWorkable(dropLast) error = %v", err)
 	}
 	text := stdout.String()
@@ -311,6 +316,7 @@ func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
 // sentences: a test that rebuilt them from focusNotice would pass whatever
 // focusNotice said, including nothing.
 func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -369,6 +375,7 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 // empty backlog. This is the cell a plain filter gets wrong: both facts render
 // as "(backlog empty)", and an agent told its backlog is empty stops.
 func TestFocusedBacklogSaysWhichEmptinessThisIs(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -400,6 +407,7 @@ func TestFocusedBacklogSaysWhichEmptinessThisIs(t *testing.T) {
 // similar-looking query for the one asked — and the agent would never learn its
 // focused goal was stuck.
 func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -466,6 +474,7 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 // row is itself blocked, so an agent sent to `lit next --all` finds nothing.
 // The sibling test above covers the case where the withheld row IS ready.
 func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -548,6 +557,7 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 // decides where a fresh session goes; it never decides whether your own work is
 // still yours.
 func TestFocusScopeNeverHidesThisCheckoutsOwnWork(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -585,6 +595,7 @@ func TestFocusScopeNeverHidesThisCheckoutsOwnWork(t *testing.T) {
 // focus withheld. Driven through the CLI so the event the run leaves is the one
 // asserted.
 func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	goalEpic := newEpicInDir(t, repo, "Goal epic")
@@ -675,6 +686,7 @@ func sameIDs(fact any, want ...string) bool {
 // first as a ranking bug. A run over the whole queue serves the higher-ranked
 // ticket and claims no scope it did not apply.
 func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -716,6 +728,7 @@ func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
 // on the stopped scope's reason, and not on the ticket the filter hid, which
 // were not drawn from the pool's scope.
 func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic"})
 	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Pool pick", Topic: "next", IssueType: "task", ParentID: epic.ID, Lane: "pick"})
@@ -770,6 +783,7 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 // would hand over the path ticket and never the bug the run asked for, which
 // sits off the path.
 func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Goal epic", Topic: "goal", IssueType: "epic",

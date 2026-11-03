@@ -14,9 +14,10 @@ import (
 // detect that, exit ExitConflict with an unrelated-histories / no-common-ancestor
 // message, and write nothing.
 func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
+	t.Parallel()
 	// Drive sync explicitly; the inline auto-sync must not reconcile out from under
 	// the assertions.
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -100,7 +101,8 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 // issue — exit zero with a "combined" report, and leave the consumer fast-forward-pushable
 // so the remote converges onto the union with NEITHER side's issue dropped.
 func TestReconcileCombineUnionsUnrelatedHistories(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")

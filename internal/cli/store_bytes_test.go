@@ -21,6 +21,7 @@ var numberedBacklogRow = regexp.MustCompile(`(?m)^\s*\d+\. `)
 // started late (after the store open, say) or stopped early fails here, where
 // a non-negative check would pass it.
 func TestAnInvocationsDurationIsItsWallClock(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Measured epic")
@@ -52,6 +53,7 @@ func TestAnInvocationsDurationIsItsWallClock(t *testing.T) {
 // Every seam that runs a command against a store records that store's size:
 // the sync family's, and `ls --at`'s, whose store is the one --at names.
 func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
+	t.Parallel()
 	t.Run("sync", func(t *testing.T) {
 		isolateEvents(t)
 		repo := newInitTestRepo(t)
@@ -75,7 +77,7 @@ func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
 			t.Fatalf("last event = %q, want the receive worker's", ev.Event)
 		}
 		assertStoreMeasured(t, ev)
-		ws, err := workspace.Resolve(testEnv(), consumer)
+		ws, err := workspace.Resolve(runEnv(t), consumer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -110,6 +112,7 @@ func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
 // store of 0 bytes: a store with no chunk store, and one whose chunk store
 // cannot be read.
 func TestAFailedStoreReadingIsNullBytesAndItsReason(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory whatever its mode")
 	}

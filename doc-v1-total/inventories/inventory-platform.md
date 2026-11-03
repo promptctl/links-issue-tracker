@@ -825,7 +825,7 @@ the Justfile or any workflow file in `.github/workflows/`.
   `pipefail` (`tools/testbudget/main.go`).
 - Budgets (`tools/testbudget/budgets.go`):
   - `internal/store` — 440 s
-  - `internal/cli` — 580 s
+  - `internal/cli` — 300 s
   - `cmd/lit` — 50 s
   - `tools/licenses` — 60 s
   - `tools/perfbench` — 45 s

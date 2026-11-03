@@ -13,7 +13,7 @@ func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -56,20 +56,21 @@ func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {
 }
 
 func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 
 	traceRefFile := filepath.Join(t.TempDir(), "trace-ref.txt")
-	t.Setenv(automationTriggerEnvVar, "git-pre-push")
-	t.Setenv(automationReasonEnvVar, "git push triggered the managed pre-push sync")
-	t.Setenv(automationTraceRefFileEnvVar, traceRefFile)
+	setRunEnv(t, automationTriggerEnvVar, "git-pre-push")
+	setRunEnv(t, automationReasonEnvVar, "git push triggered the managed pre-push sync")
+	setRunEnv(t, automationTraceRefFileEnvVar, traceRefFile)
 
 	traceRef, err := maybeRecordAutomatedCommandTrace(
-		testEnv(),
+		runEnv(t),
 		ws,
 		"lit sync push --remote origin",
 		"mirror Dolt data to the configured git remote",

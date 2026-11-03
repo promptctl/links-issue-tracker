@@ -21,6 +21,7 @@ import (
 // [LAW:behavior-not-structure] every assertion reads a trace or a record on
 // disk.
 func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
+	t.Parallel()
 	remote, producer, consumer, ws, epicID := twoClonesOverOneDoltRemote(t)
 	advertised := func() string {
 		return "origin " + remote + "\n" + remoteDoltHead(t, remote) + "\trefs/dolt/data\n"
@@ -65,18 +66,18 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	runCLIInDir(t, producer, "sync", "pull")
 	runCLIInDir(t, producer, "new", "--title", "pushed-by-the-peer", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
-	resolved, err := workspace.Resolve(testEnv(), consumer)
+	resolved, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), resolved)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), resolved)
 	if err != nil {
 		t.Fatalf("open consumer sync session: %v", err)
 	}
-	proven, unproven := provePushedAdvertisement(underInvocation(context.Background()), testEnv(), session.syncer, resolved, remoteName(t, "origin"))
+	proven, unproven := provePushedAdvertisement(underInvocation(context.Background()), runEnv(t), session.syncer, resolved, remoteName(t, "origin"))
 	// A push to a remote the receive never asks proves nothing either: its
 	// record would replace one the receive can match with one it cannot.
-	_, otherRemote := provePushedAdvertisement(underInvocation(context.Background()), testEnv(), session.syncer, resolved, remoteName(t, "backup"))
+	_, otherRemote := provePushedAdvertisement(underInvocation(context.Background()), runEnv(t), session.syncer, resolved, remoteName(t, "backup"))
 	if closeErr := closeStore(); closeErr != nil {
 		t.Fatalf("close consumer sync session: %v", closeErr)
 	}
@@ -109,12 +110,12 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 		superseded error
 		wantProven bool
 	}{{nil, true}, {errors.New("rejected, remote already carries HEAD"), false}} {
-		session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), resolved)
+		session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), resolved)
 		if err != nil {
 			t.Fatalf("open consumer sync session: %v", err)
 		}
 		ctx := underInvocation(context.Background())
-		outcome, err := performSyncPush(ctx, ctx, testStderr(t), testEnv(), session, resolved, "", syncPushCommand, false, false, pushStep(tc.superseded))
+		outcome, err := performSyncPush(ctx, ctx, testStderr(t), runEnv(t), session, resolved, "", syncPushCommand, false, false, pushStep(tc.superseded))
 		if closeErr := closeStore(); closeErr != nil {
 			t.Fatalf("close consumer sync session: %v", closeErr)
 		}

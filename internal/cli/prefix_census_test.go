@@ -7,6 +7,7 @@ import (
 )
 
 func TestCensusOfCountsEveryIssueUnderTheRootItsIdHangsFrom(t *testing.T) {
+	t.Parallel()
 	census := censusOf([]storage.IssueIdentity{
 		{ID: "links-init-0q1s", Topic: "init"},
 		// A child's own topic is not the one its id was rendered from; it is
@@ -33,6 +34,7 @@ func TestCensusOfCountsEveryIssueUnderTheRootItsIdHangsFrom(t *testing.T) {
 }
 
 func TestCensusOfAnEmptyStoreIsNoneAndNeverAMismatch(t *testing.T) {
+	t.Parallel()
 	census := censusOf(nil)
 	if got := census.String(); got != "none" {
 		t.Fatalf("census = %q, want none", got)
@@ -44,6 +46,7 @@ func TestCensusOfAnEmptyStoreIsNoneAndNeverAMismatch(t *testing.T) {
 }
 
 func TestCensusSuggestsOnlyAPrefixSetWouldStoreAsIs(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		issues []storage.IssueIdentity

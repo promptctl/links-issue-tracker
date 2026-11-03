@@ -13,6 +13,7 @@ import (
 // app-mode and workspace-mode commands alike, even though the commands here
 // read the config more than once. The command still runs.
 func TestUnknownConfigKeysWarnOncePerCommand(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	globalFile, projectFile := writeConfigLayers(t, repo,
@@ -54,6 +55,7 @@ func TestUnknownConfigKeysWarnOncePerCommand(t *testing.T) {
 // Config layers that set only settings print no warning, and the event
 // records that the keys were checked and none was unknown: [], not absent.
 func TestKnownConfigKeysWarnNothing(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	writeConfigLayers(t, repo, "required_fields = [\"title\"]\n", "[snapshot]\nretention_budget = 2\n")
@@ -73,6 +75,7 @@ func TestKnownConfigKeysWarnNothing(t *testing.T) {
 // A layer that does not parse is named in a warning and on the event, and
 // the keys of the layer that does parse are still reported.
 func TestUnparseableConfigLayerWarnsAndHidesNoOtherKey(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	globalFile, projectFile := writeConfigLayers(t, repo, "[init]\ninstall_hooks = false\n", "[sync\n")
@@ -99,7 +102,7 @@ func TestUnparseableConfigLayerWarnsAndHidesNoOtherKey(t *testing.T) {
 func writeConfigLayers(t *testing.T, repo, global, project string) (globalFile, projectFile string) {
 	t.Helper()
 	globalFile = filepath.Join(t.TempDir(), "links-issue-tracker", "config.toml")
-	t.Setenv("XDG_CONFIG_HOME", filepath.Dir(filepath.Dir(globalFile)))
+	setRunEnv(t, "XDG_CONFIG_HOME", filepath.Dir(filepath.Dir(globalFile)))
 	root, err := filepath.EvalSymlinks(repo)
 	if err != nil {
 		t.Fatal(err)

@@ -18,6 +18,7 @@ import (
 // that are not kinds. A kind left unnamed would record a blocker with no reach
 // at all, and a shared name would record two answers as one.
 func TestEveryReachKindHasAnEventName(t *testing.T) {
+	t.Parallel()
 	seen := map[string]string{}
 	name := func(what, reach string) {
 		if reach == "" {
@@ -80,6 +81,7 @@ func readThrough(id, ticket string, kind reachKind) depReach {
 // in the scope was offered — it is, exactly when one could. A pick served past
 // the scope records the same, since it prints the same.
 func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		outcome  NextOutcome
@@ -231,6 +233,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 // focus withheld under next.off_path, the key an exhausted scope's withheld
 // rows land on too.
 func TestNextRecordsWhatAFocusedEmptyPoolNamed(t *testing.T) {
+	t.Parallel()
 	recorder := telemetry.Begin(telemetry.Event{})
 	outcome := NoWork{
 		Unreachable: []rowReach{{ID: "test-gate", reading: reading{Row: rowFor("test-gate"), Kind: reachNotReady}}},
@@ -251,6 +254,7 @@ func TestNextRecordsWhatAFocusedEmptyPoolNamed(t *testing.T) {
 // ours it gates down to the dependency it is work toward — the walk's depth is
 // its length — and every other outcome records an empty one.
 func TestNextRecordsTheChainADependencyPickWasReachedThrough(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		outcome NextOutcome
@@ -290,6 +294,7 @@ func TestNextRecordsTheChainADependencyPickWasReachedThrough(t *testing.T) {
 // A `lit next` that picks a ticket leaves the pick and how it was reached on
 // its event.
 func TestNextLeavesItsPickOnTheEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
@@ -309,6 +314,7 @@ func TestNextLeavesItsPickOnTheEvent(t *testing.T) {
 // each with its reach — here a ticket waiting on an outside event — beside the
 // exit code and reason the answer printed.
 func TestNextLeavesTheRowsItWentPastOnTheEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
@@ -332,6 +338,7 @@ func TestNextLeavesTheRowsItWentPastOnTheEvent(t *testing.T) {
 // it, served nothing, or found the scope exhausted with only the filter keeping
 // the pool from it; a run the filter did not stop records none.
 func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name        string
 		outcome     NextOutcome
@@ -395,6 +402,7 @@ func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
 // the exit code and reason, and on the event. rows_gathered counts the rows the
 // filter selected, which is none, not the queue routing read.
 func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
@@ -431,6 +439,7 @@ func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 // filter emptied the pool, not the backlog, so the answer names the task
 // `lit next` would hand over rather than reading as no ready work.
 func TestNextUnderAFilterNamesThePoolTicketItHid(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "Home")
@@ -456,6 +465,7 @@ func TestNextUnderAFilterNamesThePoolTicketItHid(t *testing.T) {
 // every other pick records none: steps 1-2b walk every row whatever the focus,
 // and a pool over the whole queue was narrowed by nothing.
 func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
+	t.Parallel()
 	focused := focusScope{goals: []string{"test-goal"}}
 	for _, tc := range []struct {
 		name    string
@@ -502,6 +512,7 @@ func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
 // fact a pick records: the pool's goals when the pool offered it, and none for
 // the held scope's next ticket, which no scope narrows.
 func TestNextRecordsTheFocusTheHiddenTicketWasDrawnUnder(t *testing.T) {
+	t.Parallel()
 	focused := focusScope{goals: []string{"test-goal"}}
 	for _, tc := range []struct {
 		name    string

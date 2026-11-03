@@ -30,7 +30,7 @@ func listColumnsOutput(t *testing.T, expr string) (string, error) {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
-	err := runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--columns", expr})
+	err := runListWithStore(t, ctx, &out, ap.Store, noReadyPolicy, []string{"--columns", expr})
 	return out.String(), err
 }
 
@@ -39,6 +39,7 @@ func listColumnsOutput(t *testing.T, expr string) (string, error) {
 // are all real `lit show --field` names, so they are exactly what someone types
 // after learning the field vocabulary.
 func TestColumnsRejectsUnknownName(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		expr    string
@@ -100,6 +101,7 @@ func TestColumnsRejectsUnknownName(t *testing.T) {
 // about the vocabulary. This is what keeps the accept-set and the renderer from
 // drifting apart.
 func TestColumnsAcceptsEveryDeclaredName(t *testing.T) {
+	t.Parallel()
 	for _, name := range sortedColumnNames() {
 		t.Run(name, func(t *testing.T) {
 			out, err := listColumnsOutput(t, name)
@@ -117,6 +119,7 @@ func TestColumnsAcceptsEveryDeclaredName(t *testing.T) {
 // normalization, so the strict boundary does not also reject input it
 // normalizes.
 func TestColumnsAcceptsCaseAndSpacing(t *testing.T) {
+	t.Parallel()
 	for _, expr := range []string{"ID,TITLE", " id , title ", "Id,Title"} {
 		if _, err := listColumnsOutput(t, expr); err != nil {
 			t.Errorf("--columns %q: want accepted, got %v", expr, err)
@@ -133,6 +136,7 @@ func TestColumnsAcceptsCaseAndSpacing(t *testing.T) {
 // defaultColumnSet(), which would only compare the code with itself and pass no
 // matter which columns the default named.
 func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "dflt", Title: "T", Topic: "dflt", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Dflt", "dflt")})
@@ -147,7 +151,7 @@ func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
 		{"--columns", ","},
 	} {
 		var out bytes.Buffer
-		if err := runListWithStore(ctx, &out, ap.Store, noReadyPolicy, args); err != nil {
+		if err := runListWithStore(t, ctx, &out, ap.Store, noReadyPolicy, args); err != nil {
 			t.Fatalf("lit ls %v: want default projection, got %v", args, err)
 		}
 		got := fieldsOf(lineForID(t, out.String(), issue.ID))
@@ -161,6 +165,7 @@ func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
 // rank is a printable column, not an error. It renders the issue's own rank, so
 // the listing can show the key it is ordered by.
 func TestColumnsRankRendersTheIssueRank(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rank", Title: "T", Topic: "rank", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Rank", "rank")})
@@ -168,7 +173,7 @@ func TestColumnsRankRendersTheIssueRank(t *testing.T) {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
-	if err := runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--columns", "id,rank"}); err != nil {
+	if err := runListWithStore(t, ctx, &out, ap.Store, noReadyPolicy, []string{"--columns", "id,rank"}); err != nil {
 		t.Fatalf("--columns id,rank: %v", err)
 	}
 	fields := fieldsOf(lineForID(t, out.String(), issue.ID))
@@ -183,12 +188,13 @@ func TestColumnsRankRendersTheIssueRank(t *testing.T) {
 // TestColumnsHelpEnumeratesValidNames: the vocabulary has to be discoverable
 // without first provoking a rejection, on every surface that offers the flag.
 func TestColumnsHelpEnumeratesValidNames(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var out bytes.Buffer
 	// --help is answered by the flag parser, which reports it via a sentinel
 	// error after printing; the output is what this asserts on.
-	_ = runListWithStore(ctx, &out, ap.Store, noReadyPolicy, []string{"--help"})
+	_ = runListWithStore(t, ctx, &out, ap.Store, noReadyPolicy, []string{"--help"})
 	for _, name := range sortedColumnNames() {
 		if !strings.Contains(out.String(), name) {
 			t.Errorf("`lit ls --help` does not enumerate column %q:\n%s", name, out.String())
@@ -203,6 +209,7 @@ func TestColumnsHelpEnumeratesValidNames(t *testing.T) {
 // while the advertised vocabulary listed the name twice and both lookups
 // "worked".
 func TestColumnRegistryIsWellFormed(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	for i, spec := range columnRegistry {
 		if spec.name == "" {
@@ -227,6 +234,7 @@ func TestColumnRegistryIsWellFormed(t *testing.T) {
 // rather than user input, so the answer to a miss is a crash naming the column
 // — never the short row that silently dropping it would print.
 func TestMustColumnsPanicsOnUnknownName(t *testing.T) {
+	t.Parallel()
 	defer func() {
 		recovered := recover()
 		if recovered == nil {

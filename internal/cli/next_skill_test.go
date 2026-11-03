@@ -30,6 +30,7 @@ const emptyHandedOpener = "no ready work"
 // opening with the opener still renders a shipped lead — the quotations an
 // agent could match against the wrong answer by its opening words.
 func TestNextSkillQuotesEveryEmptyHandedLead(t *testing.T) {
+	t.Parallel()
 	root := mustRepoRoot(t)
 	corpus, err := docclaims.ShippedText(os.DirFS(root))
 	if err != nil {
@@ -96,6 +97,7 @@ func TestNextSkillQuotesEveryEmptyHandedLead(t *testing.T) {
 // The skill names the two scopes a scoped answer can report, as scope renders
 // them, so its description of `no ready work in` stays true to what follows.
 func TestNextSkillQuotesBothScopeForms(t *testing.T) {
+	t.Parallel()
 	spans := nextSkillSpans(t, mustRepoRoot(t))
 	for _, form := range []string{Exhausted{}.scope(), Exhausted{Epics: []string{"<ids>"}}.scope()} {
 		if !slices.Contains(spans, form) {

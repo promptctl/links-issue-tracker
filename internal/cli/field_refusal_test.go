@@ -21,6 +21,7 @@ import (
 // exit code rather than the absence of retry advice: "does not say retry"
 // holds of a wrong classification too.
 func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "an epic", Topic: "fields", IssueType: "epic"})
@@ -37,17 +38,17 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(blocked) error = %v", err)
 	}
-	if err := runDepAdd(ctx, io.Discard, ap, []string{blocked.ID, "--blocked-by", task.ID}); err != nil {
+	if err := runDepAdd(t, ctx, io.Discard, ap, []string{blocked.ID, "--blocked-by", task.ID}); err != nil {
 		t.Fatalf("dep add %s --blocked-by %s: %v", blocked.ID, task.ID, err)
 	}
-	runLs := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runListWithStore(ctx, stdout, ap.Store, workspaceReadyPolicy(testEnv(), ap), args)
+	runLs := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runListWithStore(t, ctx, stdout, ap.Store, workspaceReadyPolicy(runEnv(t), ap), args)
 	}
-	runBacklog := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runWorkable(ctx, stdout, ap, args, backlogView)
+	runBacklog := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runWorkable(t, ctx, stdout, ap, args, backlogView)
 	}
 
-	type runner func(context.Context, io.Writer, *app.App, []string) error
+	type runner func(testing.TB, context.Context, io.Writer, *app.App, []string) error
 	cases := []struct {
 		name     string
 		run      runner
@@ -85,7 +86,7 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout bytes.Buffer
-			err := tc.run(ctx, &stdout, ap, tc.args)
+			err := tc.run(t, ctx, &stdout, ap, tc.args)
 			if err == nil {
 				t.Fatalf("%v succeeded; the rule should refuse it", tc.args)
 			}

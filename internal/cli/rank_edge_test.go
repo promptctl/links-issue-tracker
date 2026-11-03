@@ -18,6 +18,7 @@ import (
 // [LAW:behavior-not-structure] the contract here is the text a user reads, so
 // the assertions are on that text and not on which store method ran.
 func TestRankToEdgeReportsItsFrame(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -43,7 +44,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// unqualified "moved to the top" would read as the top of the backlog, so
 	// the frame it was scoped to has to be named.
 	var stdout bytes.Buffer
-	if err := runRank(ctx, &stdout, ap, []string{second.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{second.ID, "--top"}); err != nil {
 		t.Fatalf("rank second --top error = %v", err)
 	}
 	out := stdout.String()
@@ -70,7 +71,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// ticket either way, so an unchanged order reported as a promotion is the
 	// one outcome a reader cannot tell from a real one. [LAW:no-silent-failure]
 	stdout.Reset()
-	if err := runRank(ctx, &stdout, ap, []string{second.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{second.ID, "--top"}); err != nil {
 		t.Fatalf("repeat rank second --top error = %v", err)
 	}
 	out = stdout.String()
@@ -92,7 +93,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// A top-level issue's frame is the backlog, which the epic-scoped sentence
 	// must not claim to be an epic.
 	stdout.Reset()
-	if err := runRank(ctx, &stdout, ap, []string{standalone.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID, "--top"}); err != nil {
 		t.Fatalf("rank standalone --top error = %v", err)
 	}
 	out = stdout.String()
@@ -107,7 +108,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// TopLevel is the empty Frame, so an unrendered one would print "the top of
 	// ; nothing to rank".
 	stdout.Reset()
-	if err := runRank(ctx, &stdout, ap, []string{standalone.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID, "--top"}); err != nil {
 		t.Fatalf("repeat rank standalone --top error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "is already at the top of the backlog") {
@@ -126,6 +127,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 // printed word is checked against "bottom", and the resulting order is checked
 // independently, so neither can stand in for the other. [LAW:behavior-not-structure]
 func TestRankToBottomReportsItsFrame(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -143,7 +145,7 @@ func TestRankToBottomReportsItsFrame(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runRank(ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
 		t.Fatalf("rank first --bottom error = %v", err)
 	}
 	out := stdout.String()
@@ -172,7 +174,7 @@ func TestRankToBottomReportsItsFrame(t *testing.T) {
 
 	// Repeating it writes nothing, and says so in the same words as the top edge.
 	stdout.Reset()
-	if err := runRank(ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
 		t.Fatalf("repeat rank first --bottom error = %v", err)
 	}
 	out = stdout.String()

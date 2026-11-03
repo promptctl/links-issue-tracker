@@ -80,8 +80,9 @@ func proseDivergedClones(t *testing.T) (consumer, ticketID string) {
 // after it, and through exactly one.
 // [LAW:no-silent-failure]
 func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
+	t.Parallel()
 	consumer, ticketID := proseDivergedClones(t)
-	ws, err := workspace.Resolve(testEnv(), consumer)
+	ws, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
@@ -93,7 +94,7 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	if err := markReceiveAttempt(ws); err != nil {
 		t.Fatalf("mark receive attempt: %v", err)
 	}
-	t.Setenv(DisableAutoSyncEnvVar, "0")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	_, surface, err := runCLIInDirSplit(t, consumer, "backlog")
 	if err != nil {
 		t.Fatalf("lit backlog error = %v\nstderr:\n%s", err, surface)
@@ -116,7 +117,8 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 // exits ExitConflict — the same exit `lit sync reconcile` gives for the
 // identical state. [LAW:single-enforcer]
 func TestExplicitPullSurfacesContractOnProseHeld(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1") // drive sync explicitly; no inline race
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1") // drive sync explicitly; no inline race
 	consumer, ticketID := proseDivergedClones(t)
 
 	out, err := runCLIInDirErr(t, consumer, "sync", "pull")

@@ -49,17 +49,17 @@ func readSyncTraceRecords(t *testing.T, ws workspace.Info) []syncTraceRecord {
 // and "workflows", with an empty Trigger naming that no automation fired it.
 func TestRecordSyncTraceWritesCanonicalJSONUnconditionally(t *testing.T) {
 	t.Parallel()
-	if v := os.Getenv(automationTriggerEnvVar); v != "" {
+	if v := runEnv(t).Get(automationTriggerEnvVar); v != "" {
 		t.Fatalf("test environment unexpectedly has %s=%q set", automationTriggerEnvVar, v)
 	}
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 
-	path, err := recordSyncTrace(testEnv(), ws, syncTraceRecord{
+	path, err := recordSyncTrace(runEnv(t), ws, syncTraceRecord{
 		Command:   "lit sync fetch",
 		Decision:  "fetched",
 		Status:    "ok",
@@ -106,15 +106,16 @@ func TestRecordSyncTraceWritesCanonicalJSONUnconditionally(t *testing.T) {
 // the existing automation-gated one can never disagree about what fired an
 // occasion.
 func TestRecordSyncTraceCarriesTriggerWhenAutomated(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
-	t.Setenv(automationTriggerEnvVar, "git-pre-push")
+	setRunEnv(t, automationTriggerEnvVar, "git-pre-push")
 
-	path, err := recordSyncTrace(testEnv(), ws, syncTraceRecord{Command: "lit sync push", Decision: "pushed", Status: "ok"})
+	path, err := recordSyncTrace(runEnv(t), ws, syncTraceRecord{Command: "lit sync push", Decision: "pushed", Status: "ok"})
 	if err != nil {
 		t.Fatalf("recordSyncTrace() error = %v", err)
 	}
@@ -135,10 +136,11 @@ func TestRecordSyncTraceCarriesTriggerWhenAutomated(t *testing.T) {
 // init's remote-adopt outcome: a directly-run `lit init`, with no automation
 // trigger set, leaves a durable JSON trace record.
 func TestInitLeavesDurableSyncTraceInteractively(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runCLIInDir(t, repo, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -172,7 +174,8 @@ func TestInitLeavesDurableSyncTraceInteractively(t *testing.T) {
 // TestInitAdoptsExistingRemoteBacklog's fixture) and inspects the durable
 // trace directory afterward, not just the commands' own exit codes.
 func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
-	if v := os.Getenv(automationTriggerEnvVar); v != "" {
+	t.Parallel()
+	if v := runEnv(t).Get(automationTriggerEnvVar); v != "" {
 		t.Fatalf("test environment unexpectedly has %s=%q set", automationTriggerEnvVar, v)
 	}
 	base := t.TempDir()
@@ -199,7 +202,7 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(testEnv(), consumer)
+	ws, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -265,10 +268,11 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 // TestReconcileAbortLeavesDurableTraceInteractively proves `lit sync reconcile
 // abort` leaves a durable record like its resolve/take/combine siblings.
 func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runCLIInDir(t, repo, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
@@ -304,7 +308,8 @@ func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 // sync_unrelated_test.go's direct reportTakeOutcome/reportReconcileResult
 // calls already cover).
 func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
-	t.Setenv(DisableAutoSyncEnvVar, "1")
+	t.Parallel()
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
 	newDisjointConsumer := func(t *testing.T) (consumer string, ws workspace.Info) {
 		t.Helper()
@@ -338,7 +343,7 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		// history and the producer's are disjoint by the time consumer reconciles.
 		runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
-		resolvedWs, err := workspace.Resolve(testEnv(), consumer)
+		resolvedWs, err := workspace.Resolve(runEnv(t), consumer)
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
@@ -432,13 +437,13 @@ func TestRecordSyncCommandTraceErrorPath(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(testEnv(), repo)
+	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
 
 	cause := fmt.Errorf("simulated backend failure")
-	recordSyncCommandTrace(testStderr(t), testEnv(), ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})
+	recordSyncCommandTrace(testStderr(t), runEnv(t), ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})
 
 	records := readSyncTraceRecords(t, ws)
 	if len(records) != 1 {

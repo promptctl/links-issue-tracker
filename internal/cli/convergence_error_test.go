@@ -231,6 +231,7 @@ func TestAConvergenceFailureRecordsItsStepSnapshotAndCause(t *testing.T) {
 // refuses through the CLI at exit 3 with schema_shape_refused, and the event
 // names the step.
 func TestAnUnconvergeableQuarantineTableRefusesWithItsShapeReason(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	repo, ws := initBootstrapTestRepo(t)
 	info, err := version.Get()
@@ -238,7 +239,7 @@ func TestAnUnconvergeableQuarantineTableRefusesWithItsShapeReason(t *testing.T) 
 		t.Fatalf("version.Get() error = %v", err)
 	}
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

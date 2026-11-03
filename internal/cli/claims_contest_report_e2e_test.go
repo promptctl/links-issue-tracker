@@ -14,7 +14,8 @@ import (
 // checkouts' establishing evidence lands; `lit sync reconcile` names the
 // contest rather than routing silently.
 func TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -66,7 +67,8 @@ func TestSyncReconcileNamesContestedLaneAfterPartitionedDoubleStart(t *testing.T
 // about contests at all, and leaves the database exactly as an uninstrumented
 // reconcile would.
 func TestSyncReconcileNoContestNamesNoContest(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Parallel()
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")

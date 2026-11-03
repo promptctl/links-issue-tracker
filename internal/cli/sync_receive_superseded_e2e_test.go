@@ -24,6 +24,7 @@ import (
 // [LAW:behavior-not-structure] asserted through the event, the record a
 // receive reads, and the freshness a command reports.
 func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -51,13 +52,13 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(testEnv(), consumer)
+	ws, err := workspace.Resolve(runEnv(t), consumer)
 	if err != nil {
 		t.Fatalf("resolve consumer workspace: %v", err)
 	}
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	observed, err := askRemote(ctx, testEnv(), ws)
+	observed, err := askRemote(ctx, runEnv(t), ws)
 	if err != nil || observed.record() == nil {
 		t.Fatalf("askRemote() = %+v, %v; want the remote's advertisement", observed, err)
 	}
@@ -66,7 +67,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
 	defer removeReceiveClone(testStderr(t), clone)
-	fetch, err := fetchIntoClone(ctx, testStderr(t), testEnv(), ws, clone)
+	fetch, err := fetchIntoClone(ctx, testStderr(t), runEnv(t), ws, clone)
 	if err != nil || fetch.fetchErr != nil {
 		t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 	}
@@ -79,7 +80,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 		t.Fatalf("seed received-refs.last: %v", err)
 	}
 
-	outcome := landAndRecord(ctx, testStderr(t), testEnv(), ws, clone, fetch, observed)
+	outcome := landAndRecord(ctx, testStderr(t), runEnv(t), ws, clone, fetch, observed)
 	if outcome.err != nil || outcome.landed != store.FetchedHeadSuperseded {
 		t.Fatalf("landAndRecord() landed %s, err %v; want superseded by bravo's pull", outcome.landed, outcome.err)
 	}
@@ -114,11 +115,11 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 // target name the same commit, as the last fetch or push left them.
 func assertLevelWithTheRemote(t *testing.T, dir string, target syncTarget) {
 	t.Helper()
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", dir, err)
 	}
-	session, closeStore, err := openSyncSession(underInvocation(context.Background()), testEnv(), testStderr(t), ws)
+	session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
 	}

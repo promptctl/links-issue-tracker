@@ -23,6 +23,7 @@ import (
 // Each case drives the real command handler and asserts the exact reason and
 // exit code, as TestFieldRefusalsAreDeterministicRefusals does.
 func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	create := func(title string, issueType model.IssueType, parent string) string {
@@ -37,10 +38,10 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	live := create("live", "task", epic)
 	archived := create("archived", "task", epic)
 	gone := create("deleted", "task", epic)
-	if err := runTransition(ctx, io.Discard, ap, []string{archived}, archiveSpec); err != nil {
+	if err := runTransition(t, ctx, io.Discard, ap, []string{archived}, archiveSpec); err != nil {
 		t.Fatalf("archive %s: %v", archived, err)
 	}
-	if err := runTransition(ctx, io.Discard, ap, []string{gone}, deleteSpec); err != nil {
+	if err := runTransition(t, ctx, io.Discard, ap, []string{gone}, deleteSpec); err != nil {
 		t.Fatalf("delete %s: %v", gone, err)
 	}
 	// Two siblings sharing a key, a state the contract cannot express, planted
@@ -60,28 +61,28 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	// The dependency sits in another epic: between two leaves of one epic,
 	// rank orders the work and a blocked-by edge is refused.
 	dependency := create("dependency", "task", create("upstream", "epic", ""))
-	depAdd := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runLeaf(depAddLeaf(), ctx, stdout, ap, args)
+	depAdd := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runLeaf(t, depAddLeaf(), ctx, stdout, ap, args)
 	}
-	if err := depAdd(ctx, io.Discard, ap, []string{live, "--blocked-by", dependency}); err != nil {
+	if err := depAdd(t, ctx, io.Discard, ap, []string{live, "--blocked-by", dependency}); err != nil {
 		t.Fatalf("dep add %s --blocked-by %s: %v", live, dependency, err)
 	}
-	parentSet := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runLeaf(parentSetLeaf(), ctx, stdout, ap, args)
+	parentSet := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runLeaf(t, parentSetLeaf(), ctx, stdout, ap, args)
 	}
-	commentAdd := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runLeaf(commentAddLeaf(), ctx, stdout, ap, args)
+	commentAdd := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runLeaf(t, commentAddLeaf(), ctx, stdout, ap, args)
 	}
-	commentRm := func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runLeaf(commentRmLeaf(), ctx, stdout, ap, args)
+	commentRm := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+		return runLeaf(t, commentRmLeaf(), ctx, stdout, ap, args)
 	}
-	transition := func(spec transitionSpec) func(context.Context, io.Writer, *app.App, []string) error {
-		return func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-			return runTransition(ctx, stdout, ap, args, spec)
+	transition := func(spec transitionSpec) func(testing.TB, context.Context, io.Writer, *app.App, []string) error {
+		return func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+			return runTransition(t, ctx, stdout, ap, args, spec)
 		}
 	}
 
-	type runner func(context.Context, io.Writer, *app.App, []string) error
+	type runner func(testing.TB, context.Context, io.Writer, *app.App, []string) error
 	cases := []struct {
 		name     string
 		run      runner
@@ -113,7 +114,7 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout bytes.Buffer
-			err := tc.run(ctx, &stdout, ap, tc.args)
+			err := tc.run(t, ctx, &stdout, ap, tc.args)
 			if err == nil {
 				t.Fatalf("%v succeeded; it should be answered without running", tc.args)
 			}

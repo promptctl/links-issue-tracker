@@ -60,7 +60,7 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 	gitInit(t, gitOnly)
 
 	var out bytes.Buffer
-	if err := runStores(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &out, &out, nil), []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestRunStoresRecordsWhatDiscoveryVisited(t *testing.T) {
 
 	var out bytes.Buffer
 	recorder := telemetry.Begin(telemetry.Event{})
-	err := runStores(telemetry.With(context.Background(), recorder), cwdInvocation(&out, &out, nil), []string{root})
+	err := runStores(telemetry.With(context.Background(), recorder), dirInvocation(t, t.TempDir(), &out, &out, nil), []string{root})
 	if err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRunStoresPropagatesDiscoverError(t *testing.T) {
 
 	var out bytes.Buffer
 	recorder := telemetry.Begin(telemetry.Event{})
-	err := runStores(telemetry.With(context.Background(), recorder), cwdInvocation(&out, &out, nil), []string{missing})
+	err := runStores(telemetry.With(context.Background(), recorder), dirInvocation(t, t.TempDir(), &out, &out, nil), []string{missing})
 	if err == nil {
 		t.Fatalf("runStores() returned nil error with output %q; want a surfaced Discover failure", out.String())
 	}
@@ -154,7 +154,7 @@ func TestRunStoresEmptyWhenNoStores(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runStores(underInvocation(context.Background()), cwdInvocation(&out, &out, nil), []string{root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &out, &out, nil), []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 	if out.Len() != 0 {
@@ -351,7 +351,7 @@ func TestGatherCrossProjectRollupUnreadableStoreIsErrorRow(t *testing.T) {
 		addLitStore(t, repo) // a store DIRECTORY exists but holds no real dolt data
 	}
 
-	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), testStderr(t), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), runEnv(t), testStderr(t), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v; want error rows, not a fatal error", err)
 	}
@@ -378,7 +378,7 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	storageDir = filepath.Join(repoDir, ".git", "links")
 	dbPath := filepath.Join(storageDir, "dolt")
 
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, dbPath, workspaceID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, dbPath, workspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open(%q) error = %v", dbPath, err)
 	}
@@ -433,9 +433,10 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 // [LAW:behavior-not-structure] Asserts the counts the feature promises, not how
 // they are computed.
 func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
-	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+	t.Parallel()
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
+	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 
 	// EvalSymlinks up front so the seed path, the config path, and the path
 	// Discover derives from git are one spelling of the store, never two.
@@ -450,7 +451,7 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 	gitInit(t, repo)
 	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
-	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), testEnv(), testStderr(t), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(context.Background()), runEnv(t), testStderr(t), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
 	}
@@ -479,9 +480,10 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 // that leaked into the rollup cannot produce these numbers by accident: it
 // would report ready 1 / in-flight 0 / blocked 1.
 func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
-	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+	t.Parallel()
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
+	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -497,7 +499,7 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 	storageDir, _ := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
 
 	ctx := context.Background()
-	st, err := engine.Open(ctx, testEnv(), testStderr(t), engine.ReadWrite, filepath.Join(storageDir, "dolt"), "real-workspace-id")
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, filepath.Join(storageDir, "dolt"), "real-workspace-id")
 	if err != nil {
 		t.Fatalf("engine.Open error = %v", err)
 	}
@@ -528,7 +530,7 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 		t.Fatalf("store.Close() error = %v", err)
 	}
 
-	rows, err := gatherCrossProjectRollup(underInvocation(ctx), testEnv(), testStderr(t), []string{root})
+	rows, err := gatherCrossProjectRollup(underInvocation(ctx), runEnv(t), testStderr(t), []string{root})
 	if err != nil {
 		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
 	}
@@ -551,9 +553,10 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 // paths. Proves the flag wiring end-to-end, not just the rollup helper in
 // isolation.
 func TestRunStoresCountsRendersRollup(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
-	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+	t.Parallel()
+	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
+	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
+	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -568,7 +571,7 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 
 	var counts bytes.Buffer
 	recorder := telemetry.Begin(telemetry.Event{})
-	err = runStores(telemetry.With(context.Background(), recorder), cwdInvocation(&counts, &counts, nil), []string{"--counts", root})
+	err = runStores(telemetry.With(context.Background(), recorder), dirInvocation(t, t.TempDir(), &counts, &counts, nil), []string{"--counts", root})
 	if err != nil {
 		t.Fatalf("runStores --counts error = %v", err)
 	}
@@ -584,7 +587,7 @@ func TestRunStoresCountsRendersRollup(t *testing.T) {
 
 	// Bare `stores` lists paths — no count table leaks in without the flag.
 	var plain bytes.Buffer
-	if err := runStores(underInvocation(context.Background()), cwdInvocation(&plain, &plain, nil), []string{root}); err != nil {
+	if err := runStores(underInvocation(context.Background()), dirInvocation(t, t.TempDir(), &plain, &plain, nil), []string{root}); err != nil {
 		t.Fatalf("runStores (no --counts) error = %v", err)
 	}
 	if strings.Contains(plain.String(), "PROJECT") || strings.Contains(plain.String(), "TOTAL") {

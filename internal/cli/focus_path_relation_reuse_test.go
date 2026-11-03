@@ -43,6 +43,7 @@ func (c *countingGraphSource) fetchCounts() map[string]int {
 // while the derived path map is identical seeded vs unseeded — the seed is a
 // transparent performance hint, not a behavior change.
 func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 
 	// A focused epic with two children, the later depending on the earlier, gives
@@ -108,6 +109,7 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 // only the readiness pass's wait walk loads it — and the focus walk, which
 // reaches it through the focused epic's dependency, must reuse that load.
 func TestWorkableQueueLoadsEachSubjectOnce(t *testing.T) {
+	t.Parallel()
 	h := newReadyTestHarness(t)
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Focused epic", Topic: "goal", IssueType: "epic",
@@ -133,7 +135,7 @@ func TestWorkableQueueLoadsEachSubjectOnce(t *testing.T) {
 	counting := &countingGraphSource{Store: h.ap.Store}
 	ap := *h.ap
 	ap.Store = counting
-	if _, err := gatherWorkableQueue(h.ctx, testEnv(), &ap); err != nil {
+	if _, err := gatherWorkableQueue(h.ctx, runEnv(t), &ap); err != nil {
 		t.Fatalf("gatherWorkableQueue error = %v", err)
 	}
 	for id, n := range counting.fetchCounts() {

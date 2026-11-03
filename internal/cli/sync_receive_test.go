@@ -18,11 +18,12 @@ import (
 // A receive whose target the clone skipped settles nothing, and its event and
 // trace name the skip, each once.
 func TestASkippedReceiveRecordsItsSkip(t *testing.T) {
+	t.Parallel()
 	ws := compactWorkspace(t)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	target := syncTarget{remote: remoteName(t, "origin"), skip: syncTargetRemoteEmpty}
-	outcome, closeLive := performSyncReceive(ctx, testStderr(t), testEnv(), ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
+	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
 	if outcome.skip != syncTargetRemoteEmpty {
 		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}
@@ -49,7 +50,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testStderr(t), testEnv(), workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir, Remotes: workspace.NewRemotes(testEnv(), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(checkoutRoot(t, dir))})
+	receiveOnce(ctx, testStderr(t), runEnv(t), workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(t, checkoutRoot(t, dir))})
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
@@ -64,6 +65,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 // (receiveNow), so the assertion is deterministic rather than racing a detached
 // worker; the spawn itself is pinned end to end in cmd/lit.
 func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
+	t.Parallel()
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -118,11 +120,11 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 // and without the wait for a parent that this test process never lets exit.
 func receiveNow(t *testing.T, dir string) {
 	t.Helper()
-	ws, err := workspace.Resolve(testEnv(), dir)
+	ws, err := workspace.Resolve(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("resolve workspace %s: %v", dir, err)
 	}
-	receiveOnce(underInvocation(context.Background()), testStderr(t), testEnv(), ws)
+	receiveOnce(underInvocation(context.Background()), testStderr(t), runEnv(t), ws)
 }
 
 // TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles pins the
@@ -133,7 +135,7 @@ func receiveNow(t *testing.T, dir string) {
 // [LAW:behavior-not-structure] asserted through the file a command reads.
 func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	now := time.Now()
 
 	unconverged := syncReceiveOutcome{
@@ -141,7 +143,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		reconcile: &reconcileOutcome{},
 		stopped:   receiveStepReconcile, err: errors.New("reconcile backend unavailable"),
 	}
-	surfaceReceiveOutcome(context.Background(), testStderr(t), testEnv(), ws, unconverged, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, unconverged, now)
 	block, err := os.ReadFile(receiveBlockPendingPath(ws))
 	if err != nil {
 		t.Fatalf("an unconverged receive left no block for the next command: %v", err)
@@ -150,7 +152,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 		t.Fatalf("pending block does not carry the receive's failure:\n%s", block)
 	}
 
-	surfaceReceiveOutcome(context.Background(), testStderr(t), testEnv(), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master"}, now)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a receive that settled cleanly left the earlier block pending (stat err = %v)", err)
 	}
@@ -158,7 +160,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 	// Every other surface that converges a divergence — `lit sync pull`,
 	// `lit sync reconcile` — ends the episode the same way, so a block left
 	// before it is retired too.
-	surfaceReceiveOutcome(context.Background(), testStderr(t), testEnv(), ws, unconverged, now)
+	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, unconverged, now)
 	endDivergenceEpisode(testStderr(t), ws)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a converged divergence left the receive's block pending (stat err = %v)", err)
@@ -173,7 +175,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 // mirror hold them.
 func TestTheReceiveWaitsForALiveMirror(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(testEnv(), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	if err := os.MkdirAll(ws.DatabasePath, 0o755); err != nil {
 		t.Fatalf("mkdir database path: %v", err)
 	}

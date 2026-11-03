@@ -28,12 +28,12 @@ import (
 // reads holds only the invocations it ran.
 func isolateEvents(t *testing.T) {
 	t.Helper()
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	setRunEnv(t, "XDG_STATE_HOME", t.TempDir())
 }
 
 func eventsPath(t *testing.T) string {
 	t.Helper()
-	dir, err := config.StateDir(testEnv())
+	dir, err := config.StateDir(runEnv(t))
 	if err != nil {
 		t.Fatalf("StateDir error = %v", err)
 	}
@@ -71,6 +71,7 @@ var traceID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 // Where is the directory the invocation was handed, which is not the test
 // process's own.
 func TestEveryInvocationLeavesOneEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := t.TempDir()
 	if wd, err := os.Getwd(); err != nil || wd == dir {
@@ -122,6 +123,7 @@ func TestEveryInvocationLeavesOneEvent(t *testing.T) {
 // The root parses its own flags, so its event names them as a leaf's does:
 // `lit --help` and a bare `lit` are told apart.
 func TestTheRootRecordsItsFlags(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := t.TempDir()
 	for _, tc := range []struct {
@@ -141,6 +143,7 @@ func TestTheRootRecordsItsFlags(t *testing.T) {
 // A failed invocation's event carries the exit code and reason its error line
 // printed, read from the same error.
 func TestAFailedInvocationRecordsItsExitCodeAndReason(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := t.TempDir()
 	for _, tc := range []struct {
@@ -166,6 +169,7 @@ func TestAFailedInvocationRecordsItsExitCodeAndReason(t *testing.T) {
 // is, not a fault: the exit code and reason say the state already held, and
 // the error names the edge, so the repeats are countable and attributable.
 func TestAnExistingEdgeEndsTheEventAsAlreadyHolding(t *testing.T) {
+	t.Parallel()
 	exists := storage.RelationExistsError{SrcID: "test-a", DstID: "test-b", Type: model.RelBlockedBy}
 	end := invocationEnd(time.Now(), fmt.Errorf("add relation: %w", exists), nil)
 	if end.Outcome != telemetry.OutcomeError || end.ExitCode != ExitNoWork || end.Reason != reasonStateAlreadyHolds.String() || !strings.Contains(end.Error, exists.Error()) {
@@ -176,6 +180,7 @@ func TestAnExistingEdgeEndsTheEventAsAlreadyHolding(t *testing.T) {
 // The event names the flags a command was given and never their values: a
 // value can be a title, a body, or a pasted secret.
 func TestTheEventNamesFlagsButNotTheirValues(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	const value = "a-title-that-must-stay-on-the-command-line"
 	if _, err := runCLIInDirAllowError(t, t.TempDir(), "new", "--type", "task", "--title", value); err == nil {
@@ -199,6 +204,7 @@ func TestTheEventNamesFlagsButNotTheirValues(t *testing.T) {
 // the command, then the leaf the one shared parse runs — so a family answered
 // at its own level is named too.
 func TestEveryCommandNamesItsEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	dir := t.TempDir()
 	// `bulk label add` and `bulk label rm` name values of the `bulk label`
@@ -224,6 +230,7 @@ func TestEveryCommandNamesItsEvent(t *testing.T) {
 // Past its cap the events file moves aside, one generation kept, and the
 // next event starts a fresh file.
 func TestTheEventsFileRotatesPastItsCap(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	path := eventsPath(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -248,6 +255,7 @@ func TestTheEventsFileRotatesPastItsCap(t *testing.T) {
 // another process holds it, the log is not moved, and once it is released the
 // rotation goes ahead.
 func TestRotationWaitsForTheLogsLock(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	if err := os.WriteFile(path, []byte("over the cap"), 0o600); err != nil {
 		t.Fatal(err)
@@ -284,6 +292,7 @@ func TestRotationWaitsForTheLogsLock(t *testing.T) {
 // A log under its cap is appended to without its lock, so a filesystem whose
 // flock fails or stalls costs nothing until the log needs rotating.
 func TestALogUnderItsCapDoesNotTakeItsLock(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	if err := os.WriteFile(path, []byte("under the cap"), 0o600); err != nil {
 		t.Fatal(err)
@@ -304,6 +313,7 @@ func TestALogUnderItsCapDoesNotTakeItsLock(t *testing.T) {
 // guard's hard exit, arriving while the deferred end is still writing, cannot
 // exit the process before the line is in the file.
 func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	path := eventsPath(t)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -319,7 +329,7 @@ func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
 		t.Fatalf("hold the rotation lock: acquired %v, %v", acquired, err)
 	}
 
-	record := &invocationRecord{recorder: telemetry.Begin(telemetry.Event{Event: "lit sync push"}), stderr: io.Discard, env: testEnv()}
+	record := &invocationRecord{recorder: telemetry.Begin(telemetry.Event{Event: "lit sync push"}), stderr: io.Discard, env: runEnv(t)}
 	written := make(chan bool, 2)
 	for _, end := range []telemetry.End{{Outcome: telemetry.OutcomeOK}, interruptedEnd(time.Now(), "SIGTERM", 143)} {
 		go func() {
@@ -347,6 +357,7 @@ func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
 // A rotation that cannot run is said on the event that grew the file past its
 // cap, and on stderr, and the event is still written.
 func TestAFailedRotationIsRecordedOnTheEvent(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	path := eventsPath(t)
 	// A non-empty directory where the previous generation goes: the rename
@@ -378,6 +389,7 @@ func TestAFailedRotationIsRecordedOnTheEvent(t *testing.T) {
 // An invocation the interrupt guard hard-exits is recorded as interrupted,
 // naming the signal and the exit code the guard exits with.
 func TestAHardExitedInvocationEndsAsInterrupted(t *testing.T) {
+	t.Parallel()
 	at := time.Now()
 	end := interruptedEnd(at, "SIGTERM", 143)
 	if end.Outcome != telemetry.OutcomeInterrupted || end.ExitCode != 143 || !strings.Contains(end.Error, "SIGTERM") || !strings.Contains(end.Error, "143") || end.Reason != "" || !end.At.Equal(at) {
@@ -388,6 +400,7 @@ func TestAHardExitedInvocationEndsAsInterrupted(t *testing.T) {
 // An invocation that panics is recorded as a panic, with the exit status the
 // Go runtime gives a process that dies of one.
 func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {
+	t.Parallel()
 	at := time.Now()
 	end := invocationEnd(at, nil, "index out of range")
 	if end.Outcome != telemetry.OutcomePanic || end.ExitCode != goPanicExitCode || end.Error != "index out of range" || end.Reason != "" || !end.At.Equal(at) {
@@ -402,6 +415,7 @@ func TestAPanickingInvocationEndsAsAPanic(t *testing.T) {
 // one the remote it refused, and neither records the other's; both record the
 // schema versions they compared.
 func TestASchemaAheadRefusalEndsTheEventAsSchemaAheadAtEitherBoundary(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name      string
 		refusal   error
@@ -427,6 +441,7 @@ func TestASchemaAheadRefusalEndsTheEventAsSchemaAheadAtEitherBoundary(t *testing
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(invocationEnd(time.Now(), tc.refusal, nil)))
 			if err != nil {
 				t.Fatal(err)
@@ -457,6 +472,7 @@ func TestASchemaAheadRefusalEndsTheEventAsSchemaAheadAtEitherBoundary(t *testing
 // A sync-failure block's event records which class it was: every class ends on
 // the one sync_divergence reason, so the reason alone cannot say.
 func TestASyncFailureEndsTheEventWithItsClass(t *testing.T) {
+	t.Parallel()
 	failure := SyncFailureError{Failure: SyncFailure{Class: syncFailurePushDiverged, Remote: "origin", Branch: "master", Cause: storage.ErrPushDiverged}}
 	line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(invocationEnd(time.Now(), failure, nil)))
 	if err != nil {
@@ -482,6 +498,7 @@ func TestASyncFailureEndsTheEventWithItsClass(t *testing.T) {
 // lossy rollback — none is an empty name — why snapshots could not be read, and
 // how many it read, and a wrapped refusal records the same.
 func TestASchemaAheadRefusalRecordsItsRollbackOffer(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name          string
 		snapshot      string
@@ -496,6 +513,7 @@ func TestASchemaAheadRefusalRecordsItsRollbackOffer(t *testing.T) {
 		{name: "lookup failed", lookupErr: errors.New("list snapshots: permission denied"), wantLookupErr: "list snapshots: permission denied"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			refusal := &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3, SnapshotName: tc.snapshot, SnapshotLookupErr: tc.lookupErr, SnapshotsExamined: tc.examined, SnapshotsUnreadable: tc.unreadable}
 			end := invocationEnd(time.Now(), fmt.Errorf("open store: %w", refusal), nil)
 			line, err := telemetry.Line(telemetry.Begin(telemetry.Event{}).Finish(end))
@@ -528,6 +546,7 @@ func TestASchemaAheadRefusalRecordsItsRollbackOffer(t *testing.T) {
 // count is the invocation's own when one environment serves several runs:
 // `lit workspace` asks git where the checkout is, once, each time it runs.
 func TestEveryEventCountsTheGitItsInvocationStarted(t *testing.T) {
+	t.Parallel()
 	isolateEvents(t)
 	outside := t.TempDir()
 	runCLIInDir(t, outside, "version")
@@ -537,7 +556,7 @@ func TestEveryEventCountsTheGitItsInvocationStarted(t *testing.T) {
 
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	inv := dirInvocation(repo, io.Discard, io.Discard, []string{"workspace"})
+	inv := dirInvocation(t, repo, io.Discard, io.Discard, []string{"workspace"})
 	for run := range 2 {
 		if err := Run(context.Background(), inv); err != nil {
 			t.Fatalf("lit workspace run %d: %v", run, err)
