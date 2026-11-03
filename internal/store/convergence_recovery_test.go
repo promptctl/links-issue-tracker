@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -257,7 +256,7 @@ func TestAFailedQuarantineCommitLeavesTheQuarantineInForce(t *testing.T) {
 func driftedWorkspace(t *testing.T) string {
 	t.Helper()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check`)
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check`)
@@ -351,7 +350,7 @@ func TestAPruneAfterCommittedWorkIsReportedNotFailed(t *testing.T) {
 // retry, is what clears it.
 func TestAFailedLegacyKeyDropIsClearedByARetry(t *testing.T) {
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if err := st.ExecRawForTest(ctx, `INSERT INTO meta (meta_key, meta_value) VALUES ('schema_version', '1')`); err != nil {
 			t.Fatalf("seed legacy key: %v", err)

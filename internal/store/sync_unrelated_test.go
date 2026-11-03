@@ -985,9 +985,7 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait
 	// budget.
-	restoreWait := coResidentHolderWait
-	coResidentHolderWait = time.Minute
-	t.Cleanup(func() { coResidentHolderWait = restoreWait })
+	shrinkWait(t, time.Minute)
 	for _, tc := range []struct {
 		name   string
 		failAt int

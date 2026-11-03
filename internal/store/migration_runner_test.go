@@ -66,7 +66,7 @@ func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -116,7 +116,7 @@ func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -221,7 +221,7 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 
@@ -255,7 +255,7 @@ func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 func TestOpenToleratesGooseLogWithOnlyAheadRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
@@ -292,7 +292,7 @@ func assertIssuesQueryable(t *testing.T, ctx context.Context, st *Store) {
 func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN title`)
@@ -489,7 +489,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 func TestRefusalReportsUnreadableSnapshots(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN title`)
 		mustCommit(t, ctx, st, "test: corrupt baseline shape")
@@ -534,7 +534,7 @@ const lastProducerStampedSchemaVersion = 9
 func TestFirstSchemaPastTheStampedOnesDropsProducerBinaryVersion(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	const stamped = "0.18.0"
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
@@ -568,11 +568,11 @@ func TestFirstSchemaPastTheStampedOnesDropsProducerBinaryVersion(t *testing.T) {
 func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
-		t.Fatalf("Open(fresh) error = %v", err)
+		t.Fatalf("Open(first) error = %v", err)
 	}
 	registryMax, err := migrations.MaxVersion()
 	if err != nil {
@@ -583,7 +583,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
 	if atMax != registryMax {
-		t.Fatalf("fresh workspace stamped at %d, want registry max %d", atMax, registryMax)
+		t.Fatalf("migrated workspace stamped at %d, want registry max %d", atMax, registryMax)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
@@ -613,7 +613,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		// Strip only the v2/v3 registered content — both CHECK constraints
@@ -684,7 +684,7 @@ func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 func TestRepairVersionContentDriftWithRollbackResetsOnFailure(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check`)
@@ -733,7 +733,7 @@ func TestVersionContentDriftResetSurvivesCallerCancel(t *testing.T) {
 	// serial: no t.Parallel — installs the package-level
 	// versionContentDriftRepairForTest hook.
 	bg := context.Background()
-	withStore(t, bg, filepath.Join(t.TempDir(), "dolt"), func(st *Store) {
+	withStore(t, bg, migratedDoltDir(t), func(st *Store) {
 		applied, err := st.recordedMigrationVersion(bg)
 		if err != nil {
 			t.Fatalf("recordedMigrationVersion() error = %v", err)
@@ -773,7 +773,7 @@ func TestVersionContentDriftResetSurvivesCallerCancel(t *testing.T) {
 func TestOpenToleratesHealthyManagedWorkspace(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		assertIssuesQueryable(t, ctx, st)

@@ -180,7 +180,7 @@ func TestAnUnreleasedRaiseOfAPreVersionedWorkspaceNamesItsShape(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	max := registryMax(t)
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) = %v", err)

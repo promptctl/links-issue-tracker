@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -15,7 +14,7 @@ import (
 // returns its Dolt root and the lowest quarantined version.
 func quarantinedWorkspace(t *testing.T, ctx context.Context, pending int64) (string, int64) {
 	t.Helper()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	first := headVersion(t) - pending + 1
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if _, err := st.Downgrade(ctx, first-1); err != nil {
@@ -100,7 +99,7 @@ func TestUnquarantineNamesTheQuarantineTheNextOpenStillMeets(t *testing.T) {
 func TestUnquarantineWithNothingQuarantinedWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	var before string
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		var err error
@@ -131,7 +130,7 @@ func TestUnquarantineWithNothingQuarantinedWritesNothing(t *testing.T) {
 func TestUnquarantineEnsuresTheQuarantineTableBeforeReadingIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if _, err := st.Downgrade(ctx, headVersion(t)-1); err != nil {
 			t.Fatalf("Downgrade error = %v", err)
@@ -156,7 +155,7 @@ func TestUnquarantineEnsuresTheQuarantineTableBeforeReadingIt(t *testing.T) {
 func TestUnquarantineLeavesARowThatBlocksNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if err := st.recordQuarantine(ctx, &QuarantineBlockError{Version: headVersion(t) + 1, Name: "newer.sql", ErrorText: "simulated failure"}); err != nil {
 			t.Fatalf("recordQuarantine error = %v", err)
@@ -213,7 +212,7 @@ func assertRefusesLitWithMigration(t *testing.T, ctx context.Context, doltRoot s
 // reversed: this binary has a migration to run.
 func workspaceOneBehindHead(t *testing.T, ctx context.Context) string {
 	t.Helper()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if _, err := st.Downgrade(ctx, headVersion(t)-1); err != nil {
 			t.Fatalf("Downgrade error = %v", err)

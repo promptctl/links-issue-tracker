@@ -59,12 +59,10 @@ func chunkJournalPath(doltRoot string) string {
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level
 	// coResidentHolderWait budget.
-	prevBudget := coResidentHolderWait
-	coResidentHolderWait = 700 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevBudget })
+	shrinkWait(t, 700*time.Millisecond)
 
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	openOneVersionBehind(t, ctx, doltRoot)
 
@@ -115,7 +113,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {

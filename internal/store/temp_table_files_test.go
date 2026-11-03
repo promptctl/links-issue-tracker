@@ -22,18 +22,16 @@ import (
 func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait
 	// budget, which the refused open below exhausts by design.
-	prevBudget := coResidentHolderWait
-	coResidentHolderWait = 700 * time.Millisecond
-	t.Cleanup(func() { coResidentHolderWait = prevBudget })
+	shrinkWait(t, 700*time.Millisecond)
 
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
 	if got := writer.Migrated().TempTableFiles; got == nil || *got != (storage.TempTableFilesCollection{}) {
-		t.Errorf("a fresh store's open collected %+v, want it to have looked and found nothing", got)
+		t.Errorf("a write open of a store with nothing staged collected %+v, want it to have looked and found nothing", got)
 	}
 	dir := TempTableFilesDir(doltRoot)
 	staged := filepath.Join(dir, "buffered_file_byte_sink_4242")
@@ -114,14 +112,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 func TestAWriteOpenWhoseCollectionFailsStillOpens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	doltRoot := migratedDoltDir(t)
 	// A file where the directory belongs fails the read for any user, root
 	// included, as a permission bit would not.
 	dir := TempTableFilesDir(doltRoot)

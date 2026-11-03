@@ -17,8 +17,8 @@ import (
 // at any historical canonical shape forward-migrates to v1 with every
 // row of user data intact.
 //
-// Each test simulates a specific pre-goose shape by mutating a freshly-
-// bootstrapped workspace (drop a column, rename a column, drop a table,
+// Each test simulates a specific pre-goose shape by mutating a migrated
+// workspace (drop a column, rename a column, drop a table,
 // insert legacy data values), then Opens again and asserts:
 //
 //   1. Open succeeds — no refusal.
@@ -153,7 +153,7 @@ func assertReachedBaseline(t *testing.T, doltRoot string) *Store {
 func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -206,7 +206,7 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -246,7 +246,7 @@ func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 func TestReconcileNormalizesLegacyStatusValues(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -303,7 +303,7 @@ func TestReconcileNormalizesLegacyStatusValues(t *testing.T) {
 func TestReconcileNullsEpicStatus(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -359,7 +359,7 @@ func TestReconcileNullsEpicStatus(t *testing.T) {
 func TestReconcileBackfillsTopicDefault(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -396,7 +396,7 @@ func TestReconcileBackfillsTopicDefault(t *testing.T) {
 func TestReconcileResetsLegacyPriorities(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -448,7 +448,7 @@ func TestReconcileResetsLegacyPriorities(t *testing.T) {
 func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -666,7 +666,7 @@ func nullableStrPtr(p *string) any {
 func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -864,7 +864,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -917,7 +917,7 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -999,7 +999,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1117,7 +1117,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1130,7 +1130,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	}
 	// Revert post-baseline migrations to the genuine pre-goose (baseline) shape
 	// while goose history is still intact, so adoption + forward-migration on
-	// reopen do not collide with a post-baseline column the bootstrap left behind.
+	// reopen do not collide with a post-baseline column the migrated workspace carries.
 	revertToBaseline(t, first)
 	// Reproduce the field shape: legacy issue_history table present
 	// AND a goose_db_version log claiming a version beyond this binary's
@@ -1210,9 +1210,9 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 func TestReconcileIsIdempotent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
-	// Bootstrap, then strip goose so the next Open re-runs adoption.
+	// Seed an issue, then strip goose so the next Open re-runs adoption.
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
@@ -1254,10 +1254,9 @@ func TestReconcileIsIdempotent(t *testing.T) {
 func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
-	// Bootstrap to lay down storage and a `links` database, then strip
-	// EVERY canonical table except meta. The reconcile must then CREATE
+	// Strip EVERY canonical table except meta. The reconcile must then CREATE
 	// issues, relations, comments, labels, issue_events, issue_event_changes.
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1322,7 +1321,7 @@ func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
 func TestReconcileTopicHasNoDefault(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1368,7 +1367,7 @@ func TestReconcileTopicHasNoDefault(t *testing.T) {
 func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1437,7 +1436,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {

@@ -431,9 +431,7 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 		{name: "a hold with room left gets its rotation", open: 300 * time.Millisecond, closeCost: 100 * time.Millisecond, work: 50 * time.Millisecond, wantRotations: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			restoreOpen := coResidentHolderWait
-			coResidentHolderWait = tc.open
-			t.Cleanup(func() { coResidentHolderWait = restoreOpen })
+			shrinkWait(t, tc.open)
 			restoreClose := rotationCloseReserve
 			rotationCloseReserve = tc.closeCost
 			t.Cleanup(func() { rotationCloseReserve = restoreClose })

@@ -50,35 +50,34 @@ func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
 
 // TestMigrateSnapshotNoOpOpenTakesNoSnapshot pins the "no-op Open (workspace
 // already at canonical shape, no pending versioned migrations) takes no
-// snapshot" acceptance criterion. A second Open against a workspace that is
-// already at canonical shape must not increase the snapshot count.
+// snapshot" acceptance criterion. Reopening a workspace that is already at
+// canonical shape must not increase the snapshot count.
 func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
+	// The copy carries no snapshots, so give it the one its creating Open
+	// took: a no-op Open that removed or pruned it must change the count.
+	label := formatMigrationSnapshotLabel(time.Now())
+	if _, err := dbsnapshot.Take(ctx, testStderr(), doltRoot, label); err != nil {
+		t.Fatalf("Take migration snapshot error = %v", err)
 	}
 	snapsBefore, err := dbsnapshot.List(doltRoot)
 	if err != nil {
-		t.Fatalf("List snapshots after first open error = %v", err)
+		t.Fatalf("List snapshots before reopen error = %v", err)
 	}
 
-	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	reopened, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
-		t.Fatalf("Open(second) error = %v", err)
+		t.Fatalf("Open(reopen) error = %v", err)
 	}
-	if err := second.Close(); err != nil {
-		t.Fatalf("Close(second) error = %v", err)
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("Close(reopen) error = %v", err)
 	}
 	snapsAfter, err := dbsnapshot.List(doltRoot)
 	if err != nil {
-		t.Fatalf("List snapshots after second open error = %v", err)
+		t.Fatalf("List snapshots after reopen error = %v", err)
 	}
 	if len(snapsAfter) != len(snapsBefore) {
 		t.Fatalf("no-op Open created snapshot: before=%d after=%d; entries=%+v", len(snapsBefore), len(snapsAfter), snapsAfter)
@@ -207,15 +206,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
+	doltRoot := migratedDoltDir(t)
 
 	// Manufacture excess *migration-shaped* snapshots beyond the retention
 	// budget. Kind-aware retention spares non-migration snapshots, so the
@@ -254,14 +245,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
+	doltRoot := migratedDoltDir(t)
 	// Leave one more than a full retention budget of migration snapshots, the
 	// oldest of which cannot be removed: the open's own snapshot pushes it and
 	// the one behind it out, and the prune fails on the oldest but must still
@@ -344,16 +328,7 @@ func countMigrationSnapshots(t *testing.T, databaseDir string) int {
 func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-
-	// Bootstrap the workspace so the snapshots dir exists.
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
+	doltRoot := migratedDoltDir(t)
 
 	// Manufacture many user snapshots (label without the migration prefix)
 	// plus several extra migration snapshots beyond the migration retention.
@@ -444,7 +419,7 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level failpointForTest.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	// Step 1: Seed the workspace with rich data covering all required fields.
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -770,7 +745,7 @@ func TestRollbackSnapshotIsOneTheOlderLitOpens(t *testing.T) {
 func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if _, err := st.Downgrade(ctx, 3); err != nil {
 			t.Fatalf("Downgrade(3) error = %v", err)

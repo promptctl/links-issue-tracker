@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 )
 
 // heldReports collects what a hold reports when it ends.
@@ -38,9 +40,7 @@ func (r *heldReports) snapshot() ([]LockHold, []LockWait) {
 // heartbeat ticker never fires inside a test, which then drives tick by hand.
 func liftWaitOutOfPlay(t *testing.T) {
 	t.Helper()
-	prev := coResidentHolderWait
-	coResidentHolderWait = time.Hour
-	t.Cleanup(func() { coResidentHolderWait = prev })
+	shrinkWait(t, time.Hour)
 }
 
 // takenHold is a hold of kind access on a fresh store root, told by hand that
@@ -138,7 +138,7 @@ func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
 // and sends no heartbeat until the phase ends.
 func TestALongPhaseOutlivesAConnectionRotation(t *testing.T) {
 	liftWaitOutOfPlay(t)
-	s, err := OpenRoutine(context.Background(), testEnv(), testStderr(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	s, err := OpenRoutine(context.Background(), testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenRoutine() error = %v", err)
 	}
@@ -178,7 +178,7 @@ func TestALongPhaseOutlivesAConnectionRotation(t *testing.T) {
 // A connection rotation rotates the holder record with the engine: one
 // record stands after it, under the name the new hold announces.
 func TestAReconnectRotatesTheHolderRecordWithTheEngine(t *testing.T) {
-	s, err := Open(context.Background(), testEnv(), testStderr(), filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	s, err := Open(context.Background(), testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -309,14 +309,7 @@ func TestAHoldThatNeverTookTheLockReportsNothing(t *testing.T) {
 func contend(t *testing.T, open func(context.Context, string) (*Store, error), work func(*Store) error, reports *heldReports) (error, time.Duration) {
 	t.Helper()
 	ctx := WithLockObserver(context.Background(), reports.observer())
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-	initial, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("initial Open() error = %v", err)
-	}
-	if err := initial.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
+	doltRoot := migratedDoltDir(t)
 	holder, err := open(ctx, doltRoot)
 	if err != nil {
 		t.Fatalf("holder open error = %v", err)
@@ -337,8 +330,16 @@ func contend(t *testing.T, open func(context.Context, string) (*Store, error), w
 }
 
 // shrinkWait sets coResidentHolderWait for a contention test.
+//
+// It builds the store templates first, so the template every later test
+// copies is never built under a test's wait. [LAW:no-ambient-temporal-coupling]
 func shrinkWait(t *testing.T, wait time.Duration) {
 	t.Helper()
+	for _, tp := range []*dirtemplate.Template{storeTemplate, unrelatedStoreTemplate} {
+		if _, err := tp.Dir(); err != nil {
+			t.Fatalf("build a store template: %v", err)
+		}
+	}
 	prev := coResidentHolderWait
 	coResidentHolderWait = wait
 	t.Cleanup(func() { coResidentHolderWait = prev })
@@ -440,7 +441,7 @@ func lockWaitOn(reports *heldReports, lock string) *LockWait {
 func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
 	// serial: rewrites the package-level coResidentHolderWait.
 	shrinkWait(t, time.Minute)
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	holder, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("holder Open() error = %v", err)

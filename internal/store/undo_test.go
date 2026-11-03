@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ import (
 
 func newUndoStore(t *testing.T) (*Store, string) {
 	t.Helper()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	st, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
