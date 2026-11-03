@@ -282,12 +282,16 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 		t.Fatalf("SyncFetch(consumer) = %v", err)
 	}
 	_, err := st.SyncReconcileCombine(ctx, origin, "master")
-	var refused *SchemaCeilingError
+	var refused *SchemaCeilingLiftError
 	if !errors.As(err, &refused) {
-		t.Fatalf("reconcile against a remote held at %d = %v, want a SchemaCeilingError from the lift", max-1, err)
+		t.Fatalf("reconcile against a remote held at %d = %v, want a SchemaCeilingLiftError from the lift", max-1, err)
 	}
-	if refused.Raise != RaiseLift || refused.Ceiling != holdBy("this store", max-1) {
-		t.Errorf("refusal = %+v, want the lift refused at the fetched head's hold", *refused)
+	if refused.Remote != "origin" || refused.Branch != "master" || refused.CommitSchema != max-1 || refused.TargetSchema != max || refused.Ceiling != holdBy("this store", max-1) {
+		t.Errorf("refusal = %+v, want the lift from %d to %d refused at the fetched head's hold, named for origin/master", *refused, max-1, max)
+	}
+	var lift *SchemaCeilingError
+	if !errors.As(err, &lift) || lift.Raise != RaiseLift {
+		t.Errorf("refusal %v does not wrap the lift's own refusal", err)
 	}
 	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused reconcile = %v", err)

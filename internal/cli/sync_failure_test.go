@@ -345,6 +345,80 @@ func TestASchemaHoldPushRefusalRendersTheHoldAsTheCeiling(t *testing.T) {
 	}
 }
 
+// A reconcile's lift refused by the remote's hold renders its own block: the
+// fetched commit's schema, the lift's target, the hold as the ceiling, and a
+// remedy that opens with the release at the hold, then the remote downgrade
+// and lift; never a fetch or a pull, which would read the same commit and be
+// refused the same way, and never an install, which the hold refuses too.
+func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
+	t.Parallel()
+	storeErr := &store.SchemaCeilingLiftError{
+		Remote: "origin", Branch: "master", CommitSchema: 11, TargetSchema: 12,
+		Ceiling: version.SchemaCeiling{Max: 11, Source: "origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set", Bound: version.BoundHold},
+	}
+	var syncFailure SyncFailureError
+	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
+		t.Fatalf("asSyncFailure(%v) is not a SyncFailureError", storeErr)
+	}
+	if syncFailure.Failure.Class != syncFailureSchemaCeilingLift || syncFailure.Failure.LiftRefused != storeErr || syncFailure.Failure.Remote != "origin" || syncFailure.Failure.Branch != "master" {
+		t.Fatalf("mapped failure = %+v", syncFailure.Failure)
+	}
+	if !errors.Is(syncFailure, storeErr) {
+		t.Errorf("the block does not unwrap to the refusal it renders")
+	}
+	block := syncFailure.Error()
+	for _, want := range []string{
+		"a commit the reconcile against origin/master read is at schema version 11, and settling it here means lifting it to this lit's schema version 12, but the schema ceiling for this sync is 11 (origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
+		"lit downgrade --to <tag>",
+		"release at schema v11",
+		"lit downgrade --schema 11 --remote origin",
+		"`lit upgrade --remote origin` after it lifts the hold",
+		"ESCALATION — BLOCKED",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block lacks %q:\n%s", want, block)
+		}
+	}
+	for _, retry := range []string{"lit sync fetch", "lit sync pull"} {
+		if strings.Contains(block, retry) {
+			t.Errorf("block names %q, which reads the same commit and is refused the same way:\n%s", retry, block)
+		}
+	}
+	if strings.Contains(strings.ReplaceAll(block, "lit upgrade --remote", ""), "lit upgrade") {
+		t.Errorf("block names an install, which a hold refuses too:\n%s", block)
+	}
+}
+
+// The same block renders a lift refused by this lit's released-schema
+// ceiling: the remedy is the release that carries the schema, and no
+// downgrade, which steps a backlog down to a hold this refusal has none of.
+func TestAReleasedCeilingLiftRefusalNamesTheRelease(t *testing.T) {
+	t.Parallel()
+	storeErr := &store.SchemaCeilingLiftError{
+		Remote: "origin", Branch: "master", CommitSchema: 11, TargetSchema: 12,
+		Ceiling: version.SchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0", Bound: version.BoundReleased},
+	}
+	var syncFailure SyncFailureError
+	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
+		t.Fatalf("asSyncFailure(%v) is not a SyncFailureError", storeErr)
+	}
+	block := syncFailure.Error()
+	for _, want := range []string{
+		"the schema ceiling for this sync is 11 (stamped at build time from release tag v0.24.0)",
+		"lit version",
+		"lit upgrade",
+		"lifts to schema v12 only if a release carries it",
+		"ESCALATION — BLOCKED",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block lacks %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, "lit downgrade") {
+		t.Errorf("block names a downgrade for a refusal with no hold:\n%s", block)
+	}
+}
+
 // remoteSchemaAheadFailure/asSyncFailure adapt the store's typed remote-ahead
 // refusal into the one contract error — so every surface renders the identical
 // block from the same store error — which still exits as the schema-ahead

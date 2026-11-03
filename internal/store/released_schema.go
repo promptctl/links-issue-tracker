@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -67,21 +68,80 @@ func (e *SchemaCeilingError) Error() string {
 		refused = fmt.Sprintf("refusing to migrate this workspace from %s to schema version %d", from, e.TargetVersion)
 	}
 	return fmt.Sprintf("%s: the schema ceiling here is %d (%s), and this lit never puts a schema above that ceiling in place in an existing store%s",
-		refused, e.Ceiling.Max, e.Ceiling.Source, e.remedy())
+		refused, e.Ceiling.Max, e.Ceiling.Source, holdRemedyClause(e.Ceiling))
 }
 
-// remedy is the clause a hold's refusal ends with: the store knows the hold's
-// version, not which release carries it, so it names the release by schema
-// (design-docs/schema-reversibility.md, "Lowering a remote"). A refusal by
-// the released-schema ceiling names none: no release carries the schema the
-// write would put in place. [LAW:dataflow-not-control-flow] the bound is the
-// domain's discriminator.
-func (e *SchemaCeilingError) remedy() string {
-	switch e.Ceiling.Bound {
+// holdRemedyClause is the clause a hold's refusal ends with: the store knows
+// the hold's version, not which release carries it, so it names the release
+// by schema (design-docs/schema-reversibility.md, "Lowering a remote"). A
+// refusal by the released-schema ceiling names none: no release carries the
+// schema the write would put in place. [LAW:dataflow-not-control-flow] the
+// bound is the domain's discriminator. [LAW:one-source-of-truth] the open's
+// refusal and the lift's end with the one clause.
+func holdRemedyClause(ceiling version.SchemaCeiling) string {
+	switch ceiling.Bound {
 	case version.BoundHold:
-		return fmt.Sprintf("; the release at schema version %d (`lit downgrade --to <tag>`) steps this store down to the hold", e.Ceiling.Max)
+		return fmt.Sprintf("; the release at schema version %d (`lit downgrade --to <tag>`) steps this store down to the hold", ceiling.Max)
 	default:
 		return ""
+	}
+}
+
+// SchemaCeilingLiftError refuses a reconcile against remote/branch that would
+// lift a commit it reads above the schema ceiling: the released-schema
+// ceiling, or the hold the commit carries, whichever is lower. It is the
+// lift's refusal (SchemaCeilingError, RaiseLift) stamped with the remote and
+// branch the reconcile was against, which the lift itself does not know; the
+// CLI reads this type, never the inner one, and the inner one stays wrapped
+// so the chain still names the commit the lift refused, which is the fetched
+// head or a local head held below this lit's schema. [LAW:parse-dont-validate]
+type SchemaCeilingLiftError struct {
+	Remote       string
+	Branch       string
+	CommitSchema int64
+	TargetSchema int64
+	Ceiling      version.SchemaCeiling
+	cause        error
+}
+
+func (e *SchemaCeilingLiftError) Error() string {
+	return fmt.Sprintf(
+		"refusing to settle this backlog against %s/%s: a commit the reconcile read is at schema version %d, settling it means lifting it to this lit's schema version %d, and the schema ceiling here is %d (%s); this lit never puts a schema above that ceiling in place%s",
+		e.Remote, e.Branch, e.CommitSchema, e.TargetSchema, e.Ceiling.Max, e.Ceiling.Source, holdRemedyClause(e.Ceiling))
+}
+
+// Unwrap is the lift's own refusal, with the commit it refused in its chain.
+func (e *SchemaCeilingLiftError) Unwrap() error { return e.cause }
+
+// EventRecord is the remote refused, the commit's schema, the lift's target,
+// and the ceiling.
+func (e *SchemaCeilingLiftError) EventRecord() (map[string]any, map[string]int) {
+	return map[string]any{
+		"schema_ceiling.remote":         e.Remote,
+		"schema_ceiling.branch":         e.Branch,
+		"schema_ceiling.commit_schema":  e.CommitSchema,
+		"schema_ceiling.target_schema":  e.TargetSchema,
+		"schema_ceiling.ceiling":        e.Ceiling.Max,
+		"schema_ceiling.ceiling_source": e.Ceiling.Source,
+	}, nil
+}
+
+// nameLiftRefusal stamps a lift's ceiling refusal in err with the remote and
+// branch the reconcile was against, and returns every other error unchanged.
+// [LAW:single-enforcer] replayUnderGuard runs it on every replay's error, the
+// one exit a lift refusal has toward a caller.
+func nameLiftRefusal(err error, remote storage.RemoteName, branch string) error {
+	var refused *SchemaCeilingError
+	if !errors.As(err, &refused) || refused.Raise != RaiseLift {
+		return err
+	}
+	return &SchemaCeilingLiftError{
+		Remote:       remote.String(),
+		Branch:       branch,
+		CommitSchema: refused.WorkspaceVersion,
+		TargetSchema: refused.TargetVersion,
+		Ceiling:      refused.Ceiling,
+		cause:        err,
 	}
 }
 
@@ -129,6 +189,7 @@ func (e *SchemaCeilingPushError) EventRecord() (map[string]any, map[string]int) 
 var (
 	_ model.RecordedError = (*SchemaCeilingError)(nil)
 	_ model.RecordedError = (*SchemaCeilingPushError)(nil)
+	_ model.RecordedError = (*SchemaCeilingLiftError)(nil)
 )
 
 // refuseCeilingRaise refuses a migrating open that would put a version above

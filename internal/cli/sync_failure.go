@@ -86,6 +86,13 @@ const (
 	// whichever is lower. It never clears by retrying from this lit; the
 	// ceiling's source names which bound refused.
 	syncFailureSchemaCeiling syncFailureClass = "schema_ceiling"
+	// syncFailureSchemaCeilingLift: a pull or reconcile was refused because
+	// settling a commit it read means lifting it to this lit's schema, above
+	// the schema ceiling: this lit's released-schema ceiling, or the hold the
+	// commit carries, whichever is lower. The commit was just read, so a fetch
+	// clears nothing and a pull is refused the same way; the ceiling's bound
+	// selects the remedy, as it does for a push refused by the ceiling.
+	syncFailureSchemaCeilingLift syncFailureClass = "schema_ceiling_lift"
 	// syncFailureSchemaRaiseRequiresRelease: the push was refused because it
 	// would raise the remote's schema and this lit is no release. The remote's
 	// schema is the tracking ref's as of the last fetch, so the remedy is a
@@ -158,6 +165,10 @@ type SyncFailure struct {
 	// syncFailureSchemaCeiling: the commit's schema and the ceiling that
 	// refused it, with its source.
 	AboveCeiling *store.SchemaCeilingPushError
+	// LiftRefused is the store's refusal, populated only for
+	// syncFailureSchemaCeilingLift: the commit's schema, the lift's target,
+	// and the ceiling that refused it, with its source.
+	LiftRefused *store.SchemaCeilingLiftError
 	// RaiseRefused is the store's refusal, populated only for
 	// syncFailureSchemaRaiseRequiresRelease: the remote's schema (or that it
 	// is unknown), the commit's, and the ceiling that chooses the remedy.
@@ -296,6 +307,22 @@ func schemaCeilingFailure(err error) (SyncFailure, bool) {
 	}, true
 }
 
+// schemaCeilingLiftFailure builds the sync-failure contract for a store
+// *SchemaCeilingLiftError, or ok=false when err is not one.
+func schemaCeilingLiftFailure(err error) (SyncFailure, bool) {
+	var refused *store.SchemaCeilingLiftError
+	if !errors.As(err, &refused) {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:       syncFailureSchemaCeilingLift,
+		Remote:      refused.Remote,
+		Branch:      refused.Branch,
+		LiftRefused: refused,
+		BuildNote:   resolveBuildStatusNote(time.Now()),
+	}, true
+}
+
 // schemaRaiseFailure builds the sync-failure contract for a store
 // *SchemaRaiseRequiresReleaseError, or ok=false when err is not one.
 func schemaRaiseFailure(err error) (SyncFailure, bool) {
@@ -385,17 +412,51 @@ func schemaRaiseRemedy(refused *store.SchemaRaiseRequiresReleaseError) []remedyS
 func schemaCeilingRemedy(refused *store.SchemaCeilingPushError) []remedyStep {
 	switch refused.Ceiling.Bound {
 	case version.BoundHold:
-		return []remedyStep{
+		return append([]remedyStep{
 			{"lit sync fetch --remote " + refused.Remote, "reads the remote's current head; a hold lifted on the remote since the last fetch clears this"},
 			{"lit sync push --remote " + refused.Remote, "lands when the remote no longer holds its schema below this backlog's"},
-			{"lit downgrade --to <tag>", fmt.Sprintf("only when the user directs it: install the release at schema v%d, which steps this backlog down to the hold", refused.Ceiling.Max)},
-			{fmt.Sprintf("lit downgrade --schema %d --remote %s", refused.Ceiling.Max, refused.Remote), fmt.Sprintf("only when the user means to lift %s's hold from a backlog that has risen above it: holds this backlog at v%d again, and `lit upgrade --remote %s` after it lifts the hold", refused.Remote, refused.Ceiling.Max, refused.Remote)},
-		}
+		}, holdSteps(refused.Remote, refused.Ceiling.Max)...)
 	default:
-		return []remedyStep{
-			{"lit version", "shows this lit's released-schema ceiling and where it came from"},
-			{"lit upgrade", fmt.Sprintf("only when the user directs it: install a published release, which can send schema v%d only if a release carries it", refused.CommitSchema)},
-		}
+		return releasedCeilingSteps(fmt.Sprintf("which can send schema v%d only if a release carries it", refused.CommitSchema))
+	}
+}
+
+// schemaCeilingLiftRemedy is how a pull or reconcile refused for lifting a
+// commit it read above the ceiling clears, by the bound that refused it. The
+// commit was just read, so no fetch comes first: over the remote's hold, the
+// release at the hold steps this backlog down to it, or the remote downgrade
+// and lift free a backlog that rose above the hold; over this lit's
+// released-schema ceiling, only a published release carrying the schema may
+// lift to it. [LAW:dataflow-not-control-flow] the bound is the domain's own
+// discriminator; neither arm reads the source prose.
+func schemaCeilingLiftRemedy(refused *store.SchemaCeilingLiftError) []remedyStep {
+	switch refused.Ceiling.Bound {
+	case version.BoundHold:
+		return holdSteps(refused.Remote, refused.Ceiling.Max)
+	default:
+		return releasedCeilingSteps(fmt.Sprintf("which lifts to schema v%d only if a release carries it", refused.TargetSchema))
+	}
+}
+
+// holdSteps are the two ways past a remote's hold, in order: the release at
+// the hold, which steps this backlog down to it, and the remote downgrade and
+// lift a backlog that rose above the hold runs to lift it, both the user's to
+// direct. [LAW:one-source-of-truth] the push's and the lift's hold remedies
+// end in these two steps.
+func holdSteps(remote string, hold int64) []remedyStep {
+	return []remedyStep{
+		{"lit downgrade --to <tag>", fmt.Sprintf("only when the user directs it: install the release at schema v%d, which steps this backlog down to the hold", hold)},
+		{fmt.Sprintf("lit downgrade --schema %d --remote %s", hold, remote), fmt.Sprintf("only when the user means to lift %s's hold from a backlog that has risen above it: holds this backlog at v%d again, and `lit upgrade --remote %s` after it lifts the hold", remote, hold, remote)},
+	}
+}
+
+// releasedCeilingSteps are the two ways past this lit's released-schema
+// ceiling: see where it came from, and install a release, whose gloss ends
+// in what the release can do that this lit cannot.
+func releasedCeilingSteps(releaseCan string) []remedyStep {
+	return []remedyStep{
+		{"lit version", "shows this lit's released-schema ceiling and where it came from"},
+		{"lit upgrade", "only when the user directs it: install a published release, " + releaseCan},
 	}
 }
 
@@ -419,16 +480,20 @@ func asSyncFailure(err error) error {
 }
 
 // schemaRefusalFailure builds the sync-failure contract for any of the
-// store's three schema refusals — the remote ahead of this binary, a commit
-// above the released ceiling, a raise from no release — or ok=false when err
-// is none of them. None clears by retrying from this binary, so the on-change
-// mirror renders every one of them as the block rather than as a transient
-// push error the next mutation retries. [LAW:single-enforcer]
+// store's schema refusals — the remote ahead of this binary, a commit above
+// the released ceiling, a lift above it, a raise from no release, an unheld
+// lowering — or ok=false when err is none of them. None clears by retrying
+// from this binary, so the on-change mirror and the automatic receive render
+// every one of them as the block rather than as a transient error the next
+// mutation or receive retries. [LAW:single-enforcer]
 func schemaRefusalFailure(err error) (SyncFailure, bool) {
 	if failure, ok := remoteSchemaAheadFailure(err); ok {
 		return failure, true
 	}
 	if failure, ok := schemaCeilingFailure(err); ok {
+		return failure, true
+	}
+	if failure, ok := schemaCeilingLiftFailure(err); ok {
 		return failure, true
 	}
 	if failure, ok := schemaRaiseFailure(err); ok {
@@ -499,6 +564,8 @@ func (e SyncFailureError) Unwrap() error {
 		return e.Failure.RemoteAhead
 	case e.Failure.AboveCeiling != nil:
 		return e.Failure.AboveCeiling
+	case e.Failure.LiftRefused != nil:
+		return e.Failure.LiftRefused
 	case e.Failure.RaiseRefused != nil:
 		return e.Failure.RaiseRefused
 	case e.Failure.LoweringRefused != nil:
@@ -584,6 +651,8 @@ func (f SyncFailure) headline() string {
 		return "lit sync push was refused because a peer pushed first, and needs you to merge the peer's commits."
 	case syncFailureSchemaCeiling:
 		return "lit sync push was refused because this backlog is at a schema above the remote's schema ceiling, and needs you."
+	case syncFailureSchemaCeilingLift:
+		return "lit sync could not settle this backlog against the remote because lifting a commit it read to this lit's schema is above the schema ceiling, and needs you."
 	case syncFailureSchemaRaiseRequiresRelease:
 		return "lit sync push was refused because it would raise the remote's schema and this lit is not a release, and needs you."
 	case syncFailureSchemaLoweringRequiresHold:
@@ -639,6 +708,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the commit this push would send to %s is at schema version %d, and the schema ceiling for this push is %d (%s). A lit never sends a commit above the ceiling to a remote, so nothing was written to %s.",
 			ref, f.AboveCeiling.CommitSchema, f.AboveCeiling.Ceiling.Max, f.AboveCeiling.Ceiling.Source, ref)
+	case syncFailureSchemaCeilingLift:
+		return fmt.Sprintf(
+			"a commit the reconcile against %s read is at schema version %d, and settling it here means lifting it to this lit's schema version %d, but the schema ceiling for this sync is %d (%s). A lit never raises a schema above the ceiling, so this checkout was not settled against %s and is still on the history it last settled to; the commit was just read, so fetching or pulling again is refused the same way.",
+			ref, f.LiftRefused.CommitSchema, f.LiftRefused.TargetSchema, f.LiftRefused.Ceiling.Max, f.LiftRefused.Ceiling.Source, ref)
 	case syncFailurePushDiverged:
 		return fmt.Sprintf(
 			"%s holds commits a peer pushed that this checkout lacks, and this checkout holds commits %s lacks, so the remote refused the push and nothing was written to it. A retry is refused the same way until the peer's commits are merged here.",
@@ -735,6 +808,8 @@ func (f SyncFailure) resolutionSteps() []string {
 		return remedyLines(pushDivergedRemedy(f.Remote))
 	case syncFailureSchemaCeiling:
 		return remedyLines(schemaCeilingRemedy(f.AboveCeiling))
+	case syncFailureSchemaCeilingLift:
+		return remedyLines(schemaCeilingLiftRemedy(f.LiftRefused))
 	case syncFailureSchemaRaiseRequiresRelease:
 		return remedyLines(schemaRaiseRemedy(f.RaiseRefused))
 	case syncFailureSchemaLoweringRequiresHold:
@@ -774,7 +849,7 @@ func (f SyncFailure) escalationLine() string {
 		return fmt.Sprintf(
 			"ESCALATION — BLOCKED: no settle has succeeded on this checkout since a receive first stopped after its fetch at %s (%s), and the latest receive stopped at %s; this checkout is not receiving the shared backlog. Run the resolution above, and surface it to the user as blocking if it fails.",
 			f.UnsettledSince.UTC().Format(time.RFC3339), f.agePhrase(), f.StoppedAt.describe())
-	case syncFailureSchemaCeiling:
+	case syncFailureSchemaCeiling, syncFailureSchemaCeilingLift:
 		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying from this lit; the ceiling's source above says which bound refused, a released-schema ceiling or the remote's schema hold, and what set it. " + installReplacesLit + ": run the install above only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailureSchemaRaiseRequiresRelease:
 		return "ESCALATION — resolve now: run the fetch and the push above once. A push refused again after the fetch is a raise, or the first push to a branch the remote does not have yet; a lit that is no release makes neither, and that will not clear by waiting or retrying from this lit. " + installReplacesLit + ": run the upgrade only when the user directs it, and until then surface this to the user as blocking."
