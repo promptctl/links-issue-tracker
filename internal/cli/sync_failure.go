@@ -90,8 +90,10 @@ const (
 	// settling a commit it read means lifting it to this lit's schema, above
 	// the schema ceiling: this lit's released-schema ceiling, or the hold the
 	// commit carries, whichever is lower. The commit was just read, so a fetch
-	// clears nothing and a pull is refused the same way; the ceiling's bound
-	// selects the remedy, as it does for a push refused by the ceiling.
+	// clears nothing, a pull is refused the same way, and so is a remote
+	// downgrade, which pushes and so wants this backlog not behind; the
+	// ceiling's bound selects the remedy, as it does for a push refused by
+	// the ceiling.
 	syncFailureSchemaCeilingLift syncFailureClass = "schema_ceiling_lift"
 	// syncFailureSchemaRaiseRequiresRelease: the push was refused because it
 	// would raise the remote's schema and this lit is no release. The remote's
@@ -166,8 +168,9 @@ type SyncFailure struct {
 	// refused it, with its source.
 	AboveCeiling *store.SchemaCeilingPushError
 	// LiftRefused is the store's refusal, populated only for
-	// syncFailureSchemaCeilingLift: the commit's schema, the lift's target,
-	// and the ceiling that refused it, with its source.
+	// syncFailureSchemaCeilingLift: the remote and, under Lift, the commit's
+	// schema, the lift's target, and the ceiling that refused it, with its
+	// source.
 	LiftRefused *store.SchemaCeilingLiftError
 	// RaiseRefused is the store's refusal, populated only for
 	// syncFailureSchemaRaiseRequiresRelease: the remote's schema (or that it
@@ -423,31 +426,39 @@ func schemaCeilingRemedy(refused *store.SchemaCeilingPushError) []remedyStep {
 
 // schemaCeilingLiftRemedy is how a pull or reconcile refused for lifting a
 // commit it read above the ceiling clears, by the bound that refused it. The
-// commit was just read, so no fetch comes first: over the remote's hold, the
-// release at the hold steps this backlog down to it, or the remote downgrade
-// and lift free a backlog that rose above the hold; over this lit's
-// released-schema ceiling, only a published release carrying the schema may
-// lift to it. [LAW:dataflow-not-control-flow] the bound is the domain's own
-// discriminator; neither arm reads the source prose.
+// commit was just read, so no fetch comes first; and over a hold, only the
+// release at the hold, which steps this backlog down to it: the remote
+// downgrade the push's remedy offers pushes, so it wants this backlog not
+// behind the remote, and a backlog refused at a commit it just read is
+// behind, so that step is refused and names the pull this block ends. Over
+// this lit's released-schema ceiling, only a published release carrying the
+// schema may lift to it. [LAW:dataflow-not-control-flow] the bound is the
+// domain's own discriminator; neither arm reads the source prose.
 func schemaCeilingLiftRemedy(refused *store.SchemaCeilingLiftError) []remedyStep {
-	switch refused.Ceiling.Bound {
+	switch refused.Lift.Ceiling.Bound {
 	case version.BoundHold:
-		return holdSteps(refused.Remote, refused.Ceiling.Max)
+		return []remedyStep{releaseAtHoldStep(refused.Lift.Ceiling.Max)}
 	default:
-		return releasedCeilingSteps(fmt.Sprintf("which lifts to schema v%d only if a release carries it", refused.TargetSchema))
+		return releasedCeilingSteps(fmt.Sprintf("which lifts to schema v%d only if a release carries it", refused.Lift.TargetVersion))
 	}
 }
 
-// holdSteps are the two ways past a remote's hold, in order: the release at
-// the hold, which steps this backlog down to it, and the remote downgrade and
-// lift a backlog that rose above the hold runs to lift it, both the user's to
-// direct. [LAW:one-source-of-truth] the push's and the lift's hold remedies
-// end in these two steps.
+// holdSteps are the two ways past a remote's hold for a push, in order: the
+// release at the hold, which steps this backlog down to it, and the remote
+// downgrade and lift a backlog that rose above the hold runs to lift it, both
+// the user's to direct.
 func holdSteps(remote string, hold int64) []remedyStep {
 	return []remedyStep{
-		{"lit downgrade --to <tag>", fmt.Sprintf("only when the user directs it: install the release at schema v%d, which steps this backlog down to the hold", hold)},
+		releaseAtHoldStep(hold),
 		{fmt.Sprintf("lit downgrade --schema %d --remote %s", hold, remote), fmt.Sprintf("only when the user means to lift %s's hold from a backlog that has risen above it: holds this backlog at v%d again, and `lit upgrade --remote %s` after it lifts the hold", remote, hold, remote)},
 	}
+}
+
+// releaseAtHoldStep is the release at a hold, which steps this backlog down
+// to it. [LAW:one-source-of-truth] the push's and the lift's hold remedies
+// open with this one step.
+func releaseAtHoldStep(hold int64) remedyStep {
+	return remedyStep{"lit downgrade --to <tag>", fmt.Sprintf("only when the user directs it: install the release at schema v%d, which steps this backlog down to the hold", hold)}
 }
 
 // releasedCeilingSteps are the two ways past this lit's released-schema
@@ -711,7 +722,7 @@ func (f SyncFailure) whatLine() string {
 	case syncFailureSchemaCeilingLift:
 		return fmt.Sprintf(
 			"a commit the reconcile against %s read is at schema version %d, and settling it here means lifting it to this lit's schema version %d, but the schema ceiling for this sync is %d (%s). A lit never raises a schema above the ceiling, so this checkout was not settled against %s and is still on the history it last settled to; the commit was just read, so fetching or pulling again is refused the same way.",
-			ref, f.LiftRefused.CommitSchema, f.LiftRefused.TargetSchema, f.LiftRefused.Ceiling.Max, f.LiftRefused.Ceiling.Source, ref)
+			ref, f.LiftRefused.Lift.WorkspaceVersion, f.LiftRefused.Lift.TargetVersion, f.LiftRefused.Lift.Ceiling.Max, f.LiftRefused.Lift.Ceiling.Source, ref)
 	case syncFailurePushDiverged:
 		return fmt.Sprintf(
 			"%s holds commits a peer pushed that this checkout lacks, and this checkout holds commits %s lacks, so the remote refused the push and nothing was written to it. A retry is refused the same way until the peer's commits are merged here.",

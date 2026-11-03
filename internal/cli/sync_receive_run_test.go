@@ -299,7 +299,7 @@ func TestEveryStopMapsToItsSyncFailure(t *testing.T) {
 		want syncFailureClass
 	}{
 		{&store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}, syncFailureRemoteSchemaAhead},
-		{&store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", CommitSchema: 8, TargetSchema: 9, Ceiling: version.SchemaCeiling{Max: 8, Bound: version.BoundHold}}, syncFailureSchemaCeilingLift},
+		{&store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: &store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9, Ceiling: version.SchemaCeiling{Max: 8, Bound: version.BoundHold}}}, syncFailureSchemaCeilingLift},
 	}
 	for _, refusal := range refusals {
 		for _, step := range []receiveStep{receiveStepSettle, receiveStepReconcile} {
@@ -330,7 +330,7 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 			Class: class, Remote: "origin", Branch: "master",
 			RemoteAhead:     &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8},
 			AboveCeiling:    &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9},
-			LiftRefused:     &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", CommitSchema: 8, TargetSchema: 9},
+			LiftRefused:     &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: &store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}},
 			RaiseRefused:    &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9},
 			LoweringRefused: &store.SchemaLoweringRequiresHoldError{Remote: "origin", Branch: "master", RemoteSchema: 9, CommitSchema: 8},
 			LeaseLost:       &storage.ForcedPushLeaseError{Remote: remoteName(t, "origin"), Branch: "master", Expected: "abcdef0123456789abcdef0123456789"},

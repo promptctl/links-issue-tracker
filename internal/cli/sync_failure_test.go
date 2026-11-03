@@ -346,15 +346,17 @@ func TestASchemaHoldPushRefusalRendersTheHoldAsTheCeiling(t *testing.T) {
 }
 
 // A reconcile's lift refused by the remote's hold renders its own block: the
-// fetched commit's schema, the lift's target, the hold as the ceiling, and a
-// remedy that opens with the release at the hold, then the remote downgrade
-// and lift; never a fetch or a pull, which would read the same commit and be
-// refused the same way, and never an install, which the hold refuses too.
+// fetched commit's schema, the lift's target, the hold as the ceiling naming
+// the commit that carries it, and one remedy, the release at the hold; never
+// a fetch or a pull, which would read the same commit and be refused the same
+// way, never the remote downgrade, which pushes and so is refused while this
+// backlog is behind, and never an install, which the hold refuses too.
 func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaCeilingLiftError{
-		Remote: "origin", Branch: "master", CommitSchema: 11, TargetSchema: 12,
-		Ceiling: version.SchemaCeiling{Max: 11, Source: "origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set", Bound: version.BoundHold},
+		Remote: "origin", Branch: "master",
+		Lift: &store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 11, TargetVersion: 12,
+			Ceiling: version.SchemaCeiling{Max: 11, Source: "the commit 1qvemmg4ijkfoad9kc5jsr9bl7p4ejrs the reconcile read holds its schema at 11 (meta.schema_hold), which a remote downgrade set", Bound: version.BoundHold}},
 	}
 	var syncFailure SyncFailureError
 	if !errors.As(asSyncFailure(storeErr), &syncFailure) {
@@ -368,24 +370,19 @@ func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
 	}
 	block := syncFailure.Error()
 	for _, want := range []string{
-		"a commit the reconcile against origin/master read is at schema version 11, and settling it here means lifting it to this lit's schema version 12, but the schema ceiling for this sync is 11 (origin/master's head holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
+		"a commit the reconcile against origin/master read is at schema version 11, and settling it here means lifting it to this lit's schema version 12, but the schema ceiling for this sync is 11 (the commit 1qvemmg4ijkfoad9kc5jsr9bl7p4ejrs the reconcile read holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
 		"lit downgrade --to <tag>",
 		"release at schema v11",
-		"lit downgrade --schema 11 --remote origin",
-		"`lit upgrade --remote origin` after it lifts the hold",
 		"ESCALATION — BLOCKED",
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("block lacks %q:\n%s", want, block)
 		}
 	}
-	for _, retry := range []string{"lit sync fetch", "lit sync pull"} {
-		if strings.Contains(block, retry) {
-			t.Errorf("block names %q, which reads the same commit and is refused the same way:\n%s", retry, block)
+	for _, refused := range []string{"lit sync fetch", "lit sync pull", "lit downgrade --schema", "lit upgrade"} {
+		if strings.Contains(block, refused) {
+			t.Errorf("block names %q, which is refused from a backlog behind a held remote:\n%s", refused, block)
 		}
-	}
-	if strings.Contains(strings.ReplaceAll(block, "lit upgrade --remote", ""), "lit upgrade") {
-		t.Errorf("block names an install, which a hold refuses too:\n%s", block)
 	}
 }
 
@@ -395,8 +392,9 @@ func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
 func TestAReleasedCeilingLiftRefusalNamesTheRelease(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaCeilingLiftError{
-		Remote: "origin", Branch: "master", CommitSchema: 11, TargetSchema: 12,
-		Ceiling: version.SchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0", Bound: version.BoundReleased},
+		Remote: "origin", Branch: "master",
+		Lift: &store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 11, TargetVersion: 12,
+			Ceiling: version.SchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0", Bound: version.BoundReleased}},
 	}
 	var syncFailure SyncFailureError
 	if !errors.As(asSyncFailure(storeErr), &syncFailure) {

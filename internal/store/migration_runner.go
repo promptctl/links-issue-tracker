@@ -884,15 +884,16 @@ func stepResult(result *goose.MigrationResult, err error) (*goose.MigrationResul
 // version at the reset commit decides how many migrations goose has to apply
 // (zero when the commit is already at registry max — the common case, since the
 // local head is always current).
-func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
+func (s *Store) liftWorkingSetToRegistry(ctx context.Context, holder string) error {
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
 		return fmt.Errorf("construct schema-lift provider: %w", err)
 	}
 	// The working set is the commit being lifted, so its hold is that
 	// commit's: a fetched head lowered under a hold is lifted no further than
-	// the hold, whatever this binary's registry carries.
-	hold, err := s.schemaHold(ctx)
+	// the hold, whatever this binary's registry carries. holder names that
+	// commit in the ceiling a refusal carries.
+	hold, err := s.schemaHold(ctx, holder)
 	if err != nil {
 		return fmt.Errorf("lift working set to registry schema: %w", err)
 	}
@@ -1386,7 +1387,7 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 	}
 	// The store's schema hold is read once, here, and rides the state to
 	// every raise the open decides on (migrationState.ceiling).
-	hold, err := s.schemaHold(ctx)
+	hold, err := s.schemaHold(ctx, "this store")
 	if err != nil {
 		return migrationState{}, err
 	}

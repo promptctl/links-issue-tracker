@@ -90,39 +90,35 @@ func holdRemedyClause(ceiling version.SchemaCeiling) string {
 // SchemaCeilingLiftError refuses a reconcile against remote/branch that would
 // lift a commit it reads above the schema ceiling: the released-schema
 // ceiling, or the hold the commit carries, whichever is lower. It is the
-// lift's refusal (SchemaCeilingError, RaiseLift) stamped with the remote and
-// branch the reconcile was against, which the lift itself does not know; the
-// CLI reads this type, never the inner one, and the inner one stays wrapped
-// so the chain still names the commit the lift refused, which is the fetched
-// head or a local head held below this lit's schema. [LAW:parse-dont-validate]
+// lift's refusal (Lift, a SchemaCeilingError at RaiseLift) stamped with the
+// remote and branch the reconcile was against, which the lift itself does not
+// know; the CLI reads this type, and reads the schemas and the ceiling through
+// Lift, the one record of them. The chain under it still names the commit the
+// lift refused, which is the fetched head or a local head held below this
+// lit's schema. [LAW:parse-dont-validate] [LAW:one-source-of-truth]
 type SchemaCeilingLiftError struct {
-	Remote       string
-	Branch       string
-	CommitSchema int64
-	TargetSchema int64
-	Ceiling      version.SchemaCeiling
-	cause        error
+	Remote string
+	Branch string
+	Lift   *SchemaCeilingError
+	cause  error
 }
 
 func (e *SchemaCeilingLiftError) Error() string {
 	return fmt.Sprintf(
 		"refusing to settle this backlog against %s/%s: a commit the reconcile read is at schema version %d, settling it means lifting it to this lit's schema version %d, and the schema ceiling here is %d (%s); this lit never puts a schema above that ceiling in place%s",
-		e.Remote, e.Branch, e.CommitSchema, e.TargetSchema, e.Ceiling.Max, e.Ceiling.Source, holdRemedyClause(e.Ceiling))
+		e.Remote, e.Branch, e.Lift.WorkspaceVersion, e.Lift.TargetVersion, e.Lift.Ceiling.Max, e.Lift.Ceiling.Source, holdRemedyClause(e.Lift.Ceiling))
 }
 
-// Unwrap is the lift's own refusal, with the commit it refused in its chain.
+// Unwrap is the error the reconcile's replay returned, with the lift's own
+// refusal and the commit it refused in its chain.
 func (e *SchemaCeilingLiftError) Unwrap() error { return e.cause }
 
-// EventRecord is the remote refused, the commit's schema, the lift's target,
-// and the ceiling.
+// EventRecord is the remote and branch refused; the lift's own record, under
+// this one in the chain, carries the schemas and the ceiling.
 func (e *SchemaCeilingLiftError) EventRecord() (map[string]any, map[string]int) {
 	return map[string]any{
-		"schema_ceiling.remote":         e.Remote,
-		"schema_ceiling.branch":         e.Branch,
-		"schema_ceiling.commit_schema":  e.CommitSchema,
-		"schema_ceiling.target_schema":  e.TargetSchema,
-		"schema_ceiling.ceiling":        e.Ceiling.Max,
-		"schema_ceiling.ceiling_source": e.Ceiling.Source,
+		"schema_ceiling.remote": e.Remote,
+		"schema_ceiling.branch": e.Branch,
 	}, nil
 }
 
@@ -135,14 +131,7 @@ func nameLiftRefusal(err error, remote storage.RemoteName, branch string) error 
 	if !errors.As(err, &refused) || refused.Raise != RaiseLift {
 		return err
 	}
-	return &SchemaCeilingLiftError{
-		Remote:       remote.String(),
-		Branch:       branch,
-		CommitSchema: refused.WorkspaceVersion,
-		TargetSchema: refused.TargetVersion,
-		Ceiling:      refused.Ceiling,
-		cause:        err,
-	}
+	return &SchemaCeilingLiftError{Remote: remote.String(), Branch: branch, Lift: refused, cause: err}
 }
 
 // EventRecord is what the write was, the schema it started from, the one it

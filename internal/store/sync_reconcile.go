@@ -1075,7 +1075,9 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) ([]storage.Unlo
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CLEAN"); err != nil {
 		return nil, fmt.Errorf("clean scratch at %q: %w", commit, err)
 	}
-	if err := s.liftWorkingSetToRegistry(ctx); err != nil {
+	// The hold the lift reads is this commit's, so a refusal names the commit
+	// as its holder: which head the reconcile read is what the refusal is about.
+	if err := s.liftWorkingSetToRegistry(ctx, fmt.Sprintf("the commit %s the reconcile read", commit)); err != nil {
 		return nil, fmt.Errorf("lift %q to current schema: %w", commit, err)
 	}
 	unlooped, err := cutParentLoops(ctx, s.db)
