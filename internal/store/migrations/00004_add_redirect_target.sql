@@ -50,21 +50,34 @@ WHERE r.type = 'related-to';
 -- +goose StatementEnd
 
 -- +goose Down
--- LOSS CONTRACT: down re-materializes one related-to edge per recorded
--- redirect and then drops the column, so the redirect-vs-manual-peer
--- distinction is lost again by construction — the pre-upgrade reader renders
--- the re-materialized edge exactly as it rendered the original one. Edge
--- created_at is approximated by the close timestamp (falling back to the
--- row's updated_at) and created_by by 'unknown'; the original edge's exact
--- stamps are not preserved. INSERT IGNORE tolerates two known-benign row
--- classes: a manual edge already linking the same pair (the edge the
--- redirect needs already exists), and an FK-gap row — redirect_target has
--- no FK to issues, so a redirect whose canonical row was since hard-deleted
--- cannot re-materialize as an edge (relations' FK would reject it) and is
--- skipped. The pre-column reader never rendered a redirect for a vanished
--- counterpart either, so the skip is parity, not new loss — but it IS a
--- silent skip, accepted here only because a migration has no per-row
--- reporting channel and both classes are enumerated above.
+-- The redirects and the related-to edges are stashed before the Down
+-- re-materializes one edge per redirect for the reader below; the next Up's
+-- restore (migrations.Restores) writes the redirects back and returns any
+-- manual peer edge its backfill read as a redirect.
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'redirect_target', JSON_ARRAY(SUBSTRING(t.redirect_target, 1)) FROM issues t;
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*related-to', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.type = 'related-to';
+-- +goose StatementEnd
 -- +goose StatementBegin
 INSERT IGNORE INTO relations(src_id, dst_id, type, created_at, created_by)
 SELECT LEAST(i.id, i.redirect_target), GREATEST(i.id, i.redirect_target), 'related-to', COALESCE(i.closed_at, i.updated_at), 'unknown'

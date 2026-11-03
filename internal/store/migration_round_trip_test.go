@@ -44,8 +44,6 @@ const lastVersionBeforeTheGate = 11
 // round trip from their own version today. Each is fixed in place, and the
 // list empties as they are.
 var pendingLosslessDown = map[int64]string{
-	4: "its Down re-materializes redirects as related-to edges, so the next Up reads a lone manual peer edge as a redirect",
-	6: "its Down drops follows_up without stashing it",
 	7: "its Down deletes the unfiled epic with what hangs on it and resets every lane spelled as its ticket's id",
 }
 

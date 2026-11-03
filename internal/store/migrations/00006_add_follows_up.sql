@@ -136,24 +136,34 @@ DROP TEMPORARY TABLE followup_dest;
 -- +goose StatementEnd
 
 -- +goose Down
--- LOSS CONTRACT: down re-nests every follow-up under the ticket it follows up
--- and then drops the column, so the pre-upgrade reader sees the graph it used
--- to write — a follow-up as a child of the ticket it followed up — and loses the
--- follow-up's place among its epic's children. Backfilled rows return to where
--- they were; follow-ups filed after the upgrade move under their followed-up
--- ticket for the first time. A follow-up whose followed-up ticket has since
--- been purged keeps its current parent (the join on issues requires the target
--- to exist, as relations' FK would). Every parent-child edge a re-nested
--- follow-up held is replaced by the one edge to its followed-up ticket, so a
--- restored second parent is lost with the column. Edge created_at is the
--- follow-up's own created_at and created_by is 'links', the stamps
--- `lit followup` wrote on the original edge.
---
--- The column is the only record of which children of an OPEN ticket or of an
--- epic were follow-ups: a later Up backfills from closed non-containers alone,
--- so a follow-up filed on an open ticket or on an epic comes back from a
--- downgrade-then-upgrade as an ordinary child of that ticket, with no
--- follows_up and no move beside it.
+-- The follow-up marks and the follow-ups' parent edges are stashed before
+-- the Down re-nests each follow-up under the ticket it follows up for the
+-- reader below; the next Up's restore (migrations.Restores) writes the marks
+-- back and makes each follow-up's parent edges the stashed ones again.
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'follows_up', JSON_ARRAY(SUBSTRING(t.follows_up, 1)) FROM issues t;
+-- +goose StatementEnd
+-- +goose StatementBegin
+CREATE TABLE IF NOT EXISTS schema_stash (
+  table_name VARCHAR(64) NOT NULL,
+  row_key VARCHAR(767) NOT NULL,
+  column_name VARCHAR(64) NOT NULL,
+  value JSON NOT NULL,
+  PRIMARY KEY (table_name, row_key, column_name)
+);
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*parent-child', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.type = 'parent-child' AND t.src_id IN (SELECT i.id FROM issues i WHERE i.follows_up IS NOT NULL);
+-- +goose StatementEnd
 -- +goose StatementBegin
 DELETE FROM relations
 WHERE type = 'parent-child'

@@ -32,15 +32,56 @@ type Column struct {
 	Key    []string
 }
 
-// Rows is a whole table a Down drops: every column, the primary key, and, for
-// a table whose rows die with a parent row, the parent table and the column
-// referencing it. Its entries carry column_name '*' and the row as an array.
+// Rows is the rows of a table a Down drops or rewrites, each entry carrying
+// the row as an array: every column, the primary key, the stashed slice (Where
+// over the table aliased t, empty for every row), the slice's tag, and the
+// columns that reference issues(id), whose rows die with their issue. An
+// entry's column_name is '*' and the tag, so two slices of one table, stashed
+// by two versions' Downs, never replay each other's rows.
 type Rows struct {
-	Table     string
-	Columns   []string
-	Key       []string
-	Parent    string
-	ParentRef string
+	Table   string
+	Columns []string
+	Key     []string
+	Where   string
+	Slice   string
+	Refs    []string
+}
+
+func (r Rows) entry() string { return "*" + r.Slice }
+
+// ParentEdges is the parent-child edges of the tickets Where picks (over
+// issues aliased i), which a Down rewrites. The replay makes each stashed
+// ticket's parent edges exactly the stashed ones: the Up re-derives them from
+// what the Down left, and only the stash knows what they were.
+type ParentEdges struct {
+	Where string
+}
+
+var relationColumns = []string{"src_id", "dst_id", "type", "created_at", "created_by"}
+
+func (e ParentEdges) rows() Rows {
+	return Rows{
+		Table:   "relations",
+		Columns: relationColumns,
+		Key:     []string{"src_id", "dst_id", "type"},
+		Where:   fmt.Sprintf("t.type = 'parent-child' AND t.src_id IN (SELECT i.id FROM issues i WHERE %s)", e.Where),
+		Slice:   "parent-child",
+		Refs:    []string{"src_id", "dst_id"},
+	}
+}
+
+func (e ParentEdges) Name() string       { return "relations.parent-child" }
+func (e ParentEdges) StashSQL() []string { return e.rows().StashSQL() }
+
+// RestoreSQL first deletes every parent edge of a stashed ticket that the
+// stash does not hold byte for byte, then puts the stashed ones back. An edge
+// with a stashed key and other stamps is the Up's move of it, and goes too.
+func (e ParentEdges) RestoreSQL() ([]string, int) {
+	r := e.rows()
+	stmts, writes := r.RestoreSQL()
+	prune := fmt.Sprintf("DELETE FROM relations WHERE type = 'parent-child' AND src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '%s') AND NOT EXISTS (SELECT 1 FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '%s' AND s.row_key = %s AND s.value = %s);",
+		element(0), r.entry(), r.entry(), rowKey(r.Key, "relations"), value(r.Columns, "relations"))
+	return append([]string{stmts[0], prune}, stmts[1:]...), writes + 1
 }
 
 // rowKey is an entry's row_key over the table aliased as alias. A one-column
@@ -105,34 +146,39 @@ func (c Column) RestoreSQL() ([]string, int) {
 	}, 1
 }
 
-func (r Rows) Name() string { return r.Table + ".*" }
+func (r Rows) Name() string { return r.Table + "." + r.entry() }
 
 func (r Rows) StashSQL() []string {
+	where := ""
+	if r.Where != "" {
+		where = " WHERE " + r.Where
+	}
 	return []string{
 		carrier(),
-		fmt.Sprintf("REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '%s', %s, '*', %s FROM %s t;",
-			r.Table, rowKey(r.Key, "t"), value(r.Columns, "t"), r.Table),
+		fmt.Sprintf("REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '%s', %s, '%s', %s FROM %s t%s;",
+			r.Table, rowKey(r.Key, "t"), r.entry(), value(r.Columns, "t"), r.Table, where),
 	}
 }
 
-// RestoreSQL re-inserts r's rows into the table its Up re-created empty, then
-// deletes the entries whose row is back. A row whose parent was deleted below
-// died with it, as the table's cascade would have done, and its entry stays.
+// RestoreSQL inserts each stashed row the table does not hold, then deletes
+// the entries whose row is back. A row whose issue was deleted below died
+// with it, as the table's cascade would have done, and its entry stays.
 func (r Rows) RestoreSQL() ([]string, int) {
 	elems := make([]string, len(r.Columns))
 	for i := range r.Columns {
 		elems[i] = element(i)
 	}
-	insert := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '*'",
-		r.Table, strings.Join(r.Columns, ", "), strings.Join(elems, ", "), r.Table)
-	if r.Parent != "" {
-		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM %s p WHERE p.id = %s)", r.Parent, element(indexOf(r.Columns, r.ParentRef)))
+	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", r.Table, r.entry(), rowKey(r.Key, "t"))
+	insert := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '%s' AND NOT EXISTS (SELECT 1 FROM %s t WHERE %s)",
+		r.Table, strings.Join(r.Columns, ", "), strings.Join(elems, ", "), r.Table, r.entry(), r.Table, match)
+	for _, ref := range r.Refs {
+		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM issues p WHERE p.id = %s)", element(indexOf(r.Columns, ref)))
 	}
 	return []string{
 		carrier(),
 		insert + ";",
-		fmt.Sprintf("DELETE s FROM schema_stash s JOIN %s t ON s.table_name = '%s' AND s.column_name = '*' AND s.row_key = %s WHERE s.table_name = '%s' AND s.column_name = '*';",
-			r.Table, r.Table, rowKey(r.Key, "t"), r.Table),
+		fmt.Sprintf("DELETE s FROM schema_stash s JOIN %s t ON %s WHERE s.table_name = '%s' AND s.column_name = '%s';",
+			r.Table, match, r.Table, r.entry()),
 	}, 1
 }
 
@@ -151,14 +197,22 @@ func indexOf(cols []string, c string) int {
 var Restores = map[int64][]Stash{
 	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}}},
 	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}}},
+	4: {
+		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}},
+		Rows{Table: "relations", Columns: relationColumns, Key: []string{"src_id", "dst_id", "type"}, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}},
+	},
 	5: {
 		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}},
 		Column{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}},
 	},
+	6: {
+		Column{Table: "issues", Column: "follows_up", Key: []string{"id"}},
+		ParentEdges{Where: "i.follows_up IS NOT NULL"},
+	},
 	9: {Rows{Table: "purges", Columns: []string{"issue_id", "issue_created_at", "purged_at", "purged_by"}, Key: []string{"issue_id", "issue_created_at"}}},
 	11: {
 		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}},
-		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Parent: "issues", ParentRef: "issue_id"},
+		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Refs: []string{"issue_id"}},
 	},
 }
 
