@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 )
 
@@ -33,7 +32,7 @@ func commitOrphanComment(t *testing.T, ctx context.Context, st *Store) {
 // however the store was opened. [LAW:verifiable-goals]
 func TestDoctorIntegrityCheckNamesACommittedConstraintViolation(t *testing.T) {
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

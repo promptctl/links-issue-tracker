@@ -1775,7 +1775,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
 	t.Parallel()
 	notices := &syncWriter{}
-	st, err := Open(context.Background(), testEnv(), notices, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	st, err := Open(context.Background(), testEnv(), notices, migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -1796,7 +1796,7 @@ func TestCloseTwiceRetiresTheHolderRecordOnce(t *testing.T) {
 func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1824,7 +1824,7 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -1858,7 +1858,7 @@ func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -2168,7 +2168,7 @@ func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)

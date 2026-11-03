@@ -1390,7 +1390,7 @@ func TestWaitUnderAnUnrecordedHolderIsTheElapsedBudget(t *testing.T) {
 func TestWriteEngineRecordsItselfAsTheJournalHolder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

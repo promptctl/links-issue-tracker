@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -88,7 +87,7 @@ func TestMigrationRenamesBlocksEdgesKeepingTheirMeaning(t *testing.T) {
 // CHECK it dropped, under the name the engine gave it.
 func TestAnOpenThatAppliesV8SaysWhatItRenamedAndDropped(t *testing.T) {
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

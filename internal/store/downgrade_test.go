@@ -25,7 +25,7 @@ import (
 func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
 	t.Helper()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -503,7 +503,7 @@ func TestDowngradeIncompleteWhenGooseExhausted(t *testing.T) {
 func TestDowngradeSpanUnsupportedRefused(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -568,7 +568,7 @@ func TestIsDowngradeSnapshotNameSymmetry(t *testing.T) {
 func TestDowngradeUntouchedOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -611,7 +611,7 @@ func TestDowngradeUntouchedOpen(t *testing.T) {
 func TestDowngradeRequiresGooseManaged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() = %v", err)

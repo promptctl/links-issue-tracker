@@ -64,7 +64,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	openOneVersionBehind(t, ctx, doltRoot)
 
@@ -115,7 +115,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {

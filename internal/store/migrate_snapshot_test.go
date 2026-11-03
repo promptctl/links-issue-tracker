@@ -55,7 +55,7 @@ func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
 func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -207,7 +207,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -254,7 +254,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 func TestMigratingOpenReportsAFailedSnapshotPrune(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
@@ -344,7 +344,7 @@ func countMigrationSnapshots(t *testing.T, databaseDir string) int {
 func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	// Bootstrap the workspace so the snapshots dir exists.
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -444,7 +444,7 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level failpointForTest.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	// Step 1: Seed the workspace with rich data covering all required fields.
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -770,7 +770,7 @@ func TestRollbackSnapshotIsOneTheOlderLitOpens(t *testing.T) {
 func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		if _, err := st.Downgrade(ctx, 3); err != nil {
 			t.Fatalf("Downgrade(3) error = %v", err)

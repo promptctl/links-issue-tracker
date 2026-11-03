@@ -27,7 +27,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	t.Cleanup(func() { coResidentHolderWait = prevBudget })
 
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	writer, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -114,7 +114,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 func TestAWriteOpenWhoseCollectionFailsStillOpens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

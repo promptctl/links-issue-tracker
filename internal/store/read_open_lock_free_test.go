@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,7 +19,7 @@ import (
 func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -100,7 +99,7 @@ func openOneVersionBehind(t *testing.T, ctx context.Context, doltRoot string) {
 func TestOpenForReadBringsTrailingSchemaForwardThroughOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	openOneVersionBehind(t, ctx, doltRoot)
 
@@ -128,7 +127,7 @@ func TestOpenForReadBringsTrailingSchemaForwardThroughOpen(t *testing.T) {
 func TestOpenForReadRepairsContentDrift(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check`)

@@ -49,7 +49,7 @@ func stampWriteRuleChangeAhead(t *testing.T, ctx context.Context, doltRoot, minW
 func TestWriteOpenRefusesAWorkspaceWhoseWriteRulesItPredates(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	registryMax, err := migrations.MaxVersion()
 	if err != nil {
 		t.Fatalf("migrations.MaxVersion() error = %v", err)
@@ -110,7 +110,7 @@ func TestWriteOpenWritesAWorkspaceAheadWhoseWriteRulesItKeeps(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			doltRoot := filepath.Join(t.TempDir(), "dolt")
+			doltRoot := migratedDoltDir(t)
 			ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, tc.declared)
 			withStore(t, ctx, doltRoot, func(st *Store) {
 				want := storage.SchemaAhead{WorkspaceSchema: ahead, MinWriterSchema: tc.want}
@@ -141,7 +141,7 @@ func TestAMinWriterSchemaThatIsNotAVersionRefusesWritesOnly(t *testing.T) {
 
 func minWriterSchemaThatIsNotAVersionRefusesWritesOnly(t *testing.T, raw string) {
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, raw)
 
 	want := fmt.Sprintf(`meta min_writer_schema = %q is not a schema version`, raw)
@@ -191,7 +191,7 @@ func TestSyncOpenMeetsTheWriteFloor(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			doltRoot := filepath.Join(t.TempDir(), "dolt")
+			doltRoot := migratedDoltDir(t)
 			ahead := stampWriteRuleChangeAhead(t, ctx, doltRoot, tc.declared)
 
 			st, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")

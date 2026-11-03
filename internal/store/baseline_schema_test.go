@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -64,7 +63,7 @@ func TestBaselineSchemaParsesEmbeddedMigration(t *testing.T) {
 func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
