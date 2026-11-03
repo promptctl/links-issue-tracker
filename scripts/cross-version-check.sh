@@ -152,10 +152,20 @@ git clone -q "$work/remote.git" "$work/consumer"
 (cd "$work/consumer" && "$previous" init --skip-hooks && "$previous" show "$written")
 
 # --- 5. back up, and compare ------------------------------------------------
+# upgrade only lifts the hold; the export is the migrating open that raises the
+# store, and the push after it is the one that raises the remote.
 fenced "$candidate" upgrade --remote origin
-fenced "$candidate" sync push
 "$candidate" export > "$work/after.json"
-# The remote holds the same store: a fresh clone exports it.
+fenced "$candidate" sync push
+# The raise reached the remote. The release reads a fresh clone's goose log
+# with lifeboat dump, which never migrates, and the release could not raise it
+# past v$target anyway, so what it reads is what the remote holds.
+git clone -q "$work/remote.git" "$work/stale"
+remote_schema="$(cd "$work/stale" && "$previous" init --skip-hooks >/dev/null 2>&1 &&
+    "$previous" lifeboat dump | jq '[.tables[] | select(.name == "goose_db_version") | .rows[][1]] | max')"
+[ "$remote_schema" = "$tree_max" ] ||
+    fail "the remote is at schema v$remote_schema after the raise, not v$tree_max"
+# And the remote holds the same store: a fresh clone exports it.
 git clone -q "$work/remote.git" "$work/raised"
 (cd "$work/raised" && "$candidate" init --skip-hooks >/dev/null && "$candidate" export) > "$work/raised.json"
 
