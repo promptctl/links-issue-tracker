@@ -241,6 +241,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = '*unfiled';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = '*unfiled#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), '*unfiled', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.title, 1), SUBSTRING(t.description, 1), SUBSTRING(t.agent_prompt, 1), SUBSTRING(t.status, 1), SUBSTRING(t.priority, 1), SUBSTRING(t.issue_type, 1), SUBSTRING(t.topic, 1), SUBSTRING(t.assignee, 1), SUBSTRING(t.item_rank, 1), SUBSTRING(t.lane, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.updated_at, 1), SUBSTRING(t.closed_at, 1), SUBSTRING(t.archived_at, 1), SUBSTRING(t.deleted_at, 1), SUBSTRING(t.resolution, 1), SUBSTRING(t.redirect_target, 1), SUBSTRING(t.follows_up, 1)) FROM issues t WHERE t.issue_type = 'epic' AND t.topic = 'unfiled' AND t.title = 'Unfiled tickets';
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -251,6 +257,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
   value JSON NOT NULL,
   PRIMARY KEY (table_name, row_key, column_name)
 );
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'comments' AND column_name = '*unfiled';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'comments' AND column_name = '*unfiled#image';
 -- +goose StatementEnd
 -- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'comments', CAST(t.id AS CHAR), '*unfiled', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.issue_id, 1), SUBSTRING(t.body, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM comments t WHERE t.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
@@ -265,6 +277,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'labels' AND column_name = '*unfiled';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'labels' AND column_name = '*unfiled#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'labels', CONCAT_WS(CHAR(31), CAST(t.issue_id AS CHAR), CAST(t.label AS CHAR)), '*unfiled', JSON_ARRAY(SUBSTRING(t.issue_id, 1), SUBSTRING(t.label, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM labels t WHERE t.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -275,6 +293,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
   value JSON NOT NULL,
   PRIMARY KEY (table_name, row_key, column_name)
 );
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_events' AND column_name = '*unfiled';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_events' AND column_name = '*unfiled#image';
 -- +goose StatementEnd
 -- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', CAST(t.id AS CHAR), '*unfiled', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.issue_id, 1), SUBSTRING(t.action, 1), SUBSTRING(t.reason, 1), SUBSTRING(t.actor, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.stream_id, 1), SUBSTRING(t.workspace_id, 1)) FROM issue_events t WHERE t.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
@@ -289,6 +313,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_event_changes' AND column_name = '*unfiled';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_event_changes' AND column_name = '*unfiled#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_event_changes', CONCAT_WS(CHAR(31), CAST(t.event_id AS CHAR), CAST(t.field AS CHAR)), '*unfiled', JSON_ARRAY(SUBSTRING(t.event_id, 1), SUBSTRING(t.field, 1), SUBSTRING(t.from_value, 1), SUBSTRING(t.to_value, 1)) FROM issue_event_changes t WHERE t.event_id IN (SELECT v.id FROM issue_events v WHERE v.issue_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets'));
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -299,6 +329,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
   value JSON NOT NULL,
   PRIMARY KEY (table_name, row_key, column_name)
 );
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*unfiled';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*unfiled#image';
 -- +goose StatementEnd
 -- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*unfiled', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.dst_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
@@ -313,6 +349,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*unfiled-src';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*unfiled-src#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*unfiled-src', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.src_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets');
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -323,6 +365,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
   value JSON NOT NULL,
   PRIMARY KEY (table_name, row_key, column_name)
 );
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'lane@unfiled';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'lane@unfiled#image';
 -- +goose StatementEnd
 -- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'lane@unfiled', JSON_ARRAY(SUBSTRING(t.lane, 1)) FROM issues t WHERE (t.lane = t.id OR t.id IN (SELECT c.src_id FROM relations c WHERE c.type = 'parent-child' AND c.dst_id IN (SELECT e.id FROM issues e WHERE e.issue_type = 'epic' AND e.topic = 'unfiled' AND e.title = 'Unfiled tickets')));
@@ -344,26 +392,26 @@ WHERE issue_type = 'epic' AND topic = 'unfiled' AND title = 'Unfiled tickets';
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, '*unfiled#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issues u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = '*unfiled';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, '*unfiled#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.id, 1), SUBSTRING(u.title, 1), SUBSTRING(u.description, 1), SUBSTRING(u.agent_prompt, 1), SUBSTRING(u.status, 1), SUBSTRING(u.priority, 1), SUBSTRING(u.issue_type, 1), SUBSTRING(u.topic, 1), SUBSTRING(u.assignee, 1), SUBSTRING(u.item_rank, 1), SUBSTRING(u.lane, 1), SUBSTRING(u.created_at, 1), SUBSTRING(u.updated_at, 1), SUBSTRING(u.closed_at, 1), SUBSTRING(u.archived_at, 1), SUBSTRING(u.deleted_at, 1), SUBSTRING(u.resolution, 1), SUBSTRING(u.redirect_target, 1), SUBSTRING(u.follows_up, 1)) FROM issues u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = '*unfiled';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'comments', s.row_key, '*unfiled#image', JSON_ARRAY(EXISTS (SELECT 1 FROM comments u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'comments' AND s.column_name = '*unfiled';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'comments', s.row_key, '*unfiled#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.id, 1), SUBSTRING(u.issue_id, 1), SUBSTRING(u.body, 1), SUBSTRING(u.created_at, 1), SUBSTRING(u.created_by, 1)) FROM comments u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'comments' AND s.column_name = '*unfiled';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'labels', s.row_key, '*unfiled#image', JSON_ARRAY(EXISTS (SELECT 1 FROM labels u WHERE CONCAT_WS(CHAR(31), CAST(u.issue_id AS CHAR), CAST(u.label AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'labels' AND s.column_name = '*unfiled';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'labels', s.row_key, '*unfiled#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.issue_id, 1), SUBSTRING(u.label, 1), SUBSTRING(u.created_at, 1), SUBSTRING(u.created_by, 1)) FROM labels u WHERE CONCAT_WS(CHAR(31), CAST(u.issue_id AS CHAR), CAST(u.label AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'labels' AND s.column_name = '*unfiled';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, '*unfiled#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = '*unfiled';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, '*unfiled#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.id, 1), SUBSTRING(u.issue_id, 1), SUBSTRING(u.action, 1), SUBSTRING(u.reason, 1), SUBSTRING(u.actor, 1), SUBSTRING(u.created_at, 1), SUBSTRING(u.stream_id, 1), SUBSTRING(u.workspace_id, 1)) FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = '*unfiled';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_event_changes', s.row_key, '*unfiled#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issue_event_changes u WHERE CONCAT_WS(CHAR(31), CAST(u.event_id AS CHAR), CAST(u.field AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_event_changes' AND s.column_name = '*unfiled';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_event_changes', s.row_key, '*unfiled#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.event_id, 1), SUBSTRING(u.field, 1), SUBSTRING(u.from_value, 1), SUBSTRING(u.to_value, 1)) FROM issue_event_changes u WHERE CONCAT_WS(CHAR(31), CAST(u.event_id AS CHAR), CAST(u.field AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_event_changes' AND s.column_name = '*unfiled';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))), '*unfiled#image', JSON_ARRAY((SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))) AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))), '*unfiled#image', JSON_ARRAY((SELECT GROUP_CONCAT(CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR), CAST(u.created_at AS CHAR), CAST(u.created_by AS CHAR)) ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))) AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', s.row_key, '*unfiled-src#image', JSON_ARRAY(EXISTS (SELECT 1 FROM relations u WHERE CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled-src';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', s.row_key, '*unfiled-src#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.src_id, 1), SUBSTRING(u.dst_id, 1), SUBSTRING(u.type, 1), SUBSTRING(u.created_at, 1), SUBSTRING(u.created_by, 1)) FROM relations u WHERE CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled-src';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'lane@unfiled#image', JSON_ARRAY((SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = s.row_key AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'lane@unfiled';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'lane@unfiled#image', JSON_ARRAY((SELECT GROUP_CONCAT(CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR), CAST(u.created_at AS CHAR), CAST(u.created_by AS CHAR)) ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = s.row_key AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'lane@unfiled';
 -- +goose StatementEnd

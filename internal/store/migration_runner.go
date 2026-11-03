@@ -519,10 +519,6 @@ type migrationAssessment struct {
 	// drift is nil when every applied version's registered content is
 	// present on the live schema.
 	drift *VersionContentMismatchError
-	// held is each stash at or below the applied version that still holds
-	// entries: what a lit that never replays left when it raised the store.
-	// No settle can judge them, so they stay where they are, reported.
-	held []migrations.StashRows
 }
 
 // needsWrite reports whether a migrate of this workspace would mutate it: a
@@ -619,14 +615,7 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 	if fail != nil {
 		return migrationAssessment{}, fail
 	}
-	var held []migrations.StashRows
-	if fail := attempt(stepStashRead, func() (err error) {
-		held, err = s.heldStash(ctx, state.appliedVersion)
-		return err
-	}); fail != nil {
-		return migrationAssessment{}, fail
-	}
-	return migrationAssessment{state: state, op: op, drift: mismatch, held: held}, nil
+	return migrationAssessment{state: state, op: op, drift: mismatch}, nil
 }
 
 // runMigration classifies the workspace once, refuses one this binary may not
@@ -658,8 +647,16 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, probed p
 // up to and including the recovery snapshot; applySnapshotted does the rest.
 func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	state := assessment.state
-	// Every open looks for held stash, so its fact is on every open's event.
-	probed.stash(stashHeldFact, assessment.held)
+	// Every write open looks for held stash, so its fact is on every write
+	// open's event; a read open reports no migration facts at all.
+	var held []migrations.StashRows
+	if fail := attempt(stepStashRead, func() (err error) {
+		held, err = s.heldStash(ctx, state.appliedVersion)
+		return err
+	}); fail != nil {
+		return nil, fail
+	}
+	probed.stash(stashHeldFact, held)
 	if !assessment.needsWrite() {
 		return nil, nil
 	}
@@ -823,7 +820,15 @@ func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise Sch
 	// The settle reads the store at the version its Down left, so it runs
 	// before the Up rewrites it.
 	if probed.settledStash, err = migrations.SettleStash(ctx, s.db, next); err != nil {
-		return nil, probed, &stashReplayError{err: err}
+		// The settle is next's step, so its failure names next as its Up's
+		// would.
+		var failed *goose.MigrationResult
+		for _, src := range provider.ListSources() {
+			if src.Version == next {
+				failed = &goose.MigrationResult{Source: src}
+			}
+		}
+		return failed, probed, &stashReplayError{err: err}
 	}
 	result, err := stepResult(provider.UpByOne(ctx))
 	if err != nil {

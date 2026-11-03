@@ -16,7 +16,9 @@ import (
 // registry statement that touches schema_stash is one of their outputs.
 type Stash interface {
 	// StashSQL is the statements a Down runs before the drop, the carrier's
-	// DDL first.
+	// DDL first. It replaces whatever the stash held: entries a raise that
+	// never replayed left behind describe a store this Down is stepping away
+	// from, and an image of them would vouch for rows nobody stashed.
 	StashSQL() []string
 	// ImageSQL is the statements a Down runs last, once the store is at the
 	// version below: an image of each unit the stash's entries write onto,
@@ -46,27 +48,23 @@ type Unit struct {
 	image func(key string) string
 }
 
-// present is a row of table under the entry's own key, which a write below
-// can delete or re-create.
-func present(table string, key []string) Unit {
+// row is cols of the row of table under the entry's own key, NULL when a
+// write below deleted it: the columns the restore overwrites, or that what it
+// writes is legal on only as they were.
+func row(table string, key, cols []string) Unit {
 	return Unit{key: "s.row_key", image: func(k string) string {
-		return fmt.Sprintf("EXISTS (SELECT 1 FROM %s u WHERE %s = %s)", table, rowKey(key, "u"), k)
+		return fmt.Sprintf("(SELECT %s FROM %s u WHERE %s = %s)", value(cols, "u"), table, rowKey(key, "u"), k)
 	}}
 }
 
-// closure is a ticket's closure, which a resolution or redirect is legal on
-// only as it was: reopening or closing it below changes it.
-func closure() Unit {
-	return Unit{key: "s.row_key", image: func(k string) string {
-		return fmt.Sprintf("(SELECT JSON_ARRAY(u.status, u.closed_at) FROM issues u WHERE u.id = %s)", k)
-	}}
-}
+// ticket is the issues row under the entry's key, as cols of it.
+func ticket(cols ...string) Unit { return row("issues", []string{"id"}, cols) }
 
-// parents is a ticket's parent edges, the ticket being key: filing or
-// reparenting it below changes them.
+// parents is a ticket's parent edges, whole, the ticket being key: filing,
+// reparenting, or re-creating an edge below changes them.
 func parents(key string) Unit {
 	return Unit{key: key, image: func(k string) string {
-		return fmt.Sprintf("(SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = %s AND u.type = 'parent-child')", k)
+		return fmt.Sprintf("(SELECT GROUP_CONCAT(%s ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = %s AND u.type = 'parent-child')", rowKey(relationColumns, "u"), k)
 	}}
 }
 
@@ -209,7 +207,7 @@ func (c Column) StashSQL() []string {
 		where = " WHERE " + c.Where
 	}
 	return []string{
-		carrier(),
+		carrier(), dropEntries(c.Table, c.entry()), dropEntries(c.Table, image(c.entry())),
 		fmt.Sprintf("REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '%s', %s, '%s', %s FROM %s t%s;",
 			c.Table, rowKey(c.Key, "t"), c.entry(), value([]string{c.Column}, "t"), c.Table, where),
 	}
@@ -245,7 +243,7 @@ func (r Rows) StashSQL() []string {
 		where = " WHERE " + r.Where
 	}
 	return []string{
-		carrier(),
+		carrier(), dropEntries(r.Table, r.entry()), dropEntries(r.Table, image(r.entry())),
 		fmt.Sprintf("REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '%s', %s, '%s', %s FROM %s t%s;",
 			r.Table, rowKey(r.Key, "t"), r.entry(), value(r.Columns, "t"), r.Table, where),
 	}
@@ -295,15 +293,17 @@ func (r Rows) RestoreSQL() []string {
 // released Down stashed. It lives here, outside every pinned Up byte, so a
 // released Down is made lossless without touching its Up.
 var Restores = map[int64][]Stash{
-	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Unit: present("issues", []string{"id"})}},
-	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Unit: closure()}},
+	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Unit: ticket("id")}},
+	// A resolution is legal on a ticket's closure only as it was, and a
+	// redirect on its resolution too: issues_redirect_target_check.
+	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Unit: ticket("status", "closed_at")}},
 	4: {
-		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Unit: closure()},
-		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}, Unit: present("relations", relationKey)},
+		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Unit: ticket("status", "closed_at", "resolution")},
+		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}, Unit: row("relations", relationKey, relationColumns)},
 	},
 	5: {
-		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}, Unit: present("issue_events", []string{"id"})},
-		Column{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}, Unit: present("issue_events", []string{"id"})},
+		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}, Unit: row("issue_events", []string{"id"}, []string{"id"})},
+		Column{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}, Unit: row("issue_events", []string{"id"}, []string{"id"})},
 	},
 	6: {
 		Column{Table: "issues", Column: "follows_up", Key: []string{"id"}, Unit: parents("s.row_key")},
@@ -312,7 +312,7 @@ var Restores = map[int64][]Stash{
 	7: unfiledEpic(),
 	9: {Rows{Table: "purges", Columns: []string{"issue_id", "issue_created_at", "purged_at", "purged_by"}, Key: []string{"issue_id", "issue_created_at"}, Unit: undisputed()}},
 	11: {
-		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}, Unit: present("issues", []string{"id"})},
+		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}, Unit: ticket("id")},
 		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Refs: []string{"issue_id"}, Unit: undisputed()},
 	},
 }
@@ -339,21 +339,22 @@ func unfiledEpic() []Stash {
 			Slice:   "unfiled",
 			Prune: fmt.Sprintf("issues.%s AND issues.id NOT IN (SELECT s.row_key FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = '*unfiled') AND NOT EXISTS (SELECT 1 FROM relations c WHERE c.dst_id = issues.id AND c.type = 'parent-child' AND c.src_id NOT IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled'))",
 				strings.ReplaceAll(epic, " AND ", " AND issues."), element(0)),
-			Unit: present("issues", []string{"id"}),
+			Unit: row("issues", []string{"id"}, []string{"id", "title", "description", "agent_prompt", "status", "priority", "issue_type", "topic", "assignee", "item_rank", "lane", "created_at", "updated_at", "closed_at", "archived_at", "deleted_at", "resolution", "redirect_target", "follows_up"}),
 		},
-		Rows{Table: "comments", Columns: []string{"id", "issue_id", "body", "created_at", "created_by"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: present("comments", []string{"id"})},
-		Rows{Table: "labels", Columns: []string{"issue_id", "label", "created_at", "created_by"}, Key: []string{"issue_id", "label"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: present("labels", []string{"issue_id", "label"})},
-		Rows{Table: "issue_events", Columns: []string{"id", "issue_id", "action", "reason", "actor", "created_at", "stream_id", "workspace_id"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: present("issue_events", []string{"id"})},
-		Rows{Table: "issue_event_changes", Columns: []string{"event_id", "field", "from_value", "to_value"}, Key: []string{"event_id", "field"}, Where: fmt.Sprintf("t.event_id IN (SELECT v.id FROM issue_events v WHERE %s)", strings.ReplaceAll(of("issue_id"), "t.issue_id", "v.issue_id")), Slice: "unfiled", Unit: present("issue_event_changes", []string{"event_id", "field"})},
+		Rows{Table: "comments", Columns: []string{"id", "issue_id", "body", "created_at", "created_by"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: row("comments", []string{"id"}, []string{"id", "issue_id", "body", "created_at", "created_by"})},
+		Rows{Table: "labels", Columns: []string{"issue_id", "label", "created_at", "created_by"}, Key: []string{"issue_id", "label"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: row("labels", []string{"issue_id", "label"}, []string{"issue_id", "label", "created_at", "created_by"})},
+		Rows{Table: "issue_events", Columns: []string{"id", "issue_id", "action", "reason", "actor", "created_at", "stream_id", "workspace_id"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: row("issue_events", []string{"id"}, []string{"id", "issue_id", "action", "reason", "actor", "created_at", "stream_id", "workspace_id"})},
+		Rows{Table: "issue_event_changes", Columns: []string{"event_id", "field", "from_value", "to_value"}, Key: []string{"event_id", "field"}, Where: fmt.Sprintf("t.event_id IN (SELECT v.id FROM issue_events v WHERE %s)", strings.ReplaceAll(of("issue_id"), "t.issue_id", "v.issue_id")), Slice: "unfiled", Unit: row("issue_event_changes", []string{"event_id", "field"}, []string{"event_id", "field", "from_value", "to_value"})},
 		Rows{
 			Table: "relations", Columns: relationColumns, Key: relationKey,
 			Where: of("dst_id"), Slice: "unfiled", Refs: []string{"src_id", "dst_id"},
 			Prune: fmt.Sprintf("relations.type = 'parent-child' AND relations.src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled') AND relations.dst_id IN (SELECT e.id FROM issues e WHERE e.%s)", element(0), strings.ReplaceAll(epic, " AND ", " AND e.")),
 			Unit:  parents(element(0)),
 		},
-		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: of("src_id"), Slice: "unfiled-src", Refs: []string{"src_id", "dst_id"}, Unit: present("relations", relationKey)},
+		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: of("src_id"), Slice: "unfiled-src", Refs: []string{"src_id", "dst_id"}, Unit: row("relations", relationKey, relationColumns)},
 		// The Down resets a lane spelled as its ticket's id, and the Up spells
-		// the lane of every child it leaves at the top level so.
+		// the lane of every child it leaves at the top level so: whatever lane
+		// a write below sets, the Up spells it again, so it is not the unit.
 		Column{Table: "issues", Column: "lane", Key: []string{"id"}, Slice: "unfiled",
 			Where: fmt.Sprintf("(t.lane = t.id OR t.id IN (SELECT c.src_id FROM relations c WHERE c.type = 'parent-child' AND %s))", strings.ReplaceAll(of("dst_id"), "t.dst_id", "c.dst_id")),
 			Unit:  parents("s.row_key")},

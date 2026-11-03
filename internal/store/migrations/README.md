@@ -141,12 +141,15 @@ Data the other version cannot represent goes in `schema_stash (table_name,
 row_key, column_name, value)`, a table outside the versioned schema. No Down
 drops it, and the gate's comparisons leave it out.
 
-- A Down that drops or rewrites user data copies it into the stash first.
+- A Down that drops or rewrites user data copies it into the stash first,
+  replacing what that stash held.
 - The Down's last statements record an image of each unit an entry writes
   onto (`<entry>#image`): the part of the store a write at the version below
   could change under it. A ticket's closure (status, closed_at) for a
-  resolution or redirect, a ticket's parent edges for follow-ups and the
-  unfiled epic, a row's presence for the rest.
+  resolution, and its resolution too for a redirect. A ticket's parent edges,
+  whole, for follow-ups and the unfiled epic's children. Every column a
+  restored row overwrites, for the other rows. A row's presence for a column
+  the version below does not have.
 - The settle runs before each forward step's Up, with the store at the
   version the Down left. It deletes every entry whose unit no longer matches
   its image. The store below wrote that unit, so the Up derives it from that
@@ -157,8 +160,8 @@ drops it, and the gate's comparisons leave it out.
   entry whose row is gone does not stay pending.
 - Entries no settle can judge are held, never written. These are a store an
   older release raised without replaying, or a stash a Down with no images
-  wrote. They stay in the carrier, and every open lists them as
-  `migration.stash_held`.
+  wrote. They stay in the carrier until the next Down replaces them, and
+  every write open lists them as `migration.stash_held`.
 
 The table's one definition is `stash_carrier.ddl`, embedded as
 `migrations.StashCarrierDDL`. Every stash a Down writes runs it first, so the

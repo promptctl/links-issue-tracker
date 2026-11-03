@@ -150,6 +150,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'follows_up';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'follows_up#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'follows_up', JSON_ARRAY(SUBSTRING(t.follows_up, 1)) FROM issues t;
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -160,6 +166,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
   value JSON NOT NULL,
   PRIMARY KEY (table_name, row_key, column_name)
 );
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*parent-child';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*parent-child#image';
 -- +goose StatementEnd
 -- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*parent-child', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.type = 'parent-child' AND t.src_id IN (SELECT i.id FROM issues i WHERE i.follows_up IS NOT NULL);
@@ -185,8 +197,8 @@ ALTER TABLE issues DROP COLUMN follows_up;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'follows_up#image', JSON_ARRAY((SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = s.row_key AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'follows_up';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'follows_up#image', JSON_ARRAY((SELECT GROUP_CONCAT(CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR), CAST(u.created_at AS CHAR), CAST(u.created_by AS CHAR)) ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = s.row_key AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'follows_up';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))), '*parent-child#image', JSON_ARRAY((SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))) AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*parent-child';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))), '*parent-child#image', JSON_ARRAY((SELECT GROUP_CONCAT(CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR), CAST(u.created_at AS CHAR), CAST(u.created_by AS CHAR)) ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))) AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*parent-child';
 -- +goose StatementEnd

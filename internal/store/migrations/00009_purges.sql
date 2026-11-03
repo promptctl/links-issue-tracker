@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'purges' AND column_name = '*';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'purges' AND column_name = '*#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'purges', CONCAT_WS(CHAR(31), CAST(t.issue_id AS CHAR), CAST(t.issue_created_at AS CHAR)), '*', JSON_ARRAY(SUBSTRING(t.issue_id, 1), SUBSTRING(t.issue_created_at, 1), SUBSTRING(t.purged_at, 1), SUBSTRING(t.purged_by, 1)) FROM purges t;
 -- +goose StatementEnd
 -- +goose StatementBegin

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
@@ -61,7 +62,25 @@ func TestARaiseKeepsWhatWasWrittenBelowTheDown(t *testing.T) {
 				}
 			}
 		}},
-		{"a store written nothing below v4 comes back whole", 4, func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
+		{"a redirect's ticket resolved otherwise below v4 keeps no redirect", 4, func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
+			redirected := queryOne(t, db, `SELECT s.row_key FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'redirect_target' AND JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) <> 'NULL' ORDER BY s.row_key LIMIT 1`)
+			execSQL(t, db, `UPDATE issues SET resolution = 'wontfix' WHERE id = '`+redirected+`'`)
+			return func(t *testing.T, db *sql.DB) {
+				if got := queryOne(t, db, `SELECT redirect_target FROM issues WHERE id = '`+redirected+`'`); got != "" {
+					t.Errorf("redirect_target of %s = %q, want none on a ticket resolved wontfix", redirected, got)
+				}
+			}
+		}},
+		{"a related-to edge re-created below v4 does not get its stashed author back", 4, func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
+			const edge = `type = 'related-to' AND src_id = 'seed-t1' AND dst_id = 'seed-t5'`
+			execSQL(t, db, `UPDATE relations SET created_by = 'below' WHERE `+edge)
+			return func(t *testing.T, db *sql.DB) {
+				if got := queryOne(t, db, `SELECT CAST(COUNT(*) AS CHAR) FROM relations WHERE `+edge+` AND created_by = 'alice'`); got != "0" {
+					t.Errorf("the seed-t1 related-to edge came back with its stashed author, alice")
+				}
+			}
+		}},
+		{"a store written nothing below v4 comes back whole", 4,func(t *testing.T, db *sql.DB) func(*testing.T, *sql.DB) {
 			return func(t *testing.T, db *sql.DB) {
 				ref, _ := storeAtVersion(t, migrations.FS, 4)
 				applySeed(t, ref.db, seeds[4])
@@ -106,6 +125,26 @@ func TestASettleReportsWhatItDropped(t *testing.T) {
 		return r["version"] == int64(4) && r["stash"] == "issues.redirect_target" && r["rows"] == int64(1)
 	}) {
 		t.Fatalf("%s = %v, want v4's issues.redirect_target with one unit", stashSettledFact, done.Probed[stashSettledFact])
+	}
+}
+
+// TestADownReplacesWhatARaiseWithoutReplayLeft: an entry a raise that never
+// replayed left in the carrier is not the store this Down steps away from,
+// so the raise after it does not write it.
+func TestADownReplacesWhatARaiseWithoutReplayLeft(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	seeds := seedsByVersion(t, registryMigrations(t))
+	st, provider := storeAtVersion(t, migrations.FS, 4)
+	applySeed(t, st.db, seeds[4])
+	execSQL(t, st.db, strings.TrimSpace(migrations.StashCarrierDDL))
+	execSQL(t, st.db, `INSERT INTO schema_stash (table_name, row_key, column_name, value) VALUES ('relations', CONCAT_WS(CHAR(31), 'seed-t1', 'seed-t2', 'related-to'), '*related-to', JSON_ARRAY('seed-t1', 'seed-t2', 'related-to', '2026-01-01 00:00:00', 'held'))`)
+	if _, err := provider.DownTo(ctx, 3); err != nil {
+		t.Fatalf("Down to v3: %v", err)
+	}
+	migrateLocked(t, ctx, st)
+	if got := queryOne(t, st.db, `SELECT CAST(COUNT(*) AS CHAR) FROM relations WHERE created_by = 'held'`); got != "0" {
+		t.Errorf("%s held related-to edges written by the raise, want none", got)
 	}
 }
 

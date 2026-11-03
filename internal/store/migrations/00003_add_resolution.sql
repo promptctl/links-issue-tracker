@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'resolution';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'resolution#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'resolution', JSON_ARRAY(SUBSTRING(t.resolution, 1)) FROM issues t;
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -37,5 +43,5 @@ ALTER TABLE issues DROP COLUMN resolution;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'resolution#image', JSON_ARRAY((SELECT JSON_ARRAY(u.status, u.closed_at) FROM issues u WHERE u.id = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'resolution';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'resolution#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.status, 1), SUBSTRING(u.closed_at, 1)) FROM issues u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'resolution';
 -- +goose StatementEnd

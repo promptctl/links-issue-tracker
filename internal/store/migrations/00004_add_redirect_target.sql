@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'redirect_target';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'redirect_target#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'redirect_target', JSON_ARRAY(SUBSTRING(t.redirect_target, 1)) FROM issues t;
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -74,6 +80,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
   value JSON NOT NULL,
   PRIMARY KEY (table_name, row_key, column_name)
 );
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*related-to';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'relations' AND column_name = '*related-to#image';
 -- +goose StatementEnd
 -- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', CONCAT_WS(CHAR(31), CAST(t.src_id AS CHAR), CAST(t.dst_id AS CHAR), CAST(t.type AS CHAR)), '*related-to', JSON_ARRAY(SUBSTRING(t.src_id, 1), SUBSTRING(t.dst_id, 1), SUBSTRING(t.type, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM relations t WHERE t.type = 'related-to';
@@ -92,8 +104,8 @@ ALTER TABLE issues DROP COLUMN redirect_target;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'redirect_target#image', JSON_ARRAY((SELECT JSON_ARRAY(u.status, u.closed_at) FROM issues u WHERE u.id = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'redirect_target';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'redirect_target#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.status, 1), SUBSTRING(u.closed_at, 1), SUBSTRING(u.resolution, 1)) FROM issues u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'redirect_target';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', s.row_key, '*related-to#image', JSON_ARRAY(EXISTS (SELECT 1 FROM relations u WHERE CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*related-to';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', s.row_key, '*related-to#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.src_id, 1), SUBSTRING(u.dst_id, 1), SUBSTRING(u.type, 1), SUBSTRING(u.created_at, 1), SUBSTRING(u.created_by, 1)) FROM relations u WHERE CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*related-to';
 -- +goose StatementEnd

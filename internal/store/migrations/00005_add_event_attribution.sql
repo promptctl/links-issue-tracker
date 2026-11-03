@@ -31,6 +31,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_events' AND column_name = 'stream_id';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_events' AND column_name = 'stream_id#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', CAST(t.id AS CHAR), 'stream_id', JSON_ARRAY(SUBSTRING(t.stream_id, 1)) FROM issue_events t;
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -43,6 +49,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_events' AND column_name = 'workspace_id';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issue_events' AND column_name = 'workspace_id#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', CAST(t.id AS CHAR), 'workspace_id', JSON_ARRAY(SUBSTRING(t.workspace_id, 1)) FROM issue_events t;
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -53,8 +65,8 @@ ALTER TABLE issue_events DROP COLUMN workspace_id;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, 'stream_id#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = 'stream_id';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, 'stream_id#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.id, 1)) FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = 'stream_id';
 -- +goose StatementEnd
 -- +goose StatementBegin
-REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, 'workspace_id#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = 'workspace_id';
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, 'workspace_id#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.id, 1)) FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = 'workspace_id';
 -- +goose StatementEnd
