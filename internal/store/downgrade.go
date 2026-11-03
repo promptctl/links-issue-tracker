@@ -262,6 +262,16 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, 
 			"downgrade: workspace is not goose-managed (no goose_db_version table); run Open first to adopt or initialize",
 		)
 	}
+	// A dead step's half is undone before the stranded-write commit, which
+	// would otherwise version it.
+	if state.interrupted() {
+		if err := s.undoInterruptedLocked(ctx, state); err != nil {
+			return nil, err
+		}
+		if state, err = s.classifyMigrationState(ctx); err != nil {
+			return nil, err
+		}
+	}
 	// Writes a failed commit left in the working set are versioned before the
 	// reverse reads it: the sync open runs no standing-writes gate, so a hold
 	// row a crash left uncommitted would otherwise read as "already held",

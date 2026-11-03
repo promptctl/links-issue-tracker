@@ -21,6 +21,3 @@ var FS embed.FS
 //
 //go:embed stash_carrier.ddl
 var StashCarrierDDL string
-
-// StashCarrier is the table StashCarrierDDL creates.
-const StashCarrier = "schema_stash"

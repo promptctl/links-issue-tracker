@@ -480,14 +480,14 @@ func (st migrationState) undoInterrupted(ctx context.Context, db *sql.DB) error 
 	// branch of that name when one exists.
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin the restore of HEAD's %s: %w", migrations.StashCarrier, err)
+		return fmt.Errorf("begin the restore of HEAD's schema_stash: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, "DELETE FROM "+migrations.StashCarrier); err != nil {
-		return fmt.Errorf("clear the half-settled %s: %w", migrations.StashCarrier, err)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM schema_stash"); err != nil {
+		return fmt.Errorf("clear the half-settled schema_stash: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO "+migrations.StashCarrier+" SELECT * FROM "+migrations.StashCarrier+" AS OF 'HEAD'"); err != nil {
-		return fmt.Errorf("restore HEAD's %s: %w", migrations.StashCarrier, err)
+	if _, err := tx.ExecContext(ctx, "INSERT INTO schema_stash SELECT * FROM schema_stash AS OF 'HEAD'"); err != nil {
+		return fmt.Errorf("restore HEAD's schema_stash: %w", err)
 	}
 	return tx.Commit()
 }
@@ -664,24 +664,31 @@ func (s *Store) checkWritable(ctx context.Context) (migrationState, operability,
 			if err != nil || !state.undoDue(op) {
 				return err
 			}
-			if err := state.undoInterrupted(ctx, s.db); err != nil {
-				return fmt.Errorf("undo the uncommitted step from v%d: %w", state.committedVersion, err)
-			}
-			// Still under the lock, so a step that reads interrupted now is
-			// the undo's failure, not a live writer's.
-			after, _, err := s.assessOperability(ctx)
-			if err != nil {
-				return err
-			}
-			if after.interrupted() {
-				return fmt.Errorf("the undo left the step from v%d interrupted (applied v%d, unsettled stash %t)", state.committedVersion, after.appliedVersion, after.stashUnsettled)
-			}
-			return nil
+			return s.undoInterruptedLocked(ctx, state)
 		})
 	}); fail != nil {
 		return migrationState{}, operability{}, fail
 	}
 	return s.classifyWritable(ctx)
+}
+
+// undoInterruptedLocked undoes state's interrupted step under the commit lock
+// and checks it took: still under the lock, a step that reads interrupted
+// after the undo is the undo's failure, not a live writer's.
+// [LAW:single-enforcer] every path that writes over an interrupted step under
+// the lock undoes it here first.
+func (s *Store) undoInterruptedLocked(ctx context.Context, state migrationState) error {
+	if err := state.undoInterrupted(ctx, s.db); err != nil {
+		return fmt.Errorf("undo the uncommitted step from v%d: %w", state.committedVersion, err)
+	}
+	after, err := s.classifyMigrationState(ctx)
+	if err != nil {
+		return err
+	}
+	if after.interrupted() {
+		return fmt.Errorf("the undo left the step from v%d interrupted (applied v%d, unsettled stash %t)", state.committedVersion, after.appliedVersion, after.stashUnsettled)
+	}
+	return nil
 }
 
 // classifyWritable is checkWritable's classify and floor, run once before an
@@ -1531,12 +1538,12 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		if applied == committed {
 			// dolt_status diffs every table; a store with no carrier has
 			// nothing a settle wrote.
-			carried, err := s.tableExists(ctx, migrations.StashCarrier)
+			carried, err := migrations.CarrierPresent(ctx, s.db)
 			if err != nil {
 				return migrationState{}, err
 			}
 			if carried {
-				if unsettled, err = s.tableModified(ctx, migrations.StashCarrier); err != nil {
+				if unsettled, err = s.tableModified(ctx, "schema_stash"); err != nil {
 					return migrationState{}, err
 				}
 			}
