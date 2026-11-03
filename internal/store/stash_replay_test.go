@@ -262,3 +262,33 @@ func TestTheSyncOpenVersionsNoInterruptedStep(t *testing.T) {
 	t.Cleanup(func() { _ = writer.Close() })
 	requireReplayed(t, writer, stashed, plan)
 }
+
+// TestAStepThatDiedAtItsSettleRunsAgain is a process that died after v4's
+// settle dropped a unit a write below changed, before goose recorded v4's Up:
+// the next open settles again from HEAD's carrier and reports the drop the
+// dead settle made, which a retry over the half-settled carrier reports as 0.
+func TestAStepThatDiedAtItsSettleRunsAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	seeds := seedsByVersion(t, registryMigrations(t))
+	st, provider := storeAtVersion(t, migrations.FS, 4)
+	applySeed(t, st.db, seeds[4])
+	if _, err := provider.DownTo(ctx, 3); err != nil {
+		t.Fatalf("Down to v3: %v", err)
+	}
+	execSQL(t, st.db, `UPDATE issues SET status = 'closed', closed_at = '2026-02-01T00:00:00Z', resolution = 'duplicate' WHERE id = 'seed-t4'`)
+	if err := st.commitWorkingSet(ctx, "written below v4"); err != nil {
+		t.Fatalf("commit v3: %v", err)
+	}
+	if _, err := migrations.SettleStash(ctx, st.db, 4); err != nil {
+		t.Fatalf("settle v4: %v", err)
+	}
+
+	done := migrateLocked(t, ctx, st)
+	settled, _ := done.Probed[stashSettledFact].([]map[string]any)
+	if !slices.ContainsFunc(settled, func(r map[string]any) bool {
+		return r["version"] == int64(4) && r["stash"] == "issues.redirect_target" && r["rows"] == int64(1)
+	}) {
+		t.Fatalf("%s = %v, want v4's issues.redirect_target with one unit", stashSettledFact, done.Probed[stashSettledFact])
+	}
+}
