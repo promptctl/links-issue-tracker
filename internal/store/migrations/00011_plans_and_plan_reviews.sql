@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'work_plan';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'issues' AND column_name = 'work_plan#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', CAST(t.id AS CHAR), 'work_plan', JSON_ARRAY(SUBSTRING(t.work_plan, 1)) FROM issues t;
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -56,6 +62,12 @@ CREATE TABLE IF NOT EXISTS schema_stash (
 );
 -- +goose StatementEnd
 -- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'plan_reviews' AND column_name = '*';
+-- +goose StatementEnd
+-- +goose StatementBegin
+DELETE FROM schema_stash WHERE table_name = 'plan_reviews' AND column_name = '*#image';
+-- +goose StatementEnd
+-- +goose StatementBegin
 REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'plan_reviews', CAST(t.id AS CHAR), '*', JSON_ARRAY(SUBSTRING(t.id, 1), SUBSTRING(t.issue_id, 1), SUBSTRING(t.plan_digest, 1), SUBSTRING(t.verdict, 1), SUBSTRING(t.laws, 1), SUBSTRING(t.created_at, 1), SUBSTRING(t.created_by, 1)) FROM plan_reviews t;
 -- +goose StatementEnd
 -- +goose StatementBegin
@@ -63,4 +75,11 @@ DROP TABLE plan_reviews;
 -- +goose StatementEnd
 -- +goose StatementBegin
 ALTER TABLE issues DROP COLUMN work_plan;
+-- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'work_plan#image', JSON_ARRAY((SELECT JSON_ARRAY(SUBSTRING(u.id, 1)) FROM issues u WHERE u.id = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'work_plan';
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'plan_reviews', s.row_key, '*#image', JSON_ARRAY(NULL) FROM schema_stash s WHERE s.table_name = 'plan_reviews' AND s.column_name = '*';
 -- +goose StatementEnd

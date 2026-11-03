@@ -98,7 +98,8 @@ func TestStashCarrierDriftNamesEveryOtherDefinition(t *testing.T) {
 
 // TestEveryReleasedDownStashesWhatItsUpReplays holds each version's Down to
 // its declared stash: the Down carries every Restores entry's StashSQL as
-// generated.
+// generated, and ends with their images, taken once the store is at the
+// version below.
 func TestEveryReleasedDownStashesWhatItsUpReplays(t *testing.T) {
 	entries, err := fs.ReadDir(FS, ".")
 	if err != nil {
@@ -120,6 +121,9 @@ func TestEveryReleasedDownStashesWhatItsUpReplays(t *testing.T) {
 			if want := GooseStatements(st.StashSQL()); !strings.Contains(down, want) {
 				t.Errorf("%s: its Down does not stash %s as migrations generates it:\n%s", e.Name(), st.Name(), want)
 			}
+		}
+		if want := GooseStatements(ImageSQL(v)); !strings.HasSuffix(down, want) {
+			t.Errorf("%s: its Down does not end with its images as migrations generates them:\n%s", e.Name(), want)
 		}
 	}
 	for v := range Restores {
