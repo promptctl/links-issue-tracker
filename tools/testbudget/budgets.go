@@ -9,7 +9,8 @@ import "time"
 // measured environment, rounded up — far enough over the measurement to absorb
 // machine variance, close enough that sustained creep or a single expensive
 // test fails the build long before go test's 10-minute per-package default
-// turns it into a timeout panic on an innocent diff. The check reads whatever
+// turns it into a timeout panic on an innocent diff — every package but
+// internal/cli, whose note says why it has no such margin. The check reads whatever
 // `go test -short -json ./...` run it is piped, and the enforcing one is CI's
 // concurrent run on ubuntu-latest, whose 4-vCPU runners are drawn from a pool
 // of different CPUs (AMD EPYC 7763, 9V45, 9V74; Intel Xeon 6973P/6975P) that
@@ -37,8 +38,10 @@ import "time"
 // per-package notes below say where each package's time goes; make the test
 // cheaper.
 var budgets = map[string]time.Duration{
-	// 291s (EPYC 9V74); 151-210s on the other CPUs. Remaining poles are two
-	// ~5s contention tests. Approaching this budget means fixture tax is back.
+	// 291s (EPYC 9V74); 151-210s on the other CPUs. CI measured 58.5s at the
+	// 2026-08-26 calibration, more than the runner pool's ~1.5x spread
+	// explains, so where the rest went is unmeasured. Approaching this budget
+	// means fixture tax is back.
 	"github.com/promptctl/links-issue-tracker/internal/store": 440 * time.Second,
 
 	// 385s (EPYC 7763); 249-358s on the other CPUs, most of it the serial e2e

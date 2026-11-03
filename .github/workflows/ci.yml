@@ -41,8 +41,8 @@ jobs:
       - name: Build
         run: go build ./cmd/lit
 
-      # The same commit has measured internal/store at 152s on one runner and
-      # 266s on another, so a red budget is the code's fault or the hardware's.
+      # The same commit runs up to ~1.5x slower on one runner CPU than another
+      # (tools/testbudget/budgets.go records the spread), so a red budget is the code's fault or the hardware's.
       # The runner's CPU, printed by this step just before the Test step, says
       # which. lscpu's output varies by runner image, so it cannot fail the job.
       - name: Runner CPU
