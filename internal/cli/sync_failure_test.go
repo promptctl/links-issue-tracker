@@ -355,7 +355,7 @@ func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaCeilingLiftError{
 		Remote: "origin", Branch: "master",
-		Lift: &store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 11, TargetVersion: 12,
+		Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 11, TargetVersion: 12,
 			Ceiling: version.SchemaCeiling{Max: 11, Source: "the commit 1qvemmg4ijkfoad9kc5jsr9bl7p4ejrs the reconcile read holds its schema at 11 (meta.schema_hold), which a remote downgrade set", Bound: version.BoundHold}},
 	}
 	var syncFailure SyncFailureError
@@ -370,7 +370,7 @@ func TestAHoldRefusedLiftRendersTheSyncFailureContract(t *testing.T) {
 	}
 	block := syncFailure.Error()
 	for _, want := range []string{
-		"a commit the reconcile against origin/master read is at schema version 11, and settling it here means lifting it to this lit's schema version 12, but the schema ceiling for this sync is 11 (the commit 1qvemmg4ijkfoad9kc5jsr9bl7p4ejrs the reconcile read holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
+		"a commit the reconcile against origin/master read is at schema version 11, and settling it here means lifting it toward this lit's schema, but the lift's next step, to schema version 12, is above the schema ceiling for this sync, 11 (the commit 1qvemmg4ijkfoad9kc5jsr9bl7p4ejrs the reconcile read holds its schema at 11 (meta.schema_hold), which a remote downgrade set)",
 		"lit downgrade --to <tag>",
 		"release at schema v11",
 		"ESCALATION — BLOCKED",
@@ -393,7 +393,7 @@ func TestAReleasedCeilingLiftRefusalNamesTheRelease(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.SchemaCeilingLiftError{
 		Remote: "origin", Branch: "master",
-		Lift: &store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 11, TargetVersion: 12,
+		Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 11, TargetVersion: 12,
 			Ceiling: version.SchemaCeiling{Max: 11, Source: "stamped at build time from release tag v0.24.0", Bound: version.BoundReleased}},
 	}
 	var syncFailure SyncFailureError
@@ -402,10 +402,10 @@ func TestAReleasedCeilingLiftRefusalNamesTheRelease(t *testing.T) {
 	}
 	block := syncFailure.Error()
 	for _, want := range []string{
-		"the schema ceiling for this sync is 11 (stamped at build time from release tag v0.24.0)",
+		"the schema ceiling for this sync, 11 (stamped at build time from release tag v0.24.0)",
 		"lit version",
 		"lit upgrade",
-		"lifts to schema v12 only if a release carries it",
+		"lifts past schema v11 only if a release carries v12",
 		"ESCALATION — BLOCKED",
 	} {
 		if !strings.Contains(block, want) {

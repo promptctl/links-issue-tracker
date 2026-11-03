@@ -287,11 +287,11 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 		t.Fatalf("reconcile against a remote held at %d = %v, want a SchemaCeilingLiftError from the lift", max-1, err)
 	}
 	wantLift := SchemaCeilingError{Raise: RaiseLift, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: holdBy(fmt.Sprintf("the commit %s the reconcile read", heldHead), max-1)}
-	if refused.Remote != "origin" || refused.Branch != "master" || refused.Lift == nil || *refused.Lift != wantLift {
-		t.Errorf("refusal = %+v (lift %+v), want the lift from %d to %d refused at the fetched head's hold, naming that head, for origin/master", *refused, refused.Lift, max-1, max)
+	if refused.Remote != "origin" || refused.Branch != "master" || refused.Lift != wantLift {
+		t.Errorf("refusal = %+v, want the lift from %d to %d refused at the fetched head's hold, naming that head, for origin/master", *refused, max-1, max)
 	}
 	var lift *SchemaCeilingError
-	if !errors.As(err, &lift) || lift != refused.Lift {
+	if !errors.As(err, &lift) || *lift != refused.Lift {
 		t.Errorf("refusal %v does not wrap the lift's own refusal", err)
 	}
 	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {

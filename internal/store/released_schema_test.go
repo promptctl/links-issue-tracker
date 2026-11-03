@@ -233,7 +233,7 @@ func TestARefusalNamesTheCeilingAndItsSource(t *testing.T) {
 	for _, err := range []error{
 		&SchemaCeilingError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling},
 		&SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 5, Ceiling: ceiling},
-		&SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: &SchemaCeilingError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling}},
+		&SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: SchemaCeilingError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling}},
 	} {
 		msg := err.Error()
 		if !strings.Contains(msg, "the schema ceiling") || !strings.Contains(msg, "is 4 (the checkout this lit was built from had no release tag)") {

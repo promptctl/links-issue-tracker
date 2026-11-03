@@ -87,13 +87,14 @@ const (
 	// ceiling's source names which bound refused.
 	syncFailureSchemaCeiling syncFailureClass = "schema_ceiling"
 	// syncFailureSchemaCeilingLift: a pull or reconcile was refused because
-	// settling a commit it read means lifting it to this lit's schema, above
-	// the schema ceiling: this lit's released-schema ceiling, or the hold the
-	// commit carries, whichever is lower. The commit was just read, so a fetch
-	// clears nothing, a pull is refused the same way, and so is a remote
-	// downgrade, which pushes and so wants this backlog not behind; the
-	// ceiling's bound selects the remedy, as it does for a push refused by
-	// the ceiling.
+	// settling a commit it read means lifting it toward this lit's schema,
+	// and the lift's next step is above the schema ceiling: this lit's
+	// released-schema ceiling, or the hold the commit carries, whichever is
+	// lower. The commit was just read, so until the remote's head moves a
+	// fetch clears nothing, a pull is refused the same way, and so is a
+	// remote downgrade, which pushes and so wants this backlog not behind;
+	// the ceiling's bound selects the remedy, as it does for a push refused
+	// by the ceiling.
 	syncFailureSchemaCeilingLift syncFailureClass = "schema_ceiling_lift"
 	// syncFailureSchemaRaiseRequiresRelease: the push was refused because it
 	// would raise the remote's schema and this lit is no release. The remote's
@@ -439,7 +440,7 @@ func schemaCeilingLiftRemedy(refused *store.SchemaCeilingLiftError) []remedyStep
 	case version.BoundHold:
 		return []remedyStep{releaseAtHoldStep(refused.Lift.Ceiling.Max)}
 	default:
-		return releasedCeilingSteps(fmt.Sprintf("which lifts to schema v%d only if a release carries it", refused.Lift.TargetVersion))
+		return releasedCeilingSteps(fmt.Sprintf("which lifts past schema v%d only if a release carries v%d", refused.Lift.WorkspaceVersion, refused.Lift.TargetVersion))
 	}
 }
 
@@ -721,7 +722,7 @@ func (f SyncFailure) whatLine() string {
 			ref, f.AboveCeiling.CommitSchema, f.AboveCeiling.Ceiling.Max, f.AboveCeiling.Ceiling.Source, ref)
 	case syncFailureSchemaCeilingLift:
 		return fmt.Sprintf(
-			"a commit the reconcile against %s read is at schema version %d, and settling it here means lifting it to this lit's schema version %d, but the schema ceiling for this sync is %d (%s). A lit never raises a schema above the ceiling, so this checkout was not settled against %s and is still on the history it last settled to; the commit was just read, so fetching or pulling again is refused the same way.",
+			"a commit the reconcile against %s read is at schema version %d, and settling it here means lifting it toward this lit's schema, but the lift's next step, to schema version %d, is above the schema ceiling for this sync, %d (%s). A lit never raises a schema above the ceiling, so this checkout was not settled against %s and is still on the history it last settled to; the commit was just read, so fetching or pulling again is refused the same way until the remote's head moves.",
 			ref, f.LiftRefused.Lift.WorkspaceVersion, f.LiftRefused.Lift.TargetVersion, f.LiftRefused.Lift.Ceiling.Max, f.LiftRefused.Lift.Ceiling.Source, ref)
 	case syncFailurePushDiverged:
 		return fmt.Sprintf(

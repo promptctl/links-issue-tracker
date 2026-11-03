@@ -93,20 +93,22 @@ func holdRemedyClause(ceiling version.SchemaCeiling) string {
 // lift's refusal (Lift, a SchemaCeilingError at RaiseLift) stamped with the
 // remote and branch the reconcile was against, which the lift itself does not
 // know; the CLI reads this type, and reads the schemas and the ceiling through
-// Lift, the one record of them. The chain under it still names the commit the
-// lift refused, which is the fetched head or a local head held below this
-// lit's schema. [LAW:parse-dont-validate] [LAW:one-source-of-truth]
+// Lift, the one record of them, held by value so there is no refusal without
+// its lift. Lift's TargetVersion is the lift's next step, the first migration
+// above the ceiling, not this lit's schema. The chain under it still names
+// the commit the lift refused, which is the fetched head or a local head held
+// below this lit's schema. [LAW:parse-dont-validate] [LAW:one-source-of-truth]
 type SchemaCeilingLiftError struct {
 	Remote string
 	Branch string
-	Lift   *SchemaCeilingError
+	Lift   SchemaCeilingError
 	cause  error
 }
 
+// Error is the lift's own refusal, said for the remote the reconcile was
+// against. [LAW:one-source-of-truth] the refusal is worded once, by Lift.
 func (e *SchemaCeilingLiftError) Error() string {
-	return fmt.Sprintf(
-		"refusing to settle this backlog against %s/%s: a commit the reconcile read is at schema version %d, settling it means lifting it to this lit's schema version %d, and the schema ceiling here is %d (%s); this lit never puts a schema above that ceiling in place%s",
-		e.Remote, e.Branch, e.Lift.WorkspaceVersion, e.Lift.TargetVersion, e.Lift.Ceiling.Max, e.Lift.Ceiling.Source, holdRemedyClause(e.Lift.Ceiling))
+	return fmt.Sprintf("refusing to settle this backlog against %s/%s: %v", e.Remote, e.Branch, &e.Lift)
 }
 
 // Unwrap is the error the reconcile's replay returned, with the lift's own
@@ -131,7 +133,7 @@ func nameLiftRefusal(err error, remote storage.RemoteName, branch string) error 
 	if !errors.As(err, &refused) || refused.Raise != RaiseLift {
 		return err
 	}
-	return &SchemaCeilingLiftError{Remote: remote.String(), Branch: branch, Lift: refused, cause: err}
+	return &SchemaCeilingLiftError{Remote: remote.String(), Branch: branch, Lift: *refused, cause: err}
 }
 
 // EventRecord is what the write was, the schema it started from, the one it
