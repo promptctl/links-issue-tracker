@@ -64,3 +64,10 @@ DROP TABLE plan_reviews;
 -- +goose StatementBegin
 ALTER TABLE issues DROP COLUMN work_plan;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'work_plan#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issues u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'work_plan';
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'plan_reviews', s.row_key, '*#image', JSON_ARRAY(NULL) FROM schema_stash s WHERE s.table_name = 'plan_reviews' AND s.column_name = '*';
+-- +goose StatementEnd

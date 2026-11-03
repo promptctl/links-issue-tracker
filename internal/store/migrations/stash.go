@@ -11,50 +11,102 @@ import (
 // Stash is one thing a released Down stashes before it destroys it, and the
 // next Up's replay writes back.
 //
-// [LAW:one-source-of-truth] StashSQL and RestoreSQL are the only definitions
-// of the SQL that writes and applies the carrier; every registry statement
-// that touches schema_stash is one of their outputs.
+// [LAW:one-source-of-truth] StashSQL, ImageSQL, SettleSQL and RestoreSQL are
+// the only definitions of the SQL that writes and applies the carrier; every
+// registry statement that touches schema_stash is one of their outputs.
 type Stash interface {
 	// StashSQL is the statements a Down runs before the drop, the carrier's
 	// DDL first.
 	StashSQL() []string
+	// ImageSQL is the statements a Down runs last, once the store is at the
+	// version below: an image of each unit the stash's entries write onto,
+	// as the Down left it.
+	ImageSQL() []string
+	// SettleSQL is the statements the forward step runs before its Up: they
+	// delete every entry whose unit no longer matches its image, with the
+	// image, and the last one's count is the units settled. The store below
+	// wrote that unit, and the Up derives it from that write.
+	SettleSQL() []string
 	// RestoreSQL is the statements the replay runs once the structure exists
-	// again: every one but the last writes rows it counts, and the last
-	// deletes every entry the stash holds, so a replay leaves none behind. It
-	// never creates the carrier: a store no Down stashed in has none, and
-	// holds nothing to replay. version is the stash's, at the version the store
-	// is at. A late replay runs after an Up that did
-	// not replay, onto data written since.
-	RestoreSQL(version, at int64, late bool) []string
+	// again, each writing rows it counts. It never creates the carrier: a
+	// store no Down stashed in has none, and holds nothing to replay.
+	RestoreSQL() []string
 	// Name is the stash's table and column, as the replay reports it.
 	Name() string
 	// Entry is the table_name and column_name of every entry it writes.
 	Entry() (table, column string)
 }
 
+// Unit is what one entry's restore writes onto: its key over the entry
+// (aliased s), and its image at the version below over a key expression.
+// The image holds only what a write below can change that the restore would
+// overwrite, so a write below that leaves it alone keeps the stash.
+type Unit struct {
+	key   string
+	image func(key string) string
+}
+
+// present is a row of table under the entry's own key, which a write below
+// can delete or re-create.
+func present(table string, key []string) Unit {
+	return Unit{key: "s.row_key", image: func(k string) string {
+		return fmt.Sprintf("EXISTS (SELECT 1 FROM %s u WHERE %s = %s)", table, rowKey(key, "u"), k)
+	}}
+}
+
+// closure is a ticket's closure, which a resolution or redirect is legal on
+// only as it was: reopening or closing it below changes it.
+func closure() Unit {
+	return Unit{key: "s.row_key", image: func(k string) string {
+		return fmt.Sprintf("(SELECT JSON_ARRAY(u.status, u.closed_at) FROM issues u WHERE u.id = %s)", k)
+	}}
+}
+
+// parents is a ticket's parent edges, the ticket being key: filing or
+// reparenting it below changes them.
+func parents(key string) Unit {
+	return Unit{key: key, image: func(k string) string {
+		return fmt.Sprintf("(SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = %s AND u.type = 'parent-child')", k)
+	}}
+}
+
+// undisputed is a row of a table the version below does not have, so no
+// write below reaches it.
+func undisputed() Unit { return Unit{key: "s.row_key", image: func(string) string { return "NULL" }} }
+
+func image(entry string) string { return entry + "#image" }
+
+// imageSQL records, for each entry of table's entry, its unit's image.
+func imageSQL(table, entry string, u Unit) []string {
+	return []string{fmt.Sprintf("REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT '%s', %s, '%s', JSON_ARRAY(%s) FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '%s';",
+		table, u.key, image(entry), u.image(u.key), table, entry)}
+}
+
+// settleSQL deletes each entry whose unit's image is not what the Down
+// recorded, then those images; the second statement counts the units.
+func settleSQL(table, entry string, u Unit) []string {
+	stale := func(alias string) string {
+		return fmt.Sprintf("CAST(%[1]s.value AS CHAR) <> CAST(JSON_ARRAY(%[2]s) AS CHAR)", alias, u.image(alias+".row_key"))
+	}
+	return []string{
+		fmt.Sprintf("DELETE FROM schema_stash WHERE table_name = '%[1]s' AND column_name = '%[2]s' AND row_key IN (SELECT s.row_key FROM schema_stash s JOIN schema_stash i ON i.table_name = '%[1]s' AND i.column_name = '%[3]s' AND i.row_key = %[4]s WHERE s.table_name = '%[1]s' AND s.column_name = '%[2]s' AND %[5]s);",
+			table, entry, image(entry), u.key, stale("i")),
+		fmt.Sprintf("DELETE FROM schema_stash WHERE table_name = '%s' AND column_name = '%s' AND %s;", table, image(entry), stale("schema_stash")),
+	}
+}
+
 // Column is one string column of an existing table: its table, its name, the
 // table's primary key in key order, the slice's tag, the rows it stashes
-// (Where over the table aliased t, empty for every row), Left, true of a row
-// (aliased t) whose column still holds what the Down or the Up wrote there,
-// Kept, a column the Down leaves in place, and When, true of a row (t) and
-// its entry (s) the stashed value is legal on. An entry's column_name is the
-// column and the tag, so two versions' Downs that stash one column never
-// overwrite each other's entries.
-//
-// The replay that runs right after the Up writes a dropped column back
-// whole: the stash, taken at the Down, is the record of it. A late replay,
-// and every replay of a Kept column, which the store below writes, writes
-// onto a row only where Left holds: a value written since is newer than the
-// stash and stays.
+// (Where over the table aliased t, empty for every row), and the unit each
+// entry writes onto. An entry's column_name is the column and the tag, so two
+// versions' Downs that stash one column never overwrite each other's entries.
 type Column struct {
 	Table  string
 	Column string
 	Key    []string
 	Slice  string
 	Where  string
-	Left   string
-	Kept   bool
-	When   string
+	Unit   Unit
 }
 
 func (c Column) entry() string {
@@ -66,10 +118,11 @@ func (c Column) entry() string {
 
 // Rows is the rows of a table a Down drops or rewrites, each entry carrying
 // the row as an array: every column, the primary key, the stashed slice (Where
-// over the table aliased t, empty for every row), the slice's tag, and the
-// columns that reference issues(id), whose rows die with their issue. An
-// entry's column_name is '*' and the tag, so two slices of one table, stashed
-// by two versions' Downs, never replay each other's rows.
+// over the table aliased t, empty for every row), the slice's tag, the
+// columns that reference issues(id), whose rows die with their issue, and the
+// unit each entry writes onto. An entry's column_name is '*' and the tag, so
+// two slices of one table, stashed by two versions' Downs, never replay each
+// other's rows.
 //
 // Prune, when set, picks the rows (over the table by its name) that the Up
 // re-derived from what the Down left: the replay deletes each one the stash
@@ -84,6 +137,7 @@ type Rows struct {
 	Slice   string
 	Refs    []string
 	Prune   string
+	Unit    Unit
 }
 
 func (r Rows) entry() string { return "*" + r.Slice }
@@ -104,6 +158,7 @@ func parentEdges(where string) Rows {
 		Where:   fmt.Sprintf("t.type = 'parent-child' AND t.src_id IN (SELECT i.id FROM issues i WHERE %s)", where),
 		Slice:   "parent-child",
 		Refs:    []string{"src_id", "dst_id"},
+		Unit:    parents(element(0)),
 	}
 	r.Prune = fmt.Sprintf("relations.type = 'parent-child' AND relations.src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '%s')", element(0), r.entry())
 	return r
@@ -160,25 +215,19 @@ func (c Column) StashSQL() []string {
 	}
 }
 
-// RestoreSQL writes c's entries onto the rows that still exist, guarded as
-// the type says, then deletes every entry: one whose row was deleted below,
-// or holds a newer value, has nothing left to restore.
-func (c Column) RestoreSQL(_, _ int64, late bool) []string {
+func (c Column) ImageSQL() []string { return imageSQL(c.Table, c.entry(), c.Unit) }
+
+func (c Column) SettleSQL() []string { return settleSQL(c.Table, c.entry(), c.Unit) }
+
+// RestoreSQL writes c's entries onto the rows that still exist. One whose row
+// was deleted below has nothing left to restore.
+func (c Column) RestoreSQL() []string {
 	match := fmt.Sprintf("s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s", c.Table, c.entry(), rowKey(c.Key, "t"))
-	guard := ""
-	if late || c.Kept {
-		guard = "(" + c.Left + ") AND "
-	}
-	legal := match
-	if c.When != "" {
-		legal += " AND (" + c.When + ")"
-	}
 	return []string{
 		// Single-table: Dolt refuses the joined form, UPDATE issues JOIN
 		// schema_stash, with issues_status_check on a valid row.
-		fmt.Sprintf("UPDATE %s t SET t.%s = (SELECT %s FROM schema_stash s WHERE %s) WHERE %sEXISTS (SELECT 1 FROM schema_stash s WHERE %s);",
-			c.Table, c.Column, element(0), match, guard, legal),
-		dropEntries(c.Table, c.entry()),
+		fmt.Sprintf("UPDATE %s t SET t.%s = (SELECT %s FROM schema_stash s WHERE %s) WHERE EXISTS (SELECT 1 FROM schema_stash s WHERE %s);",
+			c.Table, c.Column, element(0), match, match),
 	}
 }
 
@@ -202,16 +251,17 @@ func (r Rows) StashSQL() []string {
 	}
 }
 
-// RestoreSQL gives each live row under a stashed key the stashed values,
-// inserts each stashed row the table does not hold, then deletes every entry.
-// A row whose issue was deleted below died with it, as the table's cascade
-// would have done. A late replay only inserts: a live row, and one the Up
-// derived, may carry a write made since. It inserts each row as the Ups up
-// to at rewrote it.
-func (r Rows) RestoreSQL(version, at int64, late bool) []string {
+func (r Rows) ImageSQL() []string { return imageSQL(r.Table, r.entry(), r.Unit) }
+
+func (r Rows) SettleSQL() []string { return settleSQL(r.Table, r.entry(), r.Unit) }
+
+// RestoreSQL gives each live row under a stashed key the stashed values and
+// inserts each stashed row the table does not hold. A row whose issue was
+// deleted below died with it, as the table's cascade would have done.
+func (r Rows) RestoreSQL() []string {
 	elems := make([]string, len(r.Columns))
-	for i, col := range r.Columns {
-		elems[i] = rewritten(r.Table, col, element(i), version, at)
+	for i := range r.Columns {
+		elems[i] = element(i)
 	}
 	held := make([]string, len(r.Key))
 	for i, k := range r.Key {
@@ -230,9 +280,7 @@ func (r Rows) RestoreSQL(version, at int64, late bool) []string {
 		insert += fmt.Sprintf(" AND EXISTS (SELECT 1 FROM issues p WHERE p.id = %s)", element(slices.Index(r.Columns, ref)))
 	}
 	var stmts []string
-	if late {
-		sets = nil
-	} else if r.Prune != "" {
+	if r.Prune != "" {
 		stmts = append(stmts, fmt.Sprintf("DELETE FROM %s WHERE %s AND NOT EXISTS (SELECT 1 FROM schema_stash s WHERE s.table_name = '%s' AND s.column_name = '%s' AND s.row_key = %s AND s.value = %s);",
 			r.Table, r.Prune, r.Table, r.entry(), rowKey(r.Key, r.Table), value(r.Columns, r.Table)))
 	}
@@ -240,59 +288,32 @@ func (r Rows) RestoreSQL(version, at int64, late bool) []string {
 		stmts = append(stmts, fmt.Sprintf("UPDATE %s t SET %s WHERE EXISTS (SELECT 1 FROM schema_stash s WHERE %s);",
 			r.Table, strings.Join(sets, ", "), match))
 	}
-	return append(stmts, insert+";", dropEntries(r.Table, r.entry()))
-}
-
-// laterRewrites is each value a released Up rewrites in place, by the
-// version that rewrites it. A late replay carries a row it stashed below that
-// version through the rewrite, as the Up would have.
-var laterRewrites = []struct {
-	version       int64
-	table, column string
-	from, to      string
-}{
-	{8, "relations", "type", "blocks", "blocked-by"},
-}
-
-// rewritten is expr, the stashed value of table.column, as the Ups above
-// version and up to at leave it.
-func rewritten(table, column, expr string, version, at int64) string {
-	for _, rw := range laterRewrites {
-		if rw.table == table && rw.column == column && rw.version > version && rw.version <= at {
-			expr = fmt.Sprintf("IF(%s = '%s', '%s', %s)", expr, rw.from, rw.to, expr)
-		}
-	}
-	return expr
+	return append(stmts, insert+";")
 }
 
 // Restores is each version's stash: what that version's Up re-adds and its
 // released Down stashed. It lives here, outside every pinned Up byte, so a
 // released Down is made lossless without touching its Up.
 var Restores = map[int64][]Stash{
-	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Left: "t.lane = ''"}},
-	// A ticket reopened below holds no resolution.
-	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Left: "t.resolution IS NULL",
-		When: "t.closed_at IS NOT NULL OR " + element(0) + " IS NULL"}},
+	2: {Column{Table: "issues", Column: "lane", Key: []string{"id"}, Unit: present("issues", []string{"id"})}},
+	3: {Column{Table: "issues", Column: "resolution", Key: []string{"id"}, Unit: closure()}},
 	4: {
-		// issues_redirect_target_check: a ticket reopened below holds no
-		// redirect.
-		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Left: "t.redirect_target IS NULL",
-			When: "t.resolution IN ('duplicate','superseded') OR " + element(0) + " IS NULL"},
-		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}},
+		Column{Table: "issues", Column: "redirect_target", Key: []string{"id"}, Unit: closure()},
+		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: "t.type = 'related-to'", Slice: "related-to", Refs: []string{"src_id", "dst_id"}, Unit: present("relations", relationKey)},
 	},
 	5: {
-		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}, Left: "t.stream_id IS NULL"},
-		Column{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}, Left: "t.workspace_id IS NULL"},
+		Column{Table: "issue_events", Column: "stream_id", Key: []string{"id"}, Unit: present("issue_events", []string{"id"})},
+		Column{Table: "issue_events", Column: "workspace_id", Key: []string{"id"}, Unit: present("issue_events", []string{"id"})},
 	},
 	6: {
-		Column{Table: "issues", Column: "follows_up", Key: []string{"id"}, Left: "t.follows_up IS NULL"},
+		Column{Table: "issues", Column: "follows_up", Key: []string{"id"}, Unit: parents("s.row_key")},
 		parentEdges("i.follows_up IS NOT NULL"),
 	},
 	7: unfiledEpic(),
-	9: {Rows{Table: "purges", Columns: []string{"issue_id", "issue_created_at", "purged_at", "purged_by"}, Key: []string{"issue_id", "issue_created_at"}}},
+	9: {Rows{Table: "purges", Columns: []string{"issue_id", "issue_created_at", "purged_at", "purged_by"}, Key: []string{"issue_id", "issue_created_at"}, Unit: undisputed()}},
 	11: {
-		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}, Left: "t.work_plan = ''"},
-		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Refs: []string{"issue_id"}},
+		Column{Table: "issues", Column: "work_plan", Key: []string{"id"}, Unit: present("issues", []string{"id"})},
+		Rows{Table: "plan_reviews", Columns: []string{"id", "issue_id", "plan_digest", "verdict", "laws", "created_at", "created_by"}, Key: []string{"id"}, Refs: []string{"issue_id"}, Unit: undisputed()},
 	},
 }
 
@@ -318,26 +339,38 @@ func unfiledEpic() []Stash {
 			Slice:   "unfiled",
 			Prune: fmt.Sprintf("issues.%s AND issues.id NOT IN (SELECT s.row_key FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = '*unfiled') AND NOT EXISTS (SELECT 1 FROM relations c WHERE c.dst_id = issues.id AND c.type = 'parent-child' AND c.src_id NOT IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled'))",
 				strings.ReplaceAll(epic, " AND ", " AND issues."), element(0)),
+			Unit: present("issues", []string{"id"}),
 		},
-		Rows{Table: "comments", Columns: []string{"id", "issue_id", "body", "created_at", "created_by"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}},
-		Rows{Table: "labels", Columns: []string{"issue_id", "label", "created_at", "created_by"}, Key: []string{"issue_id", "label"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}},
-		Rows{Table: "issue_events", Columns: []string{"id", "issue_id", "action", "reason", "actor", "created_at", "stream_id", "workspace_id"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}},
-		Rows{Table: "issue_event_changes", Columns: []string{"event_id", "field", "from_value", "to_value"}, Key: []string{"event_id", "field"}, Where: fmt.Sprintf("t.event_id IN (SELECT v.id FROM issue_events v WHERE %s)", strings.ReplaceAll(of("issue_id"), "t.issue_id", "v.issue_id")), Slice: "unfiled"},
+		Rows{Table: "comments", Columns: []string{"id", "issue_id", "body", "created_at", "created_by"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: present("comments", []string{"id"})},
+		Rows{Table: "labels", Columns: []string{"issue_id", "label", "created_at", "created_by"}, Key: []string{"issue_id", "label"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: present("labels", []string{"issue_id", "label"})},
+		Rows{Table: "issue_events", Columns: []string{"id", "issue_id", "action", "reason", "actor", "created_at", "stream_id", "workspace_id"}, Key: []string{"id"}, Where: of("issue_id"), Slice: "unfiled", Refs: []string{"issue_id"}, Unit: present("issue_events", []string{"id"})},
+		Rows{Table: "issue_event_changes", Columns: []string{"event_id", "field", "from_value", "to_value"}, Key: []string{"event_id", "field"}, Where: fmt.Sprintf("t.event_id IN (SELECT v.id FROM issue_events v WHERE %s)", strings.ReplaceAll(of("issue_id"), "t.issue_id", "v.issue_id")), Slice: "unfiled", Unit: present("issue_event_changes", []string{"event_id", "field"})},
 		Rows{
 			Table: "relations", Columns: relationColumns, Key: relationKey,
 			Where: of("dst_id"), Slice: "unfiled", Refs: []string{"src_id", "dst_id"},
 			Prune: fmt.Sprintf("relations.type = 'parent-child' AND relations.src_id IN (SELECT %s FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*unfiled') AND relations.dst_id IN (SELECT e.id FROM issues e WHERE e.%s)", element(0), strings.ReplaceAll(epic, " AND ", " AND e.")),
+			Unit:  parents(element(0)),
 		},
-		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: of("src_id"), Slice: "unfiled-src", Refs: []string{"src_id", "dst_id"}},
+		Rows{Table: "relations", Columns: relationColumns, Key: relationKey, Where: of("src_id"), Slice: "unfiled-src", Refs: []string{"src_id", "dst_id"}, Unit: present("relations", relationKey)},
 		// The Down resets a lane spelled as its ticket's id, and the Up spells
 		// the lane of every child it leaves at the top level so.
-		Column{Table: "issues", Column: "lane", Key: []string{"id"}, Slice: "unfiled", Kept: true,
+		Column{Table: "issues", Column: "lane", Key: []string{"id"}, Slice: "unfiled",
 			Where: fmt.Sprintf("(t.lane = t.id OR t.id IN (SELECT c.src_id FROM relations c WHERE c.type = 'parent-child' AND %s))", strings.ReplaceAll(of("dst_id"), "t.dst_id", "c.dst_id")),
-			Left:  "t.lane IN ('', t.id)"},
+			Unit:  parents("s.row_key")},
 	}
 }
 
-// Querier is what ReplayStash needs from a database handle.
+// ImageSQL is the statements a Down at version runs last: every stash's
+// image, in Restores order.
+func ImageSQL(version int64) []string {
+	var stmts []string
+	for _, st := range Restores[version] {
+		stmts = append(stmts, st.ImageSQL()...)
+	}
+	return stmts
+}
+
+// Querier is what the stash's steps need from a database handle.
 type Querier interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -354,48 +387,105 @@ func CarrierPresent(ctx context.Context, db Querier) (bool, error) {
 	return present > 0, nil
 }
 
-// Replayed is one stash's replay: what it restored and how many rows.
-type Replayed struct {
+// StashRows is one stash's count in one step: the units a settle dropped,
+// the rows a replay wrote, or the entries it held.
+type StashRows struct {
 	Version int64
 	Name    string
 	Rows    int64
 }
 
-// ReplayStash applies version's stash to db. It is the one restorer: the
-// runner calls it after every forward step, and late for a stash an Up that
-// did not replay left, and the round-trip gate steps through it the same
-// way. [LAW:single-enforcer]
-func ReplayStash(ctx context.Context, db Querier, version, at int64, late bool) ([]Replayed, error) {
-	if len(Restores[version]) == 0 {
-		return nil, nil
+// Replayed is what one version's replay did: the rows each stash wrote, and
+// the entries of each stash it held because no image judges them.
+type Replayed struct {
+	Restored []StashRows
+	Held     []StashRows
+}
+
+// SettleStash runs version's settle on db, before its Up. It is the one
+// judge of whether an entry still holds: an entry is decided here, at the
+// version the Down left, or never. [LAW:single-enforcer]
+func SettleStash(ctx context.Context, db Querier, version int64) ([]StashRows, error) {
+	present, err := carrierFor(ctx, db, version)
+	if err != nil || !present {
+		return nil, err
 	}
-	present, err := CarrierPresent(ctx, db)
-	if err != nil {
-		return nil, fmt.Errorf("replay v%d stash: %w", version, err)
-	}
-	if !present {
-		return nil, nil
-	}
-	var replayed []Replayed
+	var settled []StashRows
 	for _, st := range Restores[version] {
-		stmts := st.RestoreSQL(version, at, late)
-		r := Replayed{Version: version, Name: st.Name()}
+		r := StashRows{Version: version, Name: st.Name()}
+		stmts := st.SettleSQL()
 		for i, stmt := range stmts {
 			res, err := db.ExecContext(ctx, stmt)
 			if err != nil {
-				return replayed, fmt.Errorf("replay v%d stash %s: %w", version, st.Name(), err)
+				return settled, fmt.Errorf("settle v%d stash %s: %w", version, st.Name(), err)
 			}
-			if i < len(stmts)-1 {
-				n, err := res.RowsAffected()
-				if err != nil {
-					return replayed, fmt.Errorf("replay v%d stash %s: %w", version, st.Name(), err)
+			if i == len(stmts)-1 {
+				if r.Rows, err = res.RowsAffected(); err != nil {
+					return settled, fmt.Errorf("settle v%d stash %s: %w", version, st.Name(), err)
 				}
-				r.Rows += n
 			}
 		}
-		replayed = append(replayed, r)
+		settled = append(settled, r)
 	}
-	return replayed, nil
+	return settled, nil
+}
+
+// ReplayStash applies version's stash to db after its Up. It is the one
+// restorer: the runner calls it after every forward step, and the round-trip
+// gate steps through it the same way. [LAW:single-enforcer] A stash with
+// entries and no image was written by a Down no settle can judge: it is held,
+// never written, and stays in the carrier.
+func ReplayStash(ctx context.Context, db Querier, version int64) (Replayed, error) {
+	var out Replayed
+	present, err := carrierFor(ctx, db, version)
+	if err != nil || !present {
+		return out, err
+	}
+	for _, st := range Restores[version] {
+		table, column := st.Entry()
+		var entries, images int64
+		if err := db.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM schema_stash WHERE table_name = ? AND column_name = ?),
+			(SELECT COUNT(*) FROM schema_stash WHERE table_name = ? AND column_name = ?)`,
+			table, column, table, image(column)).Scan(&entries, &images); err != nil {
+			return out, fmt.Errorf("replay v%d stash %s: %w", version, st.Name(), err)
+		}
+		if entries > 0 && images == 0 {
+			out.Held = append(out.Held, StashRows{Version: version, Name: st.Name(), Rows: entries})
+			continue
+		}
+		r := StashRows{Version: version, Name: st.Name()}
+		for _, stmt := range st.RestoreSQL() {
+			res, err := db.ExecContext(ctx, stmt)
+			if err != nil {
+				return out, fmt.Errorf("replay v%d stash %s: %w", version, st.Name(), err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return out, fmt.Errorf("replay v%d stash %s: %w", version, st.Name(), err)
+			}
+			r.Rows += n
+		}
+		for _, stmt := range []string{dropEntries(table, column), dropEntries(table, image(column))} {
+			if _, err := db.ExecContext(ctx, stmt); err != nil {
+				return out, fmt.Errorf("replay v%d stash %s: %w", version, st.Name(), err)
+			}
+		}
+		out.Restored = append(out.Restored, r)
+	}
+	return out, nil
+}
+
+// carrierFor says whether version has a stash and db a carrier to hold it.
+func carrierFor(ctx context.Context, db Querier, version int64) (bool, error) {
+	if len(Restores[version]) == 0 {
+		return false, nil
+	}
+	present, err := CarrierPresent(ctx, db)
+	if err != nil {
+		return false, fmt.Errorf("v%d stash: %w", version, err)
+	}
+	return present, nil
 }
 
 // GooseStatements renders stmts as goose statement blocks, the form a Down

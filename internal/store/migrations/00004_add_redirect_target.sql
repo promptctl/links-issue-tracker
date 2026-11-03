@@ -90,3 +90,10 @@ ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check;
 -- +goose StatementBegin
 ALTER TABLE issues DROP COLUMN redirect_target;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'redirect_target#image', JSON_ARRAY((SELECT JSON_ARRAY(u.status, u.closed_at) FROM issues u WHERE u.id = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'redirect_target';
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', s.row_key, '*related-to#image', JSON_ARRAY(EXISTS (SELECT 1 FROM relations u WHERE CONCAT_WS(CHAR(31), CAST(u.src_id AS CHAR), CAST(u.dst_id AS CHAR), CAST(u.type AS CHAR)) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*related-to';
+-- +goose StatementEnd

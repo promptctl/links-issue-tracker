@@ -35,3 +35,7 @@ REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'purg
 -- +goose StatementBegin
 DROP TABLE purges;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'purges', s.row_key, '*#image', JSON_ARRAY(NULL) FROM schema_stash s WHERE s.table_name = 'purges' AND s.column_name = '*';
+-- +goose StatementEnd

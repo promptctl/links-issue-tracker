@@ -216,8 +216,8 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 	return stashConsumed(t, st.db, stashed)
 }
 
-// upReplaying steps provider up to v the way upByOne does: one goose step,
-// then that version's stash replay.
+// upReplaying steps provider up to v the way upByOne does: the next
+// version's settle, one goose step, then that version's stash replay.
 func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v int64) error {
 	for {
 		current, err := provider.GetDBVersion(ctx)
@@ -227,11 +227,14 @@ func upReplaying(ctx context.Context, provider *goose.Provider, db *sql.DB, v in
 		if current >= v {
 			return nil
 		}
+		if _, err := migrations.SettleStash(ctx, db, current+1); err != nil {
+			return err
+		}
 		result, err := provider.UpByOne(ctx)
 		if err != nil {
 			return err
 		}
-		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version, result.Source.Version, false); err != nil {
+		if _, err := migrations.ReplayStash(ctx, db, result.Source.Version); err != nil {
 			return err
 		}
 	}

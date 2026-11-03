@@ -35,3 +35,7 @@ ALTER TABLE issues DROP CONSTRAINT issues_resolution_check;
 -- +goose StatementBegin
 ALTER TABLE issues DROP COLUMN resolution;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'resolution#image', JSON_ARRAY((SELECT JSON_ARRAY(u.status, u.closed_at) FROM issues u WHERE u.id = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'resolution';
+-- +goose StatementEnd

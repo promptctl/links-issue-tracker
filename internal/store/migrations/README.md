@@ -142,14 +142,23 @@ row_key, column_name, value)`, a table outside the versioned schema. No Down
 drops it, and the gate's comparisons leave it out.
 
 - A Down that drops or rewrites user data copies it into the stash first.
-- The replay writes it back. It runs after each forward step, before the next
-  step reads the store, because v7's Up reads the edges and lanes v6's replay
-  returns. It deletes every entry it reads, so an entry whose row is gone
-  does not stay pending.
-- A replay that runs late, after an Up that did not replay (a store an older
-  release raised), writes a column back only where it still holds what the Up
-  left, and only inserts missing rows: data written since is newer than the
-  stash.
+- The Down's last statements record an image of each unit an entry writes
+  onto (`<entry>#image`): the part of the store a write at the version below
+  could change under it. A ticket's closure (status, closed_at) for a
+  resolution or redirect, a ticket's parent edges for follow-ups and the
+  unfiled epic, a row's presence for the rest.
+- The settle runs before each forward step's Up, with the store at the
+  version the Down left. It deletes every entry whose unit no longer matches
+  its image. The store below wrote that unit, so the Up derives it from that
+  write. It lists what it dropped as `migration.stash_settled`.
+- The replay writes the rest back, whole. It runs after each forward step,
+  before the next step reads the store, because v7's Up reads the edges and
+  lanes v6's replay returns. It deletes every entry and image it reads, so an
+  entry whose row is gone does not stay pending.
+- Entries no settle can judge are held, never written. These are a store an
+  older release raised without replaying, or a stash a Down with no images
+  wrote. They stay in the carrier, and every open lists them as
+  `migration.stash_held`.
 
 The table's one definition is `stash_carrier.ddl`, embedded as
 `migrations.StashCarrierDDL`. Every stash a Down writes runs it first, so the
@@ -166,17 +175,17 @@ copy, or alters or drops it.
   sliced `Rows`, or a slice whose rows the replay makes exact again (`Prune`).
 - Each stash generates its SQL. `StashSQL` is what the Down carries, and
   `TestEveryReleasedDownStashesWhatItsUpReplays` fails unless the Down holds
-  it as generated. `RestoreSQL` is what `ReplayStash` runs.
-- `ReplayStash` is the one restorer. The runner's forward step (`upByOne`)
-  calls it, and so does the round-trip gate.
+  it as generated, followed at the Down's end by every `ImageSQL`.
+  `SettleSQL` is what `SettleStash` runs, and `RestoreSQL` is what
+  `ReplayStash` runs.
+- `SettleStash` is the one judge and `ReplayStash` the one restorer. The
+  runner's forward step (`upByOne`) calls both, and so does the round-trip
+  gate.
 
 The replay lives outside the Up, so a released Down is made lossless without
 touching its pinned Up. A released lit raises a store with the same Up bytes
-and never replays. The next open by a lit that replays finds the leftover
-entries (`pendingStash`), replays them under a checkpoint, commits, and lists
-them on the command's event as `migration.stash_replayed`. That catch-up
-writes back what was stashed, but it cannot undo what a later Up derived
-while the data was missing.
+and never settles or replays, so the entries it leaves are held
+(`heldStash`).
 
 The carrier holds string columns (`VARCHAR`, `TEXT`) and `INT` columns read
 back as text. That covers every column a released Down stashes. The design

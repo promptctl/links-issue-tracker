@@ -27,3 +27,7 @@ REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issu
 -- +goose StatementBegin
 ALTER TABLE issues DROP COLUMN lane;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'lane#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issues u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'lane';
+-- +goose StatementEnd

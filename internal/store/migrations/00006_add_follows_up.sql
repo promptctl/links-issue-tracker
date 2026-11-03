@@ -183,3 +183,10 @@ WHERE i.follows_up IS NOT NULL;
 -- +goose StatementBegin
 ALTER TABLE issues DROP COLUMN follows_up;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issues', s.row_key, 'follows_up#image', JSON_ARRAY((SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = s.row_key AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'issues' AND s.column_name = 'follows_up';
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'relations', IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))), '*parent-child#image', JSON_ARRAY((SELECT GROUP_CONCAT(u.dst_id ORDER BY u.dst_id SEPARATOR ',') FROM relations u WHERE u.src_id = IF(JSON_TYPE(JSON_EXTRACT(s.value, '$[0]')) = 'NULL', NULL, JSON_UNQUOTE(JSON_EXTRACT(s.value, '$[0]'))) AND u.type = 'parent-child')) FROM schema_stash s WHERE s.table_name = 'relations' AND s.column_name = '*parent-child';
+-- +goose StatementEnd

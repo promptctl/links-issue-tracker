@@ -51,3 +51,10 @@ ALTER TABLE issue_events DROP COLUMN stream_id;
 -- +goose StatementBegin
 ALTER TABLE issue_events DROP COLUMN workspace_id;
 -- +goose StatementEnd
+
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, 'stream_id#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = 'stream_id';
+-- +goose StatementEnd
+-- +goose StatementBegin
+REPLACE INTO schema_stash (table_name, row_key, column_name, value) SELECT 'issue_events', s.row_key, 'workspace_id#image', JSON_ARRAY(EXISTS (SELECT 1 FROM issue_events u WHERE CAST(u.id AS CHAR) = s.row_key)) FROM schema_stash s WHERE s.table_name = 'issue_events' AND s.column_name = 'workspace_id';
+-- +goose StatementEnd

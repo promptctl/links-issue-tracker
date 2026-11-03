@@ -519,9 +519,10 @@ type migrationAssessment struct {
 	// drift is nil when every applied version's registered content is
 	// present on the live schema.
 	drift *VersionContentMismatchError
-	// stash is the applied versions whose stash still holds entries, lowest
-	// first: what a lit that never replays left when it raised the store.
-	stash []int64
+	// held is each stash at or below the applied version that still holds
+	// entries: what a lit that never replays left when it raised the store.
+	// No settle can judge them, so they stay where they are, reported.
+	held []migrations.StashRows
 }
 
 // needsWrite reports whether a migrate of this workspace would mutate it: a
@@ -535,7 +536,7 @@ type migrationAssessment struct {
 // normalization, the default-branch rename, is not a schema fact and is not
 // assessed here.)
 func (a migrationAssessment) needsWrite() bool {
-	return a.drift != nil || len(a.stash) > 0 || a.state.willMutate()
+	return a.drift != nil || a.state.willMutate()
 }
 
 // String names what the assessment found, for the read open's handoff error.
@@ -543,8 +544,6 @@ func (a migrationAssessment) String() string {
 	switch {
 	case a.drift != nil:
 		return fmt.Sprintf("applied schema v%d missing registered content (%s)", a.drift.Version, strings.Join(a.drift.Missing, ", "))
-	case len(a.stash) > 0:
-		return fmt.Sprintf("the stash of applied schema %v not replayed", a.stash)
 	case a.state.phase == phaseManaged:
 		return fmt.Sprintf("schema v%d behind this binary's v%d", a.state.appliedVersion, a.state.support.Max)
 	case a.state.phase == phaseAdopt:
@@ -620,14 +619,14 @@ func (s *Store) assessContent(ctx context.Context, state migrationState, op oper
 	if fail != nil {
 		return migrationAssessment{}, fail
 	}
-	var stash []int64
+	var held []migrations.StashRows
 	if fail := attempt(stepStashRead, func() (err error) {
-		stash, err = s.pendingStash(ctx, state.appliedVersion)
+		held, err = s.heldStash(ctx, state.appliedVersion)
 		return err
 	}); fail != nil {
 		return migrationAssessment{}, fail
 	}
-	return migrationAssessment{state: state, op: op, drift: mismatch, stash: stash}, nil
+	return migrationAssessment{state: state, op: op, drift: mismatch, held: held}, nil
 }
 
 // runMigration classifies the workspace once, refuses one this binary may not
@@ -659,6 +658,8 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard, probed p
 // up to and including the recovery snapshot; applySnapshotted does the rest.
 func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assessment migrationAssessment, probed probedFacts) (pruneErr error, fail *SchemaConvergenceError) {
 	state := assessment.state
+	// Every open looks for held stash, so its fact is on every open's event.
+	probed.stash(stashHeldFact, assessment.held)
 	if !assessment.needsWrite() {
 		return nil, nil
 	}
@@ -690,14 +691,8 @@ func (s *Store) applyMigration(ctx context.Context, guard *snapshotGuard, assess
 			return pruneErr, fail
 		}
 	}
-	probed.replayed(nil)
-	if len(assessment.stash) > 0 {
-		stashPruneErr, fail := s.replayPendingStash(ctx, assessment.stash, state.appliedVersion, probed)
-		pruneErr = errors.Join(pruneErr, stashPruneErr)
-		if fail != nil {
-			return pruneErr, fail
-		}
-	}
+	probed.stash(stashSettledFact, nil)
+	probed.stash(stashReplayedFact, nil)
 	if !state.willMutate() {
 		return pruneErr, nil
 	}
@@ -825,20 +820,25 @@ func (s *Store) upByOne(ctx context.Context, provider *goose.Provider, raise Sch
 	if probe, ok := probes[next]; ok {
 		probed.facts, probed.err = probe(ctx, s.db)
 	}
+	// The settle reads the store at the version its Down left, so it runs
+	// before the Up rewrites it.
+	if probed.settledStash, err = migrations.SettleStash(ctx, s.db, next); err != nil {
+		return nil, probed, &stashReplayError{err: err}
+	}
 	result, err := stepResult(provider.UpByOne(ctx))
 	if err != nil {
 		return result, probed, err
 	}
 	// The step's restore runs before the next step reads what it puts back:
 	// v7's body reads the edges and lanes v6's restore returns.
-	if probed.replayedStash, err = migrations.ReplayStash(ctx, s.db, result.Source.Version, result.Source.Version, false); err != nil {
+	if probed.replayedStash, err = migrations.ReplayStash(ctx, s.db, result.Source.Version); err != nil {
 		return result, probed, &stashReplayError{err: err}
 	}
 	return result, probed, nil
 }
 
-// stashReplayError is a forward step whose Up applied and whose stash replay
-// failed.
+// stashReplayError is a forward step whose stash settle failed before its Up,
+// or whose Up applied and whose stash replay failed.
 type stashReplayError struct{ err error }
 
 func (e *stashReplayError) Error() string { return e.err.Error() }
@@ -1000,8 +1000,8 @@ func (s *Store) applyPendingMigrations(ctx context.Context, p snapshotted, ceili
 		}
 		var replayFailed *stashReplayError
 		if errors.As(gooseErr, &replayFailed) {
-			// The version's Up applied; its stash did not go back. A
-			// quarantine would name a migration body that ran.
+			// The version's stash did not settle or go back. A quarantine
+			// would name a migration body that did not fail.
 			return recoverFrom(stepStashReplay, stepMigrationReset, result, gooseErr, false)
 		}
 		if gooseErr != nil {
@@ -1037,8 +1037,10 @@ var migrationProbes = map[int64]migrationProbe{8: probeBlockedByEdge}
 type probeOutcome struct {
 	facts map[string]any
 	err   error
-	// replayedStash is what the step's stash replay wrote.
-	replayedStash []migrations.Replayed
+	// settledStash is what the step's settle dropped, and replayedStash
+	// what its replay wrote and held.
+	settledStash  []migrations.StashRows
+	replayedStash migrations.Replayed
 }
 
 // probedFacts gathers, for one migrating open, what the probes of the
@@ -1049,9 +1051,9 @@ type probedFacts map[string]any
 // record keeps a committed step's probe: the facts it read, or why it could
 // not read them.
 func (p probedFacts) record(o probeOutcome) {
-	if len(o.replayedStash) > 0 {
-		p.replayed(o.replayedStash)
-	}
+	p.stash(stashSettledFact, o.settledStash)
+	p.stash(stashReplayedFact, o.replayedStash.Restored)
+	p.stash(stashHeldFact, o.replayedStash.Held)
 	if o.err != nil {
 		p["migration.probe_error"] = telemetry.ErrorText(o.err)
 		return
