@@ -183,6 +183,33 @@ func TestQuarantineTableSurvivesCheckpointReset(t *testing.T) {
 	}
 }
 
+// TestACheckpointResetDropsATableAFailedUpCreated: a table created after the
+// checkpoint and never committed, as a failed step's Up leaves it, is gone
+// after the reset, so the step's retry does not meet its own CREATE TABLE.
+func TestACheckpointResetDropsATableAFailedUpCreated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	cp, err := st.CreateCheckpoint(ctx, "test-reset")
+	if err != nil {
+		t.Fatalf("CreateCheckpoint() error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx, `CREATE TABLE created_by_up (id INT PRIMARY KEY)`); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	if err := st.ResetToCheckpoint(ctx, cp.Name); err != nil {
+		t.Fatalf("ResetToCheckpoint() error = %v", err)
+	}
+	if ok, err := st.tableExists(ctx, "created_by_up"); err != nil || ok {
+		t.Fatalf("created_by_up survived the reset (err=%v, ok=%v)", err, ok)
+	}
+}
+
 // TestQuarantineRowInsertedAfterReset pins the ordering: after a simulated
 // migration failure, the quarantine row is inserted AFTER the checkpoint reset
 // (so it persists in the post-reset database, not in the pre-reset state that

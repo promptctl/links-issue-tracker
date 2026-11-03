@@ -464,10 +464,12 @@ func (st migrationState) interrupted() bool {
 	return st.phase == phaseManaged && st.appliedVersion > st.committedVersion
 }
 
-// undoDue reports an interrupted step this binary may undo and run again: one
-// in its registry. A step above it is a newer lit's, left for that lit.
+// undoDue reports an interrupted step this binary undoes: any it may write
+// over, a newer lit's included, since the undo is a reset to HEAD and needs
+// no knowledge of the step, and left in place this binary's next commit
+// would version it. One it may not write over is the writer's to undo.
 func (st migrationState) undoDue(op operability) bool {
-	return st.interrupted() && !op.ahead()
+	return st.interrupted() && op.writable()
 }
 
 // willMutate reports whether this Open will write. Fresh and adopt always

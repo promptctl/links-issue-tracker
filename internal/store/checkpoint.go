@@ -38,12 +38,13 @@ func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (storage.Ch
 
 // ResetToCheckpoint hard-resets the current branch to the commit the named
 // checkpoint branch points to, discarding all working-set changes and any
-// Dolt commits made after the checkpoint was taken.
+// Dolt commits made after the checkpoint was taken, the tables a failed Up
+// created among them: kept, the step's retry meets its own CREATE TABLE.
 //
 // [LAW:single-enforcer] All Dolt hard-resets for migration recovery route
-// through this method, and it through resetHardToRef.
+// through this method, and it through resetExactlyToRef.
 func (s *Store) ResetToCheckpoint(ctx context.Context, name string) error {
-	if err := resetHardToRef(ctx, s.db, name); err != nil {
+	if err := resetExactlyToRef(ctx, s.db, name); err != nil {
 		return fmt.Errorf("checkpoint: %w", err)
 	}
 	return nil

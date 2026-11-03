@@ -189,6 +189,26 @@ func TestAStepWhoseCommitFailedAfterStagingRunsAgain(t *testing.T) {
 	requireReplayed(t, st, stashed, plan)
 }
 
+// TestANewerLitsInterruptedStepIsUndoneByAWriterItAllows: a step above this
+// binary's registry, left uncommitted on a store this binary may write, is
+// reset away, so this binary's commits never version it.
+func TestANewerLitsInterruptedStepIsUndoneByAWriterItAllows(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st, _ := storeAtVersion(t, migrations.FS, 11)
+	if err := st.commitWorkingSet(ctx, "at v11"); err != nil {
+		t.Fatalf("commit v11: %v", err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO goose_db_version (version_id, is_applied) VALUES (12, 1)`); err != nil {
+		t.Fatalf("record v12: %v", err)
+	}
+
+	migrateLocked(t, ctx, st)
+	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != 11 {
+		t.Fatalf("working schema = v%d (%v), want v11", got, err)
+	}
+}
+
 // TestAReadOpenHandsAnInterruptedStepToTheWriteOpen: a read serves no half
 // step as applied; it hands off, and the write open runs the step again.
 func TestAReadOpenHandsAnInterruptedStepToTheWriteOpen(t *testing.T) {
