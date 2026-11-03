@@ -21,7 +21,7 @@ import (
 // "nothing is due". A fresh marker must block; an aged one must allow.
 func TestCompactProbeIntervalGatesTheBackstop(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	now := time.Now()
 
 	if !shouldRunNow(compactMarkerPath(ws), now, compactProbeInterval) {
@@ -49,7 +49,7 @@ func TestCompactProbeIntervalGatesTheBackstop(t *testing.T) {
 // every mutation forever.
 func TestCompactMarkerIsDistinctFromTheReceiveMarker(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 
 	if compactMarkerPath(ws) == receiveMarkerPath(ws) {
 		t.Fatal("compaction and receive share a debounce marker; one would silently suppress the other")
@@ -140,7 +140,7 @@ func readSyncTraces(t *testing.T, ws workspace.Info) []syncTraceRecord {
 
 func compactWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 }
 
 // The depth is the whole point of this command, so the flag that selects it, the
@@ -168,7 +168,7 @@ func TestRunSyncCompactCarriesTheDepthAndReportsThePass(t *testing.T) {
 			var out bytes.Buffer
 
 			if err := runSyncCompact(t, context.Background(), &out, ws, syncSession{syncer: syncer}, tc.args); err != nil {
-				t.Fatalf("runSyncCompact(t, ) error = %v", err)
+				t.Fatalf("runSyncCompact() error = %v", err)
 			}
 
 			if syncer.gotMode != tc.want {
@@ -284,7 +284,7 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 	err := runSyncCompact(t, context.Background(), &out, ws, syncSession{syncer: syncer}, nil)
 
 	if !errors.Is(err, failure) {
-		t.Fatalf("runSyncCompact(t, ) error = %v, want the engine's own failure", err)
+		t.Fatalf("runSyncCompact() error = %v, want the engine's own failure", err)
 	}
 	if out.Len() != 0 {
 		t.Fatalf("stdout = %q, want nothing printed for a pass that never ran", out.String())
@@ -550,7 +550,7 @@ func TestRunSyncCompactFailsWhenItCannotReportThePass(t *testing.T) {
 	err := runSyncCompact(t, context.Background(), refusingWriter{}, ws, syncSession{syncer: syncer}, nil)
 
 	if err == nil {
-		t.Fatal("runSyncCompact(t, ) = nil against a stdout that refused the write; a compacted store that could not report is not a success")
+		t.Fatal("runSyncCompact() = nil against a stdout that refused the write; a compacted store that could not report is not a success")
 	}
 	traces := readSyncTraces(t, ws)
 	if len(traces) != 1 || traces[0].Decision != "compacted" {

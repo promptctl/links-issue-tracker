@@ -92,7 +92,7 @@ func TestListRelationColumns(t *testing.T) {
 	// --columns id,parent,blocked surfaces the relationship facts.
 	var relOut bytes.Buffer
 	if err := runListWithStore(t, ctx, &relOut, ap.Store, noReadyPolicy, []string{"--columns", "id,parent,blocked"}); err != nil {
-		t.Fatalf("runListWithStore(t, --columns): %v", err)
+		t.Fatalf("runListWithStore(--columns): %v", err)
 	}
 
 	cases := []struct {
@@ -122,7 +122,7 @@ func TestListRelationColumns(t *testing.T) {
 	// Default projection is unchanged: id | state | topic | title, no parent/blocked.
 	var defOut bytes.Buffer
 	if err := runListWithStore(t, ctx, &defOut, ap.Store, noReadyPolicy, nil); err != nil {
-		t.Fatalf("runListWithStore(t, default): %v", err)
+		t.Fatalf("runListWithStore(default): %v", err)
 	}
 	childLine := fieldsOf(lineForID(t, defOut.String(), child.ID))
 	want := []string{child.ID, "open", "rel", "Child"}

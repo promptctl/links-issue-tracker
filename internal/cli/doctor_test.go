@@ -27,7 +27,7 @@ func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 		Location:    workspace.Location{StorageDir: "/tmp/store", GitCommonDir: "/tmp/repo/.git"},
 		WorkspaceID: "ws-id",
 		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{}),
+		Remotes:     workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{}),
 	}
 	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
@@ -139,17 +139,17 @@ func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 
 	var buf bytes.Buffer
 	if err := runDoctor(t, ctx, &buf, ap, nil); err != nil {
-		t.Fatalf("runDoctor(t, ) error = %v", err)
+		t.Fatalf("runDoctor() error = %v", err)
 	}
 	got := buf.String()
 	if !strings.Contains(got, "integrity_check=ok") {
-		t.Fatalf("runDoctor(t, ) output missing health line: %q", got)
+		t.Fatalf("runDoctor() output missing health line: %q", got)
 	}
 	if !strings.Contains(got, "sync: no git remote configured") {
-		t.Fatalf("runDoctor(t, ) output missing no-remote freshness line: %q", got)
+		t.Fatalf("runDoctor() output missing no-remote freshness line: %q", got)
 	}
 	if !strings.Contains(got, "build:") {
-		t.Fatalf("runDoctor(t, ) output missing build status line: %q", got)
+		t.Fatalf("runDoctor() output missing build status line: %q", got)
 	}
 }
 
@@ -162,14 +162,14 @@ func TestRunDoctorSurfacesUnresolvedFreshness(t *testing.T) {
 	ap := newTestCLIApp(t)
 	var buf bytes.Buffer
 	if err := runDoctor(t, context.Background(), &buf, ap, nil); err != nil {
-		t.Fatalf("runDoctor(t, ) error = %v", err)
+		t.Fatalf("runDoctor() error = %v", err)
 	}
 	got := buf.String()
 	if !strings.Contains(got, "integrity_check=ok") {
-		t.Fatalf("runDoctor(t, ) output missing health line: %q", got)
+		t.Fatalf("runDoctor() output missing health line: %q", got)
 	}
 	if !strings.Contains(got, "sync: freshness unavailable") {
-		t.Fatalf("runDoctor(t, ) output missing unresolved freshness line: %q", got)
+		t.Fatalf("runDoctor() output missing unresolved freshness line: %q", got)
 	}
 }
 
@@ -195,7 +195,7 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 
 	var clean bytes.Buffer
 	if err := runDoctor(t, h.ctx, &clean, h.ap, nil); err != nil {
-		t.Fatalf("runDoctor(t, ) on a contained hierarchy error = %v", err)
+		t.Fatalf("runDoctor() on a contained hierarchy error = %v", err)
 	}
 	if strings.Contains(clean.String(), "warning: ") {
 		t.Fatalf("doctor on a contained hierarchy should print no warning; got:\n%s", clean.String())
@@ -255,7 +255,7 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 
 	var buf bytes.Buffer
 	if err := runDoctor(t, h.ctx, &buf, h.ap, nil); err != nil {
-		t.Fatalf("runDoctor(t, ) error = %v, want exit 0: every read still answers over these warnings", err)
+		t.Fatalf("runDoctor() error = %v, want exit 0: every read still answers over these warnings", err)
 	}
 	assertWarnings(t, buf.String())
 
@@ -272,7 +272,7 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	var fixed bytes.Buffer
 	err = runDoctor(t, h.ctx, &fixed, h.ap, []string{"--fix=rank"})
 	if err == nil || !strings.Contains(err.Error(), "lit dep rm") {
-		t.Fatalf("runDoctor(t, --fix=rank) error = %v, want the rank repair's refusal on the cycle", err)
+		t.Fatalf("runDoctor(--fix=rank) error = %v, want the rank repair's refusal on the cycle", err)
 	}
 	assertWarnings(t, fixed.String())
 
@@ -294,7 +294,7 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	// A report cut short by its own write failure still carries the repair's.
 	err = runDoctor(t, h.ctx, refusingWriter{}, h.ap, []string{"--fix=rank"})
 	if err == nil || !strings.Contains(err.Error(), "stdout is gone") || !strings.Contains(err.Error(), "lit dep rm") {
-		t.Fatalf("runDoctor(t, --fix=rank) to a refusing stdout error = %v, want both the write failure and the rank repair's refusal", err)
+		t.Fatalf("runDoctor(--fix=rank) to a refusing stdout error = %v, want both the write failure and the rank repair's refusal", err)
 	}
 }
 

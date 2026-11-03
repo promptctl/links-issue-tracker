@@ -175,7 +175,7 @@ func TestSyncStalenessLines(t *testing.T) {
 // its clock, a success replaces it, and a later start leaves the success.
 func TestFetchRecordRoundTrip(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	origin, fork := remoteName(t, "origin"), remoteName(t, "fork")
 	now := time.Now()
 
@@ -224,7 +224,7 @@ func TestFetchRecordRoundTrip(t *testing.T) {
 // which a permission fixture is not.
 func TestReadFetchRecordSurfacesNonNotExistErrorsToStderr(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: filepath.Join(t.TempDir(), "storage\x00")}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: filepath.Join(t.TempDir(), "storage\x00")}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 
 	var stderr bytes.Buffer
 	if fetch, missing := readFetchRecord(&stderr, ws, remoteName(t, "origin"), time.Now()); fetch != nil || missing {
@@ -240,7 +240,7 @@ func TestReadFetchRecordSurfacesNonNotExistErrorsToStderr(t *testing.T) {
 // read as either basis, and is not missing, so no record is started over it.
 func TestReadFetchRecordReportsAndKeepsUnknownContent(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	origin := remoteName(t, "origin")
 	if err := os.WriteFile(fetchRecordPath(ws, origin), []byte("v9 something\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -260,7 +260,7 @@ func TestReadFetchRecordReportsAndKeepsUnknownContent(t *testing.T) {
 // fetch" warning line above.
 func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	origin := remoteName(t, "origin")
 	markFetchSuccess(testStderr(t), ws, origin)
 	backdated := time.Now().Add(-30 * time.Hour)
@@ -317,7 +317,7 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 // across workspaces).
 func TestFetchSuccessMarkerPathLivesUnderStorageDir(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: "/tmp/some-workspace/.lit"}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: "/tmp/some-workspace/.lit"}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	got := fetchRecordPath(ws, remoteName(t, "origin"))
 	want := filepath.Join("/tmp/some-workspace/.lit", "fetched.origin")
 	if got != want {

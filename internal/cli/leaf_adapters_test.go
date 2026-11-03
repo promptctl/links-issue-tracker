@@ -218,7 +218,8 @@ func runListWithStore(t testing.TB, ctx context.Context, stdout io.Writer, st st
 func runListLeaf(t testing.TB, ctx context.Context, stdout io.Writer, surface listSurface, scope listScope, args []string) error {
 	ctx = underInvocation(ctx)
 	l, _ := listLeaf(surface)
-	declared, err := parseLeaf(ctx, l, args, dirInvocation(t, t.TempDir(), stdout, stdout, nil))
+	inv := dirInvocation(t, t.TempDir(), stdout, stdout, nil)
+	declared, err := parseLeaf(ctx, l, args, inv)
 	if err != nil {
 		return err
 	}
@@ -226,5 +227,5 @@ func runListLeaf(t testing.TB, ctx context.Context, stdout io.Writer, surface li
 	if err != nil {
 		return err
 	}
-	return l.work(ctx, dirInvocation(t, t.TempDir(), stdout, stdout, nil), scope, positional)
+	return l.work(ctx, inv, scope, positional)
 }

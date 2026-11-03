@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,7 +20,8 @@ import (
 // TestMain is the one place that sets them, once, before any test runs.
 // [LAW:no-shared-mutable-globals] [LAW:single-enforcer]
 var processWrites = map[string][]string{
-	"os": {"Chdir", "Setenv", "Unsetenv", "Clearenv"},
+	"os":      {"Chdir", "Setenv", "Unsetenv", "Clearenv"},
+	"syscall": {"Chdir", "Fchdir", "Setenv", "Unsetenv", "Clearenv"},
 }
 
 // processStreams are the os values a test may not assign.
@@ -28,7 +30,8 @@ var processStreams = map[string][]string{
 }
 
 // testingProcessWrites are the testing.T methods that change the process's
-// directory or environment for the rest of the test.
+// directory or environment for the rest of the test, reached through any
+// receiver: t, h.t, s.T().
 var testingProcessWrites = []string{"Chdir", "Setenv"}
 
 func TestNoTestChangesTheProcess(t *testing.T) {
@@ -78,7 +81,8 @@ func processWritesIn(fset *token.FileSet, file *ast.File) []string {
 		p := fset.Position(pos)
 		found = append(found, fmt.Sprintf("%s:%d: %s", p.Filename, p.Line, what))
 	}
-	// Both lists name only os, so one lookup finds its local name for both.
+	// processWrites names every package processStreams does, so one lookup
+	// finds the local names for both.
 	local := importedAs(fset, file, processWrites, at)
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch n := n.(type) {
@@ -99,16 +103,16 @@ func processWritesIn(fset *token.FileSet, file *ast.File) []string {
 			if !ok {
 				return true
 			}
-			recv, ok := sel.X.(*ast.Ident)
-			if !ok {
-				return true
-			}
-			if path, isPackage := local[recv.Name]; isPackage {
-				if slices.Contains(processWrites[path], sel.Sel.Name) {
-					at(sel.Pos(), path+"."+sel.Sel.Name)
+			if pkg, ok := sel.X.(*ast.Ident); ok {
+				if path, isPackage := local[pkg.Name]; isPackage {
+					if slices.Contains(processWrites[path], sel.Sel.Name) {
+						at(sel.Pos(), path+"."+sel.Sel.Name)
+					}
+					return true
 				}
-			} else if slices.Contains(testingProcessWrites, sel.Sel.Name) {
-				at(sel.Pos(), recv.Name+"."+sel.Sel.Name)
+			}
+			if slices.Contains(testingProcessWrites, sel.Sel.Name) {
+				at(sel.Pos(), types.ExprString(sel))
 			}
 		}
 		return true
@@ -130,6 +134,9 @@ func TestProcessWritesScanFindsEverySpelling(t *testing.T) {
 		{"aliased os", `import sys "os"; func f() { sys.Setenv("A", "b") }`, []string{"os.Setenv"}},
 		{"t.Setenv", `func f(t T) { t.Setenv("A", "b") }`, []string{"t.Setenv"}},
 		{"t.Chdir", `func f(tb T) { tb.Chdir("d") }`, []string{"tb.Chdir"}},
+		{"a field's t", `func f(h H) { h.t.Setenv("A", "b"); h.t.Chdir("d") }`, []string{"h.t.Setenv", "h.t.Chdir"}},
+		{"a call's t", `func f(s S) { s.T().Setenv("A", "b") }`, []string{"s.T().Setenv"}},
+		{"syscall", `import "syscall"; func f() { syscall.Setenv("A", "b"); syscall.Unsetenv("A"); syscall.Clearenv(); syscall.Chdir("d"); syscall.Fchdir(3) }`, []string{"syscall.Setenv", "syscall.Unsetenv", "syscall.Clearenv", "syscall.Chdir", "syscall.Fchdir"}},
 		{"stream assignment", `import "os"; func f() { os.Stderr = nil; os.Stdin, os.Stdout = nil, nil }`, []string{"os.Stderr assignment", "os.Stdin assignment", "os.Stdout assignment"}},
 		{"stream read", `import "os"; func f() { _ = os.Stderr }`, nil},
 		{"inside TestMain", `import "os"; func TestMain(m M) { os.Setenv("A", "b"); os.Stdout = nil }`, nil},

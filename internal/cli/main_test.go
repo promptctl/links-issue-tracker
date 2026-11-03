@@ -10,14 +10,11 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// Parallelism convention for this package: a test calls t.Parallel() exactly
-// when it is transitively free of process-global mutation — no os.Chdir (the
-// runCLIInDir/chdirTempRepo helpers), no t.Setenv, no os.Stdout swap. The
-// in-process e2e tests fail that test by construction: they point the one
-// process-wide cwd and environment at a per-test repo before calling Run, so
-// two of them overlapping would silently run against each other's workspace.
-// They stay serial until Run accepts its working directory and environment as
-// parameters instead of reading process globals.
+// Parallelism convention for this package: every test calls t.Parallel(). A
+// test hands lit its working directory and environment through the Invocation
+// (dirInvocation, setRunEnv) instead of the process's, so two runs overlapping
+// never see each other's workspace; TestNoTestChangesTheProcess keeps any test
+// from changing the process's.
 // [LAW:no-shared-mutable-globals] the process cwd/env is exactly such a global.
 
 // suiteStallDeadline is the deadline this suite runs the mirror's hold and the
@@ -34,6 +31,11 @@ import (
 // figure.
 const suiteStallDeadline = time.Minute
 
+// testMirrorPushDeadlineEnvVar carries a test's push deadline to a mirror it
+// runs as a child of this binary, where store.MirrorPushDeadline is the
+// child's own and no other test reads it.
+const testMirrorPushDeadlineEnvVar = "LIT_TEST_MIRROR_PUSH_DEADLINE"
+
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
 // would spawn the on-change push mirror (via os.Executable(), which under
@@ -41,11 +43,6 @@ const suiteStallDeadline = time.Minute
 // as a side effect of unrelated tests. The receive path is exercised explicitly,
 // by tests that run the receive worker's body in-process (receiveNow), so
 // disabling it package-wide loses no coverage.
-// testMirrorPushDeadlineEnvVar carries a test's push deadline to a mirror it
-// runs as a child of this binary, where store.MirrorPushDeadline is the
-// child's own and no other test reads it.
-const testMirrorPushDeadlineEnvVar = "LIT_TEST_MIRROR_PUSH_DEADLINE"
-
 func TestMain(m *testing.M) {
 	store.MirrorHoldBudget, store.ReceiveDeadline = suiteStallDeadline, suiteStallDeadline
 	// A detached worker spawns os.Executable(), which here is this test binary.
@@ -72,12 +69,14 @@ func TestMain(m *testing.M) {
 	// in-process on every store open, from the process environment no run's
 	// Env reaches: directories the suite owns keep the developer's events
 	// file, settings and ~/.dolt out of every test, and the detached workers a
-	// test spawns inherit them.
+	// test spawns inherit them. HOME is the suite's too: the git a test runs,
+	// and the git Dolt runs, read ~/.gitconfig from it.
 	var suiteDirs []string
 	for _, home := range []struct{ key, prefix string }{
 		{"XDG_STATE_HOME", "lit-cli-state-"},
 		{"XDG_CONFIG_HOME", "lit-cli-config-"},
 		{"DOLT_ROOT_PATH", "lit-cli-dolt-"},
+		{"HOME", "lit-cli-home-"},
 	} {
 		dir, err := os.MkdirTemp("", home.prefix)
 		if err != nil {
@@ -87,6 +86,13 @@ func TestMain(m *testing.M) {
 			panic("set " + home.key + ": " + err.Error())
 		}
 		suiteDirs = append(suiteDirs, dir)
+	}
+	// The tests' repositories expect their first branch to be master, which
+	// git's built-in default no longer promises once ~/.gitconfig is out.
+	for key, value := range map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "init.defaultBranch", "GIT_CONFIG_VALUE_0": "master"} {
+		if err := os.Setenv(key, value); err != nil {
+			panic("set " + key + ": " + err.Error())
+		}
 	}
 	code := dirtemplate.Run(m, storeTemplate)
 	for _, dir := range suiteDirs {

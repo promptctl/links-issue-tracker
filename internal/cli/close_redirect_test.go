@@ -32,7 +32,7 @@ func seedTaskIn(t *testing.T, ctx context.Context, ap *app.App, title, epicID st
 	t.Helper()
 	var out bytes.Buffer
 	if err := runNew(t, ctx, &out, ap, []string{"--title", title, "--topic", "redirect", "--type", "task", "--parent", epicID}); err != nil {
-		t.Fatalf("runNew(t, %q) error = %v", title, err)
+		t.Fatalf("runNew(%q) error = %v", title, err)
 	}
 	return strings.Fields(out.String())[0]
 }
@@ -114,7 +114,7 @@ func TestCloseAsDuplicateRecordsRedirectEdge(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runTransition(t, ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
+		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
 	if err != nil {
@@ -140,12 +140,12 @@ func TestShowRendersRedirectDistinctFromRelated(t *testing.T) {
 
 	var sink bytes.Buffer
 	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
+		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 
 	var out bytes.Buffer
 	if err := runShow(t, ctx, &out, ap, []string{dup}); err != nil {
-		t.Fatalf("runShow(t, %s) error = %v", dup, err)
+		t.Fatalf("runShow(%s) error = %v", dup, err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "redirect:\n- "+canonical) {
@@ -171,7 +171,7 @@ func TestShowManualRelatedRendersUnchanged(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runShow(t, ctx, &out, ap, []string{focal}); err != nil {
-		t.Fatalf("runShow(t, %s) error = %v", focal, err)
+		t.Fatalf("runShow(%s) error = %v", focal, err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "related:\n- "+peer) {
@@ -198,7 +198,7 @@ func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 
 	var sink bytes.Buffer
 	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
+		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
@@ -214,7 +214,7 @@ func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runShow(t, ctx, &out, ap, []string{dup}); err != nil {
-		t.Fatalf("runShow(t, %s) error = %v", dup, err)
+		t.Fatalf("runShow(%s) error = %v", dup, err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "redirect:\n- "+canonical) {
@@ -326,7 +326,7 @@ func TestCloseAsSupersededRoundTrip(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runTransition(t, ctx, &out, ap, []string{old, "--resolution", "superseded", "--of", replacement}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close superseded) error = %v", err)
+		t.Fatalf("runTransition(close superseded) error = %v", err)
 	}
 	// The close adjacency output surfaces the redirect at the close moment.
 	if !strings.Contains(out.String(), "redirect:\n- "+replacement) {
@@ -349,7 +349,7 @@ func TestCloseAsSupersededRoundTrip(t *testing.T) {
 
 	var show bytes.Buffer
 	if err := runShow(t, ctx, &show, ap, []string{old}); err != nil {
-		t.Fatalf("runShow(t, %s) error = %v", old, err)
+		t.Fatalf("runShow(%s) error = %v", old, err)
 	}
 	if !strings.Contains(show.String(), "redirect:\n- "+replacement) {
 		t.Fatalf("show output missing redirect group for %s; got:\n%s", replacement, show.String())
@@ -370,7 +370,7 @@ func TestCloseAsDuplicateOfDeletedCanonicalRejected(t *testing.T) {
 
 	var sink bytes.Buffer
 	if err := runTransition(t, ctx, &sink, ap, []string{canonical}, deleteSpec); err != nil {
-		t.Fatalf("runTransition(t, delete canonical) error = %v", err)
+		t.Fatalf("runTransition(delete canonical) error = %v", err)
 	}
 	err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec)
 	if err == nil {
@@ -400,7 +400,7 @@ func TestCloseAsDuplicateOfArchivedCanonicalAllowed(t *testing.T) {
 
 	var sink bytes.Buffer
 	if err := runTransition(t, ctx, &sink, ap, []string{canonical}, archiveSpec); err != nil {
-		t.Fatalf("runTransition(t, archive canonical) error = %v", err)
+		t.Fatalf("runTransition(archive canonical) error = %v", err)
 	}
 	if err := runTransition(t, ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("close duplicate-of an archived canonical must succeed, got: %v", err)
@@ -426,7 +426,7 @@ func TestCloseAsDuplicateRendersRedirectAdjacency(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runTransition(t, ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close duplicate) error = %v", err)
+		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 	if !strings.Contains(out.String(), "redirect:\n- "+canonical) {
 		t.Fatalf("close adjacency missing redirect group for %s; got:\n%s", canonical, out.String())

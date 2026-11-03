@@ -49,7 +49,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 			RootDir:     storeDir,
 			WorkspaceID: wsID,
 			IssuePrefix: testIssuePrefix(t, prefix),
-			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(checkoutRoot(t, storeDir)),
+			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(t, checkoutRoot(t, storeDir)),
 		},
 		Store: st,
 	}
@@ -102,7 +102,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 			RootDir:     storeDir,
 			WorkspaceID: "ws-foreign",
 			IssuePrefix: testIssuePrefix(t, "proj"),
-			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(checkoutRoot(t, storeDir)),
+			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(t, checkoutRoot(t, storeDir)),
 		},
 		Store: st,
 	}

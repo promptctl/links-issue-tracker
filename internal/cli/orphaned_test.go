@@ -18,7 +18,7 @@ func runOrphanedIDs(t *testing.T, h readyTestHarness, args ...string) []string {
 	t.Helper()
 	var stdout bytes.Buffer
 	if err := runOrphaned(t, h.ctx, &stdout, h.ap, args); err != nil {
-		t.Fatalf("runOrphaned(t, %v) error = %v", args, err)
+		t.Fatalf("runOrphaned(%v) error = %v", args, err)
 	}
 	return issueIDsFromText(stdout.String())
 }

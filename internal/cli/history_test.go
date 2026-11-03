@@ -44,13 +44,13 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 	}
 	for _, args := range edits {
 		if err := runUpdate(t, ctx, &bytes.Buffer{}, ap, args); err != nil {
-			t.Fatalf("runUpdate(t, %v) error = %v", args, err)
+			t.Fatalf("runUpdate(%v) error = %v", args, err)
 		}
 	}
 
 	var stdout bytes.Buffer
 	if err := runHistory(t, ctx, &stdout, ap, []string{issue.ID}); err != nil {
-		t.Fatalf("runHistory(t, ) error = %v", err)
+		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
 
@@ -99,7 +99,7 @@ func seedProseHistory(t *testing.T, ctx context.Context, ap *app.App) string {
 	}
 	for _, args := range edits {
 		if err := runUpdate(t, ctx, &bytes.Buffer{}, ap, args); err != nil {
-			t.Fatalf("runUpdate(t, %v) error = %v", args, err)
+			t.Fatalf("runUpdate(%v) error = %v", args, err)
 		}
 	}
 	return issue.ID
@@ -117,7 +117,7 @@ func TestRunHistoryShowsLongTextChangesAsVersions(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runHistory(t, ctx, &stdout, ap, []string{id}); err != nil {
-		t.Fatalf("runHistory(t, ) error = %v", err)
+		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
 
@@ -158,10 +158,10 @@ func TestRunHistoryVersionPrintsTheTextThatVersionHeld(t *testing.T) {
 	} {
 		var stdout bytes.Buffer
 		if err := runHistory(t, ctx, &stdout, ap, []string{id, "--version", ref}); err != nil {
-			t.Fatalf("runHistory(t, --version %s) error = %v", ref, err)
+			t.Fatalf("runHistory(--version %s) error = %v", ref, err)
 		}
 		if got := stdout.String(); got != want {
-			t.Fatalf("runHistory(t, --version %s) = %q, want %q", ref, got, want)
+			t.Fatalf("runHistory(--version %s) = %q, want %q", ref, got, want)
 		}
 	}
 }
@@ -184,7 +184,7 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runHistory(t, ctx, &stdout, ap, []string{untouched.ID, "--version", "description@1"}); err != nil || stdout.String() != "only draft\n" {
-		t.Fatalf("runHistory(t, %s --version description@1) = %q, %v; want the current text", untouched.ID, stdout.String(), err)
+		t.Fatalf("runHistory(%s --version description@1) = %q, %v; want the current text", untouched.ID, stdout.String(), err)
 	}
 	for _, tc := range []struct{ id, ref, want string }{
 		{id, "description@4", "holds 3 versions of description"},
@@ -193,7 +193,7 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 	} {
 		err := runHistory(t, ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
 		if ExitCode(err) != ExitNotFound || commandErrorReason(err) != reasonVersionNotFound || !strings.Contains(err.Error(), tc.want) {
-			t.Fatalf("runHistory(t, %s --version %s) = exit %d %v, want exit %d naming %q", tc.id, tc.ref, ExitCode(err), err, ExitNotFound, tc.want)
+			t.Fatalf("runHistory(%s --version %s) = exit %d %v, want exit %d naming %q", tc.id, tc.ref, ExitCode(err), err, ExitNotFound, tc.want)
 		}
 	}
 }
@@ -312,7 +312,7 @@ func TestRunHistoryVersionRejectsAMalformedReference(t *testing.T) {
 	} {
 		err := runHistory(t, ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
 		if ExitCode(err) != ExitUsage {
-			t.Fatalf("runHistory(t, %s --version %q) = exit %d %v, want exit %d", tc.id, tc.ref, ExitCode(err), err, ExitUsage)
+			t.Fatalf("runHistory(%s --version %q) = exit %d %v, want exit %d", tc.id, tc.ref, ExitCode(err), err, ExitUsage)
 		}
 	}
 }
@@ -363,7 +363,7 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runLeaf(t, historyLeaf(), ctx, &stdout, ap, []string{issue.ID}); err != nil {
-		t.Fatalf("runHistory(t, ) error = %v", err)
+		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
 	if strings.Contains(out, "re-adder") {

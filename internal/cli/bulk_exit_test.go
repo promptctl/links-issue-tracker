@@ -62,7 +62,7 @@ func TestBulkLabelAllSucceedExitsZero(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runBulkLabel(t, ctx, &out, ap, []string{"add", "--ids", a + "," + b, "--label", "urgent"}); err != nil {
-		t.Fatalf("runBulkLabel(t, all valid) error = %v, want nil (exit 0)", err)
+		t.Fatalf("runBulkLabel(all valid) error = %v, want nil (exit 0)", err)
 	}
 	stdout := out.String()
 	for _, id := range []string{a, b} {

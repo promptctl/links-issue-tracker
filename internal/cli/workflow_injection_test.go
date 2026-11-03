@@ -47,11 +47,11 @@ func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T
 
 	var stdout bytes.Buffer
 	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close) error = %v", err)
+		t.Fatalf("runTransition(close) error = %v", err)
 	}
 	want := "Ticket " + issue.ID + " closed without finishing — check for a duplicate."
 	if got := stdout.String(); !bytes.Contains([]byte(got), []byte(want)) {
-		t.Fatalf("runTransition(t, close) stdout = %q, want it to contain %q", got, want)
+		t.Fatalf("runTransition(close) stdout = %q, want it to contain %q", got, want)
 	}
 }
 
@@ -76,14 +76,14 @@ func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, doneSpec); err != nil {
-		t.Fatalf("runTransition(t, done) error = %v", err)
+		t.Fatalf("runTransition(done) error = %v", err)
 	}
 	got := stdout.String()
 	want := "CUSTOM: " + issue.ID + " wrapped up."
 	if !bytes.Contains([]byte(got), []byte(want)) {
-		t.Fatalf("runTransition(t, done) stdout = %q, want the project override %q", got, want)
+		t.Fatalf("runTransition(done) stdout = %q, want the project override %q", got, want)
 	}
 	if bytes.Contains([]byte(got), []byte("has been closed")) {
-		t.Fatalf("runTransition(t, done) stdout = %q, want the embedded default's body suppressed by the override", got)
+		t.Fatalf("runTransition(done) stdout = %q, want the embedded default's body suppressed by the override", got)
 	}
 }

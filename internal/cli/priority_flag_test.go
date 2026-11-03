@@ -54,7 +54,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
 					"--priority", raw,
 				}); err != nil {
-					t.Fatalf("runNew(t, --priority %q) error = %v", raw, err)
+					t.Fatalf("runNew(--priority %q) error = %v", raw, err)
 				}
 				createdID := firstIssueID(t, newOut.String())
 				created, err := ap.Store.GetIssue(ctx, createdID)
@@ -62,7 +62,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					t.Fatalf("GetIssue(%s) error = %v", createdID, err)
 				}
 				if created.Priority != want {
-					t.Fatalf("runNew(t, --priority %q) stored priority %d, want %d", raw, int(created.Priority), int(want))
+					t.Fatalf("runNew(--priority %q) stored priority %d, want %d", raw, int(created.Priority), int(want))
 				}
 
 				// The round trip closes here: what the read surface prints for the
@@ -83,14 +83,14 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 				otherRaw := spelling.of(other)
 				var updateOut bytes.Buffer
 				if err := runUpdate(t, ctx, &updateOut, ap, []string{createdID, "--priority", otherRaw}); err != nil {
-					t.Fatalf("runUpdate(t, --priority %q) error = %v", otherRaw, err)
+					t.Fatalf("runUpdate(--priority %q) error = %v", otherRaw, err)
 				}
 				updated, err := ap.Store.GetIssue(ctx, createdID)
 				if err != nil {
 					t.Fatalf("GetIssue(%s) after update error = %v", createdID, err)
 				}
 				if updated.Priority != other {
-					t.Fatalf("runUpdate(t, --priority %q) stored priority %d, want %d", otherRaw, int(updated.Priority), int(other))
+					t.Fatalf("runUpdate(--priority %q) stored priority %d, want %d", otherRaw, int(updated.Priority), int(other))
 				}
 
 				var followupOut bytes.Buffer
@@ -99,7 +99,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					"--title", "priority follow-up",
 					"--priority", raw,
 				}); err != nil {
-					t.Fatalf("runFollowup(t, --priority %q) error = %v", raw, err)
+					t.Fatalf("runFollowup(--priority %q) error = %v", raw, err)
 				}
 				followupID := firstIssueID(t, followupOut.String())
 				followup, err := ap.Store.GetIssue(ctx, followupID)
@@ -107,7 +107,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					t.Fatalf("GetIssue(%s) error = %v", followupID, err)
 				}
 				if followup.Priority != want {
-					t.Fatalf("runFollowup(t, --priority %q) stored priority %d, want %d", raw, int(followup.Priority), int(want))
+					t.Fatalf("runFollowup(--priority %q) stored priority %d, want %d", raw, int(followup.Priority), int(want))
 				}
 			})
 		}
@@ -150,17 +150,17 @@ func TestPriorityFlagRefusesOutOfDomainValuesWithoutAdvisingRetry(t *testing.T) 
 				"--priority", raw,
 			})
 			if err == nil {
-				t.Fatalf("runNew(t, --priority %q) succeeded; the value is outside the sealed domain", raw)
+				t.Fatalf("runNew(--priority %q) succeeded; the value is outside the sealed domain", raw)
 			}
 			if code := ExitCode(err); code != ExitValidation {
-				t.Fatalf("runNew(t, --priority %q) exit code = %d, want %d (a domain refusal, not a generic failure)", raw, code, ExitValidation)
+				t.Fatalf("runNew(--priority %q) exit code = %d, want %d (a domain refusal, not a generic failure)", raw, code, ExitValidation)
 			}
 			reason := commandErrorReason(err)
 			if reason != reasonValidationRefused {
-				t.Fatalf("runNew(t, --priority %q) reason = %q, want validation_refused", raw, reason)
+				t.Fatalf("runNew(--priority %q) reason = %q, want validation_refused", raw, reason)
 			}
 			if rem := commandErrorRemediation(reason); strings.Contains(rem, "Retry the command") {
-				t.Fatalf("runNew(t, --priority %q) remediation advises retrying a deterministic refusal: %q", raw, rem)
+				t.Fatalf("runNew(--priority %q) remediation advises retrying a deterministic refusal: %q", raw, rem)
 			}
 			// The refusal has to name what to type instead.
 			for _, p := range model.Priorities() {
@@ -186,7 +186,7 @@ func TestPriorityFlagDefaultsToNormal(t *testing.T) {
 		"--type", "task",
 		"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
 	}); err != nil {
-		t.Fatalf("runNew(t, ) error = %v", err)
+		t.Fatalf("runNew() error = %v", err)
 	}
 	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {
@@ -233,14 +233,14 @@ func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
 				"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
 				"--priority", raw,
 			}); err != nil {
-				t.Fatalf("runNew(t, --priority %q) error = %v", raw, err)
+				t.Fatalf("runNew(--priority %q) error = %v", raw, err)
 			}
 			created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
 			if err != nil {
 				t.Fatalf("GetIssue() error = %v", err)
 			}
 			if created.Priority != model.PriorityUrgent {
-				t.Fatalf("runNew(t, --priority %q) stored %d, want %d", raw, int(created.Priority), int(model.PriorityUrgent))
+				t.Fatalf("runNew(--priority %q) stored %d, want %d", raw, int(created.Priority), int(model.PriorityUrgent))
 			}
 		})
 	}

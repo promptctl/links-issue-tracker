@@ -16,7 +16,7 @@ func childrenOutput(t *testing.T, ap *app.App, id string) string {
 	t.Helper()
 	var buf bytes.Buffer
 	if err := runChildren(t, context.Background(), &buf, ap, []string{id}); err != nil {
-		t.Fatalf("runChildren(t, %s) error = %v", id, err)
+		t.Fatalf("runChildren(%s) error = %v", id, err)
 	}
 	return buf.String()
 }

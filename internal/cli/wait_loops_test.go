@@ -17,7 +17,7 @@ func (h readyTestHarness) doctorWaitLoopLine() (string, string) {
 	h.t.Helper()
 	var buf bytes.Buffer
 	if err := runDoctor(h.t, h.ctx, &buf, h.ap, nil); err != nil {
-		h.t.Fatalf("runDoctor(t, ) error = %v", err)
+		h.t.Fatalf("runDoctor() error = %v", err)
 	}
 	got := buf.String()
 	if !strings.Contains(got, " wait_loops=1\n") {
@@ -40,7 +40,7 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 	h := newReadyTestHarness(t)
 	var buf bytes.Buffer
 	if err := runDoctor(t, h.ctx, &buf, h.ap, nil); err != nil {
-		t.Fatalf("runDoctor(t, ) on an empty workspace error = %v", err)
+		t.Fatalf("runDoctor() on an empty workspace error = %v", err)
 	}
 	if !strings.Contains(buf.String(), " wait_loops=0\n") {
 		t.Fatalf("doctor on an empty workspace should report wait_loops=0; got:\n%s", buf.String())
@@ -115,7 +115,7 @@ func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 	var buf bytes.Buffer
 	err = runDoctor(t, h.ctx, &buf, h.ap, nil)
 	if !errors.As(err, new(CorruptionError)) {
-		t.Fatalf("runDoctor(t, ) error = %v, want the parent cycle's CorruptionError", err)
+		t.Fatalf("runDoctor() error = %v, want the parent cycle's CorruptionError", err)
 	}
 	if got := commandErrorReason(err); got != reasonParentCycle {
 		t.Errorf("reason = %q, want %q", got, reasonParentCycle)

@@ -45,12 +45,12 @@ func TestCloseRendersLiveAdjacency(t *testing.T) {
 	// Close the sibling that must not appear as live adjacency.
 	var sink bytes.Buffer
 	if err := runTransition(t, ctx, &sink, ap, []string{closedSibling}, doneSpec); err != nil {
-		t.Fatalf("runTransition(t, done closedSibling) error = %v", err)
+		t.Fatalf("runTransition(done closedSibling) error = %v", err)
 	}
 
 	var out bytes.Buffer
 	if err := runTransition(t, ctx, &out, ap, []string{focal}, doneSpec); err != nil {
-		t.Fatalf("runTransition(t, done focal) error = %v", err)
+		t.Fatalf("runTransition(done focal) error = %v", err)
 	}
 	text := out.String()
 
@@ -83,7 +83,7 @@ func TestCloseWithNoAdjacencyPrintsNothing(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runTransition(t, ctx, &out, ap, []string{id, "--resolution", "obsolete"}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close obsolete) error = %v", err)
+		t.Fatalf("runTransition(close obsolete) error = %v", err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "parent:\n- "+epic) {
@@ -110,11 +110,11 @@ func TestCloseAdjacencyOnlyOnFinish(t *testing.T) {
 	// Drive focal to closed, then reopen it; only the reopen output is inspected.
 	var sink bytes.Buffer
 	if err := runTransition(t, ctx, &sink, ap, []string{focal}, doneSpec); err != nil {
-		t.Fatalf("runTransition(t, done focal) error = %v", err)
+		t.Fatalf("runTransition(done focal) error = %v", err)
 	}
 	var out bytes.Buffer
 	if err := runTransition(t, ctx, &out, ap, []string{focal}, openSpec); err != nil {
-		t.Fatalf("runTransition(t, reopen focal) error = %v", err)
+		t.Fatalf("runTransition(reopen focal) error = %v", err)
 	}
 	if strings.Contains(out.String(), "siblings:") {
 		t.Fatalf("reopen emitted an adjacency block; got:\n%s", out.String())

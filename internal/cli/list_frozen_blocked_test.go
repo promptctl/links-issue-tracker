@@ -81,7 +81,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 			var sink bytes.Buffer
 			for _, id := range []string{gated.ID, ungated.ID} {
 				if err := runTransition(t, h.ctx, &sink, h.ap, []string{id}, freeze.spec); err != nil {
-					t.Fatalf("runTransition(t, %s %s): %v", freeze.spec.name, id, err)
+					t.Fatalf("runTransition(%s %s): %v", freeze.spec.name, id, err)
 				}
 			}
 

@@ -50,7 +50,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testStderr(t), runEnv(t), workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(checkoutRoot(t, dir))})
+	receiveOnce(ctx, testStderr(t), runEnv(t), workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), RootDir: dir, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(t, checkoutRoot(t, dir))})
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
@@ -135,7 +135,7 @@ func receiveNow(t *testing.T, dir string) {
 // [LAW:behavior-not-structure] asserted through the file a command reads.
 func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	now := time.Now()
 
 	unconverged := syncReceiveOutcome{
@@ -175,7 +175,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 // mirror hold them.
 func TestTheReceiveWaitsForALiveMirror(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(t.TempDir()), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	if err := os.MkdirAll(ws.DatabasePath, 0o755); err != nil {
 		t.Fatalf("mkdir database path: %v", err)
 	}

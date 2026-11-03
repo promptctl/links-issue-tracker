@@ -116,8 +116,8 @@ func checkoutRoot(t testing.TB, dir string) workspace.CheckoutRoot {
 }
 
 // testProject is the project config layer Resolve gives the checkout at root.
-func testProject(root workspace.CheckoutRoot) config.ProjectLayer {
-	return config.CheckoutProject(testEnv(), pathspec.New(root.String()))
+func testProject(t testing.TB, root workspace.CheckoutRoot) config.ProjectLayer {
+	return config.CheckoutProject(runEnv(t), pathspec.New(root.String()))
 }
 
 // repositoryOf is the repository a standard checkout at dir has, <dir>/.git,

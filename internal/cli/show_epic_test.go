@@ -19,7 +19,7 @@ func showOutput(t *testing.T, ap *app.App, id string) string {
 	t.Helper()
 	var buf bytes.Buffer
 	if err := runShow(t, context.Background(), &buf, ap, []string{id}); err != nil {
-		t.Fatalf("runShow(t, %s) error = %v", id, err)
+		t.Fatalf("runShow(%s) error = %v", id, err)
 	}
 	return buf.String()
 }

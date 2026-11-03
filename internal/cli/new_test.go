@@ -52,7 +52,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 		"--type", "task",
 		"--priority", "1",
 	}); err != nil {
-		t.Fatalf("runNew(t, ) error = %v", err)
+		t.Fatalf("runNew() error = %v", err)
 	}
 
 	createdID := firstIssueID(t, stdout.String())
@@ -82,7 +82,7 @@ func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
 		var stdout bytes.Buffer
 		base := []string{"--title", title, "--topic", "place", "--type", "epic"}
 		if err := runNew(t, ctx, &stdout, ap, append(base, args...)); err != nil {
-			t.Fatalf("runNew(t, %q) error = %v", title, err)
+			t.Fatalf("runNew(%q) error = %v", title, err)
 		}
 		return firstIssueID(t, stdout.String())
 	}
@@ -121,7 +121,7 @@ func TestRunNewAppendsWithinItsFrame(t *testing.T) {
 		var stdout bytes.Buffer
 		base := []string{"--title", title, "--topic", "place"}
 		if err := runNew(t, ctx, &stdout, ap, append(base, args...)); err != nil {
-			t.Fatalf("runNew(t, %q) error = %v", title, err)
+			t.Fatalf("runNew(%q) error = %v", title, err)
 		}
 		return firstIssueID(t, stdout.String())
 	}
@@ -176,7 +176,7 @@ func TestRunQuickstartLoadsTemplateGuidance(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runQuickstart(t, ctx, &stdout, ap.Workspace, nil); err != nil {
-		t.Fatalf("runQuickstart(t, ) error = %v", err)
+		t.Fatalf("runQuickstart() error = %v", err)
 	}
 	output := stdout.String()
 	if !strings.Contains(output, "## Custom quickstart") {
@@ -193,7 +193,7 @@ func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	if err := runLeaf(t, newLeaf(), ctx, &stdout, ap, []string{
 		"--title", "Born unclaimed", "--topic", "lifecycle", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	}); err != nil {
-		t.Fatalf("runNew(t, ) error = %v", err)
+		t.Fatalf("runNew() error = %v", err)
 	}
 	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {
@@ -215,7 +215,7 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	if err := runLeaf(t, newLeaf(), ctx, &stdout, ap, []string{
 		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	}); err != nil {
-		t.Fatalf("runNew(t, ) error = %v", err)
+		t.Fatalf("runNew() error = %v", err)
 	}
 	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {
@@ -238,17 +238,17 @@ func TestRunNewLeafWithoutParentIsRefused(t *testing.T) {
 	var stdout bytes.Buffer
 	err := runNew(t, ctx, &stdout, ap, []string{"--title", "Homeless", "--topic", "lifecycle"})
 	if err == nil {
-		t.Fatalf("runNew(t, no --parent) = nil, want a refusal; output:\n%s", stdout.String())
+		t.Fatalf("runNew(no --parent) = nil, want a refusal; output:\n%s", stdout.String())
 	}
 	if code := ExitCode(err); code != ExitValidation {
-		t.Fatalf("runNew(t, no --parent) exit code = %d, want %d (error: %v)", code, ExitValidation, err)
+		t.Fatalf("runNew(no --parent) exit code = %d, want %d (error: %v)", code, ExitValidation, err)
 	}
 	if reason := commandErrorReason(err); reason != reasonValidationRefused {
-		t.Fatalf("runNew(t, no --parent) reason = %q, want validation_refused (error: %v)", reason, err)
+		t.Fatalf("runNew(no --parent) reason = %q, want validation_refused (error: %v)", reason, err)
 	}
 	want := "cannot create a task outside an epic: every ticket except an epic lives inside one, so give it the epic it belongs to as its parent, or make it an epic"
 	if !strings.Contains(err.Error(), want) {
-		t.Fatalf("runNew(t, no --parent) error = %q, want it to contain %q", err.Error(), want)
+		t.Fatalf("runNew(no --parent) error = %q, want it to contain %q", err.Error(), want)
 	}
 }
 
@@ -262,7 +262,7 @@ func TestRunNewEpicWithoutParentIsTopLevel(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runNew(t, ctx, &stdout, ap, []string{"--title", "A home", "--topic", "lifecycle", "--type", "epic"}); err != nil {
-		t.Fatalf("runNew(t, --type epic, no --parent) error = %v", err)
+		t.Fatalf("runNew(--type epic, no --parent) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, stdout.String()))
 	if err != nil {

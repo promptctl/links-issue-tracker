@@ -362,7 +362,7 @@ func (r *mirrorRig) start(timeout time.Duration, args ...string) mirrorRun {
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		err := r.runUnder(ctx, out, args)
-		if ctx.Err() != nil {
+		if err != nil && ctx.Err() != nil {
 			err = fmt.Errorf("Run(%v) still blocked after %s — the run is unbounded", args, timeout)
 		}
 		done <- mirrorResult{out: out, err: err}
@@ -405,6 +405,9 @@ func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []stri
 	cmd.Dir, cmd.Env = r.root, env.List()
 	cmd.Stdin = strings.NewReader(workerHandoffStdin(r.t, r.root))
 	cmd.Stdout, cmd.Stderr = out, out
+	// A descendant that outlives the kill holds the output pipes open; without
+	// a bound on that, Run never returns and the tripwire never fires.
+	cmd.WaitDelay = 5 * time.Second
 	return cmd.Run()
 }
 

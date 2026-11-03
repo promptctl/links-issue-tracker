@@ -70,7 +70,7 @@ func TestCloseSummarySharesTheStateCell(t *testing.T) {
 
 	var out bytes.Buffer
 	if err := runTransition(t, h.ctx, &out, h.ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close wontfix) error = %v", err)
+		t.Fatalf("runTransition(close wontfix) error = %v", err)
 	}
 	want := issue.ID + " [closed:wontfix/task/listing/normal] declined"
 	if !slices.Contains(strings.Split(out.String(), "\n"), want) {

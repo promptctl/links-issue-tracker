@@ -196,7 +196,7 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 	// Ranked to the top of the view it is aimed at, and it lands there.
 	var stdout bytes.Buffer
 	if err := runRank(t, h.ctx, &stdout, h.ap, []string{late.ID, "--top"}); err != nil {
-		t.Fatalf("runRank(t, --top) error = %v", err)
+		t.Fatalf("runRank(--top) error = %v", err)
 	}
 	text := h.runWorkableText()
 	if pos := rowPosition(t, text, late.ID); pos != 1 {
@@ -303,7 +303,7 @@ func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runWorkable(t, h.ctx, &stdout, h.ap, nil, dropLast); err != nil {
-		t.Fatalf("runWorkable(t, dropLast) error = %v", err)
+		t.Fatalf("runWorkable(dropLast) error = %v", err)
 	}
 	text := stdout.String()
 	if strings.Contains(text, "--limit trimmed this run") {

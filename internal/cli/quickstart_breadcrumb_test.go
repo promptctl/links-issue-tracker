@@ -52,7 +52,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 
 	var newOut bytes.Buffer
 	if err := runNew(t, ctx, &newOut, ap, []string{"--title", "Crumb probe", "--topic", "crumbs", "--type", "task", "--parent", seedEpicRaw(t, ctx, ap, "Crumbs", "crumbs")}); err != nil {
-		t.Fatalf("runNew(t, ) error = %v", err)
+		t.Fatalf("runNew() error = %v", err)
 	}
 	if got, want := lastLine(newOut.String()), quickstartBreadcrumb("new"); got != want {
 		t.Fatalf("lit new last line = %q, want breadcrumb %q", got, want)
@@ -61,7 +61,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 
 	var startOut bytes.Buffer
 	if err := runTransition(t, ctx, &startOut, ap, []string{issueID}, startSpec); err != nil {
-		t.Fatalf("runTransition(t, start) error = %v", err)
+		t.Fatalf("runTransition(start) error = %v", err)
 	}
 	if got, want := lastLine(startOut.String()), quickstartBreadcrumb("work"); got != want {
 		t.Fatalf("lit start last line = %q, want breadcrumb %q", got, want)
@@ -77,7 +77,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 
 	var closeOut bytes.Buffer
 	if err := runTransition(t, ctx, &closeOut, ap, []string{issueID, "--resolution", "wontfix", "--reason", "probe done"}, closeSpec); err != nil {
-		t.Fatalf("runTransition(t, close) error = %v", err)
+		t.Fatalf("runTransition(close) error = %v", err)
 	}
 	if got, want := lastLine(closeOut.String()), quickstartBreadcrumb("done"); got != want {
 		t.Fatalf("lit close last line = %q, want breadcrumb %q", got, want)

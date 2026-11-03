@@ -202,7 +202,7 @@ func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	return workspace.Info{
 		RootDir:  checkout.String(),
 		Location: workspace.Location{GitCommonDir: filepath.Join(checkout.String(), ".git"), StorageDir: t.TempDir()},
-		Remotes:  workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkout), Project: testProject(checkout),
+		Remotes:  workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkout), Project: testProject(t, checkout),
 	}
 }
 

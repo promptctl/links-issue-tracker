@@ -53,7 +53,7 @@ func litRepoForCadence(t *testing.T) (dir, marker string) {
 	// own command did.
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(dir, ".git", "links")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(workspace.CheckoutRoot{})}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(dir, ".git", "links")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	marker = compactMarkerPath(ws)
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("probe marker existed before any auto-synced command: %s", marker)
@@ -127,7 +127,7 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	root := t.TempDir()
-	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(checkoutRoot(t, root))}
+	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		t.Fatalf("make storage dir error = %v", err)
 	}

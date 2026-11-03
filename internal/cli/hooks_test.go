@@ -69,7 +69,7 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 	}
 
 	if err := runHooksInstall(t, new(bytes.Buffer), ws, nil); err != nil {
-		t.Fatalf("runHooksInstall(t, ) error = %v", err)
+		t.Fatalf("runHooksInstall() error = %v", err)
 	}
 
 	newHook, err := os.ReadFile(originalPath)
@@ -105,7 +105,7 @@ func TestHooksInstallMigratesLegacyMarkers(t *testing.T) {
 	}
 
 	if err := runHooksInstall(t, new(bytes.Buffer), ws, nil); err != nil {
-		t.Fatalf("runHooksInstall(t, ) error = %v", err)
+		t.Fatalf("runHooksInstall() error = %v", err)
 	}
 
 	got, err := os.ReadFile(hookPath)

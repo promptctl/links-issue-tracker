@@ -161,7 +161,7 @@ func (h readyTestHarness) runNextText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
 	if err := runLeaf(h.t, nextLeaf(), h.ctx, &stdout, h.ap, args); err != nil {
-		h.t.Fatalf("runNext(t, %v) error = %v", args, err)
+		h.t.Fatalf("runNext(%v) error = %v", args, err)
 	}
 	return stdout.String()
 }
@@ -676,7 +676,7 @@ func TestRunNextRejectsLimitAndColumns(t *testing.T) {
 	for _, args := range [][]string{{"--limit", "2"}, {"--columns", "id"}} {
 		err := h.runNextErr(args...)
 		if err == nil || !strings.Contains(err.Error(), "unknown flag") {
-			t.Fatalf("runNext(t, %v) error = %v, want unknown-flag usage error", args, err)
+			t.Fatalf("runNext(%v) error = %v, want unknown-flag usage error", args, err)
 		}
 	}
 }
@@ -750,13 +750,13 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	h := newReadyTestHarness(t)
 	err := h.runNextErr()
 	if err == nil {
-		t.Fatal("runNext(t, ) error = nil, want non-nil for empty ready set")
+		t.Fatal("runNext() error = nil, want non-nil for empty ready set")
 	}
 	// Exactly, not merely contains: NoWork appends a clause naming the rows
 	// the pool walk went past, and an empty backlog has none. A contains-check
 	// would pass on a message that had grown a clause here.
 	if err.Error() != "no ready work" {
-		t.Fatalf("runNext(t, ) error = %q, want exactly %q — an empty backlog gained no clause", err.Error(), "no ready work")
+		t.Fatalf("runNext() error = %q, want exactly %q — an empty backlog gained no clause", err.Error(), "no ready work")
 	}
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, err); code != ExitNoWork {
@@ -889,10 +889,10 @@ func TestRunNextContinueFlagIsRetired(t *testing.T) {
 	h := newReadyTestHarness(t)
 	err := h.runNextErr("--continue")
 	if err == nil {
-		t.Fatal("runNext(t, --continue) error = nil, want retirement error")
+		t.Fatal("runNext(--continue) error = nil, want retirement error")
 	}
 	if !strings.Contains(err.Error(), "retired") {
-		t.Fatalf("runNext(t, --continue) error = %q, want it to say the flag is retired", err.Error())
+		t.Fatalf("runNext(--continue) error = %q, want it to say the flag is retired", err.Error())
 	}
 }
 

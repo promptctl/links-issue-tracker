@@ -117,12 +117,12 @@ func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
 
 	var buf bytes.Buffer
 	if err := runShow(t, context.Background(), &buf, f.ap, []string{focus.ID, "--field", "description"}); err != nil {
-		t.Fatalf("runShow(t, --field description) error = %v", err)
+		t.Fatalf("runShow(--field description) error = %v", err)
 	}
 
 	want := "the focused child's own description\n"
 	if buf.String() != want {
-		t.Fatalf("runShow(t, --field description) = %q, want %q", buf.String(), want)
+		t.Fatalf("runShow(--field description) = %q, want %q", buf.String(), want)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
 	err = runShow(t, context.Background(), &buf, ap, []string{issue.ID, "--field", "bogus"})
 	var usageErr UsageError
 	if !errors.As(err, &usageErr) {
-		t.Fatalf("runShow(t, --field bogus) error = %v, want UsageError", err)
+		t.Fatalf("runShow(--field bogus) error = %v, want UsageError", err)
 	}
 }
 

@@ -35,7 +35,7 @@ func TestRunImportTreeJSONPathUnchanged(t *testing.T) {
 	]`)
 	var stdout bytes.Buffer
 	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(t, json) error = %v", err)
+		t.Fatalf("runImportTree(json) error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "imported 2 issues") {
 		t.Fatalf("output = %q, want the imported-count line", stdout.String())
@@ -63,7 +63,7 @@ func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
 
 	err := runImportTree(t, ctx, &bytes.Buffer{}, ap, []string{"--path", path})
 	if err == nil {
-		t.Fatal("runImportTree(t, export) error = nil, want a refusal")
+		t.Fatal("runImportTree(export) error = nil, want a refusal")
 	}
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, err); code != ExitValidation {
@@ -154,7 +154,7 @@ parent: e1
 `)
 	var stdout bytes.Buffer
 	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(t, yaml create) error = %v", err)
+		t.Fatalf("runImportTree(yaml create) error = %v", err)
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "created 2 issues") || !strings.Contains(out, "updated 0 issues") {
@@ -292,7 +292,7 @@ labels: [reviewed]
 `)
 	var stdout bytes.Buffer
 	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(t, yaml update) error = %v", err)
+		t.Fatalf("runImportTree(yaml update) error = %v", err)
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "created 0 issues") || !strings.Contains(out, "updated 1 issues") {
@@ -333,7 +333,7 @@ priority: 1
 `)
 	var stdout bytes.Buffer
 	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(t, yaml mixed) error = %v", err)
+		t.Fatalf("runImportTree(yaml mixed) error = %v", err)
 	}
 	out := stdout.String()
 	if !strings.Contains(out, "created 1 issues") || !strings.Contains(out, "updated 1 issues") {
@@ -354,10 +354,10 @@ title: New title
 	var stdout bytes.Buffer
 	err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path})
 	if err == nil {
-		t.Fatal("runImportTree(t, yaml unknown id) error = nil, want not-found error")
+		t.Fatal("runImportTree(yaml unknown id) error = nil, want not-found error")
 	}
 	if !strings.Contains(err.Error(), "not found") {
-		t.Fatalf("runImportTree(t, yaml unknown id) error = %v, want not-found error", err)
+		t.Fatalf("runImportTree(yaml unknown id) error = %v, want not-found error", err)
 	}
 }
 
@@ -368,10 +368,10 @@ func TestRunImportRequiresPath(t *testing.T) {
 	var stdout bytes.Buffer
 	err := runImportTree(t, ctx, &stdout, ap, nil)
 	if err == nil {
-		t.Fatal("runImportTree(t, no --path) error = nil, want usage error")
+		t.Fatal("runImportTree(no --path) error = nil, want usage error")
 	}
 	if ExitCode(err) != ExitUsage {
-		t.Fatalf("runImportTree(t, no --path) exit code = %d, want %d", ExitCode(err), ExitUsage)
+		t.Fatalf("runImportTree(no --path) exit code = %d, want %d", ExitCode(err), ExitUsage)
 	}
 }
 
@@ -409,7 +409,7 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 	path := writeImportFile(t, "update.yaml", "id: "+created.ID+"\ntitle: After\n")
 	var stdout bytes.Buffer
 	if err := runLeaf(t, importTreeLeaf(), ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
-		t.Fatalf("runImportTree(t, yaml update --by) error = %v", err)
+		t.Fatalf("runImportTree(yaml update --by) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
 	if err != nil {
@@ -448,7 +448,7 @@ func TestRunImportAttributesCreatesToBy(t *testing.T) {
 			path := writeImportFile(t, tc.file, tc.body(seedEpicRaw(t, ctx, ap, "Import", "import")))
 			var stdout bytes.Buffer
 			if err := runLeaf(t, importTreeLeaf(), ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
-				t.Fatalf("runImportTree(t, %s --by alice) error = %v", tc.file, err)
+				t.Fatalf("runImportTree(%s --by alice) error = %v", tc.file, err)
 			}
 			for _, id := range importedIDs(t, stdout.String()) {
 				events, err := ap.Store.ListEvents(ctx, id)
@@ -496,7 +496,7 @@ reason: "  padded reason  "
 `)
 	var stdout bytes.Buffer
 	if err := runImportTree(t, ctx, &stdout, ap, []string{"--path", path}); err != nil {
-		t.Fatalf("runImportTree(t, yaml reason) error = %v", err)
+		t.Fatalf("runImportTree(yaml reason) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
 	if err != nil {
