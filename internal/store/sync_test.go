@@ -20,14 +20,6 @@ func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() initial error = %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close() initial error = %v", err)
-	}
-
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
 	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")

@@ -33,7 +33,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	if got := writer.Migrated().TempTableFiles; got == nil || *got != (storage.TempTableFilesCollection{}) {
-		t.Errorf("a fresh store's open collected %+v, want it to have looked and found nothing", got)
+		t.Errorf("a write open of a store with nothing staged collected %+v, want it to have looked and found nothing", got)
 	}
 	dir := TempTableFilesDir(doltRoot)
 	staged := filepath.Join(dir, "buffered_file_byte_sink_4242")
@@ -115,13 +115,6 @@ func TestAWriteOpenWhoseCollectionFailsStillOpens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
 	// A file where the directory belongs fails the read for any user, root
 	// included, as a permission bit would not.
 	dir := TempTableFilesDir(doltRoot)

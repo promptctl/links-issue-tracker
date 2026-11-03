@@ -19,7 +19,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
-// openWorkspaceForDowngrade opens a fresh workspace at registry-max — every
+// openWorkspaceForDowngrade opens a migrated workspace at registry-max — every
 // downgrade test starts from this state because Open is the only legitimate
 // way to land a goose-managed workspace.
 func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
@@ -291,7 +291,7 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	if delta := snapshotCount(t, doltRoot) - before; delta != 1 {
 		t.Fatalf("happy-path took %d snapshot(s); want exactly 1", delta)
 	}
-	// A fresh workspace holds no downgrade snapshot, so the one Downgrade
+	// A migrated workspace holds no downgrade snapshot, so the one Downgrade
 	// names is the one it took.
 	snap := snapshotTaken(t, done, "")
 	if want := (storage.Downgraded{From: registryMax, Reversed: 2, Snapshot: snap}); !reflect.DeepEqual(*done, want) || !IsDowngradeSnapshotName(snap.Name) {

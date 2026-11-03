@@ -65,7 +65,7 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 	}
 }
 
-// openOneVersionBehind creates a workspace at registry max and steps it one
+// openOneVersionBehind opens the workspace at registry max and steps it one
 // migration back, the state a read open hands to Open, then closes it.
 func openOneVersionBehind(t *testing.T, ctx context.Context, doltRoot string) {
 	t.Helper()

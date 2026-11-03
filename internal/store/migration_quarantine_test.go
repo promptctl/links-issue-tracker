@@ -46,14 +46,6 @@ func TestQuarantineTableCreatedByAdoption(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
-
 	// Simulate a pre-goose workspace by dropping goose history.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
@@ -264,15 +256,6 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	// First Open: bootstrap the workspace.
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
-
 	// Force re-migration so applyPendingMigrations runs on next Open.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
@@ -476,17 +459,16 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	// Drive more Opens than the retention count by dropping goose history.
+	// Drive more mutating Opens than the retention count by dropping goose
+	// history before each one.
 	for i := 0; i < migrationCheckpointRetention+3; i++ {
+		withGooseHistoryDropped(t, ctx, doltRoot)
 		st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 		if err != nil {
 			t.Fatalf("Open(%d) error = %v", i, err)
 		}
 		if err := st.Close(); err != nil {
 			t.Fatalf("Close(%d) error = %v", i, err)
-		}
-		if i < migrationCheckpointRetention+2 {
-			withGooseHistoryDropped(t, ctx, doltRoot)
 		}
 	}
 
@@ -624,18 +606,11 @@ func TestMigrationSuccessPruneSurvivesCallerCancel(t *testing.T) {
 	}
 }
 
-// migratedWorkspaceWithGooseHistoryDropped bootstraps a workspace, then drops
-// its goose history so the next Open runs applyPendingMigrations.
+// migratedWorkspaceWithGooseHistoryDropped copies a migrated workspace and
+// drops its goose history so the next Open runs applyPendingMigrations.
 func migratedWorkspaceWithGooseHistoryDropped(t *testing.T) string {
 	t.Helper()
 	doltRoot := migratedDoltDir(t)
-	first, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
 	withGooseHistoryDropped(t, context.Background(), doltRoot)
 	return doltRoot
 }
@@ -682,14 +657,6 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 	// hook.
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
 
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
@@ -745,7 +712,6 @@ func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	// First Open: bootstrap the workspace (creates quarantine table).
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
@@ -849,14 +815,6 @@ func TestQuarantineTableSelfHealsStaleShapeWhenEmpty(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
-
 	withStaleShapeQuarantineTable(t, ctx, doltRoot, false)
 
 	// Drop goose history so this Open is a mutating adoption pass — the phase
@@ -889,14 +847,6 @@ func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
-
 	withStaleShapeQuarantineTable(t, ctx, doltRoot, true)
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
@@ -923,14 +873,6 @@ func TestFailedMigrationReportsCheckpointPruneFailure(t *testing.T) {
 	// hook and failpointForTest.
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
 
 	withGooseHistoryDropped(t, ctx, doltRoot)
 

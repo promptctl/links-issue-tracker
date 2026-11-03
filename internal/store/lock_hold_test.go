@@ -310,13 +310,6 @@ func contend(t *testing.T, open func(context.Context, string) (*Store, error), w
 	t.Helper()
 	ctx := WithLockObserver(context.Background(), reports.observer())
 	doltRoot := migratedDoltDir(t)
-	initial, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("initial Open() error = %v", err)
-	}
-	if err := initial.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
 	holder, err := open(ctx, doltRoot)
 	if err != nil {
 		t.Fatalf("holder open error = %v", err)

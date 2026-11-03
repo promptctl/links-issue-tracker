@@ -17,8 +17,8 @@ import (
 // at any historical canonical shape forward-migrates to v1 with every
 // row of user data intact.
 //
-// Each test simulates a specific pre-goose shape by mutating a freshly-
-// bootstrapped workspace (drop a column, rename a column, drop a table,
+// Each test simulates a specific pre-goose shape by mutating a migrated
+// workspace (drop a column, rename a column, drop a table,
 // insert legacy data values), then Opens again and asserts:
 //
 //   1. Open succeeds — no refusal.
@@ -1130,7 +1130,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	}
 	// Revert post-baseline migrations to the genuine pre-goose (baseline) shape
 	// while goose history is still intact, so adoption + forward-migration on
-	// reopen do not collide with a post-baseline column the bootstrap left behind.
+	// reopen do not collide with a post-baseline column the migrated workspace carries.
 	revertToBaseline(t, first)
 	// Reproduce the field shape: legacy issue_history table present
 	// AND a goose_db_version log claiming a version beyond this binary's
@@ -1212,7 +1212,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	// Bootstrap, then strip goose so the next Open re-runs adoption.
+	// Seed an issue, then strip goose so the next Open re-runs adoption.
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
@@ -1256,8 +1256,7 @@ func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	// Bootstrap to lay down storage and a `links` database, then strip
-	// EVERY canonical table except meta. The reconcile must then CREATE
+	// Strip EVERY canonical table except meta. The reconcile must then CREATE
 	// issues, relations, comments, labels, issue_events, issue_event_changes.
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {

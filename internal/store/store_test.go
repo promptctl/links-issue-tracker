@@ -1798,17 +1798,9 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() initial error = %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close() initial error = %v", err)
-	}
-
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
-	st, err = Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() reopen error = %v", err)
 	}
@@ -1859,14 +1851,6 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-
-	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() initial error = %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close() initial error = %v", err)
-	}
 
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 
@@ -2169,13 +2153,6 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
-	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(first) error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
 	before := observedHead(t, ctx, doltRoot, "test-workspace-id")
 	second, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {

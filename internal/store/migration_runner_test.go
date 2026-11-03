@@ -572,7 +572,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
-		t.Fatalf("Open(fresh) error = %v", err)
+		t.Fatalf("Open(first) error = %v", err)
 	}
 	registryMax, err := migrations.MaxVersion()
 	if err != nil {
@@ -583,7 +583,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
 	if atMax != registryMax {
-		t.Fatalf("fresh workspace stamped at %d, want registry max %d", atMax, registryMax)
+		t.Fatalf("migrated workspace stamped at %d, want registry max %d", atMax, registryMax)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
