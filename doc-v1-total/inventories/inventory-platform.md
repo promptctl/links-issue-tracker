@@ -824,10 +824,11 @@ the Justfile or any workflow file in `.github/workflows/`.
   budget is exceeded, 0 otherwise. Test pass/fail is left to `go test` under
   `pipefail` (`tools/testbudget/main.go`).
 - Budgets (`tools/testbudget/budgets.go`):
-  - `internal/store` — 210 s
-  - `internal/cli` — 340 s
+  - `internal/store` — 440 s
+  - `internal/cli` — 580 s
   - `cmd/lit` — 50 s
-  - `tools/licenses` — 50 s
+  - `tools/licenses` — 60 s
+  - `tools/perfbench` — 45 s
   - every other package — `defaultBudget = 30 * time.Second` (`tools/testbudget/budgets.go`)
 
 ### 9.2 `tools/mkmanifest`
