@@ -107,14 +107,15 @@ const (
 
 // holdWorkingSet writes the hold a downgrade to target leaves the working set
 // with, and reports that hold (0 for none) and whether it wrote: target under
-// holdAtTarget; under holdNone, the hold the store already carries, moved to
-// target, or none. A present hold is always at the head's schema: a held
-// store a release downgrade steps further down stays held, and no head
-// carries a hold above its own schema, which the lowering verdict
-// (schema_lowering.go) would read as a head holding the remote at a schema
-// it is not at. A row already reading target is left as it is, so a repeated
-// remote downgrade commits nothing; a row that is not a schema version is an
-// error, as it is everywhere the hold is read. The caller commits.
+// holdAtTarget; under holdNone, the hold the store already carries, moved
+// down to target when it was above it, or none. A hold never sits above the
+// head that carries it, which the lowering verdict (schema_lowering.go) would
+// read as a head holding the remote at a schema it is not at; and a release
+// downgrade never raises one, since a hold below the head (a binary from
+// before the row raised the store past it) is the operator's hold and stays.
+// A row already reading the hold is left as it is, so a repeated remote
+// downgrade commits nothing; a row that is not a schema version is an error,
+// as it is everywhere the hold is read. The caller commits.
 // [LAW:single-enforcer] the one writer of meta.schema_hold; the lift
 // (LiftSchemaHold) is its one remover. [LAW:types-are-the-program] the
 // invariant lives in the one writer, not in every reader.
@@ -129,6 +130,9 @@ func (s *Store) holdWorkingSet(ctx context.Context, target int64, policy holdPol
 	if policy == holdNone && !read.present {
 		return 0, false, nil
 	}
+	if policy == holdNone {
+		target = min(target, read.version)
+	}
 	if read.present && read.version == target {
 		return target, false, nil
 	}
@@ -141,12 +145,20 @@ func (s *Store) holdWorkingSet(ctx context.Context, target int64, policy holdPol
 // LiftSchemaHold removes the store's schema hold in one commit and reports the
 // hold it lifted. A store with no hold lifts nothing and commits nothing: the
 // lift's caller pushes the head either way, so a lift whose push failed is run
-// again without inventing a second commit. A row that is not a schema version
-// is an error, as it is everywhere the hold is read. Its one caller is
-// `lit upgrade --remote`. [LAW:no-silent-failure]
+// again without inventing a second commit. Writes a failed commit left in the
+// working set are versioned first, as the downgrade does: the sync open runs
+// no standing-writes gate, so a removal a crash left uncommitted would
+// otherwise read as "no hold" while HEAD still carries it. A row that is not
+// a schema version is an error, as it is everywhere the hold is read. Its one
+// caller is `lit upgrade --remote`. [LAW:no-silent-failure]
+// [LAW:single-enforcer] commitStrandedWrites is the one place a stranded
+// write lands.
 func (s *Store) LiftSchemaHold(ctx context.Context) (storage.SchemaHoldLifted, error) {
 	var lifted storage.SchemaHoldLifted
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		if err := s.commitStrandedWrites(ctx, strandedWritesCommitMessage); err != nil {
+			return err
+		}
 		read, err := s.readSchemaHold(ctx)
 		if err != nil {
 			return err

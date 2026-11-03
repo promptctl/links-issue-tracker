@@ -297,28 +297,6 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 	}
 }
 
-// heldCommitLog is every commit message on st's checked-out branch, newest first.
-func heldCommitLog(t *testing.T, ctx context.Context, st *Store) []string {
-	t.Helper()
-	rows, err := st.db.QueryContext(ctx, `SELECT message FROM dolt_log()`)
-	if err != nil {
-		t.Fatalf("read commit log: %v", err)
-	}
-	defer rows.Close()
-	var messages []string
-	for rows.Next() {
-		var m string
-		if err := rows.Scan(&m); err != nil {
-			t.Fatalf("read commit log: %v", err)
-		}
-		messages = append(messages, m)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("read commit log: %v", err)
-	}
-	return messages
-}
-
 // A remote downgrade's hold rides in the commit of the last reversed
 // migration: the head before it carries no hold, the new head carries the
 // hold at the target, and the reverse added exactly its reversal commits. Run
@@ -329,7 +307,7 @@ func TestARemoteDowngradeHoldsTheStoreInItsLastCommit(t *testing.T) {
 	max := registryMax(t)
 	st, _ := openWorkspaceForDowngrade(t)
 	before := headCommit(t, ctx, st)
-	logBefore := heldCommitLog(t, ctx, st)
+	logBefore := commitMessages(t, ctx, st)
 
 	done, err := st.DowngradeAndHold(ctx, max-1)
 	if err != nil {
@@ -341,7 +319,7 @@ func TestARemoteDowngradeHoldsTheStoreInItsLastCommit(t *testing.T) {
 	if facts, _ := done.EventRecord(); facts["downgrade.schema_hold"] != max-1 {
 		t.Errorf("downgrade.schema_hold = %v, want %d", facts["downgrade.schema_hold"], max-1)
 	}
-	if logAfter := heldCommitLog(t, ctx, st); len(logAfter) != len(logBefore)+1 {
+	if logAfter := commitMessages(t, ctx, st); len(logAfter) != len(logBefore)+1 {
 		t.Fatalf("the reverse added %d commits, want 1:\n%q", len(logAfter)-len(logBefore), logAfter)
 	}
 	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
@@ -354,7 +332,7 @@ func TestARemoteDowngradeHoldsTheStoreInItsLastCommit(t *testing.T) {
 		t.Fatalf("recorded version = %d, %v; want %d", got, err, max-1)
 	}
 
-	logHeld := heldCommitLog(t, ctx, st)
+	logHeld := commitMessages(t, ctx, st)
 	again, err := st.DowngradeAndHold(ctx, max-1)
 	if err != nil {
 		t.Fatalf("second DowngradeAndHold(%d) = %v", max-1, err)
@@ -362,7 +340,7 @@ func TestARemoteDowngradeHoldsTheStoreInItsLastCommit(t *testing.T) {
 	if again.From != max-1 || again.Reversed != 0 || again.Hold != max-1 {
 		t.Fatalf("second done = %+v, want From %d, Reversed 0, Hold %d", *again, max-1, max-1)
 	}
-	if logAgain := heldCommitLog(t, ctx, st); !slices.Equal(logAgain, logHeld) {
+	if logAgain := commitMessages(t, ctx, st); !slices.Equal(logAgain, logHeld) {
 		t.Fatalf("a repeated remote downgrade committed:\nbefore %q\nafter  %q", logHeld, logAgain)
 	}
 }
@@ -380,7 +358,7 @@ func TestARemoteDowngradeAtTheTargetHoldsInACommitOfItsOwn(t *testing.T) {
 	if hold, err := st.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() after a plain downgrade = %+v, %v; want the unbounded ceiling", hold, err)
 	}
-	logBefore := heldCommitLog(t, ctx, st)
+	logBefore := commitMessages(t, ctx, st)
 
 	done, err := st.DowngradeAndHold(ctx, max-1)
 	if err != nil {
@@ -389,7 +367,7 @@ func TestARemoteDowngradeAtTheTargetHoldsInACommitOfItsOwn(t *testing.T) {
 	if done.From != max-1 || done.Reversed != 0 || done.Hold != max-1 {
 		t.Fatalf("done = %+v, want From %d, Reversed 0, Hold %d", *done, max-1, max-1)
 	}
-	logAfter := heldCommitLog(t, ctx, st)
+	logAfter := commitMessages(t, ctx, st)
 	if want := append([]string{fmt.Sprintf("downgrade: hold schema at %d", max-1)}, logBefore...); !slices.Equal(logAfter, want) {
 		t.Fatalf("commit log after the hold:\n%q\nwant\n%q", logAfter, want)
 	}
@@ -409,7 +387,7 @@ func TestLiftSchemaHoldRemovesTheHoldInOneCommitAndTheStoreRisesAgain(t *testing
 	if _, err := st.DowngradeAndHold(ctx, max-1); err != nil {
 		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
 	}
-	logHeld := heldCommitLog(t, ctx, st)
+	logHeld := commitMessages(t, ctx, st)
 
 	lifted, err := st.LiftSchemaHold(ctx)
 	if err != nil {
@@ -421,7 +399,7 @@ func TestLiftSchemaHoldRemovesTheHoldInOneCommitAndTheStoreRisesAgain(t *testing
 	if facts, _ := lifted.EventRecord(); facts["schema_hold.lifted"] != max-1 {
 		t.Errorf("schema_hold.lifted = %v, want %d", facts["schema_hold.lifted"], max-1)
 	}
-	logLifted := heldCommitLog(t, ctx, st)
+	logLifted := commitMessages(t, ctx, st)
 	if want := append([]string{fmt.Sprintf("upgrade: lift the schema hold at %d", max-1)}, logHeld...); !slices.Equal(logLifted, want) {
 		t.Fatalf("commit log after the lift:\n%q\nwant\n%q", logLifted, want)
 	}
@@ -433,7 +411,7 @@ func TestLiftSchemaHoldRemovesTheHoldInOneCommitAndTheStoreRisesAgain(t *testing
 	if err != nil || none.Lifted != 0 {
 		t.Fatalf("LiftSchemaHold() of an unheld store = %+v, %v; want Lifted 0", none, err)
 	}
-	if logAgain := heldCommitLog(t, ctx, st); !slices.Equal(logAgain, logLifted) {
+	if logAgain := commitMessages(t, ctx, st); !slices.Equal(logAgain, logLifted) {
 		t.Fatalf("a lift of an unheld store committed:\nbefore %q\nafter  %q", logLifted, logAgain)
 	}
 
@@ -588,5 +566,57 @@ func TestARemoteDowngradeCommitsAHoldRowACrashLeftUncommitted(t *testing.T) {
 	}
 	if hold, err := st.schemaHoldAt(ctx, head, "HEAD"); err != nil || hold != holdBy("HEAD", max-1) {
 		t.Fatalf("schemaHoldAt(HEAD) = %+v, %v; want the hold committed", hold, err)
+	}
+}
+
+// A removal of the hold a crash left uncommitted is committed by the next
+// lift before it judges the hold, so the head it then pushes carries none.
+func TestALiftCommitsARemovalACrashLeftUncommitted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	max := registryMax(t)
+	st, _ := openWorkspaceForDowngrade(t)
+	if _, err := st.DowngradeAndHold(ctx, max-1); err != nil {
+		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
+	}
+	held := headCommit(t, ctx, st)
+	if _, err := st.db.ExecContext(ctx, `DELETE FROM meta WHERE meta_key = ?`, schemaHoldKey); err != nil {
+		t.Fatalf("leave the removal uncommitted: %v", err)
+	}
+
+	if _, err := st.LiftSchemaHold(ctx); err != nil {
+		t.Fatalf("LiftSchemaHold() over the stranded removal = %v", err)
+	}
+	head := headCommit(t, ctx, st)
+	if head == held {
+		t.Fatalf("the stranded removal was never committed: HEAD is still %s", held)
+	}
+	if hold, err := st.schemaHoldAt(ctx, head, "HEAD"); err != nil || hold != version.UnboundedSchemaCeiling() {
+		t.Fatalf("schemaHoldAt(HEAD) = %+v, %v; want no hold", hold, err)
+	}
+}
+
+// A hold below the head, which a binary from before the row left by raising
+// the store past it, is the operator's hold: a release downgrade to a schema
+// above it leaves it where it is, and one to a schema below it moves it down.
+func TestAPlainDowngradeNeverRaisesAHold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	max := registryMax(t)
+	st, _ := openWorkspaceForDowngrade(t)
+	holdStore(t, ctx, st, max-2)
+
+	done, err := st.Downgrade(ctx, max-1)
+	if err != nil {
+		t.Fatalf("Downgrade(%d) of a store held at %d = %v", max-1, max-2, err)
+	}
+	if done.Hold != max-2 {
+		t.Fatalf("Hold = %d, want the hold at %d left where it was", done.Hold, max-2)
+	}
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-2) {
+		t.Fatalf("schemaHold() = %+v, %v; want %+v", hold, err, holdBy("this store", max-2))
+	}
+	if done, err = st.Downgrade(ctx, max-3); err != nil || done.Hold != max-3 {
+		t.Fatalf("Downgrade(%d) = %+v, %v; want the hold moved down to %d", max-3, done, err, max-3)
 	}
 }

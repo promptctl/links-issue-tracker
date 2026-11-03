@@ -184,13 +184,6 @@ func runWithApp(ctx context.Context, inv Invocation, accessMode app.AccessMode, 
 	if err != nil {
 		return err
 	}
-	return runAppIn(ctx, inv, ws, accessMode, run)
-}
-
-// runAppIn is runWithApp over a workspace the caller has already resolved,
-// for the leaves the workspace pipeline hands one: resolving it again would
-// settle the config and report its layers twice. [LAW:one-source-of-truth]
-func runAppIn(ctx context.Context, inv Invocation, ws workspace.Info, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
 	// [LAW:single-enforcer] Cobra command registration owns app access selection so startup mode is declared once per entrypoint.
 	ap, err := app.Open(ctx, inv.Env, inv.Stderr, ws, accessMode)
 	if err != nil {

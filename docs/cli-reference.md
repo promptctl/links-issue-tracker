@@ -1258,7 +1258,8 @@ lit downgrade --schema <v> --remote <name>
 Reverses schema migrations and atomically installs the prior `lit` binary for the given
 release tag (`vX.Y.Z`) — the rollback path for a bad upgrade. Unlike `lit upgrade`, the
 target is always explicit: a backward move stays deliberate, so there is no "latest"
-to resolve.
+to resolve. Both forms open the backlog without migrating it, so `--to` runs on a
+backlog held below this lit's schema, which is the remedy a hold's refusal names.
 
 `lit downgrade --schema <v> --remote <name>` lowers a shared remote to schema `v` and
 makes it stay lowered: it steps this backlog down to `v`, writes the schema hold

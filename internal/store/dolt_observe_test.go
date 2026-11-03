@@ -56,21 +56,30 @@ func observedCommitMessages(t *testing.T, ctx context.Context, doltRoot, workspa
 	t.Helper()
 	var messages []string
 	observeDolt(t, ctx, doltRoot, workspaceID, func(s *Store) {
-		rows, err := s.db.QueryContext(ctx, `SELECT message FROM dolt_log()`)
-		if err != nil {
-			t.Fatalf("read commit log: %v", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var m string
-			if err := rows.Scan(&m); err != nil {
-				t.Fatalf("read commit log: %v", err)
-			}
-			messages = append(messages, m)
-		}
-		if err := rows.Err(); err != nil {
-			t.Fatalf("read commit log: %v", err)
-		}
+		messages = commitMessages(t, ctx, s)
 	})
+	return messages
+}
+
+// commitMessages is every commit message on st's checked-out branch, newest
+// first.
+func commitMessages(t *testing.T, ctx context.Context, st *Store) []string {
+	t.Helper()
+	rows, err := st.db.QueryContext(ctx, `SELECT message FROM dolt_log()`)
+	if err != nil {
+		t.Fatalf("read commit log: %v", err)
+	}
+	defer rows.Close()
+	var messages []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			t.Fatalf("read commit log: %v", err)
+		}
+		messages = append(messages, m)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read commit log: %v", err)
+	}
 	return messages
 }

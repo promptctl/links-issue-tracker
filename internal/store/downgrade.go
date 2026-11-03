@@ -347,14 +347,11 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold hold
 		return 0, 0, fmt.Errorf("construct downgrade provider: %w", err)
 	}
 	reversed, held := 0, int64(0)
-	for {
-		current, err := s.recordedMigrationVersion(ctx)
-		if err != nil {
-			return reversed, held, err
-		}
-		if current <= target {
-			return reversed, held, nil
-		}
+	current, err := s.recordedMigrationVersion(ctx)
+	if err != nil {
+		return reversed, held, err
+	}
+	for current > target {
 		downOne := provider.Down
 		if hook := migrationDownForTest; hook != nil {
 			downOne = func(ctx context.Context) (*goose.MigrationResult, error) {
@@ -385,7 +382,11 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold hold
 		if err := s.commitWorkingSet(ctx, downgradeCommitMessage(result)); err != nil {
 			return reversed, held, fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)
 		}
+		// The version this step landed at is the one the next step starts
+		// from: one read per step. [LAW:one-source-of-truth]
+		current = landed
 	}
+	return reversed, held, nil
 }
 
 // downgradeCommitMessage is the one-line Dolt commit message for a reversed

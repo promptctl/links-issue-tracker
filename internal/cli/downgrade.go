@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -38,12 +37,14 @@ import (
 //     stay lowered"). It installs nothing: the binary that reads a held store
 //     is the release at the hold, which `--to` installs.
 //
-// The two forms acquire differently, and the difference is the whole reason
-// they are two: the release form opens the store as every mutating command
-// does, migrating; the remote form opens the sync session, which never
-// migrates, so it opens a store already held below this lit's registry — the
-// state a re-run after a failed push finds — where the migrating open would
-// refuse it (SchemaCeilingError).
+// Both forms open the sync session, which never migrates: a downgrade reverses
+// a store, so it never raises one on the way in, and the migrating open would
+// refuse a store already held below this lit's registry (SchemaCeilingError).
+// That store is the one both forms are for: the remote form re-run after a
+// failed push, and the release form the hold's own refusal names as the remedy
+// (`lit downgrade --to <tag>`, the release at the hold). [LAW:one-type-per-behavior]
+// one open; the forms differ in what follows the reverse, the install or the
+// push.
 //
 // [LAW:single-enforcer] release.Resolver owns artifact resolution,
 // release.Installer owns binary install, the engine's storage.SchemaMigrator
@@ -132,8 +133,8 @@ func withDowngradeAcquisition(declare func() downgradeDeclaration) wsLeafFn {
 			// has nothing to downgrade. Asking the opened store yields the
 			// migrator, which satisfies the narrower schemaDowngrader, so the
 			// work never sees an engine that cannot revert.
-			return runAppIn(ctx, inv, ws, app.AccessWrite, func(ctx context.Context, ap *app.App) error {
-				migrator, err := storage.SchemaMigration.Of(ap.Store)
+			return runWithSyncSession(ctx, inv, ws, func(ctx context.Context, session syncSession) error {
+				migrator, err := storage.SchemaMigration.Of(session.engine)
 				if err != nil {
 					return err
 				}
@@ -338,7 +339,7 @@ func remoteDowngradeWork(ctx context.Context, inv Invocation, request remoteDown
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(inv.Stdout, "%s; pushing the held head to %s%s\n", loweredLine(request.schema, done.Reversed), request.remote, downgradePruneWarning(done.PruneErr)); err != nil {
+	if _, err := fmt.Fprintf(inv.Stdout, "%s; pushing the held head to %s%s\n", loweredLine(done.Hold, done.Reversed), request.remote, downgradePruneWarning(done.PruneErr)); err != nil {
 		return err
 	}
 	return scope.push(ctx, inv)

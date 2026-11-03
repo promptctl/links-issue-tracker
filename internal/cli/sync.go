@@ -556,8 +556,9 @@ type livePushOptions struct {
 // the push would skip, or one holding commits this backlog lacks, which would
 // refuse the push as diverged and leave a held or lifted backlog to merge
 // across a schema gap. A name no git remote carries is resolution's own
-// error. The push resolves the target and fetches again (performSyncPush);
-// this runs them first, one more round trip, so a hold or a lift is
+// error. The push resolves the target and fetches again (performSyncPush),
+// under its own completion marker; this runs them first, a second resolution
+// and fetch on a command an operator runs by hand, so a hold or a lift is
 // committed only for a push that has somewhere to land.
 // [LAW:no-ambient-temporal-coupling] the store changes after the target is
 // known, not before. [LAW:single-enforcer] resolveSyncTarget is the one
@@ -596,10 +597,10 @@ func pushLiveStore(ctx context.Context, inv Invocation, ws workspace.Info, sessi
 	// because session IS the live path's one read-write engine — every
 	// command that could have observed the marker committed and closed before
 	// this session opened, so its commit is inside this push's HEAD. Cleared
-	// at entry, not on success: if the
-	// attempt then skips or fails, that ending is loudly recorded, and the
-	// next mutation re-claims and re-spawns rather than a stale "covered"
-	// promise papering over a push that never landed.
+	// at entry, not on success: if the attempt then skips or fails, that
+	// ending is loudly recorded, and the next mutation re-claims and re-spawns
+	// rather than a stale "covered" promise papering over a push that never
+	// landed.
 	// [LAW:no-ambient-temporal-coupling]
 	clearMirrorPending(inv.Stderr, ws)
 	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
