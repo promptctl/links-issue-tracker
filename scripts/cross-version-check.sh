@@ -53,9 +53,10 @@ registry_max() {
 pkg=github.com/promptctl/links-issue-tracker/internal/version
 candidate="$work/candidate/lit"
 (cd "$root" && go build -ldflags "-X $pkg.Origin=release -X $pkg.ReleasedSchema=carried" -o "$candidate" ./cmd/lit)
-# The binary states the registry it embeds, untracked migrations included.
-tree_max="$("$candidate" version | sed -n 's/^schema versions supported: [0-9]*–\([0-9]*\)$/\1/p')"
-[ -n "$tree_max" ] || fail "the candidate states no schema max"
+# The directory the build embeds, untracked migrations included, read the same
+# way as each tag's registry below.
+tree_max="$(ls "$root"/internal/store/migrations/*.sql | registry_max)"
+[ -n "$tree_max" ] || fail "no migrations found in internal/store/migrations"
 
 # --- 2. the target release --------------------------------------------------
 tag=""
@@ -94,9 +95,14 @@ while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^LIT_'
 unset CLAUDE_CODE_SESSION_ID
 export XDG_CONFIG_HOME="$work/config" XDG_STATE_HOME="$work/state"
 export LIT_DISABLE_AUTO_SYNC=1
+# Nor the caller's git config: no signing prompt, hooks path or template.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 git init -q --bare "$work/remote.git"
 git clone -q "$work/remote.git" "$work/producer" 2>/dev/null
 cd "$work/producer"
+# CI never writes to the lit tracker: every push below goes to this throwaway
+# remote, and this line is the fence TestNoCIJobWritesToTheTracker pins.
+[ "$(git remote get-url origin)" = "$work/remote.git" ] || fail "the fixture's origin is not its own throwaway remote"
 git config user.email ci@example.invalid
 git config user.name cross-version-check
 echo seed > readme.md
@@ -162,8 +168,12 @@ normalize='del(.exported_at, .workspace_id)
   | .labels |= map(select(.issue_id != $w))
   | .relations |= map(select(.src_id != $w and .dst_id != $w))'
 for raised in after raised; do
-    jq -e --arg w "$written" '.issues | any(.id == $w)' "$work/$raised.json" >/dev/null ||
-        fail "the ticket $tag wrote ($written) is missing from the $raised export"
+    # The release's write is itself proven: its row, its parent link, its history.
+    jq -e --arg w "$written" --arg e "$epic" '
+        (.issues | any(.id == $w and .title == "written-by-the-release" and .topic == "demo"))
+        and (.relations | any(.src_id == $w and .dst_id == $e))
+        and (.events | any(.issue_id == $w))' "$work/$raised.json" >/dev/null ||
+        fail "the ticket $tag wrote ($written) lost its row, parent link or history in the $raised export"
     if ! diff -u <(jq -S --arg w "$written" "$normalize" "$work/before.json") \
         <(jq -S --arg w "$written" "$normalize" "$work/$raised.json"); then
         fail "stepping down to $tag and back up changed the $raised export (diff above)"
