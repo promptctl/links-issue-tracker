@@ -9,14 +9,17 @@ import "time"
 // measured environment, rounded up — far enough over the measurement to absorb
 // machine variance, close enough that sustained creep or a single expensive
 // test fails the build long before go test's 10-minute per-package default
-// turns it into a timeout panic on an innocent diff. Two environments matter
-// because the check reads whatever `go test -short -json ./...` run it is
-// piped: CI's concurrent run (the enforcing one — its table is in every CI
-// log) and the dev machine's (the documented local invocation) — and at
-// calibration the dev machine was the SLOWER of the two on every heavy
-// package, so most numbers below are dev-bound. Calibration record: CI table
-// from PR #422's run and the dev-machine full-suite measurement, both
-// 2026-08-26, both quoted per package below as CI/dev.
+// turns it into a timeout panic on an innocent diff — every package but
+// internal/cli, whose note says why it has no such margin. The check reads whatever
+// `go test -short -json ./...` run it is piped, and the enforcing one is CI's
+// concurrent run on ubuntu-latest, whose 4-vCPU runners are drawn from a pool
+// of different CPUs (AMD EPYC 7763, 9V45, 9V74; Intel Xeon 6973P/6975P) that
+// differ by ~1.5-2x on one commit, on top of noisy-neighbor variance within
+// one CPU model: commit 70feabb3 took internal/cli 262s on a Xeon 6975P
+// and 378s on an EPYC 7763. So the worst environment is the slowest runner the
+// pool hands out, not a median. Calibration record: the per-package maximum
+// over 17 build-and-test runs on master and PR branches, 2026-11-02/03, quoted
+// below as worst (CPU).
 //
 // RAISING A BUDGET IS NOT A FIX. Time comes back from cheaper fixtures, real
 // parallelism, and moving benchmark-shaped work to the nightly lane — never by
@@ -35,34 +38,37 @@ import "time"
 // per-package notes below say where each package's time goes; make the test
 // cheaper.
 var budgets = map[string]time.Duration{
-	// 58.5s/95s (141s dev isolated, 2026-08-25). Honest floor; remaining
-	// poles are two ~5s contention tests. Approaching this budget means
-	// fixture tax is back.
-	"github.com/promptctl/links-issue-tracker/internal/store": 210 * time.Second,
+	// 291s (EPYC 9V74); 151-210s on the other CPUs. CI measured 58.5s at the
+	// 2026-08-26 calibration, more than the runner pool's ~1.5x spread
+	// explains, so where the rest went is unmeasured. Approaching this budget
+	// means fixture tax is back.
+	"github.com/promptctl/links-issue-tracker/internal/store": 440 * time.Second,
 
-	// 108s/220s (174s dev isolated), of which ~170s is the serial e2e set —
-	// the floor moves only via links-testperf-xxsx.2.1 (Run taking cwd/env
-	// as parameters, so the e2e tests can parallelize). Tighten this budget
-	// when 2.1 lands.
-	"github.com/promptctl/links-issue-tracker/internal/cli": 340 * time.Second,
+	// 385s (EPYC 7763); 249-358s on the other CPUs, most of it the serial e2e
+	// set. 1.5x leaves almost no room under go test's 600s per-package
+	// timeout, so this is the number with no slack left: its floor moves only
+	// when the e2e tests can run in parallel (Run taking cwd and env as
+	// parameters). Tighten it from the first runs after that lands.
+	"github.com/promptctl/links-issue-tracker/internal/cli": 580 * time.Second,
 
-	// 17.3s/31.5s, and the ~18.5s isolated number is a floor, not slack:
-	// the package's wall equals its one giant,
+	// 31s (EPYC 7763 and 9V74), and the ~18.5s isolated number is a floor,
+	// not slack: the package's wall equals its one giant,
 	// TestBurstOfMutationsNeverHitsEngineReadOnlyCollision, whose runtime is
 	// the production mirror-contention it exists to reproduce.
 	"github.com/promptctl/links-issue-tracker/cmd/lit": 50 * time.Second,
 
-	// 18.2–30.2s across two same-day CI runs (cold corpus load makes it the
-	// suite's noisiest package) / 7.2s dev — the one CI-bound entry, and
-	// above every unlisted package in its worst environment, which is what
-	// graduates it from the default: five genuine buildEntries runs (~2s
-	// each) plus sub-second tests; the content tests share one memoized
-	// inventory. The graph audit is env-gated and does not run here.
-	"github.com/promptctl/links-issue-tracker/tools/licenses": 50 * time.Second,
+	// 37s (EPYC 7763); cold corpus load makes it the suite's noisiest
+	// package. Five genuine buildEntries runs (~2s each) plus sub-second
+	// tests; the content tests share one memoized inventory. The graph audit
+	// is env-gated and does not run here.
+	"github.com/promptctl/links-issue-tracker/tools/licenses": 60 * time.Second,
+
+	// 27s (EPYC 9V74), over what the default's headroom absorbs.
+	"github.com/promptctl/links-issue-tracker/tools/perfbench": 45 * time.Second,
 }
 
-// Every package not listed above — today all at or under ~12s in the slower
-// environment — gets this budget, so a new or newly slow package is caught
+// Every package not listed above — today all at or under ~15s on the slowest
+// runner — gets this budget, so a new or newly slow package is caught
 // without anyone remembering to enroll it. A package that legitimately
 // outgrows the default graduates to an explicit entry with its rationale, not
 // a bigger default.
