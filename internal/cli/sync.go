@@ -551,14 +551,18 @@ type livePushOptions struct {
 }
 
 // requireLivePushTarget resolves the remote a command is about to change the
-// live store for and refuses the command while the store is untouched when
-// the push would be skipped: a remote with nothing on it. A name no git remote
-// carries is resolution's own error. The push resolves the same target again
-// (performSyncPush); this reads it first, so a hold or a lift is committed
-// only for a push that has somewhere to land.
+// live store for, fetches it, and refuses the command while the store is
+// untouched when the push would not land: a remote with nothing on it, which
+// the push would skip, or one holding commits this backlog lacks, which would
+// refuse the push as diverged and leave a held or lifted backlog to merge
+// across a schema gap. A name no git remote carries is resolution's own
+// error. The push resolves the target and fetches again (performSyncPush);
+// this runs them first, one more round trip, so a hold or a lift is
+// committed only for a push that has somewhere to land.
 // [LAW:no-ambient-temporal-coupling] the store changes after the target is
 // known, not before. [LAW:single-enforcer] resolveSyncTarget is the one
-// resolution; this asks it, it decides nothing itself.
+// resolution and SyncFreshness the one divergence read; this asks them, it
+// decides nothing itself.
 func requireLivePushTarget(ctx context.Context, inv Invocation, ws workspace.Info, session syncSession, remote string, command []string) error {
 	target, err := resolveSyncTarget(ctx, inv.Stderr, inv.Env, session, ws, remote)
 	if err != nil {
@@ -566,6 +570,16 @@ func requireLivePushTarget(ctx context.Context, inv Invocation, ws workspace.Inf
 	}
 	if target.skip != syncTargetReady {
 		return model.ValidationError{Message: fmt.Sprintf("%s: %s has no backlog to push to (%s); this backlog is changed only for a push that lands", formatCommand(command), remote, target.skip)}
+	}
+	if err := session.syncer.SyncFetch(ctx, target.remote); err != nil {
+		return err
+	}
+	fresh, err := session.syncer.SyncFreshness(ctx, target.remote, target.branch)
+	if err != nil {
+		return err
+	}
+	if fresh.Behind > 0 {
+		return model.ValidationError{Message: fmt.Sprintf("%s: %s/%s holds %d commit(s) this backlog lacks, so the push would be refused as diverged; run `lit sync pull --remote %s` first, then this command", formatCommand(command), remote, target.branch, fresh.Behind, remote)}
 	}
 	return nil
 }

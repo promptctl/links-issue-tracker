@@ -262,6 +262,15 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, 
 			"downgrade: workspace is not goose-managed (no goose_db_version table); run Open first to adopt or initialize",
 		)
 	}
+	// Writes a failed commit left in the working set are versioned before the
+	// reverse reads it: the sync open runs no standing-writes gate, so a hold
+	// row a crash left uncommitted would otherwise read as "already held",
+	// commit nothing, and leave HEAD unheld for the push.
+	// [LAW:single-enforcer] commitStrandedWrites is the one place a stranded
+	// write lands; the migrating open's gate has already run it for `--to`.
+	if err := s.commitStrandedWrites(ctx, strandedWritesCommitMessage); err != nil {
+		return nil, err
+	}
 	// [LAW:dataflow-not-control-flow] the report fills in as the pipeline
 	// advances; every return from here carries it, at whatever step it stopped.
 	done := &storage.Downgraded{From: state.appliedVersion}
@@ -328,9 +337,10 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, 
 // DowngradeIncompleteError so the operator sees that the target was never
 // reached.
 //
-// The hold the policy asks for is written into the working set of the step
-// that lands at target, before that step's commit, so the lowered head and
-// its hold are one commit: no commit is lowered and not held.
+// The hold moves with the head: it is written into the working set of every
+// step, at the schema that step lands at, before the step's commit, so no
+// commit is lowered and not held, and no commit carries a hold above its own
+// head, whether or not a later step fails. The last step lands at target.
 func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold holdPolicy) (int, int64, error) {
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
@@ -369,10 +379,8 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold hold
 		if err != nil {
 			return reversed, held, err
 		}
-		if landed <= target {
-			if held, _, err = s.holdWorkingSet(ctx, target, hold); err != nil {
-				return reversed, held, fmt.Errorf("hold the schema at %d: %w", target, err)
-			}
+		if held, _, err = s.holdWorkingSet(ctx, landed, hold); err != nil {
+			return reversed, held, fmt.Errorf("hold the schema at %d: %w", landed, err)
 		}
 		if err := s.commitWorkingSet(ctx, downgradeCommitMessage(result)); err != nil {
 			return reversed, held, fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)

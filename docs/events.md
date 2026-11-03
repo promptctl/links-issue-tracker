@@ -623,7 +623,7 @@ the ones it had.
 | `counts.downgrade.reversed` | The down-migrations applied. `0` when none ran; on a reverse that failed part-way, those applied before it stopped. |
 | `downgrade.snapshot_prune_error` | Why lit's older recovery snapshots could not be removed after the reverse, or `null`. The downgrade prints the failure as a `warning:` line and still installs the `--to` release. |
 | `downgrade.installed_path` | The path the `--to` release was installed to. Absent when nothing was installed. |
-| `downgrade.schema_hold` | The schema hold the reverse left the workspace with: the target under `--remote`, `0` under `--to`. Set with `downgrade.workspace_schema`. |
+| `downgrade.schema_hold` | The schema hold the reverse left the workspace with: the target under `--remote`; under `--to`, the workspace's existing hold moved to the target, or `0` when it held none. Set with `downgrade.workspace_schema`. |
 
 `lit downgrade --schema <v> --remote <name>` resolves no release and installs nothing: it steps this backlog to `v`, holds it there, and pushes the held head. It records `downgrade.target_schema_max` as `v`, the running schema range, the reverse's keys above, and `downgrade.remote`, the remote named by `--remote`; the push's own keys ride beside them. `downgrade.tag` and `downgrade.installed_path` are absent.
 

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -324,6 +326,14 @@ func remoteDowngradeWork(ctx context.Context, inv Invocation, request remoteDown
 	if done != nil {
 		facts, counts := done.EventRecord()
 		telemetry.Record(ctx, facts, counts)
+	}
+	var ahead *store.DowngradeTargetAheadError
+	if errors.As(err, &ahead) {
+		// The store's refusal names `lit upgrade`, the release form's sibling;
+		// a remote is lowered by a backlog at or above the target, and this
+		// one is below it. [LAW:no-silent-failure] the remedy is the one that
+		// brings this backlog to the target.
+		return model.ValidationError{Message: fmt.Sprintf("downgrade: this backlog is at schema v%d, below v%d, and a remote is lowered only by a backlog at or above the target; bring this backlog to v%d first: a migrating command (`lit ls`) raises an unheld backlog to this lit's schema v%d, and `lit upgrade --remote %s` lifts a held one", ahead.Current, ahead.Target, ahead.Target, scope.current.Schema.Max, request.remote)}
 	}
 	if err != nil {
 		return err

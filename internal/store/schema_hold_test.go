@@ -7,6 +7,7 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -528,17 +529,64 @@ func TestAPlainDowngradeOfAHeldStoreMovesTheHoldWithIt(t *testing.T) {
 		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
 	}
 
-	done, err := st.Downgrade(ctx, max-2)
+	done, err := st.Downgrade(ctx, max-3)
 	if err != nil {
-		t.Fatalf("Downgrade(%d) of a store held at %d = %v", max-2, max-1, err)
+		t.Fatalf("Downgrade(%d) of a store held at %d = %v", max-3, max-1, err)
 	}
-	if done.From != max-1 || done.Reversed != 1 || done.Hold != max-2 {
-		t.Fatalf("done = %+v, want From %d, Reversed 1, Hold %d", *done, max-1, max-2)
+	if done.From != max-1 || done.Reversed != 2 || done.Hold != max-3 {
+		t.Fatalf("done = %+v, want From %d, Reversed 2, Hold %d", *done, max-1, max-3)
 	}
-	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-2) {
-		t.Fatalf("schemaHold() after the plain downgrade = %+v, %v; want %+v", hold, err, holdBy("this store", max-2))
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-3) {
+		t.Fatalf("schemaHold() after the plain downgrade = %+v, %v; want %+v", hold, err, holdBy("this store", max-3))
 	}
-	if hold, err := st.schemaHoldAt(ctx, headCommit(t, ctx, st), "the head"); err != nil || hold != holdBy("the head", max-2) {
+	if hold, err := st.schemaHoldAt(ctx, headCommit(t, ctx, st), "the head"); err != nil || hold != holdBy("the head", max-3) {
 		t.Fatalf("schemaHoldAt(head) = %+v, %v; want the hold in the lowered commit", hold, err)
+	}
+	// The step before it holds at its own schema: a reverse that stops there
+	// leaves no head holding above itself.
+	if hold, err := st.schemaHoldAt(ctx, parentCommit(t, ctx, st), "the step before"); err != nil || hold != holdBy("the step before", max-2) {
+		t.Fatalf("schemaHoldAt(parent) = %+v, %v; want the hold at %d", hold, err, max-2)
+	}
+}
+
+// parentCommit is the hash of the commit before HEAD on st's checked-out branch.
+func parentCommit(t *testing.T, ctx context.Context, st *Store) string {
+	t.Helper()
+	var hash string
+	if err := st.db.QueryRowContext(ctx, `SELECT commit_hash FROM dolt_log() LIMIT 1 OFFSET 1`).Scan(&hash); err != nil {
+		t.Fatalf("read the parent commit: %v", err)
+	}
+	return hash
+}
+
+// A hold row a crash left in the working set, uncommitted, is committed by
+// the next remote downgrade before it judges the hold, so the head it then
+// pushes carries the hold.
+func TestARemoteDowngradeCommitsAHoldRowACrashLeftUncommitted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	max := registryMax(t)
+	st, _ := openWorkspaceForDowngrade(t)
+	if _, err := st.Downgrade(ctx, max-1); err != nil {
+		t.Fatalf("Downgrade(%d) = %v", max-1, err)
+	}
+	unheld := headCommit(t, ctx, st)
+	if err := st.setMeta(ctx, nil, schemaHoldKey, strconv.FormatInt(max-1, 10)); err != nil {
+		t.Fatalf("leave the hold row uncommitted: %v", err)
+	}
+
+	done, err := st.DowngradeAndHold(ctx, max-1)
+	if err != nil {
+		t.Fatalf("DowngradeAndHold(%d) over the stranded row = %v", max-1, err)
+	}
+	if done.From != max-1 || done.Reversed != 0 || done.Hold != max-1 {
+		t.Fatalf("done = %+v, want From %d, Reversed 0, Hold %d", *done, max-1, max-1)
+	}
+	head := headCommit(t, ctx, st)
+	if head == unheld {
+		t.Fatalf("the stranded hold row was never committed: HEAD is still %s", unheld)
+	}
+	if hold, err := st.schemaHoldAt(ctx, head, "HEAD"); err != nil || hold != holdBy("HEAD", max-1) {
+		t.Fatalf("schemaHoldAt(HEAD) = %+v, %v; want the hold committed", hold, err)
 	}
 }

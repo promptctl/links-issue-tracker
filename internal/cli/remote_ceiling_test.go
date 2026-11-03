@@ -213,6 +213,31 @@ func TestARemoteDowngradeSaysWhetherItLoweredAnything(t *testing.T) {
 	}
 }
 
+// A target above this backlog's schema is refused in the remote form's own
+// words: the store's refusal names `lit upgrade`, which installs a release
+// and moves this backlog nowhere.
+func TestARemoteDowngradeBelowItsTargetNamesHowTheBacklogRises(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	holder := &stubHolder{done: &storage.Downgraded{From: 6}, err: &store.DowngradeTargetAheadError{Current: 6, Target: 7}}
+	push := &recordedPush{out: &out}
+	_, _, err := runRecorded(t, &out, func(ctx context.Context, inv Invocation) error {
+		return remoteDowngradeWork(ctx, inv, remoteDowngradeRequest{schema: 7, remote: "origin"}, remoteDowngradeScope{schema: holder, current: newerCurrentInfo(), push: push.push})
+	})
+	var refused model.ValidationError
+	if !errors.As(err, &refused) || push.called {
+		t.Fatalf("remoteDowngradeWork = %v (push called %v), want a validation error and no push", err, push.called)
+	}
+	for _, want := range []string{"at schema v6, below v7", "`lit ls`", "schema v4", "`lit upgrade --remote origin` lifts a held one"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal lacks %q: %v", want, err)
+		}
+	}
+	if strings.Contains(strings.ReplaceAll(err.Error(), "lit upgrade --remote", ""), "lit upgrade") {
+		t.Errorf("refusal names the install: %v", err)
+	}
+}
+
 // A reverse that fails pushes nothing, and its report still reaches the event.
 func TestARemoteDowngradeThatFailsPushesNothing(t *testing.T) {
 	t.Parallel()
@@ -331,6 +356,17 @@ func TestARemoteLoweredByDowngradeStaysLoweredUntilLifted(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error()+refusedOut, "lit downgrade --schema "+target+": empty has no backlog to push to (remote_empty)") {
 		t.Fatalf("downgrade --remote empty: err = %v, want the empty remote refused before the reverse\noutput:\n%s", err, refusedOut)
 	}
+
+	// A remote holding a peer's commit this backlog lacks refuses the
+	// lowering before the store is touched, naming the pull.
+	runCLIInDir(t, consumer, "new", "--title", "peer-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
+	runCLIInDir(t, consumer, "sync", "push")
+	refusedOut, err = runCLIInDirAllowError(t, producer, "downgrade", "--schema", target, "--remote", "origin")
+	if err == nil || !strings.Contains(err.Error()+refusedOut, "origin/master holds 1 commit(s) this backlog lacks, so the push would be refused as diverged; run `lit sync pull --remote origin` first") {
+		t.Fatalf("downgrade --remote over a peer's push: err = %v, want the pull named before the reverse\noutput:\n%s", err, refusedOut)
+	}
+	runCLIInDir(t, producer, "sync", "pull")
+	before = remoteDoltHead(t, remote)
 
 	out := runCLIInDir(t, producer, "downgrade", "--schema", target, "--remote", "origin")
 	if want := "lowered this backlog to schema v" + target + " and held it there; pushing the held head to origin"; !strings.Contains(out, want) {
