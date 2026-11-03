@@ -86,7 +86,7 @@ func syncReconcileShowLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcile(ctx, remote, branch)
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
 	}}
@@ -134,7 +134,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions, resolveActor(inv.Env))
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, proseResolveCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, proseResolveCommand, remote, branch, result, true)
 	}}
@@ -229,7 +229,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 				return ownerApprovalRefusalError{Approval: approval, Remote: remote.String(), Branch: branch}
 			}
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, command, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportTakeOutcome(inv.Stderr, inv.Env, inv.Stdout, ws, command, remote, branch, result)
 	}}
@@ -261,7 +261,7 @@ func syncReconcileCombineLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcileCombine(ctx, remote, branch)
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
 	}}

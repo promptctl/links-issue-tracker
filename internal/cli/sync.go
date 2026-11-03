@@ -385,8 +385,8 @@ func syncPullLeaf() syncLeaf {
 			// receive tolerates a transient hiccup. [LAW:no-silent-failure] A remote
 			// schema ahead of this binary surfaces as the one sync-failure contract
 			// (exit ExitValidation as the schema-ahead refusal it wraps, naming
-			// `lit upgrade`), not the raw store refusal.
-			return asSyncFailure(err)
+			// `lit upgrade`), not the raw store refusal, and pages the owner.
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		// SyncPull succeeding means its internal SyncReceive fetched the remote
 		// successfully (the fetch is the first step of every outcome branch below),

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -118,18 +119,21 @@ func (ev ownerNotifyEvent) fingerprint() string {
 // [LAW:dataflow-not-control-flow] every surface calls this unconditionally;
 // the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
-	switch failure.Class {
-	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision,
-		syncFailureRemoteSchemaAhead, syncFailureSchemaCeilingLift:
+	kind := ownerNotifyKind(failure.Class)
+	switch {
+	// The classes a settle ends are the one list that also clears them, so a
+	// class cannot page and never clear, or clear and never page.
+	// [LAW:one-source-of-truth]
+	case slices.Contains(ownerNotifySettleEndedKinds, kind):
 		return ownerNotifyEvent{
-			Kind:    ownerNotifyKind(failure.Class),
+			Kind:    kind,
 			Summary: failure.whatLine(),
 			Remote:  failure.Remote,
 			Branch:  failure.Branch,
 		}, true
-	case syncFailureReceiveUnsettled:
+	case failure.Class == syncFailureReceiveUnsettled:
 		return ownerNotifyEvent{
-			Kind:         ownerNotifyKind(failure.Class),
+			Kind:         kind,
 			Summary:      failure.whatLine(),
 			Remote:       failure.Remote,
 			Branch:       failure.Branch,
@@ -138,6 +142,25 @@ func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	default:
 		return ownerNotifyEvent{}, false
 	}
+}
+
+// surfaceSyncFailure is what a foreground sync command does with the error its
+// engine call returned: the error renders as the sync-failure contract
+// (asSyncFailure), and a class the receive half of the owner channel owns pages
+// the owner, since an explicit `lit sync pull` or `lit sync reconcile` is the
+// first — on a checkout with no automatic receive, the only — detector of a
+// schema refusal. [LAW:dataflow-not-control-flow] every error passes through;
+// the class decides, so a push class returned here pages nobody twice.
+// [LAW:single-enforcer] the five foreground error paths share this one point.
+func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, err error) error {
+	err = asSyncFailure(err)
+	var failure SyncFailureError
+	if errors.As(err, &failure) {
+		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
+			maybeNotifyOwner(ctx, stderr, env, ws, ev)
+		}
+	}
+	return err
 }
 
 // ownerNotifyMarkerPath is the per-kind sent marker: its content is the episode

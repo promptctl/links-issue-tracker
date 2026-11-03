@@ -252,6 +252,69 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	}
 }
 
+// TestSurfaceSyncFailurePagesTheOwner pins the foreground half of the receive
+// side: an explicit pull or reconcile whose engine call returns a schema refusal
+// renders the contract AND pages the owner, since on a checkout with no
+// automatic receive that command is the only detector. A push class returned
+// through the same point pages nobody: the push half owns it. An error that is
+// no sync failure passes through untouched.
+func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	sink := filepath.Join(t.TempDir(), "notifications")
+	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	ctx := context.Background()
+
+	lift := &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}}
+	err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, lift)
+	var failure SyncFailureError
+	if !errors.As(err, &failure) || failure.Failure.Class != syncFailureSchemaCeilingLift {
+		t.Fatalf("surfaceSyncFailure(lift) = %v, want the schema_ceiling_lift contract", err)
+	}
+	if payload, readErr := os.ReadFile(sink); readErr != nil || string(payload) != "schema_ceiling_lift\n" {
+		t.Fatalf("a refused lift did not page exactly once: payload=%q err=%v", payload, readErr)
+	}
+	if _, statErr := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyKind(syncFailureSchemaCeilingLift))); statErr != nil {
+		t.Fatalf("a refused lift left no episode marker: %v", statErr)
+	}
+
+	diverged := storage.PushDivergedError{Remote: remoteName(t, "origin"), Branch: "master", Refusal: errors.New("rejected")}
+	err = surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, diverged)
+	if !errors.As(err, &failure) || failure.Failure.Class != syncFailurePushDiverged {
+		t.Fatalf("surfaceSyncFailure(diverged push) = %v, want the push_diverged contract", err)
+	}
+	if payload, _ := os.ReadFile(sink); string(payload) != "schema_ceiling_lift\n" {
+		t.Fatalf("a push class paged from the receive half: %q", payload)
+	}
+
+	plain := errors.New("remote unreachable")
+	if err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, plain); err != plain {
+		t.Fatalf("surfaceSyncFailure(plain) = %v, want the error itself", err)
+	}
+}
+
+// TestEndSettleEndedEpisodesClearsEveryKind pins the group a settle ends: a
+// live marker of every kind in it is gone after one settle, so the next
+// episode of that kind pages immediately instead of being deduped for a day.
+func TestEndSettleEndedEpisodesClearsEveryKind(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+		t.Fatalf("mkdir storage dir: %v", err)
+	}
+	for _, kind := range ownerNotifySettleEndedKinds {
+		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte("fp"), 0o644); err != nil {
+			t.Fatalf("write %s marker: %v", kind, err)
+		}
+	}
+	endSettleEndedEpisodes(testStderr(t), ws)
+	for _, kind := range ownerNotifySettleEndedKinds {
+		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a settle left the %s episode live (stat err=%v)", kind, err)
+		}
+	}
+}
+
 // TestSyncReceiveOutcomeSettledCleanly pins which receive outcomes end a
 // divergence episode: only a completed receive that left no unresolved
 // divergence. Skips and failures carry no information; a non-converged
