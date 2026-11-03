@@ -468,6 +468,8 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 // [LAW:single-enforcer] the mutation envelope is written once; the body is the only variable.
 // [LAW:no-ambient-temporal-coupling] the schema-ahead read reuses the captured remoteHead, so
 // no concurrent fetch can shift the decision between guard and replay.
+// A lift the body refuses at the ceiling leaves as SchemaCeilingLiftError, named for this
+// remote and branch (nameLiftRefusal), as the schema-ahead refusal above is.
 func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch) error) error {
 	if err := s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead); err != nil {
 		return err
@@ -480,9 +482,9 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName,
 	}
 	scratchBranch := newReconcileScratch()
 	guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
-	return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
+	return nameLiftRefusal(retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
 		return body(ctx, guard, scratchBranch)
-	}, s.reconnect)
+	}, s.reconnect), remote, branch)
 }
 
 // reconcileFromAnchors reads the three exports at fixed commit hashes, runs the
@@ -1069,7 +1071,9 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) ([]storage.Unlo
 	if err := resetExactlyToRef(ctx, s.db, commit); err != nil {
 		return nil, fmt.Errorf("reset scratch: %w", err)
 	}
-	if err := s.liftWorkingSetToRegistry(ctx); err != nil {
+	// The hold the lift reads is this commit's, so a refusal names the commit
+	// as its holder: which head the reconcile read is what the refusal is about.
+	if err := s.liftWorkingSetToRegistry(ctx, fmt.Sprintf("the commit %s the reconcile read", commit)); err != nil {
 		return nil, fmt.Errorf("lift %q to current schema: %w", commit, err)
 	}
 	unlooped, err := cutParentLoops(ctx, s.db)

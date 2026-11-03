@@ -214,7 +214,7 @@ func TestAStepIntoAnOutOfOrderGapAboveTheCeilingIsRefused(t *testing.T) {
 	mustExec(t, ctx, st, `DELETE FROM goose_db_version WHERE version_id = ?`, max-1)
 	st.env = testEnv().WithReleasedSchema(ceilingAt(max - 2))
 
-	err := st.liftWorkingSetToRegistry(ctx)
+	err := st.liftWorkingSetToRegistry(ctx, "this store")
 	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
 		t.Fatalf("lift over a gap at %d with released schema %d = %v, want an SchemaCeilingError", max-1, max-2, err)
@@ -233,6 +233,7 @@ func TestARefusalNamesTheCeilingAndItsSource(t *testing.T) {
 	for _, err := range []error{
 		&SchemaCeilingError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling},
 		&SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 5, Ceiling: ceiling},
+		&SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: SchemaCeilingError{Raise: RaiseLift, WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling}},
 	} {
 		msg := err.Error()
 		if !strings.Contains(msg, "the schema ceiling") || !strings.Contains(msg, "is 4 (the checkout this lit was built from had no release tag)") {
@@ -257,7 +258,7 @@ func TestTheReconcileLiftRefusesToRaisePastTheReleasedSchema(t *testing.T) {
 	}
 	st.env = testEnv().WithReleasedSchema(ceilingAt(max - 1))
 
-	err := st.liftWorkingSetToRegistry(ctx)
+	err := st.liftWorkingSetToRegistry(ctx, "this store")
 	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
 		t.Fatalf("lift with released schema %d = %v, want an SchemaCeilingError", max-1, err)

@@ -546,8 +546,10 @@ func (o syncReceiveOutcome) access() app.AccessMode {
 // could not converge, or reports ok=false when there is nothing to surface.
 // Every surfaced outcome routes through the one contract, with the error
 // carried as the block's trailing cause rather than as an ignorable headline:
-//   - a cause that is the remote's schema running ahead of this binary, at
-//     any step, is its own class — it never clears by retrying;
+//   - a cause that is one of the store's schema refusals — the remote's
+//     schema running ahead of this binary, a lift refused by the schema
+//     ceiling — at any step, is its own class: it never clears by retrying,
+//     so it never ages into an unsettled receive whose remedy retries it;
 //   - a stop at the reconcile is a divergence the reconcile could not resolve;
 //   - a run of post-fetch stops that has lasted (unsettledLasting) is an
 //     unsettled receive;
@@ -560,7 +562,7 @@ func (o syncReceiveOutcome) access() app.AccessMode {
 // timestamps the receive recorded. [LAW:dataflow-not-control-flow]
 func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool) {
 	// [LAW:single-enforcer] one adapter, every surface, every step.
-	if failure, ok := remoteSchemaAheadFailure(o.err); ok {
+	if failure, ok := schemaRefusalFailure(o.err); ok {
 		return failure, true
 	}
 	base := SyncFailure{

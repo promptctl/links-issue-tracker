@@ -37,20 +37,20 @@ func TestASchemaHoldReadsAsACeiling(t *testing.T) {
 	ctx := context.Background()
 	st, _ := openWorkspaceForDowngrade(t)
 
-	hold, err := st.schemaHold(ctx)
+	hold, err := st.schemaHold(ctx, "this store")
 	if err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() of an unheld store = %+v, %v; want the unbounded ceiling", hold, err)
 	}
 
 	mustExec(t, ctx, st, `INSERT INTO meta (meta_key, meta_value) VALUES (?, '7')`, schemaHoldKey)
-	hold, err = st.schemaHold(ctx)
+	hold, err = st.schemaHold(ctx, "this store")
 	if err != nil || hold != holdBy("this store", 7) {
 		t.Fatalf("schemaHold() of a held store = %+v, %v; want %+v", hold, err, holdBy("this store", 7))
 	}
 
 	for _, raw := range []string{"seven", "0", "-1"} {
 		mustExec(t, ctx, st, `UPDATE meta SET meta_value = ? WHERE meta_key = ?`, raw, schemaHoldKey)
-		if _, err := st.schemaHold(ctx); err == nil || !strings.Contains(err.Error(), fmt.Sprintf(`meta schema_hold = %q is not a schema version`, raw)) {
+		if _, err := st.schemaHold(ctx, "this store"); err == nil || !strings.Contains(err.Error(), fmt.Sprintf(`meta schema_hold = %q is not a schema version`, raw)) {
 			t.Fatalf("schemaHold() of hold %q = %v, want the malformed row named", raw, err)
 		}
 	}
@@ -129,7 +129,7 @@ func TestTheReconcileLiftRefusesToRaisePastAHold(t *testing.T) {
 	}
 	holdStore(t, ctx, st, max-1)
 
-	err := st.liftWorkingSetToRegistry(ctx)
+	err := st.liftWorkingSetToRegistry(ctx, "this store")
 	var refused *SchemaCeilingError
 	if !errors.As(err, &refused) {
 		t.Fatalf("lift of a working set held at %d = %v, want a SchemaCeilingError", max-1, err)
@@ -282,12 +282,17 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 		t.Fatalf("SyncFetch(consumer) = %v", err)
 	}
 	_, err := st.SyncReconcileCombine(ctx, origin, "master")
-	var refused *SchemaCeilingError
+	var refused *SchemaCeilingLiftError
 	if !errors.As(err, &refused) {
-		t.Fatalf("reconcile against a remote held at %d = %v, want a SchemaCeilingError from the lift", max-1, err)
+		t.Fatalf("reconcile against a remote held at %d = %v, want a SchemaCeilingLiftError from the lift", max-1, err)
 	}
-	if refused.Raise != RaiseLift || refused.Ceiling != holdBy("this store", max-1) {
-		t.Errorf("refusal = %+v, want the lift refused at the fetched head's hold", *refused)
+	wantLift := SchemaCeilingError{Raise: RaiseLift, WorkspaceVersion: max - 1, TargetVersion: max, Ceiling: holdBy(fmt.Sprintf("the commit %s the reconcile read", heldHead), max-1)}
+	if refused.Remote != "origin" || refused.Branch != "master" || refused.Lift != wantLift {
+		t.Errorf("refusal = %+v, want the lift from %d to %d refused at the fetched head's hold, naming that head, for origin/master", *refused, max-1, max)
+	}
+	var lift *SchemaCeilingError
+	if !errors.As(err, &lift) || *lift != refused.Lift {
+		t.Errorf("refusal %v does not wrap the lift's own refusal", err)
 	}
 	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused reconcile = %v", err)
@@ -322,7 +327,7 @@ func TestARemoteDowngradeHoldsTheStoreInItsLastCommit(t *testing.T) {
 	if logAfter := commitMessages(t, ctx, st); len(logAfter) != len(logBefore)+1 {
 		t.Fatalf("the reverse added %d commits, want 1:\n%q", len(logAfter)-len(logBefore), logAfter)
 	}
-	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
+	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != holdBy("this store", max-1) {
 		t.Fatalf("schemaHold() after the reverse = %+v, %v; want %+v", hold, err, holdBy("this store", max-1))
 	}
 	if hold, err := st.schemaHoldAt(ctx, before, "the head before"); err != nil || hold != version.UnboundedSchemaCeiling() {
@@ -355,7 +360,7 @@ func TestARemoteDowngradeAtTheTargetHoldsInACommitOfItsOwn(t *testing.T) {
 	if _, err := st.Downgrade(ctx, max-1); err != nil {
 		t.Fatalf("Downgrade(%d) = %v", max-1, err)
 	}
-	if hold, err := st.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
+	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() after a plain downgrade = %+v, %v; want the unbounded ceiling", hold, err)
 	}
 	logBefore := commitMessages(t, ctx, st)
@@ -371,7 +376,7 @@ func TestARemoteDowngradeAtTheTargetHoldsInACommitOfItsOwn(t *testing.T) {
 	if want := append([]string{fmt.Sprintf("downgrade: hold schema at %d", max-1)}, logBefore...); !slices.Equal(logAfter, want) {
 		t.Fatalf("commit log after the hold:\n%q\nwant\n%q", logAfter, want)
 	}
-	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-1) {
+	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != holdBy("this store", max-1) {
 		t.Fatalf("schemaHold() = %+v, %v; want %+v", hold, err, holdBy("this store", max-1))
 	}
 }
@@ -403,7 +408,7 @@ func TestLiftSchemaHoldRemovesTheHoldInOneCommitAndTheStoreRisesAgain(t *testing
 	if want := append([]string{fmt.Sprintf("upgrade: lift the schema hold at %d", max-1)}, logHeld...); !slices.Equal(logLifted, want) {
 		t.Fatalf("commit log after the lift:\n%q\nwant\n%q", logLifted, want)
 	}
-	if hold, err := st.schemaHold(ctx); err != nil || hold != version.UnboundedSchemaCeiling() {
+	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != version.UnboundedSchemaCeiling() {
 		t.Fatalf("schemaHold() after the lift = %+v, %v; want the unbounded ceiling", hold, err)
 	}
 
@@ -415,7 +420,7 @@ func TestLiftSchemaHoldRemovesTheHoldInOneCommitAndTheStoreRisesAgain(t *testing
 		t.Fatalf("a lift of an unheld store committed:\nbefore %q\nafter  %q", logLifted, logAgain)
 	}
 
-	if err := st.liftWorkingSetToRegistry(ctx); err != nil {
+	if err := st.liftWorkingSetToRegistry(ctx, "this store"); err != nil {
 		t.Fatalf("lift of the working set after the hold was lifted = %v", err)
 	}
 	if got, err := st.recordedMigrationVersion(ctx); err != nil || got != max {
@@ -520,7 +525,7 @@ func TestTheHoldMovesWithTheHeadAndNeverRises(t *testing.T) {
 	if done.From != max || done.Reversed != 1 || done.Hold != max-2 {
 		t.Fatalf("done = %+v, want From %d, Reversed 1, Hold %d left where it was", *done, max, max-2)
 	}
-	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-2) {
+	if hold, err := st.schemaHold(ctx, "this store"); err != nil || hold != holdBy("this store", max-2) {
 		t.Fatalf("schemaHold() = %+v, %v; want %+v", hold, err, holdBy("this store", max-2))
 	}
 

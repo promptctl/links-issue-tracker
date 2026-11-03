@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // everyReceiveStep is the closed set, in the order the receive runs it.
@@ -289,11 +291,24 @@ func TestEveryStopMapsToItsSyncFailure(t *testing.T) {
 			t.Errorf("stopped at %q: unsettled failure = %+v; want the step, the run's start and its age", tc.stopped, failure)
 		}
 	}
-	for _, step := range []receiveStep{receiveStepSettle, receiveStepReconcile} {
-		ahead := &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}
-		o := syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master", stopped: step, err: ahead}
-		if failure, ok := o.inlineSyncFailure(now); !ok || failure.Class != syncFailureRemoteSchemaAhead {
-			t.Errorf("schema-ahead cause at %q on the first stop = %q (ok %v); want the schema-ahead class", step, failure.Class, ok)
+	// A schema refusal is its own class at any step, on the first stop and
+	// on a run old enough to be an unsettled receive alike: it never clears
+	// by the pull the unsettled block names.
+	refusals := []struct {
+		err  error
+		want syncFailureClass
+	}{
+		{&store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}, syncFailureRemoteSchemaAhead},
+		{&store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9, Ceiling: version.SchemaCeiling{Max: 8, Bound: version.BoundHold}}}, syncFailureSchemaCeilingLift},
+	}
+	for _, refusal := range refusals {
+		for _, step := range []receiveStep{receiveStepSettle, receiveStepReconcile} {
+			for _, since := range []time.Time{{}, old} {
+				o := syncReceiveOutcome{remote: remoteName(t, "origin"), branch: "master", stopped: step, err: fmt.Errorf("settle: %w", refusal.err), unsettledSince: since, unsettledPreviousStop: since.Add(time.Minute)}
+				if failure, ok := o.inlineSyncFailure(now); !ok || failure.Class != refusal.want {
+					t.Errorf("%T at %q, run since %v = %q (ok %v); want %q", refusal.err, step, since, failure.Class, ok, refusal.want)
+				}
+			}
 		}
 	}
 }
@@ -308,13 +323,14 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 		syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureRemoteSchemaAhead,
 		syncFailureUnrelatedHistories, syncFailureIDCollision, syncFailureReceiveUnsettled,
 		syncFailurePushDiverged, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease,
-		syncFailureSchemaLoweringRequiresHold, syncFailureForcedPushStale,
+		syncFailureSchemaLoweringRequiresHold, syncFailureForcedPushStale, syncFailureSchemaCeilingLift,
 	}
 	for _, class := range classes {
 		failure := SyncFailure{
 			Class: class, Remote: "origin", Branch: "master",
 			RemoteAhead:     &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8},
 			AboveCeiling:    &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9},
+			LiftRefused:     &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}},
 			RaiseRefused:    &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9},
 			LoweringRefused: &store.SchemaLoweringRequiresHoldError{Remote: "origin", Branch: "master", RemoteSchema: 9, CommitSchema: 8},
 			LeaseLost:       &storage.ForcedPushLeaseError{Remote: remoteName(t, "origin"), Branch: "master", Expected: "abcdef0123456789abcdef0123456789"},

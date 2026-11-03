@@ -59,7 +59,7 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	}
 
 	// The lift replays 00003/00004 over the working set, uncommitted.
-	if err := st.liftWorkingSetToRegistry(ctx); err != nil {
+	if err := st.liftWorkingSetToRegistry(ctx, "this store"); err != nil {
 		t.Fatalf("liftWorkingSetToRegistry: %v", err)
 	}
 
