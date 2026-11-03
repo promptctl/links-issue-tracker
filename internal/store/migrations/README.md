@@ -152,8 +152,8 @@ drops it, and the gate's comparisons leave it out.
 The table's one definition is `stash_carrier.ddl`, embedded as
 `migrations.StashCarrierDDL`. Every step that stashes or restores runs it
 first, copied byte for byte, so whichever step a store meets first creates the
-table. A test fails on any other definition, alteration, or drop of
-`schema_stash`.
+table. A test fails on any registry migration that defines `schema_stash`
+other than by that copy, or alters or drops it.
 
 The carrier admits string columns (`VARCHAR`, `TEXT`), which is every column
 a released Down drops. The template below restores columns of rows that still

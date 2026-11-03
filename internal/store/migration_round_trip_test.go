@@ -156,6 +156,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 	st, provider := storeAtVersion(t, fsys, v)
 	applySeed(t, st.db, seed)
 	before := exportTables(t, st.db)
+	held := stashEntries(t, st.db)
 	if _, err := provider.DownTo(ctx, below); err != nil {
 		return fmt.Errorf("Down to v%d: %w", below, err)
 	}
@@ -163,7 +164,7 @@ func roundTripFrom(t *testing.T, fsys fs.FS, v, below int64, seed string) error 
 		return fmt.Errorf("shape after Down differs from a fresh Up to v%d:\n%s", below,
 			unifiedSchemaDiff("fresh Up", "after Down", want, got))
 	}
-	stashed := stashEntries(t, st.db)
+	stashed := stashedSince(t, st.db, held)
 	if _, err := provider.UpTo(ctx, v); err != nil {
 		return fmt.Errorf("Up to v%d after Down: %w", v, err)
 	}
@@ -198,10 +199,11 @@ func roundTripBelow(t *testing.T, fsys fs.FS, v, below int64, seed string) error
 	st, provider := storeAtVersion(t, fsys, below)
 	applySeed(t, st.db, seed)
 	before := exportTables(t, st.db)
+	held := stashEntries(t, st.db)
 	if _, err := provider.UpTo(ctx, v); err != nil {
 		return fmt.Errorf("Up to v%d: %w", v, err)
 	}
-	stashed := stashEntries(t, st.db)
+	stashed := stashedSince(t, st.db, held)
 	if _, err := provider.DownTo(ctx, below); err != nil {
 		return fmt.Errorf("Down to v%d after Up: %w", below, err)
 	}
@@ -235,6 +237,18 @@ func stashEntries(t *testing.T, db *sql.DB) map[string]bool {
 		t.Fatalf("read stash entries: %v", err)
 	}
 	return keys
+}
+
+// stashedSince is the entries in the carrier now that held did not have: what
+// the step just run stashed. Entries a lower migration left are not its to
+// hand back.
+func stashedSince(t *testing.T, db *sql.DB, held map[string]bool) map[string]bool {
+	t.Helper()
+	now := stashEntries(t, db)
+	for key := range held {
+		delete(now, key)
+	}
+	return now
 }
 
 // stashConsumed fails a round trip whose return step left behind an entry the

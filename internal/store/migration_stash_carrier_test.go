@@ -48,7 +48,7 @@ const carrierSeed = `UPDATE issues SET stash_note = CONCAT('x"y\\z ünï 😀\n'
 UPDATE issues SET stash_note = NULL ORDER BY id LIMIT 1;
 UPDATE issues SET stash_label = '' ORDER BY id LIMIT 1;
 UPDATE issues SET stash_note = '', stash_label = NULL ORDER BY id DESC LIMIT 1;
-UPDATE issues SET stash_note = 'null', stash_label = '[1]' ORDER BY id DESC LIMIT 1 OFFSET 1;
+UPDATE issues SET stash_note = 'null', stash_label = '[1]' WHERE id = (SELECT id FROM (SELECT id FROM issues ORDER BY id DESC LIMIT 1 OFFSET 1) second_last);
 `
 
 // registryWithCarrier is the embedded registry plus the test-only carrier
