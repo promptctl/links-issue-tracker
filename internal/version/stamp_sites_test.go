@@ -144,12 +144,35 @@ func TestOnlyTheJustfileOmitsVersion(t *testing.T) {
 // from-source entrypoints, and any build that stamps nothing at all — must land
 // on the side that reports its age, because an unknown producer is a binary
 // nobody can vouch for and silence is the wrong answer for it.
+//
+// The one exception is scripts/cross-version-check.sh: it builds a release
+// stand-in into a temporary directory it removes on exit, to step a store down
+// and raise it back as a release would. Every other build site in the Justfile,
+// scripts/ and .github/ is scanned, so a further claimant fails here.
 func TestOnlyGoreleaserClaimsReleaseProvenance(t *testing.T) {
 	t.Parallel()
-	for _, rel := range []string{"Justfile", "scripts/install.sh", "scripts/version-ldflags.sh"} {
-		if strings.Contains(repoFile(t, rel), "Origin="+OriginRelease) {
-			t.Errorf("%s stamps Origin=%s — only goreleaser may claim release provenance", rel, OriginRelease)
+	allowed := map[string]bool{".goreleaser.yml": true, "scripts/cross-version-check.sh": true}
+	sites := []string{"Justfile"}
+	for _, dir := range []string{"scripts", ".github"} {
+		err := filepath.WalkDir(repoPath(dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			rel, err := filepath.Rel(repoPath(), path)
+			sites = append(sites, filepath.ToSlash(rel))
+			return err
+		})
+		if err != nil {
+			t.Fatalf("walk %s: %v", dir, err)
 		}
+	}
+	for _, rel := range sites {
+		if !allowed[rel] && strings.Contains(repoFile(t, rel), ".Origin="+OriginRelease) {
+			t.Errorf("%s stamps Origin=%s — only goreleaser, and the cross-version check's throwaway build, may claim release provenance", rel, OriginRelease)
+		}
+	}
+	if !strings.Contains(repoFile(t, "scripts/cross-version-check.sh"), ".Origin="+OriginRelease) {
+		t.Error("scripts/cross-version-check.sh no longer stamps release provenance; drop its exception here")
 	}
 }
 

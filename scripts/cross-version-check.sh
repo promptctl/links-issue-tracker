@@ -20,9 +20,9 @@
 #      target.
 #   4. Run the release against it, in the stepped store and in a fresh clone of
 #      the remote: read, write, sync.
-#   5. Lift the hold and raise the store with this tree, export again, and
-#      compare: the export must equal the first one plus exactly the ticket the
-#      release wrote.
+#   5. Lift the hold and raise the store with this tree, export it and a fresh
+#      clone of the remote, and compare: each export must equal the first one
+#      plus exactly the ticket the release wrote.
 #
 # Any failure exits non-zero. Needs git, go (and the cgo flags the engine
 # needs), gh (authenticated; downloads the release), jq, and the repository's
@@ -32,6 +32,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=scripts/release-tags.sh
 . "$root/scripts/release-tags.sh"
+# shellcheck source=scripts/cgo-env.sh
+. "$root/scripts/cgo-env.sh"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -51,8 +53,9 @@ registry_max() {
 pkg=github.com/promptctl/links-issue-tracker/internal/version
 candidate="$work/candidate/lit"
 (cd "$root" && go build -ldflags "-X $pkg.Origin=release -X $pkg.ReleasedSchema=carried" -o "$candidate" ./cmd/lit)
-tree_max="$(cd "$root" && git ls-files 'internal/store/migrations/*.sql' | registry_max)"
-[ -n "$tree_max" ] || fail "no migrations found in internal/store/migrations"
+# The binary states the registry it embeds, untracked migrations included.
+tree_max="$("$candidate" version | sed -n 's/^schema versions supported: [0-9]*–\([0-9]*\)$/\1/p')"
+[ -n "$tree_max" ] || fail "the candidate states no schema max"
 
 # --- 2. the target release --------------------------------------------------
 tag=""
@@ -83,9 +86,14 @@ tar -xzf "$work/release/$archive" -C "$work/release" lit
 previous="$work/release/lit"
 
 # --- 3. a filled workspace, stepped down ------------------------------------
-# Every command names its actor with --by, so the session's identity, if any,
-# never reaches the fixture.
+# The fixture sees none of the caller's lit config, state or session: both
+# binaries read config from and log events to $work alone, and every command
+# names its actor with --by. Auto-sync is off so no detached worker outlives a
+# command and contends with the next one for the store.
+while IFS= read -r name; do unset "$name"; done < <(compgen -e | grep -E '^LIT_' || true)
 unset CLAUDE_CODE_SESSION_ID
+export XDG_CONFIG_HOME="$work/config" XDG_STATE_HOME="$work/state"
+export LIT_DISABLE_AUTO_SYNC=1
 git init -q --bare "$work/remote.git"
 git clone -q "$work/remote.git" "$work/producer" 2>/dev/null
 cd "$work/producer"
@@ -104,6 +112,7 @@ planned="$("$candidate" new --title planned --topic demo --parent "$epic" --lane
 open="$("$candidate" new --title open --topic demo --parent "$epic" --lane b --by ci | first_word)"
 duplicate="$("$candidate" new --title duplicate --topic demo --parent "$epic" --by ci | first_word)"
 blocked="$("$candidate" new --title blocked --topic demo --parent "$other_epic" --by ci | first_word)"
+purged="$("$candidate" new --title purged --topic demo --parent "$other_epic" --by ci | first_word)"
 digest="$("$candidate" show "$planned" | sed -n 's/.*digest \([0-9a-f]*\)).*/\1/p')"
 [ -n "$digest" ] || fail "could not read the plan digest of $planned"
 # Their stdout is guidance for an agent; a failure still prints on stderr.
@@ -115,13 +124,18 @@ digest="$("$candidate" show "$planned" | sed -n 's/.*digest \([0-9a-f]*\)).*/\1/
     "$candidate" start "$planned" --by ci
     "$candidate" done "$planned" --by ci
     "$candidate" close "$duplicate" --resolution duplicate --of "$open" --by ci
+    "$candidate" purge "$purged" --yes --by ci
 } >/dev/null
 "$candidate" sync push --set-upstream
 "$candidate" export > "$work/before.json"
+# A table the fixture leaves empty would pass the comparison below vacuously.
+empty="$(jq -r 'to_entries[] | select((.value | type) == "array" and (.value | length) == 0) | .key' "$work/before.json")"
+[ -z "$empty" ] || fail "the fixture leaves exported tables empty, so a Down could drop them unseen: $empty"
 "$candidate" downgrade --schema "$target" --remote origin
 
 # --- 4. the release reads, writes and syncs ---------------------------------
-# The release predates --by; with no session id it records its default actor.
+# The release's `new` predates --by; with no session id it records its default
+# actor.
 "$previous" ls
 "$previous" show "$open"
 written="$("$previous" new --title written-by-the-release --topic demo --parent "$epic" | first_word)"
@@ -134,19 +148,25 @@ git clone -q "$work/remote.git" "$work/consumer"
 "$candidate" upgrade --remote origin
 "$candidate" sync push
 "$candidate" export > "$work/after.json"
+# The raise must reach the remote too: a fresh clone exports the same store.
+git clone -q "$work/remote.git" "$work/raised"
+(cd "$work/raised" && "$candidate" init --skip-hooks >/dev/null && "$candidate" export) > "$work/raised.json"
 
 # The release's write is removed from the second export by its id; what is left
-# must equal the first export. exported_at is when, not what.
-normalize='del(.exported_at)
+# must equal the first export. exported_at is when, not what, and workspace_id
+# names the checkout `init` wrote, not the store it holds.
+normalize='del(.exported_at, .workspace_id)
   | .issues |= map(select(.id != $w))
   | .events |= map(select(.issue_id != $w))
   | .comments |= map(select(.issue_id != $w))
   | .labels |= map(select(.issue_id != $w))
   | .relations |= map(select(.src_id != $w and .dst_id != $w))'
-jq -e --arg w "$written" '.issues | any(.id == $w)' "$work/after.json" >/dev/null ||
-    fail "the ticket $tag wrote ($written) is missing after the raise"
-if ! diff -u <(jq -S --arg w "$written" "$normalize" "$work/before.json") \
-    <(jq -S --arg w "$written" "$normalize" "$work/after.json"); then
-    fail "stepping down to $tag and back up changed the export (diff above)"
-fi
+for raised in after raised; do
+    jq -e --arg w "$written" '.issues | any(.id == $w)' "$work/$raised.json" >/dev/null ||
+        fail "the ticket $tag wrote ($written) is missing from the $raised export"
+    if ! diff -u <(jq -S --arg w "$written" "$normalize" "$work/before.json") \
+        <(jq -S --arg w "$written" "$normalize" "$work/$raised.json"); then
+        fail "stepping down to $tag and back up changed the $raised export (diff above)"
+    fi
+done
 echo "cross-version-check: $tag reads, writes and syncs a store stepped down from v$tree_max to v$target, and the raise back loses nothing"
