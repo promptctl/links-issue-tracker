@@ -476,18 +476,28 @@ func (st migrationState) undoInterrupted(ctx context.Context, db *sql.DB) error 
 	if st.appliedVersion > st.committedVersion {
 		return resetExactlyToRef(ctx, db, "HEAD")
 	}
-	for _, call := range []string{"DOLT_RESET", "DOLT_CHECKOUT"} {
-		if _, err := db.ExecContext(ctx, "CALL "+call+"(?)", migrations.StashCarrier); err != nil {
-			return fmt.Errorf("restore HEAD's %s: %w", migrations.StashCarrier, err)
-		}
+	// Rows, not a checkout: DOLT_CHECKOUT of the carrier's name switches to a
+	// branch of that name when one exists.
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin the restore of HEAD's %s: %w", migrations.StashCarrier, err)
 	}
-	return nil
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM "+migrations.StashCarrier); err != nil {
+		return fmt.Errorf("clear the half-settled %s: %w", migrations.StashCarrier, err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO "+migrations.StashCarrier+" SELECT * FROM "+migrations.StashCarrier+" AS OF 'HEAD'"); err != nil {
+		return fmt.Errorf("restore HEAD's %s: %w", migrations.StashCarrier, err)
+	}
+	return tx.Commit()
 }
 
 // undoDue reports an interrupted step this binary undoes: any it may write
-// over, a newer lit's included, since the undo is a reset to HEAD and needs
-// no knowledge of the step, and left in place this binary's next commit
-// would version it. One it may not write over is the writer's to undo.
+// over, a newer lit's included, and left in place this binary's next commit
+// would version it. The undo knows one thing of the step: a settle writes only
+// the carrier, so a newer lit whose pre-Up work wrote another table leaves that
+// write for the stranded-write commit. One it may not write over is the
+// writer's to undo.
 func (st migrationState) undoDue(op operability) bool {
 	return st.interrupted() && op.writable()
 }
@@ -656,6 +666,15 @@ func (s *Store) checkWritable(ctx context.Context) (migrationState, operability,
 			}
 			if err := state.undoInterrupted(ctx, s.db); err != nil {
 				return fmt.Errorf("undo the uncommitted step from v%d: %w", state.committedVersion, err)
+			}
+			// Still under the lock, so a step that reads interrupted now is
+			// the undo's failure, not a live writer's.
+			after, _, err := s.assessOperability(ctx)
+			if err != nil {
+				return err
+			}
+			if after.interrupted() {
+				return fmt.Errorf("the undo left the step from v%d interrupted (applied v%d, unsettled stash %t)", state.committedVersion, after.appliedVersion, after.stashUnsettled)
 			}
 			return nil
 		})
@@ -1510,8 +1529,16 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		}
 		unsettled := false
 		if applied == committed {
-			if unsettled, err = s.tableModified(ctx, migrations.StashCarrier); err != nil {
+			// dolt_status diffs every table; a store with no carrier has
+			// nothing a settle wrote.
+			carried, err := s.tableExists(ctx, migrations.StashCarrier)
+			if err != nil {
 				return migrationState{}, err
+			}
+			if carried {
+				if unsettled, err = s.tableModified(ctx, migrations.StashCarrier); err != nil {
+					return migrationState{}, err
+				}
 			}
 		}
 		return migrationState{phase: phaseManaged, appliedVersion: applied, committedVersion: committed, stashUnsettled: unsettled, support: support, hold: hold}, nil
@@ -1916,7 +1943,6 @@ func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool
 	return columns, nil
 }
 
-// tableExists reports whether a table is present in the active database.
 // tableModified reports whether table, as HEAD has it, stands changed in the
 // working set: a settle only deletes from the carrier HEAD holds, so a carrier
 // the working set created is some other step's, not a settle's.
@@ -1928,6 +1954,7 @@ func (s *Store) tableModified(ctx context.Context, table string) (bool, error) {
 	return modified, nil
 }
 
+// tableExists reports whether a table is present in the active database.
 func (s *Store) tableExists(ctx context.Context, table string) (bool, error) {
 	var marker int
 	err := s.db.QueryRowContext(ctx,

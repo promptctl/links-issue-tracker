@@ -267,6 +267,7 @@ func TestTheSyncOpenVersionsNoInterruptedStep(t *testing.T) {
 // settle dropped a unit a write below changed, before goose recorded v4's Up:
 // the next open settles again from HEAD's carrier and reports the drop the
 // dead settle made, which a retry over the half-settled carrier reports as 0.
+// A write to another table since the settle stands.
 func TestAStepThatDiedAtItsSettleRunsAgain(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -283,8 +284,16 @@ func TestAStepThatDiedAtItsSettleRunsAgain(t *testing.T) {
 	if _, err := migrations.SettleStash(ctx, st.db, 4); err != nil {
 		t.Fatalf("settle v4: %v", err)
 	}
+	execSQL(t, st.db, `UPDATE issues SET title = 'written after the settle' WHERE id = 'seed-t4'`)
 
 	done := migrateLocked(t, ctx, st)
+	var title string
+	if err := st.db.QueryRowContext(ctx, `SELECT title FROM issues WHERE id = 'seed-t4'`).Scan(&title); err != nil {
+		t.Fatalf("read seed-t4's title: %v", err)
+	}
+	if title != "written after the settle" {
+		t.Fatalf("seed-t4's title = %q, want the write the undo of the settle leaves standing", title)
+	}
 	settled, _ := done.Probed[stashSettledFact].([]map[string]any)
 	if !slices.ContainsFunc(settled, func(r map[string]any) bool {
 		return r["version"] == int64(4) && r["stash"] == "issues.redirect_target" && r["rows"] == int64(1)
