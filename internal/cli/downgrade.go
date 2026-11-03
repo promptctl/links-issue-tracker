@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -107,13 +108,20 @@ func withDowngradeAcquisition(declare func() downgradeDeclaration) wsLeafFn {
 				if err != nil {
 					return err
 				}
+				command := []string{"downgrade", "--schema", strconv.FormatInt(request.schema, 10)}
 				return runWithSyncSession(ctx, inv, ws, func(ctx context.Context, session syncSession) error {
 					migrator, err := storage.SchemaMigration.Of(session.engine)
 					if err != nil {
 						return err
 					}
+					// The remote is resolved before the store is lowered and
+					// held, so a remote the push would skip leaves the store as
+					// it was.
+					if err := requireLivePushTarget(ctx, inv, ws, session, request.remote, command); err != nil {
+						return err
+					}
 					return remoteDowngradeWork(ctx, inv, request, remoteDowngradeScope{schema: migrator, current: current, push: func(ctx context.Context, inv Invocation) error {
-						return pushLiveStore(ctx, inv, ws, session, request.remote, livePushOptions{})
+						return pushLiveStore(ctx, inv, ws, session, request.remote, livePushOptions{command: command})
 					}})
 				})
 			}
@@ -122,7 +130,7 @@ func withDowngradeAcquisition(declare func() downgradeDeclaration) wsLeafFn {
 			// has nothing to downgrade. Asking the opened store yields the
 			// migrator, which satisfies the narrower schemaDowngrader, so the
 			// work never sees an engine that cannot revert.
-			return runWithApp(ctx, inv, app.AccessWrite, func(ctx context.Context, ap *app.App) error {
+			return runAppIn(ctx, inv, ws, app.AccessWrite, func(ctx context.Context, ap *app.App) error {
 				migrator, err := storage.SchemaMigration.Of(ap.Store)
 				if err != nil {
 					return err
@@ -320,13 +328,20 @@ func remoteDowngradeWork(ctx context.Context, inv Invocation, request remoteDown
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(inv.Stdout,
-		"lowered this backlog to schema v%d and held it there; pushing the held head to %s%s\n",
-		request.schema, request.remote, downgradePruneWarning(done.PruneErr),
-	); err != nil {
+	if _, err := fmt.Fprintf(inv.Stdout, "%s; pushing the held head to %s%s\n", loweredLine(request.schema, done.Reversed), request.remote, downgradePruneWarning(done.PruneErr)); err != nil {
 		return err
 	}
 	return scope.push(ctx, inv)
+}
+
+// loweredLine is the remote downgrade's result as a sentence: the lowering
+// it made, or that the backlog was already there, as a re-run after a failed
+// push finds it. [LAW:one-source-of-truth] worded from the store's report.
+func loweredLine(schema int64, reversed int) string {
+	if reversed == 0 {
+		return fmt.Sprintf("this backlog is at schema v%d and held there", schema)
+	}
+	return fmt.Sprintf("lowered this backlog to schema v%d and held it there", schema)
 }
 
 // installOverCurrentBinary installs target over the running binary and

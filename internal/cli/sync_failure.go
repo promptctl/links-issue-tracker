@@ -339,6 +339,7 @@ func schemaCeilingRemedy(refused *store.SchemaCeilingPushError) []remedyStep {
 			{"lit sync fetch --remote " + refused.Remote, "reads the remote's current head; a hold lifted on the remote since the last fetch clears this"},
 			{"lit sync push --remote " + refused.Remote, "lands when the remote no longer holds its schema below this backlog's"},
 			{"lit downgrade --to <tag>", fmt.Sprintf("only when the user directs it: install the release at schema v%d, which steps this backlog down to the hold", refused.Ceiling.Max)},
+			{fmt.Sprintf("lit downgrade --schema %d --remote %s", refused.Ceiling.Max, refused.Remote), fmt.Sprintf("only when the user means to lift %s's hold from a backlog that has risen above it: holds this backlog at v%d again, and `lit upgrade --remote %s` after it lifts the hold", refused.Remote, refused.Ceiling.Max, refused.Remote)},
 		}
 	default:
 		return []remedyStep{

@@ -515,3 +515,30 @@ func TestAnUnheldLoweringPushSendsNothingAndAHeldOneLands(t *testing.T) {
 		t.Fatalf("remote after the held push = %+v, want schema %d held there", head, max-1)
 	}
 }
+
+// A held store a release downgrade steps further down stays held, at its new
+// schema: a hold is never above the head that carries it, so no head reaches
+// a remote holding it at a schema the head is not at.
+func TestAPlainDowngradeOfAHeldStoreMovesTheHoldWithIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	max := registryMax(t)
+	st, _ := openWorkspaceForDowngrade(t)
+	if _, err := st.DowngradeAndHold(ctx, max-1); err != nil {
+		t.Fatalf("DowngradeAndHold(%d) = %v", max-1, err)
+	}
+
+	done, err := st.Downgrade(ctx, max-2)
+	if err != nil {
+		t.Fatalf("Downgrade(%d) of a store held at %d = %v", max-2, max-1, err)
+	}
+	if done.From != max-1 || done.Reversed != 1 || done.Hold != max-2 {
+		t.Fatalf("done = %+v, want From %d, Reversed 1, Hold %d", *done, max-1, max-2)
+	}
+	if hold, err := st.schemaHold(ctx); err != nil || hold != holdBy("this store", max-2) {
+		t.Fatalf("schemaHold() after the plain downgrade = %+v, %v; want %+v", hold, err, holdBy("this store", max-2))
+	}
+	if hold, err := st.schemaHoldAt(ctx, headCommit(t, ctx, st), "the head"); err != nil || hold != holdBy("the head", max-2) {
+		t.Fatalf("schemaHoldAt(head) = %+v, %v; want the hold in the lowered commit", hold, err)
+	}
+}

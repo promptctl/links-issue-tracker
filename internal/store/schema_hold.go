@@ -105,35 +105,37 @@ const (
 	holdAtTarget
 )
 
-// at is the hold a downgrade to target leaves the store with under the policy:
-// target, or 0 for none, as storage.Downgraded and storage.Migrated report it.
-func (p holdPolicy) at(target int64) int64 {
-	if p == holdAtTarget {
-		return target
-	}
-	return 0
-}
-
-// holdWorkingSet writes the hold the policy asks for into the working set and
-// reports whether it wrote: a row already reading target is left as it is, so
-// a repeated remote downgrade commits nothing. The caller commits.
+// holdWorkingSet writes the hold a downgrade to target leaves the working set
+// with, and reports that hold (0 for none) and whether it wrote: target under
+// holdAtTarget; under holdNone, the hold the store already carries, moved to
+// target, or none. A present hold is always at the head's schema: a held
+// store a release downgrade steps further down stays held, and no head
+// carries a hold above its own schema, which the lowering verdict
+// (schema_lowering.go) would read as a head holding the remote at a schema
+// it is not at. A row already reading target is left as it is, so a repeated
+// remote downgrade commits nothing; a row that is not a schema version is an
+// error, as it is everywhere the hold is read. The caller commits.
 // [LAW:single-enforcer] the one writer of meta.schema_hold; the lift
-// (LiftSchemaHold) is its one remover.
-func (s *Store) holdWorkingSet(ctx context.Context, target int64, policy holdPolicy) (bool, error) {
-	if policy == holdNone {
-		return false, nil
-	}
+// (LiftSchemaHold) is its one remover. [LAW:types-are-the-program] the
+// invariant lives in the one writer, not in every reader.
+func (s *Store) holdWorkingSet(ctx context.Context, target int64, policy holdPolicy) (int64, bool, error) {
 	read, err := s.readSchemaHold(ctx)
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
-	if read.present && read.malformed == nil && read.version == target {
-		return false, nil
+	if read.malformed != nil {
+		return 0, false, read.malformed
+	}
+	if policy == holdNone && !read.present {
+		return 0, false, nil
+	}
+	if read.present && read.version == target {
+		return target, false, nil
 	}
 	if err := s.setMeta(ctx, nil, schemaHoldKey, strconv.FormatInt(target, 10)); err != nil {
-		return false, err
+		return 0, false, err
 	}
-	return true, nil
+	return target, true, nil
 }
 
 // LiftSchemaHold removes the store's schema hold in one commit and reports the

@@ -264,11 +264,12 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, 
 	}
 	// [LAW:dataflow-not-control-flow] the report fills in as the pipeline
 	// advances; every return from here carries it, at whatever step it stopped.
-	done := &storage.Downgraded{From: state.appliedVersion, Hold: hold.at(targetSchemaVersion)}
+	done := &storage.Downgraded{From: state.appliedVersion}
 	if targetSchemaVersion == done.From {
 		// Nothing to reverse, so the hold has no reversal commit to ride in
 		// and lands in one of its own; already held there, nothing is written.
-		written, err := s.holdWorkingSet(ctx, targetSchemaVersion, hold)
+		var written bool
+		done.Hold, written, err = s.holdWorkingSet(ctx, targetSchemaVersion, hold)
 		if err != nil || !written {
 			return done, err
 		}
@@ -294,7 +295,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, 
 	}
 	done.Snapshot = recoverySnapshot(snap)
 
-	done.Reversed, err = s.applyDownMigrations(ctx, targetSchemaVersion, hold)
+	done.Reversed, done.Hold, err = s.applyDownMigrations(ctx, targetSchemaVersion, hold)
 	if err != nil {
 		return done, &DowngradeRollbackError{Snapshot: snap.Snapshot, Cause: err}
 	}
@@ -313,10 +314,11 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, 
 
 // applyDownMigrations steps the workspace from its recorded version down to
 // target, one migration at a time, with one Dolt commit per reversed step, and
-// returns how many steps goose applied — on failure, those before it, counting
-// a step whose Dolt commit then failed: its Down already moved the working
-// set's recorded version, so the count matches what recordedMigrationVersion
-// reads.
+// returns how many steps goose applied and the hold the step that landed at
+// target left the store with (holdWorkingSet) — on failure, the steps before
+// it, counting a step whose Dolt commit then failed: its Down already moved
+// the working set's recorded version, so the count matches what
+// recordedMigrationVersion reads.
 // Symmetric with applyPendingMigrations: a single goose provider drives the
 // loop and commitWorkingSet records each step. The commit lock is already
 // held by Downgrade, so commitWorkingSet's withCommitLock short-circuits.
@@ -329,19 +331,19 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64, 
 // The hold the policy asks for is written into the working set of the step
 // that lands at target, before that step's commit, so the lowered head and
 // its hold are one commit: no commit is lowered and not held.
-func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold holdPolicy) (int, error) {
+func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold holdPolicy) (int, int64, error) {
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
-		return 0, fmt.Errorf("construct downgrade provider: %w", err)
+		return 0, 0, fmt.Errorf("construct downgrade provider: %w", err)
 	}
-	reversed := 0
+	reversed, held := 0, int64(0)
 	for {
 		current, err := s.recordedMigrationVersion(ctx)
 		if err != nil {
-			return reversed, err
+			return reversed, held, err
 		}
 		if current <= target {
-			return reversed, nil
+			return reversed, held, nil
 		}
 		downOne := provider.Down
 		if hook := migrationDownForTest; hook != nil {
@@ -352,28 +354,28 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64, hold hold
 		result, err := downOne(ctx)
 		if err != nil {
 			if errors.Is(err, goose.ErrNoNextVersion) {
-				return reversed, &DowngradeIncompleteError{Current: current, Target: target}
+				return reversed, held, &DowngradeIncompleteError{Current: current, Target: target}
 			}
-			return reversed, &downgradeMigrationFailedError{Version: current, Cause: err}
+			return reversed, held, &downgradeMigrationFailedError{Version: current, Cause: err}
 		}
 		reversed++
 		if result == nil {
-			return reversed, fmt.Errorf("down-migrate v%d: goose returned nil result", current)
+			return reversed, held, fmt.Errorf("down-migrate v%d: goose returned nil result", current)
 		}
 		if result.Source == nil {
-			return reversed, fmt.Errorf("down-migrate v%d: goose result has nil Source", current)
+			return reversed, held, fmt.Errorf("down-migrate v%d: goose result has nil Source", current)
 		}
 		landed, err := s.recordedMigrationVersion(ctx)
 		if err != nil {
-			return reversed, err
+			return reversed, held, err
 		}
 		if landed <= target {
-			if _, err := s.holdWorkingSet(ctx, target, hold); err != nil {
-				return reversed, fmt.Errorf("hold the schema at %d: %w", target, err)
+			if held, _, err = s.holdWorkingSet(ctx, target, hold); err != nil {
+				return reversed, held, fmt.Errorf("hold the schema at %d: %w", target, err)
 			}
 		}
 		if err := s.commitWorkingSet(ctx, downgradeCommitMessage(result)); err != nil {
-			return reversed, fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)
+			return reversed, held, fmt.Errorf("commit downgrade revert of v%d: %w", result.Source.Version, err)
 		}
 	}
 }

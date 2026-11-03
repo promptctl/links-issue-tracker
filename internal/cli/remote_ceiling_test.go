@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -198,6 +199,20 @@ func TestARemoteDowngradeHoldsThenPushesTheHeldHead(t *testing.T) {
 	}
 }
 
+// The remote downgrade says what it did from the store's report: a re-run
+// after a failed push reverses nothing and says the backlog is already held.
+func TestARemoteDowngradeSaysWhetherItLoweredAnything(t *testing.T) {
+	t.Parallel()
+	for reversed, want := range map[int]string{
+		1: "lowered this backlog to schema v11 and held it there",
+		0: "this backlog is at schema v11 and held there",
+	} {
+		if got := loweredLine(11, reversed); got != want {
+			t.Errorf("loweredLine(11, %d) = %q, want %q", reversed, got, want)
+		}
+	}
+}
+
 // A reverse that fails pushes nothing, and its report still reaches the event.
 func TestARemoteDowngradeThatFailsPushesNothing(t *testing.T) {
 	t.Parallel()
@@ -307,6 +322,15 @@ func TestARemoteLoweredByDowngradeStaysLoweredUntilLifted(t *testing.T) {
 	}
 	target := strconv.FormatInt(max-1, 10)
 	before := remoteDoltHead(t, remote)
+
+	// A remote with nothing on it refuses the lowering before the store is
+	// touched: the lowering that follows still has a migration to reverse.
+	runGit(t, filepath.Dir(remote), "init", "--bare", "empty.git")
+	runGit(t, producer, "remote", "add", "empty", filepath.Join(filepath.Dir(remote), "empty.git"))
+	refusedOut, err := runCLIInDirAllowError(t, producer, "downgrade", "--schema", target, "--remote", "empty")
+	if err == nil || !strings.Contains(err.Error()+refusedOut, "lit downgrade --schema "+target+": empty has no backlog to push to (remote_empty)") {
+		t.Fatalf("downgrade --remote empty: err = %v, want the empty remote refused before the reverse\noutput:\n%s", err, refusedOut)
+	}
 
 	out := runCLIInDir(t, producer, "downgrade", "--schema", target, "--remote", "origin")
 	if want := "lowered this backlog to schema v" + target + " and held it there; pushing the held head to origin"; !strings.Contains(out, want) {

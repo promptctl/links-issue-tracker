@@ -539,7 +539,8 @@ type Downgraded struct {
 	Snapshot *RecoverySnapshot
 	PruneErr error
 	// Hold is the schema hold the downgrade leaves the store with: the target
-	// under DowngradeAndHold, 0 under Downgrade, as Migrated.SchemaHold reads
+	// under DowngradeAndHold; under Downgrade, the hold the store already
+	// carried, now at the target, or 0 for none, as Migrated.SchemaHold reads
 	// a store with none.
 	Hold int64
 }

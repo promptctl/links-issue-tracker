@@ -1241,9 +1241,12 @@ next run if it trails.
 `lit downgrade --schema <v> --remote <name>` left on this backlog, in one commit, and
 pushes that head to the remote. The pushed head is at the hold's schema, so the push
 is no raise; the remote rises when a lit at a higher schema opens this backlog and a
-release's `lit sync push` sends it. A backlog with no hold lifts nothing and still
-pushes, so a lift whose push failed is run again as it was. `--remote` and `--to` do
-not combine.
+release's `lit sync push` sends it. The remote is resolved before the hold is lifted,
+so a remote with nothing to push to leaves the backlog held. A backlog with no hold
+lifts nothing and still pushes, so a lift whose push failed is run again as it was,
+as long as no migrating command has raised the backlog in between; once one has, the
+push is refused by the remote's hold, and its remedy names the remote downgrade that
+holds the backlog there again before the lift. `--remote` and `--to` do not combine.
 
 ### `lit downgrade`
 
