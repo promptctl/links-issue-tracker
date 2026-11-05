@@ -196,12 +196,18 @@ func pushFailureDecision(pushErr error, remote storage.RemoteName, receiveMerges
 // [LAW:single-enforcer] Callers construct nothing themselves: the record is
 // derived once, from the same two values, for every producer. The record also
 // lands on the invocation's event, one value per attempt on push.outcomes.
-// [LAW:nothing-unseen]
+// [LAW:nothing-unseen] The push error is parsed here, once, for the schema
+// refusal it may be — the one failure the owner hears under its own class —
+// so the owner half reads a typed result and never the raw error.
+// [LAW:parse-dont-validate] Only the push step raises a schema refusal; a
+// could-not-attempt error (remote resolution, a mirror dying before its
+// attempt) is never one, so pushErr is the one carrier to parse.
 func completePushAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
 	rec := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion(stderr))
 	telemetry.Append(ctx, "push.outcomes", rec.eventValue())
 	recordPushOutcome(stderr, ws, rec)
-	observePushOutcomeForOwner(ctx, stderr, env, ws, rec)
+	refusal, refused := schemaRefusalFailure(outcome.pushErr)
+	observePushOutcomeForOwner(ctx, stderr, env, ws, rec, refusal, refused)
 }
 
 // eventValue is the record as one value of the event's push.outcomes list.

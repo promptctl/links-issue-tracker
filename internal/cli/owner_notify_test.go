@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -75,10 +77,11 @@ func TestOwnerNotifyDue(t *testing.T) {
 }
 
 // TestOwnerNotifyEventForFailure pins the partition of the closed class set:
-// every divergence class, an unsettled receive, and every schema refusal the
-// receive side detects notifies with the failure's own domain sentence; a push
-// class does not, because the push half of the channel pages it as push_failed.
-// Both halves are spelled out by hand and then checked against
+// every divergence class, an unsettled receive, and every schema refusal,
+// whichever half detects it, notifies under its own kind with the failure's
+// own domain sentence; a push refused over a peer's commits and a lost
+// forced-push lease do not, because the push half pages them as push_failed.
+// Both lists are spelled out by hand and then checked against
 // syncFailureClasses, so a class added to the constants and to neither list
 // here fails this test instead of rendering a block that pages nobody.
 func TestOwnerNotifyEventForFailure(t *testing.T) {
@@ -96,22 +99,28 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 			RemoteAhead: &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}},
 		{Class: syncFailureSchemaCeilingLift, Remote: "origin", Branch: "master",
 			LiftRefused: &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}}},
+		{Class: syncFailureSchemaCeiling, Remote: "origin", Branch: "master",
+			AboveCeiling: &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9}},
+		{Class: syncFailureSchemaRaiseRequiresRelease, Remote: "origin", Branch: "master",
+			RaiseRefused: &store.SchemaRaiseRequiresReleaseError{Remote: "origin", Branch: "master", RemoteSchema: 8, RemoteKnown: true, CommitSchema: 9}},
+		{Class: syncFailureSchemaLoweringRequiresHold, Remote: "origin", Branch: "master",
+			LoweringRefused: &store.SchemaLoweringRequiresHoldError{Remote: "origin", Branch: "master", RemoteSchema: 9, CommitSchema: 8}},
 	}
-	pushClasses := []syncFailureClass{syncFailurePushDiverged, syncFailureForcedPushStale, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease, syncFailureSchemaLoweringRequiresHold}
+	pushFailed := []syncFailureClass{syncFailurePushDiverged, syncFailureForcedPushStale}
 
 	placed := map[syncFailureClass]string{}
 	for _, failure := range paging {
 		placed[failure.Class] = "paging"
 	}
-	for _, class := range pushClasses {
+	for _, class := range pushFailed {
 		if placed[class] != "" {
-			t.Fatalf("class %q is listed as both paging and a push class", class)
+			t.Fatalf("class %q is listed as both paging under its own kind and paging as push_failed", class)
 		}
-		placed[class] = "push"
+		placed[class] = "push_failed"
 	}
 	for _, class := range syncFailureClasses {
 		if placed[class] == "" {
-			t.Fatalf("class %q is in syncFailureClasses but this test places it in neither half of the owner channel; decide which half pages it", class)
+			t.Fatalf("class %q is in syncFailureClasses but this test places it under neither its own kind nor push_failed; decide which pages it", class)
 		}
 	}
 	if len(placed) != len(syncFailureClasses) {
@@ -126,10 +135,17 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 		if ev.Kind != ownerNotifyKind(failure.Class) || ev.Remote != "origin" || ev.Branch != "master" || ev.Summary == "" {
 			t.Fatalf("class %q mapped to %+v, want its own kind/target and a summary", failure.Class, ev)
 		}
+		if got, want := ev.fingerprint(), string(failure.Class)+" origin/master"; failure.Class != syncFailureReceiveUnsettled && got != want {
+			t.Fatalf("class %q fingerprints as %q, want the per-target %q", failure.Class, got, want)
+		}
+		// A kind that pages must have an ender, or its first episode is its last.
+		if !slices.Contains(ownerNotifySettleEndedKinds, ev.Kind) && !slices.Contains(ownerNotifyPushEndedKinds, ev.Kind) && failure.Class != syncFailureReceiveUnsettled {
+			t.Fatalf("class %q pages but neither a settle nor a landed push ends it", failure.Class)
+		}
 	}
-	for _, class := range pushClasses {
+	for _, class := range pushFailed {
 		if _, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"}); ok {
-			t.Fatalf("push class %q mapped to an owner notification; the push half already pages it as push_failed", class)
+			t.Fatalf("class %q mapped to its own owner notification; the push half pages it as push_failed", class)
 		}
 	}
 }
@@ -294,9 +310,15 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	ctx := context.Background()
+	// The failures here are no schema refusal, which is what the completion
+	// seam would have parsed; TestPushRefusedBySchemaPagesUnderItsClass pins
+	// that parse.
+	observe := func(rec pushOutcomeRecord) {
+		observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, rec, SyncFailure{}, false)
+	}
 
 	failed := pushOutcomeRecord{Decision: pushDecisionError, Reason: "remote unreachable", Remote: "origin", Branch: "master"}
-	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, failed)
+	observe(failed)
 	if payload, err := os.ReadFile(sink); err != nil || string(payload) != "push_failed\n" {
 		t.Fatalf("failed push did not notify exactly once: payload=%q err=%v", payload, err)
 	}
@@ -304,7 +326,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 		t.Fatalf("failed push left no episode marker: %v", err)
 	}
 
-	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
+	observe(pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
 	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a landed push did not end the episode (stat err=%v)", err)
 	}
@@ -313,7 +335,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	if cancelled.Decision != pushDecisionCanceled || cancelled.failed() {
 		t.Fatalf("pushOutcomeOf(canceled) = %+v, want the non-failed canceled decision", cancelled)
 	}
-	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, cancelled)
+	observe(cancelled)
 	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "push_failed") != 1 {
 		t.Fatalf("a cancelled push notified the owner: %q", payload)
 	}
@@ -321,12 +343,12 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	// A push refused over a peer's commits a receive merges neither notifies
 	// nor ends a live episode: the channel is not broken, and it has not been
 	// shown healthy.
-	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, failed)
+	observe(failed)
 	diverged := pushOutcomeOf(syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", receiveMerges: true, pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
 	if diverged.Decision != pushDecisionDiverged || diverged.failed() {
 		t.Fatalf("pushOutcomeOf(diverged) = %+v, want the non-failed diverged decision", diverged)
 	}
-	observePushOutcomeForOwner(ctx, testStderr(t), runEnv(t), ws, diverged)
+	observe(diverged)
 	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "push_failed") != 2 {
 		t.Fatalf("want the second failure's one notification and none for the diverged push: %q", payload)
 	}
@@ -335,13 +357,99 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	}
 }
 
+// TestPushRefusedBySchemaPagesUnderItsClass pins that the push half pages a
+// schema refusal under the refusal's own kind, through the completion seam
+// every push attempt ends at: a push refused because the remote's schema is
+// ahead pages remote_schema_ahead, keyed to the remote and branch, and writes
+// no push_failed marker; the same refusal again is the same episode and pages
+// nothing; a landed push ends it, so the next refusal pages at once; and a
+// push the released ceiling refused pages schema_ceiling. The receive half
+// pages a remote schema ahead under the same kind, so a checkout that pushes
+// and receives against such a remote holds one marker for it.
+func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	sink := filepath.Join(t.TempDir(), "notifications")
+	enableOwnerNotify(t, ws, `printf "%s %s %s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
+	// The completion seam lands the attempt on the invocation's event, so it
+	// runs under one, as every command does.
+	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
+	complete := func(pushErr error) {
+		completePushAttempt(ctx, testStderr(t), runEnv(t), ws, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: pushErr}, nil)
+	}
+	ahead := &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}
+
+	complete(ahead)
+	if payload, err := os.ReadFile(sink); err != nil || string(payload) != "remote_schema_ahead origin master\n" {
+		t.Fatalf("a push refused by the remote's schema did not page remote_schema_ahead exactly once: payload=%q err=%v", payload, err)
+	}
+	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a schema refusal left a push_failed marker (stat err=%v)", err)
+	}
+	marker := ownerNotifyMarkerPath(ws, ownerNotifyKind(syncFailureRemoteSchemaAhead))
+	if payload, err := os.ReadFile(marker); err != nil || string(payload) != "remote_schema_ahead origin/master\n" {
+		t.Fatalf("remote_schema_ahead marker = %q (err=%v), want the per-target fingerprint", payload, err)
+	}
+
+	complete(ahead)
+	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "remote_schema_ahead") != 1 {
+		t.Fatalf("the same refusal paged again inside its episode: %q", payload)
+	}
+
+	complete(nil)
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a landed push did not end the remote_schema_ahead episode (stat err=%v)", err)
+	}
+	complete(ahead)
+	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "remote_schema_ahead") != 2 {
+		t.Fatalf("a refusal after a landed push did not page as a new episode: %q", payload)
+	}
+
+	complete(&store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9})
+	if payload, _ := os.ReadFile(sink); !strings.HasSuffix(string(payload), "schema_ceiling origin master\n") {
+		t.Fatalf("a push refused by the ceiling did not page schema_ceiling: %q", payload)
+	}
+
+	complete(errors.New("remote unreachable"))
+	if payload, _ := os.ReadFile(sink); !strings.HasSuffix(string(payload), "push_failed origin master\n") {
+		t.Fatalf("a failure that is no schema refusal did not page push_failed: %q", payload)
+	}
+}
+
+// TestLandedPushEndsEveryPushEndedKind pins the group a landed push ends: a
+// live marker of every kind in it is gone after one landed push, and a marker
+// a settle alone ends still stands, since a landed push says nothing about a
+// lift the ceiling refused.
+func TestLandedPushEndsEveryPushEndedKind(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+		t.Fatalf("mkdir storage dir: %v", err)
+	}
+	standing := ownerNotifyKind(syncFailureSchemaCeilingLift)
+	for _, kind := range append(slices.Clone(ownerNotifyPushEndedKinds), standing) {
+		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte(string(kind)+" origin/master\n"), 0o644); err != nil {
+			t.Fatalf("plant %s marker: %v", kind, err)
+		}
+	}
+	observePushOutcomeForOwner(context.Background(), testStderr(t), runEnv(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"}, SyncFailure{}, false)
+	for _, kind := range ownerNotifyPushEndedKinds {
+		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("a landed push left the %s episode standing (stat err=%v)", kind, err)
+		}
+	}
+	if _, err := os.Stat(ownerNotifyMarkerPath(ws, standing)); err != nil {
+		t.Fatalf("a landed push ended the %s episode, which only a settle proves gone: %v", standing, err)
+	}
+}
+
 // TestSurfaceSyncFailurePagesTheOwner pins the foreground half of the receive
 // side: an explicit pull or reconcile whose engine call returns a schema refusal
 // renders the contract AND pages the owner, since on a checkout with no
-// automatic receive that command is the only detector. A push class returned
-// through the same point pages nobody and is reported on stderr as a bug: no
-// pull or reconcile pushes, so the push half, which owns that class, never saw
-// it. An error that is no sync failure passes through untouched.
+// automatic receive that command is the only detector. A class the push half
+// pages as push_failed, returned through the same point, pages nobody and is
+// reported on stderr as a bug: no pull or reconcile pushes, so the push half
+// never saw it. An error that is no sync failure passes through untouched.
 func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
@@ -371,7 +479,7 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 	if payload, _ := os.ReadFile(sink); string(payload) != "schema_ceiling_lift\n" {
 		t.Fatalf("a push class paged from the receive half: %q", payload)
 	}
-	if !strings.Contains(reported.String(), `"push_diverged" reached the receive half`) {
+	if !strings.Contains(reported.String(), `"push_diverged" reached the owner channel with no kind of its own`) {
 		t.Fatalf("a push class at the receive half was not reported as a bug; stderr=%q", reported.String())
 	}
 
