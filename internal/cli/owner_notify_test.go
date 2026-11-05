@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -143,45 +144,52 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		t.Fatalf("mkdir storage dir: %v", err)
-	}
-	plant := func() {
-		for _, kind := range ownerNotifySettleEndedKinds {
-			if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte("fp"), 0o644); err != nil {
-				t.Fatalf("write %s marker: %v", kind, err)
-			}
-		}
-		if err := os.WriteFile(receiveBlockPendingPath(ws), []byte("block\n"), 0o644); err != nil {
-			t.Fatalf("write pending block: %v", err)
-		}
-	}
-	ended := func(surface string) {
-		t.Helper()
-		for _, kind := range ownerNotifySettleEndedKinds {
-			if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
-				t.Fatalf("%s not-diverged left the %s episode live (stat err=%v)", surface, kind, err)
-			}
-		}
-		if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("%s not-diverged left the pending block waiting (stat err=%v)", surface, err)
-		}
-	}
 	notDiverged := storage.SyncReconcileResult{State: storage.SyncReconcileNotDiverged}
 
-	plant()
+	plantSettleEndedEpisodes(t, ws)
 	var out strings.Builder
 	if err := reportTakeOutcome(testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", notDiverged); err != nil {
 		t.Fatalf("reportTakeOutcome: %v", err)
 	}
-	ended("take")
+	requireSettleEndedEpisodesEnded(t, ws, "take not-diverged")
 
-	plant()
+	plantSettleEndedEpisodes(t, ws)
 	out.Reset()
 	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult: %v", err)
 	}
-	ended("reconcile")
+	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged")
+}
+
+// plantSettleEndedEpisodes leaves a live marker of every kind a settle ends
+// and a pending sync-failure block, the state a settle must clear.
+func plantSettleEndedEpisodes(t *testing.T, ws workspace.Info) {
+	t.Helper()
+	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+		t.Fatalf("mkdir storage dir: %v", err)
+	}
+	for _, kind := range ownerNotifySettleEndedKinds {
+		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte("fp"), 0o644); err != nil {
+			t.Fatalf("write %s marker: %v", kind, err)
+		}
+	}
+	if err := os.WriteFile(receiveBlockPendingPath(ws), []byte("block\n"), 0o644); err != nil {
+		t.Fatalf("write pending block: %v", err)
+	}
+}
+
+// requireSettleEndedEpisodesEnded fails unless every marker a settle ends and
+// the pending block are gone; surface names what was supposed to end them.
+func requireSettleEndedEpisodesEnded(t *testing.T, ws workspace.Info, surface string) {
+	t.Helper()
+	for _, kind := range ownerNotifySettleEndedKinds {
+		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s left the %s episode live (stat err=%v)", surface, kind, err)
+		}
+	}
+	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s left the pending block waiting (stat err=%v)", surface, err)
+	}
 }
 
 // TestOwnerNotifyEventFingerprint pins the episode identity: a divergence
@@ -331,8 +339,9 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 // side: an explicit pull or reconcile whose engine call returns a schema refusal
 // renders the contract AND pages the owner, since on a checkout with no
 // automatic receive that command is the only detector. A push class returned
-// through the same point pages nobody: the push half owns it. An error that is
-// no sync failure passes through untouched.
+// through the same point pages nobody and is reported on stderr as a bug: no
+// pull or reconcile pushes, so the push half, which owns that class, never saw
+// it. An error that is no sync failure passes through untouched.
 func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
@@ -354,12 +363,16 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 	}
 
 	diverged := storage.PushDivergedError{Remote: remoteName(t, "origin"), Branch: "master", Refusal: errors.New("rejected")}
-	err = surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, diverged)
+	var reported bytes.Buffer
+	err = surfaceSyncFailure(ctx, &reported, runEnv(t), ws, diverged)
 	if !errors.As(err, &failure) || failure.Failure.Class != syncFailurePushDiverged {
 		t.Fatalf("surfaceSyncFailure(diverged push) = %v, want the push_diverged contract", err)
 	}
 	if payload, _ := os.ReadFile(sink); string(payload) != "schema_ceiling_lift\n" {
 		t.Fatalf("a push class paged from the receive half: %q", payload)
+	}
+	if !strings.Contains(reported.String(), `"push_diverged" reached the receive half`) {
+		t.Fatalf("a push class at the receive half was not reported as a bug; stderr=%q", reported.String())
 	}
 
 	plain := errors.New("remote unreachable")
@@ -374,20 +387,9 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 func TestEndSettleEndedEpisodesClearsEveryKind(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		t.Fatalf("mkdir storage dir: %v", err)
-	}
-	for _, kind := range ownerNotifySettleEndedKinds {
-		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte("fp"), 0o644); err != nil {
-			t.Fatalf("write %s marker: %v", kind, err)
-		}
-	}
+	plantSettleEndedEpisodes(t, ws)
 	endSettleEndedEpisodes(testStderr(t), ws)
-	for _, kind := range ownerNotifySettleEndedKinds {
-		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("a settle left the %s episode live (stat err=%v)", kind, err)
-		}
-	}
+	requireSettleEndedEpisodesEnded(t, ws, "a settle")
 }
 
 // TestSyncReceiveOutcomeSettledCleanly pins which receive outcomes end a

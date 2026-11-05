@@ -155,7 +155,7 @@ func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 // the owner, since an explicit `lit sync pull` or `lit sync reconcile` is the
 // first — on a checkout with no automatic receive, the only — detector of a
 // schema refusal. [LAW:dataflow-not-control-flow] every error passes through;
-// the class decides, so a push class returned here pages nobody twice.
+// the class decides.
 // [LAW:single-enforcer] the five foreground error paths share this one point.
 func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, err error) error {
 	err = asSyncFailure(err)
@@ -169,12 +169,18 @@ func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, 
 // notifyOwnerForFailure is the receive half's one detection point: every
 // surface that holds a sync failure — the automatic receive, a held pull or
 // reconcile, doctor, a foreground engine error — hands it here, and the class
-// decides whether the owner hears. [LAW:single-enforcer]
-// [LAW:dataflow-not-control-flow]
+// decides whether the owner hears. Every class a receive-side surface can
+// produce maps, so a class that does not is a push class, and no pull,
+// reconcile, receive or doctor pushes: it is reported as the bug it is rather
+// than passing as a refusal the push half will page, which it never saw.
+// [LAW:single-enforcer] [LAW:no-silent-failure]
 func notifyOwnerForFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, failure SyncFailure) {
-	if ev, ok := ownerNotifyEventForFailure(failure); ok {
-		maybeNotifyOwner(ctx, stderr, env, ws, ev)
+	ev, ok := ownerNotifyEventForFailure(failure)
+	if !ok {
+		fmt.Fprintf(stderr, "lit: sync failure %q reached the receive half of the owner channel, which pages no push class; the owner was not paged — this is a bug; please report it\n", failure.Class)
+		return
 	}
+	maybeNotifyOwner(ctx, stderr, env, ws, ev)
 }
 
 // ownerNotifyMarkerPath is the per-kind sent marker: its content is the episode
