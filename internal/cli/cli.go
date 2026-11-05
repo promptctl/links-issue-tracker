@@ -52,8 +52,8 @@ func Run(ctx context.Context, inv Invocation) (err error) {
 	inv.Stderr = serializeWrites(inv.Stderr)
 	recorder := beginInvocation(time.Now(), inv.Dir, inv.Env)
 	inv = inv.withEnv(envInTrace(inv.Env, recorder))
-	record := &invocationRecord{recorder: recorder, stderr: inv.Stderr, env: inv.Env, gitSpawnsBefore: inv.Env.GitSpawns()}
-	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.close(interruptedEnd(time.Now(), signal, code)) })
+	record := &invocationRecord{ctx: ctx, recorder: recorder, stderr: inv.Stderr, env: inv.Env, gitSpawnsBefore: inv.Env.GitSpawns()}
+	interrupt.BeforeHardExit(ctx, func(signal string, code int) { record.closeInterrupted(interruptedEnd(time.Now(), signal, code)) })
 	defer func() {
 		panicked := recover()
 		record.close(invocationEnd(time.Now(), err, panicked))

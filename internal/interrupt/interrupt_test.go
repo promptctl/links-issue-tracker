@@ -143,7 +143,7 @@ func TestEscalationRunsTheHooksBeforeExiting(t *testing.T) {
 	BeforeHardExit(ctx, func(signal string, code int) { calls = append(calls, fmt.Sprintf("first %s %d", signal, code)) })
 	BeforeHardExit(ctx, func(signal string, code int) { calls = append(calls, fmt.Sprintf("second %s %d", signal, code)) })
 
-	escalation(hooks, time.Hour, func(code int) { calls = append(calls, fmt.Sprintf("exit %d", code)) })(syscall.SIGTERM)
+	escalation(hooks, &exitDecision{}, time.Hour, func(code int) { calls = append(calls, fmt.Sprintf("exit %d", code)) })(syscall.SIGTERM)
 
 	if got, want := strings.Join(calls, ", "), "first SIGTERM 143, second SIGTERM 143, exit 143"; got != want {
 		t.Errorf("escalation ran %q, want %q", got, want)
@@ -160,7 +160,7 @@ func TestAStuckHookDoesNotStopTheHardExit(t *testing.T) {
 	BeforeHardExit(ctx, func(string, int) { <-stuck })
 
 	exited := make(chan int, 1)
-	go escalation(hooks, 10*time.Millisecond, func(code int) { exited <- code })(syscall.SIGINT)
+	go escalation(hooks, &exitDecision{}, 10*time.Millisecond, func(code int) { exited <- code })(syscall.SIGINT)
 	select {
 	case code := <-exited:
 		if code != 130 {
@@ -168,6 +168,68 @@ func TestAStuckHookDoesNotStopTheHardExit(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a stuck hook held the hard exit past its budget")
+	}
+}
+
+// A clean end that claimed the exit before the grace ran out keeps its code:
+// the hard exit still ends the process, but with the code the clean end
+// recorded, not 128+signum.
+func TestAHardExitAfterACleanClaimExitsWithTheCleanCode(t *testing.T) {
+	hooks := &hardExitHooks{}
+	decision := &exitDecision{}
+	ctx := context.WithValue(context.WithValue(context.Background(), hardExitHooksKey{}, hooks), exitDecisionKey{}, decision)
+	if _, ok := Claim(ctx, 3); !ok {
+		t.Fatal("a claim before any hard exit lost")
+	}
+	var hookCode, exited int
+	BeforeHardExit(ctx, func(_ string, code int) { hookCode = code })
+	escalation(hooks, decision, time.Hour, func(code int) { exited = code })(syscall.SIGTERM)
+	if exited != 3 || hookCode != 3 {
+		t.Errorf("hard exit after a clean claim of 3 exited %d (hooks told %d), want 3", exited, hookCode)
+	}
+}
+
+// A clean end that arrives after the hard exit claimed loses, and is told the
+// interrupt and code the process exits with.
+func TestACleanClaimAfterTheHardExitLosesToIt(t *testing.T) {
+	decision := &exitDecision{}
+	ctx := context.WithValue(context.Background(), exitDecisionKey{}, decision)
+	if code := decision.claimHard("SIGINT", 130); code != 130 {
+		t.Fatalf("first hard claim decided %d, want 130", code)
+	}
+	lost, ok := Claim(ctx, 1)
+	if ok || lost != (HardExit{Signal: "SIGINT", Code: 130}) {
+		t.Errorf("Claim after the hard exit = %+v, %v; want lost to SIGINT 130", lost, ok)
+	}
+}
+
+// A clean end racing the hard exit: whichever claims first, the code the
+// clean end is told it lost to (or kept) is the code the process exits with.
+func TestACleanEndRacingTheHardExitAgreesWithIt(t *testing.T) {
+	for range 200 {
+		hooks := &hardExitHooks{}
+		decision := &exitDecision{}
+		ctx := context.WithValue(context.WithValue(context.Background(), hardExitHooksKey{}, hooks), exitDecisionKey{}, decision)
+		recorded := make(chan int, 1)
+		go func() {
+			code := 1
+			if lost, ok := Claim(ctx, code); !ok {
+				code = lost.Code
+			}
+			recorded <- code
+		}()
+		exited := make(chan int, 1)
+		go escalation(hooks, decision, time.Hour, func(code int) { exited <- code })(syscall.SIGTERM)
+		if r, e := <-recorded, <-exited; r != e {
+			t.Fatalf("clean end recorded %d, process exited %d", r, e)
+		}
+	}
+}
+
+// A context no Guard derived is never hard-exited, so its claim always holds.
+func TestAnUnguardedClaimHolds(t *testing.T) {
+	if _, ok := Claim(context.Background(), 1); !ok {
+		t.Error("an unguarded claim lost")
 	}
 }
 

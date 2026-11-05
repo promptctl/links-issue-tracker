@@ -15,9 +15,10 @@ func main() {
 	// lifecycle has one owner: a SIGINT/SIGTERM cancels this context (so the
 	// post-write auto-sync abandons cleanly and releases the store's commit lock)
 	// and, if the in-flight work ignores the cancel, escalates to a hard exit so
-	// the process never becomes SIGKILL-only.
-	ctx, stop := interrupt.Guard(context.Background(), interrupt.DefaultGrace)
-	defer stop()
+	// the process never becomes SIGKILL-only. It is also the one way the
+	// process exits: exit ends it with the code the guard decided, which is the
+	// code the invocation's event records.
+	ctx, exit := interrupt.Guard(context.Background(), interrupt.DefaultGrace)
 	// [LAW:effects-at-boundaries] The one place lit reads its process: the run
 	// below is handed everything it would otherwise read from it.
 	// The released-schema ceiling and the raise policy are read from this
@@ -25,7 +26,7 @@ func main() {
 	// every store open.
 	released, err := version.ReadReleasedSchemaCeiling()
 	if err != nil {
-		os.Exit(cli.WriteCommandError(os.Stderr, err))
+		exit(cli.WriteCommandError(os.Stderr, err))
 	}
 	inv := cli.Invocation{
 		Dir:    cli.WorkingDirOf(os.Getwd()),
@@ -36,6 +37,7 @@ func main() {
 		Stderr: os.Stderr,
 	}
 	if err := cli.Run(ctx, inv); err != nil {
-		os.Exit(cli.WriteCommandError(os.Stderr, err))
+		exit(cli.WriteCommandError(os.Stderr, err))
 	}
+	exit(cli.ExitOK)
 }

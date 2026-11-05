@@ -50,38 +50,107 @@ const DefaultGrace = gitcmd.CancelBound + time.Second
 var interruptSignals = map[os.Signal]string{syscall.SIGINT: "SIGINT", syscall.SIGTERM: "SIGTERM"}
 
 // Guard installs interrupt→cancel over parent and returns the derived context
-// plus a stop func the entrypoint defers for the normal (no-signal) exit path.
+// plus the exit func the entrypoint ends the process through, on every path.
 //
 // On the first interrupt it cancels the context so ctx-aware work abandons and
 // deferred cleanup runs, then arms escalation so a ctx-ignoring operation can
 // never leave the process terminable only by SIGKILL: the OS default disposition
 // is restored (a second interrupt terminates immediately) AND a grace timer
-// hard-exits with the conventional 128+signum code if the clean path has not
-// returned within grace, after running what the guarded work registered with
-// BeforeHardExit.
+// hard-exits if the clean path has not returned within grace, after running
+// what the guarded work registered with BeforeHardExit.
 //
-// stop() must be called on the normal exit path; it disarms the handler and
-// releases the internal goroutine. It is a no-op if an interrupt already fired.
-func Guard(parent context.Context, grace time.Duration) (context.Context, func()) {
+// The process's exit code is decided once, here: by Claim (or exit) on the
+// clean path, or by the hard exit with the conventional 128+signum code, which
+// ever comes first. A hard exit after a clean claim exits with the claimed
+// code; an exit after a hard claim waits for the hard exit to end the process.
+// [LAW:single-enforcer]
+func Guard(parent context.Context, grace time.Duration) (context.Context, func(code int)) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, slices.Collect(maps.Keys(interruptSignals))...)
 	hooks := &hardExitHooks{}
-	ctx, cancel := context.WithCancel(context.WithValue(parent, hardExitHooksKey{}, hooks))
+	decision := &exitDecision{}
+	ctx, cancel := context.WithCancel(context.WithValue(context.WithValue(parent, hardExitHooksKey{}, hooks), exitDecisionKey{}, decision))
 	done := make(chan struct{})
 
 	go watch(sigs, done, cancel, func() { signal.Stop(sigs) }, grace,
-		escalation(hooks, hardExitHookBudget, os.Exit))
+		escalation(hooks, decision, hardExitHookBudget, os.Exit))
 
-	var stopped bool
-	return ctx, func() {
-		if stopped {
-			return
-		}
-		stopped = true
+	return ctx, func(code int) {
+		code = decision.exitWith(code)
 		signal.Stop(sigs)
 		cancel()
 		close(done)
+		os.Exit(code)
 	}
+}
+
+type exitDecisionKey struct{}
+
+// exitDecision is the process's exit code, decided once by whichever of the
+// clean path and the hard exit claims it first.
+type exitDecision struct {
+	mu      sync.Mutex
+	claimed bool
+	hard    bool
+	signal  string
+	code    int
+}
+
+// HardExit is the claim a clean end lost to: the interrupt whose grace ran
+// out, and the code the process exits with.
+type HardExit struct {
+	Signal string
+	Code   int
+}
+
+// claimClean claims the exit with code, or reports the hard exit that
+// already holds it. A clean claim already made stands.
+func (d *exitDecision) claimClean(code int) (HardExit, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.claimed {
+		d.claimed, d.code = true, code
+	}
+	if d.hard {
+		return HardExit{Signal: d.signal, Code: d.code}, false
+	}
+	return HardExit{}, true
+}
+
+// claimHard is the hard exit's claim: the code it exits with, which is the
+// clean path's when the clean path claimed first.
+func (d *exitDecision) claimHard(signal string, code int) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.claimed {
+		d.claimed, d.hard, d.signal, d.code = true, true, signal, code
+	}
+	return d.code
+}
+
+// exitWith is the code the entrypoint exits with: the clean claim's. When
+// the hard exit holds the claim, the process is already being ended by it,
+// so this never returns.
+func (d *exitDecision) exitWith(code int) int {
+	if _, ok := d.claimClean(code); !ok {
+		select {}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.code
+}
+
+// Claim claims the process's exit with code for the clean end of the guarded
+// work, before that end is recorded, so what is recorded is what the process
+// exits with. It returns false, with the hard exit's signal and code, when the
+// grace already ran out and the hard exit holds the claim. A context no Guard
+// derived is never hard-exited, and its claim always holds.
+func Claim(ctx context.Context, code int) (HardExit, bool) {
+	decision, guarded := ctx.Value(exitDecisionKey{}).(*exitDecision)
+	if !guarded {
+		return HardExit{}, true
+	}
+	return decision.claimClean(code)
 }
 
 // hardExitHookBudget bounds how long the hooks registered with BeforeHardExit
@@ -133,11 +202,12 @@ func (h *hardExitHooks) run(signal string, code int, budget time.Duration) {
 	}
 }
 
-// escalation is the guard's hard exit: the registered hooks, within their
-// budget, then exit with the conventional code for the signal.
-func escalation(hooks *hardExitHooks, budget time.Duration, exit func(int)) func(os.Signal) {
+// escalation is the guard's hard exit: claim the exit, run the registered
+// hooks within their budget, then exit with the claimed code — the
+// conventional code for the signal, or the clean end's when it claimed first.
+func escalation(hooks *hardExitHooks, decision *exitDecision, budget time.Duration, exit func(int)) func(os.Signal) {
 	return func(sig os.Signal) {
-		code := exitCode(sig)
+		code := decision.claimHard(interruptSignals[sig], exitCode(sig))
 		hooks.run(interruptSignals[sig], code, budget)
 		exit(code)
 	}

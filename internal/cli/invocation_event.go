@@ -16,6 +16,7 @@ import (
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -285,8 +286,14 @@ func interruptedEnd(at time.Time, signal string, code int) telemetry.End {
 // gitSpawnsBefore is the env's git count when the invocation began, so the
 // event's git.lit_spawns is this invocation's even when one Env serves
 // several in-process runs one after another.
+//
+// The clean end claims the process's exit code from the interrupt guard
+// before it writes, so the event's exit_code is the code the process exits
+// with: a clean end that lost the claim to the hard exit is written as the
+// interruption it lost to.
 type invocationRecord struct {
-	once            sync.Once
+	ctx             context.Context
+	once           sync.Once
 	recorder        *telemetry.Recorder
 	stderr          io.Writer
 	env             environ.Env
@@ -295,14 +302,27 @@ type invocationRecord struct {
 
 func (r *invocationRecord) close(end telemetry.End) {
 	r.once.Do(func() {
-		// Every git lit itself started for the invocation, zero included, on
-		// every way it can end. Dolt's own git inside a fetch or push is not
-		// started through the Env and is not in it. [LAW:nothing-unseen]
-		counts := map[string]int{"git.lit_spawns": int(r.env.GitSpawns() - r.gitSpawnsBefore)}
-		maps.Copy(counts, end.Counts)
-		end.Counts = counts
-		recordInvocation(r.stderr, r.env, r.recorder.Finish(end))
+		if lost, ok := interrupt.Claim(r.ctx, end.ExitCode); !ok {
+			end = interruptedEnd(end.At, lost.Signal, lost.Code)
+		}
+		r.write(end)
 	})
+}
+
+// closeInterrupted is the hard exit's end: the hard exit already holds the
+// claim, so it is written as it is.
+func (r *invocationRecord) closeInterrupted(end telemetry.End) {
+	r.once.Do(func() { r.write(end) })
+}
+
+func (r *invocationRecord) write(end telemetry.End) {
+	// Every git lit itself started for the invocation, zero included, on
+	// every way it can end. Dolt's own git inside a fetch or push is not
+	// started through the Env and is not in it. [LAW:nothing-unseen]
+	counts := map[string]int{"git.lit_spawns": int(r.env.GitSpawns() - r.gitSpawnsBefore)}
+	maps.Copy(counts, end.Counts)
+	end.Counts = counts
+	recordInvocation(r.stderr, r.env, r.recorder.Finish(end))
 }
 
 // recordInvocation is the export edge: the one place an invocation's event
