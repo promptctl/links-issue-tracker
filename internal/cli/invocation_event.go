@@ -293,7 +293,7 @@ func interruptedEnd(at time.Time, signal string, code int) telemetry.End {
 // interruption it lost to.
 type invocationRecord struct {
 	ctx             context.Context
-	once           sync.Once
+	once            sync.Once
 	recorder        *telemetry.Recorder
 	stderr          io.Writer
 	env             environ.Env
