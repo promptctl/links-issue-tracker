@@ -103,10 +103,12 @@ func TestAPassAfterAPushRotatesTheEngineAndTheNextPushLands(t *testing.T) {
 // marking, which Dolt's error names by its SaveHashes step, between a deadline
 // that cut before marking and one whose pass ran to its end. Marking's width is
 // the machine's (about 1ms on a development machine), so the search bisects
-// rather than stepping a fixed amount a fast machine can step over. A Dolt that
-// lost the cut runs the pass to its end at every deadline, and the search closes
-// to 10µs, a hundredth of marking, without finding one. A cut pass leaves the
-// journal uncollected, and the store then takes a write.
+// rather than stepping a fixed amount a fast machine can step over. The machine
+// is noisy and every pass that runs changes the store, so a bisection that
+// closes to 10µs, a hundredth of marking, starts again from its first bracket;
+// a Dolt that lost the cut never names SaveHashes, and the search gives up
+// after eight rounds. A cut pass leaves the journal uncollected, and the store
+// then takes a write.
 func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -116,14 +118,17 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 		t.Fatalf("OpenMaintenance() error = %v", err)
 	}
 	commitPayload(t, ctx, s, "before")
-	before, err := s.measureCompactionSignals()
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	const resolution = 10 * time.Microsecond
+	const (
+		resolution = 10 * time.Microsecond
+		rounds     = 8
+	)
 	var probes []string
 	probe := func(deadline time.Duration) deadlineCut {
+		before, err := s.measureCompactionSignals()
+		if err != nil {
+			t.Fatal(err)
+		}
 		cut, cancel := context.WithTimeout(ctx, deadline)
 		outcome, err := s.SyncCompact(cut, GCFull)
 		cancel()
@@ -132,47 +137,35 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 		switch landed {
 		case cutInvalid:
 			t.Fatalf("SyncCompact() under %s = %+v, %v; want a pass cut by its deadline, or one that ran", deadline, outcome, err)
-		case cutLate:
-			// The pass collected the journal: give the next probe one to
-			// collect, and measure the journal it faces.
-			commitPayload(t, ctx, s, "again")
-			if before, err = s.measureCompactionSignals(); err != nil {
+		case cutMarking:
+			after, err := s.measureCompactionSignals()
+			if err != nil {
 				t.Fatal(err)
 			}
+			if after.JournalBytes < before.JournalBytes {
+				t.Fatalf("journal went from %d to %d bytes: the collection ran on past its deadline", before.JournalBytes, after.JournalBytes)
+			}
+		case cutLate:
+			// The pass collected the journal: give the next probe one to collect.
+			commitPayload(t, ctx, s, "again")
 		}
 		return landed
 	}
-	var low, high time.Duration
-	landed := cutEarly
-	for high = time.Millisecond; landed == cutEarly; high *= 2 {
-		if high > time.Minute {
-			t.Fatalf("every deadline up to %s cut before marking: %v", high, probes)
+	var early time.Duration
+	for late := time.Millisecond; ; early, late = late, late*2 {
+		if late > time.Minute {
+			t.Fatalf("every deadline up to %s cut before marking: %v", early, probes)
 		}
-		if landed = probe(high); landed == cutEarly {
-			low = high
+		landed := probe(late)
+		if landed == cutEarly {
+			continue
 		}
-	}
-	high /= 2
-	for landed != cutMarking {
-		if high-low <= resolution {
-			t.Fatalf("no deadline between %s (cut before marking) and %s (ran to its end) cut inside marking: the cut is lost; probes %v", low, high, probes)
+		if landed == cutLate && !bisectForMarking(probe, early, late, resolution, rounds) {
+			t.Fatalf("no deadline between %s (cut before marking) and %s (ran to its end) cut inside marking in %d rounds: the cut is lost; probes %v", early, late, rounds, probes)
 		}
-		mid := low + (high-low)/2
-		switch landed = probe(mid); landed {
-		case cutEarly:
-			low = mid
-		case cutLate:
-			high = mid
-		}
+		break
 	}
 	t.Logf("cut inside marking after probes %v", probes)
-	after, err := s.measureCompactionSignals()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.JournalBytes < before.JournalBytes {
-		t.Fatalf("journal went from %d to %d bytes: the collection ran on past its deadline", before.JournalBytes, after.JournalBytes)
-	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -183,6 +176,26 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	}
 	defer reopened.Close()
 	commitPayload(t, ctx, reopened, "after")
+}
+
+// bisectForMarking searches between a deadline that cut before marking and one
+// whose pass ran to its end for one that cuts inside marking. Each round closes
+// to resolution; a round that finds nothing starts again from the first bracket.
+func bisectForMarking(probe func(time.Duration) deadlineCut, low, high, resolution time.Duration, rounds int) bool {
+	for range rounds {
+		for lo, hi := low, high; hi-lo > resolution; {
+			mid := lo + (hi-lo)/2
+			switch probe(mid) {
+			case cutMarking:
+				return true
+			case cutEarly:
+				lo = mid
+			case cutLate:
+				hi = mid
+			}
+		}
+	}
+	return false
 }
 
 // deadlineCut is where a deadline landed in one compaction pass.
