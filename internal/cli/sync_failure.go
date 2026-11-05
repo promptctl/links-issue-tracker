@@ -111,6 +111,26 @@ const (
 	syncFailureSchemaLoweringRequiresHold syncFailureClass = "schema_lowering_requires_hold"
 )
 
+// syncFailureClasses is the closed set, in the order declared above. A class
+// is added here with its constant, and the tests that partition the set — which
+// classes render their own block, which page the owner from which half of the
+// channel — range over it, so a class added to the constants alone fails them
+// rather than falling silently to a default arm. [LAW:one-source-of-truth]
+var syncFailureClasses = []syncFailureClass{
+	syncFailureProseHeld,
+	syncFailureDivergedUnresolved,
+	syncFailureRemoteSchemaAhead,
+	syncFailureUnrelatedHistories,
+	syncFailureIDCollision,
+	syncFailureReceiveUnsettled,
+	syncFailurePushDiverged,
+	syncFailureForcedPushStale,
+	syncFailureSchemaCeiling,
+	syncFailureSchemaCeilingLift,
+	syncFailureSchemaRaiseRequiresRelease,
+	syncFailureSchemaLoweringRequiresHold,
+}
+
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
 // which a divergence stops reading as "reconcile in progress" and becomes an
 // incident an agent must resolve now. Either signal alone trips it: a slow drip

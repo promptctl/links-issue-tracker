@@ -595,9 +595,7 @@ func doctorLeaf() appLeaf {
 		exitErr := doctorDivergenceExit(syncReport)
 		var syncFailure SyncFailureError
 		if errors.As(exitErr, &syncFailure) {
-			if ev, ok := ownerNotifyEventForFailure(syncFailure.Failure); ok {
-				maybeNotifyOwner(ctx, inv.Stderr, inv.Env, ap.Workspace, ev)
-			}
+			notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ap.Workspace, syncFailure.Failure)
 		}
 		// A workspace that cannot mint is not healthy, so doctor reports the
 		// state above and then exits on it — after the owner notification, which

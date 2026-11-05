@@ -161,7 +161,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 	// `lit sync reconcile` — ends the episode the same way, so a block left
 	// before it is retired too.
 	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, unconverged, now)
-	endDivergenceEpisode(testStderr(t), ws)
+	endSettleEndedEpisodes(testStderr(t), ws)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a converged divergence left the receive's block pending (stat err = %v)", err)
 	}

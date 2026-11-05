@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -73,25 +74,121 @@ func TestOwnerNotifyDue(t *testing.T) {
 	}
 }
 
-// TestOwnerNotifyEventForFailure pins the trigger set to the ticket's "real
-// divergence" definition: every divergence class notifies with the failure's own
-// domain sentence; a remote-schema-ahead block (a version condition, not a
-// divergence) does not. The list is spelled out rather than counted, so adding a
-// class to the switch without adding it here is the failure this test exists to
-// catch.
+// TestOwnerNotifyEventForFailure pins the partition of the closed class set:
+// every divergence class, an unsettled receive, and every schema refusal the
+// receive side detects notifies with the failure's own domain sentence; a push
+// class does not, because the push half of the channel pages it as push_failed.
+// Both halves are spelled out by hand and then checked against
+// syncFailureClasses, so a class added to the constants and to neither list
+// here fails this test instead of rendering a block that pages nobody.
 func TestOwnerNotifyEventForFailure(t *testing.T) {
 	t.Parallel()
-	for _, class := range []syncFailureClass{syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision} {
-		ev, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"})
-		if !ok {
-			t.Fatalf("class %q did not map to an owner notification", class)
+	// The schema classes carry the store's typed refusal, which their summary
+	// reads, so they are built as a surface would build them.
+	paging := []SyncFailure{
+		{Class: syncFailureProseHeld, Remote: "origin", Branch: "master"},
+		{Class: syncFailureDivergedUnresolved, Remote: "origin", Branch: "master"},
+		{Class: syncFailureUnrelatedHistories, Remote: "origin", Branch: "master"},
+		{Class: syncFailureIDCollision, Remote: "origin", Branch: "master"},
+		{Class: syncFailureReceiveUnsettled, Remote: "origin", Branch: "master",
+			StoppedAt: receiveStepSettle, UnsettledSince: time.Now().Add(-time.Hour), Age: time.Hour},
+		{Class: syncFailureRemoteSchemaAhead, Remote: "origin", Branch: "master",
+			RemoteAhead: &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}},
+		{Class: syncFailureSchemaCeilingLift, Remote: "origin", Branch: "master",
+			LiftRefused: &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}}},
+	}
+	pushClasses := []syncFailureClass{syncFailurePushDiverged, syncFailureForcedPushStale, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease, syncFailureSchemaLoweringRequiresHold}
+
+	placed := map[syncFailureClass]string{}
+	for _, failure := range paging {
+		placed[failure.Class] = "paging"
+	}
+	for _, class := range pushClasses {
+		if placed[class] != "" {
+			t.Fatalf("class %q is listed as both paging and a push class", class)
 		}
-		if ev.Kind != ownerNotifyKind(class) || ev.Remote != "origin" || ev.Branch != "master" || ev.Summary == "" {
-			t.Fatalf("class %q mapped to %+v, want its own kind/target and a summary", class, ev)
+		placed[class] = "push"
+	}
+	for _, class := range syncFailureClasses {
+		if placed[class] == "" {
+			t.Fatalf("class %q is in syncFailureClasses but this test places it in neither half of the owner channel; decide which half pages it", class)
 		}
 	}
-	if _, ok := ownerNotifyEventForFailure(SyncFailure{Class: syncFailureRemoteSchemaAhead}); ok {
-		t.Fatal("remote-schema-ahead mapped to an owner notification; it is not a divergence")
+	if len(placed) != len(syncFailureClasses) {
+		t.Fatalf("this test places %d classes, syncFailureClasses holds %d; a class listed here is not in the closed set", len(placed), len(syncFailureClasses))
+	}
+
+	for _, failure := range paging {
+		ev, ok := ownerNotifyEventForFailure(failure)
+		if !ok {
+			t.Fatalf("class %q did not map to an owner notification", failure.Class)
+		}
+		if ev.Kind != ownerNotifyKind(failure.Class) || ev.Remote != "origin" || ev.Branch != "master" || ev.Summary == "" {
+			t.Fatalf("class %q mapped to %+v, want its own kind/target and a summary", failure.Class, ev)
+		}
+	}
+	for _, class := range pushClasses {
+		if _, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"}); ok {
+			t.Fatalf("push class %q mapped to an owner notification; the push half already pages it as push_failed", class)
+		}
+	}
+}
+
+// TestForegroundReconcileNotDivergedEndsTheEpisodes pins that a foreground
+// reconcile answering not-diverged ends every settle-ended episode and retires
+// the pending block, the schema kinds included: the store raises the receive
+// half's schema refusals only inside the replay of a diverged plan, so a
+// not-diverged answer proves every condition that half pages is gone. Two
+// reviews read this arm the opposite way; the wiring is pinned so the next
+// reader has the answer.
+func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	notDiverged := storage.SyncReconcileResult{State: storage.SyncReconcileNotDiverged}
+
+	plantSettleEndedEpisodes(t, ws)
+	var out strings.Builder
+	if err := reportTakeOutcome(testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", notDiverged); err != nil {
+		t.Fatalf("reportTakeOutcome: %v", err)
+	}
+	requireSettleEndedEpisodesEnded(t, ws, "take not-diverged")
+
+	plantSettleEndedEpisodes(t, ws)
+	out.Reset()
+	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
+		t.Fatalf("reportReconcileResult: %v", err)
+	}
+	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged")
+}
+
+// plantSettleEndedEpisodes leaves a live marker of every kind a settle ends
+// and a pending sync-failure block, the state a settle must clear.
+func plantSettleEndedEpisodes(t *testing.T, ws workspace.Info) {
+	t.Helper()
+	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+		t.Fatalf("mkdir storage dir: %v", err)
+	}
+	for _, kind := range ownerNotifySettleEndedKinds {
+		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte("fp"), 0o644); err != nil {
+			t.Fatalf("write %s marker: %v", kind, err)
+		}
+	}
+	if err := os.WriteFile(receiveBlockPendingPath(ws), []byte("block\n"), 0o644); err != nil {
+		t.Fatalf("write pending block: %v", err)
+	}
+}
+
+// requireSettleEndedEpisodesEnded fails unless every marker a settle ends and
+// the pending block are gone; surface names what was supposed to end them.
+func requireSettleEndedEpisodesEnded(t *testing.T, ws workspace.Info, surface string) {
+	t.Helper()
+	for _, kind := range ownerNotifySettleEndedKinds {
+		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s left the %s episode live (stat err=%v)", surface, kind, err)
+		}
+	}
+	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s left the pending block waiting (stat err=%v)", surface, err)
 	}
 }
 
@@ -236,6 +333,63 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); err != nil {
 		t.Fatalf("a diverged push ended the live failure episode: %v", err)
 	}
+}
+
+// TestSurfaceSyncFailurePagesTheOwner pins the foreground half of the receive
+// side: an explicit pull or reconcile whose engine call returns a schema refusal
+// renders the contract AND pages the owner, since on a checkout with no
+// automatic receive that command is the only detector. A push class returned
+// through the same point pages nobody and is reported on stderr as a bug: no
+// pull or reconcile pushes, so the push half, which owns that class, never saw
+// it. An error that is no sync failure passes through untouched.
+func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	sink := filepath.Join(t.TempDir(), "notifications")
+	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	ctx := context.Background()
+
+	lift := &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}}
+	err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, lift)
+	var failure SyncFailureError
+	if !errors.As(err, &failure) || failure.Failure.Class != syncFailureSchemaCeilingLift {
+		t.Fatalf("surfaceSyncFailure(lift) = %v, want the schema_ceiling_lift contract", err)
+	}
+	if payload, readErr := os.ReadFile(sink); readErr != nil || string(payload) != "schema_ceiling_lift\n" {
+		t.Fatalf("a refused lift did not page exactly once: payload=%q err=%v", payload, readErr)
+	}
+	if _, statErr := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyKind(syncFailureSchemaCeilingLift))); statErr != nil {
+		t.Fatalf("a refused lift left no episode marker: %v", statErr)
+	}
+
+	diverged := storage.PushDivergedError{Remote: remoteName(t, "origin"), Branch: "master", Refusal: errors.New("rejected")}
+	var reported bytes.Buffer
+	err = surfaceSyncFailure(ctx, &reported, runEnv(t), ws, diverged)
+	if !errors.As(err, &failure) || failure.Failure.Class != syncFailurePushDiverged {
+		t.Fatalf("surfaceSyncFailure(diverged push) = %v, want the push_diverged contract", err)
+	}
+	if payload, _ := os.ReadFile(sink); string(payload) != "schema_ceiling_lift\n" {
+		t.Fatalf("a push class paged from the receive half: %q", payload)
+	}
+	if !strings.Contains(reported.String(), `"push_diverged" reached the receive half`) {
+		t.Fatalf("a push class at the receive half was not reported as a bug; stderr=%q", reported.String())
+	}
+
+	plain := errors.New("remote unreachable")
+	if err := surfaceSyncFailure(ctx, testStderr(t), runEnv(t), ws, plain); err != plain {
+		t.Fatalf("surfaceSyncFailure(plain) = %v, want the error itself", err)
+	}
+}
+
+// TestEndSettleEndedEpisodesClearsEveryKind pins the group a settle ends: a
+// live marker of every kind in it is gone after one settle, so the next
+// episode of that kind pages immediately instead of being deduped for a day.
+func TestEndSettleEndedEpisodesClearsEveryKind(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	plantSettleEndedEpisodes(t, ws)
+	endSettleEndedEpisodes(testStderr(t), ws)
+	requireSettleEndedEpisodesEnded(t, ws, "a settle")
 }
 
 // TestSyncReceiveOutcomeSettledCleanly pins which receive outcomes end a

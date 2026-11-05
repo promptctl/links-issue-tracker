@@ -86,7 +86,7 @@ func syncReconcileShowLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcile(ctx, remote, branch)
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
 	}}
@@ -134,7 +134,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcileResolved(ctx, remote, branch, resolutions, resolveActor(inv.Env))
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, proseResolveCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, proseResolveCommand, remote, branch, result, true)
 	}}
@@ -219,17 +219,15 @@ func syncReconcileTakeLeaf() syncLeaf {
 					Metadata:  map[string]string{"remote": remote.String(), "sync_branch": branch},
 				})
 
-				if ev, ok := ownerNotifyEventForFailure(SyncFailure{
+				notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, SyncFailure{
 					Class:  syncFailureUnrelatedHistories,
 					Remote: remote.String(),
 					Branch: branch,
-				}); ok {
-					maybeNotifyOwner(ctx, inv.Stderr, inv.Env, ws, ev)
-				}
+				})
 				return ownerApprovalRefusalError{Approval: approval, Remote: remote.String(), Branch: branch}
 			}
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, command, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportTakeOutcome(inv.Stderr, inv.Env, inv.Stdout, ws, command, remote, branch, result)
 	}}
@@ -261,7 +259,7 @@ func syncReconcileCombineLeaf() syncLeaf {
 		result, err := reconciler.SyncReconcileCombine(ctx, remote, branch)
 		if err != nil {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
-			return asSyncFailure(err)
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
 	}}
@@ -362,7 +360,7 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 	ref := remote.String() + "/" + branch
 	switch result.State {
 	case storage.SyncReconcileTookRemote:
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		state := "the local backlog now equals " + ref + " and sync is clean (no push needed)"
 		if result.CarriedPurges > 0 {
 			state = fmt.Sprintf("the local backlog now equals %s less what you purged, with %d purge record(s) carried onto it; run `lit sync push` (or let auto-sync) to deliver them", ref, result.CarriedPurges)
@@ -374,7 +372,7 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "the adopted backlog", result.Landing)
 	case storage.SyncReconcileTookLocal:
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		if _, err := fmt.Fprintf(stdout,
 			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\nDROPPED the issue(s) a purge on either side names: %s\n",
 			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)), describeIDSet(purgedIDs(result.Unrelated))); err != nil {
@@ -382,7 +380,11 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "your backlog", result.Landing)
 	case storage.SyncReconcileNotDiverged:
-		endDivergenceEpisode(stderr, ws)
+		// Not diverged ends every episode the receive half pages: the
+		// divergence classes by definition, and the two schema refusals
+		// because the store raises them only inside the replay of a diverged
+		// plan (replayUnderGuard), never from a checkout that is not diverged.
+		endSettleEndedEpisodes(stderr, ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
@@ -466,9 +468,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 			BuildNote:  resolveBuildStatusNote(time.Now()),
 		}}
 		recordSyncHeldTrace(stderr, env, ws, command, failure, metadata)
-		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
 		return failure
 	case storage.SyncReconcileUnrelated:
 		// [LAW:single-enforcer] one contract, every surface — the block is the error's
@@ -485,9 +485,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 			BuildNote: resolveBuildStatusNote(time.Now()),
 		}}
 		recordSyncHeldTrace(stderr, env, ws, command, failure, metadata)
-		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
 		return failure
 	case storage.SyncReconcileProsePending:
 		metadata["pending"] = strconv.Itoa(len(result.Pending))
@@ -514,21 +512,19 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		// A held prose state on the explicit reconcile can be the FIRST detection
 		// (auto-sync disabled), so it notifies like every other surface, de-duplicated
 		// against the automatic receive's earlier detection when there was one.
-		if ev, ok := ownerNotifyEventForFailure(SyncFailure{
+		notifyOwnerForFailure(ctx, stderr, env, ws, SyncFailure{
 			Class:  syncFailureProseHeld,
 			Remote: remote.String(),
 			Branch: branch,
 			Fields: result.Pending,
-		}); ok {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		})
 		if err := renderProsePendingGuidance(stdout, result.Pending, buildNote); err != nil {
 			return err
 		}
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}
 	case storage.SyncReconcileLinearized:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
 			return err
 		}
@@ -541,7 +537,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileCombined:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endDivergenceEpisode(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws)
 		// Report what the union KEPT from each side, so "nothing dropped" is evidenced, not
 		// asserted: the both-sides partition names the kept-local, kept-remote, and
 		// field-merged shared ids. A defensively-absent inventory reads as empty sides, which
@@ -570,7 +566,9 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endDivergenceEpisode(stderr, ws)
+		// Ends every receive-half episode; see reportTakeOutcome's arm for why
+		// the schema refusals end here too.
+		endSettleEndedEpisodes(stderr, ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:

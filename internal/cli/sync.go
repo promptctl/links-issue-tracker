@@ -385,8 +385,8 @@ func syncPullLeaf() syncLeaf {
 			// receive tolerates a transient hiccup. [LAW:no-silent-failure] A remote
 			// schema ahead of this binary surfaces as the one sync-failure contract
 			// (exit ExitValidation as the schema-ahead refusal it wraps, naming
-			// `lit upgrade`), not the raw store refusal.
-			return asSyncFailure(err)
+			// `lit upgrade`), not the raw store refusal, and pages the owner.
+			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
 		// SyncPull succeeding means its internal SyncReceive fetched the remote
 		// successfully (the fetch is the first step of every outcome branch below),
@@ -408,16 +408,14 @@ func syncPullLeaf() syncLeaf {
 			recordSyncHeldTrace(inv.Stderr, inv.Env, ws, "lit sync pull", failure, pullTraceMetadata)
 			// A held pull is a detection moment: the owner hears out-of-band, the day
 			// it happens, not through later archaeology (links-sync-pgct.4).
-			if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-				maybeNotifyOwner(ctx, inv.Stderr, inv.Env, ws, ev)
-			}
+			notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, failure.Failure)
 			return failure
 		}
 		landingMetadata(pullTraceMetadata, result.Landing)
 		recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 		// A pull that completed without a held state converged (or found nothing to
 		// converge): the divergence episode, if one was notified, is over.
-		endDivergenceEpisode(inv.Stderr, ws)
+		endSettleEndedEpisodes(inv.Stderr, ws)
 		return printSyncPullOutcome(inv.Stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State, landing: result.Landing}, *verbose)
 	}}
 }

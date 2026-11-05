@@ -409,10 +409,12 @@ The in-band surfaces above talk to whoever runs the next command — usually an
 agent. The party who can actually *lose work* when sync degrades is the OWNER,
 so lit also carries the event out of the terminal: when it detects a real
 divergence (no common ancestor, a reconcile it could not converge, a held
-prose conflict, an id naming two different tickets), when the automatic receive
-has kept failing to bring fetched history into the checkout for 10 minutes, or
-when a push attempt fails,
-it runs a shell command you configure — e.g. a push to an
+prose conflict, an id naming two different tickets), when a schema refusal
+stops the checkout from settling against the remote (the remote's schema is
+ahead of this lit, or a schema hold refuses the reconcile's lift), when the
+automatic receive has kept failing to bring fetched history into the checkout
+for 10 minutes, or when a push attempt fails, it runs a shell command you
+configure — e.g. a push to an
 [ntfy](https://ntfy.sh) topic — at detection time:
 
 ```toml
@@ -428,7 +430,7 @@ event's facts in the environment:
 
 | variable             | value                                                            |
 | -------------------- | ---------------------------------------------------------------- |
-| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, `id_collision`, `receive_unsettled`, or `push_failed` |
+| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, `id_collision`, `remote_schema_ahead`, `schema_ceiling_lift`, `receive_unsettled`, or `push_failed` |
 | `LIT_NOTIFY_SUMMARY` | the one-sentence domain description of what degraded             |
 | `LIT_NOTIFY_REMOTE`  | the sync remote concerned (may be empty for an unresolved push)  |
 | `LIT_NOTIFY_BRANCH`  | the sync branch concerned                                        |
@@ -438,7 +440,7 @@ Notifications are de-duplicated **per episode**: the first detection of a
 condition fires immediately, re-detections of the same ongoing condition are
 suppressed (re-pinging at most daily while it persists), and the episode ends
 when the condition resolves — a landed push, a converged reconcile, a settle
-after an unsettled run — so the
+after an unsettled run or after a lifted hold or an upgrade — so the
 *next* occurrence notifies immediately again. A failed hook is loud on stderr,
 recorded in the sync traces, and retried on the next detection. Empty (the
 default) configures no channel and runs nothing; `LIT_DISABLE_AUTO_SYNC=1`

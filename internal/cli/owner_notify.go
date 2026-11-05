@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -17,11 +18,11 @@ import (
 )
 
 // This file is the owner's out-of-band channel: when sync detects a real
-// divergence or a failing push, the OWNER — the human whose work the backlog
-// carries — hears about it the day it happens, through a hook they configured
-// (sync.owner_notify_cmd), not days later through an agent's archaeology. The
-// agent-facing blocks stay the in-band surface; this is the copy that leaves
-// the terminal.
+// divergence, a schema refusal that stops the receive, or a failing push, the
+// OWNER — the human whose work the backlog carries — hears about it the day it
+// happens, through a hook they configured (sync.owner_notify_cmd), not days
+// later through an agent's archaeology. The agent-facing blocks stay the
+// in-band surface; this is the copy that leaves the terminal.
 
 const (
 	// ownerNotifyHookTimeout bounds the hook run so a hung notifier (an
@@ -48,23 +49,28 @@ const (
 )
 
 // ownerNotifyKind is the closed set of owner-relevant degraded states. The
-// receive's kinds ARE its sync-failure classes — the divergence classes and the
-// unsettled receive — one vocabulary, so the trace, the failure block, and the
-// notification can never spell the same condition two ways; plus the push
-// kind, whose detection point (a completed push attempt) has no SyncFailure.
+// receive's kinds ARE its sync-failure classes — the divergence classes, the
+// unsettled receive, and the schema refusals that stop a settle — one
+// vocabulary, so the trace, the failure block, and the notification can never
+// spell the same condition two ways; plus the push kind, whose detection point
+// (a completed push attempt) has no SyncFailure.
 // [LAW:one-source-of-truth]
 type ownerNotifyKind string
 
 const ownerNotifyPushFailed ownerNotifyKind = "push_failed"
 
-// ownerNotifyDivergenceKinds is the group cleared together when a divergence
-// episode ends: any converged state (fast-forwarded, linearized, combined,
-// taken, not-diverged) resolves them, whichever was notified.
-var ownerNotifyDivergenceKinds = []ownerNotifyKind{
+// ownerNotifySettleEndedKinds is the group one settle ends: any converged state
+// (fast-forwarded, linearized, combined, taken, not-diverged) resolves a
+// divergence, and the receive half's two schema refusals are raised only
+// inside the reconcile's replay of a diverged plan, so every one of those
+// states proves them gone as well, whichever was notified.
+var ownerNotifySettleEndedKinds = []ownerNotifyKind{
 	ownerNotifyKind(syncFailureProseHeld),
 	ownerNotifyKind(syncFailureDivergedUnresolved),
 	ownerNotifyKind(syncFailureUnrelatedHistories),
 	ownerNotifyKind(syncFailureIDCollision),
+	ownerNotifyKind(syncFailureRemoteSchemaAhead),
+	ownerNotifyKind(syncFailureSchemaCeilingLift),
 }
 
 // ownerNotifyEvent is one owner-relevant occurrence: what degraded (Kind), the
@@ -102,22 +108,37 @@ func (ev ownerNotifyEvent) fingerprint() string {
 }
 
 // ownerNotifyEventForFailure maps a surfaced sync failure to its owner
-// notification: the divergence classes and an unsettled receive notify, and a
-// remote-schema-ahead block, a version condition only an upgrade clears, is
-// ok=false. [LAW:dataflow-not-control-flow] every surface calls this
-// unconditionally; the class value decides.
+// notification: the divergence classes, an unsettled receive, and the schema
+// refusals that stop the receive side (a remote schema ahead of this lit, a
+// lift refused by the ceiling) notify — a checkout that cannot settle against
+// the remote is off the shared backlog, and only the owner, who wrote the hold
+// or cut the release, can clear that. The push classes are ok=false: they are
+// detected at a completed push attempt, and observePushOutcomeForOwner pages
+// them as push_failed, so mapping them here would page one refusal twice.
+// [LAW:single-enforcer] each class pages from one half of the channel. The
+// one condition both halves detect is a remote schema ahead of this binary:
+// the push refuses it too and pages that as push_failed, so a checkout that
+// pushes and receives against such a remote hears once per half, under two
+// kinds with two clears; keying the push half's schema refusals per class is
+// open work under the remote-ceiling epic.
+// [LAW:dataflow-not-control-flow] every surface calls this unconditionally;
+// the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
-	switch failure.Class {
-	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision:
+	kind := ownerNotifyKind(failure.Class)
+	switch {
+	// The classes a settle ends are the one list that also clears them, so a
+	// class cannot page and never clear, or clear and never page.
+	// [LAW:one-source-of-truth]
+	case slices.Contains(ownerNotifySettleEndedKinds, kind):
 		return ownerNotifyEvent{
-			Kind:    ownerNotifyKind(failure.Class),
+			Kind:    kind,
 			Summary: failure.whatLine(),
 			Remote:  failure.Remote,
 			Branch:  failure.Branch,
 		}, true
-	case syncFailureReceiveUnsettled:
+	case failure.Class == syncFailureReceiveUnsettled:
 		return ownerNotifyEvent{
-			Kind:         ownerNotifyKind(failure.Class),
+			Kind:         kind,
 			Summary:      failure.whatLine(),
 			Remote:       failure.Remote,
 			Branch:       failure.Branch,
@@ -126,6 +147,40 @@ func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	default:
 		return ownerNotifyEvent{}, false
 	}
+}
+
+// surfaceSyncFailure is what a foreground sync command does with the error its
+// engine call returned: the error renders as the sync-failure contract
+// (asSyncFailure), and a class the receive half of the owner channel owns pages
+// the owner, since an explicit `lit sync pull` or `lit sync reconcile` is the
+// first — on a checkout with no automatic receive, the only — detector of a
+// schema refusal. [LAW:dataflow-not-control-flow] every error passes through;
+// the class decides.
+// [LAW:single-enforcer] the five foreground error paths share this one point.
+func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, err error) error {
+	err = asSyncFailure(err)
+	var failure SyncFailureError
+	if errors.As(err, &failure) {
+		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
+	}
+	return err
+}
+
+// notifyOwnerForFailure is the receive half's one detection point: every
+// surface that holds a sync failure — the automatic receive, a held pull or
+// reconcile, doctor, a foreground engine error — hands it here, and the class
+// decides whether the owner hears. Every class a receive-side surface can
+// produce maps, so a class that does not is a push class, and no pull,
+// reconcile, receive or doctor pushes: it is reported as the bug it is rather
+// than passing as a refusal the push half will page, which it never saw.
+// [LAW:single-enforcer] [LAW:no-silent-failure]
+func notifyOwnerForFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, failure SyncFailure) {
+	ev, ok := ownerNotifyEventForFailure(failure)
+	if !ok {
+		fmt.Fprintf(stderr, "lit: sync failure %q reached the receive half of the owner channel, which pages no push class; the owner was not paged — this is a bug; please report it\n", failure.Class)
+		return
+	}
+	maybeNotifyOwner(ctx, stderr, env, ws, ev)
 }
 
 // ownerNotifyMarkerPath is the per-kind sent marker: its content is the episode
