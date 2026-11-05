@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -98,11 +99,14 @@ func TestAPassAfterAPushRotatesTheEngineAndTheNextPushLands(t *testing.T) {
 
 // The backstop's hold is routine because its pass ends on its own: writers wait
 // behind it for as long as it runs, so this deadline is what ends their wait
-// while a collection marks. Stepping it walks the cut from before DOLT_GC starts,
-// which proves nothing, into marking, which Dolt's error names by its SaveHashes
-// step. The step is shorter than marking, so a slow start cannot carry the cut
-// past it. A Dolt that lost the cut runs the pass to its end here instead. A cut
-// pass leaves the journal uncollected, and the store then takes a write.
+// while a collection marks. The test searches for a deadline that cuts inside
+// marking, which Dolt's error names by its SaveHashes step, between a deadline
+// that cut before marking and one whose pass ran to its end. Marking's width is
+// the machine's (about 1ms on a development machine), so the search bisects
+// rather than stepping a fixed amount a fast machine can step over. A Dolt that
+// lost the cut runs the pass to its end at every deadline, and the search closes
+// to 10µs, a hundredth of marking, without finding one. A cut pass leaves the
+// journal uncollected, and the store then takes a write.
 func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -117,16 +121,51 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = nil
-	for deadline := time.Millisecond; err == nil || !strings.Contains(err.Error(), "SaveHashes"); deadline += 5 * time.Millisecond {
+	const resolution = 10 * time.Microsecond
+	var probes []string
+	probe := func(deadline time.Duration) deadlineCut {
 		cut, cancel := context.WithTimeout(ctx, deadline)
-		var outcome storage.CompactionOutcome
-		outcome, err = s.SyncCompact(cut, GCFull)
+		outcome, err := s.SyncCompact(cut, GCFull)
 		cancel()
-		if !errors.Is(err, context.DeadlineExceeded) || outcome.Ran {
-			t.Fatalf("SyncCompact() under %s = %+v, %v; want a pass that did not run, cut by its deadline", deadline, outcome, err)
+		landed := classifyDeadlineCut(outcome, err)
+		probes = append(probes, fmt.Sprintf("%s: %s", deadline, landed))
+		switch landed {
+		case cutInvalid:
+			t.Fatalf("SyncCompact() under %s = %+v, %v; want a pass cut by its deadline, or one that ran", deadline, outcome, err)
+		case cutLate:
+			// The pass collected the journal: give the next probe one to
+			// collect, and measure the journal it faces.
+			commitPayload(t, ctx, s, "again")
+			if before, err = s.measureCompactionSignals(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return landed
+	}
+	var low, high time.Duration
+	landed := cutEarly
+	for high = time.Millisecond; landed == cutEarly; high *= 2 {
+		if high > time.Minute {
+			t.Fatalf("every deadline up to %s cut before marking: %v", high, probes)
+		}
+		if landed = probe(high); landed == cutEarly {
+			low = high
 		}
 	}
+	high /= 2
+	for landed != cutMarking {
+		if high-low <= resolution {
+			t.Fatalf("no deadline between %s (cut before marking) and %s (ran to its end) cut inside marking: the cut is lost; probes %v", low, high, probes)
+		}
+		mid := low + (high-low)/2
+		switch landed = probe(mid); landed {
+		case cutEarly:
+			low = mid
+		case cutLate:
+			high = mid
+		}
+	}
+	t.Logf("cut inside marking after probes %v", probes)
 	after, err := s.measureCompactionSignals()
 	if err != nil {
 		t.Fatal(err)
@@ -144,6 +183,31 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	}
 	defer reopened.Close()
 	commitPayload(t, ctx, reopened, "after")
+}
+
+// deadlineCut is where a deadline landed in one compaction pass.
+type deadlineCut string
+
+const (
+	cutEarly   deadlineCut = "cut before marking"
+	cutMarking deadlineCut = "cut inside marking"
+	cutLate    deadlineCut = "ran to its end"
+	cutInvalid deadlineCut = "neither cut by its deadline nor run"
+)
+
+// classifyDeadlineCut reads one pass under a deadline. A pass that ran is late
+// whatever its error: a deadline can still cut the sweep after the collection.
+func classifyDeadlineCut(outcome storage.CompactionOutcome, err error) deadlineCut {
+	switch {
+	case outcome.Ran:
+		return cutLate
+	case !errors.Is(err, context.DeadlineExceeded):
+		return cutInvalid
+	case strings.Contains(err.Error(), "SaveHashes"):
+		return cutMarking
+	default:
+		return cutEarly
+	}
 }
 
 // A deadline or a cancel can land after DOLT_GC returned, when the store is
