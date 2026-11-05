@@ -427,9 +427,7 @@ func surfaceReceiveOutcome(ctx context.Context, stderr io.Writer, env environ.En
 		if err := writeMarkerAtomic(receiveBlockPendingPath(ws), []byte(block+"\n")); err != nil {
 			fmt.Fprintf(stderr, "lit: sync-failure block not left for the next command: %v\n", err)
 		}
-		if ev, evOK := ownerNotifyEventForFailure(failure); evOK {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		notifyOwnerForFailure(ctx, stderr, env, ws, failure)
 		return
 	}
 	if outcome.settledCleanly() {

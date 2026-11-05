@@ -156,11 +156,20 @@ func surfaceSyncFailure(ctx context.Context, stderr io.Writer, env environ.Env, 
 	err = asSyncFailure(err)
 	var failure SyncFailureError
 	if errors.As(err, &failure) {
-		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
 	}
 	return err
+}
+
+// notifyOwnerForFailure is the receive half's one detection point: every
+// surface that holds a sync failure — the automatic receive, a held pull or
+// reconcile, doctor, a foreground engine error — hands it here, and the class
+// decides whether the owner hears. [LAW:single-enforcer]
+// [LAW:dataflow-not-control-flow]
+func notifyOwnerForFailure(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, failure SyncFailure) {
+	if ev, ok := ownerNotifyEventForFailure(failure); ok {
+		maybeNotifyOwner(ctx, stderr, env, ws, ev)
+	}
 }
 
 // ownerNotifyMarkerPath is the per-kind sent marker: its content is the episode

@@ -219,13 +219,11 @@ func syncReconcileTakeLeaf() syncLeaf {
 					Metadata:  map[string]string{"remote": remote.String(), "sync_branch": branch},
 				})
 
-				if ev, ok := ownerNotifyEventForFailure(SyncFailure{
+				notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, SyncFailure{
 					Class:  syncFailureUnrelatedHistories,
 					Remote: remote.String(),
 					Branch: branch,
-				}); ok {
-					maybeNotifyOwner(ctx, inv.Stderr, inv.Env, ws, ev)
-				}
+				})
 				return ownerApprovalRefusalError{Approval: approval, Remote: remote.String(), Branch: branch}
 			}
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, command, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
@@ -466,9 +464,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 			BuildNote:  resolveBuildStatusNote(time.Now()),
 		}}
 		recordSyncHeldTrace(stderr, env, ws, command, failure, metadata)
-		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
 		return failure
 	case storage.SyncReconcileUnrelated:
 		// [LAW:single-enforcer] one contract, every surface — the block is the error's
@@ -485,9 +481,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 			BuildNote: resolveBuildStatusNote(time.Now()),
 		}}
 		recordSyncHeldTrace(stderr, env, ws, command, failure, metadata)
-		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		notifyOwnerForFailure(ctx, stderr, env, ws, failure.Failure)
 		return failure
 	case storage.SyncReconcileProsePending:
 		metadata["pending"] = strconv.Itoa(len(result.Pending))
@@ -514,14 +508,12 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		// A held prose state on the explicit reconcile can be the FIRST detection
 		// (auto-sync disabled), so it notifies like every other surface, de-duplicated
 		// against the automatic receive's earlier detection when there was one.
-		if ev, ok := ownerNotifyEventForFailure(SyncFailure{
+		notifyOwnerForFailure(ctx, stderr, env, ws, SyncFailure{
 			Class:  syncFailureProseHeld,
 			Remote: remote.String(),
 			Branch: branch,
 			Fields: result.Pending,
-		}); ok {
-			maybeNotifyOwner(ctx, stderr, env, ws, ev)
-		}
+		})
 		if err := renderProsePendingGuidance(stdout, result.Pending, buildNote); err != nil {
 			return err
 		}

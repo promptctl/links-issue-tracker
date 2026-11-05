@@ -408,9 +408,7 @@ func syncPullLeaf() syncLeaf {
 			recordSyncHeldTrace(inv.Stderr, inv.Env, ws, "lit sync pull", failure, pullTraceMetadata)
 			// A held pull is a detection moment: the owner hears out-of-band, the day
 			// it happens, not through later archaeology (links-sync-pgct.4).
-			if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
-				maybeNotifyOwner(ctx, inv.Stderr, inv.Env, ws, ev)
-			}
+			notifyOwnerForFailure(ctx, inv.Stderr, inv.Env, ws, failure.Failure)
 			return failure
 		}
 		landingMetadata(pullTraceMetadata, result.Landing)
