@@ -61,8 +61,8 @@ foreground at all.
 
 ## Storage and repo-impact budgets (at 10x)
 
-Growth is monotone by charter #7 (no truncation; purge is the one exception), so these are ceilings on
-rate and footprint, not promises of shrinkage.
+These are ceilings on rate and footprint. Rewrites (charter #7) can shrink a
+store — compaction is one — but no budget here depends on one running.
 
 | Quantity | Budget | Notes |
 |---|---|---|

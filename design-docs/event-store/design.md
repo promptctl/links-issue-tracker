@@ -44,7 +44,7 @@ Tokens are stable; cite them from code comments, tickets, and reviews as
 
 | Token | One line |
 |---|---|
-| `INV:append-only` | events are written once and never modified, rewritten, or dropped — save by a purge, which drops one ticket's events (§store) |
+| `INV:rewrite-is-an-event` | an event changes after it is written only by a rewrite event naming the change; a ref moves non-fast-forward only when rewrite events account for every difference (§store) |
 | `INV:deterministic-fold` | same event set ⇒ byte-identical derived state on every machine; only a fold-version bump may change it |
 | `INV:single-writer-ref` | each ref has exactly one writing checkout; all cross-writer coordination is read-side |
 | `INV:preserve-unknown` | an event a reader cannot interpret is carried and surfaced, never discarded |
@@ -59,7 +59,13 @@ status: destination
 
 An event is a small structured record: `(type, schema-version, issue-id,
 payload, attribution, config-ref, causal-position, recorded-at,
-signature-slot)`.
+signature-slot)`. The signature covers a **header** — every field but the
+payload, plus a salted hash committing to the payload — and never the payload
+itself or any other event. So a rewrite that replaces or drops a payload leaves
+the original author's signature valid: it still proves who made which change
+where, and a verifier reports the payload as rewritten, pointing at the rewrite
+event and its own signature. The salt travels with the payload and is erased
+with it, so a low-entropy value cannot be recovered by guessing its hash.
 Attribution is the (stream, workspace, principal) triple — the existing
 work-claims pair plus the principal reference the access-control design
 requires. `config-ref` names the config-stream version in force when the event
@@ -142,7 +148,7 @@ defers the mechanism here.
 
 **Schema versioning.** Events are immortal, so every shape ever shipped stays
 readable forever. Readers hold a chain of pure upcasters (v1→v2→…) applied at
-fold time; bytes on disk never change (`INV:append-only`). Know what an
+fold time; a schema bump changes no bytes on disk. Know what an
 upcaster is before writing one: a frozen historical artifact, kept and tested
 forever — the same class of object as `schema_reconcile.go`, whose deletion
 once bricked every pre-v1 workspace (the P000 incident). The temptation will
@@ -191,15 +197,17 @@ writer's ref is fast-forward-only and linear in its **first-parent** history —
 the one exception to single-parent commits is the sweep anchor below, which
 adds a second parent, so tooling walks first-parent for a writer's own chain.
 
-The store has **no eraser**. A wrong event — bad status, mangled title,
-mistaken close — is corrected by appending the correcting event, exactly as a
-ledger corrects an entry. The temptation is git fluency itself: *"I'll just
-rewrite my ref and drop the bad commit, it's my ref."* Refuse it. A rewritten
-ref breaks every peer's fast-forward fetch, voids any signature chain over the
-sequence, and teaches the codebase that history is negotiable. Content leaves
-the store in exactly two ways: purge removes one ticket's events entirely
-(charter #7), and cryptographic erasure destroys content within a ticket
-(§security-and-config).
+Most corrections are appends: a wrong status or a mistaken close is fixed by
+the correcting event, as a ledger corrects an entry. When history itself should
+change — content that must go, a mangled event, noise worth squashing, history
+worth compacting — the tool is a **rewrite** (charter #7). A rewrite is an event
+appended to the rewriter's ref that names the events it drops, the payloads it
+replaces, and the ranges it squashes. The fold applies it on every replica the
+moment it arrives; each writer then rebuilds its own ref without the rewritten
+material, and a receiver accepts a non-fast-forward ref move only when rewrite
+events account for every difference. Surviving events keep their bytes and
+their signatures (§events). Purge, below, is the rewrite that drops one
+ticket's events.
 
 **Purge** removes one ticket the way a git history rewrite removes content,
 in three parts.
@@ -220,10 +228,9 @@ in three parts.
   carried them beside other events is re-made without them — including the
   dead writers' and inbox chains it anchors through sweep parents, and pushes
   the new head as a compare-and-swap against the head it replaced. This is
-  the one exception to `INV:append-only` and to fast-forward-only refs, and it
-  is checkable: a receiver accepts a ref moving non-fast-forward only when
-  every event the new chain lacks belongs to an id a purge event names, and
-  refuses any other rewrite as the eraser the store does not have. Surviving
+  the rewrite mechanism of §store applied to one ticket, and it is checkable
+  the same way: a receiver accepts the ref moving non-fast-forward only when
+  every event the new chain lacks belongs to an id a purge event names. Surviving
   events keep their bytes and their per-event signatures; only the commits
   around them change. A checkout writes only its own ref
   (`INV:single-writer-ref`), so the purge completes as each writer next runs,
@@ -435,8 +442,9 @@ remains the normative home for the layers themselves.
 - **Signature slot.** Every event carries one (§events). Pre-RBAC it holds the
   checkout's self-signature; the write layer later upgrades verification
   policy without touching stored bytes. The replayed-commit re-signing problem
-  the access-control draft holds OPEN dissolves here: nothing is ever
-  replayed, so every signature is original forever.
+  the access-control draft holds OPEN dissolves here: a rewrite rebuilds
+  commits, never events, and each signature covers its event's header alone,
+  so every surviving signature is original forever.
 - **Envelopes.** Prose payload fields are defined as opaque byte strings end
   to end (`INV:opaque-envelope`); plaintext is an encoding those bytes happen
   to use before the read layer ships. The fold, cache, codec, and sync never
@@ -465,13 +473,11 @@ remains the normative home for the layers themselves.
   enforcement section exists to prevent. Any fix must stay deterministic (a
   rule keyed to what a receiver happens to know would fold differently on
   different machines); see OPEN #6.
-- **Erasure within a ticket is cryptographic.** Apart from purging a whole
-  ticket (charter #7, §store), the store has no physical delete (`INV:append-only`,
-  restated where it bites: even an owner cannot recall one field's pushed
-  plaintext). Content that may ever need destroying is
-  ciphertext whose key can be shredded — which moves the read layer's
-  encrypted-by-default posture from good hygiene to the load-bearing erasure
-  mechanism. The access-control design owns the key machinery.
+- **Erasure has two reaches.** A rewrite (charter #7, §store) removes
+  content from every replica that syncs. Copies that never sync again — a
+  stale clone, a host that has not collected garbage, a backup — are reached
+  only if the content was ciphertext whose key can be shredded, which keeps
+  the read layer's encrypted-by-default posture load-bearing. The access-control design owns the key machinery.
 
 YAGNI deserves its answer here, because every slot above will attract it:
 *"nothing verifies signatures yet — ship without the slot."* YAGNI is right
