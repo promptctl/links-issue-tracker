@@ -133,13 +133,14 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 	}
 }
 
-// TestForegroundReconcileNotDivergedEndsNoEpisode pins that a foreground
-// reconcile answering not-diverged leaves every settle-ended marker and the
-// pending block in place: the store gives that answer from the plan, before it
-// reads the remote head, so a checkout merely behind a remote whose schema is
-// ahead reaches it with the refusal still standing. Ending the episode there
-// would page the owner again, inside the cooldown, for the same refusal.
-func TestForegroundReconcileNotDivergedEndsNoEpisode(t *testing.T) {
+// TestForegroundReconcileNotDivergedEndsTheEpisodes pins that a foreground
+// reconcile answering not-diverged ends every settle-ended episode and retires
+// the pending block, the schema kinds included: the store raises the receive
+// half's schema refusals only inside the replay of a diverged plan, so a
+// not-diverged answer proves every condition that half pages is gone. Two
+// reviews read this arm the opposite way; the wiring is pinned so the next
+// reader has the answer.
+func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
@@ -155,15 +156,15 @@ func TestForegroundReconcileNotDivergedEndsNoEpisode(t *testing.T) {
 			t.Fatalf("write pending block: %v", err)
 		}
 	}
-	standing := func(surface string) {
+	ended := func(surface string) {
 		t.Helper()
 		for _, kind := range ownerNotifySettleEndedKinds {
-			if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); err != nil {
-				t.Fatalf("%s not-diverged ended the %s episode without settling (stat err=%v)", surface, kind, err)
+			if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s not-diverged left the %s episode live (stat err=%v)", surface, kind, err)
 			}
 		}
-		if _, err := os.Stat(receiveBlockPendingPath(ws)); err != nil {
-			t.Fatalf("%s not-diverged retired the pending block without settling (stat err=%v)", surface, err)
+		if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("%s not-diverged left the pending block waiting (stat err=%v)", surface, err)
 		}
 	}
 	notDiverged := storage.SyncReconcileResult{State: storage.SyncReconcileNotDiverged}
@@ -173,14 +174,14 @@ func TestForegroundReconcileNotDivergedEndsNoEpisode(t *testing.T) {
 	if err := reportTakeOutcome(testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", notDiverged); err != nil {
 		t.Fatalf("reportTakeOutcome: %v", err)
 	}
-	standing("take")
+	ended("take")
 
 	plant()
 	out.Reset()
 	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult: %v", err)
 	}
-	standing("reconcile")
+	ended("reconcile")
 }
 
 // TestOwnerNotifyEventFingerprint pins the episode identity: a divergence

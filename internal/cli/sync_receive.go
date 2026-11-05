@@ -450,13 +450,11 @@ func receiveBlockProvenance(path string, now time.Time) string {
 }
 
 // endSettleEndedEpisodes is what every surface does when it has settled against
-// the remote — this receive, a landed `lit sync pull`, and a `lit sync
-// reconcile` (take and combine included) that linearized, combined, or took a
-// side: the owner-notify markers a settle ends reset, so the next divergence or
-// schema refusal is a new episode, and a sync-failure block still waiting for a
-// command is retired, since the condition it describes is gone. A foreground
-// reconcile's not-diverged answer is not a settle: the store gives it from the
-// plan, before the remote head is read, so it ends nothing.
+// the remote or found nothing to settle — this receive, `lit sync pull`,
+// `lit sync reconcile` and its take and combine, their not-diverged answers
+// included: the owner-notify markers a settle ends reset, so the next
+// divergence or schema refusal is a new episode, and a sync-failure block still
+// waiting for a command is retired, since the condition it describes is gone.
 // [LAW:single-enforcer] one ending, whichever surface settled.
 func endSettleEndedEpisodes(stderr io.Writer, ws workspace.Info) {
 	clearOwnerNotify(stderr, ws, ownerNotifySettleEndedKinds...)

@@ -380,10 +380,11 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "your backlog", result.Landing)
 	case storage.SyncReconcileNotDiverged:
-		// Not a settle: the store answers not-diverged from the plan alone,
-		// before it reads or lifts the remote head, so a checkout merely behind
-		// a remote whose schema is ahead lands here with that refusal still
-		// standing. Ending the episodes here would page it again as new.
+		// Not diverged ends every episode the receive half pages: the
+		// divergence classes by definition, and the two schema refusals
+		// because the store raises them only inside the replay of a diverged
+		// plan (replayUnderGuard), never from a checkout that is not diverged.
+		endSettleEndedEpisodes(stderr, ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
@@ -565,8 +566,9 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		// Not a settle (see reportTakeOutcome): nothing was read or lifted, so
-		// no episode ends here.
+		// Ends every receive-half episode; see reportTakeOutcome's arm for why
+		// the schema refusals end here too.
+		endSettleEndedEpisodes(stderr, ws)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:

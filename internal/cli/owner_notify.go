@@ -61,9 +61,9 @@ const ownerNotifyPushFailed ownerNotifyKind = "push_failed"
 
 // ownerNotifySettleEndedKinds is the group one settle ends: any converged state
 // (fast-forwarded, linearized, combined, taken, not-diverged) resolves a
-// divergence, and a settle against the remote is exactly what a lifted hold or
-// an upgraded binary makes possible, so both schema refusals end with it too,
-// whichever was notified.
+// divergence, and the receive half's two schema refusals are raised only
+// inside the reconcile's replay of a diverged plan, so every one of those
+// states proves them gone as well, whichever was notified.
 var ownerNotifySettleEndedKinds = []ownerNotifyKind{
 	ownerNotifyKind(syncFailureProseHeld),
 	ownerNotifyKind(syncFailureDivergedUnresolved),
@@ -115,7 +115,12 @@ func (ev ownerNotifyEvent) fingerprint() string {
 // or cut the release, can clear that. The push classes are ok=false: they are
 // detected at a completed push attempt, and observePushOutcomeForOwner pages
 // them as push_failed, so mapping them here would page one refusal twice.
-// [LAW:single-enforcer] each class pages from one half of the channel.
+// [LAW:single-enforcer] each class pages from one half of the channel. The
+// one condition both halves detect is a remote schema ahead of this binary:
+// the push refuses it too and pages that as push_failed, so a checkout that
+// pushes and receives against such a remote hears once per half, under two
+// kinds with two clears; keying the push half's schema refusals per class is
+// open work under the remote-ceiling epic.
 // [LAW:dataflow-not-control-flow] every surface calls this unconditionally;
 // the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
