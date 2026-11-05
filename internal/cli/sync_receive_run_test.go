@@ -319,13 +319,7 @@ func TestEveryStopMapsToItsSyncFailure(t *testing.T) {
 // fails here and not in a release.
 func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 	t.Parallel()
-	classes := []syncFailureClass{
-		syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureRemoteSchemaAhead,
-		syncFailureUnrelatedHistories, syncFailureIDCollision, syncFailureReceiveUnsettled,
-		syncFailurePushDiverged, syncFailureSchemaCeiling, syncFailureSchemaRaiseRequiresRelease,
-		syncFailureSchemaLoweringRequiresHold, syncFailureForcedPushStale, syncFailureSchemaCeilingLift,
-	}
-	for _, class := range classes {
+	for _, class := range syncFailureClasses {
 		failure := SyncFailure{
 			Class: class, Remote: "origin", Branch: "master",
 			RemoteAhead:     &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8},

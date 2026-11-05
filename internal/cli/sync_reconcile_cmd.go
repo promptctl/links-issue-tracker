@@ -380,7 +380,10 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "your backlog", result.Landing)
 	case storage.SyncReconcileNotDiverged:
-		endSettleEndedEpisodes(stderr, ws)
+		// Not a settle: the store answers not-diverged from the plan alone,
+		// before it reads or lifts the remote head, so a checkout merely behind
+		// a remote whose schema is ahead lands here with that refusal still
+		// standing. Ending the episodes here would page it again as new.
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
@@ -562,7 +565,8 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endSettleEndedEpisodes(stderr, ws)
+		// Not a settle (see reportTakeOutcome): nothing was read or lifted, so
+		// no episode ends here.
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
