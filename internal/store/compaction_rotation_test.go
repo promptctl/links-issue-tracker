@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -98,11 +99,16 @@ func TestAPassAfterAPushRotatesTheEngineAndTheNextPushLands(t *testing.T) {
 
 // The backstop's hold is routine because its pass ends on its own: writers wait
 // behind it for as long as it runs, so this deadline is what ends their wait
-// while a collection marks. Stepping it walks the cut from before DOLT_GC starts,
-// which proves nothing, into marking, which Dolt's error names by its SaveHashes
-// step. The step is shorter than marking, so a slow start cannot carry the cut
-// past it. A Dolt that lost the cut runs the pass to its end here instead. A cut
-// pass leaves the journal uncollected, and the store then takes a write.
+// while a collection marks. The test searches for a deadline that cuts inside
+// marking, which Dolt's error names by its SaveHashes step, between a deadline
+// that cut before marking and one whose pass ran to its end. Marking's width is
+// the machine's (about 1ms on a development machine), so the search bisects
+// rather than stepping a fixed amount a fast machine can step over. The machine
+// is noisy and every pass that runs changes the store, so a bisection that
+// closes to 10µs, a hundredth of marking, starts again from its first bracket;
+// a Dolt that lost the cut never names SaveHashes, and the search gives up
+// after eight rounds. A cut pass leaves the journal uncollected, and the store
+// then takes a write.
 func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -112,28 +118,54 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 		t.Fatalf("OpenMaintenance() error = %v", err)
 	}
 	commitPayload(t, ctx, s, "before")
-	before, err := s.measureCompactionSignals()
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	err = nil
-	for deadline := time.Millisecond; err == nil || !strings.Contains(err.Error(), "SaveHashes"); deadline += 5 * time.Millisecond {
-		cut, cancel := context.WithTimeout(ctx, deadline)
-		var outcome storage.CompactionOutcome
-		outcome, err = s.SyncCompact(cut, GCFull)
-		cancel()
-		if !errors.Is(err, context.DeadlineExceeded) || outcome.Ran {
-			t.Fatalf("SyncCompact() under %s = %+v, %v; want a pass that did not run, cut by its deadline", deadline, outcome, err)
+	const (
+		resolution = 10 * time.Microsecond
+		rounds     = 8
+	)
+	var probes []string
+	probe := func(deadline time.Duration) deadlineCut {
+		before, err := s.measureCompactionSignals()
+		if err != nil {
+			t.Fatal(err)
 		}
+		cut, cancel := context.WithTimeout(ctx, deadline)
+		outcome, err := s.SyncCompact(cut, GCFull)
+		cancel()
+		landed := classifyDeadlineCut(outcome, err)
+		probes = append(probes, fmt.Sprintf("%s: %s", deadline, landed))
+		switch landed {
+		case cutInvalid:
+			t.Fatalf("SyncCompact() under %s = %+v, %v; want a pass cut by its deadline, or one that ran", deadline, outcome, err)
+		case cutMarking:
+			after, err := s.measureCompactionSignals()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.JournalBytes < before.JournalBytes {
+				t.Fatalf("journal went from %d to %d bytes: the collection ran on past its deadline", before.JournalBytes, after.JournalBytes)
+			}
+		case cutLate:
+			// The pass collected the journal: give the next probe one to collect.
+			commitPayload(t, ctx, s, "again")
+		}
+		return landed
 	}
-	after, err := s.measureCompactionSignals()
-	if err != nil {
-		t.Fatal(err)
+	var early time.Duration
+	for late := time.Millisecond; ; early, late = late, late*2 {
+		if late > time.Minute {
+			t.Fatalf("every deadline up to %s cut before marking: %v", early, probes)
+		}
+		landed := probe(late)
+		if landed == cutEarly {
+			continue
+		}
+		if landed == cutLate && !bisectForMarking(probe, early, late, resolution, rounds) {
+			t.Fatalf("no deadline between %s (cut before marking) and %s (ran to its end) cut inside marking in %d rounds: the cut is lost; probes %v", early, late, rounds, probes)
+		}
+		break
 	}
-	if after.JournalBytes < before.JournalBytes {
-		t.Fatalf("journal went from %d to %d bytes: the collection ran on past its deadline", before.JournalBytes, after.JournalBytes)
-	}
+	t.Logf("cut inside marking after probes %v", probes)
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -144,6 +176,52 @@ func TestADeadlineCutsACollectionWhileItMarks(t *testing.T) {
 	}
 	defer reopened.Close()
 	commitPayload(t, ctx, reopened, "after")
+}
+
+// bisectForMarking searches between a deadline that cut before marking and one
+// whose pass ran to its end for one that cuts inside marking. Each round closes
+// to resolution; a round that finds nothing starts again from the first bracket.
+func bisectForMarking(probe func(time.Duration) deadlineCut, low, high, resolution time.Duration, rounds int) bool {
+	for range rounds {
+		for lo, hi := low, high; hi-lo > resolution; {
+			mid := lo + (hi-lo)/2
+			switch probe(mid) {
+			case cutMarking:
+				return true
+			case cutEarly:
+				lo = mid
+			case cutLate:
+				hi = mid
+			}
+		}
+	}
+	return false
+}
+
+// deadlineCut is where a deadline landed in one compaction pass.
+type deadlineCut string
+
+const (
+	cutEarly   deadlineCut = "cut before marking"
+	cutMarking deadlineCut = "cut inside marking"
+	cutLate    deadlineCut = "ran to its end"
+	cutInvalid deadlineCut = "neither cut by its deadline nor run"
+)
+
+// classifyDeadlineCut reads one pass under a deadline. A pass that ran is late
+// when its error is none or the deadline's: a deadline can still cut the sweep
+// after the collection, but any other error is a pass that failed.
+func classifyDeadlineCut(outcome storage.CompactionOutcome, err error) deadlineCut {
+	switch {
+	case outcome.Ran && (err == nil || errors.Is(err, context.DeadlineExceeded)):
+		return cutLate
+	case !errors.Is(err, context.DeadlineExceeded):
+		return cutInvalid
+	case strings.Contains(err.Error(), "SaveHashes"):
+		return cutMarking
+	default:
+		return cutEarly
+	}
 }
 
 // A deadline or a cancel can land after DOLT_GC returned, when the store is
