@@ -10,7 +10,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // takeLocalCommitMessage labels the marker commit that settles a take-local
@@ -267,11 +266,11 @@ func (s *Store) takeRemoteCarryingPurges(ctx context.Context, result *storage.Sy
 		// Only local's purge records land, so a loop its hierarchy held is not
 		// part of what lands; the remote head's cut is reported by the spine's
 		// lift.
-		local, _, err := s.exportAtCommit(ctx, scratch.read, "local head", localHead, version.UnboundedSchemaCeiling())
+		local, _, err := s.exportAtCommit(ctx, scratch.read, unheldRead(readLocalHead, localHead))
 		if err != nil {
 			return err
 		}
-		theirs, _, err := s.exportAtCommit(ctx, scratch.read, "remote head", remoteHead.hash, remoteHead.hold)
+		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead.read())
 		if err != nil {
 			return err
 		}
@@ -318,12 +317,12 @@ func (s *Store) purgesMissingAt(ctx context.Context, commit string) ([]model.Pur
 // lifecycle, shared with the field-aware path.
 func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead string, remoteHead fetchedHead) error {
 	return s.runOnScratch(ctx, dataBranch, []string{scratch.spine, scratch.read}, localHead, attemptOnce, func() error {
-		local, localCut, err := s.exportAtCommit(ctx, scratch.read, "local head", localHead, version.UnboundedSchemaCeiling())
+		local, localCut, err := s.exportAtCommit(ctx, scratch.read, unheldRead(readLocalHead, localHead))
 		if err != nil {
 			return err
 		}
 		// The spine's lift of the same commit cuts and reports what this read cut.
-		theirs, _, err := s.exportAtCommit(ctx, scratch.read, "remote head", remoteHead.hash, remoteHead.hold)
+		theirs, _, err := s.exportAtCommit(ctx, scratch.read, remoteHead.read())
 		if err != nil {
 			return err
 		}

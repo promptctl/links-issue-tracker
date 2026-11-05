@@ -580,9 +580,9 @@ Only ever run on a scratch branch.
 
 `cutParentLoops(ctx, db) ([]storage.Unlooped, error)` (`sync_reconcile.go`): `loadParentEdges` (every stored `parent-child` edge, no hydration), then `storage.Unloop` on it (`01-data-model.md`), then for each cut `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = 'parent-child'` in the working set (error `"cut parent edge %s -> %s: %w"`). A commit an older lit or a hand edit wrote can hold a loop, and every read of a commit hydrates, which refuses a loop (`storage.ParentCycleError`); the cut is what lets a sync read such a commit. Tests `TestSyncReconcileCutsALoopTheRemoteHeadHolds`, `TestSyncReconcileCutsALoopTheLocalHeadHolds`, `TestSyncReconcileReplaysALoopAnUnpushedCommitHeldAfterItsRepair` (`sync_parent_loop_test.go`).
 
-`exportAtCommit(ctx, readBranch, commit) (model.Export, []storage.Unlooped, error)` (`sync_reconcile.go`):
+`exportAtCommit(ctx, readBranch, at commitRead) (model.Export, []storage.Unlooped, error)` (`sync_reconcile.go`):
 1. `s.checkout(readBranch)` — the branch is an **argument**, never inherited from session state; error `"switch to reconcile read branch %q: %w"`.
-2. `resetAndLift(commit)`; error `"read export at %q: %w"`.
+2. `resetAndLift(commit)`; every failure wrapped `"read the %s export at %q: %w"` (role, commit); `commitRead` is `fetchedHead.read()` for the remote head, `unheldRead(role, commit)` otherwise.
 3. `s.Export(ctx)`, returned with the lift's cuts.
 
 ### 5.13 `mergeAndReplay` — the shared merge/settle/replay tail
