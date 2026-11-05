@@ -209,10 +209,11 @@ const (
 )
 
 // classifyDeadlineCut reads one pass under a deadline. A pass that ran is late
-// whatever its error: a deadline can still cut the sweep after the collection.
+// when its error is none or the deadline's: a deadline can still cut the sweep
+// after the collection, but any other error is a pass that failed.
 func classifyDeadlineCut(outcome storage.CompactionOutcome, err error) deadlineCut {
 	switch {
-	case outcome.Ran:
+	case outcome.Ran && (err == nil || errors.Is(err, context.DeadlineExceeded)):
 		return cutLate
 	case !errors.Is(err, context.DeadlineExceeded):
 		return cutInvalid
