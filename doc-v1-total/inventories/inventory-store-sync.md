@@ -635,8 +635,8 @@ Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit
 `commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper, localCut) (replayLanding, error)` (`sync_reconcile.go`), where `replayLanding{replayed int; landing storage.Landing}`:
 
 1. `s.checkout(scratch.spine)`; error `"switch to reconcile spine branch %q: %w"`.
-2. `remoteCut = s.resetAndLift(ctx, remoteHead)`; error `"adopt remote head %q on scratch: %w"`. This is the spine's **one and only** reset.
-3. `s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: reconcileLiftCommitMessage})` — the schema-lift DDL, bookkeeping and parent-loop cut land as their own named commit, or **no commit at all** on a current-schema, loop-free head (empty diff). Error `"commit schema lift of %q: %w"` (`sync_reconcile.go`).
+2. `remoteCut = s.resetAndLift(ctx, remoteHead.read())`; error `"adopt on spine branch %q: %w"`. This is the spine's **one and only** reset.
+3. `s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: reconcileLiftCommitMessage})` — the schema-lift DDL, bookkeeping and parent-loop cut land as their own named commit, or **no commit at all** on a current-schema, loop-free head (empty diff). Error `"commit schema lift of %v: %w"` (the remote head's read) (`sync_reconcile.go`).
 4. `liftedBase = readDoltHead(ctx, s.db)`; error `"read lifted base: %w"`.
 5. `writer = newSpineWriter(ctx, scratch.spine)` — constructed **after** the lift commit.
 6. Loop `i = 0 .. stepper.len()-1`: `step = stepper.step(ctx, i)`; `writer.land(step.export, step.stamp)`, its landing discarded; landing error wrapped `"replay folded commit %q: %w"` naming the step's message (`sync_reconcile.go`). One step is read and landed before the next is read — bounded memory.

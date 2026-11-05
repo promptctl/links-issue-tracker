@@ -528,10 +528,10 @@ const (
 )
 
 // commitRead is one lift of a reconcile commit: the commit, the role it plays,
-// and the hold that bounds the lift. [LAW:parse-dont-validate] built only by
-// fetchedHead.read and unheldRead, so the remote head always carries its own
-// hold and no other commit carries one; every failure of the lift names the
-// role and commit.
+// and the hold that bounds the lift. [LAW:parse-dont-validate] the only value
+// that carries a hold is fetchedHead.read, so no lift can pair a hold with a
+// commit other than the head it rode in with; every failure of the lift names
+// the role and commit.
 type commitRead struct {
 	role   string
 	commit string
@@ -970,7 +970,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// registry carries, and a refusal names that head as the holder.
 	remoteCut, err := s.resetAndLift(ctx, remoteHead.read())
 	if err != nil {
-		return replayLanding{}, fmt.Errorf("adopt on scratch: %w", err)
+		return replayLanding{}, fmt.Errorf("adopt on spine branch %q: %w", scratch.spine, err)
 	}
 	// The lift's own changes (schema DDL, migration bookkeeping, the cut of a
 	// parent loop the remote head held) land as the machinery's own named
@@ -981,7 +981,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// below goes through replayDeltaOnScratch: a self-rotating retry would
 	// resume on the data branch (see replayDeltaOnScratch).
 	if err := s.commitWorkingSetOnce(ctx, s.db, commitStamp{Message: reconcileLiftCommitMessage}); err != nil {
-		return replayLanding{}, fmt.Errorf("commit schema lift of %q: %w", remoteHead.hash, err)
+		return replayLanding{}, fmt.Errorf("commit schema lift of %v: %w", remoteHead.read(), err)
 	}
 	liftedBase, err := readDoltHead(ctx, s.db)
 	if err != nil {
