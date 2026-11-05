@@ -512,36 +512,37 @@ type fetchedHead struct {
 	hold version.SchemaCeiling
 }
 
-// read is the head as a reconcile read: its role, its commit, and its own hold.
+// read is the head as a lift: its commit under its own hold.
 func (h fetchedHead) read() commitRead {
-	return commitRead{role: readRemoteHead, commit: h.hash, hold: h.hold}
+	return commitRead{role: "remote head", commit: h.hash, hold: h.hold}
 }
 
-// readRole names which of a reconcile's commits a read is of, so a read that
-// fails says which one it was.
-type readRole string
+// unheldRole names a commit a reconcile lifts that no hold binds: every commit
+// but the fetched head, whose lift only fetchedHead.read builds.
+type unheldRole string
 
 const (
-	readBase         readRole = "base"
-	readLocalHead    readRole = "local head"
-	readRemoteHead   readRole = "remote head"
-	readFoldedCommit readRole = "folded commit"
+	readBase         unheldRole = "base"
+	readLocalHead    unheldRole = "local head"
+	readFoldedCommit unheldRole = "folded commit"
 )
 
-// commitRead is one reconcile read: the commit, the role it plays, and the
-// hold that bounds its lift. [LAW:parse-dont-validate] the remote head's read
-// is built only by fetchedHead.read, so its hold cannot pair with another
-// commit or role; every other read is unheld.
+// commitRead is one lift of a reconcile commit: the commit, the role it plays,
+// and the hold that bounds the lift. [LAW:parse-dont-validate] built only by
+// fetchedHead.read and unheldRead, so the remote head always carries its own
+// hold and no other commit carries one; every failure of the lift names the
+// role and commit.
 type commitRead struct {
-	role   readRole
+	role   string
 	commit string
 	hold   version.SchemaCeiling
 }
 
-// unheldRead is a read of a commit no hold binds: every commit but the
-// fetched head.
-func unheldRead(role readRole, commit string) commitRead {
-	return commitRead{role: role, commit: commit, hold: version.UnboundedSchemaCeiling()}
+func (r commitRead) String() string { return fmt.Sprintf("the %s %q", r.role, r.commit) }
+
+// unheldRead is a lift of a commit no hold binds.
+func unheldRead(role unheldRole, commit string) commitRead {
+	return commitRead{role: string(role), commit: commit, hold: version.UnboundedSchemaCeiling()}
 }
 
 // reconcileFromAnchors reads the three exports at fixed commit hashes, runs the
@@ -967,9 +968,9 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// under the hold that rode in with the head (fetchedHead): a head a remote
 	// downgrade lowered is adopted no higher than its hold, whatever this lit's
 	// registry carries, and a refusal names that head as the holder.
-	remoteCut, err := s.resetAndLift(ctx, remoteHead.hash, remoteHead.hold)
+	remoteCut, err := s.resetAndLift(ctx, remoteHead.read())
 	if err != nil {
-		return replayLanding{}, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead.hash, err)
+		return replayLanding{}, fmt.Errorf("adopt on scratch: %w", err)
 	}
 	// The lift's own changes (schema DDL, migration bookkeeping, the cut of a
 	// parent loop the remote head held) land as the machinery's own named
@@ -1126,7 +1127,7 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 // cut, one looped commit anywhere in the history a sync reads would refuse that
 // sync on every attempt, and a repair at the head could not reach it.
 //
-// hold is the schema hold that bounds the lift beside the released-schema
+// at.hold is the schema hold that bounds the lift beside the released-schema
 // ceiling: the fetched head's own for every lift of that head (fetchedHead),
 // the unbounded ceiling for any other commit. The local head and the base
 // are lifted only to be read and discarded, so their holds bind nothing:
@@ -1134,21 +1135,21 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 // held before the remote was lifted, could never settle.
 // [LAW:dataflow-not-control-flow] the ceiling is a value the caller holds,
 // not a mode the lift reads off the working set.
-func (s *Store) resetAndLift(ctx context.Context, commit string, hold version.SchemaCeiling) ([]storage.Unlooped, error) {
+func (s *Store) resetAndLift(ctx context.Context, at commitRead) ([]storage.Unlooped, error) {
 	// An earlier lift on this branch leaves the tables its migrations created
 	// untracked in the working set (the lift commits nothing). The exact reset
 	// drops them: kept, the next lift re-runs a CREATE TABLE against a table
 	// the previous lift left behind, or reads its rows as if they belonged to
 	// this commit.
-	if err := resetExactlyToRef(ctx, s.db, commit); err != nil {
-		return nil, fmt.Errorf("reset scratch: %w", err)
+	if err := resetExactlyToRef(ctx, s.db, at.commit); err != nil {
+		return nil, fmt.Errorf("reset scratch to %v: %w", at, err)
 	}
-	if err := s.liftWorkingSetToRegistry(ctx, hold); err != nil {
-		return nil, fmt.Errorf("lift to current schema: %w", err)
+	if err := s.liftWorkingSetToRegistry(ctx, at.hold); err != nil {
+		return nil, fmt.Errorf("lift %v to current schema: %w", at, err)
 	}
 	unlooped, err := cutParentLoops(ctx, s.db)
 	if err != nil {
-		return nil, fmt.Errorf("cut parent loops: %w", err)
+		return nil, fmt.Errorf("cut parent loops in %v: %w", at, err)
 	}
 	return unlooped, nil
 }
@@ -1175,8 +1176,7 @@ func cutParentLoops(ctx context.Context, db *sql.DB) ([]storage.Unlooped, error)
 // exportAtCommit switches to the reconcile's READ branch, resets it to a
 // commit, lifts it to the current schema, and exports it, with the parent edges
 // the lift cut. Reading at a revision this way reuses the one canonical export
-// path. role names which of the reconcile's commits this is, so a failed
-// read says which one could not be read. [LAW:single-enforcer]
+// path. Every failure names the read (at). [LAW:single-enforcer]
 //
 // Taking the branch as a parameter and switching to it here — rather than
 // inheriting whatever branch the session happens to be on — is what makes the
@@ -1187,26 +1187,18 @@ func cutParentLoops(ctx context.Context, db *sql.DB) ([]storage.Unlooped, error)
 // not a consequence of call order.
 //
 // at.hold bounds the lift (resetAndLift), so a held remote refuses at its
-// first read. Any failure names the read's role and commit.
+// first read.
 func (s *Store) exportAtCommit(ctx context.Context, readBranch string, at commitRead) (model.Export, []storage.Unlooped, error) {
-	export, unlooped, err := s.exportAt(ctx, readBranch, at)
-	if err != nil {
-		return model.Export{}, nil, fmt.Errorf("read the %s export at %q: %w", at.role, at.commit, err)
-	}
-	return export, unlooped, nil
-}
-
-func (s *Store) exportAt(ctx context.Context, readBranch string, at commitRead) (model.Export, []storage.Unlooped, error) {
 	if err := s.checkout(ctx, readBranch); err != nil {
-		return model.Export{}, nil, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
+		return model.Export{}, nil, fmt.Errorf("switch to reconcile read branch %q to read %v: %w", readBranch, at, err)
 	}
-	unlooped, err := s.resetAndLift(ctx, at.commit, at.hold)
+	unlooped, err := s.resetAndLift(ctx, at)
 	if err != nil {
 		return model.Export{}, nil, err
 	}
 	export, err := s.Export(ctx)
 	if err != nil {
-		return model.Export{}, nil, err
+		return model.Export{}, nil, fmt.Errorf("export %v: %w", at, err)
 	}
 	return export, unlooped, nil
 }

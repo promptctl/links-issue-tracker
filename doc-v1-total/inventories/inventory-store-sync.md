@@ -571,19 +571,18 @@ The branch a session is on is per-connection state, and a fresh connection opens
 
 ### 5.12 Reading exports at fixed anchors
 
-`resetAndLift(ctx, commit) ([]storage.Unlooped, error)` (`sync_reconcile.go`):
-1. `CALL DOLT_RESET('--hard', commit)`; error `"reset scratch to %q: %w"`.
-2. `CALL DOLT_CLEAN()` (`execProcedureDiscard`, `sync.go`); error `"clean scratch at %q: %w"`. A hard reset keeps untracked tables, and an earlier lift on the branch leaves the tables its migrations created untracked (the lift commits nothing); the clean drops them so the working set is exactly the commit's (`sync_reconcile.go`).
-3. `s.liftWorkingSetToRegistry(ctx)`; error `"lift %q to current schema: %w"`.
-4. `cutParentLoops(ctx, s.db)`; error `"cut parent loops at %q: %w"`. Returns its cuts.
+`resetAndLift(ctx, at commitRead) ([]storage.Unlooped, error)` (`sync_reconcile.go`). `commitRead` is the commit, its role, and the hold bounding its lift: `fetchedHead.read()` for the remote head (its own hold), `unheldRead(role, commit)` for the base, local head, or a folded commit (unbounded). Every error names `at` as `the <role> "<commit>"`:
+1. `resetExactlyToRef(commit)`; error `"reset scratch to %v: %w"`. The exact reset drops tables an earlier lift on the branch left untracked.
+2. `s.liftWorkingSetToRegistry(ctx, at.hold)`; error `"lift %v to current schema: %w"`.
+3. `cutParentLoops(ctx, s.db)`; error `"cut parent loops in %v: %w"`. Returns its cuts.
 Only ever run on a scratch branch.
 
 `cutParentLoops(ctx, db) ([]storage.Unlooped, error)` (`sync_reconcile.go`): `loadParentEdges` (every stored `parent-child` edge, no hydration), then `storage.Unloop` on it (`01-data-model.md`), then for each cut `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = 'parent-child'` in the working set (error `"cut parent edge %s -> %s: %w"`). A commit an older lit or a hand edit wrote can hold a loop, and every read of a commit hydrates, which refuses a loop (`storage.ParentCycleError`); the cut is what lets a sync read such a commit. Tests `TestSyncReconcileCutsALoopTheRemoteHeadHolds`, `TestSyncReconcileCutsALoopTheLocalHeadHolds`, `TestSyncReconcileReplaysALoopAnUnpushedCommitHeldAfterItsRepair` (`sync_parent_loop_test.go`).
 
 `exportAtCommit(ctx, readBranch, at commitRead) (model.Export, []storage.Unlooped, error)` (`sync_reconcile.go`):
-1. `s.checkout(readBranch)` — the branch is an **argument**, never inherited from session state; error `"switch to reconcile read branch %q: %w"`.
-2. `resetAndLift(commit)`; every failure wrapped `"read the %s export at %q: %w"` (role, commit); `commitRead` is `fetchedHead.read()` for the remote head, `unheldRead(role, commit)` otherwise.
-3. `s.Export(ctx)`, returned with the lift's cuts.
+1. `s.checkout(readBranch)` — the branch is an **argument**, never inherited from session state; error `"switch to reconcile read branch %q to read %v: %w"`.
+2. `resetAndLift(at)`, its error unwrapped.
+3. `s.Export(ctx)`; error `"export %v: %w"`. Returned with the lift's cuts.
 
 ### 5.13 `mergeAndReplay` — the shared merge/settle/replay tail
 

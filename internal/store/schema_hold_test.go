@@ -298,7 +298,7 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 	if !errors.As(err, &lift) || *lift != refused.Lift {
 		t.Errorf("refusal %v does not wrap the lift's own refusal", err)
 	}
-	if want := fmt.Sprintf("read the remote head export at %q", heldHead); !strings.Contains(errors.Unwrap(refused).Error(), want) {
+	if want := fmt.Sprintf("lift the remote head %q to current schema", heldHead); !strings.Contains(errors.Unwrap(refused).Error(), want) {
 		t.Errorf("refusal's cause %q does not name the read it stopped at, want %q", errors.Unwrap(refused), want)
 	}
 	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
