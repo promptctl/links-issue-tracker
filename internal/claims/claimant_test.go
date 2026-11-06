@@ -16,7 +16,7 @@ const fieldUpdate = model.ActionName("")
 // it — deliberately unhydrated, because ClaimantOf touches no lifecycle state:
 // it reads the assignee column and the events handed to it, and nothing else.
 func ticket(assignee string) model.Issue {
-	return model.Issue{ID: "T", Assignee: assignee}
+	return model.Issue{ID: "T", Assignee: model.Text(assignee)}
 }
 
 func TestClaimantOf(t *testing.T) {

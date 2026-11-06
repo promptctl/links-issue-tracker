@@ -122,7 +122,7 @@ func describeClaimant(c claims.Claimant) string {
 	case c.Assignee == "":
 		return nameCheckout(c.Checkout)
 	case !c.Checkout.Present():
-		return c.Assignee
+		return fmt.Sprint(c.Assignee)
 	}
 	return fmt.Sprintf("%s (%s)", c.Assignee, nameCheckout(c.Checkout))
 }

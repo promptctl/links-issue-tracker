@@ -43,8 +43,8 @@ func normalizeEvents(events []model.IssueEvent, keep func(id string) bool) map[s
 		out[ev.ID] = normEvent{
 			IssueID:   ev.IssueID,
 			Action:    ev.Action,
-			Reason:    ev.Reason,
-			Actor:     ev.Actor,
+			Reason:    ev.Reason.Raw(),
+			Actor:     ev.Actor.Raw(),
 			CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339Nano),
 			Changes:   changes,
 		}

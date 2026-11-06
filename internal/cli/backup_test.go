@@ -268,7 +268,7 @@ func TestRepeatedRestoresKeepEveryDistinctBackup(t *testing.T) {
 		}
 		var titles []string
 		for _, issue := range export.Issues {
-			titles = append(titles, issue.Title)
+			titles = append(titles, issue.Title.Raw())
 		}
 		slices.Sort(titles)
 		held = append(held, strings.Join(titles, ","))

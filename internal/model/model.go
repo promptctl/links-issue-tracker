@@ -82,7 +82,7 @@ var (
 // issue behavior across duplicate types.
 type Issue struct {
 	ID          string `json:"id"`
-	Title       string `json:"title"`
+	Title       Text   `json:"title"`
 	Description string `json:"description"`
 	Prompt      string `json:"prompt,omitempty"`
 	// Plan is how the work will be done, written before it starts so a
@@ -91,18 +91,18 @@ type Issue struct {
 	Plan      string    `json:"plan,omitempty"`
 	Priority  Priority  `json:"priority"`
 	IssueType IssueType `json:"issue_type"`
-	Topic     string    `json:"topic"`
+	Topic     Text      `json:"topic"`
 	// Assignee is the issue's owner — orthogonal to the status state machine and
 	// preserved across every transition. [LAW:one-source-of-truth] One home for
 	// ownership; the lifecycle leaf carries no assignee.
-	Assignee string `json:"assignee,omitempty"`
+	Assignee Text   `json:"assignee,omitempty"`
 	Rank     string `json:"rank"`
 	// Lane partitions an epic's children into parallel rank-ordered
 	// sub-sequences: same lane → sequenced by rank, different lanes → parallel.
 	// Empty string is the shared default lane (fully-sequential). Meaningful
 	// only within an epic; the readiness gate is what scopes it.
-	Lane   string   `json:"lane"`
-	Labels []string `json:"labels"`
+	Lane   Text   `json:"lane"`
+	Labels []Text `json:"labels"`
 	// FollowsUp is the id of the ticket this one was filed as a follow-up of
 	// (`lit followup --on`), or empty for every ticket that was not. It is a
 	// birth fact: written once at creation and absent from UpdateIssueInput, so
@@ -230,7 +230,7 @@ func LaneOf(issue Issue, parent *Issue) LaneID {
 	if parent == nil || !parent.IsContainer() {
 		return LaneID{key: issue.ID, solo: true}
 	}
-	return LaneID{epic: parent.ID, key: issue.Lane}
+	return LaneID{epic: parent.ID, key: issue.Lane.Raw()}
 }
 
 // LaneFamily is every issue whose history a write on issueID is stamped
@@ -286,6 +286,17 @@ func (l LaneID) String() string {
 	return l.epic + "#" + l.key
 }
 
+// Format prints the lane as String does, each part held to its row, so a
+// lane key holding a break cannot start a line of its own wherever fmt prints
+// a lane. String stays the stored text, for keys and comparison.
+func (l LaneID) Format(f fmt.State, verb rune) {
+	if l.solo {
+		_, _ = f.Write([]byte(HoldRow(l.key)))
+		return
+	}
+	_, _ = f.Write([]byte(HoldRow(l.epic) + "#" + HoldRow(l.key)))
+}
+
 // Describe renders the lane for a sentence a person or an agent reads, and
 // reports whether the lane is anything the sentence should name at all.
 //
@@ -308,9 +319,9 @@ func (l LaneID) Describe() (string, bool) {
 		return "", false
 	}
 	if l.key == "" {
-		return fmt.Sprintf("the default lane of epic %s", l.epic), true
+		return fmt.Sprintf("the default lane of epic %s", HoldRow(l.epic)), true
 	}
-	return fmt.Sprintf("lane %s of epic %s", l.key, l.epic), true
+	return fmt.Sprintf("lane %s of epic %s", HoldRow(l.key), HoldRow(l.epic)), true
 }
 
 // Capabilities reports the issue's structural lifecycle capabilities. Whether an
@@ -522,7 +533,7 @@ func (i Issue) StatusValue() string {
 	return string(status.Value)
 }
 
-func (i Issue) AssigneeValue() string {
+func (i Issue) AssigneeValue() Text {
 	return i.Assignee
 }
 
@@ -628,18 +639,18 @@ func (i Issue) lifecycleOrError() (lifecycle.Lifecycle, error) {
 
 type issueJSON struct {
 	ID          string                `json:"id"`
-	Title       string                `json:"title"`
+	Title       Text                  `json:"title"`
 	Description string                `json:"description"`
 	Prompt      string                `json:"prompt,omitempty"`
 	Plan        string                `json:"plan,omitempty"`
 	Status      *State                `json:"status,omitempty"`
 	Priority    Priority              `json:"priority"`
 	IssueType   IssueType             `json:"issue_type"`
-	Topic       string                `json:"topic"`
-	Assignee    string                `json:"assignee,omitempty"`
+	Topic       Text                  `json:"topic"`
+	Assignee    Text                  `json:"assignee,omitempty"`
 	Rank        string                `json:"rank"`
-	Lane        string                `json:"lane"`
-	Labels      []string              `json:"labels"`
+	Lane        Text                  `json:"lane"`
+	Labels      []Text                `json:"labels"`
 	FollowsUp   string                `json:"follows_up,omitempty"`
 	CreatedAt   time.Time             `json:"created_at"`
 	UpdatedAt   time.Time             `json:"updated_at"`
@@ -778,7 +789,7 @@ type Relation struct {
 	DstID     string       `json:"dst_id"`
 	Type      RelationType `json:"type"`
 	CreatedAt time.Time    `json:"created_at"`
-	CreatedBy string       `json:"created_by"`
+	CreatedBy Text         `json:"created_by"`
 }
 
 type Comment struct {
@@ -786,14 +797,14 @@ type Comment struct {
 	IssueID   string    `json:"issue_id"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by"`
+	CreatedBy Text      `json:"created_by"`
 }
 
 type Label struct {
 	IssueID   string    `json:"issue_id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by"`
+	CreatedBy Text      `json:"created_by"`
 }
 
 // FieldChange describes a single field's transition within an IssueEvent.
@@ -930,8 +941,8 @@ type IssueEvent struct {
 	ID          string        `json:"id"`
 	IssueID     string        `json:"issue_id"`
 	Action      string        `json:"action,omitempty"`
-	Reason      string        `json:"reason"`
-	Actor       string        `json:"actor"`
+	Reason      Text          `json:"reason"`
+	Actor       Text          `json:"actor"`
 	CreatedAt   time.Time     `json:"created_at"`
 	Attribution Attribution   `json:"attribution,omitzero"`
 	Changes     []FieldChange `json:"changes"`
@@ -1067,8 +1078,8 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 				ID:        v1EventID(h.IssueID, h.Action, h.FromStatus, h.ToStatus, h.CreatedBy, h.CreatedAt),
 				IssueID:   h.IssueID,
 				Action:    h.Action,
-				Reason:    h.Reason,
-				Actor:     h.CreatedBy,
+				Reason:    Text(h.Reason),
+				Actor:     Text(h.CreatedBy),
 				CreatedAt: h.CreatedAt,
 				Changes:   []FieldChange{{Field: "status", From: h.FromStatus, To: h.ToStatus}},
 			})

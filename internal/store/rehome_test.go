@@ -61,7 +61,7 @@ func TestUnfiledEpicMatchesMigration00007(t *testing.T) {
 			minted = issue
 		}
 	}
-	got := row{title: minted.Title, description: minted.Description, topic: minted.Topic, issueType: string(minted.IssueType), rank: minted.Rank, lane: minted.Lane, priority: int(minted.Priority), createdAt: minted.CreatedAt, updatedAt: minted.UpdatedAt}
+	got := row{title: minted.Title.Raw(), description: minted.Description, topic: minted.Topic.Raw(), issueType: string(minted.IssueType), rank: minted.Rank, lane: minted.Lane.Raw(), priority: int(minted.Priority), createdAt: minted.CreatedAt, updatedAt: minted.UpdatedAt}
 	if got != migrated {
 		t.Errorf("minted unfiled epic differs from the row 00007 writes:\n minted %+v\nmigrate %+v", got, migrated)
 	}
@@ -73,7 +73,7 @@ func TestUnfiledEpicMatchesMigration00007(t *testing.T) {
 		t.Fatalf("read the migrated edge: %v", err)
 	}
 	for _, r := range homed.Relations {
-		if r.SrcID == "acme-core-bb22" && (!r.CreatedAt.Equal(mustParseTime(t, edgeAt)) || r.CreatedBy != edgeBy) {
+		if r.SrcID == "acme-core-bb22" && (!r.CreatedAt.Equal(mustParseTime(t, edgeAt)) || r.CreatedBy.Raw() != edgeBy) {
 			t.Errorf("minted edge stamped %s by %q; 00007 stamps %s by %q", r.CreatedAt, r.CreatedBy, edgeAt, edgeBy)
 		}
 	}
@@ -103,7 +103,7 @@ func TestHomeStrandedHomesWhatMigration00007Homes(t *testing.T) {
 	}
 	lanes := map[string]string{}
 	for _, issue := range out.Issues {
-		lanes[issue.ID] = issue.Lane
+		lanes[issue.ID] = issue.Lane.Raw()
 	}
 	for id, want := range containmentLanes {
 		if lanes[id] != want {
@@ -117,7 +117,7 @@ type exportSeeder struct{ export model.Export }
 
 func (s *exportSeeder) issue(row seedRow) {
 	topic, title := row.topicAndTitle()
-	issue := model.Issue{ID: row.id, Title: title, IssueType: model.IssueType(row.issueType), Topic: topic, Rank: row.rank, Lane: row.lane, CreatedAt: migrationSeedBorn, UpdatedAt: migrationSeedBorn}
+	issue := model.Issue{ID: row.id, Title: model.Text(title), IssueType: model.IssueType(row.issueType), Topic: model.Text(topic), Rank: row.rank, Lane: model.Text(row.lane), CreatedAt: migrationSeedBorn, UpdatedAt: migrationSeedBorn}
 	if row.deleted {
 		issue.SetRetention(model.Deleted{At: migrationSeedBorn})
 	}

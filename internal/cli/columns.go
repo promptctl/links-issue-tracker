@@ -84,18 +84,18 @@ const (
 // because each entry declares its own source; a new column cannot be added and
 // then served less data than its cell needs.
 var columnRegistry = []columnSpec{
-	{name: "id", render: func(i model.Issue, _ derivedColumns) string { return i.ID }},
+	{name: "id", render: func(i model.Issue, _ derivedColumns) string { return model.HoldRow(i.ID) }},
 	{name: "state", render: func(i model.Issue, _ derivedColumns) string { return formatIssueState(i) }},
 	{name: "type", render: func(i model.Issue, _ derivedColumns) string { return string(i.IssueType) }},
-	{name: "topic", render: func(i model.Issue, _ derivedColumns) string { return i.Topic }},
+	{name: "topic", render: func(i model.Issue, _ derivedColumns) string { return fmt.Sprint(i.Topic) }},
 	{name: "priority", render: func(i model.Issue, _ derivedColumns) string { return i.Priority.String() }},
-	{name: "title", render: func(i model.Issue, _ derivedColumns) string { return i.Title }},
+	{name: "title", render: func(i model.Issue, _ derivedColumns) string { return fmt.Sprint(i.Title) }},
 	// rank is printable because it is the key `lit ls` orders by; a listing
 	// that cannot show its own sort key forces the reader to infer the order.
 	{name: "rank", render: func(i model.Issue, _ derivedColumns) string { return emptyDash(i.Rank) }},
-	{name: "assignee", render: func(i model.Issue, _ derivedColumns) string { return emptyDash(i.AssigneeValue()) }},
+	{name: "assignee", render: func(i model.Issue, _ derivedColumns) string { return emptyDash(fmt.Sprint(i.AssigneeValue())) }},
 	{name: "labels", render: func(i model.Issue, _ derivedColumns) string {
-		return emptyDash(strings.Join(i.Labels, ","))
+		return emptyDash(joinTexts(i.Labels, ","))
 	}},
 	{name: "updated_at", render: func(i model.Issue, _ derivedColumns) string {
 		return i.UpdatedAt.Format(time.RFC3339)

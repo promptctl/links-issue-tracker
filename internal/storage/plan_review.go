@@ -74,7 +74,7 @@ func PlanReviewOf(issue model.Issue, events []model.IssueEvent, in AddPlanReview
 		PlanDigest: digest,
 		Verdict:    verdict,
 		Laws:       laws,
-		CreatedBy:  reviewer,
+		CreatedBy:  model.Text(reviewer),
 	}, nil
 }
 

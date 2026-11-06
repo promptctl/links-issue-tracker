@@ -1213,7 +1213,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	}
 	titles := make([]string, 0, len(issues))
 	for _, issue := range issues {
-		titles = append(titles, issue.Title)
+		titles = append(titles, issue.Title.Raw())
 	}
 	slices.Sort(titles)
 	if !slices.Equal(titles, []string{"remote-epic", "remote-ticket"}) {

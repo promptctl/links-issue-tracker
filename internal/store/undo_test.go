@@ -137,7 +137,7 @@ func TestRevertWritesPutsAFieldEditBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if got.Title != "before" || !slices.Equal(got.Labels, []string{"keep"}) {
+	if got.Title != "before" || !slices.Equal(model.RawTexts(got.Labels), []string{"keep"}) {
 		t.Errorf("after the undo: title %q, labels %v; want before, [keep]", got.Title, got.Labels)
 	}
 	detail, err := st.GetIssueDetail(ctx, task.ID)
@@ -145,7 +145,7 @@ func TestRevertWritesPutsAFieldEditBack(t *testing.T) {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
 	last := detail.Events[len(detail.Events)-1]
-	if last.Reason != "undo "+edit || last.Actor != "undoer" {
+	if last.Reason.Raw() != "undo "+edit || last.Actor != "undoer" {
 		t.Errorf("the undo's event = %+v, want reason %q by undoer", last, "undo "+edit)
 	}
 	if _, err := st.RevertWrites(ctx, result.Landed, "undoer"); err != nil {
@@ -180,7 +180,7 @@ func TestRevertWritesPutsALabelVerbBack(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetIssue() error = %v", err)
 		}
-		if !slices.Equal(got.Labels, tc.want) {
+		if !slices.Equal(model.RawTexts(got.Labels), tc.want) {
 			t.Errorf("after undoing %+v, labels = %v, want %v", tc.verb, got.Labels, tc.want)
 		}
 	}

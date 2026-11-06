@@ -323,7 +323,7 @@ func (s *Store) AddRelation(ctx context.Context, in storage.AddRelationInput) (m
 	}
 	srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)
 	now := s.clock.Now()
-	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: now, CreatedBy: storage.Actor(in.CreatedBy)}
+	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: now, CreatedBy: model.Text(storage.Actor(in.CreatedBy))}
 	if err := s.withMutation(ctx, "add relation", func(ctx context.Context, tx *sql.Tx) error {
 		return addRelationTx(ctx, tx, rel)
 	}); err != nil {
@@ -787,7 +787,7 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 		DstID:     in.ParentID,
 		Type:      model.RelParentChild,
 		CreatedAt: s.clock.Now(),
-		CreatedBy: storage.Actor(in.CreatedBy),
+		CreatedBy: model.Text(storage.Actor(in.CreatedBy)),
 	}
 	if err := s.withMutation(ctx, "set parent", func(ctx context.Context, tx *sql.Tx) error {
 		// [LAW:single-enforcer] SetParent is one validated caller of the shared

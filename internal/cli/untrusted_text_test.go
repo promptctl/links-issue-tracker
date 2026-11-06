@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // TestQuoteRemoteBreaksOnEveryLineSeparator pins what fenced() counts as a line.
@@ -89,7 +91,7 @@ func TestQuoteRemoteInlineBoundsTheValue(t *testing.T) {
 func TestQuoteRemoteInlineJoinsLinesWithoutFabricatingStructure(t *testing.T) {
 	t.Parallel()
 	got := quoteRemote("first\u2028second").inline()
-	if strings.Count(got, quotedInlineOpen) != 1 || !strings.Contains(got, quotedBreak) {
+	if strings.Count(got, quotedInlineOpen) != 1 || !strings.Contains(got, model.QuotedBreak) {
 		t.Fatalf("inline() = %q, want one bounded token whose break is stated", got)
 	}
 }
@@ -115,8 +117,8 @@ func TestQuoteRemoteInlineBoundingSurvivesADelimiterInTheValue(t *testing.T) {
 // one value into two apparent ones.
 func TestQuoteRemoteDefusesTheBreakToken(t *testing.T) {
 	t.Parallel()
-	got := quoteRemote("first" + quotedBreak + "second").inline()
-	if strings.Contains(got, quotedBreak) {
+	got := quoteRemote("first" + model.QuotedBreak + "second").inline()
+	if strings.Contains(got, model.QuotedBreak) {
 		t.Fatalf("inline() = %q, want the written break token defused", got)
 	}
 }
@@ -166,7 +168,7 @@ func TestDefusedTextCarriesNoDelimiter(t *testing.T) {
 	t.Parallel()
 	delimiters := []string{
 		agentInstructionsOpen, agentInstructionsClose,
-		quotedBreak, quotedInlineOpen, quotedInlineClose,
+		model.QuotedBreak, quotedInlineOpen, quotedInlineClose,
 	}
 	for _, written := range delimiters {
 		t.Run(written, func(t *testing.T) {

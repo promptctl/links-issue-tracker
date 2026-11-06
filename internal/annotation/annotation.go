@@ -142,8 +142,8 @@ type Annotation struct {
 // the single most important context for an agent deciding which leaf to
 // claim.
 type ParentEpicRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID    string     `json:"id"`
+	Title model.Text `json:"title"`
 }
 
 // AnnotatedIssue pairs an issue with its computed annotations.

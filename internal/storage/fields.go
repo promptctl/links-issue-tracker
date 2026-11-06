@@ -309,9 +309,9 @@ var issueFields = []issueField{
 	patchField("title", ShortText,
 		func(in *UpdateIssueInput) **string { return &in.Title },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Title }),
-		func(issue *model.Issue, v string) error { issue.Title = strings.TrimSpace(v); return nil },
-		func(issue model.Issue) string { return issue.Title },
-		func(issue *model.Issue, v string) { issue.Title = v }, asText).
+		func(issue *model.Issue, v string) error { issue.Title = model.Text(strings.TrimSpace(v)); return nil },
+		func(issue model.Issue) string { return issue.Title.Raw() },
+		func(issue *model.Issue, v string) { issue.Title = model.Text(v) }, asText).
 		admitting(func(text string) error { _, err := ParseTitle(text); return err }),
 	patchField("description", LongText,
 		func(in *UpdateIssueInput) **string { return &in.Description },
@@ -381,17 +381,17 @@ var issueFields = []issueField{
 			if err != nil {
 				return err
 			}
-			issue.Assignee = assignee
+			issue.Assignee = model.Text(assignee)
 			return nil
 		},
-		func(issue model.Issue) string { return issue.AssigneeValue() },
-		func(issue *model.Issue, v string) { issue.Assignee = v }, asText),
+		func(issue model.Issue) string { return issue.AssigneeValue().Raw() },
+		func(issue *model.Issue, v string) { issue.Assignee = model.Text(v) }, asText),
 	patchField("lane", ShortText,
 		func(in *UpdateIssueInput) **string { return &in.Lane },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Lane }),
-		func(issue *model.Issue, v string) error { issue.Lane = strings.TrimSpace(v); return nil },
-		func(issue model.Issue) string { return issue.Lane },
-		func(issue *model.Issue, v string) { issue.Lane = v }, asText).
+		func(issue *model.Issue, v string) error { issue.Lane = model.Text(strings.TrimSpace(v)); return nil },
+		func(issue model.Issue) string { return issue.Lane.Raw() },
+		func(issue *model.Issue, v string) { issue.Lane = model.Text(v) }, asText).
 		admitting(func(text string) error { _, err := ParseLane(text); return err }),
 	patchField("labels", ShortText,
 		func(in *UpdateIssueInput) **[]string { return &in.Labels },
@@ -401,11 +401,11 @@ var issueFields = []issueField{
 			if err != nil {
 				return err
 			}
-			issue.Labels = labels
+			issue.Labels = model.Texts(labels)
 			return nil
 		},
-		func(issue model.Issue) []string { return issue.Labels },
-		func(issue *model.Issue, v []string) { issue.Labels = slices.Clone(v) },
+		func(issue model.Issue) []string { return model.RawTexts(issue.Labels) },
+		func(issue *model.Issue, v []string) { issue.Labels = model.Texts(v) },
 		// A label cannot hold a comma (model.NormalizeLabel), so the joined set
 		// splits back into exactly the labels it was joined from; the empty
 		// text is the empty set.

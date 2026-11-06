@@ -190,9 +190,9 @@ func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
 // through a needless delete-and-reinsert.
 func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
 	t.Parallel()
-	before := hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t", Labels: []string{"keep"}}, model.StateOpen)
+	before := hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t", Labels: model.Texts([]string{"keep"})}, model.StateOpen)
 	after := before
-	after.Labels = []string{"keep", "urgent"}
+	after.Labels = model.Texts([]string{"keep", "urgent"})
 
 	kept := model.Label{IssueID: "a", Name: "keep"}
 	added := model.Label{IssueID: "a", Name: "urgent"}

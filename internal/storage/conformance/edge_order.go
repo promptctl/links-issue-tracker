@@ -49,7 +49,7 @@ func relationsAndCommentsAreTotallyOrdered(t *testing.T, ctx context.Context, st
 				t.Fatalf("AddRelation related-to %s: %v", peer.ID, err)
 			}
 			for _, nth := range []string{"first", "second"} {
-				if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: subject.ID, Body: storagetest.CommentBody(t, nth+" on "+peer.Title), CreatedBy: "ada"}); err != nil {
+				if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: subject.ID, Body: storagetest.CommentBody(t, nth+" on "+peer.Title.Raw()), CreatedBy: "ada"}); err != nil {
 					t.Fatalf("AddComment: %v", err)
 				}
 			}

@@ -236,17 +236,17 @@ func issueEqual(left *model.Issue, right *model.Issue) bool {
 
 type issueProjection struct {
 	ID          string
-	Title       string
+	Title       model.Text
 	Description string
 	Prompt      string
 	Plan        string
 	Priority    model.Priority
 	IssueType   model.IssueType
-	Topic       string
-	Assignee    string
+	Topic       model.Text
+	Assignee    model.Text
 	Rank        string
-	Lane        string
-	Labels      []string
+	Lane        model.Text
+	Labels      []model.Text
 	FollowsUp   string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -276,7 +276,7 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 		Assignee:     issue.AssigneeValue(),
 		Rank:         issue.Rank,
 		Lane:         issue.Lane,
-		Labels:       append([]string{}, issue.Labels...),
+		Labels:       append([]model.Text{}, issue.Labels...),
 		FollowsUp:    issue.FollowsUp,
 		CreatedAt:    issue.CreatedAt,
 		UpdatedAt:    issue.UpdatedAt,

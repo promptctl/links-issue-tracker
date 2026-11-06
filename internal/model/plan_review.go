@@ -32,7 +32,7 @@ type PlanReview struct {
 	// each once. A fail cites at least one.
 	Laws      []Law     `json:"laws"`
 	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by"`
+	CreatedBy Text      `json:"created_by"`
 }
 
 // Judges reports whether this review judged the plan text plan.

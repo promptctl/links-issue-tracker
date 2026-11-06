@@ -111,7 +111,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetIssueDetail error = %v", err)
 		}
-		if len(detail.Comments) != 1 || detail.Comments[0].CreatedBy != want {
+		if len(detail.Comments) != 1 || detail.Comments[0].CreatedBy.Raw() != want {
 			t.Fatalf("comments = %+v, want one by %q (raw $USER must not leak)", detail.Comments, want)
 		}
 	})
@@ -125,7 +125,7 @@ func assertLabelActor(t *testing.T, ap *app.App, issueID, label, want string) {
 	}
 	for _, l := range export.Labels {
 		if l.IssueID == issueID && l.Name == label {
-			if l.CreatedBy != want {
+			if l.CreatedBy.Raw() != want {
 				t.Fatalf("label %q CreatedBy = %q, want %q (raw $USER must not leak)", label, l.CreatedBy, want)
 			}
 			return
@@ -144,7 +144,7 @@ func assertRelationActor(t *testing.T, ap *app.App, issueID string, relType mode
 		t.Fatalf("no %s relation recorded for %q", relType, issueID)
 	}
 	for _, rel := range rels {
-		if rel.CreatedBy != want {
+		if rel.CreatedBy.Raw() != want {
 			t.Fatalf("%s relation CreatedBy = %q, want %q (raw $USER must not leak)", relType, rel.CreatedBy, want)
 		}
 	}
@@ -158,7 +158,7 @@ func assertCloseEventActor(t *testing.T, ap *app.App, issueID, want string) {
 	}
 	for _, ev := range detail.Events {
 		if ev.Action == string(model.ActionClose) {
-			if ev.Actor != want {
+			if ev.Actor.Raw() != want {
 				t.Fatalf("close event Actor = %q, want %q (raw $USER must not leak)", ev.Actor, want)
 			}
 			return

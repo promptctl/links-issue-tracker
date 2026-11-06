@@ -159,7 +159,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 					t.Fatalf("Apply(%s, %s) error = %v, want success", issueType, combo.name, err)
 				}
 
-				if in.Fields.Title != nil && updated.Issue.Title != *in.Fields.Title {
+				if in.Fields.Title != nil && updated.Issue.Title.Raw() != *in.Fields.Title {
 					t.Fatalf("Apply(%s, %s) title = %q, want %q", issueType, combo.name, updated.Issue.Title, *in.Fields.Title)
 				}
 				if in.Fields.Description != nil && updated.Issue.Description != *in.Fields.Description {
@@ -168,7 +168,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				if in.Fields.Priority != nil && updated.Issue.Priority != *in.Fields.Priority {
 					t.Fatalf("Apply(%s, %s) priority = %d, want %d", issueType, combo.name, updated.Issue.Priority, *in.Fields.Priority)
 				}
-				if in.Fields.Labels != nil && strings.Join(updated.Issue.Labels, ",") != strings.Join(*in.Fields.Labels, ",") {
+				if in.Fields.Labels != nil && strings.Join(model.RawTexts(updated.Issue.Labels), ",") != strings.Join(*in.Fields.Labels, ",") {
 					t.Fatalf("Apply(%s, %s) labels = %v, want %v", issueType, combo.name, updated.Issue.Labels, *in.Fields.Labels)
 				}
 				// Every action-carrying combo drives the status machine, so the

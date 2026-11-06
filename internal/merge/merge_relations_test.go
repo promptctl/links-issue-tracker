@@ -120,7 +120,7 @@ func collided(t *testing.T) collidedFixture {
 	born := func(hour int) time.Time { return time.Date(2026, 8, 27, hour, 0, 0, 0, time.UTC) }
 	sixteen := func(hour int, title string) model.Issue {
 		return leaf(t, "epic.16", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
-			i.Title = title
+			i.Title = model.Text(title)
 			i.CreatedAt = born(hour)
 		})
 	}

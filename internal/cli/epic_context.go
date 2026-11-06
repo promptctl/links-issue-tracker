@@ -376,7 +376,7 @@ func (x crossEpicEdges) empty() bool {
 // are here)".
 func renderEpicContext(ec EpicContext) string {
 	var b strings.Builder
-	fmt.Fprintln(&b, singleLine(fmt.Sprintf("Epic: %s — %s", ec.Epic.ID, ec.Epic.Title)))
+	fmt.Fprintln(&b, fmt.Sprintf("Epic: %s — %s", model.HoldRow(ec.Epic.ID), ec.Epic.Title))
 	fmt.Fprintf(&b, "Why: %s\n", firstLine(ec.Epic.Description))
 	b.WriteString("\nChildren:\n")
 	b.WriteString(renderChildren(ec.Children, ec.Focused))
@@ -438,7 +438,7 @@ func renderChildLine(child epicChild, focused bool) string {
 	if focused {
 		prefix, suffix = "  ▶ ", "   (you are here)"
 	}
-	return singleLine(fmt.Sprintf("%s%-*s %s  %s%s%s", prefix, statusMarkerWidth, child.Status.marker(), child.Issue.ID, child.Issue.Title, laneTag(child.Issue.Lane), suffix)) + "\n"
+	return fmt.Sprintf("%s%-*s %s  %s%s%s", prefix, statusMarkerWidth, child.Status.marker(), model.HoldRow(child.Issue.ID), child.Issue.Title, laneTag(child.Issue.Lane), suffix) + "\n"
 }
 
 // laneTag renders a child's lane as an inline tag so the epic plan shows which
@@ -446,11 +446,11 @@ func renderChildLine(child epicChild, focused bool) string {
 // parallel). The empty lane — the fully-sequential default — renders as nothing.
 // [LAW:dataflow-not-control-flow] The tag is a pure function of the lane value;
 // the empty case is data rendering to empty, not a branch the caller manages.
-func laneTag(lane string) string {
+func laneTag(lane model.Text) string {
 	if lane == "" {
 		return ""
 	}
-	return "  [lane: " + lane + "]"
+	return "  [lane: " + fmt.Sprint(lane) + "]"
 }
 
 // firstLine returns the first non-blank line of s as prose: surrounding
@@ -458,7 +458,7 @@ func laneTag(lane string) string {
 // descriptions conventionally open with a "# Heading" the "why" should read
 // past.
 func firstLine(s string) string {
-	for _, line := range strings.Split(s, "\n") {
+	for _, line := range model.TextLines(s) {
 		trimmed := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(line), "#"))
 		if trimmed != "" {
 			return trimmed

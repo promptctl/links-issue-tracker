@@ -57,7 +57,7 @@ func TestThreeWayEmitsProsePendingForConcurrentTitleRewrite(t *testing.T) {
 func TestThreeWayEmptyBaseUnionsUnrelatedSides(t *testing.T) {
 	now := time.Now().UTC()
 	mk := func(id, title string) model.Issue {
-		return issueWithStatus(t, model.Issue{ID: id, Title: title, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
+		return issueWithStatus(t, model.Issue{ID: id, Title: model.Text(title), IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
 	}
 	local := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{mk("only-local", "L"), mk("shared", "from-B")}}
 	remote := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{mk("only-remote", "R"), mk("shared", "from-A")}}
@@ -118,7 +118,7 @@ func TestIssueEqualTreatsNilAndEmptyLabelsAsEquivalent(t *testing.T) {
 	withNil := base
 	withNil.Labels = nil
 	withEmpty := base
-	withEmpty.Labels = []string{}
+	withEmpty.Labels = model.Texts([]string{})
 	if !issueEqual(&withNil, &withEmpty) {
 		t.Fatalf("issueEqual(nil, []) = false; nil and empty Labels must compare equal so JSON wire round-trip drift does not synthesize spurious changes")
 	}
@@ -132,7 +132,7 @@ func issueClosedWith(t *testing.T, id string, closedAt time.Time, resolution mod
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	res := resolution
 	hydrated, err := model.HydrateStatus(
-		model.Issue{ID: id, Title: id, Priority: 0, IssueType: "task", CreatedAt: fixed, UpdatedAt: fixed},
+		model.Issue{ID: id, Title: model.Text(id), Priority: 0, IssueType: "task", CreatedAt: fixed, UpdatedAt: fixed},
 		model.StatusView{Value: model.StateClosed, ClosedAt: &closedAt, Resolution: &res},
 	)
 	if err != nil {
@@ -199,7 +199,7 @@ func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 	}
 	merged := map[string]string{}
 	for _, issue := range provisional(t, result).Issues {
-		merged[issue.ID] = issue.Title
+		merged[issue.ID] = issue.Title.Raw()
 	}
 	if merged["i1"] != "local i1" || merged["i2"] != "remote i2" {
 		t.Fatalf("merged titles = %#v", merged)

@@ -615,7 +615,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			DstID:     cellString(rec["dst_id"]),
 			Type:      model.RelationTypeFromStored(cellString(rec["type"])), // [LAW:single-enforcer] exception: lifeboat salvage conserves bytes, reading a pre-v8 store's spelling as today's; Doctor re-checks
 			CreatedAt: cellTime(rec["created_at"]),
-			CreatedBy: cellString(rec["created_by"]),
+			CreatedBy: model.Text(cellString(rec["created_by"])),
 		})
 	}
 	for _, rec := range records[collComments] {
@@ -624,7 +624,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			IssueID:   cellString(rec["issue_id"]),
 			Body:      cellString(rec["body"]),
 			CreatedAt: cellTime(rec["created_at"]),
-			CreatedBy: cellString(rec["created_by"]),
+			CreatedBy: model.Text(cellString(rec["created_by"])),
 		})
 	}
 	for _, rec := range records[collLabels] {
@@ -632,7 +632,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			IssueID:   cellString(rec["issue_id"]),
 			Name:      cellString(rec["name"]),
 			CreatedAt: cellTime(rec["created_at"]),
-			CreatedBy: cellString(rec["created_by"]),
+			CreatedBy: model.Text(cellString(rec["created_by"])),
 		})
 	}
 
@@ -645,8 +645,8 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			ID:        cellString(rec["id"]),
 			IssueID:   cellString(rec["issue_id"]),
 			Action:    cellString(rec["action"]),
-			Reason:    cellString(rec["reason"]),
-			Actor:     cellString(rec["actor"]),
+			Reason:    model.Text(cellString(rec["reason"])),
+			Actor:     model.Text(cellString(rec["actor"])),
 			CreatedAt: cellTime(rec["created_at"]),
 			// A recovered dump carries whatever attribution the events had —
 			// including none, for anything older than the feature — and never
@@ -686,7 +686,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			Verdict:    model.PlanVerdict(cellString(rec["verdict"])),
 			Laws:       splitLaws(cellString(rec["laws"])),
 			CreatedAt:  cellTime(rec["created_at"]),
-			CreatedBy:  cellString(rec["created_by"]),
+			CreatedBy:  model.Text(cellString(rec["created_by"])),
 		})
 	}
 	return export, nil
@@ -701,17 +701,17 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 func buildIssue(rec map[string]any) (model.Issue, error) {
 	issue := model.Issue{
 		ID:          cellString(rec["id"]),
-		Title:       cellString(rec["title"]),
+		Title:       model.Text(cellString(rec["title"])),
 		Description: cellString(rec["description"]),
 		Prompt:      cellString(rec["prompt"]),
 		Plan:        cellString(rec["plan"]),
-		Lane:        cellString(rec["lane"]),
+		Lane:        model.Text(cellString(rec["lane"])),
 		// Raw conversions on the restore boundary, conserving values the DB
 		// CHECK constraints already vouch for — the salvage-path convention.
 		Priority:  model.Priority(cellInt(rec["priority"])),
 		IssueType: model.IssueType(cellString(rec["issue_type"])),
-		Topic:     cellString(rec["topic"]),
-		Assignee:  cellString(rec["assignee"]),
+		Topic:     model.Text(cellString(rec["topic"])),
+		Assignee:  model.Text(cellString(rec["assignee"])),
 		Rank:      cellString(rec["rank"]),
 		FollowsUp: cellString(rec["follows_up"]),
 		CreatedAt: cellTime(rec["created_at"]),

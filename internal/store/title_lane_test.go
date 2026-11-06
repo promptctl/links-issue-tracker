@@ -25,13 +25,13 @@ func seedStoredTitle(t *testing.T, st *Store, id, title string) {
 	}
 	for i := range export.Issues {
 		if export.Issues[i].ID == id {
-			export.Issues[i].Title = title
+			export.Issues[i].Title = model.Text(title)
 		}
 	}
 	if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
-	if got, err := st.GetIssue(ctx, id); err != nil || got.Title != title {
+	if got, err := st.GetIssue(ctx, id); err != nil || got.Title.Raw() != title {
 		t.Fatalf("seeded title = %q, %v; want %q", got.Title, err, title)
 	}
 }
@@ -118,7 +118,7 @@ func TestAReadOutOfAStoredBreakTitleReimports(t *testing.T) {
 			} else if err != nil {
 				t.Fatalf("BulkApply(the read-out) error = %v", err)
 			}
-			if got, _ := st.GetIssue(ctx, epic.ID); got.Title != tc.want {
+			if got, _ := st.GetIssue(ctx, epic.ID); got.Title.Raw() != tc.want {
 				t.Errorf("title = %q, want %q", got.Title, tc.want)
 			}
 		})

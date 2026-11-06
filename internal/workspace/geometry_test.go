@@ -205,7 +205,7 @@ func TestResolveAndTheEnumerationAgreeOnEveryCheckoutsIdentity(t *testing.T) {
 		if at < 0 {
 			t.Fatalf("token %q that Resolve gave %q is not in the enumeration %+v", token, checkout, checkouts)
 		}
-		if got, want := physicalPath(t, checkouts[at].Path), physicalPath(t, listedAt); got != want {
+		if got, want := physicalPath(t, checkouts[at].Path.Raw()), physicalPath(t, listedAt); got != want {
 			t.Fatalf("token %q is enumerated at %q, want where git lists the checkout that minted it, %q", token, got, want)
 		}
 	}

@@ -33,13 +33,13 @@ import (
 func sortKeys(ancestry RankAncestry) map[string]func(a, b model.Issue) int {
 	return map[string]func(a, b model.Issue) int{
 		"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
-		"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
+		"title":      func(a, b model.Issue) int { return strings.Compare(a.Title.Raw(), b.Title.Raw()) },
 		"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
 		"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
 		"rank":       ancestry.Compare,
 		"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
-		"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
-		"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
+		"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic.Raw(), b.Topic.Raw()) },
+		"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee.Raw(), b.Assignee.Raw()) },
 		"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
 		"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
 	}

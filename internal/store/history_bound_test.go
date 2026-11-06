@@ -309,10 +309,10 @@ func TestABoundKeptOnTheMirrorsCloneCollectsNothing(t *testing.T) {
 func backlogGrewBy(before, after model.Export, title string) bool {
 	titles := map[string]string{}
 	for _, issue := range after.Issues {
-		titles[issue.ID] = issue.Title
+		titles[issue.ID] = issue.Title.Raw()
 	}
 	for _, issue := range before.Issues {
-		if titles[issue.ID] != issue.Title {
+		if titles[issue.ID] != issue.Title.Raw() {
 			return false
 		}
 		delete(titles, issue.ID)

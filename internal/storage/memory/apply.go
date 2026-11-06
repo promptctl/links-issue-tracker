@@ -79,7 +79,7 @@ func (e *Engine) apply(id string, plan storage.ChangePlan) (storage.Change, stor
 	}
 
 	e.writeIssue(rec, patch.issue)
-	e.setLabels(rec.id, patch.issue.Labels, now, patch.actor)
+	e.setLabels(rec.id, model.RawTexts(patch.issue.Labels), now, patch.actor)
 	e.recordEvents(rec.id, actionEvents, now)
 	e.recordEvents(rec.id, patch.events, now)
 	issue, err := e.hydrate(rec, e.positions())
@@ -152,7 +152,7 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	// in Claimant.After, where both engines read it.
 	prior := claims.ClaimantOf(current, e.eventsFor(current.ID))
 	post := prior.After(action, e.attribution)
-	updated.Assignee = post.Assignee
+	updated.Assignee = model.Text(post.Assignee)
 	// A call whose target state and resulting claimant both already hold is
 	// the documented no-op: history records mutations that happened, not calls
 	// that were made. A same-state start that moves the claimant — a new
@@ -285,7 +285,7 @@ func statusChanges(before, after model.Issue) []model.FieldChange {
 		})
 	}
 	if before.Assignee != after.Assignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: before.Assignee, To: after.Assignee})
+		changes = append(changes, model.FieldChange{Field: "assignee", From: before.Assignee.Raw(), To: after.Assignee.Raw()})
 	}
 	return changes
 }
@@ -310,14 +310,14 @@ func retentionChanges(before, after model.Retention) []model.FieldChange {
 // mutation becomes stored state, which is what keeps every axis's plan from
 // having to know how the record spells itself. [LAW:single-enforcer]
 func (e *Engine) writeIssue(rec *record, issue model.Issue) {
-	rec.title = issue.Title
+	rec.title = issue.Title.Raw()
 	rec.description = issue.Description
 	rec.prompt = issue.Prompt
 	rec.plan = issue.Plan
 	rec.issueType = issue.IssueType
 	rec.priority = issue.Priority
-	rec.assignee = issue.Assignee
-	rec.lane = issue.Lane
+	rec.assignee = issue.Assignee.Raw()
+	rec.lane = issue.Lane.Raw()
 	rec.updatedAt = issue.UpdatedAt
 	rec.retention = issue.Retention()
 	rec.status = statusViewOf(issue)

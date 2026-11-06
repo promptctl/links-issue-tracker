@@ -13,7 +13,7 @@ import (
 // package itself exposes for exactly this. [LAW:effects-at-boundaries]
 func hydratedIssue(t *testing.T, id string, labels []string, state model.State) model.Issue {
 	t.Helper()
-	issue, err := model.HydrateStatus(model.Issue{ID: id, IssueType: model.TypeTask, Labels: labels}, model.StatusView{Value: state})
+	issue, err := model.HydrateStatus(model.Issue{ID: id, IssueType: model.TypeTask, Labels: model.Texts(labels)}, model.StatusView{Value: state})
 	if err != nil {
 		t.Fatalf("HydrateStatus() error = %v", err)
 	}

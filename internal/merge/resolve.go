@@ -2,7 +2,7 @@ package merge
 
 import (
 	"cmp"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -105,13 +105,13 @@ func ResolveIssue(in SameEntity) IssueResolution {
 	merged := *basis
 
 	merged.IssueType = mergedType
-	merged.Title = r.prose(ProseTitle, r.base.Title, ours.Title, theirs.Title)
+	merged.Title = model.Text(r.prose(ProseTitle, r.base.Title.Raw(), ours.Title.Raw(), theirs.Title.Raw()))
 	merged.Description = r.prose(ProseDescription, r.base.Description, ours.Description, theirs.Description)
 	merged.Prompt = r.prose(ProsePrompt, r.base.Prompt, ours.Prompt, theirs.Prompt)
 	merged.Plan = r.prose(ProsePlan, r.base.Plan, ours.Plan, theirs.Plan)
 	merged.Priority = twoTier(r.hasBase, r.base.Priority, ours.Priority, theirs.Priority, higher)
-	merged.Topic = twoTier(r.hasBase, r.base.Topic, ours.Topic, theirs.Topic, r.tiebreak)
-	merged.Lane = twoTier(r.hasBase, r.base.Lane, ours.Lane, theirs.Lane, r.tiebreak)
+	merged.Topic = twoTier(r.hasBase, r.base.Topic, ours.Topic, theirs.Topic, typedTiebreak[model.Text](&r))
+	merged.Lane = twoTier(r.hasBase, r.base.Lane, ours.Lane, theirs.Lane, typedTiebreak[model.Text](&r))
 	merged.Rank = twoTier(r.hasBase, r.base.Rank, ours.Rank, theirs.Rank, r.tiebreak)
 	merged.Labels = mergeLabelNames(r.hasBase, r.base.Labels, ours.Labels, theirs.Labels)
 	// A birth fact, so both sides normally agree; the two-tier rule covers the
@@ -207,7 +207,7 @@ func (r *resolver) resolveStatus(merged model.Issue) model.Issue {
 	// fields only when it actually exists; without a base every field is "changed"
 	// and the base operand is unused anyway.
 	baseState := 0
-	baseAssignee := ""
+	var baseAssignee model.Text
 	if r.hasBase {
 		baseState = stateRank(r.base.StatusValue())
 		baseAssignee = r.base.AssigneeValue()
@@ -215,7 +215,7 @@ func (r *resolver) resolveStatus(merged model.Issue) model.Issue {
 	state := stateFromRank(twoTier(r.hasBase, baseState, stateRank(r.ours.StatusValue()), stateRank(r.theirs.StatusValue()), higher))
 	// Assignee is an issue-level field resolved independently of state — it is not
 	// part of the lifecycle, so it travels on merged.Assignee, not the StatusView.
-	merged.Assignee = twoTier(r.hasBase, baseAssignee, r.ours.AssigneeValue(), r.theirs.AssigneeValue(), r.tiebreak)
+	merged.Assignee = twoTier(r.hasBase, baseAssignee, r.ours.AssigneeValue(), r.theirs.AssigneeValue(), typedTiebreak[model.Text](r))
 
 	var closedAt *time.Time
 	var resolution *model.Resolution
@@ -400,9 +400,9 @@ func boolBase(t *time.Time, hasBase bool) bool {
 // or both removing agree, so it only ever formalizes that agreement.
 // [LAW:single-enforcer] Set convergence is twoTier per element, the same rule
 // every scalar field uses, not a second label-specific policy.
-func mergeLabelNames(hasBase bool, base, ours, theirs []string) []string {
+func mergeLabelNames(hasBase bool, base, ours, theirs []model.Text) []model.Text {
 	baseSet, oursSet, theirsSet := nameSet(base), nameSet(ours), nameSet(theirs)
-	out := make([]string, 0, len(oursSet)+len(theirsSet))
+	out := make([]model.Text, 0, len(oursSet)+len(theirsSet))
 	for name := range unionNameSet(baseSet, oursSet, theirsSet) {
 		_, inBase := baseSet[name]
 		_, inOurs := oursSet[name]
@@ -414,22 +414,22 @@ func mergeLabelNames(hasBase bool, base, ours, theirs []string) []string {
 	if len(out) == 0 {
 		return nil
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
 func presentOr(ours, theirs bool) bool { return ours || theirs }
 
-func nameSet(names []string) map[string]struct{} {
-	out := make(map[string]struct{}, len(names))
+func nameSet(names []model.Text) map[model.Text]struct{} {
+	out := make(map[model.Text]struct{}, len(names))
 	for _, name := range names {
 		out[name] = struct{}{}
 	}
 	return out
 }
 
-func unionNameSet(sets ...map[string]struct{}) map[string]struct{} {
-	out := map[string]struct{}{}
+func unionNameSet(sets ...map[model.Text]struct{}) map[model.Text]struct{} {
+	out := map[model.Text]struct{}{}
 	for _, set := range sets {
 		for name := range set {
 			out[name] = struct{}{}

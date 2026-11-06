@@ -35,7 +35,7 @@ func formatEpicLine(epic *annotation.ParentEpicRef) string {
 	if epic == nil {
 		return ""
 	}
-	return singleLine(fmt.Sprintf("epic: %s  %s", epic.ID, epic.Title))
+	return fmt.Sprintf("epic: %s  %s", model.HoldRow(epic.ID), epic.Title)
 }
 
 // printEpicLine renders the indented "epic:" context line shown identically
@@ -83,7 +83,7 @@ func printIDListLine(w io.Writer, indent, label string, ids []string) error {
 }
 
 func printIssueSummary(w io.Writer, issue model.Issue) error {
-	_, err := fmt.Fprintln(w, singleLine(fmt.Sprintf("%s [%s/%s/%s/%s] %s%s", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))))
+	_, err := fmt.Fprintln(w, fmt.Sprintf("%s [%s/%s/%s/%s] %s%s", model.HoldRow(issue.ID), formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels)))
 	return err
 }
 
@@ -210,7 +210,7 @@ func printIssueLines(w io.Writer, issues []model.Issue, columns []columnSpec, ce
 func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	issue := detail.Issue
 	archivedAt, deletedAt := model.RetentionTimestamps(issue.Retention())
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, singleLine(issue.Title), issue.IssueType, issue.Topic, issue.Priority, emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(archivedAt), formatOptionalTime(deletedAt)); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, issue.Priority, emptyDash(joinTexts(issue.Labels, ", ")), formatOptionalTime(archivedAt), formatOptionalTime(deletedAt)); err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] Capability presence is the type-encoded
@@ -227,7 +227,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 				return err
 			}
 		}
-		if _, err := fmt.Fprintf(w, "assignee: %s\n", emptyDash(issue.AssigneeValue())); err != nil {
+		if _, err := fmt.Fprintf(w, "assignee: %s\n", emptyDash(fmt.Sprint(issue.AssigneeValue()))); err != nil {
 			return err
 		}
 		// Resolution is closed-only optional data; the line appears exactly when a
@@ -343,21 +343,21 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 // `description` are field names a caller reasonably tries as columns.
 // [LAW:one-source-of-truth]
 var issueFieldNames = map[string]func(model.IssueDetail) string{
-	"id":          func(d model.IssueDetail) string { return d.Issue.ID },
-	"title":       func(d model.IssueDetail) string { return d.Issue.Title },
+	"id":          func(d model.IssueDetail) string { return model.HoldRow(d.Issue.ID) },
+	"title":       func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.Title) },
 	"description": func(d model.IssueDetail) string { return d.Issue.Description },
 	"prompt":      func(d model.IssueDetail) string { return d.Issue.Prompt },
 	"plan":        func(d model.IssueDetail) string { return d.Issue.Plan },
 	"type":        func(d model.IssueDetail) string { return string(d.Issue.IssueType) },
-	"topic":       func(d model.IssueDetail) string { return d.Issue.Topic },
+	"topic":       func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.Topic) },
 	"priority":    func(d model.IssueDetail) string { return d.Issue.Priority.String() },
 	"status":      func(d model.IssueDetail) string { return string(d.Issue.State()) },
 	"phase":       detailPhase,
-	"assignee":    func(d model.IssueDetail) string { return d.Issue.AssigneeValue() },
-	"labels":      func(d model.IssueDetail) string { return strings.Join(d.Issue.Labels, ",") },
-	"rank":        func(d model.IssueDetail) string { return d.Issue.Rank },
-	"lane":        func(d model.IssueDetail) string { return d.Issue.Lane },
-	"follows_up":  func(d model.IssueDetail) string { return d.Issue.FollowsUp },
+	"assignee":    func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.AssigneeValue()) },
+	"labels":      func(d model.IssueDetail) string { return joinTexts(d.Issue.Labels, ",") },
+	"rank":        func(d model.IssueDetail) string { return model.HoldRow(d.Issue.Rank) },
+	"lane":        func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.Lane) },
+	"follows_up":  func(d model.IssueDetail) string { return model.HoldRow(d.Issue.FollowsUp) },
 	"created_at":  func(d model.IssueDetail) string { return d.Issue.CreatedAt.Format(time.RFC3339) },
 	"updated_at":  func(d model.IssueDetail) string { return d.Issue.UpdatedAt.Format(time.RFC3339) },
 }
@@ -410,17 +410,17 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 		_, err := fmt.Fprintln(w, resolved[0].value)
 		return err
 	}
-	// A long text keeps its authored lines, as in show's detail view; every
-	// other value is one row, held to it so a title or lane holding a break
-	// cannot print a line that reads as another field's.
+	// A long text keeps its authored lines, as in show's detail view, each
+	// after the first indented under its "name:" line so none reads as another
+	// field; every other getter already holds its value to the row.
 	long := map[string]bool{}
 	for _, field := range storage.LongTextFields() {
 		long[field.Name] = true
 	}
 	for _, entry := range resolved {
 		value := entry.value
-		if !long[entry.name] {
-			value = singleLine(value)
+		if long[entry.name] {
+			value = hangLines(value, "  ")
 		}
 		if _, err := fmt.Fprintf(w, "%s: %s\n", entry.name, value); err != nil {
 			return err
@@ -460,20 +460,20 @@ func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.P
 		if action == "" {
 			action = "update"
 		}
-		text := fmt.Sprintf("- [%s @ %s] %s %s\n", singleLine(event.Actor), formatHistoryTimestamp(event.CreatedAt), singleLine(action), singleLine(event.Reason))
+		text := fmt.Sprintf("- [%s @ %s] %s %s\n", event.Actor, formatHistoryTimestamp(event.CreatedAt), model.HoldRow(action), event.Reason)
 		for _, change := range event.Changes {
 			from, to := emptyDash(change.From), emptyDash(change.To)
 			if texts, long := versions[change.Field]; long {
 				from, to = versionLabel(texts, change.From), versionLabel(texts, change.To)
 			}
-			text += fmt.Sprintf("    %s: %s → %s\n", singleLine(change.Field), singleLine(from), singleLine(to))
+			text += fmt.Sprintf("    %s: %s → %s\n", model.HoldRow(change.Field), model.HoldRow(from), model.HoldRow(to))
 		}
 		rows = append(rows, row{at: event.CreatedAt, text: text})
 	}
 	plans := versions[storage.PlanField().Name]
 	for _, review := range reviews {
 		rows = append(rows, row{at: review.CreatedAt, text: fmt.Sprintf("- [%s @ %s] verdict %s on plan %s — laws: %s\n",
-			singleLine(review.CreatedBy), formatHistoryTimestamp(review.CreatedAt), review.Verdict, planVersionLabel(plans, review.PlanDigest), joinLaws(review.Laws))})
+			review.CreatedBy, formatHistoryTimestamp(review.CreatedAt), review.Verdict, planVersionLabel(plans, review.PlanDigest), joinLaws(review.Laws))})
 	}
 	slices.SortStableFunc(rows, func(a, b row) int { return a.at.Compare(b.at) })
 	for _, row := range rows {
@@ -482,19 +482,6 @@ func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.P
 		}
 	}
 	return nil
-}
-
-// singleLine holds a value to the one row it is printed on: its printable
-// lines joined by quotedBreak, the CLI's one rendering of a break inside a
-// one-line value, each line's own quotedBreak defused last so the token means
-// only a break. No part of the value can start a row of its own and read as
-// another event or change. [LAW:one-source-of-truth]
-func singleLine(s string) string {
-	lines := textLines(s)
-	for i, line := range lines {
-		lines[i] = strings.ReplaceAll(line, quotedBreak, defusedBreak)
-	}
-	return strings.Join(lines, quotedBreak)
 }
 
 // historyVersions numbers the texts each long text field has held, keyed by
@@ -516,8 +503,8 @@ func historyVersions(detail model.IssueDetail) map[string][]string {
 // empty Events slice honestly prints just the header rather than fabricating
 // a line.
 func printIssueHistory(w io.Writer, detail model.IssueDetail, versions map[string][]string) error {
-	id := singleLine(detail.Issue.ID)
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", id, singleLine(detail.Issue.Title)); err != nil {
+	id := model.HoldRow(detail.Issue.ID)
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", id, detail.Issue.Title); err != nil {
 		return err
 	}
 	var superseded []string
@@ -567,7 +554,7 @@ func printCurrentPlan(w io.Writer, detail model.IssueDetail) error {
 		return err
 	}
 	for _, review := range current {
-		if _, err := fmt.Fprintf(w, "- %s [%s @ %s] laws: %s\n", review.Verdict, singleLine(review.CreatedBy), formatHistoryTimestamp(review.CreatedAt), joinLaws(review.Laws)); err != nil {
+		if _, err := fmt.Fprintf(w, "- %s [%s @ %s] laws: %s\n", review.Verdict, review.CreatedBy, formatHistoryTimestamp(review.CreatedAt), joinLaws(review.Laws)); err != nil {
 			return err
 		}
 	}
@@ -663,7 +650,7 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 		// The standing marker is why the group is worth reading at all: the
 		// agent learns where each referenced issue stands inline, without a
 		// second 'lit show' per id.
-		if _, err := fmt.Fprintln(w, singleLine(fmt.Sprintf("- %s [%s] %s", issue.ID, issueStanding(issue), issue.Title))); err != nil {
+		if _, err := fmt.Fprintln(w, fmt.Sprintf("- %s [%s] %s", model.HoldRow(issue.ID), issueStanding(issue), issue.Title)); err != nil {
 			return err
 		}
 	}
@@ -744,7 +731,7 @@ func formatIssueColumns(issue model.Issue, columns []columnSpec, delimiter strin
 		// whose derived data wasn't loaded — so no renderer needs a guard.
 		values = append(values, column.render(issue, cells[issue.ID]))
 	}
-	return singleLine(strings.Join(values, delimiter))
+	return strings.Join(values, delimiter)
 }
 
 // blockedLabel renders the blocked indicator as a self-describing token rather
@@ -764,16 +751,25 @@ func emptyDash(s string) string {
 	return s
 }
 
-func printLabels(w io.Writer, labels []string) error {
-	_, err := fmt.Fprintln(w, strings.Join(labels, ","))
+func printLabels(w io.Writer, labels []model.Text) error {
+	_, err := fmt.Fprintln(w, joinTexts(labels, ","))
 	return err
 }
 
-func formatLabels(labels []string) string {
+func formatLabels(labels []model.Text) string {
 	if len(labels) == 0 {
 		return ""
 	}
-	return " [" + strings.Join(labels, ",") + "]"
+	return " [" + joinTexts(labels, ",") + "]"
+}
+
+// joinTexts joins each text held to its row, so the joined row holds them all.
+func joinTexts(texts []model.Text, sep string) string {
+	held := make([]string, len(texts))
+	for i, t := range texts {
+		held[i] = fmt.Sprint(t)
+	}
+	return strings.Join(held, sep)
 }
 
 func formatOptionalTime(value *time.Time) string {
@@ -906,9 +902,11 @@ func indentLines(s, prefix string) string {
 }
 
 // hangLines prefixes every line of s after the first with prefix: a hanging
-// indent for text that continues a line the caller has already started.
+// indent for text that continues a line the caller has already started. A
+// line is what model.TextLines says one is, so no break form or ESC starts a
+// column-0 line the prefix never reached.
 // Trailing newlines are stripped so callers that append their own "\n"
 // (e.g., via Fprintf) do not produce a stray prefix-only line at the end.
 func hangLines(s, prefix string) string {
-	return strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n"+prefix)
+	return strings.Join(model.TextLines(strings.TrimRight(model.LineBreakNormalizer.Replace(s), "\n")), "\n"+prefix)
 }

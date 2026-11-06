@@ -491,11 +491,11 @@ func followupLeaf() appLeaf {
 		telemetry.Set(ctx, "followup.parent_source", parentSource)
 		resolvedTopic := strings.TrimSpace(*topic)
 		if resolvedTopic == "" {
-			resolvedTopic = origin.Issue.Topic
+			resolvedTopic = origin.Issue.Topic.Raw()
 		}
 		resolvedDescription := strings.TrimSpace(description.value())
 		if resolvedDescription == "" {
-			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID, origin.Issue.Title)
+			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID, origin.Issue.Title.Raw())
 		}
 		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {

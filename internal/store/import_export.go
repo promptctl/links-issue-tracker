@@ -442,7 +442,7 @@ func removedBy(held []heldTicket, landed model.Export) []storage.Removed {
 	var removed []storage.Removed
 	for _, ticket := range held {
 		if born, ok := bornOf[ticket.id]; !ok || !born.Equal(ticket.born) {
-			removed = append(removed, storage.Removed{IssueID: ticket.id, Title: ticket.title})
+			removed = append(removed, storage.Removed{IssueID: ticket.id, Title: model.Text(ticket.title)})
 		}
 	}
 	return removed
@@ -558,7 +558,7 @@ func issueRowValues(issue model.Issue) []any {
 	archivedCol, deletedCol := retentionColumns(issue)
 	return []any{
 		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, status, priority,
-		issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp),
+		issue.IssueType, issueid.NormalizeSlug(issue.Topic.Raw()), issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp),
 		issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt,
 		nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()),
 		archivedCol, deletedCol,

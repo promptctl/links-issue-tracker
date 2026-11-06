@@ -315,7 +315,7 @@ func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
 func openLeaf(t *testing.T, id, title, lane string) model.Issue {
 	t.Helper()
 	issue, err := model.HydrateStatus(
-		model.Issue{ID: id, Title: title, Lane: lane, IssueType: model.TypeTask},
+		model.Issue{ID: id, Title: model.Text(title), Lane: model.Text(lane), IssueType: model.TypeTask},
 		model.StatusView{Value: model.StateOpen},
 	)
 	if err != nil {

@@ -12,7 +12,7 @@ func epic(id string) *model.Issue {
 }
 
 func task(id, lane string) model.Issue {
-	return model.Issue{ID: id, Lane: lane, IssueType: model.TypeTask}
+	return model.Issue{ID: id, Lane: model.Text(lane), IssueType: model.TypeTask}
 }
 
 // TestLaneOfGroupsSiblingsBySpelling: same epic, same lane string — including

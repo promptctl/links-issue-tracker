@@ -1,5 +1,7 @@
 package storage
 
+import "github.com/promptctl/links-issue-tracker/internal/model"
+
 // Landing is what a write that lands an export whole — a sync, a restore — had
 // to change on the way in so the store's rules hold over what it landed: the
 // parent edges it cut because they closed a loop, the tickets it moved into an
@@ -24,8 +26,8 @@ type Replacement struct {
 // A ticket is its id and its birth (created_at), so one the export holds under
 // the same id but born at another instant is removed too.
 type Removed struct {
-	IssueID string `json:"issue_id"`
-	Title   string `json:"title"`
+	IssueID string     `json:"issue_id"`
+	Title   model.Text `json:"title"`
 }
 
 // Rekeyed is one ticket a landing gave a new rank key so that no two tickets

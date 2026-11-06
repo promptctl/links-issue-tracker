@@ -267,7 +267,7 @@ func TestACancelDuringACommitIsNotAFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply() cancelled during its commit error = %v, want nil", err)
 	}
-	if applied.Issue.Title != after {
+	if applied.Issue.Title.Raw() != after {
 		t.Fatalf("Apply() answered title %q, want the landed write", applied.Issue.Title)
 	}
 	if !heard {
@@ -278,7 +278,7 @@ func TestACancelDuringACommitIsNotAFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if got.Title != after {
+	if got.Title.Raw() != after {
 		t.Fatalf("title = %q, want the landed write", got.Title)
 	}
 }
