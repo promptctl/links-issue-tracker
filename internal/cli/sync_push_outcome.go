@@ -125,20 +125,24 @@ func pushOutcomeMarkerPath(ws workspace.Info) string {
 // after the push step) cannot leave the record saying one thing and the owner
 // page another. [LAW:one-source-of-truth] [LAW:parse-dont-validate]
 func pushOutcomeOf(outcome syncPushOutcome, err error, observedBy string) (pushOutcomeRecord, SyncFailure, bool) {
-	rec, refusal, refused := classifyPushOutcome(outcome, err)
+	rec, pushFailure := classifyPushOutcome(outcome, err)
 	// [LAW:dataflow-not-control-flow] Every outcome is stamped, so an empty
 	// ObservedBy means only "no observer", never "not a failure".
 	rec.ObservedBy = observedBy
 	rec.ReceiveMerges = outcome.receiveMerges
 	rec.PushDeadlineCut = pushDeadlineCutOf(firstError(err, outcome.pushErr))
+	refusal, refused := schemaRefusalFailure(pushFailure)
 	return rec, refusal, refused
 }
 
 // classifyPushOutcome decides which decision an attempt's ending was, and the
 // remote, branch and reason that name it; pushOutcomeOf dates what it
-// classifies. When the failure it classified is the push step's own error, it
-// also returns the schema refusal that error is, if one.
-func classifyPushOutcome(outcome syncPushOutcome, err error) (pushOutcomeRecord, SyncFailure, bool) {
+// classifies. pushFailure is the push step's own error when that is the
+// failure the record names, and nil otherwise (no failure, or an attempt
+// error that outranks it), so a consumer that reads the push error further
+// reads the one the record is about. [LAW:single-enforcer] the precedence
+// among an attempt's errors is decided here only.
+func classifyPushOutcome(outcome syncPushOutcome, err error) (rec pushOutcomeRecord, pushFailure error) {
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(outcome.pushErr, context.Canceled):
 		return pushOutcomeRecord{
@@ -146,33 +150,32 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) (pushOutcomeRecord,
 			Reason:   firstError(err, outcome.pushErr).Error(),
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}, SyncFailure{}, false
+		}, nil
 	case errors.Is(err, store.ErrWorkspaceBusy) || errors.Is(outcome.pushErr, store.ErrWorkspaceBusy):
 		return pushOutcomeRecord{
 			Decision: pushDecisionWorkspaceBusy,
 			Reason:   firstError(err, outcome.pushErr).Error(),
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}, SyncFailure{}, false
+		}, nil
 	case err != nil:
-		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}, SyncFailure{}, false
+		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}, nil
 	case outcome.pushErr != nil:
 		decision, reason := pushFailureDecision(outcome.pushErr, outcome.remote, outcome.receiveMerges)
-		refusal, refused := schemaRefusalFailure(outcome.pushErr)
 		return pushOutcomeRecord{
 			Decision: decision,
 			Reason:   reason,
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}, refusal, refused
+		}, outcome.pushErr
 	case outcome.skip != syncTargetReady:
-		return pushOutcomeRecord{Decision: string(outcome.skip), Remote: outcome.remote.String()}, SyncFailure{}, false
+		return pushOutcomeRecord{Decision: string(outcome.skip), Remote: outcome.remote.String()}, nil
 	default:
 		return pushOutcomeRecord{
 			Decision: pushDecisionPushed,
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}, SyncFailure{}, false
+		}, nil
 	}
 }
 

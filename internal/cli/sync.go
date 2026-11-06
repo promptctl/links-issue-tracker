@@ -875,7 +875,7 @@ func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env e
 		traceErr:      traceRecordErr,
 		pushErr:       pushErr,
 	}
-	decided, _, _ := classifyPushOutcome(outcome, nil)
+	decided, _ := classifyPushOutcome(outcome, nil)
 	recordSyncTraceLogged(stderr, env, ws, syncTraceRecord{
 		Command:   formatCommand(syncCommandArgs),
 		Decision:  decided.Decision,

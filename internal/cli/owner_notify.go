@@ -66,9 +66,11 @@ const ownerNotifyPushFailed ownerNotifyKind = "push_failed"
 
 // ownerNotifySettleEndedKinds is the group one settle ends: any converged state
 // (fast-forwarded, linearized, combined, taken, not-diverged) resolves a
-// divergence, and the receive half's two schema refusals are raised only
-// inside the reconcile's replay of a diverged plan, so every one of those
-// states proves them gone as well, whichever was notified.
+// divergence, and the receive half raises its two schema refusals only inside
+// the reconcile's replay of a diverged plan, so every one of those states
+// proves that replay passed. A remote schema ahead is push-detected as well,
+// and a settle that ran no replay proves nothing about it; which settles are
+// proof is open under the remote-ceiling epic.
 var ownerNotifySettleEndedKinds = []ownerNotifyKind{
 	ownerNotifyKind(syncFailureProseHeld),
 	ownerNotifyKind(syncFailureDivergedUnresolved),
