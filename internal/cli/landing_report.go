@@ -104,7 +104,7 @@ func rekeyedIDs(rekeyed []storage.Rekeyed, render func(model.ID) string) []strin
 func describeRekeys(rekeyed []storage.Rekeyed) []string {
 	described := make([]string, len(rekeyed))
 	for i, r := range rekeyed {
-		described[i] = fmt.Sprintf("%s %q -> %q", r.IssueID, r.From, r.Rank)
+		described[i] = fmt.Sprintf("%s %q -> %q", r.IssueID.Raw(), r.From, r.Rank)
 	}
 	return described
 }

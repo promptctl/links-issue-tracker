@@ -291,10 +291,10 @@ func (l LaneID) String() string {
 // a lane. String stays the stored text, for keys and comparison.
 func (l LaneID) Format(f fmt.State, verb rune) {
 	if l.solo {
-		formatHeld(f, verb, HoldRow(l.key))
+		formatHeld(f, verb, l.key)
 		return
 	}
-	formatHeld(f, verb, HoldRow(l.epic.Raw())+"#"+HoldRow(l.key))
+	formatHeld(f, verb, l.epic.Raw()+"#"+l.key)
 }
 
 // Describe renders the lane for a sentence a person or an agent reads, and

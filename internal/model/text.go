@@ -2,7 +2,6 @@ package model
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -22,7 +21,7 @@ func (t Text) Raw() string { return string(t) }
 // Format prints the text held to one row whatever the verb and width, so %s,
 // %v, %q and %-20s all hold it. [LAW:single-enforcer]
 func (t Text) Format(f fmt.State, verb rune) {
-	formatHeld(f, verb, HoldRow(string(t)))
+	formatHeld(f, verb, string(t))
 }
 
 // ID names a ticket, comment or event: minted by lit, but stored and carried
@@ -37,15 +36,9 @@ func (id ID) Raw() string { return string(id) }
 // Trim is the id with surrounding whitespace removed, as a caller typed it.
 func (id ID) Trim() ID { return ID(strings.TrimSpace(string(id))) }
 
-// Format prints the id held to one row whatever the verb and width. %q quotes
-// the raw id: Go's escapes already keep it to one row, and they show exactly
-// which tab or invisible a rejected id carried.
+// Format prints the id held to one row whatever the verb and width.
 func (id ID) Format(f fmt.State, verb rune) {
-	if verb == 'q' {
-		formatHeld(f, 's', strconv.Quote(string(id)))
-		return
-	}
-	formatHeld(f, verb, HoldRow(string(id)))
+	formatHeld(f, verb, string(id))
 }
 
 // JoinIDs prints ids joined by sep, each held to its row as %s holds it, so a
@@ -76,11 +69,20 @@ func RawIDs(ids []ID) []string {
 	return raw
 }
 
-// formatHeld writes an already held value honouring %q and width, so every
-// type that prints held formats the same way.
-func formatHeld(f fmt.State, verb rune, held string) {
+// formatHeld writes a value honouring %q and width, so every type that prints
+// held formats the same way: held to its row under every verb but %q, which
+// Go-quotes the raw value, since its escapes already keep it to one row and
+// show exactly which break, tab or invisible the value carries.
+func formatHeld(f fmt.State, verb rune, raw string) {
+	held := HoldRow(raw)
 	if verb == 'q' {
-		held = fmt.Sprintf("%q", held)
+		flags := ""
+		for _, flag := range "+#" {
+			if f.Flag(int(flag)) {
+				flags += string(flag)
+			}
+		}
+		held = fmt.Sprintf("%"+flags+"q", raw)
 	}
 	if width, ok := f.Width(); ok {
 		if pad := width - utf8.RuneCountInString(held); pad > 0 {

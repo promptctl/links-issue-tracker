@@ -8,6 +8,7 @@ import (
 // TestTextPrintsHeldUnderEveryVerb pins that printing a Text through fmt is
 // what holds it: whichever verb and width a printer picks, a break prints as
 // QuotedBreak, a tab as a space and an ESC as U+FFFD, so no printer can forget.
+// %q Go-quotes the stored text, whose escapes already keep it to one row.
 func TestTextPrintsHeldUnderEveryVerb(t *testing.T) {
 	t.Parallel()
 	text := Text("a\u2028b\tc\x1bd")
@@ -15,7 +16,7 @@ func TestTextPrintsHeldUnderEveryVerb(t *testing.T) {
 	for _, tc := range []struct{ format, want string }{
 		{"%s", held},
 		{"%v", held},
-		{"%q", fmt.Sprintf("%q", held)},
+		{"%q", fmt.Sprintf("%q", string(text))},
 		{"[%-16s]", "[" + held + " ]"},
 		{"[%17s]", "[  " + held + "]"},
 	} {
