@@ -47,6 +47,8 @@ import (
 	"time"
 
 	"github.com/promptctl/primitives/filelock"
+
+	"github.com/promptctl/links-issue-tracker/internal/dirlist"
 )
 
 // Snapshot is a frozen copy of a Dolt storage directory.
@@ -301,7 +303,7 @@ func pathFree(p string) (bool, error) {
 // code parses or constructs snapshot directory names.
 func List(databaseDir string) ([]Snapshot, error) {
 	snapshotsDir := DirFor(databaseDir)
-	entries, err := readSnapshotsDir(snapshotsDir)
+	entries, err := dirlist.Read(snapshotsDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return []Snapshot{}, nil
@@ -328,29 +330,6 @@ func List(databaseDir string) ([]Snapshot, error) {
 		return snapshots[i].Created.After(snapshots[j].Created)
 	})
 	return snapshots, nil
-}
-
-// readSnapshotsDir is os.ReadDir that refuses a non-directory at path on every
-// platform. Windows' readdir reports a regular file as an empty directory, so
-// without the check a file where the snapshots directory belongs would read
-// as no snapshots. The check and the read share one handle, so the path
-// cannot be swapped between them.
-func readSnapshotsDir(path string) ([]fs.DirEntry, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", path)
-	}
-	entries, err := f.ReadDir(-1)
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	return entries, err
 }
 
 // Restore moves <DirFor(databaseDir)>/<name>/ into databaseDir, after rotating

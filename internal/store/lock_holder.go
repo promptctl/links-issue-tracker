@@ -11,7 +11,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -19,6 +18,8 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
+
+	"github.com/promptctl/links-issue-tracker/internal/dirlist"
 )
 
 // This file answers the one question an flock cannot: WHO is holding it. The
@@ -887,41 +888,22 @@ func (w *holdWait) holderNames() ([]string, bool) {
 // liveness is probeLockHolder's business. A directory that does not exist yet
 // has no holders.
 // [LAW:one-source-of-truth] The one listing the account, the sweep and the
-// wait all read.
-//
-// The kind is checked before the read because a directory read cannot be
-// trusted with it: on Windows it reads a regular file as an empty directory
-// (os/dir_windows.go takes the ERROR_FILE_NOT_FOUND its listing call returns
-// on a file handle for "no more entries"), so a file squatting on the holder
-// dir would read as no holders rather than as the unreadable records it is.
-// One handle answers both, so the kind checked is the kind listed.
+// wait all read. A file squatting on the holder dir is an error, not an empty
+// listing, on every platform (dirlist.Read).
 func holderRecordNames(dir string) (names []string, err error) {
-	listing, err := os.Open(dir)
+	entries, err := dirlist.Read(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer func() { err = errors.Join(err, listing.Close()) }()
-	info, err := listing.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("%s is not a directory", dir)
-	}
-	entries, err := listing.ReadDir(-1)
-	if err != nil {
-		return nil, err
-	}
+	// Entries arrive sorted by name: the account renders holders in this order.
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
 			names = append(names, entry.Name())
 		}
 	}
-	// Sorted, as os.ReadDir sorts: the account renders holders in this order.
-	slices.Sort(names)
 	return names, nil
 }
 

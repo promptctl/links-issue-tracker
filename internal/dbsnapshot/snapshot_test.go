@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -99,8 +100,8 @@ func TestList_RefusesFileAtSnapshotsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	list, err := List(db)
-	if err == nil {
-		t.Fatalf("List with a file at the snapshots dir: want error, got %d snapshots and nil", len(list))
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("List with a file at the snapshots dir = %d snapshots, %v; want ENOTDIR", len(list), err)
 	}
 }
 
