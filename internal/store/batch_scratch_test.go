@@ -27,7 +27,7 @@ func assertBatchLeftNoScratch(t *testing.T, ctx context.Context, st *Store) {
 func createTwo(st *Store, epic string) func(ctx context.Context, result *storage.BulkApplyResult) error {
 	return func(ctx context.Context, result *storage.BulkApplyResult) error {
 		for _, title := range []string{"first", "second"} {
-			issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", ParentID: epic})
+			issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic})
 			if err != nil {
 				return err
 			}

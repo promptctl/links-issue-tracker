@@ -143,24 +143,24 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "dep", IssueType: "epic", Priority: 1})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	siblingA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "A", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	siblingA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A"), Lane: storage.SharedLane, Topic: "dep", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(siblingA) error = %v", err)
 	}
-	siblingB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "B", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	siblingB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B"), Lane: storage.SharedLane, Topic: "dep", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(siblingB) error = %v", err)
 	}
 
-	subEpic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sub-epic", Topic: "dep", IssueType: "epic", Priority: 0, ParentID: epic.ID})
+	subEpic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Sub-epic"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(subEpic) error = %v", err)
 	}
-	nestedLeaf, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Nested leaf", Topic: "dep", IssueType: "task", Priority: 0, ParentID: subEpic.ID})
+	nestedLeaf, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Nested leaf"), Lane: storage.SharedLane, Topic: "dep", IssueType: "task", Priority: 0, ParentID: subEpic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(nestedLeaf) error = %v", err)
 	}
@@ -199,28 +199,28 @@ func TestDepAddAllowsCrossEpicAndFloatingBlocks(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epicA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "dep", IssueType: "epic", Priority: 1})
+	epicA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(epicA) error = %v", err)
 	}
-	epicB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "dep", IssueType: "epic", Priority: 1})
+	epicB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(epicB) error = %v", err)
 	}
-	childOfA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	childOfA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child A"), Lane: storage.SharedLane, Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(childOfA) error = %v", err)
 	}
-	childOfB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	childOfB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child B"), Lane: storage.SharedLane, Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(childOfB) error = %v", err)
 	}
 	// The top level holds only epics, so the ticket in no epic is an epic.
-	topEpicA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Float A", Topic: "dep", IssueType: "epic", Priority: 0})
+	topEpicA, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Float A"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(topEpicA) error = %v", err)
 	}
-	topEpicB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Float B", Topic: "dep", IssueType: "epic", Priority: 0})
+	topEpicB, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Float B"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(topEpicB) error = %v", err)
 	}

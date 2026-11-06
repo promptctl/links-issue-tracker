@@ -53,11 +53,11 @@ func listingQueryCount(t *testing.T, ctx context.Context, epicCount int) int64 {
 	t.Helper()
 	st := openIssueStore(t, ctx)
 	for e := 0; e < epicCount; e++ {
-		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "qcount", IssueType: "epic", Priority: 1})
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "qcount", IssueType: "epic", Priority: 1})
 		if err != nil {
 			t.Fatalf("CreateIssue(epic) error = %v", err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "qcount", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: storage.RankBottom}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child"), Lane: storage.SharedLane, Topic: "qcount", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: storage.RankBottom}); err != nil {
 			t.Fatalf("CreateIssue(child) error = %v", err)
 		}
 	}

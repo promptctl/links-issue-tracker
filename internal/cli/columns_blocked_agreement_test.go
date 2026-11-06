@@ -77,51 +77,55 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 	// of its own, so no sibling gate reaches any of them. It carries a
 	// description so the field gate stays out of it too.
 	home := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Home epic", Topic: "agree", IssueType: "epic", Description: "d",
+		Prefix: "agree", Title: storage.MustParseTitle("Home epic"),
+		Lane: storage.SharedLane, Topic: "agree", IssueType: "epic", Description: "d",
 	})
 
 	// The dependency reason, standing alone: its own lane, so no sibling gate.
 	depBlocker := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Dependency", Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: "dep-blocker",
+		Prefix: "agree", Title: storage.MustParseTitle("Dependency"), Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: storage.MustParseLane("dep-blocker"),
 	})
 	byDependency := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Blocked by a dependency", Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: "by-dependency",
+		Prefix: "agree", Title: storage.MustParseTitle("Blocked by a dependency"), Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: storage.MustParseLane("by-dependency"),
 	})
 	h.addDependencyWithinEpic(byDependency.ID, depBlocker.ID)
 
 	// The sibling gate: two children of one epic, the later one gated by the
 	// earlier. Both carry a description so the field gate stays out of it.
 	epic := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Epic", Topic: "agree", IssueType: "epic", Description: "d",
+		Prefix: "agree", Title: storage.MustParseTitle("Epic"),
+		Lane: storage.SharedLane, Topic: "agree", IssueType: "epic", Description: "d",
 	})
 	firstSibling := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "First sibling", Topic: "agree", IssueType: "task", ParentID: epic.ID, Description: "d",
+		Prefix: "agree", Title: storage.MustParseTitle("First sibling"),
+		Lane: storage.SharedLane, Topic: "agree", IssueType: "task", ParentID: epic.ID, Description: "d",
 	})
 	bySibling := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Second sibling", Topic: "agree", IssueType: "task", ParentID: epic.ID, Description: "d",
+		Prefix: "agree", Title: storage.MustParseTitle("Second sibling"),
+		Lane: storage.SharedLane, Topic: "agree", IssueType: "task", ParentID: epic.ID, Description: "d",
 	})
 
 	// The required-field gate: the one row with no description.
 	byMissingField := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Missing the required field", Topic: "agree", IssueType: "task", ParentID: home.ID, Lane: "by-missing-field",
+		Prefix: "agree", Title: storage.MustParseTitle("Missing the required field"), Topic: "agree", IssueType: "task", ParentID: home.ID, Lane: storage.MustParseLane("by-missing-field"),
 	})
 
 	// needs-design, carried by a label.
 	byNeedsDesign := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Needs design", Topic: "agree", IssueType: "task",
-		Description: "d", Labels: []string{NeedsDesignLabel}, ParentID: home.ID, Lane: "by-needs-design",
+		Prefix: "agree", Title: storage.MustParseTitle("Needs design"), Topic: "agree", IssueType: "task",
+		Description: "d", Labels: []string{NeedsDesignLabel}, ParentID: home.ID, Lane: storage.MustParseLane("by-needs-design"),
 	})
 
 	// external, carried by a label.
 	byExternal := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Waits on an upstream fix", Topic: "agree", IssueType: "task",
-		Description: "d", Labels: []string{ExternalLabel}, ParentID: home.ID, Lane: "by-external",
+		Prefix: "agree", Title: storage.MustParseTitle("Waits on an upstream fix"), Topic: "agree", IssueType: "task",
+		Description: "d", Labels: []string{ExternalLabel}, ParentID: home.ID, Lane: storage.MustParseLane("by-external"),
 	})
 
 	// The control: nothing holds it up. Without it, a map populated with
 	// `blocked` for every row would satisfy every assertion above it.
 	unblocked := h.createIssue(storage.CreateIssueInput{
-		Prefix: "agree", Title: "Workable", Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: "unblocked",
+		Prefix: "agree", Title: storage.MustParseTitle("Workable"), Topic: "agree", IssueType: "task", Description: "d", ParentID: home.ID, Lane: storage.MustParseLane("unblocked"),
 	})
 
 	for _, tc := range []struct {
@@ -173,9 +177,9 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 func TestBlockedColumnOnListIsTheRegistrysVerdictNotTheEdges(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: "Epic", Topic: "edge", IssueType: "epic"})
-	first := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: "First", Topic: "edge", IssueType: "task", ParentID: epic.ID})
-	gated := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: "Second", Topic: "edge", IssueType: "task", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "edge", IssueType: "epic"})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: storage.MustParseTitle("First"), Lane: storage.SharedLane, Topic: "edge", IssueType: "task", ParentID: epic.ID})
+	gated := h.createIssue(storage.CreateIssueInput{Prefix: "edge", Title: storage.MustParseTitle("Second"), Lane: storage.SharedLane, Topic: "edge", IssueType: "task", ParentID: epic.ID})
 
 	detail, err := h.ap.Store.GetIssueDetail(h.ctx, gated.ID)
 	if err != nil {

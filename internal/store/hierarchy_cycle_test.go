@@ -21,7 +21,7 @@ func parentChain(t *testing.T, ctx context.Context, st *Store, titles ...string)
 	t.Helper()
 	out := make([]model.Issue, 0, len(titles))
 	for _, title := range titles {
-		in := storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "hier", IssueType: "epic", Placement: storage.RankBottom}
+		in := storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "hier", IssueType: "epic", Placement: storage.RankBottom}
 		if len(out) > 0 {
 			in.ParentID = out[len(out)-1].ID
 		}
@@ -131,11 +131,11 @@ func TestAddRelationRefusesAParentCycle(t *testing.T) {
 func TestSetParentRefusesACycleThroughANonEpicParent(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "E", Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("E"), Lane: storage.SharedLane, Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	task, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "T", Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	task, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("T"), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(task) error = %v", err)
 	}
@@ -268,7 +268,7 @@ func TestSetParentStillAcceptsANonCyclicMove(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	chain := parentChain(t, ctx, st, "E", "S", "L")
-	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Other", Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
+	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Other"), Lane: storage.SharedLane, Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(other) error = %v", err)
 	}
@@ -346,7 +346,7 @@ func TestSetParentBreaksAStoredLoopOfLeaves(t *testing.T) {
 	epic := parentChain(t, ctx, st, "E")[0]
 	var leaves []model.Issue
 	for _, title := range []string{"A", "B"} {
-		leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+		leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 		if err != nil {
 			t.Fatalf("CreateIssue(%s) error = %v", title, err)
 		}
@@ -391,7 +391,7 @@ func TestDoctorNamesTicketsOutsideAnEpic(t *testing.T) {
 	epic := parentChain(t, ctx, st, "E")[0]
 	var leaves []model.Issue
 	for _, title := range []string{"loose", "host", "under"} {
-		leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+		leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 		if err != nil {
 			t.Fatalf("CreateIssue(%s) error = %v", title, err)
 		}
@@ -606,11 +606,11 @@ func TestALaneFamilyPlacesAChildWithTwoParentsByTheLowerOne(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	epics := []string{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
 	lower, higher := min(epics[0], epics[1]), max(epics[0], epics[1])
-	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "child", Topic: "hier", ParentID: lower})
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "hier", ParentID: lower})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "sibling", Topic: "hier", ParentID: higher})
+	sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "hier", ParentID: higher})
 	if err != nil {
 		t.Fatalf("CreateIssue(sibling) error = %v", err)
 	}
@@ -639,7 +639,7 @@ func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
 			ctx := context.Background()
 			st := openIssueStore(t, ctx)
 			parents := []string{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
-			child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "child", Topic: "hier", ParentID: parents[0]})
+			child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "hier", ParentID: parents[0]})
 			if err != nil {
 				t.Fatalf("CreateIssue(child) error = %v", err)
 			}
@@ -651,7 +651,7 @@ func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
 			var siblings []string
 			for i, parent := range parents {
 				st.clock = func() time.Time { return instants[i] }
-				sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "sibling", Topic: "hier", ParentID: parent})
+				sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "hier", ParentID: parent})
 				if err != nil {
 					t.Fatalf("CreateIssue(sibling under %s) error = %v", parent, err)
 				}
@@ -798,7 +798,7 @@ func TestRemovingOneOfTwoParentEdgesKeepsALeafInside(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	first := parentChain(t, ctx, st, "E1")[0]
 	second := parentChain(t, ctx, st, "E2")[0]
-	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "C", Topic: "hier", IssueType: "task", ParentID: first.ID, Placement: storage.RankBottom})
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: first.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(C) error = %v", err)
 	}
@@ -866,7 +866,7 @@ func TestClearParentReportsAnUnknownIssueAsMissing(t *testing.T) {
 	// the one shape that can be parentless — answers that its parent is
 	// already absent, so the case above is not passing because every absence
 	// is called an issue.
-	solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Solo", Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
+	solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Solo"), Lane: storage.SharedLane, Topic: "hier", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue error = %v", err)
 	}
@@ -886,7 +886,7 @@ func TestARankRefusesAStoredLoopThroughALeafByName(t *testing.T) {
 	defer cancel()
 	st := openIssueStore(t, ctx)
 	epic := parentChain(t, ctx, st, "E")[0]
-	leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "T", Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	leaf, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("T"), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(T) error = %v", err)
 	}

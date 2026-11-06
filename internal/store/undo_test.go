@@ -60,11 +60,11 @@ func parentsNow(t *testing.T, st *Store, child string) []string {
 func TestRevertWritesPutsARunOfReparentsBack(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	from := mustCreate(t, st, storage.CreateIssueInput{Title: "from", IssueType: "epic"})
-	to := mustCreate(t, st, storage.CreateIssueInput{Title: "to", IssueType: "epic"})
+	from := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("from"), Lane: storage.SharedLane, IssueType: "epic"})
+	to := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("to"), Lane: storage.SharedLane, IssueType: "epic"})
 	var tasks, run []string
 	for _, title := range []string{"one", "two", "three"} {
-		tasks = append(tasks, mustCreate(t, st, storage.CreateIssueInput{Title: title, ParentID: from.ID}).ID)
+		tasks = append(tasks, mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, ParentID: from.ID}).ID)
 	}
 	events, err := st.ListAllEvents(ctx)
 	if err != nil {
@@ -122,8 +122,8 @@ func TestRevertWritesPutsARunOfReparentsBack(t *testing.T) {
 func TestRevertWritesPutsAFieldEditBack(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
-	task := mustCreate(t, st, storage.CreateIssueInput{Title: "before", ParentID: epic.ID, Labels: []string{"keep"}})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("before"), Lane: storage.SharedLane, ParentID: epic.ID, Labels: []string{"keep"}})
 	title, labels := "after", []string{"keep", "new"}
 	if _, err := st.Apply(ctx, task.ID, storage.Change{Actor: "editor", Fields: storage.UpdateIssueInput{Title: &title, Labels: &labels}}); err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -161,8 +161,8 @@ func TestRevertWritesPutsAFieldEditBack(t *testing.T) {
 func TestRevertWritesPutsALabelVerbBack(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
-	task := mustCreate(t, st, storage.CreateIssueInput{Title: "task", ParentID: epic.ID, Labels: []string{"keep"}})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, ParentID: epic.ID, Labels: []string{"keep"}})
 	for _, tc := range []struct {
 		verb storage.ChangePlan
 		want []string
@@ -193,8 +193,8 @@ func TestRevertWritesPutsALabelVerbBack(t *testing.T) {
 func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
-	task := mustCreate(t, st, storage.CreateIssueInput{Title: "task", ParentID: epic.ID})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, ParentID: epic.ID})
 	created := headWrite(t, st)
 	if _, err := st.Apply(ctx, task.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply(start) error = %v", err)
@@ -207,7 +207,7 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 		t.Fatalf("insert label row error = %v", err)
 	}
 	labeled := headWrite(t, st)
-	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: "doomed", ParentID: epic.ID})
+	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("doomed"), Lane: storage.SharedLane, ParentID: epic.ID})
 	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: doomed.ID, Actor: "ada"}); err != nil {
 		t.Fatalf("Purge() error = %v", err)
 	}
@@ -238,12 +238,12 @@ func TestRevertWritesRefusesWhatNoDocumentCanPutBack(t *testing.T) {
 func TestListWritesNamesAMadeOrRemovedTicketOnce(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
-	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: "doomed", ParentID: epic.ID, Labels: []string{"x"}})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
+	doomed := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("doomed"), Lane: storage.SharedLane, ParentID: epic.ID, Labels: []string{"x"}})
 	created := headWrite(t, st)
 	// Edges with the removed ticket at the far end are its removal too.
-	other := mustCreate(t, st, storage.CreateIssueInput{Title: "other", IssueType: "epic"})
-	blocked := mustCreate(t, st, storage.CreateIssueInput{Title: "blocked", ParentID: other.ID})
+	other := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other"), Lane: storage.SharedLane, IssueType: "epic"})
+	blocked := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("blocked"), Lane: storage.SharedLane, ParentID: other.ID})
 	for _, in := range []storage.AddRelationInput{
 		{SrcID: blocked.ID, DstID: doomed.ID, Type: model.RelBlockedBy},
 		{SrcID: blocked.ID, DstID: doomed.ID, Type: model.RelRelatedTo},
@@ -285,7 +285,7 @@ func TestListWritesNamesAMadeOrRemovedTicketOnce(t *testing.T) {
 func TestListWritesNamesAnEventChangeRewritten(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	task := mustCreate(t, st, storage.CreateIssueInput{Title: "before", IssueType: "epic"})
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("before"), Lane: storage.SharedLane, IssueType: "epic"})
 	title := "after"
 	if _, err := st.Apply(ctx, task.ID, storage.Change{Actor: "editor", Fields: storage.UpdateIssueInput{Title: &title}}); err != nil {
 		t.Fatalf("Apply() error = %v", err)
@@ -310,10 +310,10 @@ func TestListWritesNamesAnEventChangeRewritten(t *testing.T) {
 func TestListWritesNamesARankWriteOnce(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
 	var tasks []string
 	for _, title := range []string{"one", "two", "three"} {
-		tasks = append(tasks, mustCreate(t, st, storage.CreateIssueInput{Title: title, ParentID: epic.ID}).ID)
+		tasks = append(tasks, mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, ParentID: epic.ID}).ID)
 	}
 	// Reversed, the first and last swap keys and the middle keeps its own.
 	if _, err := st.RankSet(ctx, []string{tasks[2], tasks[1], tasks[0]}); err != nil {
@@ -333,10 +333,10 @@ func TestListWritesNamesARankWriteOnce(t *testing.T) {
 func TestRevertWritesRefusesWhatALaterWriteMovedAgain(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	a := mustCreate(t, st, storage.CreateIssueInput{Title: "a", IssueType: "epic"})
-	b := mustCreate(t, st, storage.CreateIssueInput{Title: "b", IssueType: "epic"})
-	c := mustCreate(t, st, storage.CreateIssueInput{Title: "c", IssueType: "epic"})
-	task := mustCreate(t, st, storage.CreateIssueInput{Title: "task", ParentID: a.ID})
+	a := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("a"), Lane: storage.SharedLane, IssueType: "epic"})
+	b := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("b"), Lane: storage.SharedLane, IssueType: "epic"})
+	c := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c"), Lane: storage.SharedLane, IssueType: "epic"})
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, ParentID: a.ID})
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: task.ID, ParentID: b.ID}); err != nil {
 		t.Fatalf("SetParent(b) error = %v", err)
 	}
@@ -371,9 +371,9 @@ func TestRevertWritesRefusesAWriteNotInHistory(t *testing.T) {
 func TestRevertWritesLandedExcludesAStrandedWrite(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	a := mustCreate(t, st, storage.CreateIssueInput{Title: "a", IssueType: "epic"})
-	b := mustCreate(t, st, storage.CreateIssueInput{Title: "b", IssueType: "epic"})
-	task := mustCreate(t, st, storage.CreateIssueInput{Title: "task", ParentID: a.ID})
+	a := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("a"), Lane: storage.SharedLane, IssueType: "epic"})
+	b := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("b"), Lane: storage.SharedLane, IssueType: "epic"})
+	task := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, ParentID: a.ID})
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: task.ID, ParentID: b.ID}); err != nil {
 		t.Fatalf("SetParent() error = %v", err)
 	}
@@ -404,8 +404,8 @@ func TestRevertWritesLandedExcludesAStrandedWrite(t *testing.T) {
 func TestListWritesTakesNoCommitLock(t *testing.T) {
 	ctx := context.Background()
 	st, doltRoot := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
-	mustCreate(t, st, storage.CreateIssueInput{Title: "task", ParentID: epic.ID})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
+	mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, ParentID: epic.ID})
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -444,7 +444,7 @@ func TestListWritesTakesNoCommitLock(t *testing.T) {
 func TestListWritesTakesAnEditBesideAnUnnormalizedRowAsRevertable(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
 	if err := st.withMutation(ctx, "an older title", func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `UPDATE issues SET title = 'epic  ' WHERE id = ?`, epic.ID)
 		return err
@@ -468,7 +468,7 @@ func TestListWritesTakesAnEditBesideAnUnnormalizedRowAsRevertable(t *testing.T) 
 func TestListWritesNamesARowMoveBesideARankMove(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "epic", IssueType: "epic"})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
 	if err := st.withMutation(ctx, "rank and topic", func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `UPDATE issues SET item_rank = CONCAT(item_rank, 'z'), topic = 'elsewhere' WHERE id = ?`, epic.ID)
 		return err
@@ -493,7 +493,7 @@ func TestListWritesNamesARowMoveBesideARankMove(t *testing.T) {
 func TestRevertWritesIsHeardOnceItsLockIsReleased(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
-	epic := mustCreate(t, st, storage.CreateIssueInput{Title: "before", IssueType: "epic"})
+	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("before"), Lane: storage.SharedLane, IssueType: "epic"})
 	title := "after"
 	if _, err := st.Apply(ctx, epic.ID, storage.Change{Actor: "editor", Fields: storage.UpdateIssueInput{Title: &title}}); err != nil {
 		t.Fatalf("Apply() error = %v", err)

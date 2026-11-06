@@ -28,7 +28,7 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	ap := newTestCLIApp(t)
 	create := func(title string, issueType model.IssueType, parent string) string {
 		t.Helper()
-		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "refusals", IssueType: issueType, ParentID: parent})
+		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "refusals", IssueType: issueType, ParentID: parent})
 		if err != nil {
 			t.Fatalf("CreateIssue(%s) error = %v", title, err)
 		}

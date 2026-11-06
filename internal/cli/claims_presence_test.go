@@ -62,8 +62,8 @@ func TestInProgressSuffixSaysNothingWithoutTheAnnotation(t *testing.T) {
 func TestCapacityForReadsAbandonmentOffTheLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "next", IssueType: "epic", Priority: 1})
-	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "In flight", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("In flight"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	h.transition(ticket.ID, model.Start{Assignee: "tester"})
 
 	rows, _, _ := h.gather()

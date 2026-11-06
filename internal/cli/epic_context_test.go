@@ -31,7 +31,8 @@ func newEpicFixture(t *testing.T, epicTitle, epicDesc string) epicFixture {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: epicTitle, Description: epicDesc, Topic: "epic-view", IssueType: "epic", Priority: 1,
+		Prefix: "test", Title: storage.MustParseTitle(epicTitle),
+		Lane: storage.SharedLane, Description: epicDesc, Topic: "epic-view", IssueType: "epic", Priority: 1,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
@@ -42,7 +43,8 @@ func newEpicFixture(t *testing.T, epicTitle, epicDesc string) epicFixture {
 func (f epicFixture) addChild(title string) string {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID,
+		Prefix: "test", Title: storage.MustParseTitle(title),
+		Lane: storage.SharedLane, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID,
 		// Author children top-to-bottom in call order: append at the bottom so
 		// creation order equals rank order. Stated rather than inherited — this
 		// fixture's order is its own premise, not a reading of the product
@@ -64,7 +66,8 @@ func (f epicFixture) addChild(title string) string {
 func (f epicFixture) addEpicChild(title string) string {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "epic", Priority: 0, ParentID: f.epicID,
+		Prefix: "test", Title: storage.MustParseTitle(title),
+		Lane: storage.SharedLane, Topic: "epic-view", IssueType: "epic", Priority: 0, ParentID: f.epicID,
 		Placement: storage.RankBottom,
 	})
 	if err != nil {
@@ -238,7 +241,7 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 func (f epicFixture) addChildLane(title, lane string) string {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID, Lane: lane,
+		Prefix: "test", Title: storage.MustParseTitle(title), Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID, Lane: storage.MustParseLane(lane),
 		// Same premise as addChild: creation order is rank order, stated here
 		// rather than inherited from the product default.
 		Placement: storage.RankBottom,
@@ -334,7 +337,8 @@ func TestRenderEpicContextNestedEpicChildIsClassified(t *testing.T) {
 	f := newEpicFixture(t, "Outer epic", "an epic under an epic")
 	f.requiredFields = []string{"description"}
 	inner, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Inner epic", Topic: "epic-view", IssueType: "epic", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Inner epic"),
+		Lane: storage.SharedLane, Topic: "epic-view", IssueType: "epic", Priority: 0,
 		ParentID: f.epicID, Placement: storage.RankBottom,
 	})
 	if err != nil {
@@ -447,7 +451,8 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 func (f epicFixture) outsider(title string) string {
 	f.t.Helper()
 	out, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Topic: "other", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle(title),
+		Lane: storage.SharedLane, Topic: "other", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(f.t, f.ctx, f.ap, title+" (epic)", "other"),
 	})
 	if err != nil {

@@ -214,7 +214,7 @@ func TestARemoteThatDropsTheForkPointsTicketsStaysUnrelated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(other) error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "other", Topic: "topic", IssueType: "epic"}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("other"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"}); err != nil {
 		t.Fatalf("CreateIssue(other) error = %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -785,7 +785,7 @@ func createAndPush(t *testing.T, ctx context.Context, root, epic, title string) 
 	if err != nil {
 		t.Fatalf("Open(%s) error = %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", ParentID: epic})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic})
 	if err != nil {
 		t.Fatalf("CreateIssue(%s) error = %v", title, err)
 	}

@@ -25,11 +25,11 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "purge", IssueType: model.TypeEpic})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "purge", IssueType: model.TypeEpic})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	doomed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "pasted a secret", Topic: "purge", IssueType: "task", ParentID: epic.ID})
+	doomed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("pasted a secret"), Lane: storage.SharedLane, Topic: "purge", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(doomed) error = %v", err)
 	}

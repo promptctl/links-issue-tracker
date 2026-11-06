@@ -115,16 +115,16 @@ func (h readyTestHarness) gather() ([]annotation.AnnotatedIssue, map[string]stor
 func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	// A.2 sits in its own lane so the lane gate does not block it behind the
 	// in_progress default-lane sibling A.1 — this test's contract is claim
 	// precedence over rank, not lane-gate membership.
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution)}
@@ -148,11 +148,11 @@ func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
-	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
+	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic C"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherAttribution)}
@@ -182,14 +182,14 @@ func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
 
 	rows, details, epics := h.gather()
 	// A.1 is closed, so it is not among the gathered rows — its lane is
@@ -220,13 +220,13 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
@@ -272,13 +272,13 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
 
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -316,13 +316,13 @@ func TestExhaustionOfAnEmptiedScopeClaimsNothingWasDone(t *testing.T) {
 func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Outside, theirs"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, blocker.ID)
 
 	rows, details, epics := h.gather()
@@ -380,13 +380,13 @@ func followStayRoute(t *testing.T, h readyTestHarness, newFlags []string, blocke
 func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocks the whole epic, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Blocks the whole epic, theirs"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(epicA.ID, blocker.ID)
 
 	rows, details, epics := h.gather()
@@ -432,12 +432,12 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2, theirs"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.3"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a3")})
 	h.addDependencyWithinEpic(a3.ID, a2.ID)
 
 	rows, details, epics := h.gather()
@@ -462,14 +462,14 @@ func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
 func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.3"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a3")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Outside, theirs"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependencyWithinEpic(a3.ID, a2.ID)
 	h.addDependency(a2.ID, blocker.ID)
 
@@ -501,13 +501,13 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2, theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2, theirs"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -542,13 +542,13 @@ func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
 func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ready, off the focus path", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	offPath := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Ready, off the focus path"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -589,14 +589,14 @@ func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
 
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 0})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 0})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 
 	rows, details, epics := h.gather()
 	if rows[0].ID != b1.ID {
@@ -625,13 +625,13 @@ func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("External blocker"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 
 	rows, details, epics := h.gather()
@@ -667,11 +667,11 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.3"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a3")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("External blocker"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 	h.addDependency(a3.ID, dep.ID)
 
@@ -717,12 +717,12 @@ func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(selfAttribution)}
@@ -746,12 +746,12 @@ func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	orphan(t, rows, a1.ID)
@@ -778,12 +778,12 @@ func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 	h.transition(b1.ID, model.Start{Assignee: "other"})
 
-	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
-	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
+	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic C"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, epics := h.gather()
 	orphan(t, rows, b1.ID)
@@ -808,12 +808,12 @@ func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 	h.transition(b1.ID, model.Start{Assignee: "other"})
 
-	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
-	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
+	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic C"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherAttribution)}
@@ -845,11 +845,11 @@ func onlyBugs(t *testing.T) storage.IssueCriteria {
 func TestRouteNextNamesTheTicketAFilterHidFromTheHeldScope(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
@@ -869,8 +869,8 @@ func TestRouteNextNamesTheTicketAFilterHidFromTheHeldScope(t *testing.T) {
 func TestRouteNextNarrowedWhenNothingTheFilterSelectsIsReady(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
@@ -891,13 +891,13 @@ func TestRouteNextNarrowedWhenNothingTheFilterSelectsIsReady(t *testing.T) {
 func TestRouteNextStillReportsAnExhaustedScopeUnderAFilter(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	epicD := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic D", Topic: "next", IssueType: "epic", Priority: 1})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicD.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicD := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic D"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Their task"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicD.ID})
 	h.addDependency(a1.ID, dep.ID)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -934,15 +934,15 @@ func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-			epicD := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic D", Topic: "next", IssueType: "epic", Priority: 1})
-			dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicD.ID})
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+			epicD := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic D"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Their task"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicD.ID})
 			h.addDependency(a1.ID, dep.ID)
 			var b1 model.Issue
 			if tc.readyTask {
-				epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-				b1 = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+				epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+				b1 = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 			}
 
 			rows, details, epics := h.gather()
@@ -982,14 +982,14 @@ func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
 func TestRouteNextExhaustionUnderAFilterNamesOnlyWithheldRowsItSelects(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	offBug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Bug off the path", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicX.ID, Lane: "bug"})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Task off the path", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "task"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	offBug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Bug off the path"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicX.ID, Lane: storage.MustParseLane("bug")})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Task off the path"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: storage.MustParseLane("task")})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -1013,9 +1013,9 @@ func TestRouteNextExhaustionUnderAFilterNamesOnlyWithheldRowsItSelects(t *testin
 func TestRouteNextNoWorkUnderAFilterNamesOnlyRowsItSelects(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
-	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their bug", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: "bug"})
-	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Their task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Their bug"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("bug")})
+	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Their task"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("task")})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -1039,8 +1039,8 @@ func TestRouteNextNoWorkUnderAFilterNamesOnlyRowsItSelects(t *testing.T) {
 func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
-	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "task"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Task"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("task")})
 
 	rows, details, epics := h.gather()
 	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
@@ -1049,7 +1049,7 @@ func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
 		t.Fatalf("routeNext = %#v (%T), want Narrowed naming %q", outcome, outcome, task.ID)
 	}
 
-	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Bug", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: "bug"})
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Bug"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("bug")})
 	rows, details, epics = h.gather()
 	outcome = routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
 	if served, ok := outcome.(ServedFromNewLane); !ok || served.Row.ID != bug.ID {
@@ -1063,12 +1063,12 @@ func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
 func TestRouteNextFindsADependencyThroughATicketTheFilterHides(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	between := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "The task between", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
-	epicY := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic Y", Topic: "next", IssueType: "epic", Priority: 1})
-	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "The bug upstream", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicY.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	between := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("The task between"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	epicY := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic Y"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("The bug upstream"), Lane: storage.SharedLane, Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicY.ID})
 	h.addDependency(a1.ID, between.ID)
 	h.addDependency(between.ID, upstream.ID)
 
@@ -1091,11 +1091,11 @@ func TestRouteNextFindsADependencyThroughATicketTheFilterHides(t *testing.T) {
 func TestRouteNextServesTheTicketUnderAnEpicBlockerThatTheFilterSelects(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID})
-	epicE := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic E", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "E's task", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: "task"})
-	eBug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "E's bug", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicE.ID, Lane: "bug"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID})
+	epicE := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic E"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("E's task"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: storage.MustParseLane("task")})
+	eBug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("E's bug"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicE.ID, Lane: storage.MustParseLane("bug")})
 	h.addDependency(a1.ID, epicE.ID)
 
 	rows, details, epics := h.gather()
@@ -1120,13 +1120,13 @@ func TestRouteNextServesTheTicketUnderAnEpicBlockerThatTheFilterSelects(t *testi
 func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("External blocker"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 
 	rows, details, epics := h.gather()
@@ -1178,12 +1178,12 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ranked first", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "x"})
-	hidden := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Earlier in lane l", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "l"})
-	later := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Later in lane l", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "l"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Outside blocker", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicX.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Ranked first"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("x")})
+	hidden := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Earlier in lane l"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("l")})
+	later := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Later in lane l"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("l")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	outside := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Outside blocker"), Lane: storage.SharedLane, Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(first.ID, outside.ID)
 	h.addDependency(outside.ID, hidden.ID)
 
@@ -1225,8 +1225,8 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 		waitOutside func(h readyTestHarness, waits model.Issue)
 	}{
 		{name: "through an external ticket", waitOutside: func(h readyTestHarness, waits model.Issue) {
-			epicU := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic U", Topic: "next", IssueType: "epic", Priority: 1})
-			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream release", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicU.ID, Labels: []string{ExternalLabel}})
+			epicU := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic U"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Upstream release"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicU.ID, Labels: []string{ExternalLabel}})
 			h.addDependency(waits.ID, upstream.ID)
 		}},
 		{name: "by its own external label", waitOutside: func(h readyTestHarness, waits model.Issue) {
@@ -1235,11 +1235,11 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-			ours := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a"})
-			epicE := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic E", Topic: "next", IssueType: "epic", Priority: 1})
-			waits := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "E.1 waits", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: "e1"})
-			held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "E.2 needs design", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: "e2", Labels: []string{NeedsDesignLabel}})
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			ours := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a")})
+			epicE := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic E"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			waits := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("E.1 waits"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: storage.MustParseLane("e1")})
+			held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("E.2 needs design"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicE.ID, Lane: storage.MustParseLane("e2"), Labels: []string{NeedsDesignLabel}})
 			h.addDependency(ours.ID, epicE.ID)
 			tc.waitOutside(h, waits)
 
@@ -1269,12 +1269,12 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	gone := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Out of view", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "gone"})
-	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "theirs"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	a3 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.3"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a3")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	gone := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Out of view"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: storage.MustParseLane("gone")})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Theirs"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: storage.MustParseLane("theirs")})
 
 	// The out-of-view blocker gates whichever of ours the queue ranks first.
 	rows, _, _ := h.gather()
@@ -1323,9 +1323,9 @@ func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	earlier := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Earlier in our lane", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "ours"})
-	later := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Later in our lane", Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: "ours"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	earlier := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Earlier in our lane"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("ours")})
+	later := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Later in our lane"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("ours")})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -1363,13 +1363,13 @@ func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) 
 func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("External blocker"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 
 	rows, details, epics := h.gather()
@@ -1427,14 +1427,14 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "dep"})
-	deeper := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker's blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "deeper"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("External blocker"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: storage.MustParseLane("dep")})
+	deeper := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Blocker's blocker"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: storage.MustParseLane("deeper")})
 	h.addDependency(a2.ID, dep.ID)
 	h.addDependencyWithinEpic(dep.ID, deeper.ID)
 
@@ -1493,9 +1493,9 @@ func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-			lead := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a", Labels: []string{tc.label}})
-			h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a"})
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			lead := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a"), Labels: []string{tc.label}})
+			h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a")})
 
 			rows, details, epics := h.gather()
 			standings := claims.Standings{laneOf(t, details, rowByID(t, rows, lead.ID)): heldBy(selfAttribution)}
@@ -1534,11 +1534,11 @@ func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
 			// held, its epic is the checkout's scope, and the plain ticket
 			// has to be outside it to be served past the exhaustion rather
 			// than as a sibling lane of the same epic.
-			epicW := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic W", Topic: "next", IssueType: "epic", Priority: 1})
-			waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicW.ID, Labels: []string{ExternalLabel}})
+			epicW := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic W"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			waiting := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Upstream fix lands"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicW.ID, Labels: []string{ExternalLabel}})
 			h.transition(waiting.ID, model.Start{Assignee: "tester"})
-			epicP := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic P", Topic: "next", IssueType: "epic", Priority: 1})
-			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Plain work", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicP.ID})
+			epicP := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic P"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Plain work"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicP.ID})
 
 			rows, details, epics := h.gather()
 			standings := claims.Standings{}
@@ -1583,7 +1583,7 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 	}
 	through := func(labels ...string) path {
 		return func(h readyTestHarness, a2, upstream, epicY model.Issue) model.Issue {
-			between := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Waits on upstream", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicY.ID, Lane: "between", Labels: labels})
+			between := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Waits on upstream"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicY.ID, Lane: storage.MustParseLane("between"), Labels: labels})
 			h.addDependency(a2.ID, between.ID)
 			h.addDependency(between.ID, upstream.ID)
 			return between
@@ -1608,14 +1608,14 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 			h.transition(a1.ID, model.Start{Assignee: "tester"})
 			h.transition(a1.ID, model.Done{})
-			a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-			epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Upstream fix lands", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: "upstream", Labels: []string{ExternalLabel}})
-			epicY := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic Y", Topic: "next", IssueType: "epic", Priority: 1})
+			a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+			epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			upstream := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Upstream fix lands"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID, Lane: storage.MustParseLane("upstream"), Labels: []string{ExternalLabel}})
+			epicY := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic Y"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
 			reached := tc.path(h, a2, upstream, epicY)
 			var foreign []string
 			if tc.heldForeign {
@@ -1623,7 +1623,7 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 			}
 			wantRoute := ""
 			if tc.alsoPlain {
-				plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicY.ID, Lane: "plain"})
+				plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Theirs"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicY.ID, Lane: storage.MustParseLane("plain")})
 				h.addDependency(a2.ID, plain.ID)
 				foreign = append(foreign, plain.ID)
 				wantRoute = " — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID + " --top`, then make that blocker blocked by it with `lit dep add " + plain.ID + " --blocked-by <new>`"
@@ -1664,16 +1664,16 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 func TestExhaustionOffersToClearAStartedBlockerWhateverItStillDependsOn(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicY := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic Y", Topic: "next", IssueType: "epic", Priority: 1})
-	started := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, underway", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicY.ID, Lane: "started"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicY := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic Y"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	started := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Theirs, underway"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicY.ID, Lane: storage.MustParseLane("started")})
 	h.transition(started.ID, model.Start{Assignee: "them"})
-	epicZ := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic Z", Topic: "next", IssueType: "epic", Priority: 1})
-	still := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Still open", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicZ.ID, Lane: "still"})
+	epicZ := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic Z"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	still := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Still open"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicZ.ID, Lane: storage.MustParseLane("still")})
 	h.addDependency(a2.ID, started.ID)
 	h.addDependency(started.ID, still.ID)
 
@@ -1702,11 +1702,11 @@ func TestExhaustionOffersToClearAStartedBlockerWhateverItStillDependsOn(t *testi
 func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
 	h.transition(a2.ID, model.Start{Assignee: "other"})
 
 	rows, details, epics := h.gather()
@@ -1738,11 +1738,11 @@ func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 func TestRouteNextServesOpenTicketInAnExpiredForeignLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
-	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
+	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic C"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): expired}
@@ -1766,14 +1766,14 @@ func TestRouteNextServesOpenTicketInAnExpiredForeignLane(t *testing.T) {
 func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
 
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
@@ -1822,13 +1822,13 @@ func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	named := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
-	unnamed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.5, read as a lane of one", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a5"})
-	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.3", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a3"})
-	unnamedInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.4", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	soloInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.6, read as a lane of one, abandoned", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a6"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	named := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
+	unnamed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.5, read as a lane of one"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a5")})
+	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.3"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a3")})
+	unnamedInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.4"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	soloInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.6, read as a lane of one, abandoned"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a6")})
 	for _, abandoned := range []string{inFlight.ID, unnamedInFlight.ID, soloInFlight.ID} {
 		h.transition(abandoned, model.Start{Assignee: "other"})
 	}
@@ -1881,8 +1881,8 @@ func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
 func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1, read as a lane of one", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1, read as a lane of one"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 
 	rows, _, _ := h.gather()
 	row := rowByID(t, rows, solo.ID)
@@ -1907,9 +1907,9 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
 			mk := func(title, lane string) model.Issue {
-				return h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: lane})
+				return h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane(lane)})
 			}
 			var inFlight, ready model.Issue
 			if tc.resumeFirst {
@@ -1948,13 +1948,13 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
 	h.transition(a1.ID, model.Start{Assignee: "tester"})
 	h.transition(a1.ID, model.Done{})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic X", Topic: "next", IssueType: "epic", Priority: 1})
-	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
+	epicX := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic X"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("External blocker"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicX.ID})
 	h.addDependency(a2.ID, dep.ID)
 	h.transition(dep.ID, model.Start{Assignee: "other"})
 
@@ -1999,12 +1999,12 @@ func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
 			h.transition(a1.ID, model.Start{Assignee: "tester"})
 
-			epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-			b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
+			epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+			b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
 
 			rows, details, epics := h.gather()
 			row := rowByID(t, rows, a1.ID)
@@ -2034,11 +2034,11 @@ func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
 
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
 	if rows[0].ID != a1.ID {
@@ -2068,8 +2068,8 @@ func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
 func TestRouteNextDoesNotAdoptExpiredPublicHistory(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 	h.transition(a1.ID, model.Start{Assignee: "whoever-came-before"})
 
 	rows, details, epics := h.gather()
@@ -2096,10 +2096,10 @@ func TestRouteNextDoesNotAdoptExpiredPublicHistory(t *testing.T) {
 func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
 	h.transition(a1.ID, model.Start{Assignee: "whoever-is-working-it"})
 
 	rows, details, epics := h.gather()
@@ -2166,13 +2166,13 @@ func readingOf(t *testing.T, blocker blockerReach) rowReach {
 func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs, in flight", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID, Lane: "held"})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Theirs, in flight"), Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID, Lane: storage.MustParseLane("held")})
 	h.transition(held.ID, model.Start{Assignee: "tester"})
 	// Gated by the row above — in its own lane, so the dependency is the one
 	// thing holding it — and the whole pool is unstartable without either
 	// row being takeable, for two different reasons.
-	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Ours to want, not to start", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "gated"})
+	gated := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Ours to want, not to start"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("gated")})
 	h.addDependencyWithinEpic(gated.ID, held.ID)
 
 	rows, details, epics := h.gather()
@@ -2223,8 +2223,8 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 func TestNoWorkReportsARowHeldByItself(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
-	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "held", Labels: []string{NeedsDesignLabel}})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Needs design"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("held"), Labels: []string{NeedsDesignLabel}})
 
 	rows, details, epics := h.gather()
 	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})

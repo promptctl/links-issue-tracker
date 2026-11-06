@@ -117,7 +117,7 @@ func TestAGroupOfOneClimbsNothing(t *testing.T) {
 	if levels != 0 || links != 0 {
 		t.Errorf("one blocker climbed %d levels and %d links, want none", levels, links)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "sibling", Topic: "core", Prefix: "test", IssueType: model.TypeTask, ParentID: first[0].ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "core", Prefix: "test", IssueType: model.TypeTask, ParentID: first[0].ID}); err != nil {
 		t.Fatal(err)
 	}
 	levels, links = 0, 0
@@ -155,7 +155,7 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	child, kept := lower[1], upper[1]
-	later, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "later", Topic: "core", Prefix: "test", IssueType: model.TypeTask, ParentID: upper[0].ID})
+	later, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("later"), Lane: storage.SharedLane, Topic: "core", Prefix: "test", IssueType: model.TypeTask, ParentID: upper[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}

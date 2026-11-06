@@ -119,11 +119,11 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "journal epic", Topic: "sync", IssueType: "epic"})
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("journal epic"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "journal payload", Topic: "sync", ParentID: epic.ID}); err != nil {
+	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("journal payload"), Lane: storage.SharedLane, Topic: "sync", ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := s.Close(); err != nil {

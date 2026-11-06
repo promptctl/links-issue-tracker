@@ -63,7 +63,7 @@ func seedSyncEpic(t *testing.T, ctx context.Context, doltRoot, workspace string)
 	if err != nil {
 		t.Fatalf("Open(epic) error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -342,11 +342,11 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc epic", Topic: "gc-test", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("gc epic"), Lane: storage.SharedLane, Topic: "gc-test", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("gc target"), Lane: storage.SharedLane, Topic: "gc-test", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -510,13 +510,14 @@ func TestMeasureCompactionSignalsMatchesDoltsRealOldGenLayout(t *testing.T) {
 	}
 	// Enough history that a pass has something to archive; an empty store would
 	// leave an old generation Dolt never wrote, proving nothing.
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "layout epic", Topic: "layout", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("layout epic"), Lane: storage.SharedLane, Topic: "layout", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	for i := range 8 {
 		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("layout %d", i), Topic: "layout", IssueType: "task", Priority: 0, ParentID: epic.ID,
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("layout %d", i)),
+			Lane: storage.SharedLane, Topic: "layout", IssueType: "task", Priority: 0, ParentID: epic.ID,
 		}); err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
@@ -665,7 +666,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -781,7 +782,7 @@ func TestSyncPushDelivers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -854,11 +855,11 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("c1"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -911,12 +912,13 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "fragmented", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID,
+		Prefix: "test", Title: storage.MustParseTitle("fragmented"),
+		Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -972,12 +974,13 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "doomed push", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID,
+		Prefix: "test", Title: storage.MustParseTitle("doomed push"),
+		Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -1029,7 +1032,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -1061,7 +1064,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 
 	// The rotated connection must be a fully working handle, not just non-nil:
 	// a real mutation through it has to commit.
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "after-reconnect", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("after-reconnect"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() after reconnect error = %v", err)
 	}
 }
@@ -1145,11 +1148,11 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(producer) error = %v", err)
 	}
-	epic, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-epic", Topic: "topic", IssueType: "epic"})
+	epic, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("remote-epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(producer epic) error = %v", err)
 	}
-	if _, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-ticket", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+	if _, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("remote-ticket"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue(producer) error = %v", err)
 	}
 	if err := producer.Close(); err != nil {
@@ -1248,14 +1251,14 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	if got, err := st.LocalIssueCount(ctx); err != nil || got != 0 {
 		t.Fatalf("migrated-empty LocalIssueCount() = %d, %v; want 0, nil", got, err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "e1", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("e1"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	if got, err := st.LocalIssueCount(ctx); err != nil || got != 1 {
 		t.Fatalf("after-epic LocalIssueCount() = %d, %v; want 1, nil", got, err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "t1", Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("t1"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if got, err := st.LocalIssueCount(ctx); err != nil || got != 2 {
@@ -1430,7 +1433,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%s,%q) error = %v", root, title, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", ParentID: epicID}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epicID}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {

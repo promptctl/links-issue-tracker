@@ -18,7 +18,8 @@ func makeEpics(t *testing.T, ctx context.Context, st *Store, n int, titlef strin
 	ids := make([]string, 0, n)
 	for i := range n {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf(titlef, i), Topic: "batch",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf(titlef, i)),
+			Lane: storage.SharedLane, Topic: "batch",
 			IssueType: "epic", Placement: storage.RankBottom,
 		})
 		if err != nil {
@@ -80,7 +81,8 @@ func TestListIssuesByParentIDsAnswersForEveryParent(t *testing.T) {
 	children := make([]string, 0, count)
 	for i, parent := range parents {
 		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("child %d", i), Topic: "batch",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("child %d", i)),
+			Lane: storage.SharedLane, Topic: "batch",
 			IssueType: "task", Placement: storage.RankBottom, ParentID: parent,
 		})
 		if err != nil {
@@ -110,7 +112,8 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 	children := make([]string, 0, count)
 	for i, parent := range parents {
 		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("child %d", i), Topic: "batch",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("child %d", i)),
+			Lane: storage.SharedLane, Topic: "batch",
 			IssueType: "task", Placement: storage.RankBottom, ParentID: parent,
 		})
 		if err != nil {

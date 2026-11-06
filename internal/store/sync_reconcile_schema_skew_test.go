@@ -37,11 +37,11 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	}
 	defer st.Close()
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic): %v", err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "orig", Topic: "topic", IssueType: "task", ParentID: epic.ID})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("orig"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
@@ -394,11 +394,11 @@ func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("seed epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed epic): %v", err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task", ParentID: epic.ID})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("seed"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}

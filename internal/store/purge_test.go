@@ -20,11 +20,11 @@ func TestRestoreNeverUnpurges(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "purge", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "purge", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic): %v", err)
 	}
-	doomed, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Doomed", Topic: "purge", IssueType: "task", ParentID: epic.ID})
+	doomed, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Doomed"), Lane: storage.SharedLane, Topic: "purge", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(doomed): %v", err)
 	}
@@ -72,7 +72,7 @@ func TestPurgingOneOfALeafsTwoParentsKeepsItInside(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	first := parentChain(t, ctx, st, "E1")[0]
 	second := parentChain(t, ctx, st, "E2")[0]
-	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "C", Topic: "hier", IssueType: "task", ParentID: first.ID, Placement: storage.RankBottom})
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: first.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(C) error = %v", err)
 	}

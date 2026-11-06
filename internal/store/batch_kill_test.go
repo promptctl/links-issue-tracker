@@ -84,7 +84,7 @@ func TestABatchKilledPartwayWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "home", Topic: "crash", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, Topic: "crash", IssueType: "epic"})
 	if err != nil {
 		t.Fatal(err)
 	}

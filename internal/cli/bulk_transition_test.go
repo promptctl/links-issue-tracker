@@ -41,9 +41,9 @@ func bulkFailures(t *testing.T, h readyTestHarness, stdout io.Writer, spec trans
 func TestBulkOpenReopensTheRestAndFailsTheTicketOpenRefuses(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "bulk", IssueType: "epic"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "epic"})
 	child := func(title string) string {
-		return h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "bulk", IssueType: "task", ParentID: epic.ID}).ID
+		return h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic.ID}).ID
 	}
 	first, archived, second := child("first"), child("archived"), child("second")
 	for _, id := range []string{first, archived, second} {
@@ -86,7 +86,7 @@ func TestBulkTransitionsRefuseWhatTheSingleVerbRefusesInItsWords(t *testing.T) {
 				h := newReadyTestHarness(t)
 				id := h.epicFixture(1, 0)
 				if target == "archived" {
-					id = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "frozen", Topic: "bulk", IssueType: "task", ParentID: id}).ID
+					id = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("frozen"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: id}).ID
 					h.applyAction(id, model.Archive{}, "")
 				}
 				single := h.runTransitionErr(id, spec, actionFlags[spec.name]...)
@@ -116,10 +116,10 @@ func TestBulkStartRefusesAHeldLaneUnlessTaken(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "bulk-start-sess")
 	h := newReadyTestHarness(t)
-	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "held epic", Topic: "bulk", IssueType: "epic"})
-	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "theirs", Topic: "bulk", IssueType: "task", ParentID: held.ID})
-	contested := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "contested", Topic: "bulk", IssueType: "task", ParentID: held.ID})
-	free := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "free", Topic: "bulk", IssueType: "task", ParentID: h.epicFixture(0, 0)})
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("held epic"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "epic"})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("theirs"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	contested := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	free := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("free"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: h.epicFixture(0, 0)})
 	h.asCheckout("otherstream01")
 	h.transition(theirs.ID, model.Start{Assignee: "other"})
 	h.asCheckout(h.ap.Stream.Value())
@@ -155,8 +155,8 @@ func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	h.ctx = telemetry.With(h.ctx, recorder)
 	epic := h.epicFixture(0, 0)
-	unplanned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unplanned", Topic: "bulk", IssueType: "task", ParentID: epic}).ID
-	closed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "closed", Topic: "bulk", IssueType: "task", ParentID: epic}).ID
+	unplanned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("unplanned"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic}).ID
+	closed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("closed"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic}).ID
 	h.applyAction(closed, model.Done{}, "")
 	const missing = "test-missing"
 
@@ -223,9 +223,9 @@ func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "bulk-start-sess")
 	h := newReadyTestHarness(t)
-	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "held epic", Topic: "bulk", IssueType: "epic"})
-	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "theirs", Topic: "bulk", IssueType: "task", ParentID: held.ID})
-	contested := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "contested", Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("held epic"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "epic"})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("theirs"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	contested := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
 	h.asCheckout("otherstream01")
 	h.transition(theirs.ID, model.Start{Assignee: "other"})
 	h.asCheckout(h.ap.Stream.Value())

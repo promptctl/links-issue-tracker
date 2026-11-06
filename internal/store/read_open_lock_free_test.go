@@ -25,11 +25,11 @@ func TestOpenForReadDoesNotWaitOnCommitLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "scale epic", Topic: "scale", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("scale epic"), Lane: storage.SharedLane, Topic: "scale", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "served under a held commit lock", Topic: "scale", ParentID: epic.ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("served under a held commit lock"), Lane: storage.SharedLane, Topic: "scale", ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := st.Close(); err != nil {

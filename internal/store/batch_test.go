@@ -17,7 +17,7 @@ func openBatchStore(t *testing.T, ctx context.Context) (*Store, string) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "home", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -101,7 +101,7 @@ func TestABatchRefusedByCancellationLeavesTheBranchWhereItStarted(t *testing.T) 
 	head := headCommit(t, context.Background(), st)
 	ctx, cancel := context.WithCancel(context.Background())
 	_, _, err := withBatch(ctx, st, func(ctx context.Context, _ *storage.BulkApplyResult) error {
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "lands", Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("lands"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
 		cancel()
@@ -126,7 +126,7 @@ func TestARefusedImportKeepsAStrandedWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "home", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}

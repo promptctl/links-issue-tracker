@@ -350,17 +350,17 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 		states = append(states, deltaScenarioState{name: name, export: export})
 	}
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "delta", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "delta", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic): %v", err)
 	}
-	first, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	first, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("First"), Lane: storage.SharedLane, Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(first): %v", err)
 	}
 	// A sub-epic, so first may be blocked by it below: between two leaves of
 	// one epic a blocked-by edge is refused.
-	second, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "delta", IssueType: "epic", ParentID: epic.ID, Placement: storage.RankBottom})
+	second, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Second"), Lane: storage.SharedLane, Topic: "delta", IssueType: "epic", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(second): %v", err)
 	}
@@ -393,7 +393,7 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 	}
 	snapshot("relation endpoint rewritten")
 
-	third, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Third", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	third, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Third"), Lane: storage.SharedLane, Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(third): %v", err)
 	}

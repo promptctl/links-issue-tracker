@@ -26,7 +26,7 @@ func listColumnsOutput(t *testing.T, expr string) (string, error) {
 	t.Helper()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "col", Title: "T", Topic: "col", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Col", "col")}); err != nil {
+	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "col", Title: storage.MustParseTitle("T"), Lane: storage.SharedLane, Topic: "col", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Col", "col")}); err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
 	var out bytes.Buffer
@@ -139,7 +139,7 @@ func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "dflt", Title: "T", Topic: "dflt", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Dflt", "dflt")})
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "dflt", Title: storage.MustParseTitle("T"), Lane: storage.SharedLane, Topic: "dflt", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Dflt", "dflt")})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
@@ -168,7 +168,7 @@ func TestColumnsRankRendersTheIssueRank(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rank", Title: "T", Topic: "rank", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Rank", "rank")})
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rank", Title: storage.MustParseTitle("T"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Rank", "rank")})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}

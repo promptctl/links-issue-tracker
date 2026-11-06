@@ -17,33 +17,33 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "rel", IssueType: "epic", Priority: 1})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "rel", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	childA, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: storage.RankBottom})
+	childA, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child A"), Lane: storage.SharedLane, Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childA) error = %v", err)
 	}
-	childB, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: storage.RankBottom})
+	childB, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child B"), Lane: storage.SharedLane, Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childB) error = %v", err)
 	}
 	// The dependency endpoints live under a second epic, so the subject
 	// epic's children stay exactly the two the spot-check below counts.
-	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Other", Topic: "rel", IssueType: "epic", Priority: 1})
+	other, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Other"), Lane: storage.SharedLane, Topic: "rel", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(other) error = %v", err)
 	}
-	upstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Upstream", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
+	upstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Upstream"), Lane: storage.SharedLane, Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(upstream) error = %v", err)
 	}
-	downstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Downstream", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
+	downstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Downstream"), Lane: storage.SharedLane, Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(downstream) error = %v", err)
 	}
-	peer, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Peer", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
+	peer, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Peer"), Lane: storage.SharedLane, Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(peer) error = %v", err)
 	}

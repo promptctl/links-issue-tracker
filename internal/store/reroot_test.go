@@ -41,7 +41,7 @@ func TestReRootGivesTheSameHashesInEveryStore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%d) error = %v", i, err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: fmt.Sprintf("t%d", i), Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("t%d", i)), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 			t.Fatalf("CreateIssue(%d) error = %v", i, err)
 		}
 		if err := st.Close(); err != nil {

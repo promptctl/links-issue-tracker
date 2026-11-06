@@ -41,17 +41,18 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 			// dependency, so the cell reads the dependency and not a sibling
 			// ranked ahead of it in a shared lane.
 			epic := h.createIssue(storage.CreateIssueInput{
-				Prefix: "frozen", Title: "Frozen", Topic: "frozen", IssueType: "epic",
+				Prefix: "frozen", Title: storage.MustParseTitle("Frozen"),
+				Lane: storage.SharedLane, Topic: "frozen", IssueType: "epic",
 			})
 			blocker := h.createIssue(storage.CreateIssueInput{
-				Prefix: "frozen", Title: "Blocker", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "blocker",
+				Prefix: "frozen", Title: storage.MustParseTitle("Blocker"), Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: storage.MustParseLane("blocker"),
 			})
 			gated := h.createIssue(storage.CreateIssueInput{
-				Prefix: "frozen", Title: "Gated", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "gated",
+				Prefix: "frozen", Title: storage.MustParseTitle("Gated"), Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: storage.MustParseLane("gated"),
 			})
 			h.addDependencyWithinEpic(gated.ID, blocker.ID)
 			ungated := h.createIssue(storage.CreateIssueInput{
-				Prefix: "frozen", Title: "Ungated", Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: "ungated",
+				Prefix: "frozen", Title: storage.MustParseTitle("Ungated"), Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: storage.MustParseLane("ungated"),
 			})
 
 			cellOf := func(id string, args ...string) string {

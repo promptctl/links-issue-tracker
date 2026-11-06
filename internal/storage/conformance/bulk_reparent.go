@@ -15,16 +15,16 @@ import (
 // stating a parent lands under it, and one whose parent already is the one it
 // states is reported as held rather than refused or counted as moved.
 func aBulkFileReparentsItsUpdateDocuments(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	from := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "from", Topic: "core", IssueType: model.TypeEpic})
-	to := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "to", Topic: "core", IssueType: model.TypeEpic})
+	from := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("from"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	to := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("to"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	var specs []storage.BulkIssueSpec
 	var moved []string
 	for i := range 3 {
-		task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: fmt.Sprintf("task %d", i), Topic: "core", ParentID: from.ID})
+		task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(fmt.Sprintf("task %d", i)), Lane: storage.SharedLane, Topic: "core", ParentID: from.ID})
 		specs = append(specs, storage.BulkIssueSpec{ID: task.ID, Parent: ptr(to.ID)})
 		moved = append(moved, task.ID)
 	}
-	already := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "already", Topic: "core", ParentID: to.ID})
+	already := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("already"), Lane: storage.SharedLane, Topic: "core", ParentID: to.ID})
 	specs = append(specs, storage.BulkIssueSpec{ID: already.ID, Parent: ptr(to.ID)})
 
 	result, err := st.BulkApply(ctx, prefix, "ada", specs)
@@ -43,7 +43,7 @@ func aBulkFileReparentsItsUpdateDocuments(t *testing.T, ctx context.Context, st 
 // under that create — needs no read to refuse, so it is refused before the
 // create lands, and no tombstone is left behind. [LAW:single-enforcer]
 func aBulkFileStatingAParentCycleWritesNothing(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "x", Topic: "core", IssueType: model.TypeEpic})
+	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("x"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true})
 	title, topic, epicType := "c", "core", "epic"
 	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
@@ -65,10 +65,10 @@ func aBulkFileStatingAParentCycleWritesNothing(t *testing.T, ctx context.Context
 // documents refused there changes nothing — not the reparent beside it, not a
 // title, not the order.
 func aRefusedReparentAppliesNoDocument(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
-	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic, ParentID: a.ID})
-	r := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "r", Topic: "core", IssueType: model.TypeEpic})
-	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task", Topic: "core", ParentID: a.ID})
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("a"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("b"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: a.ID})
+	r := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("r"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, Topic: "core", ParentID: a.ID})
 	order := []string{a.ID, b.ID, task.ID, r.ID}
 	assertOrder(t, ctx, st, "before", order...)
 	top, renamed := "top", "renamed"
@@ -95,7 +95,7 @@ func aRefusedReparentAppliesNoDocument(t *testing.T, ctx context.Context, st sto
 // [LAW:no-ambient-temporal-coupling]
 func aBulkFileIsJudgedOnTheHierarchyItEndsWith(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := func(title, parent string) string {
-		return mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title, Topic: "core", IssueType: model.TypeEpic, ParentID: parent}).ID
+		return mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: parent}).ID
 	}
 	for _, reversed := range []bool{false, true} {
 		apply := func(what string, docs ...storage.BulkIssueSpec) {
@@ -133,10 +133,10 @@ func aBulkFileIsJudgedOnTheHierarchyItEndsWith(t *testing.T, ctx context.Context
 // type, so the refusal comes before any write: a create beside it leaves no
 // tombstone.
 func aBulkFileClearsAParentWithAnEmptyOne(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outer", Topic: "core", IssueType: model.TypeEpic})
-	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested", Topic: "core", IssueType: model.TypeEpic, ParentID: outer.ID})
-	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: outer.ID})
-	topLevel := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top level", Topic: "core", IssueType: model.TypeEpic})
+	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("outer"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("nested"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: outer.ID})
+	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: outer.ID})
+	topLevel := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top level"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
 	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true})
 	title, topic, epicType := "fresh", "core", "epic"
@@ -168,9 +168,9 @@ func aBulkFileClearsAParentWithAnEmptyOne(t *testing.T, ctx context.Context, st 
 // under an epic the same file creates, and its `rank: top` orders it in that
 // new frame, because the file's ordering is written after its reparents.
 func aBulkFileRanksIssuesInTheFrameItMovesThemTo(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "home", Topic: "core", IssueType: model.TypeEpic})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: home.ID})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: home.ID})
+	home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
 	title, topic, epicType, top := "new home", "core", "epic", "top"
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{LocalID: "new", Title: &title, Topic: &topic, IssueType: &epicType},
@@ -193,9 +193,9 @@ func aBulkFileRanksIssuesInTheFrameItMovesThemTo(t *testing.T, ctx context.Conte
 // legal and lands; moved into it, the two are leaves of one epic, which the
 // gate refuses before any write. [LAW:no-ambient-temporal-coupling]
 func aBulkFileJudgesItsBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	e := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "e", Topic: "core", IssueType: model.TypeEpic})
-	f := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "f", Topic: "core", IssueType: model.TypeEpic})
-	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "x", Topic: "core", ParentID: e.ID})
+	e := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("e"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	f := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("f"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("x"), Lane: storage.SharedLane, Topic: "core", ParentID: e.ID})
 	title, topic, taskType := "t", "core", "task"
 	create := func(parent string) storage.BulkIssueSpec {
 		return storage.BulkIssueSpec{LocalID: "t", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(parent), BlockedBy: ptr([]string{x.ID})}

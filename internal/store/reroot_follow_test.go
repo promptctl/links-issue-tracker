@@ -54,7 +54,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 		t.Fatalf("Open(alpha) error = %v", err)
 	}
 	for i := range 4 {
-		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: fmt.Sprintf("t%d", i), Topic: "topic", IssueType: "task", ParentID: epic})
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("t%d", i)), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic})
 		if err != nil {
 			t.Fatalf("CreateIssue(%d) error = %v", i, err)
 		}
@@ -621,7 +621,7 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 	}
 	var ticket string
 	for i := range 5 {
-		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: fmt.Sprintf("t%d", i), Topic: "topic", IssueType: "task", ParentID: epic})
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("t%d", i)), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic})
 		if err != nil {
 			t.Fatalf("CreateIssue(%d) error = %v", i, err)
 		}

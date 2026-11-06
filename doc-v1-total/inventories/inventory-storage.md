@@ -725,7 +725,7 @@ These types live in the contract, not in an engine, because a capability interfa
 
 Order of checks is stated as contract: the parent must be resolved before the cosmetic prefix, so naming a missing parent reports the missing issue (`internal/storage/memory/issues.go`).
 
-1. `title = strings.TrimSpace(in.Title)`; empty → `model.ValidationError{Message: "title is required"}`.
+1. `in.Title.Text()` and `in.Lane.Text()` — the parsed `storage.Title` and `storage.Lane` (`internal/storage/title.go`); a zero `Title` → `model.ValidationError{Message: "title is required"}`, a `Lane` no parser made → an error.
 2. `canonicalLabels(in.Labels)` — normalize/dedupe/sort; error propagates.
 3. `issueid.NormalizeTopicForCreate(in.Topic)` — error propagates.
 4. `issueType`: if `in.IssueType == ""` → `model.TypeTask`.
@@ -866,8 +866,8 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - **Archived stays legal**, because "duplicate of something already done" is the most common real redirect.
 
 **`planFields`** (`internal/storage/memory/apply.go`) — a pure function of (baseline, patch, actor, now); no clock beyond the stamp handed in, no store, no writes. It applies the patch through `storage.ApplyIssueFields` (`internal/storage/fields.go`), which carries the per-field rules below.
-- `Title` set → `strings.TrimSpace`; if the result is empty → `model.ValidationError{Message: "title cannot be empty"}`.
-- `Description`, `Prompt`, `Plan`, `Assignee`, `Lane` set → `strings.TrimSpace`.
+- `Title`, `Description`, `Prompt`, `Plan`, `Assignee`, `Lane` set → `strings.TrimSpace` (the projection inside `ApplyIssueFields`, which refuses no title or lane).
+- A `title` or `lane` change row — projected text the issue does not already hold — is admitted by `storage.ParseTitle` / `storage.ParseLane`: `"title is required"`, `"title cannot hold a line break"`, `"lane cannot hold a line break"`. Restating the stored text makes no change row, so nothing parses it.
 - `IssueType` set → **refused if it would cross the container/leaf line**: `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}`.
 - `Priority` set → assigned as-is.
 - `Labels` set → `model.CanonicalizeLabels(*in.Labels)`.
@@ -1062,24 +1062,23 @@ Because the order is a slice, an intent is literally what it says: "above Y" rem
 - Second pass over the create documents: a non-container type with `Parent == ""` → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectLeafWithoutParent(...))`; a `Parent` naming a create document in the file whose type is not a container → `fmt.Errorf("bulk: doc %d: %w", i, storage.RejectParentThatIsNotAContainer(...))`; a `Parent` matching no `local_id` is left to `createIssue`.
 
 **`parseBulkCreateDoc`** (`internal/storage/import_validate.go`)
-- Missing/blank `Title` → `"bulk: doc %d missing title"`.
+- `storage.ParseTitle(Title)` and `storage.ParseLane(Lane)` refuse → `fmt.Errorf("bulk: doc %d: %w", i, err)`.
 - `Topic == nil` → `"bulk: doc %d missing topic"`; otherwise parsed by `issueid.NormalizeTopicForCreate`, the parser `CreateIssue` runs; its refusal → `fmt.Errorf("bulk: doc %d: %w", i, err)`.
 - Missing `IssueType` → `"bulk: doc %d missing type"`.
 - Unparseable type → `fmt.Errorf("bulk: doc %d: %w", i, invalidValue("type", *spec.IssueType, err))`, so it reads `bulk: doc 0: has invalid type "ghost": issue type must be …`; unparseable priority (when set) → the same around `invalidValue("priority", *spec.Priority, err)`. `invalidValue` (`internal/storage/fields.go`) is the `has invalid %s %#v: %w` an update document's refusal also wraps.
 - `Reason != ""` on a create → `"bulk: doc %d sets reason without id (reason only applies to updates)"`.
-- The create it returns: Title and Topic `strings.TrimSpace`'d; Description/Prompt/Assignee/Lane/Labels from `valueOr(ptr, zero)`; Priority `model.PriorityNormal` when the doc sets none. **`Placement` is left at its zero value**, so a batch keeps its file order in the ranked order, whichever authored format the file is.
+- The create it returns: the parsed Title and Lane; Topic `strings.TrimSpace`'d; Description/Prompt/Assignee/Labels from `valueOr(ptr, zero)`; Priority `model.PriorityNormal` when the doc sets none. **`Placement` is left at its zero value**, so a batch keeps its file order in the ranked order, whichever authored format the file is.
 
 **`parseBulkUpdateDoc`** — refuses the fields an update document has no business setting, which no update makes, and otherwise returns the update's patch:
 - `LocalID != ""` → `"bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets"`.
 - `Topic != nil` → `"... sets topic; topic is immutable and update cannot change it"`.
-- `Title` set and trims to `""` → `"bulk: doc %d (id %q) sets an empty title"`.
 - A `bulkUpdatePatch` error → `fmt.Errorf("bulk: doc %d (id %q): %w", i, spec.ID, err)`, so an invalid type reads `bulk: doc 0 (id "x"): has invalid type "ghost": issue type must be …`.
 - A stated `Parent` (non-nil) becomes a `storage.FileReparent{ID, Parent}` in `file.Reparents`; `""` clears. A stated `BlockedBy` (non-nil) becomes a `storage.FileBlockedBy{ID, BlockedBy}` in `file.BlockedBy`; `[]` empties the set. `bulkUpdatePatch(spec).IsEmpty()` with no `parent`, no `blocked_by` and no `rank` → `"bulk: doc %d (id %q) has no fields to update, no parent, no blocked_by and no rank"`; a document stating only `parent`, `blocked_by` and/or `rank: top` writes no `BulkUpdate`, and one that also states a `reason` → `"bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent, blocked_by and rank write none"`. A `rank` other than `top` → `"bulk: doc %d: rank %q is not a placement; …"`. Updatable fields are exactly the rows of `issueFields`: `Title`, `Description`, `Prompt`, `Plan`, `IssueType`, `Priority`, `Assignee`, `Labels`, `Lane`.
 
 **`storage.parseImportTreeSpecs`** (`internal/storage/import_validate.go`) — returns each spec parsed, its type and priority the ones the create writes
 - Empty → `"import: no issues in input"`.
 - Blank `LocalID` → `"import: spec %d missing local_id"`; untrimmed → `"import: spec %d local_id %q has surrounding whitespace"`.
-- Blank `Title` → `"import: spec %q missing title"`; `issueid.NormalizeTopicForCreate(Topic)` or `model.CanonicalizeLabels(Labels)` refuses → `"import: spec %q: %w"`, the parsers `CreateIssue` runs.
+- `storage.ParseTitle(Title)`, `issueid.NormalizeTopicForCreate(Topic)` or `model.CanonicalizeLabels(Labels)` refuses → `"import: spec %q: %w"`, the parsers `CreateIssue` runs.
 - Invalid type or priority → `"import: spec %q: %w"` around `invalidValue("type", …)` / `invalidValue("priority", …)`.
 - Duplicate `LocalID` → `"import: duplicate local_id %q"`.
 - Second loop: `Parent` untrimmed → error; **`Parent` must name a spec in the file** → `"import: spec %q references missing parent %q"`; a `Parent` whose spec is not a container → `"import: spec %q: %w"` around `storage.RejectParentThatIsNotAContainer`; a non-container spec with no `Parent` → `"import: spec %q: %w"` around `storage.RejectLeafWithoutParent`.

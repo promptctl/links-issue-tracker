@@ -157,6 +157,8 @@ var cases = []engineCase{
 	{"create_read_roundtrip", createReadRoundtrip},
 	{"create_defaults", createDefaults},
 	{"create_requires_title", createRequiresTitle},
+	{"an_update_moving_a_title_or_lane_onto_a_line_break_is_refused", anUpdateMovingATitleOrLaneOntoALineBreakIsRefused},
+	{"restating_the_stored_title_and_lane_is_no_change", restatingTheStoredTitleAndLaneIsNoChange},
 	{"create_normalizes_topic", createNormalizesTopic},
 	{"create_under_missing_parent_is_not_found", createUnderMissingParent},
 	{"get_missing_issue_is_not_found", getMissingIssue},
@@ -257,9 +259,9 @@ var cases = []engineCase{
 // Every row a create writes — its created event, its parent edge, its labels —
 // names the create's actor, trimmed, and "unknown" when the caller named none.
 func aCreateIsWrittenByItsActor(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	for _, tc := range []struct{ actor, want string }{{" ada ", "ada"}, {"", "unknown"}} {
-		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "filed", Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}, Actor: tc.actor})
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("filed"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}, Actor: tc.actor})
 		export, err := st.Export(ctx)
 		if err != nil {
 			t.Fatalf("Export() error = %v", err)
@@ -287,9 +289,9 @@ func aCreateIsWrittenByItsActor(t *testing.T, ctx context.Context, st storage.St
 }
 
 func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "renderer", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "renderer", IssueType: model.TypeEpic})
 	created := mustCreate(t, ctx, st, storage.CreateIssueInput{
-		Title:       "  Renderer cleanup  ",
+		Title:       storage.MustParseTitle("  Renderer cleanup  "),
 		Description: "  drop the legacy pass  ",
 		Prompt:      "  do the thing  ",
 		Plan:        "  cut the pass, delete its flag  ",
@@ -297,7 +299,7 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 		Topic:       "renderer",
 		Priority:    model.PriorityUrgent,
 		Assignee:    "ada",
-		Lane:        "left",
+		Lane:        storage.MustParseLane("left"),
 		Labels:      []string{"perf"},
 		ParentID:    epic.ID,
 	})
@@ -358,8 +360,8 @@ func createDefaults(t *testing.T, ctx context.Context, st storage.Store, clk *cl
 	// since that is the path every non-interactive creation surface takes. The
 	// epic is the home every leaf needs; it leads the listing as the container
 	// of everything filed below.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "unspecified", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("unspecified"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	if issue.IssueType != model.TypeTask {
 		t.Errorf("IssueType = %q, want task for an unspecified type", issue.IssueType)
 	}
@@ -371,22 +373,71 @@ func createDefaults(t *testing.T, ctx context.Context, st storage.Store, clk *cl
 	}
 
 	// RankBottom is the zero value, so a second create files below the first.
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	assertOrder(t, ctx, st, "default placement appends", epic.ID, issue.ID, second.ID)
 
-	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
 	assertOrder(t, ctx, st, "RankTop leads", epic.ID, top.ID, issue.ID, second.ID)
 }
 
 func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The leaf is filed under an epic so the title is the only thing wrong with
-	// it: a refusal here has to be the title's.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	// Whitespace is not a title: the trim happens before the requirement, so a
-	// blank-looking title cannot slip in as a non-empty string.
-	for _, title := range []string{"", "   "} {
-		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: title, Topic: "core", ParentID: epic.ID})
-		assertRefused(t, err, fmt.Sprintf("CreateIssue(title=%q)", title))
+	// it: a refusal here has to be the title's. A create's title is parsed where
+	// it enters, so the one unparsed title an engine can be handed is the zero
+	// value, and it must be refused rather than stored as the empty title.
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
+	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	assertRefused(t, err, "CreateIssue(zero title)")
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("laneless"), Topic: "core", ParentID: epic.ID}); err == nil {
+		t.Error("CreateIssue(zero lane) error = nil, want a refusal: a lane no parser made is not the shared lane")
+	}
+	if after := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true}); len(after) != len(before) {
+		t.Errorf("issues after the refused creates = %d, want %d", len(after), len(before))
+	}
+}
+
+// anUpdateMovingATitleOrLaneOntoALineBreakIsRefused: a title or lane holding a
+// line break breaks every line-oriented listing, so a write that would store
+// one is refused, and the refusal is checked on the stored row.
+func anUpdateMovingATitleOrLaneOntoALineBreakIsRefused(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("work"), Lane: storage.MustParseLane("east"), Topic: "core", ParentID: epic.ID})
+	for _, tc := range []struct {
+		name  string
+		patch func(string) storage.UpdateIssueInput
+		raws  []string
+	}{
+		{"title", func(v string) storage.UpdateIssueInput { return storage.UpdateIssueInput{Title: &v} }, []string{"two\nlines", "two\r\nlines", "   "}},
+		{"lane", func(v string) storage.UpdateIssueInput { return storage.UpdateIssueInput{Lane: &v} }, []string{"two\nlanes", "cr\rlane"}},
+	} {
+		for _, raw := range tc.raws {
+			_, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: tc.patch(raw)})
+			assertRefused(t, err, fmt.Sprintf("Apply(%s %q)", tc.name, raw))
+		}
+	}
+	read, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue error = %v", err)
+	}
+	if read.Title != "work" || read.Lane != "east" {
+		t.Errorf("after the refused updates: title %q, lane %q; want work, east", read.Title, read.Lane)
+	}
+}
+
+// restatingTheStoredTitleAndLaneIsNoChange: an update that states the text the
+// issue already holds moves nothing, so it records no change and bumps no
+// stamp.
+func restatingTheStoredTitleAndLaneIsNoChange(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("work"), Lane: storage.MustParseLane("east"), Topic: "core", ParentID: epic.ID})
+	title, lane := "  work ", "east"
+	got, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Title: &title, Lane: &lane}})
+	if err != nil {
+		t.Fatalf("Apply(restated title and lane) error = %v", err)
+	}
+	if len(got.Fields) != 0 || !got.Issue.UpdatedAt.Equal(issue.UpdatedAt) {
+		t.Errorf("changes %v, UpdatedAt %s; want none and the create's %s: restating moves nothing", got.Fields, got.Issue.UpdatedAt, issue.UpdatedAt)
 	}
 }
 
@@ -397,8 +448,8 @@ func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store, cl
 // be one is refused rather than stored. [LAW:parse-dont-validate]
 func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The epic shares the leaf's topic so the vocabulary below is one name.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "renderer-cleanup", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "shaped", Topic: "  Renderer Cleanup  ", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "renderer-cleanup", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("shaped"), Lane: storage.SharedLane, Topic: "  Renderer Cleanup  ", ParentID: epic.ID})
 	if issue.Topic != "renderer-cleanup" {
 		t.Errorf("Topic = %q, want the normalized renderer-cleanup", issue.Topic)
 	}
@@ -411,13 +462,13 @@ func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store, 
 	// Filed under the epic so the topic is the only fault the refusal can be
 	// about.
 	for _, topic := range []string{"", "   ", "ab", "-!-", strings.Repeat("a", 31)} {
-		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "unnamed", Topic: topic, ParentID: epic.ID, Prefix: prefix})
+		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("unnamed"), Lane: storage.SharedLane, Topic: topic, ParentID: epic.ID, Prefix: prefix})
 		assertRefused(t, err, fmt.Sprintf("CreateIssue(topic=%q)", topic))
 	}
 }
 
 func createUnderMissingParent(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "orphan", Topic: "core", ParentID: "no-such-issue"})
+	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("orphan"), Lane: storage.SharedLane, Topic: "core", ParentID: "no-such-issue"})
 	assertNotFound(t, err, "issue", "CreateIssue under a missing parent")
 }
 
@@ -430,8 +481,8 @@ func getMissingIssue(t *testing.T, ctx context.Context, st storage.Store, clk *c
 }
 
 func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "before", Topic: "core", Assignee: "ada", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("before"), Lane: storage.SharedLane, Topic: "core", Assignee: "ada", ParentID: epic.ID})
 
 	title := "after"
 	priority := model.PriorityUrgent
@@ -467,12 +518,12 @@ func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *c
 // refusal is checked on the stored row: a write that errored and still landed
 // would pass an error-only check.
 func anAssigneeNoFilterCanSelectIsRefused(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "work", Topic: "core", Assignee: "ada", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("work"), Lane: storage.SharedLane, Topic: "core", Assignee: "ada", ParentID: epic.ID})
 	before := mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true, IncludeArchived: true})
 	comma := "Doe, J"
 
-	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "comma", Topic: "core", Assignee: comma, ParentID: epic.ID, Prefix: prefix})
+	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("comma"), Lane: storage.SharedLane, Topic: "core", Assignee: comma, ParentID: epic.ID, Prefix: prefix})
 	assertRefused(t, err, "CreateIssue(assignee "+comma+")")
 	_, err = st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Assignee: &comma}})
 	assertRefused(t, err, "Apply(update assignee "+comma+")")
@@ -492,8 +543,8 @@ func anAssigneeNoFilterCanSelectIsRefused(t *testing.T, ctx context.Context, st 
 }
 
 func applyStatusTransition(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "work", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("work"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	started, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"})
 	if err != nil {
@@ -531,8 +582,8 @@ func applyMissingIssue(t *testing.T, ctx context.Context, st storage.Store, clk 
 }
 
 func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	// An epic with children has no status of its own — its state is derived
 	// from theirs — so acting on it directly is refused with an error the CLI
@@ -565,8 +616,8 @@ func applyToFrozenNamesTheThaw(t *testing.T, ctx context.Context, st storage.Sto
 		{model.Archive{}, "archived", "unarchive"},
 		{model.Delete{}, "deleted", "restore"},
 	} {
-		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: tc.state, Topic: "core", ParentID: epic.ID})
+		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(tc.state), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 		if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: tc.freeze, Actor: "ada"}); err != nil {
 			t.Fatalf("%s error = %v", tc.freeze.Name(), err)
 		}
@@ -588,9 +639,9 @@ func applyToFrozenNamesTheThaw(t *testing.T, ctx context.Context, st storage.Sto
 // container that is itself out of the flow keeps its whole child set, so an
 // archived epic stays the state it had when it left instead of collapsing.
 func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	finished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "finished", Topic: "core", ParentID: epic.ID})
-	unfinished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "unfinished", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	finished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("finished"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	unfinished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("unfinished"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	if _, err := st.Apply(ctx, finished.ID, storage.Change{Action: model.Done{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply done error = %v", err)
@@ -624,8 +675,8 @@ func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Sto
 	// event here, the creates included, is stamped on the one clock the case
 	// controls.
 	clk.Pin(earlierInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "phased", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("phased"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	phaseOf := func() (model.Phase, bool) {
 		t.Helper()
 		detail, err := st.GetIssueDetail(ctx, issue.ID)
@@ -718,8 +769,8 @@ func aPhaseMoveRecordsItsEvent(t *testing.T, ctx context.Context, st storage.Sto
 }
 
 func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tracked", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("tracked"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	title := "retitled"
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Title: &title}}); err != nil {
 		t.Fatalf("Apply error = %v", err)
@@ -801,7 +852,7 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 	priority := model.PriorityUrgent
 	labels := []string{"beta"}
 	title, description, prompt, plan, assignee, lane := "retitled", "described", "render at 1024x768", "drop the cache", "ada", "left"
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
 	// One patch per field, each moving exactly that field, so a recorded row
 	// can only have come from the field the case names.
@@ -820,7 +871,7 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 		{"lane", storage.UpdateIssueInput{Lane: &lane}, "left"},
 		{"labels", storage.UpdateIssueInput{Labels: &labels}, "beta"},
 	} {
-		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "recorded", Topic: "core", IssueType: model.TypeTask, ParentID: epic.ID})
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("recorded"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeTask, ParentID: epic.ID})
 		if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: edit.patch}); err != nil {
 			t.Errorf("Apply %s patch error = %v", edit.field, err)
 			continue
@@ -862,8 +913,8 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 	// it was planned against; left to the event ids, the tie would say nothing
 	// about which start came last.
 	clk.Pin(earlierInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core", ParentID: epic.ID, Assignee: "ada"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Assignee: "ada"})
 	start := func(assignee string) storage.Applied {
 		t.Helper()
 		applied, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: assignee}, Actor: assignee})
@@ -954,13 +1005,13 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 // clock's reading, since no lane reader compares it with this epic's events.
 func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant.Add(-time.Hour))
-	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	stranger := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stranger", Topic: "core", ParentID: elsewhere.ID})
+	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	stranger := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("stranger"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
 
 	clk.Pin(laterInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "held", Topic: "core", ParentID: epic.ID})
-	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("held"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	st.AttributeTo("checkout-a")
 	if _, err := st.Apply(ctx, held.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
@@ -1042,14 +1093,14 @@ func aStampIsPastTheNewestInstantNotTheNewestSpelling(t *testing.T, ctx context.
 	}
 
 	clk.Pin(older)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	clk.Pin(newer)
 	retitle(child.ID, "held past")
 	retitle(epic.ID, "held past")
 
 	clk.Pin(older.Add(-time.Hour))
-	created := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created", Topic: "core", ParentID: epic.ID})
+	created := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("created"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	if got := newestEvent(created.ID); !got.CreatedAt.After(newer) {
 		t.Errorf("a create under the parent stamped %s, want past %s", got.CreatedAt, newer)
 	}
@@ -1076,8 +1127,8 @@ func aStampIsPastTheNewestInstantNotTheNewestSpelling(t *testing.T, ctx context.
 // the lane stays with the first checkout while the second believes it holds it,
 // and both work the same ticket. [LAW:no-silent-failure]
 func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	st.AttributeTo("checkout-a")
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
@@ -1148,9 +1199,9 @@ func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st st
 	// The creates are inside the later group, not before it: an unpinned create
 	// would stamp the real instant, later than either pinned one.
 	clk.Pin(laterInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID})
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("subject"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	// Interleaved on purpose. A reader that returns the wrong issue's events,
 	// and one that returns the right issue's in the wrong order, both survive a
@@ -1212,10 +1263,10 @@ func sameIssueInOrder(all []model.IssueEvent, issueID string) []model.IssueEvent
 }
 
 func listDefaultsToRankOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
-	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "third", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("third"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	// An unsorted listing is reproducible, not merely arbitrary: rank ascending
 	// with ties broken by id, the container ahead of what it holds. Callers
@@ -1227,12 +1278,14 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 	// The epic that homes both leaves is a row like any other: it lists wherever
 	// its own type, its derived state (in_progress, once the task starts) and
 	// its stamps match, and nowhere a field it does not carry is asked for.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gamma home", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("gamma home"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	bug := mustCreate(t, ctx, st, storage.CreateIssueInput{
-		Title: "alpha widget", Topic: "renderer", IssueType: model.TypeBug, Assignee: "ada", Labels: []string{"perf", "ui"}, ParentID: epic.ID,
+		Title: storage.MustParseTitle("alpha widget"),
+		Lane:  storage.SharedLane, Topic: "renderer", IssueType: model.TypeBug, Assignee: "ada", Labels: []string{"perf", "ui"}, ParentID: epic.ID,
 	})
 	task := mustCreate(t, ctx, st, storage.CreateIssueInput{
-		Title: "beta gadget", Topic: "parser", IssueType: model.TypeTask, Assignee: "grace", ParentID: epic.ID,
+		Title: storage.MustParseTitle("beta gadget"),
+		Lane:  storage.SharedLane, Topic: "parser", IssueType: model.TypeTask, Assignee: "grace", ParentID: epic.ID,
 	})
 	if _, err := st.Apply(ctx, task.ID, storage.Change{Action: model.Start{Assignee: "grace"}, Actor: "grace"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
@@ -1274,17 +1327,17 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 }
 
 func listByParent(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	// The second child is itself an epic: only an epic holds children, so it is
 	// the one kind of child that can parent the grandchild.
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
-	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "grandchild", Topic: "core", ParentID: second.ID})
-	cousin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "cousin", Topic: "core", ParentID: other.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("grandchild"), Lane: storage.SharedLane, Topic: "core", ParentID: second.ID})
+	cousin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("cousin"), Lane: storage.SharedLane, Topic: "core", ParentID: other.ID})
 	// A top-level epic nobody below names, so a parent filter has something to
 	// leave out.
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "loose epic", Topic: "core", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("loose epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	if _, err := st.Apply(ctx, first.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
@@ -1314,10 +1367,10 @@ func listByParent(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The epic stays in the flow throughout, so it leads every listing below
 	// whatever retention state its children are in.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "live", Topic: "core", ParentID: epic.ID})
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("live"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("archived"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("deleted"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply archive error = %v", err)
 	}
@@ -1340,10 +1393,10 @@ func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.S
 func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Titled past its children so a title sort puts it at one end or the other
 	// and never between them.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "d", Topic: "core", IssueType: model.TypeEpic})
-	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", ParentID: epic.ID})
-	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", ParentID: epic.ID})
-	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("d"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("b"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("a"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	assertIssueIDs(t, "sorted by title ascending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
@@ -1372,10 +1425,10 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 	// One title across four issues, the epic included: the sort key cannot
 	// separate them, so the contract's tie-break is the only thing deciding the
 	// order.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", IssueType: model.TypeEpic})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", ParentID: epic.ID})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", ParentID: epic.ID})
-	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("same"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("same"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("same"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("same"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	ascending := []string{epic.ID, first.ID, second.ID, third.ID}
 	slices.Sort(ascending)
@@ -1412,27 +1465,27 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 // "alpha", and "Zed" and "ada". "bug" sorts before "task" as text and after it
 // in model.IssueTypes, the vocabulary's declared order.
 func listOrdersByEachValueKey(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "keys", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "keys", IssueType: model.TypeEpic})
 	for _, row := range []struct {
 		key string
 		// first is the issue the key orders first ascending.
 		first, second storage.CreateIssueInput
 	}{
 		{"title",
-			storage.CreateIssueInput{Title: "Zeta", Topic: "keys"},
-			storage.CreateIssueInput{Title: "alpha", Topic: "keys"}},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("Zeta"), Lane: storage.SharedLane, Topic: "keys"},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("alpha"), Lane: storage.SharedLane, Topic: "keys"}},
 		{"assignee",
-			storage.CreateIssueInput{Title: "pair", Topic: "keys", Assignee: "Zed"},
-			storage.CreateIssueInput{Title: "pair", Topic: "keys", Assignee: "ada"}},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "keys", Assignee: "Zed"},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "keys", Assignee: "ada"}},
 		{"topic",
-			storage.CreateIssueInput{Title: "pair", Topic: "alpha"},
-			storage.CreateIssueInput{Title: "pair", Topic: "beta"}},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "alpha"},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "beta"}},
 		{"type",
-			storage.CreateIssueInput{Title: "pair", Topic: "keys", IssueType: model.TypeBug},
-			storage.CreateIssueInput{Title: "pair", Topic: "keys", IssueType: model.TypeTask}},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "keys", IssueType: model.TypeBug},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "keys", IssueType: model.TypeTask}},
 		{"priority",
-			storage.CreateIssueInput{Title: "pair", Topic: "keys", Priority: model.PriorityNormal},
-			storage.CreateIssueInput{Title: "pair", Topic: "keys", Priority: model.PriorityUrgent}},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "keys", Priority: model.PriorityNormal},
+			storage.CreateIssueInput{Title: storage.MustParseTitle("pair"), Lane: storage.SharedLane, Topic: "keys", Priority: model.PriorityUrgent}},
 	} {
 		row.first.ParentID, row.second.ParentID = epic.ID, epic.ID
 		clk.Pin(earlierInstant)
@@ -1458,11 +1511,11 @@ func listOrdersByEachValueKey(t *testing.T, ctx context.Context, st storage.Stor
 func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The two leaves live in their own epic, which the listings below leave out
 	// along with the child, so the epic under test is the only container read.
-	home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "home", Topic: "core", IssueType: model.TypeEpic})
-	closedLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "closed leaf", Topic: "core", ParentID: home.ID})
-	openLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "open leaf", Topic: "core", ParentID: home.ID})
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	closedLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("closed leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
+	openLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("open leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	if _, err := st.Apply(ctx, closedLeaf.ID, storage.Change{Action: model.Done{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply done error = %v", err)
@@ -1503,8 +1556,8 @@ func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage
 // so a wall-clock stamp cannot coincide with it. [LAW:verifiable-goals]
 func stampsComeFromTheClock(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "clock", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stamped", Topic: "clock", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "clock", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("stamped"), Lane: storage.SharedLane, Topic: "clock", ParentID: epic.ID})
 
 	// Both columns, because a create reads the clock once and an engine that
 	// stamped only one of them from it would be half-honoring the seam.
@@ -1552,12 +1605,12 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 	// create past the later one and the trap would never be written. The epics
 	// are stamped by the live clock, years past every pinned instant, and the
 	// listings are narrowed to the pair so they decide nothing below.
-	newerEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "newer's epic", Topic: "clock", IssueType: model.TypeEpic})
-	olderEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "older's epic", Topic: "clock", IssueType: model.TypeEpic})
+	newerEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("newer's epic"), Lane: storage.SharedLane, Topic: "clock", IssueType: model.TypeEpic})
+	olderEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("older's epic"), Lane: storage.SharedLane, Topic: "clock", IssueType: model.TypeEpic})
 	clk.Pin(laterInstant)
-	newer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created later", Topic: "clock", ParentID: newerEpic.ID})
+	newer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("created later"), Lane: storage.SharedLane, Topic: "clock", ParentID: newerEpic.ID})
 	clk.Pin(earlierInstant)
-	older := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "created earlier", Topic: "clock", ParentID: olderEpic.ID})
+	older := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("created earlier"), Lane: storage.SharedLane, Topic: "clock", ParentID: olderEpic.ID})
 
 	for _, touch := range []struct {
 		issue   model.Issue
@@ -1607,8 +1660,8 @@ func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store
 	clk.Pin(earlierInstant)
 	var audited []model.Issue
 	for _, title := range []string{"ada", "grace", "edsger"} {
-		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title + "'s epic", Topic: "core", IssueType: model.TypeEpic})
-		audited = append(audited, mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title, Topic: "core", ParentID: epic.ID}))
+		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title + "'s epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+		audited = append(audited, mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}))
 	}
 	for _, group := range []struct {
 		at    time.Time
@@ -1651,9 +1704,9 @@ func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store
 func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Three epics: the top level holds only epics, so they are the frame-mates
 	// a top-level reorder is read against.
-	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
-	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic})
-	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", IssueType: model.TypeEpic})
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("a"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("b"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	assertOrder(t, ctx, st, "as created", a.ID, b.ID, c.ID)
 
 	move, err := st.RankAbove(ctx, c.ID, a.ID)
@@ -1723,12 +1776,12 @@ func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store, clk
 // and must name the frame they moved within so the caller can say which order
 // changed.
 func rankToEdgeStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	// The outsider is an epic: nothing but an epic sits at the top level beside
 	// the one under test.
-	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone epic", Topic: "core", IssueType: model.TypeEpic})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("standalone epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
 	end, err := st.RankToTop(ctx, second.ID)
 	if err != nil {
@@ -1764,8 +1817,8 @@ func rankToEdgeStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage
 
 	// An only child holds both ends of its frame at once: there is no
 	// frame-mate its position is read against, so neither end can move it.
-	lone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "lone epic", Topic: "core", IssueType: model.TypeEpic})
-	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "only", Topic: "core", ParentID: lone.ID})
+	lone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("lone epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("only"), Lane: storage.SharedLane, Topic: "core", ParentID: lone.ID})
 	for _, tc := range []struct {
 		name string
 		run  func() (storage.RankEnd, error)
@@ -1793,10 +1846,10 @@ func rankToEdgeStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage
 // stepping past something invisible. The SQL engine excludes it with
 // `deleted_at IS NULL`; this case is what keeps the two answering alike.
 func rankToEdgeIgnoresADeletedFrameMate(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone", Topic: "core", ParentID: epic.ID})
-	lead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "lead", Topic: "core", ParentID: epic.ID})
-	tail := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tail", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("gone"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	lead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("lead"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	tail := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("tail"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	// The deleted child holds the frame's first slot, which is precisely the row
 	// an unfiltered edge lookup would anchor against.
@@ -1837,14 +1890,14 @@ func rankToEdgeIgnoresADeletedFrameMate(t *testing.T, ctx context.Context, st st
 func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Filed in this order so that each frame's keys sit above the frame filed
 	// before it, and a top-level epic holds the workspace's first key.
-	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider epic", Topic: "core", IssueType: model.TypeEpic})
-	firstEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first epic", Topic: "core", IssueType: model.TypeEpic})
-	firstChild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first child", Topic: "core", ParentID: firstEpic.ID})
-	secondEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second epic", Topic: "core", IssueType: model.TypeEpic})
-	secondChild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second child", Topic: "core", ParentID: secondEpic.ID})
+	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("outsider epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	firstEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	firstChild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first child"), Lane: storage.SharedLane, Topic: "core", ParentID: firstEpic.ID})
+	secondEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	secondChild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second child"), Lane: storage.SharedLane, Topic: "core", ParentID: secondEpic.ID})
 
-	firstLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first lead", Topic: "core", ParentID: firstEpic.ID, Placement: storage.RankTop})
-	secondLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second lead", Topic: "core", ParentID: secondEpic.ID, Placement: storage.RankTop})
+	firstLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first lead"), Lane: storage.SharedLane, Topic: "core", ParentID: firstEpic.ID, Placement: storage.RankTop})
+	secondLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second lead"), Lane: storage.SharedLane, Topic: "core", ParentID: secondEpic.ID, Placement: storage.RankTop})
 
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
@@ -1862,7 +1915,7 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 
 	// The top level is a frame like any other, so an epic filed at the top
 	// with no parent leads the epics that share that frame.
-	topLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top lead", Topic: "core", IssueType: model.TypeEpic, Placement: storage.RankTop})
+	topLead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top lead"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, Placement: storage.RankTop})
 	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, topLead.ID, outsider.ID)
@@ -1887,18 +1940,18 @@ func createAtTopFilesInsideItsFrame(t *testing.T, ctx context.Context, st storag
 // memory engine has no keys to collide, and that is the point of asking it: its
 // answer is the position, which is what the store's keys have to render.
 func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	// The two top-level issues are epics, the only kind the top level holds.
-	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core", IssueType: model.TypeEpic})
-	leading := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leading", Topic: "core", IssueType: model.TypeEpic, Placement: storage.RankTop})
+	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("trailing"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	leading := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("leading"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, Placement: storage.RankTop})
 	// Parks a top-level key between the two the frame's own placement would
 	// otherwise treat as an empty span.
 	if _, err := st.RankBelow(ctx, trailing.ID, leading.ID); err != nil {
 		t.Fatalf("RankBelow(trailing, leading) error = %v", err)
 	}
 
-	lead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "new lead", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+	lead := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("new lead"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, lead.ID, child.ID)
@@ -1907,7 +1960,7 @@ func placingAtAFrameEdgeKeepsTheKeyBesideItsFrame(t *testing.T, ctx context.Cont
 	assertPrecedes(t, listed, epic.ID, lead.ID)
 
 	// The rank verb answers the same question and must answer it the same way.
-	moved := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "moved", Topic: "core", ParentID: epic.ID})
+	moved := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("moved"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	if _, err := st.RankToTop(ctx, moved.ID); err != nil {
 		t.Fatalf("RankToTop(moved) error = %v", err)
 	}
@@ -1938,13 +1991,13 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 	// The first issue in a workspace holds the opening key — the very key a
 	// "middle of the keyspace" answer would hand out a second time. It and the
 	// trailing issue are epics, since only an epic sits at the top level.
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", IssueType: model.TypeEpic})
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "childless epic", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("childless epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	// Filed after the epic so that "beside the container" and "past everything"
 	// are different positions. With the epic trailing the workspace the two
 	// coincide, and the case cannot tell them apart.
-	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "trailing", Topic: "core", IssueType: model.TypeEpic})
-	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "only child", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+	trailing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("trailing"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	only := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("only child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
 
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
@@ -1958,7 +2011,7 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 
 	// The second child, filed at the top of a frame that now holds one, leads
 	// it — the frame has an order to lead again.
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second child", Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Placement: storage.RankTop})
 	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertPrecedes(t, listed, second.ID, only.ID)
@@ -1980,9 +2033,9 @@ func createAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T, ctx context.Contex
 // is what names the failure for what it is rather than leaving the listing to
 // an id tiebreak.
 func aRelativeMoveKeepsEveryRankDistinct(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("standalone epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	if _, err := st.RankBelow(ctx, child.ID, standalone.ID); err != nil {
 		t.Fatalf("RankBelow(child, standalone) error = %v", err)
@@ -2013,11 +2066,11 @@ func aRelativeMoveKeepsEveryRankDistinct(t *testing.T, ctx context.Context, st s
 // outsider whose rank changed is the observable that a write reached outside
 // the frame it named.
 func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider epic", Topic: "core", IssueType: model.TypeEpic})
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	c1 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c1", Topic: "core", ParentID: epic.ID})
-	c2 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c2", Topic: "core", ParentID: epic.ID})
-	c3 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c3", Topic: "core", ParentID: epic.ID})
+	outsider := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("outsider epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	c1 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c1"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	c2 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c2"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	c3 := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c3"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	before := mustGet(t, ctx, st, outsider.ID).Rank
 	epicBefore := mustGet(t, ctx, st, epic.ID).Rank
@@ -2059,13 +2112,13 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 // after — which on the memory engine, whose keys are rendered positions, says
 // the same thing as it does on the SQL one.
 func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	// The outsider is the far wall past the epic's key, so the room just past
 	// the epic is a closed gap rather than the open end of the keyspace.
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outsider epic", Topic: "core", IssueType: model.TypeEpic})
-	low := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "low", Topic: "core", IssueType: model.TypeEpic})
-	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid", Topic: "core", IssueType: model.TypeEpic})
-	high := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "high", Topic: "core", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("outsider epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	low := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("low"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("mid"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	high := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("high"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	if _, err := st.RankAbove(ctx, low.ID, epic.ID); err != nil {
 		t.Fatalf("RankAbove(low, epic) error = %v", err)
 	}
@@ -2076,9 +2129,9 @@ func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st
 		t.Fatalf("RankBelow(high, low) error = %v", err)
 	}
 	children := []model.Issue{
-		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c1", Topic: "core", ParentID: epic.ID}),
-		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c2", Topic: "core", ParentID: epic.ID}),
-		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c3", Topic: "core", ParentID: epic.ID}),
+		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c1"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}),
+		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c2"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}),
+		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c3"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}),
 	}
 	frame := map[string]struct{}{}
 	for _, child := range children {
@@ -2120,12 +2173,12 @@ func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st
 // lead it in the order named, the rest keep their order, nothing inside an epic
 // moves, and asking again changes nothing.
 func rankSetFromMidFrameLeadsIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", IssueType: model.TypeEpic})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: second.ID})
-	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "third", Topic: "core", IssueType: model.TypeEpic})
-	inner := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "inner", Topic: "core", ParentID: third.ID})
-	fourth := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "fourth", Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: second.ID})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("third"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	inner := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("inner"), Lane: storage.SharedLane, Topic: "core", ParentID: third.ID})
+	fourth := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("fourth"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	childKey, innerKey := mustGet(t, ctx, st, child.ID).Rank, mustGet(t, ctx, st, inner.ID).Rank
 
 	named := []string{third.ID, second.ID}
@@ -2187,13 +2240,13 @@ func childrenOf(issues []model.Issue, frame map[string]struct{}) []model.Issue {
 // answer: whatever a rank verb decides to do about a deleted issue, an issue
 // nobody named must still be listed afterwards. [LAW:no-silent-failure]
 func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone", Topic: "core", ParentID: epic.ID})
-	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("gone"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	// bystander is named by nothing below. It is the issue a truncated rewrite
 	// would drop, so its survival is what separates a refused write from a
 	// half-applied one.
-	bystander := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "bystander", Topic: "core", ParentID: epic.ID})
+	bystander := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("bystander"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	if _, err := st.Apply(ctx, gone.ID, storage.Change{Action: model.Delete{}, Actor: "tester"}); err != nil {
 		t.Fatalf("delete the child: %v", err)
@@ -2262,12 +2315,12 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 // Every listing is asserted whole, because a key-ordered listing puts the
 // container after its own children in each of them.
 func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outer", Topic: "core", IssueType: model.TypeEpic})
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
-	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
-	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "grandchild", Topic: "core", ParentID: nested.ID})
-	last := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "last", Topic: "core", IssueType: model.TypeEpic})
+	outer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("outer"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("nested epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	grandchild := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("grandchild"), Lane: storage.SharedLane, Topic: "core", ParentID: nested.ID})
+	last := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("last"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
 	// Moved: the epic's new key lies past every key its subtree holds.
 	if _, err := st.RankBelow(ctx, epic.ID, last.ID); err != nil {
@@ -2323,9 +2376,9 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 // frames is honored against the containing ancestors that ARE comparable, and
 // the substitution comes back so the caller can say so.
 func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
-	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("standalone epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
 	// "put the child above the standalone" is a request about the epic: the
 	// child has no position the standalone can be compared against.
@@ -2354,9 +2407,9 @@ func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storag
 
 func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Three epics, so the frame they share is the top level.
-	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core", IssueType: model.TypeEpic})
-	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core", IssueType: model.TypeEpic})
-	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core", IssueType: model.TypeEpic})
+	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("a"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("b"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
 	result, err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID})
 	if err != nil {
@@ -2394,10 +2447,10 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 // hierarchy is not consulted: the follow-up here is a sibling of the ticket it
 // follows up, under the same epic, exactly as `lit followup` files it.
 func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	origin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "origin", Topic: "core", ParentID: epic.ID})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: "  " + origin.ID + "  "})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: origin.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	origin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("origin"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first follow-up"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, FollowsUp: "  " + origin.ID + "  "})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second follow-up"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, FollowsUp: origin.ID})
 
 	if first.FollowsUp != origin.ID {
 		t.Errorf("created FollowsUp = %q, want the trimmed %q", first.FollowsUp, origin.ID)
@@ -2474,7 +2527,7 @@ func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, 
 
 	// The link names a ticket that exists, as a parent must; a follows_up no
 	// row answers to is refused at the write, not stored and never rendered.
-	_, err = st.CreateIssue(ctx, storage.CreateIssueInput{Title: "dangling follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: "core-nope"})
+	_, err = st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("dangling follow-up"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, FollowsUp: "core-nope"})
 	assertNotFound(t, err, "issue", "CreateIssue(FollowsUp names no issue)")
 }
 
@@ -2483,9 +2536,9 @@ func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, 
 // reopen clears all of it at once, and a redirect to an issue that is not
 // there is refused rather than stored as a dangling pointer.
 func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "canonical", Topic: "core", ParentID: epic.ID})
-	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("canonical"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("duplicate"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	closed, err := st.Apply(ctx, duplicate.ID, storage.Change{
 		Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "ada",
@@ -2532,8 +2585,8 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 }
 
 func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "discussed", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("discussed"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	comment, withComment, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: storagetest.CommentBody(t, "first"), CreatedBy: "ada"})
 	if err != nil {
@@ -2594,8 +2647,8 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk 
 // again. Both engines decide the review through storage.PlanReviewOf, so the
 // refusals are held here once for both.
 func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "planned", Topic: "core", ParentID: epic.ID, Plan: "add a retry"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("planned"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Plan: "add a retry"})
 	revise := func(plan string) {
 		t.Helper()
 		if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Plan: &plan}}); err != nil {
@@ -2709,8 +2762,8 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 }
 
 func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tagged", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("tagged"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	labelRows := func() []model.Label {
 		var rows []model.Label
 		for _, label := range mustExport(t, ctx, st).Labels {
@@ -2785,11 +2838,11 @@ func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, _ *clo
 func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The dependency lives in another epic: between two leaves of one epic,
 	// rank orders the work and a blocked-by edge is refused.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	upstream := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "upstream epic", Topic: "core", IssueType: model.TypeEpic})
-	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core", ParentID: epic.ID})
-	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: upstream.ID})
-	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "peer", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	upstream := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("upstream epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("dependent"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("dependency"), Lane: storage.SharedLane, Topic: "core", ParentID: upstream.ID})
+	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("peer"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	rel, err := st.AddRelation(ctx, storage.AddRelationInput{
 		SrcID: dependent.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada",
@@ -2881,12 +2934,12 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk
 }
 
 func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	// The dependency lives in another epic, so the epic under test holds the
 	// one child its bucket is asserted to.
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: other.ID})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("dependency"), Lane: storage.SharedLane, Topic: "core", ParentID: other.ID})
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
 		SrcID: child.ID, DstID: dependency.ID, Type: model.RelBlockedBy, CreatedBy: "ada",
 	}); err != nil {
@@ -2928,13 +2981,13 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 // state at either end, and for nothing else: a blocked-by edge is not
 // parentage, and a top-level epic has no entry.
 func parentByChildMapsEveryChild(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
-	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "live", Topic: "core", ParentID: nested.ID})
-	shelved := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "shelved epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: shelved.ID})
-	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "core", ParentID: gone.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("nested"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("live"), Lane: storage.SharedLane, Topic: "core", ParentID: nested.ID})
+	shelved := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("shelved epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("archived"), Lane: storage.SharedLane, Topic: "core", ParentID: shelved.ID})
+	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("gone epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("deleted"), Lane: storage.SharedLane, Topic: "core", ParentID: gone.ID})
 	for _, step := range []struct {
 		id     string
 		action model.Action
@@ -2943,8 +2996,8 @@ func parentByChildMapsEveryChild(t *testing.T, ctx context.Context, st storage.S
 			t.Fatalf("Apply(%s, %T) error = %v", step.id, step.action, err)
 		}
 	}
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core", ParentID: other.ID})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("dependency"), Lane: storage.SharedLane, Topic: "core", ParentID: other.ID})
 	mustBlock(t, ctx, st, live.ID, dependency.ID)
 
 	got, err := st.ParentByChild(ctx)
@@ -2967,12 +3020,12 @@ func parentByChildMapsEveryChild(t *testing.T, ctx context.Context, st storage.S
 // the order its epic lists in. A third epic, ranked above both, holds a
 // dependency that lists first.
 func rankInversionsReadTreeOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	early := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "early", Topic: "core", IssueType: model.TypeEpic})
-	late := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "late", Topic: "core", IssueType: model.TypeEpic})
-	lateTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "late task", Topic: "core", ParentID: late.ID})
-	earlyTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "early task", Topic: "core", ParentID: early.ID})
-	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top", Topic: "core", IssueType: model.TypeEpic})
-	topTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "top task", Topic: "core", ParentID: top.ID})
+	early := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("early"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	late := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("late"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	lateTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("late task"), Lane: storage.SharedLane, Topic: "core", ParentID: late.ID})
+	earlyTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("early task"), Lane: storage.SharedLane, Topic: "core", ParentID: early.ID})
+	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	topTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top task"), Lane: storage.SharedLane, Topic: "core", ParentID: top.ID})
 	for _, id := range []string{late.ID, top.ID} {
 		if _, err := st.RankToTop(ctx, id); err != nil {
 			t.Fatalf("RankToTop(%s) error = %v", id, err)
@@ -2998,11 +3051,11 @@ func rankInversionsReadTreeOrder(t *testing.T, ctx context.Context, st storage.S
 // rank inversion and the repair has nothing between them to satisfy. Closing
 // the task one way round ends it, because only live work is ordered.
 func interleavedEpicsHoldNoRankInversion(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", IssueType: model.TypeEpic})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeEpic})
-	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "later", Topic: "core", ParentID: first.ID})
-	base := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "base", Topic: "core", ParentID: first.ID})
-	middle := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "middle", Topic: "core", ParentID: second.ID})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("later"), Lane: storage.SharedLane, Topic: "core", ParentID: first.ID})
+	base := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("base"), Lane: storage.SharedLane, Topic: "core", ParentID: first.ID})
+	middle := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("middle"), Lane: storage.SharedLane, Topic: "core", ParentID: second.ID})
 	mustBlock(t, ctx, st, later.ID, middle.ID)
 	mustBlock(t, ctx, st, middle.ID, base.ID)
 	listed := mustListIDs(t, ctx, st, []string{first.ID, later.ID, base.ID, second.ID, middle.ID})
@@ -3067,11 +3120,11 @@ func mustListIDs(t *testing.T, ctx context.Context, st storage.Store, want []str
 }
 
 func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	// The child is itself an epic: a leaf cannot be detached, and the clearing
 	// half of this case is about the edge, not the child's kind.
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: epic.ID, CreatedBy: "ada"}); err != nil {
 		t.Fatalf("SetParent error = %v", err)
@@ -3109,9 +3162,9 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 // writes nothing, whether the rule is judged before the first write or needs a
 // read the write makes.
 func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
-	mover := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mover", Topic: "core", ParentID: existing.ID})
-	crosser := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "crosser", Topic: "core", ParentID: existing.ID})
+	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("existing"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	mover := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("mover"), Lane: storage.SharedLane, Topic: "core", ParentID: existing.ID})
+	crosser := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("crosser"), Lane: storage.SharedLane, Topic: "core", ParentID: existing.ID})
 	before := mustExport(t, ctx, st)
 	title, topic, epicType, taskType, shortTopic, blank, renamed, top := "imported", "core", "epic", "task", "x", " ", "renamed", "top"
 	commaLabel := []string{"a,b"}
@@ -3224,11 +3277,11 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 // issue, no reparent, edge or rank key kept, no update landed, and a result
 // that reports nothing written.
 func anImportFileRefusedAtAWriteWritesNothing(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "existing", Topic: "core", IssueType: model.TypeEpic})
-	home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "home", Topic: "core", IssueType: model.TypeEpic})
-	mover := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mover", Topic: "core", ParentID: home.ID})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mover's sibling", Topic: "core", ParentID: home.ID})
-	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested", Topic: "core", IssueType: model.TypeEpic, ParentID: home.ID})
+	existing := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("existing"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	mover := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("mover"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("mover's sibling"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("nested"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: home.ID})
 	blocked := tasksInEpicsOfTheirOwn(t, ctx, st, 3)
 	mustBlock(t, ctx, st, blocked[0], blocked[1])
 	title, topic, epicType, taskType, renamed, top := "imported", "core", "epic", "task", "renamed", "top"
@@ -3274,14 +3327,14 @@ func anImportFileRefusedAtAWriteWritesNothing(t *testing.T, ctx context.Context,
 // and still landed would pass an error-only check while leaving the state
 // this case forbids.
 func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: epic.ID})
-	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("nested epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
 
 	// A leaf is never created outside an epic, whatever its type. The refusal
 	// is a validation refusal, not a not-found: nothing was looked up.
 	for _, leafType := range []model.IssueType{model.TypeTask, model.TypeBug, model.TypeFeature, model.TypeChore} {
-		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "loose", Topic: "core", IssueType: leafType, Prefix: prefix})
+		_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("loose"), Lane: storage.SharedLane, Topic: "core", IssueType: leafType, Prefix: prefix})
 		var refused model.ValidationError
 		if !errors.As(err, &refused) {
 			t.Errorf("CreateIssue(%s with no parent) error = %v; want a ValidationError", leafType, err)
@@ -3289,20 +3342,20 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 	}
 	// The default type is a leaf, so an input that states no type is refused
 	// the same way.
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "loose", Topic: "core", Prefix: prefix}); err == nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("loose"), Lane: storage.SharedLane, Topic: "core", Prefix: prefix}); err == nil {
 		t.Error("CreateIssue(default type, no parent) succeeded; want a refusal")
 	}
 	// An epic may be top-level, and may sit inside another epic.
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "top-level epic", Topic: "core", IssueType: model.TypeEpic, Prefix: prefix}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("top-level epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, Prefix: prefix}); err != nil {
 		t.Errorf("CreateIssue(epic with no parent) error = %v; an epic is the one thing that may be top-level", err)
 	}
 
 	// Every parent is an epic: a create, a reparent, and the dep-add door onto
 	// the same edge all refuse a leaf as the parent.
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "under a leaf", Topic: "core", ParentID: leaf.ID, Prefix: prefix}); err == nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("under a leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: leaf.ID, Prefix: prefix}); err == nil {
 		t.Error("CreateIssue(under a leaf) succeeded; want a refusal")
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "epic under a leaf", Topic: "core", IssueType: model.TypeEpic, ParentID: leaf.ID, Prefix: prefix}); err == nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("epic under a leaf"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: leaf.ID, Prefix: prefix}); err == nil {
 		t.Error("CreateIssue(epic under a leaf) succeeded; want a refusal")
 	}
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: nested.ID, ParentID: leaf.ID}); err == nil {
@@ -3408,9 +3461,9 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 // alone: a write that errored and still landed would satisfy an error-only
 // check while leaving exactly the state this case exists to forbid.
 func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	root := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "root epic", Topic: "core", IssueType: model.TypeEpic})
-	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid epic", Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
-	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: mid.ID})
+	root := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("root epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("mid epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
+	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: mid.ID})
 
 	// Precondition that gives the case teeth: the chain really is root > mid >
 	// leaf, so each refusal below is refusing a loop rather than a nonsense id.
@@ -3440,7 +3493,7 @@ func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store,
 
 	// A move that closes no loop still works, or the rule has simply broken
 	// reparenting.
-	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling epic", Topic: "core", IssueType: model.TypeEpic})
+	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("sibling epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: leaf.ID, ParentID: sibling.ID}); err != nil {
 		t.Fatalf("SetParent(leaf under an unrelated epic) error = %v; this move closes no cycle", err)
 	}
@@ -3454,10 +3507,10 @@ func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store,
 // Depth is the point — a check that compared nearest epics refused the
 // direct-child case and let everything two levels down through.
 func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	root := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "root epic", Topic: "core", IssueType: model.TypeEpic})
-	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "mid epic", Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
-	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "leaf", Topic: "core", ParentID: mid.ID})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "direct child", Topic: "core", ParentID: root.ID})
+	root := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("root epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	mid := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("mid epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
+	leaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: mid.ID})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("direct child"), Lane: storage.SharedLane, Topic: "core", ParentID: root.ID})
 
 	refusedPairs := []struct {
 		what                  string
@@ -3494,8 +3547,8 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 	// issue under it sit in root's tree with mid and leaf, yet neither branch is
 	// above the other, so edges between the branches are accepted at every
 	// depth.
-	holder := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling sub-epic", Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
-	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "held leaf", Topic: "core", ParentID: holder.ID})
+	holder := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("sibling sub-epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: root.ID})
+	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("held leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: holder.ID})
 	accepted := []struct {
 		what                  string
 		dependent, dependency string
@@ -3534,12 +3587,12 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 // Edges that order work units stay legal: a leaf against the sub-epic beside
 // it, either way round, and leaves of two different epics.
 func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", IssueType: model.TypeBug, ParentID: epic.ID})
-	sub := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sub-epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "elsewhere", Topic: "core", ParentID: other.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeBug, ParentID: epic.ID})
+	sub := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("sub-epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("elsewhere"), Lane: storage.SharedLane, Topic: "core", ParentID: other.ID})
 
 	_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: second.ID, DstID: first.ID, Type: model.RelBlockedBy})
 	assertHierarchyBlocksRefused(t, err, "AddRelation(a leaf blocked by the leaf beside it)")
@@ -3628,10 +3681,10 @@ func assertHierarchyBlocksRefused(t *testing.T, err error, what string) {
 }
 
 func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "renderer", IssueType: model.TypeEpic})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "one", Topic: "renderer", ParentID: epic.ID})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "two", Topic: "renderer", ParentID: epic.ID})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "three", Topic: "parser", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "renderer", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("one"), Lane: storage.SharedLane, Topic: "renderer", ParentID: epic.ID})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("two"), Lane: storage.SharedLane, Topic: "renderer", ParentID: epic.ID})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("three"), Lane: storage.SharedLane, Topic: "parser", ParentID: epic.ID})
 
 	topics, err := st.ListTopics(ctx)
 	if err != nil {
@@ -3646,10 +3699,10 @@ func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store,
 // an archived or deleted issue's id still occupies its prefix — and answers in
 // id order with the topic each issue was created under.
 func issueIdentitiesCoverEveryRow(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "parser", ParentID: epic.ID})
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "renderer", ParentID: epic.ID})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "renderer", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "parser", ParentID: epic.ID})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("archived"), Lane: storage.SharedLane, Topic: "renderer", ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("deleted"), Lane: storage.SharedLane, Topic: "renderer", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply archive error = %v", err)
 	}
@@ -3677,12 +3730,12 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	// One instant for the whole case, so every event this store holds shares a
 	// stamp and the export's order is decided entirely by the id tie-break.
 	clk.Pin(earlierInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}})
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: storagetest.CommentBody(t, "note"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
-	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core", ParentID: epic.ID})
+	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("archived"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, archived.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply archive error = %v", err)
 	}
@@ -3696,7 +3749,7 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	// instant, so a broken export fails every run.
 	tied := make([]string, 0, 3)
 	for _, name := range []string{"a", "b", "c"} {
-		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tied " + name, Topic: "core", ParentID: epic.ID})
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("tied " + name), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 		title := "started " + name
 		if _, err := st.Apply(ctx, issue.ID, storage.Change{
 			Action: model.Start{Assignee: "ada"},
@@ -3833,7 +3886,7 @@ func bulkFileOrdersItsRankTopDocuments(t *testing.T, ctx context.Context, st sto
 	// is read in. Two of the twelve go unnamed and must follow the ten.
 	epics := make([]model.Issue, 12)
 	for i := range epics {
-		epics[i] = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: fmt.Sprintf("epic %d", i), Topic: "core", IssueType: model.TypeEpic})
+		epics[i] = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(fmt.Sprintf("epic %d", i)), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	}
 	top := "top"
 	var specs []storage.BulkIssueSpec
@@ -3876,9 +3929,9 @@ func bulkFileOrdersItsRankTopDocuments(t *testing.T, ctx context.Context, st sto
 // epic's children — and a file whose ordering is one document is that issue
 // sent to the top of its frame.
 func bulkFileRanksACreateAtTheTopOfItsEpic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core", ParentID: epic.ID})
-	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	title, topic, task, top := "new", "core", "task", "top"
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
 		{Title: &title, Topic: &topic, IssueType: &task, Parent: ptr(epic.ID), Rank: &top},
@@ -3962,11 +4015,11 @@ func refsOf(created []storage.IDMapping) []string {
 func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Before attribution is named, work is recorded unattributed rather than
 	// half-attributed — the read-mode open of a never-mutated checkout.
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	before := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "anonymous", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	before := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("anonymous"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	st.AttributeTo("stream-token")
-	after := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "attributed", Topic: "core", ParentID: epic.ID})
+	after := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("attributed"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	byIssue := map[string][]model.IssueEvent{}
 	for _, e := range mustEvents(t, ctx, st) {
@@ -3999,8 +4052,8 @@ func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store
 }
 
 func observersHearEveryChange(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "task", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	type heard struct {
 		action model.Action
 		id     string
@@ -4052,9 +4105,9 @@ func localIssueCountTracksCreates(t *testing.T, ctx context.Context, st storage.
 		t.Errorf("LocalIssueCount on a fresh engine = %d, want 0", count)
 	}
 
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "one", Topic: "core", ParentID: epic.ID})
-	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "two", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("one"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("two"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, deleted.ID, storage.Change{Action: model.Delete{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply delete error = %v", err)
 	}

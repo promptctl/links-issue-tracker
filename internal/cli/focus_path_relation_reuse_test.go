@@ -50,13 +50,13 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 	// a multi-level walk: frontier [epic] -> children [c1, c2], whose parent-epic
 	// fetch re-references the epic one level after it was first loaded.
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Focused epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Focused epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Step 1", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+		Title: storage.MustParseTitle("Step 1"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	c2 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Step 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+		Title: storage.MustParseTitle("Step 2"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	h.addDependencyWithinEpic(c2.ID, c1.ID)
 	h.setLabels(epic.ID, FocusLabel)
@@ -112,13 +112,13 @@ func TestWorkableQueueLoadsEachSubjectOnce(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Focused epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Focused epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Step", Topic: "goal", IssueType: "task", ParentID: goal.ID,
+		Title: storage.MustParseTitle("Step"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: goal.ID,
 	})
 	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Empty gate", Topic: "gate", IssueType: "epic",
+		Title: storage.MustParseTitle("Empty gate"), Lane: storage.SharedLane, Topic: "gate", IssueType: "epic",
 	})
 	h.addDependency(goal.ID, gate.ID)
 	h.setLabels(goal.ID, FocusLabel)

@@ -107,11 +107,11 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	defer reopened.Close()
 	// The store must be genuinely writable — the whole point of failing fast
 	// instead of accepting dolt's silent read-only fallback.
-	epic, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-handoff epic", Topic: "sync", IssueType: "epic"})
+	epic, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("post-handoff epic"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) on the recovered store error = %v", err)
 	}
-	created, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-handoff write works", Topic: "sync", ParentID: epic.ID})
+	created, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("post-handoff write works"), Lane: storage.SharedLane, Topic: "sync", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() on the recovered store error = %v", err)
 	}
@@ -175,11 +175,11 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
-	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "visible epic", Topic: "sync", IssueType: "epic"})
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("visible epic"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "visible to readers", Topic: "sync", ParentID: epic.ID}); err != nil {
+	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("visible to readers"), Lane: storage.SharedLane, Topic: "sync", ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -257,11 +257,11 @@ func TestAReadOpenWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "read epic", Topic: "sync", IssueType: "epic"})
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("read epic"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "read payload", Topic: "sync", ParentID: epic.ID}); err != nil {
+	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("read payload"), Lane: storage.SharedLane, Topic: "sync", ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -328,7 +328,7 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "beside epic", Topic: "sync", IssueType: "epic"})
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("beside epic"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -348,7 +348,7 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() beside an open reader error = %v; a reader must hold no journal lock", err)
 	}
-	if _, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "written beside a reader", Topic: "sync", ParentID: epic.ID}); err != nil {
+	if _, err := writer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("written beside a reader"), Lane: storage.SharedLane, Topic: "sync", ParentID: epic.ID}); err != nil {
 		_ = writer.Close()
 		t.Fatalf("CreateIssue() beside an open reader error = %v", err)
 	}
@@ -430,7 +430,7 @@ func TestStoreOutlivesTheContextItWasOpenedUnder(t *testing.T) {
 	cancel()
 
 	ctx := context.Background()
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "after the opener gave up", Topic: "ctx", IssueType: "epic"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("after the opener gave up"), Lane: storage.SharedLane, Topic: "ctx", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue() after cancelling the open context error = %v", err)
 	}
@@ -452,12 +452,12 @@ func TestAReaderOutlivesAFullCompactionBesideIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc epic", Topic: "sync", IssueType: "epic"})
+	epic, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("gc epic"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	for i := 0; i < 20; i++ {
-		if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc payload " + strconv.Itoa(i), Topic: "sync", ParentID: epic.ID}); err != nil {
+		if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("gc payload " + strconv.Itoa(i)), Lane: storage.SharedLane, Topic: "sync", ParentID: epic.ID}); err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
 	}

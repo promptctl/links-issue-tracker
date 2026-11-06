@@ -22,11 +22,12 @@ import (
 func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
 	t.Parallel()
 	h := newBacklogTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "seq", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "seq", IssueType: "epic", Priority: 1})
 	var children []string
 	for _, title := range []string{"First", "Second", "Third", "Fourth"} {
 		children = append(children, h.createIssue(storage.CreateIssueInput{
-			Prefix: "test", Title: title, Topic: "seq", IssueType: "task", Priority: 1, ParentID: epic,
+			Prefix: "test", Title: storage.MustParseTitle(title),
+			Lane: storage.SharedLane, Topic: "seq", IssueType: "task", Priority: 1, ParentID: epic,
 		}))
 	}
 
@@ -59,10 +60,11 @@ func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
 func TestBacklogNamesAnEpicOncePerRun(t *testing.T) {
 	t.Parallel()
 	h := newBacklogTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Shared Epic", Topic: "run", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Shared Epic"), Lane: storage.SharedLane, Topic: "run", IssueType: "epic", Priority: 1})
 	for _, title := range []string{"First", "Second", "Third"} {
 		h.createIssue(storage.CreateIssueInput{
-			Prefix: "test", Title: title, Topic: "run", IssueType: "task", Priority: 1, ParentID: epic,
+			Prefix: "test", Title: storage.MustParseTitle(title),
+			Lane: storage.SharedLane, Topic: "run", IssueType: "task", Priority: 1, ParentID: epic,
 		})
 	}
 
@@ -77,10 +79,11 @@ func TestBacklogNamesAnEpicOncePerRun(t *testing.T) {
 func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
 	t.Parallel()
 	h := newBacklogTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Claimed Epic", Topic: "claim", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Claimed Epic"), Lane: storage.SharedLane, Topic: "claim", IssueType: "epic", Priority: 1})
 	for _, title := range []string{"First", "Second", "Third"} {
 		h.createIssue(storage.CreateIssueInput{
-			Prefix: "test", Title: title, Topic: "claim", IssueType: "task", Priority: 1, ParentID: epic,
+			Prefix: "test", Title: storage.MustParseTitle(title),
+			Lane: storage.SharedLane, Topic: "claim", IssueType: "task", Priority: 1, ParentID: epic,
 		})
 	}
 
@@ -123,11 +126,11 @@ func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
 func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 	t.Parallel()
 	h := newBacklogTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "weave", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A one", Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicA})
-	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A two", Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicA})
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "weave", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B one", Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicB})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "weave", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A one"), Lane: storage.SharedLane, Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicA})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A two"), Lane: storage.SharedLane, Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicA})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "weave", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B one"), Lane: storage.SharedLane, Topic: "weave", IssueType: "task", Priority: 1, ParentID: epicB})
 
 	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(t), h.ap, workableFilter{})
 	if err != nil {
@@ -174,10 +177,10 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
 	t.Parallel()
 	h := newBacklogTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "solo", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A one", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicA})
-	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "solo", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B one, alone in its epic", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicB})
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "solo", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A one"), Lane: storage.SharedLane, Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicA})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane, Topic: "solo", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B one, alone in its epic"), Lane: storage.SharedLane, Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicB})
 
 	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(t), h.ap, workableFilter{})
 	if err != nil {

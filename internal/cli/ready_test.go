@@ -218,34 +218,34 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 
 	// Each leaf in its own lane, so the dependency edge is the one thing that
 	// can hold openB back.
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	openA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Open issue A",
+		Title:     storage.MustParseTitle("Open issue A"),
 		Topic:     "alpha",
 		IssueType: "task",
 		Priority:  0,
 		Assignee:  "alice",
 		ParentID:  epic.ID,
-		Lane:      "a",
+		Lane:      storage.MustParseLane("a"),
 	})
 	openB := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Open issue B",
+		Title:     storage.MustParseTitle("Open issue B"),
 		Topic:     "bravo",
 		IssueType: "bug",
 		Priority:  1,
 		Assignee:  "bob",
 		ParentID:  epic.ID,
-		Lane:      "b",
+		Lane:      storage.MustParseLane("b"),
 	})
 	h.addDependencyWithinEpic(openB.ID, openA.ID)
 
 	closed := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Already done",
+		Title:     storage.MustParseTitle("Already done"),
 		Topic:     "closed",
 		IssueType: "task",
 		Priority:  0,
 		ParentID:  epic.ID,
-		Lane:      "closed",
+		Lane:      storage.MustParseLane("closed"),
 	})
 	h.closeIssue(closed.ID, "not ready work")
 
@@ -299,21 +299,21 @@ func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			h := newReadyTestHarness(t)
-			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 			// Distinct lanes: the edge, not lane order, is what gates the dependent.
 			blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-				Title:     "The blocker",
+				Title:     storage.MustParseTitle("The blocker"),
 				Topic:     "alpha",
 				IssueType: "task",
 				ParentID:  epic.ID,
-				Lane:      "blocker",
+				Lane:      storage.MustParseLane("blocker"),
 			})
 			dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-				Title:     "The dependent",
+				Title:     storage.MustParseTitle("The dependent"),
 				Topic:     "alpha",
 				IssueType: "task",
 				ParentID:  epic.ID,
-				Lane:      "dependent",
+				Lane:      storage.MustParseLane("dependent"),
 			})
 			h.addDependencyWithinEpic(dependent.ID, blocker.ID)
 			// The live arm leaves the blocker where it started, so the four arms
@@ -355,24 +355,24 @@ func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
 			t.Parallel()
 			h := newReadyTestHarness(t)
 
-			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+			epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 			// Distinct lanes: the label, not lane order, is what holds the flagged leaf.
 			plain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-				Title:     "Ready leaf",
+				Title:     storage.MustParseTitle("Ready leaf"),
 				Topic:     "alpha",
 				IssueType: "task",
 				Priority:  0,
 				ParentID:  epic.ID,
-				Lane:      "plain",
+				Lane:      storage.MustParseLane("plain"),
 			})
 			flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-				Title:     "Flagged",
+				Title:     storage.MustParseTitle("Flagged"),
 				Topic:     "alpha",
 				IssueType: "task",
 				Priority:  0,
 				Labels:    []string{tc.label},
 				ParentID:  epic.ID,
-				Lane:      "flagged",
+				Lane:      storage.MustParseLane("flagged"),
 			})
 
 			got := h.runWorkableAnnotated(workableFilter{}, 0)
@@ -402,24 +402,24 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Alice old",
+		Title:     storage.MustParseTitle("Alice old"),
 		Topic:     "alice",
 		IssueType: "task",
 		Priority:  1,
 		Assignee:  "alice",
 		ParentID:  epic.ID,
-		Lane:      "alice",
+		Lane:      storage.MustParseLane("alice"),
 	})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Bob task",
+		Title:     storage.MustParseTitle("Bob task"),
 		Topic:     "bob",
 		IssueType: "task",
 		Priority:  0,
 		Assignee:  "bob",
 		ParentID:  epic.ID,
-		Lane:      "bob",
+		Lane:      storage.MustParseLane("bob"),
 	})
 
 	got := h.runWorkableAnnotated(workableFilter{Assignees: []string{"alice"}}, 1)
@@ -437,9 +437,9 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("assignee")
 
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:       "Needs assignee",
+		Title: storage.MustParseTitle("Needs assignee"), Lane: storage.SharedLane,
 		Topic:       "assignee",
 		IssueType:   "task",
 		Priority:    1,
@@ -488,9 +488,9 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Claimed work",
+		Title: storage.MustParseTitle("Claimed work"), Lane: storage.SharedLane,
 		Topic:     "claimed",
 		IssueType: "task",
 		Priority:  1,
@@ -516,9 +516,9 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Stale work",
+		Title: storage.MustParseTitle("Stale work"), Lane: storage.SharedLane,
 		Topic:     "stale",
 		IssueType: "task",
 		Priority:  1,
@@ -543,9 +543,9 @@ func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Fresh work",
+		Title: storage.MustParseTitle("Fresh work"), Lane: storage.SharedLane,
 		Topic:     "fresh",
 		IssueType: "task",
 		Priority:  1,
@@ -573,22 +573,22 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 	// But if we make first depend on second (second blocks first), second has
 	// worse rank than first — that's a rank inversion. Distinct lanes, so rank
 	// alone — not lane order — relates the two.
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "First issue (better rank)",
+		Title:     storage.MustParseTitle("First issue (better rank)"),
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
-		Lane:      "first",
+		Lane:      storage.MustParseLane("first"),
 	})
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Second issue (worse rank)",
+		Title:     storage.MustParseTitle("Second issue (worse rank)"),
 		Topic:     "second",
 		IssueType: "task",
 		Priority:  0,
 		ParentID:  epic.ID,
-		Lane:      "second",
+		Lane:      storage.MustParseLane("second"),
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependencyWithinEpic(first.ID, second.ID)
@@ -623,22 +623,22 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 
 	// first is created first (better rank), second is created second (worse rank).
 	// second depends on first — first (dependency) has better rank → no inversion.
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "First issue (better rank)",
+		Title:     storage.MustParseTitle("First issue (better rank)"),
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
-		Lane:      "first",
+		Lane:      storage.MustParseLane("first"),
 	})
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Second issue (worse rank)",
+		Title:     storage.MustParseTitle("Second issue (worse rank)"),
 		Topic:     "second",
 		IssueType: "task",
 		Priority:  0,
 		ParentID:  epic.ID,
-		Lane:      "second",
+		Lane:      storage.MustParseLane("second"),
 	})
 	// second depends on first — first (dependency) ranked above second → no inversion.
 	h.addDependencyWithinEpic(second.ID, first.ID)
@@ -660,22 +660,22 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	first := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "First issue",
+		Title:     storage.MustParseTitle("First issue"),
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
-		Lane:      "first",
+		Lane:      storage.MustParseLane("first"),
 	})
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Second issue",
+		Title:     storage.MustParseTitle("Second issue"),
 		Topic:     "second",
 		IssueType: "task",
 		Priority:  0,
 		ParentID:  epic.ID,
-		Lane:      "second",
+		Lane:      storage.MustParseLane("second"),
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependencyWithinEpic(first.ID, second.ID)
@@ -693,12 +693,12 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "home", IssueType: "epic", Priority: 1})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic", Priority: 1})
 	a := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "First", Topic: "aaa", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "a",
+		Title: storage.MustParseTitle("First"), Topic: "aaa", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: storage.MustParseLane("a"),
 	})
 	b := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "b",
+		Title: storage.MustParseTitle("Second"), Topic: "bbb", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("b"),
 	})
 
 	text := h.runWorkableText()
@@ -723,26 +723,26 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Epic container",
+		Title: storage.MustParseTitle("Epic container"), Lane: storage.SharedLane,
 		Topic:     "epic-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
 	leafTask := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Leaf task under epic",
+		Title: storage.MustParseTitle("Leaf task under epic"), Lane: storage.SharedLane,
 		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Other epic container",
+		Title: storage.MustParseTitle("Other epic container"), Lane: storage.SharedLane,
 		Topic:     "bug-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
 	bugUnderOtherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Bug under the other epic",
+		Title: storage.MustParseTitle("Bug under the other epic"), Lane: storage.SharedLane,
 		Topic:     "bug-topic",
 		IssueType: "bug",
 		Priority:  1,
@@ -781,40 +781,40 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Integrate foo subsystem end-to-end",
+		Title: storage.MustParseTitle("Integrate foo subsystem end-to-end"), Lane: storage.SharedLane,
 		Topic:     "epic-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
 	leaf := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Wire up the frobnicator",
+		Title: storage.MustParseTitle("Wire up the frobnicator"), Lane: storage.SharedLane,
 		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
 	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Fix the bugs",
+		Title: storage.MustParseTitle("Fix the bugs"), Lane: storage.SharedLane,
 		Topic:     "bug-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
 	bugUnderOtherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "A bug of its own epic",
+		Title: storage.MustParseTitle("A bug of its own epic"), Lane: storage.SharedLane,
 		Topic:     "bug-topic",
 		IssueType: "bug",
 		Priority:  1,
 		ParentID:  otherEpic.ID,
 	})
 	nestedEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Nested epic",
+		Title: storage.MustParseTitle("Nested epic"), Lane: storage.SharedLane,
 		Topic:     "epic-topic",
 		IssueType: "epic",
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
 	childOfNested := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Nested subtask",
+		Title: storage.MustParseTitle("Nested subtask"), Lane: storage.SharedLane,
 		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
@@ -869,13 +869,13 @@ func TestRunReadyOrdersLeavesInTreeOrder(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Epic A",
+		Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane,
 		Topic:     "epic-a",
 		IssueType: "epic",
 		Priority:  1,
 	})
 	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "Epic B",
+		Title: storage.MustParseTitle("Epic B"), Lane: storage.SharedLane,
 		Topic:     "epic-b",
 		IssueType: "epic",
 		Priority:  1,
@@ -884,27 +884,27 @@ func TestRunReadyOrdersLeavesInTreeOrder(t *testing.T) {
 	// both are ready at once; this test's contract is tree-order ORDERING,
 	// not the lane gate's membership (covered by the lane-gate tests).
 	leafA1 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "A.1",
+		Title:     storage.MustParseTitle("A.1"),
 		Topic:     "epic-a",
 		IssueType: "task",
 		ParentID:  epicA.ID,
 		Priority:  1,
-		Lane:      "a1",
+		Lane:      storage.MustParseLane("a1"),
 	})
 	leafB1 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "B.1",
+		Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane,
 		Topic:     "epic-b",
 		IssueType: "task",
 		ParentID:  epicB.ID,
 		Priority:  1,
 	})
 	leafA2 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title:     "A.2",
+		Title:     storage.MustParseTitle("A.2"),
 		Topic:     "epic-a",
 		IssueType: "task",
 		ParentID:  epicA.ID,
 		Priority:  1,
-		Lane:      "a2",
+		Lane:      storage.MustParseLane("a2"),
 	})
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
@@ -955,22 +955,22 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	urgent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated urgent"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
 	})
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Step 1", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+		Title: storage.MustParseTitle("Step 1"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	c2 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Step 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+		Title: storage.MustParseTitle("Step 2"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	c3 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+		Title: storage.MustParseTitle("Goal"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	h.setLabels(c3.ID, FocusLabel)
 
@@ -1025,24 +1025,24 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 	// A standing-urgent, unrelated item the focus scope must withhold — it would
 	// otherwise win on priority, so the pick proves the pool narrowed.
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated urgent"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
 	})
 	// The chain's members sit in distinct lanes of one epic, so the explicit
 	// edges — not lane order — are what sequence them.
 	chain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Chain epic", Topic: "chain", IssueType: "epic",
+		Title: storage.MustParseTitle("Chain epic"), Lane: storage.SharedLane, Topic: "chain", IssueType: "epic",
 	})
 	b := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "B", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "b",
+		Title: storage.MustParseTitle("B"), Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: storage.MustParseLane("b"),
 	})
 	a := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "A", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "a",
+		Title: storage.MustParseTitle("A"), Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: storage.MustParseLane("a"),
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: storage.MustParseLane("goal"),
 	})
 	h.addDependencyWithinEpic(goal.ID, a.ID)
 	h.addDependencyWithinEpic(a.ID, b.ID)
@@ -1062,20 +1062,20 @@ func TestFocusRemovalRestoresTheWholePoolAndUrgentDoesNotPropagate(t *testing.T)
 	h := newReadyTestHarness(t)
 
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	urgent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated urgent"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
 	})
 	// Distinct lanes: the edge, not lane order, is what gates the goal.
 	chain := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Chain epic", Topic: "chain", IssueType: "epic",
+		Title: storage.MustParseTitle("Chain epic"), Lane: storage.SharedLane, Topic: "chain", IssueType: "epic",
 	})
 	prereq := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: "prereq",
+		Title: storage.MustParseTitle("Prereq"), Topic: "chain", IssueType: "task", ParentID: chain.ID, Lane: storage.MustParseLane("prereq"),
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Urgent goal", Topic: "chain", IssueType: "task", Priority: 1, ParentID: chain.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Urgent goal"), Topic: "chain", IssueType: "task", Priority: 1, ParentID: chain.ID, Lane: storage.MustParseLane("goal"),
 	})
 	h.addDependencyWithinEpic(goal.ID, prereq.ID)
 
@@ -1108,21 +1108,21 @@ func TestFocusPathExpandsContainerChildren(t *testing.T) {
 	// A standing-urgent, unrelated item the focus scope must withhold — it would
 	// otherwise win on priority, so the pick proves the pool narrowed.
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated urgent"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", Priority: 1, ParentID: noise.ID,
 	})
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Focused epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Focused epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Child 1", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+		Title: storage.MustParseTitle("Child 1"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	// A second child that focus also expands onto the path but that stays gated
 	// behind c1, so it is not the one that surfaces next.
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Child 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+		Title: storage.MustParseTitle("Child 2"), Lane: storage.SharedLane, Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	h.setLabels(epic.ID, FocusLabel)
 

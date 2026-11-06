@@ -63,7 +63,7 @@ func TestCancelledDoltTransferEndsItsTransport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: "t", Topic: "topic", IssueType: "epic"}); err != nil {
+			if _, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("t"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"}); err != nil {
 				t.Fatal(err)
 			}
 			if err := st.Close(); err != nil {

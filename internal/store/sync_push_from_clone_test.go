@@ -127,7 +127,7 @@ func commitTitled(t *testing.T, ctx context.Context, root, epicID, title string)
 	if err != nil {
 		t.Fatalf("Open(%q) error = %v", title, err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epicID}); err != nil {
 		t.Fatalf("CreateIssue(%q) error = %v", title, err)
 	}
 	var head string

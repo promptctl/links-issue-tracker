@@ -84,7 +84,7 @@ func TestIDSetReadsAnswerEachRowOnceAndTheEmptySetWithNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Labelled", Topic: "idset", IssueType: "epic", Labels: []string{"alpha", "beta"}})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Labelled"), Lane: storage.SharedLane, Topic: "idset", IssueType: "epic", Labels: []string{"alpha", "beta"}})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -232,7 +232,7 @@ type batchedRelationFixture struct {
 
 func newBatchedRelationFixture(t *testing.T, ctx context.Context, st *Store) batchedRelationFixture {
 	t.Helper()
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Batch epic", Topic: "batch", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Batch epic"), Lane: storage.SharedLane, Topic: "batch", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -240,7 +240,8 @@ func newBatchedRelationFixture(t *testing.T, ctx context.Context, st *Store) bat
 	subjects := make([]string, 0, subjectCount)
 	for i := range subjectCount {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("Subject %d", i), Topic: "batch",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("Subject %d", i)),
+			Lane: storage.SharedLane, Topic: "batch",
 			IssueType: "task", Placement: storage.RankBottom, ParentID: epic.ID,
 		})
 		if err != nil {
@@ -250,15 +251,15 @@ func newBatchedRelationFixture(t *testing.T, ctx context.Context, st *Store) bat
 	}
 	// Sink and source sit in an epic of their own: between two leaves of one
 	// epic a blocked-by edge is refused.
-	ends, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Ends epic", Topic: "batch", IssueType: "epic"})
+	ends, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Ends epic"), Lane: storage.SharedLane, Topic: "batch", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(ends epic) error = %v", err)
 	}
-	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sink", Topic: "batch", IssueType: "task", ParentID: ends.ID})
+	sink, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Sink"), Lane: storage.SharedLane, Topic: "batch", IssueType: "task", ParentID: ends.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(sink) error = %v", err)
 	}
-	source, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Source", Topic: "batch", IssueType: "task", ParentID: ends.ID})
+	source, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Source"), Lane: storage.SharedLane, Topic: "batch", IssueType: "task", ParentID: ends.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(source) error = %v", err)
 	}

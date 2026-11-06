@@ -22,13 +22,15 @@ func TestAnnotateIssuesRowsComeFromTheRelationsFetch(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Home epic", Topic: "snapshot", IssueType: "epic", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Home epic"),
+		Lane: storage.SharedLane, Topic: "snapshot", IssueType: "epic", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Current title", Topic: "snapshot", IssueType: "task", Priority: 0, ParentID: epic.ID,
+		Prefix: "test", Title: storage.MustParseTitle("Current title"),
+		Lane: storage.SharedLane, Topic: "snapshot", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

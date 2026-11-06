@@ -107,7 +107,8 @@ func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
 	f := newEpicFixture(t, "Plan epic", "the epic's own long description")
 	sibling := f.addChild("Sibling")
 	focus, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Focused child", Topic: "epic-view", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Focused child"),
+		Lane: storage.SharedLane, Topic: "epic-view", IssueType: "task", Priority: 0,
 		ParentID: f.epicID, Description: "the focused child's own description",
 	})
 	if err != nil {
@@ -133,7 +134,8 @@ func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
 	t.Parallel()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
-		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Free floating"),
+		Lane: storage.SharedLane, Topic: "misc", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, context.Background(), ap, "Misc", "misc"),
 	})
 	if err != nil {

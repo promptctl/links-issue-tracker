@@ -360,7 +360,8 @@ func orderByRank(ranks map[string]string) []string {
 func createRankTestEpic(t *testing.T, ctx context.Context, st *Store) string {
 	t.Helper()
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Rank epic", Topic: "rank", IssueType: "epic",
+		Prefix: "test", Title: storage.MustParseTitle("Rank epic"),
+		Lane: storage.SharedLane, Topic: "rank", IssueType: "epic",
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
@@ -371,7 +372,8 @@ func createRankTestEpic(t *testing.T, ctx context.Context, st *Store) string {
 func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, epic, title string) string {
 	t.Helper()
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Topic: "rank", IssueType: "task", Priority: 0, Placement: storage.RankBottom, ParentID: epic,
+		Prefix: "test", Title: storage.MustParseTitle(title),
+		Lane: storage.SharedLane, Topic: "rank", IssueType: "task", Priority: 0, Placement: storage.RankBottom, ParentID: epic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(%s) error = %v", title, err)

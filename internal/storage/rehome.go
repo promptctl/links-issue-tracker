@@ -58,6 +58,9 @@ const (
 
 var unfiledBorn = time.Date(2026, time.October, 12, 0, 0, 0, 0, time.UTC)
 
+// unfiledTitle is the title a mint stores, parsed as every created title is.
+var unfiledTitle = MustParseTitle(UnfiledTitle)
+
 // UnfiledEpicID is the id migration 00007 mints for the unfiled epic of a
 // store whose ids carry prefix, the first id in prefix's chain: rendered the
 // way `lit new` renders a top-level id, with the hash fixed to the first four
@@ -298,7 +301,7 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 		case !occupied && !purged[id]:
 			return id, &model.Issue{
 				ID:          id,
-				Title:       UnfiledTitle,
+				Title:       unfiledTitle.text,
 				Description: unfiledDescription,
 				IssueType:   model.TypeEpic,
 				Topic:       UnfiledTopic,

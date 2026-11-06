@@ -29,7 +29,7 @@ func TestSyncReconcileKeepsADependencyThisCloneRemoved(t *testing.T) {
 		t.Fatalf("Open(A): %v", err)
 	}
 	waiter := mustCreateTask(t, ctx, st, epicID, "waiter")
-	otherEpic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "other", Topic: "topic", IssueType: "epic"})
+	otherEpic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("other"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(other epic): %v", err)
 	}
@@ -71,7 +71,7 @@ func TestSyncReconcileKeepsADependencyThisCloneRemoved(t *testing.T) {
 
 func mustCreateTask(t *testing.T, ctx context.Context, st *Store, epicID, title string) model.Issue {
 	t.Helper()
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", ParentID: epicID})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epicID})
 	if err != nil {
 		t.Fatalf("CreateIssue(%s): %v", title, err)
 	}

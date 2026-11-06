@@ -104,13 +104,15 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 			t.Fatal("a write open must mint the checkout's identity")
 		}
 		epic, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
-			Prefix: "test", Title: "The epic the work serves", Topic: "claims", IssueType: "epic",
+			Prefix: "test", Title: storage.MustParseTitle("The epic the work serves"),
+			Lane: storage.SharedLane, Topic: "claims", IssueType: "epic",
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue(epic) error = %v", err)
 		}
 		issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
-			Prefix: "test", Title: "Work the worker took", Topic: "claims", IssueType: "task", ParentID: epic.ID,
+			Prefix: "test", Title: storage.MustParseTitle("Work the worker took"),
+			Lane: storage.SharedLane, Topic: "claims", IssueType: "task", ParentID: epic.ID,
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)

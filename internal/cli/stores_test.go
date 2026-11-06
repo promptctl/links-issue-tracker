@@ -387,14 +387,15 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	// the first unfinished, turning "ready two" and "blocked" into lane holds
 	// rather than the states this seed names.
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Title: "work epic", Topic: "work", IssueType: model.TypeEpic, Prefix: prefix, Placement: storage.RankBottom,
+		Title: storage.MustParseTitle("work epic"),
+		Lane:  storage.SharedLane, Topic: "work", IssueType: model.TypeEpic, Prefix: prefix, Placement: storage.RankBottom,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	newLeaf := func(title string) model.Issue {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: title, Topic: "work", Prefix: prefix, Placement: storage.RankBottom, ParentID: epic.ID, Lane: title,
+			Title: storage.MustParseTitle(title), Topic: "work", Prefix: prefix, Placement: storage.RankBottom, ParentID: epic.ID, Lane: storage.MustParseLane(title),
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
@@ -504,14 +505,15 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 		t.Fatalf("engine.Open error = %v", err)
 	}
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Title: "focus epic", Topic: "focus", IssueType: model.TypeEpic, Prefix: "real", Placement: storage.RankBottom,
+		Title: storage.MustParseTitle("focus epic"),
+		Lane:  storage.SharedLane, Topic: "focus", IssueType: model.TypeEpic, Prefix: "real", Placement: storage.RankBottom,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	newLeaf := func(title string) model.Issue {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: title, Topic: "focus", Prefix: "real", Placement: storage.RankBottom, ParentID: epic.ID, Lane: title,
+			Title: storage.MustParseTitle(title), Topic: "focus", Prefix: "real", Placement: storage.RankBottom, ParentID: epic.ID, Lane: storage.MustParseLane(title),
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)

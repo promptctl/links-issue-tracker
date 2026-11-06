@@ -47,13 +47,15 @@ func allEvents(t *testing.T, ctx context.Context, st *Store) []model.IssueEvent 
 func exerciseEveryEventKind(t *testing.T, ctx context.Context, st *Store) {
 	t.Helper()
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Attributed epic", Topic: "claims", IssueType: "epic",
+		Prefix: "test", Title: storage.MustParseTitle("Attributed epic"),
+		Lane: storage.SharedLane, Topic: "claims", IssueType: "epic",
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Attributed work", Topic: "claims", IssueType: "task", Priority: 0, ParentID: epic.ID,
+		Prefix: "test", Title: storage.MustParseTitle("Attributed work"),
+		Lane: storage.SharedLane, Topic: "claims", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

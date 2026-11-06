@@ -47,12 +47,12 @@ func TestPanicDuringMutationReleasesLock(t *testing.T) {
 	assertCommitLockFree(t, st.commitLockPath)
 
 	// A subsequent mutation must succeed, proving the lock was released.
-	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: "Post-panic epic", Topic: "crash", IssueType: "epic"})
+	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Post-panic epic"), Lane: storage.SharedLane, Topic: "crash", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) after panic error = %v", err)
 	}
 	_, err = st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test",
-		Title:     "Post-panic issue",
+		Title: storage.MustParseTitle("Post-panic issue"), Lane: storage.SharedLane,
 		Topic:     "crash",
 		IssueType: "task",
 		Priority:  0,
@@ -101,12 +101,12 @@ func TestWithMutationCommitWorkingSetReentrantPath(t *testing.T) {
 	// 2. begins tx, runs fn, commits tx
 	// 3. calls commitWorkingSet (which re-enters withCommitLock — short-circuits)
 	// If any step fails, CreateIssue returns an error.
-	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: "Commit path epic", Topic: "crash", IssueType: "epic"})
+	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Commit path epic"), Lane: storage.SharedLane, Topic: "crash", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	issue, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test",
-		Title:     "Commit path exercise",
+		Title: storage.MustParseTitle("Commit path exercise"), Lane: storage.SharedLane,
 		Topic:     "crash",
 		IssueType: "task",
 		Priority:  1,

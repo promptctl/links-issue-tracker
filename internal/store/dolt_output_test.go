@@ -109,11 +109,11 @@ func seedSecondChange(t *testing.T, ctx context.Context, root, remoteURL string)
 	if err != nil {
 		t.Fatalf("Open(second change): %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "second epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("second epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(second epic): %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "second", Topic: "topic", IssueType: "task", ParentID: epic.ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue(second): %v", err)
 	}
 	if err := st.Close(); err != nil {

@@ -29,10 +29,12 @@ func TestListReadsReadyPolicyOnlyWhenProjected(t *testing.T) {
 	h.writeProjectConfig("[sync]\ncadence = \"not-a-cadence\"\n")
 
 	epic := h.createIssue(storage.CreateIssueInput{
-		Prefix: "policy", Title: "Home epic", Topic: "policy", IssueType: "epic", Description: "d",
+		Prefix: "policy", Title: storage.MustParseTitle("Home epic"),
+		Lane: storage.SharedLane, Topic: "policy", IssueType: "epic", Description: "d",
 	})
 	issue := h.createIssue(storage.CreateIssueInput{
-		Prefix: "policy", Title: "Listable", Topic: "policy", IssueType: "task", Description: "d", ParentID: epic.ID,
+		Prefix: "policy", Title: storage.MustParseTitle("Listable"),
+		Lane: storage.SharedLane, Topic: "policy", IssueType: "task", Description: "d", ParentID: epic.ID,
 	})
 
 	runLS := func(args ...string) (string, error) {

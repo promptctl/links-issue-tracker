@@ -19,17 +19,17 @@ import (
 // holding the newest event of all, a nested epic filed in a lane, and two
 // tickets in progress in one lane, which the claim line names one of.
 func aLaneFamilyReadsWhatTheBacklogReads(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	child := func(title, lane string) model.Issue {
-		return mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title, Topic: "core", ParentID: epic.ID, Lane: lane})
+		return mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Topic: "core", ParentID: epic.ID, Lane: storage.MustParseLane(lane)})
 	}
 	finished, waiting := child("finished", "done-lane"), child("waiting", "done-lane")
 	archived, deleted := child("archived", "retired-lane"), child("deleted", "retired-lane")
 	first, second, _ := child("first", "busy-lane"), child("second", "busy-lane"), child("default lane", "")
-	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "nested", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID, Lane: "retired-lane"})
-	inNested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "in nested", Topic: "core", ParentID: nested.ID})
-	alone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	outside := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "outside", Topic: "core", ParentID: alone.ID})
+	nested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("nested"), Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID, Lane: storage.MustParseLane("retired-lane")})
+	inNested := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("in nested"), Lane: storage.SharedLane, Topic: "core", ParentID: nested.ID})
+	alone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	outside := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("outside"), Lane: storage.SharedLane, Topic: "core", ParentID: alone.ID})
 
 	apply := func(checkout, id string, actions ...model.Action) {
 		t.Helper()
@@ -70,15 +70,15 @@ func aLaneFamilyReadsWhatTheBacklogReads(t *testing.T, ctx context.Context, st s
 // LaneFamily reads model.LaneFamily's set, every retention state included, and
 // names the parent of everything in it.
 func aLaneFamilyIsTheIssueAndWhatIsFiledBesideIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID})
-	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "sibling", Topic: "core", ParentID: epic.ID, Lane: "another"})
-	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "gone", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("subject"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	sibling := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("sibling"), Topic: "core", ParentID: epic.ID, Lane: storage.MustParseLane("another")})
+	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("gone"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	if _, err := st.Apply(ctx, gone.ID, storage.Change{Action: model.Delete{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply(%s, Delete) error = %v", gone.ID, err)
 	}
-	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
-	stranger := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stranger", Topic: "core", ParentID: other.ID})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	stranger := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("stranger"), Lane: storage.SharedLane, Topic: "core", ParentID: other.ID})
 
 	family, err := st.LaneFamily(ctx, subject.ID)
 	if err != nil {

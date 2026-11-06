@@ -21,8 +21,8 @@ import (
 func TestListStateCellNamesTheCloseReason(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "listing", IssueType: model.TypeEpic, Topic: "listing"})
-	canonical := h.createIssue(storage.CreateIssueInput{Title: "the canonical ticket", IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("listing"), Lane: storage.SharedLane, IssueType: model.TypeEpic, Topic: "listing"})
+	canonical := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("the canonical ticket"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 
 	cases := []struct {
 		title   string
@@ -38,7 +38,7 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 	}
 	rows := make([]string, len(cases))
 	for i, tc := range cases {
-		issue := h.createIssue(storage.CreateIssueInput{Title: tc.title, IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
+		issue := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle(tc.title), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 		for _, action := range tc.actions {
 			if _, err := h.ap.Store.Apply(h.ctx, issue.ID, storage.Change{Action: action, Actor: "tester"}); err != nil {
 				t.Fatalf("Apply(%s, %T) error = %v", tc.title, action, err)
@@ -65,8 +65,8 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 func TestCloseSummarySharesTheStateCell(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "listing", IssueType: model.TypeEpic, Topic: "listing"})
-	issue := h.createIssue(storage.CreateIssueInput{Title: "declined", IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("listing"), Lane: storage.SharedLane, IssueType: model.TypeEpic, Topic: "listing"})
+	issue := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("declined"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 
 	var out bytes.Buffer
 	if err := runTransition(t, h.ctx, &out, h.ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {

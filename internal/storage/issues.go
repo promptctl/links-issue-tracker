@@ -44,7 +44,7 @@ type IssueIdentity struct {
 }
 
 type CreateIssueInput struct {
-	Title       string
+	Title       Title
 	Description string
 	Prompt      string
 	Plan        string
@@ -62,7 +62,7 @@ type CreateIssueInput struct {
 	// [LAW:types-are-the-program]
 	Priority model.Priority
 	Assignee string
-	Lane     string
+	Lane     Lane
 	Labels   []string
 	// FollowsUp names the ticket the new issue follows up (`lit followup --on`);
 	// empty for an ordinary create. It is the only way the field is ever

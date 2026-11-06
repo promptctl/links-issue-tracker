@@ -27,7 +27,8 @@ func TestConcurrentUseIsSerialized(t *testing.T) {
 
 	// One epic, made before the writers start, homes every leaf they file.
 	epic, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
-		Title: "epic", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic,
+		Title: storage.MustParseTitle("epic"),
+		Lane:  storage.SharedLane, Topic: "core", Prefix: "conf", IssueType: model.TypeEpic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
@@ -42,7 +43,8 @@ func TestConcurrentUseIsSerialized(t *testing.T) {
 			defer wg.Done()
 			for i := range perWriter {
 				issue, err := engine.CreateIssue(ctx, storage.CreateIssueInput{
-					Title:    fmt.Sprintf("writer %d item %d", writer, i),
+					Title:    storage.MustParseTitle(fmt.Sprintf("writer %d item %d", writer, i)),
+					Lane:     storage.SharedLane,
 					Topic:    "core",
 					Prefix:   "conf",
 					ParentID: epic.ID,

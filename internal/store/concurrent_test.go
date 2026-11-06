@@ -32,7 +32,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	var mu sync.Mutex
 	createdIDs := make([]string, 0, goroutines)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Concurrent epic", Topic: "concurrent", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Concurrent epic"), Lane: storage.SharedLane, Topic: "concurrent", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -42,7 +42,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	for i := range goroutines {
 		eg.Go(func() error {
 			issue, err := st.CreateIssue(egCtx, storage.CreateIssueInput{Prefix: "test",
-				Title:     fmt.Sprintf("Concurrent issue %d", i),
+				Title: storage.MustParseTitle(fmt.Sprintf("Concurrent issue %d", i)), Lane: storage.SharedLane,
 				Topic:     "concurrent",
 				IssueType: "task",
 				Priority:  model.Priority(i % 2),
@@ -110,7 +110,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Mixed epic", Topic: "mixed", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Mixed epic"), Lane: storage.SharedLane, Topic: "mixed", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -120,7 +120,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	issues := make([]string, preCreateCount)
 	for i := range issues {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-			Title:     fmt.Sprintf("Pre-create %d", i),
+			Title: storage.MustParseTitle(fmt.Sprintf("Pre-create %d", i)), Lane: storage.SharedLane,
 			Topic:     "mixed",
 			IssueType: "task",
 			Priority:  0,
@@ -151,7 +151,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	for i := range newCount {
 		eg.Go(func() error {
 			_, err := st.CreateIssue(egCtx, storage.CreateIssueInput{Prefix: "test",
-				Title:     fmt.Sprintf("New issue %d", i),
+				Title: storage.MustParseTitle(fmt.Sprintf("New issue %d", i)), Lane: storage.SharedLane,
 				Topic:     "mixed",
 				IssueType: "task",
 				Priority:  1,

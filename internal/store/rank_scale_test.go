@@ -544,7 +544,7 @@ func TestALiveStoreRespacesLocally(t *testing.T) {
 	ctx := watch.on(base)
 	create := func(title string, placement storage.RankPlacement) model.Issue {
 		t.Helper()
-		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "env", IssueType: "epic", Placement: placement})
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "env", IssueType: "epic", Placement: placement})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -583,7 +583,7 @@ func TestATopCreateLeadsItsFrameOnAHotSpot(t *testing.T) {
 	ids := seedKeys(t, base, st, liveKeys(t))
 	for _, epic := range []string{ids[0], ids[625]} {
 		for i := range 300 {
-			child, err := st.CreateIssue(base, storage.CreateIssueInput{Prefix: "test", Title: fmt.Sprintf("hot %d", i), Topic: "env", IssueType: "task", ParentID: epic, Placement: storage.RankTop})
+			child, err := st.CreateIssue(base, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("hot %d", i)), Lane: storage.SharedLane, Topic: "env", IssueType: "task", ParentID: epic, Placement: storage.RankTop})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -644,7 +644,7 @@ func TestAChildTwoParentsClaimSitsInOneFrame(t *testing.T) {
 	child := first[1]
 	seedParentEdge(t, ctx, st, child.ID, second[0].ID)
 	lower, upper := min(first[0].ID, second[0].ID), max(first[0].ID, second[0].ID)
-	sibling := mustCreate(t, st, storage.CreateIssueInput{Prefix: "test", Title: "beside it", Topic: "env", IssueType: "task", ParentID: lower})
+	sibling := mustCreate(t, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("beside it"), Lane: storage.SharedLane, Topic: "env", IssueType: "task", ParentID: lower})
 
 	tx, err := st.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -711,7 +711,7 @@ func TestBottomAppendsDoNoRespaceAtTenTimesTheStore(t *testing.T) {
 	watch := &rankWatch{}
 	ctx := watch.on(base)
 	for i := range 200 {
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: fmt.Sprintf("row %d", i), Topic: "env", IssueType: "epic"}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("row %d", i)), Lane: storage.SharedLane, Topic: "env", IssueType: "epic"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -944,7 +944,7 @@ func TestAPlacementThatDoesNotRespaceSaysWhatItWrote(t *testing.T) {
 		watch := &rankWatch{}
 		ctx := watch.on(base)
 		for i := range 2 {
-			if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: fmt.Sprintf("row %d", i), Topic: "env", IssueType: "epic"}); err != nil {
+			if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("row %d", i)), Lane: storage.SharedLane, Topic: "env", IssueType: "epic"}); err != nil {
 				t.Fatal(err)
 			}
 		}

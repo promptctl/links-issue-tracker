@@ -19,7 +19,7 @@ func seedEpicRaw(t *testing.T, ctx context.Context, ap *app.App, title, topic st
 	if err != nil {
 		t.Fatalf("Mintable() error = %v", err)
 	}
-	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: prefix.Value(), Title: title, Topic: topic, IssueType: model.TypeEpic})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: prefix.Value(), Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: topic, IssueType: model.TypeEpic})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic %q) error = %v", title, err)
 	}

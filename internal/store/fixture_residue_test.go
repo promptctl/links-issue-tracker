@@ -70,13 +70,13 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open first copy: %v", err)
 	}
-	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "residue", Title: "Residue epic", Topic: "residue", IssueType: "epic", Priority: 1})
+	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "residue", Title: storage.MustParseTitle("Residue epic"), Lane: storage.SharedLane, Topic: "residue", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue epic: %v", err)
 	}
 	// Filing the child under the epic writes the parent-child relation row,
 	// so the residue spans issues, relations and comments.
-	child, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "residue", Title: "Residue child", Topic: "residue", IssueType: "task", ParentID: epic.ID})
+	child, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "residue", Title: storage.MustParseTitle("Residue child"), Lane: storage.SharedLane, Topic: "residue", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue child: %v", err)
 	}

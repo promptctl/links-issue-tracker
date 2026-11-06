@@ -28,7 +28,7 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Original title", Topic: "history", IssueType: "task", Priority: 0,
+		Title: storage.MustParseTitle("Original title"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "History", "history"),
 	})
 	if err != nil {
@@ -85,7 +85,7 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 func seedProseHistory(t *testing.T, ctx context.Context, ap *app.App) string {
 	t.Helper()
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Original title", Description: "first draft", Prompt: "old prompt",
+		Title: storage.MustParseTitle("Original title"), Lane: storage.SharedLane, Description: "first draft", Prompt: "old prompt",
 		Topic: "history", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "History", "history"),
 	})
@@ -175,7 +175,7 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 	ap := newTestCLIApp(t)
 	id := seedProseHistory(t, ctx, ap)
 	untouched, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Never edited", Description: "only draft", Topic: "history", IssueType: "task",
+		Title: storage.MustParseTitle("Never edited"), Lane: storage.SharedLane, Description: "only draft", Topic: "history", IssueType: "task",
 		ParentID: seedEpicRaw(t, ctx, ap, "Untouched", "history"),
 	})
 	if err != nil {
@@ -329,7 +329,7 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Labeled", Topic: "history", IssueType: "task", Priority: 0,
+		Title: storage.MustParseTitle("Labeled"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "History", "history"),
 	})
 	if err != nil {
@@ -393,7 +393,7 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 	ap := newTestCLIApp(t)
 	epic := seedEpicRaw(t, ctx, ap, "History", "history")
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Edited", Topic: "history", IssueType: model.TypeTask, Description: "first", ParentID: epic,
+		Title: storage.MustParseTitle("Edited"), Lane: storage.SharedLane, Topic: "history", IssueType: model.TypeTask, Description: "first", ParentID: epic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

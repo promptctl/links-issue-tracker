@@ -420,15 +420,10 @@ func (s *Store) readFieldMoves(ctx context.Context, before, after revision, ids 
 			}
 		}
 		// What is left different once both sides carry the newer side's
-		// fields is what moved outside the editable set. Both go through the
-		// same rows, so a value the rows normalize reads alike on both sides.
+		// fields is what moved outside the editable set.
 		// [LAW:one-source-of-truth] the editable set is the field table's.
-		carried, wasErr := storage.WithIssueFieldsOf(was[id], is[id])
-		self, isErr := storage.WithIssueFieldsOf(is[id], is[id])
-		if err := cmp.Or(wasErr, isErr); err != nil {
-			outside(fmt.Sprintf("%s: %v", id, err), "")
-			continue
-		}
+		carried := storage.WithIssueFieldsOf(was[id], is[id])
+		self := is[id]
 		carried.UpdatedAt = self.UpdatedAt
 		if !reflect.DeepEqual(wasStatus[id], isStatus[id]) {
 			outside(fmt.Sprintf("%s: its lifecycle moved", id), "lifecycle moves only through its verbs")

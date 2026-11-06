@@ -36,8 +36,17 @@ type issueField struct {
 	stated   func(UpdateIssueInput) bool
 	fromBulk func(BulkIssueSpec, *UpdateIssueInput) error
 	toBulk   func(model.Issue, *BulkIssueSpec)
-	apply    func(*model.Issue, UpdateIssueInput) error
-	encode   func(model.Issue) string
+	// project lands a stated value on the issue as the write would store it.
+	// It never refuses a title or lane: whether that text may be stored is
+	// admit's question, and it is asked only of text the issue does not hold.
+	project func(*model.Issue, UpdateIssueInput) error
+	// admit parses the projected text of a field whose value is moving, nil
+	// for a field project already decides in full.
+	admit  func(string) error
+	encode func(model.Issue) string
+	// carry copies src's stored value onto dst as it is stored: no parse, no
+	// write path, so carrying a value is never mistaken for writing one.
+	carry func(dst *model.Issue, src model.Issue)
 	// restore states on a bulk update document the value a change row
 	// recorded for this field: encode's inverse, landing where fromBulk reads.
 	restore func(*BulkIssueSpec, string) error
@@ -109,7 +118,8 @@ func LongTextFields() []LongTextField {
 // patchField builds a row from the parts that differ per field: the shape of
 // its text, which pointer on the patch states it, which key of a bulk update
 // document states it, how a stated value lands on the issue, the issue's
-// current value, and how that value encodes for history.
+// current value and how it is set as stored, and how that value encodes for
+// history.
 //
 // A nil pointer means "leave this alone", and this is the one place that
 // sentence is written. Restating it per field in each engine would be eight
@@ -126,6 +136,7 @@ func patchField[T any](
 	bulk bulkKey[T],
 	write func(*model.Issue, T) error,
 	current func(model.Issue) T,
+	set func(*model.Issue, T),
 	history historyCodec[T],
 ) issueField {
 	return issueField{
@@ -141,7 +152,7 @@ func patchField[T any](
 			return nil
 		},
 		toBulk: func(issue model.Issue, doc *BulkIssueSpec) { bulk.state(doc, current(issue)) },
-		apply: func(issue *model.Issue, in UpdateIssueInput) error {
+		project: func(issue *model.Issue, in UpdateIssueInput) error {
 			value := *slot(&in)
 			if value == nil {
 				return nil
@@ -149,6 +160,7 @@ func patchField[T any](
 			return write(issue, *value)
 		},
 		encode: func(issue model.Issue) string { return history.encode(current(issue)) },
+		carry:  func(dst *model.Issue, src model.Issue) { set(dst, current(src)) },
 		restore: func(doc *BulkIssueSpec, recorded string) error {
 			value, err := history.decode(recorded)
 			if err != nil {
@@ -158,6 +170,13 @@ func patchField[T any](
 			return nil
 		},
 	}
+}
+
+// admitting is the row with its admission: the parse a moving value's
+// projected text must pass before a write may store it.
+func (f issueField) admitting(parse func(string) error) issueField {
+	f.admit = parse
+	return f
 }
 
 // historyCodec is how a field's value is written into a change row and read
@@ -290,29 +309,28 @@ var issueFields = []issueField{
 	patchField("title", ShortText,
 		func(in *UpdateIssueInput) **string { return &in.Title },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Title }),
-		func(issue *model.Issue, v string) error {
-			issue.Title = strings.TrimSpace(v)
-			if issue.Title == "" {
-				return model.ValidationError{Message: "title cannot be empty"}
-			}
-			return nil
-		},
-		func(issue model.Issue) string { return issue.Title }, asText),
+		func(issue *model.Issue, v string) error { issue.Title = strings.TrimSpace(v); return nil },
+		func(issue model.Issue) string { return issue.Title },
+		func(issue *model.Issue, v string) { issue.Title = v }, asText).
+		admitting(func(text string) error { _, err := ParseTitle(text); return err }),
 	patchField("description", LongText,
 		func(in *UpdateIssueInput) **string { return &in.Description },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Description }),
 		func(issue *model.Issue, v string) error { issue.Description = strings.TrimSpace(v); return nil },
-		func(issue model.Issue) string { return issue.Description }, asText),
+		func(issue model.Issue) string { return issue.Description },
+		func(issue *model.Issue, v string) { issue.Description = v }, asText),
 	patchField("prompt", LongText,
 		func(in *UpdateIssueInput) **string { return &in.Prompt },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Prompt }),
 		func(issue *model.Issue, v string) error { issue.Prompt = strings.TrimSpace(v); return nil },
-		func(issue model.Issue) string { return issue.Prompt }, asText),
+		func(issue model.Issue) string { return issue.Prompt },
+		func(issue *model.Issue, v string) { issue.Prompt = v }, asText),
 	patchField(planFieldName, LongText,
 		func(in *UpdateIssueInput) **string { return &in.Plan },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Plan }),
 		func(issue *model.Issue, v string) error { issue.Plan = strings.TrimSpace(v); return nil },
-		func(issue model.Issue) string { return issue.Plan }, asText),
+		func(issue model.Issue) string { return issue.Plan },
+		func(issue *model.Issue, v string) { issue.Plan = v }, asText),
 	patchField("issue_type", ShortText,
 		func(in *UpdateIssueInput) **model.IssueType { return &in.IssueType },
 		bulkParsed("type", func(doc *BulkIssueSpec) **string { return &doc.IssueType }, model.ParseIssueType,
@@ -331,6 +349,7 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) model.IssueType { return issue.IssueType },
+		func(issue *model.Issue, v model.IssueType) { issue.IssueType = v },
 		historyCodec[model.IssueType]{encode: func(v model.IssueType) string { return string(v) }, decode: model.ParseIssueType}),
 	patchField("priority", ShortText,
 		func(in *UpdateIssueInput) **model.Priority { return &in.Priority },
@@ -338,6 +357,7 @@ var issueFields = []issueField{
 			func(v model.Priority) int { return int(v) }),
 		func(issue *model.Issue, v model.Priority) error { issue.Priority = v; return nil },
 		func(issue model.Issue) model.Priority { return issue.Priority },
+		func(issue *model.Issue, v model.Priority) { issue.Priority = v },
 		// The numeric wire encoding, not the display name: history keeps what
 		// the field stores, so a replay reads back the value that was written.
 		historyCodec[model.Priority]{
@@ -364,12 +384,15 @@ var issueFields = []issueField{
 			issue.Assignee = assignee
 			return nil
 		},
-		func(issue model.Issue) string { return issue.AssigneeValue() }, asText),
+		func(issue model.Issue) string { return issue.AssigneeValue() },
+		func(issue *model.Issue, v string) { issue.Assignee = v }, asText),
 	patchField("lane", ShortText,
 		func(in *UpdateIssueInput) **string { return &in.Lane },
 		bulkAsStated(func(doc *BulkIssueSpec) **string { return &doc.Lane }),
 		func(issue *model.Issue, v string) error { issue.Lane = strings.TrimSpace(v); return nil },
-		func(issue model.Issue) string { return issue.Lane }, asText),
+		func(issue model.Issue) string { return issue.Lane },
+		func(issue *model.Issue, v string) { issue.Lane = v }, asText).
+		admitting(func(text string) error { _, err := ParseLane(text); return err }),
 	patchField("labels", ShortText,
 		func(in *UpdateIssueInput) **[]string { return &in.Labels },
 		bulkAsStated(func(doc *BulkIssueSpec) **[]string { return &doc.Labels }),
@@ -382,6 +405,7 @@ var issueFields = []issueField{
 			return nil
 		},
 		func(issue model.Issue) []string { return issue.Labels },
+		func(issue *model.Issue, v []string) { issue.Labels = slices.Clone(v) },
 		// A label cannot hold a comma (model.NormalizeLabel), so the joined set
 		// splits back into exactly the labels it was joined from; the empty
 		// text is the empty set.
@@ -429,42 +453,32 @@ func RestoreIssueField(doc *BulkIssueSpec, field, recorded string) error {
 }
 
 // WithIssueFieldsOf is dst carrying src's editable fields and nothing else of
-// src: every field src holds, stated on a document and applied to dst through
-// the rows. What still differs between the result and src is what differs
-// outside the editable set.
-func WithIssueFieldsOf(dst, src model.Issue) (model.Issue, error) {
-	var doc BulkIssueSpec
+// src: every field src holds, carried as stored. What still differs between
+// the result and src is what differs outside the editable set. A carried value
+// is no write, so nothing parses it: a title stored before its parser existed
+// carries as it is. [LAW:one-source-of-truth]
+func WithIssueFieldsOf(dst, src model.Issue) model.Issue {
 	for _, field := range issueFields {
-		field.toBulk(src, &doc)
+		field.carry(&dst, src)
 	}
-	patch, err := bulkUpdatePatch(doc)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	issue, _, err := ApplyIssueFields(dst, patch)
-	return issue, err
+	return dst
 }
 
-// ApplyIssueFields is the field axis of a patch, decided: the post-patch issue
-// and one change row per field that actually moved. Pure — no clock, no store,
-// no writes — so an engine can plan a patch before it opens a transaction and
-// stamp the result with its own write time.
-//
-// Every engine owes lit this exact answer, which is why it is computed here
-// rather than per engine. An engine that planned its own would be free to
-// disagree about what a patch means, and the differential oracle would read
-// that disagreement as engine divergence rather than as the duplicated logic
-// it is. [LAW:effects-at-boundaries] [LAW:one-source-of-truth]
-func ApplyIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, []model.FieldChange, error) {
+// projectIssueFields is the field axis of a patch, projected: the post-patch
+// issue and one change row per field that actually moved, with no title or
+// lane refused. Pure, as ApplyIssueFields is; it is the part of that decision
+// that says what a write would store, for a caller weighing a value rather
+// than writing one (MergeReadOut).
+func projectIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, []model.FieldChange, error) {
 	// Encoded eagerly, so a prior is a snapshot of the value rather than a
-	// view onto data the apply pass is about to replace.
+	// view onto data the projection is about to replace.
 	priors := make([]string, len(issueFields))
 	for i, field := range issueFields {
 		priors[i] = field.encode(baseline)
 	}
 	issue := baseline
 	for _, field := range issueFields {
-		if err := field.apply(&issue, in); err != nil {
+		if err := field.project(&issue, in); err != nil {
 			return model.Issue{}, nil, err
 		}
 	}
@@ -475,6 +489,39 @@ func ApplyIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, [
 			continue
 		}
 		changes = append(changes, model.FieldChange{Field: field.name, From: priors[i], To: current})
+	}
+	return issue, changes, nil
+}
+
+// ApplyIssueFields is the field axis of a patch, decided: the post-patch issue
+// and one change row per field that actually moved. Pure — no clock, no store,
+// no writes — so an engine can plan a patch before it opens a transaction and
+// stamp the result with its own write time.
+//
+// It is the projection, then admission: a title or lane is parsed only when
+// its change row moves it to text the issue does not already hold. Restating
+// the stored text makes no change row, so a value stored before its parser
+// existed survives every write that leaves it alone. [LAW:single-enforcer]
+//
+// Every engine owes lit this exact answer, which is why it is computed here
+// rather than per engine. An engine that planned its own would be free to
+// disagree about what a patch means, and the differential oracle would read
+// that disagreement as engine divergence rather than as the duplicated logic
+// it is. [LAW:effects-at-boundaries] [LAW:one-source-of-truth]
+func ApplyIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, []model.FieldChange, error) {
+	issue, changes, err := projectIssueFields(baseline, in)
+	if err != nil {
+		return model.Issue{}, nil, err
+	}
+	for _, change := range changes {
+		for _, field := range issueFields {
+			if field.name != change.Field || field.admit == nil {
+				continue
+			}
+			if err := field.admit(change.To); err != nil {
+				return model.Issue{}, nil, err
+			}
+		}
 	}
 	return issue, changes, nil
 }

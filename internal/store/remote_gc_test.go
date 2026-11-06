@@ -316,7 +316,7 @@ func TestAPushThatReadTheRemoteBeforeItsGCLandsAfterIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "b1", Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("b1"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {

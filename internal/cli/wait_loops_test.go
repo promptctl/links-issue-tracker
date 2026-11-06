@@ -46,10 +46,10 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 		t.Fatalf("doctor on an empty workspace should report wait_loops=0; got:\n%s", buf.String())
 	}
 
-	e0 := h.createIssue(storage.CreateIssueInput{Title: "E0", Topic: "loop", IssueType: "epic"})
-	e1 := h.createIssue(storage.CreateIssueInput{Title: "E1", Topic: "loop", IssueType: "epic", ParentID: e0.ID})
-	c := h.createIssue(storage.CreateIssueInput{Title: "C", Topic: "loop", IssueType: "task", ParentID: e1.ID})
-	b := h.createIssue(storage.CreateIssueInput{Title: "B", Topic: "loop", IssueType: "task", ParentID: e0.ID})
+	e0 := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("E0"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic"})
+	e1 := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("E1"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic", ParentID: e0.ID})
+	c := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "loop", IssueType: "task", ParentID: e1.ID})
+	b := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("B"), Lane: storage.SharedLane, Topic: "loop", IssueType: "task", ParentID: e0.ID})
 	h.addDependency(c.ID, b.ID)
 
 	got, line := h.doctorWaitLoopLine()
@@ -71,11 +71,11 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	e := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
-	b := h.createIssue(storage.CreateIssueInput{Title: "B", Topic: "loop", IssueType: "task", ParentID: e.ID})
-	c := h.createIssue(storage.CreateIssueInput{Title: "C", Topic: "loop", IssueType: "task", ParentID: e.ID})
-	f := h.createIssue(storage.CreateIssueInput{Title: "F", Topic: "loop", IssueType: "epic"})
-	x := h.createIssue(storage.CreateIssueInput{Title: "X", Topic: "loop", IssueType: "task", ParentID: f.ID})
+	e := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("E"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic"})
+	b := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("B"), Lane: storage.SharedLane, Topic: "loop", IssueType: "task", ParentID: e.ID})
+	c := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "loop", IssueType: "task", ParentID: e.ID})
+	f := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("F"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic"})
+	x := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("X"), Lane: storage.SharedLane, Topic: "loop", IssueType: "task", ParentID: f.ID})
 	h.addDependencyWithinEpic(c.ID, b.ID)
 	h.addDependency(b.ID, f.ID)
 	h.addDependency(x.ID, c.ID)
@@ -99,8 +99,8 @@ func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	top := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
-	sub := h.createIssue(storage.CreateIssueInput{Title: "S", Topic: "loop", IssueType: "epic", ParentID: top.ID})
+	top := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("E"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic"})
+	sub := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("S"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic", ParentID: top.ID})
 	raw, err := storage.TestSupport.Of(h.ap.Store)
 	if err != nil {
 		t.Fatalf("TestSupport: %v", err)

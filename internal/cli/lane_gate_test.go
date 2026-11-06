@@ -42,9 +42,9 @@ func containsID(rows []annotation.AnnotatedIssue, id string) bool {
 func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
-	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	urgentLater := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "urgent later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "lane", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	urgentLater := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("urgent later"), Lane: storage.SharedLane, Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	// The pullable set drops the blocked urgent sibling; only the earlier one is pullable.
 	pullable := h.runPullableAnnotated(workableFilter{})
@@ -94,9 +94,9 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
-	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "a"})
-	otherLane := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "other lane", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "b"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "lane", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("first"), Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("a")})
+	otherLane := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("other lane"), Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: storage.MustParseLane("b")})
 
 	pullable := h.runPullableAnnotated(workableFilter{})
 	if !containsID(pullable, first.ID) || !containsID(pullable, otherLane.ID) {
@@ -115,9 +115,9 @@ func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 func TestLaneGateSeesSiblingsHiddenByAssigneeFilter(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
-	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "bob's first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Assignee: "bob"})
-	mineLater := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "my later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Assignee: "alice"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "lane", IssueType: "epic", Priority: 1})
+	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("bob's first"), Lane: storage.SharedLane, Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Assignee: "bob"})
+	mineLater := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("my later"), Lane: storage.SharedLane, Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Assignee: "alice"})
 
 	// Viewing only alice's work, her later sibling is still gated by bob's open
 	// earlier sibling even though bob's ticket is filtered out of the view.

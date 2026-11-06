@@ -29,11 +29,11 @@ const forged = "FORGED"
 func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "epic", Topic: "demo", IssueType: model.TypeEpic})
-	open := h.createIssue(storage.CreateIssueInput{Title: "open", Topic: "demo", ParentID: epic.ID, Lane: "left"})
-	stale := h.createIssue(storage.CreateIssueInput{Title: "stale", Topic: "demo", ParentID: epic.ID, Lane: "right"})
-	upstreamEpic := h.createIssue(storage.CreateIssueInput{Title: "upstream epic", Topic: "demo", IssueType: model.TypeEpic})
-	upstream := h.createIssue(storage.CreateIssueInput{Title: "upstream", Topic: "demo", ParentID: upstreamEpic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "demo", IssueType: model.TypeEpic})
+	open := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("open"), Topic: "demo", ParentID: epic.ID, Lane: storage.MustParseLane("left")})
+	stale := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("stale"), Topic: "demo", ParentID: epic.ID, Lane: storage.MustParseLane("right")})
+	upstreamEpic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("upstream epic"), Lane: storage.SharedLane, Topic: "demo", IssueType: model.TypeEpic})
+	upstream := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("upstream"), Lane: storage.SharedLane, Topic: "demo", ParentID: upstreamEpic.ID})
 	h.addDependency(stale.ID, upstream.ID)
 
 	raw, err := storage.TestSupport.Of(h.ap.Store)

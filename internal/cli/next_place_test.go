@@ -85,8 +85,8 @@ func TestPlacePastExhaustionFollowsWhatTheCheckoutHasLeft(t *testing.T) {
 func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic", Priority: 1})
-	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Pick", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
+	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Pick"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	rows, _, _ := h.gather()
 	row := rowByID(t, rows, ticket.ID)
 	for _, tc := range []struct {
