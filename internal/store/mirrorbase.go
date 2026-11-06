@@ -52,6 +52,8 @@ func MirrorRootOf(env environ.Env) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("locate the git mirror root: %w (set %s to choose one)", err, MirrorRootEnvVar)
 	}
+	// Short, not the app directory config uses: this path is the prefix of
+	// every mirror's GIT_DIR, which Windows caps (see above).
 	return filepath.Join(cache, "lit", "m"), nil
 }
 
@@ -191,16 +193,18 @@ type mirrorBaseEntry struct {
 
 // readMirrorBases lists the bases under mirrorRoot that carry a root file. A
 // directory without one is not a base this package wrote, so no collector
-// owns it. A mirror root that does not exist holds no bases.
-func readMirrorBases(mirrorRoot string) ([]mirrorBaseEntry, error) {
+// owns it. A mirror root that does not exist holds no bases. A base whose
+// root file cannot be read is left out and named in unreadable, so one base
+// of any repository on the machine never stops the collection of the rest.
+func readMirrorBases(mirrorRoot string) (bases []mirrorBaseEntry, unreadable error, err error) {
 	entries, err := os.ReadDir(mirrorRoot)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("read git mirror root %s: %w", mirrorRoot, err)
+		return nil, nil, fmt.Errorf("read git mirror root %s: %w", mirrorRoot, err)
 	}
-	var bases []mirrorBaseEntry
+	var skipped []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -211,11 +215,12 @@ func readMirrorBases(mirrorRoot string) ([]mirrorBaseEntry, error) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read git mirror base %s: %w", dir, err)
+			skipped = append(skipped, fmt.Errorf("read git mirror base %s: %w", dir, err))
+			continue
 		}
 		bases = append(bases, mirrorBaseEntry{dir: dir, database: string(recorded)})
 	}
-	return bases, nil
+	return bases, errors.Join(skipped...), nil
 }
 
 // isUnder reports whether path is dir or lies below it, both cleaned.
@@ -227,9 +232,11 @@ func isUnder(path, dir string) bool {
 // SweepMirrorBasesUnder removes every base under mirrorRoot whose database
 // lies under dir. A clone's take calls it on the clone base before it removes
 // that base, so the mirrors of a clone a killed cycle left behind go with the
-// clone itself, on the same schedule.
+// clone itself, on the same schedule. A base whose root file cannot be read
+// may serve any repository on the machine, so it does not fail the take; the
+// prune reports it.
 func SweepMirrorBasesUnder(mirrorRoot, dir string) error {
-	bases, err := readMirrorBases(mirrorRoot)
+	bases, _, err := readMirrorBases(mirrorRoot)
 	if err != nil {
 		return err
 	}
@@ -253,12 +260,15 @@ func SweepMirrorBasesUnder(mirrorRoot, dir string) error {
 // remote-cache prune does.
 func sweepOrphanedMirrorBases(mirrorRoot string) remoteCachePruneOutcome {
 	var outcome remoteCachePruneOutcome
-	bases, err := readMirrorBases(mirrorRoot)
+	bases, unreadable, err := readMirrorBases(mirrorRoot)
 	if err != nil {
 		outcome.Problem = err.Error()
 		return outcome
 	}
 	var problems []string
+	if unreadable != nil {
+		problems = append(problems, unreadable.Error())
+	}
 	for _, base := range bases {
 		if _, err := os.Stat(filepath.Dir(base.database)); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			continue

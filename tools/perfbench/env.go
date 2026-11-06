@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // hermeticEnv is the environment lit runs under while it is being measured:
 // the caller's, with every setting that would make lit take a different code
@@ -20,7 +23,9 @@ import "strings"
 // CLAUDE_CODE_SESSION_ID changes what the write probe records as its
 // assignee. So: XDG_CONFIG_HOME and XDG_STATE_HOME are pointed
 // at empty directories the run owns, and every LIT_* variable and the session
-// id are dropped.
+// id are dropped. LIT_MIRROR_ROOT is then set under the state directory, so
+// the git mirrors a syncing run lays down go with the run, not into the
+// developer's user cache.
 // [LAW:one-source-of-truth] the generated store's own .lit/config.toml is then
 // the only configuration in force, at every size, on every machine.
 //
@@ -30,7 +35,7 @@ import "strings"
 // Pure — a function of the environment it is handed — so what it strips is
 // testable without a process. [LAW:effects-at-boundaries]
 func hermeticEnv(environ []string, configHome, stateHome string) []string {
-	out := make([]string, 0, len(environ)+2)
+	out := make([]string, 0, len(environ)+3)
 	for _, kv := range environ {
 		key, _, _ := strings.Cut(kv, "=")
 		if key == "XDG_CONFIG_HOME" || key == "XDG_STATE_HOME" || key == "CLAUDE_CODE_SESSION_ID" || strings.HasPrefix(key, "LIT_") {
@@ -38,5 +43,5 @@ func hermeticEnv(environ []string, configHome, stateHome string) []string {
 		}
 		out = append(out, kv)
 	}
-	return append(out, "XDG_CONFIG_HOME="+configHome, "XDG_STATE_HOME="+stateHome)
+	return append(out, "XDG_CONFIG_HOME="+configHome, "XDG_STATE_HOME="+stateHome, "LIT_MIRROR_ROOT="+filepath.Join(stateHome, "mirrors"))
 }

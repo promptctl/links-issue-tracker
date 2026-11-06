@@ -715,7 +715,12 @@ type omission []string
 // and reading the file through a second handle would either fail the copy
 // outright or release the hold mid-walk, reopening the tear window the hold
 // exists to close.
-var cloneOmits = omission{".dolt/noms/LOCK"}
+//
+// It also leaves out the in-repository remote cache an older lit kept: the
+// mirrors live in the store's mirror base now, nothing a clone runs reads the
+// old cache, and copying it would spend the live store's hold on dead bytes
+// until a prune removes it.
+var cloneOmits = omission{".dolt/noms/LOCK", ".dolt/" + RemoteCacheDirName}
 
 // snapshotOmits is what a recovery snapshot also leaves out: the bytes
 // restoring it never needs. The remote cache is a mirror of the remote that
@@ -723,7 +728,6 @@ var cloneOmits = omission{".dolt/noms/LOCK"}
 // what a Dolt process leaves when it dies before removing them. Together
 // they were 77% of a snapshot of this repository's store (links-scale-dy46.5u8).
 var snapshotOmits = append(slices.Clone(cloneOmits),
-	".dolt/"+RemoteCacheDirName,
 	".dolt/"+TempTableFilesDirName,
 )
 

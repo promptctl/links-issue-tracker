@@ -145,6 +145,7 @@ func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 // TestPruneRemoteCacheCollectsAbandonedMirrors proves the prune does its job:
 // a mirror no configured remote maps to is removed, and the live one is not.
 func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
+	env := isolatedMirrorEnv(t)
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
@@ -152,7 +153,7 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 	remote := seedBareGitRemote(t, base)
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	st, err := Open(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -161,7 +162,7 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -216,6 +217,7 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 // removable. The failure still has to be reported — the point is that it stops
 // being a gate on everyone else's collection.
 func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
+	env := isolatedMirrorEnv(t)
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
@@ -223,7 +225,7 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 	remote := seedBareGitRemote(t, base)
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	st, err := Open(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -232,7 +234,7 @@ func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}

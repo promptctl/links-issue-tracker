@@ -3790,8 +3790,9 @@ func newDoltConnector(env environ.Env, doltRootDir, workspaceID, database string
 		DisableSingletonCache: true,
 		// The engine serves the one database at doltRootDir, so every git
 		// remote it opens keeps its mirror in that database's base, whatever
-		// spelling of the root Dolt hands the callback. Dolt calls it only
-		// when it opens a git remote, so an engine that never does (a
+		// spelling of the root Dolt hands the callback. Dolt calls it when it
+		// opens a remote of any kind, so a store with any remote has a base,
+		// empty when no remote is git; an engine that opens none (a
 		// bootstrap, a snapshot) lays down no base.
 		GitCacheBaseFor: func(string) string { return mirrorBaseOpenedBy(mirrorRoot, doltRootDir) },
 	}
