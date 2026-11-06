@@ -277,6 +277,21 @@ func interruptedEnd(at time.Time, signal string, code int) telemetry.End {
 	}
 }
 
+// endedAfterHardExit is a clean end that arrived after the hard exit claimed
+// the process's exit: it keeps what the command ended with — its error,
+// reason, facts and counts — and is recorded as the interruption the process
+// exits with. [LAW:nothing-unseen]
+func endedAfterHardExit(end telemetry.End, hard interrupt.Decision) telemetry.End {
+	lost := interruptedEnd(end.At, hard.Signal, hard.Code)
+	end.Outcome, end.ExitCode = lost.Outcome, lost.ExitCode
+	if end.Error == "" {
+		end.Error = lost.Error
+	} else {
+		end.Error = lost.Error + "; it then ended: " + end.Error
+	}
+	return end
+}
+
 // invocationRecord writes one invocation's event, once. An invocation can end
 // two ways at once — its stack unwinding just as the interrupt guard's hard
 // exit fires — and its event is one record: the first end to arrive is
@@ -290,7 +305,7 @@ func interruptedEnd(at time.Time, signal string, code int) telemetry.End {
 // The clean end claims the process's exit code from the interrupt guard
 // before it writes, so the event's exit_code is the code the process exits
 // with: a clean end that lost the claim to the hard exit is written as the
-// interruption it lost to.
+// interruption it lost to, with what it ended with.
 type invocationRecord struct {
 	ctx             context.Context
 	once            sync.Once
@@ -302,8 +317,8 @@ type invocationRecord struct {
 
 func (r *invocationRecord) close(end telemetry.End) {
 	r.once.Do(func() {
-		if lost, ok := interrupt.Claim(r.ctx, end.ExitCode); !ok {
-			end = interruptedEnd(end.At, lost.Signal, lost.Code)
+		if decided := interrupt.Claim(r.ctx, end.ExitCode); decided.Hard() {
+			end = endedAfterHardExit(end, decided)
 		}
 		r.write(end)
 	})

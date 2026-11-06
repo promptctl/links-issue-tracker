@@ -17,6 +17,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
+	"github.com/promptctl/links-issue-tracker/internal/interrupt"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -331,9 +332,13 @@ func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
 
 	record := &invocationRecord{ctx: context.Background(), recorder: telemetry.Begin(telemetry.Event{Event: "lit sync push"}), stderr: io.Discard, env: runEnv(t)}
 	written := make(chan bool, 2)
-	for _, end := range []telemetry.End{{Outcome: telemetry.OutcomeOK}, interruptedEnd(time.Now(), "SIGTERM", 143)} {
+	ends := []func(){
+		func() { record.close(telemetry.End{Outcome: telemetry.OutcomeOK}) },
+		func() { record.closeInterrupted(interruptedEnd(time.Now(), "SIGTERM", 143)) },
+	}
+	for _, end := range ends {
 		go func() {
-			record.close(end)
+			end()
 			// Written: the oversized file rotated away and the event begun a
 			// new one.
 			info, err := os.Stat(path)
@@ -351,6 +356,30 @@ func TestASecondEndWaitsForTheFirstEndsWrite(t *testing.T) {
 	}
 	if events := readEvents(t); len(events) != 1 || events[0].Event != "lit sync push" {
 		t.Errorf("events = %+v, want the one event, written once", events)
+	}
+}
+
+// A clean end that arrives after the hard exit claimed is recorded as the
+// interruption the process exits with, and keeps what the command ended with.
+func TestACleanEndAfterTheHardExitKeepsWhatItEndedWith(t *testing.T) {
+	t.Parallel()
+	end := telemetry.End{
+		Outcome:  telemetry.OutcomeError,
+		ExitCode: ExitGeneric,
+		Reason:   "command_failed",
+		Error:    "sync push: refused",
+		Facts:    map[string]any{"remote": "origin"},
+		Counts:   map[string]int{"commits": 2},
+	}
+	got := endedAfterHardExit(end, interrupt.Decision{Code: 143, Signal: "SIGTERM"})
+	if got.Outcome != telemetry.OutcomeInterrupted || got.ExitCode != 143 {
+		t.Errorf("outcome, exit code = %v, %d; want interrupted, 143", got.Outcome, got.ExitCode)
+	}
+	if got.Reason != end.Reason || got.Facts["remote"] != "origin" || got.Counts["commits"] != 2 {
+		t.Errorf("end = %+v, want the command's reason, facts and counts kept", got)
+	}
+	if !strings.Contains(got.Error, "SIGTERM") || !strings.HasSuffix(got.Error, "sync push: refused") {
+		t.Errorf("error = %q, want the interruption and then the command's own error", got.Error)
 	}
 }
 

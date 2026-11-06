@@ -33,6 +33,10 @@ func WriteCommandError(stderr io.Writer, err error) int {
 	return reason.exit
 }
 
+// CommandExitCode is the exit code a failed command arrives on: the one
+// WriteCommandError prints and returns.
+func CommandExitCode(err error) int { return commandErrorReason(err).exit }
+
 // commandReason is the machine-readable reason a failed command prints beside
 // its exit code, and the exit code it arrives on. The tokens are a published
 // contract (docs/cli-reference.md lists each with its code): a script branches
