@@ -50,6 +50,74 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	}
 }
 
+// A push the hook triggers can fail in ways no retry clears (a peer's commits,
+// a remote schema ahead); only the failure's own block names the remedy. The
+// hook must pass that block through and never claim the failure is transient.
+func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
+	t.Parallel()
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not on PATH")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	ws, err := workspace.Resolve(runEnv(t), repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runWsFamily(t, hooksFamily, context.Background(), &stdout, ws, []string{"install"}); err != nil {
+		t.Fatalf("hooks install error = %v", err)
+	}
+	hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
+
+	const remedy = "HOW TO RESOLVE: run `lit sync pull`, then `lit sync push`."
+	cases := []struct {
+		name       string
+		stub       string
+		wantStderr []string
+	}{
+		{
+			name:       "failing push",
+			stub:       "echo pushed-summary\necho '" + remedy + "' >&2\nexit 1\n",
+			wantStderr: []string{remedy, "hook-triggered lit sync push failed (trigger=git-pre-push remote=peer"},
+		},
+		{name: "succeeding push", stub: "echo pushed-summary\nexit 0\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			binDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(binDir, "lit"), []byte("#!/bin/sh\n"+tc.stub), 0o755); err != nil {
+				t.Fatalf("WriteFile(stub lit) error = %v", err)
+			}
+			cmd := exec.Command(bash, hookPath, "peer")
+			cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			var hookStdout, hookStderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &hookStdout, &hookStderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("hook exited %v, want 0 (it must never block the push); stderr=%q", err, hookStderr.String())
+			}
+			got := hookStderr.String()
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(got, want) {
+					t.Errorf("hook stderr = %q, want it to contain %q", got, want)
+				}
+			}
+			if len(tc.wantStderr) == 0 && got != "" {
+				t.Errorf("hook stderr = %q, want silence on success", got)
+			}
+			for _, claim := range []string{"retry", "transient"} {
+				if strings.Contains(strings.ToLower(got), claim) {
+					t.Errorf("hook stderr = %q claims %q", got, claim)
+				}
+			}
+			if hookStdout.Len() != 0 {
+				t.Errorf("hook stdout = %q, want the push's summary discarded", hookStdout.String())
+			}
+		})
+	}
+}
+
 func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
