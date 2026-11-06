@@ -103,6 +103,7 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	telemetry.Append(event, "dolt.journal_warnings")
 	telemetry.Append(event, "lock.waits")
 	telemetry.Append(event, "lock.holds")
+	telemetry.Append(event, "lock.records")
 	telemetry.Append(event, "rank.respaces")
 	telemetry.Max(event, "rank.longest_key", 0)
 	telemetry.Count(event, "rank.ancestry_levels", 0)
@@ -111,8 +112,9 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	telemetry.Append(event, "rank.ancestry_conflicts")
 	telemetry.Append(event, "rank.ancestry_loops")
 	ctx = store.WithLockObserver(event, store.LockObserver{
-		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
-		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
+		Waited:   func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
+		Held:     func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
+		Recorded: func(record store.LockRecord) { telemetry.Append(event, "lock.records", lockRecordValue(record)) },
 	})
 	met := newAncestryMet(event)
 	ctx = store.WithRankObserver(ctx, store.RankObserver{
@@ -206,6 +208,16 @@ func lockWaitValue(w store.LockWait) map[string]any {
 		"lock.wait.waited_ms":     w.Waited.Milliseconds(),
 		"lock.wait.progress_seen": w.ProgressSeen,
 		"lock.wait.outcome":       string(w.Outcome),
+	}
+}
+
+// lockRecordValue is one lock.records occurrence.
+func lockRecordValue(r store.LockRecord) map[string]any {
+	return map[string]any{
+		"lock.record.lock":          r.Lock,
+		"lock.record.sweep_retired": r.SweepRetired,
+		"lock.record.sweep_error":   telemetry.ErrorText(r.SweepErr),
+		"lock.record.publish_error": telemetry.ErrorText(r.PublishErr),
 	}
 }
 

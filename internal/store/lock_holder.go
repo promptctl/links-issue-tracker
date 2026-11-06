@@ -211,18 +211,26 @@ type lockHolderRecord struct {
 // [LAW:dataflow-not-control-flow] The sweep runs on every acquisition; an
 // empty directory is simply a sweep with nothing to retire.
 //
+// Both failures are printed to stderr, the writer this acquisition was handed
+// (which may be a lease the caller revokes), and go with the sweep's count to
+// the observer on ctx as one LockRecord, so the command's event carries them.
+//
 // That sweep is also what demotes a failed retirement at release, the way a
 // failed publish is demoted: a record this release could not remove has lost
 // its hold, so the next acquisition proves it unheld and retires it. On
 // Windows that failure needs nothing worse than a concurrent sweep's probe
 // holding the file open, since filelock's open denies the delete right.
 func recordLockHolder(ctx context.Context, stderr io.Writer, storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
-	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
-		fmt.Fprintf(stderr, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
+	retired, sweepErr := retireDeadLockHolders(storageDir, lockPath)
+	releaseRecord, publishErr := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
+	if sweepErr != nil {
+		fmt.Fprintf(stderr, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, sweepErr)
 	}
-	releaseRecord, err := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
+	if publishErr != nil {
+		fmt.Fprintf(stderr, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, publishErr)
+	}
+	lockObserverFrom(ctx).Recorded(LockRecord{Lock: filepath.Base(lockPath), SweepRetired: retired, SweepErr: sweepErr, PublishErr: publishErr})
+	if publishErr != nil {
 		return lockRelease
 	}
 	return func() error {
@@ -557,19 +565,23 @@ func readLockHolders(storageDir, lockPath string) ([]lockHolderRecord, []string)
 
 // retireDeadLockHolders retires every record under lockPath's holder directory
 // whose holder is gone, and reads nothing else: the sweep a publisher runs,
-// which wants no account, only the directory cleared of the dead.
-func retireDeadLockHolders(storageDir, lockPath string) error {
+// which wants no account, only the directory cleared of the dead and how many
+// it retired.
+func retireDeadLockHolders(storageDir, lockPath string) (retired int, err error) {
 	dir := lockHolderDir(storageDir, lockPath)
 	names, err := holderRecordNames(dir)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	errs := make([]error, 0, len(names))
 	for _, name := range names {
-		_, probeErr := probeLockHolder(filepath.Join(dir, name))
+		live, published, probeErr := probeLockHolder(filepath.Join(dir, name))
+		if !live && published && probeErr == nil {
+			retired++
+		}
 		errs = append(errs, probeErr)
 	}
-	return errors.Join(errs...)
+	return retired, errors.Join(errs...)
 }
 
 // probeLockHolder decides whether the record at recordPath still has a live
@@ -585,20 +597,25 @@ func retireDeadLockHolders(storageDir, lockPath string) error {
 //
 // [LAW:single-enforcer] The one place a record is judged dead, for the
 // account a contender reads and the sweep a publisher runs alike.
-func probeLockHolder(recordPath string) (live bool, err error) {
+func probeLockHolder(recordPath string) (live, published bool, err error) {
 	// maxAttempts 1 keeps this a probe: it decides liveness and takes custody
 	// of nothing, so no process ever waits on a holder record.
 	release, acquired, err := filelock.Acquire(context.Background(), recordPath, true, 1, 0)
 	if err != nil {
-		return false, fmt.Errorf("holder record %s unprobeable: %w", filepath.Base(recordPath), err)
+		return false, false, fmt.Errorf("holder record %s unprobeable: %w", filepath.Base(recordPath), err)
 	}
 	if !acquired {
-		return true, nil
+		return true, true, nil
 	}
+	// Held now, the file can change no more. A record is filled in before it
+	// is ever named, so an empty one is this probe's own O_CREATE of a name
+	// retired since it was listed, not a gone holder's record.
+	info, statErr := os.Stat(recordPath)
+	published = statErr == nil && info.Size() > 0
 	if err := errors.Join(release(), retireRecord(recordPath), retireRecord(privateNameFor(recordPath))); err != nil {
-		return false, fmt.Errorf("retiring dead holder record %s: %w", filepath.Base(recordPath), err)
+		return false, published, fmt.Errorf("retiring dead holder record %s: %w", filepath.Base(recordPath), err)
 	}
-	return false, nil
+	return false, published, nil
 }
 
 // readLockHolder resolves one record file into at most one live holder. The
@@ -607,7 +624,7 @@ func probeLockHolder(recordPath string) (live bool, err error) {
 // would, on Windows, lock out the read it is deciding about.
 func readLockHolder(recordPath string) ([]lockHolderRecord, []string) {
 	payload, readErr := os.ReadFile(recordPath)
-	live, err := probeLockHolder(recordPath)
+	live, _, err := probeLockHolder(recordPath)
 	if err != nil {
 		return nil, []string{err.Error()}
 	}

@@ -18,16 +18,24 @@ import (
 
 // heldReports collects what a hold reports when it ends.
 type heldReports struct {
-	mu    sync.Mutex
-	holds []LockHold
-	waits []LockWait
+	mu      sync.Mutex
+	holds   []LockHold
+	waits   []LockWait
+	records []LockRecord
 }
 
 func (r *heldReports) observer() LockObserver {
 	return LockObserver{
-		Waited: func(w LockWait) { r.mu.Lock(); r.waits = append(r.waits, w); r.mu.Unlock() },
-		Held:   func(h LockHold) { r.mu.Lock(); r.holds = append(r.holds, h); r.mu.Unlock() },
+		Waited:   func(w LockWait) { r.mu.Lock(); r.waits = append(r.waits, w); r.mu.Unlock() },
+		Held:     func(h LockHold) { r.mu.Lock(); r.holds = append(r.holds, h); r.mu.Unlock() },
+		Recorded: func(rec LockRecord) { r.mu.Lock(); r.records = append(r.records, rec); r.mu.Unlock() },
 	}
+}
+
+func (r *heldReports) recordsSnapshot() []LockRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]LockRecord(nil), r.records...)
 }
 
 func (r *heldReports) snapshot() ([]LockHold, []LockWait) {

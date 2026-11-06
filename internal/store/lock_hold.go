@@ -94,24 +94,39 @@ type LockHold struct {
 	HeartbeatFailures int
 }
 
-// LockObserver is told about each lock wait and each LOCK hold of the work
+// LockRecord is one acquisition's upkeep of its lock's holder records: how
+// many records of holders that are gone its sweep retired, the sweep's
+// failure, and the failure to publish this process's own record. A nil error
+// is a step that succeeded. Either failure leaves the lock held; only a
+// diagnostic is short (recordLockHolder). Lock is the file name, as on every
+// lock report.
+type LockRecord struct {
+	Lock         string
+	SweepRetired int
+	SweepErr     error
+	PublishErr   error
+}
+
+// LockObserver is told about each lock wait, each LOCK hold, and each
+// acquisition's holder-record upkeep (LockRecord) of the work
 // run under the context that carries it. The store reports these as values
 // and never records them itself: the command's event is the CLI's, which
 // installs one observer per invocation (invocationContext), as it does for
 // Dolt's journal warnings. [LAW:effects-at-boundaries]
 type LockObserver struct {
-	Waited func(LockWait)
-	Held   func(LockHold)
+	Waited   func(LockWait)
+	Held     func(LockHold)
+	Recorded func(LockRecord)
 }
 
 type lockObserverKey struct{}
 
-// WithLockObserver returns ctx carrying observer. Both funcs must be set: a
+// WithLockObserver returns ctx carrying observer. Every func must be set: a
 // nil one panics here, where it was installed, rather than later inside a
 // lock acquisition or Dolt's close.
 func WithLockObserver(ctx context.Context, observer LockObserver) context.Context {
-	if observer.Waited == nil || observer.Held == nil {
-		panic("store.WithLockObserver: both Waited and Held must be set")
+	if observer.Waited == nil || observer.Held == nil || observer.Recorded == nil {
+		panic("store.WithLockObserver: Waited, Held and Recorded must all be set")
 	}
 	return context.WithValue(ctx, lockObserverKey{}, observer)
 }
@@ -123,7 +138,7 @@ func lockObserverFrom(ctx context.Context) LockObserver {
 	if observer, ok := ctx.Value(lockObserverKey{}).(LockObserver); ok {
 		return observer
 	}
-	return LockObserver{Waited: func(LockWait) {}, Held: func(LockHold) {}}
+	return LockObserver{Waited: func(LockWait) {}, Held: func(LockHold) {}, Recorded: func(LockRecord) {}}
 }
 
 // holdHeartbeatInterval is how often a working routine hold says so: four
