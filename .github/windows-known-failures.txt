@@ -7,3 +7,22 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
+nightly-windows-failure internal/cli TestAFailedStoreReadingIsNullBytesAndItsReason
+nightly-windows-failure internal/cli TestAnUnreadableUpstreamFailsOnlyTheSelectionThatReadsIt
+nightly-windows-failure internal/cli TestInitBesideARemoteWhoseURLNamesNoOneRepositoryStartsFresh
+nightly-windows-failure internal/cli TestResolvePathsResolvesOnlyAGivenPath
+nightly-windows-failure internal/cli TestUnreadableWorkingDirFailsOnlyARelativePath
+nightly-windows-failure internal/cli TestWorkingDirIsAbsoluteOrAnError
+nightly-windows-failure internal/dbsnapshot TestList_RefusesFileAtSnapshotsDir
+nightly-windows-failure internal/environ TestConstructorsGiveAChildItsDirectoryAsPWD
+nightly-windows-failure internal/store TestAWaitsFirstReadableReadingIsItsBaseline
+nightly-windows-failure internal/store TestDoctorReportsAnUnreadableFootprintAndStillChecks
+nightly-windows-failure internal/store TestOpenForReadToleratesForeignJournalHolder
+nightly-windows-failure internal/store TestTheCeilingAgainstOrdinaryUse
+nightly-windows-failure internal/store TestUnnamedHolderDoesNotGuessPastAFailedRead
+nightly-windows-failure internal/store TestUnreadableHolderDirIsReportedNotSwallowed
+nightly-windows-failure internal/workspace TestARemoteURLIsReadAsGitReadsIt
+nightly-windows-failure internal/workspace TestCheckoutGitDirReadsTheDotGitEntry
+nightly-windows-failure internal/workspace TestDiscoverNeverListsAWorkingTreesDirectories
+nightly-windows-failure internal/workspace TestDiscoverReportsTheFirstErrorInWalkOrder
+nightly-windows-failure internal/workspace TestParseGeometryTakesTheOneCutThatNamesExistingDirectories
