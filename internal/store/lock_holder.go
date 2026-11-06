@@ -211,18 +211,19 @@ type lockHolderRecord struct {
 // [LAW:dataflow-not-control-flow] The sweep runs on every acquisition; an
 // empty directory is simply a sweep with nothing to retire.
 //
+// Neither failure is printed here: both go to the observer on ctx as one
+// LockRecord, and the CLI that installed it says them. [LAW:effects-at-boundaries]
+//
 // That sweep is also what demotes a failed retirement at release, the way a
 // failed publish is demoted: a record this release could not remove has lost
 // its hold, so the next acquisition proves it unheld and retires it. On
 // Windows that failure needs nothing worse than a concurrent sweep's probe
 // holding the file open, since filelock's open denies the delete right.
 func recordLockHolder(ctx context.Context, stderr io.Writer, storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
-	if err := retireDeadLockHolders(storageDir, lockPath); err != nil {
-		fmt.Fprintf(stderr, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, err)
-	}
-	releaseRecord, err := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, err)
+	retired, sweepErr := retireDeadLockHolders(storageDir, lockPath)
+	releaseRecord, publishErr := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
+	lockObserverFrom(ctx).Recorded(LockRecord{Lock: filepath.Base(lockPath), Path: lockPath, SweepRetired: retired, SweepErr: sweepErr, PublishErr: publishErr})
+	if publishErr != nil {
 		return lockRelease
 	}
 	return func() error {
@@ -557,19 +558,23 @@ func readLockHolders(storageDir, lockPath string) ([]lockHolderRecord, []string)
 
 // retireDeadLockHolders retires every record under lockPath's holder directory
 // whose holder is gone, and reads nothing else: the sweep a publisher runs,
-// which wants no account, only the directory cleared of the dead.
-func retireDeadLockHolders(storageDir, lockPath string) error {
+// which wants no account, only the directory cleared of the dead and how many
+// it retired.
+func retireDeadLockHolders(storageDir, lockPath string) (retired int, err error) {
 	dir := lockHolderDir(storageDir, lockPath)
 	names, err := holderRecordNames(dir)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	errs := make([]error, 0, len(names))
 	for _, name := range names {
-		_, probeErr := probeLockHolder(filepath.Join(dir, name))
+		live, probeErr := probeLockHolder(filepath.Join(dir, name))
+		if !live && probeErr == nil {
+			retired++
+		}
 		errs = append(errs, probeErr)
 	}
-	return errors.Join(errs...)
+	return retired, errors.Join(errs...)
 }
 
 // probeLockHolder decides whether the record at recordPath still has a live

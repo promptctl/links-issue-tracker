@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -157,7 +158,7 @@ func appendUnparseableTail(t *testing.T, path string) {
 func TestAnInvocationThatMetNoneRecordsEmptyObservations(t *testing.T) {
 	t.Parallel()
 	recorder := telemetry.Begin(telemetry.Event{})
-	invocationContext(context.Background(), recorder)
+	invocationContext(context.Background(), recorder, io.Discard)
 	line, err := telemetry.Line(recorder.Finish(telemetry.End{At: time.Now()}))
 	if err != nil {
 		t.Fatal(err)

@@ -382,15 +382,20 @@ func TestRecordingFailureLeavesTheLockUsable(t *testing.T) {
 	// so recording cannot succeed while the lock itself is untouched.
 	blockHolderDir(t, lockPath)
 
-	release, err := acquireStoreLock(context.Background(), notices, storageDirOf(lockPath), lockPath, true, 0)
+	reports := &heldReports{}
+	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), notices, storageDirOf(lockPath), lockPath, true, 0)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v, want the lock despite an unrecordable holder", err)
 	}
 	if err := release(); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if printed := notices.String(); !strings.Contains(printed, "could not record this process as the holder") {
-		t.Errorf("recording failure was not reported:\n%s", printed)
+	records := reports.recordsSnapshot()
+	if len(records) != 1 || records[0].PublishErr == nil || records[0].Lock != "test.lock" || records[0].Path != lockPath {
+		t.Errorf("records = %+v, want one for test.lock carrying the publish failure", records)
+	}
+	if printed := notices.String(); strings.Contains(printed, "could not record this process") {
+		t.Errorf("the store printed %q, want the failure only on the record the CLI says", printed)
 	}
 }
 
@@ -733,6 +738,32 @@ func TestAReusedPidPublishesPastItsPredecessorsNames(t *testing.T) {
 	}
 }
 
+// TestAnAcquisitionReportsHowManyDeadRecordsItsSweepRetired pins the count on
+// the acquisition's record: each dead holder's record the sweep retired is
+// one, and the acquirer's own record, published after the sweep, is none.
+func TestAnAcquisitionReportsHowManyDeadRecordsItsSweepRetired(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+	dir := lockHolderDir(storageDir, lockPath)
+	for i := range 3 {
+		strandDeadRecord(t, dir, fmt.Sprintf("424242-%d", i))
+	}
+
+	reports := &heldReports{}
+	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), testStderr(), storageDir, lockPath, true, 0)
+	if err != nil {
+		t.Fatalf("acquireStoreLock() error = %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	records := reports.recordsSnapshot()
+	if len(records) != 1 || records[0].SweepRetired != 3 || records[0].SweepErr != nil || records[0].PublishErr != nil {
+		t.Errorf("records = %+v, want one with SweepRetired 3 and no failure", records)
+	}
+}
+
 // TestASweepThatFailsIsReportedAndTheLockStillGranted pins the sweep's place
 // beside the publish it precedes: housekeeping on a diagnostic, so a failure
 // is loud but costs neither the lock nor this holder's own record.
@@ -746,7 +777,8 @@ func TestASweepThatFailsIsReportedAndTheLockStillGranted(t *testing.T) {
 		t.Fatalf("mkdir unprobeable record: %v", err)
 	}
 
-	release, err := acquireStoreLock(context.Background(), notices, storageDir, lockPath, true, 0)
+	reports := &heldReports{}
+	release, err := acquireStoreLock(WithLockObserver(context.Background(), reports.observer()), notices, storageDir, lockPath, true, 0)
 	if err != nil {
 		t.Fatalf("acquireStoreLock() error = %v, want the lock despite a failed sweep", err)
 	}
@@ -754,8 +786,12 @@ func TestASweepThatFailsIsReportedAndTheLockStillGranted(t *testing.T) {
 	if err := release(); err != nil {
 		t.Fatalf("release: %v", err)
 	}
-	if printed := notices.String(); !strings.Contains(printed, "could not retire the records of holders gone") || !strings.Contains(printed, "unprobeable") {
-		t.Errorf("notices = %q, want the failed sweep reported, naming the record", printed)
+	records := reports.recordsSnapshot()
+	if len(records) != 1 || records[0].SweepErr == nil || !strings.Contains(records[0].SweepErr.Error(), "unprobeable") || records[0].PublishErr != nil {
+		t.Errorf("records = %+v, want one carrying the failed sweep, naming the record, and no publish failure", records)
+	}
+	if printed := notices.String(); strings.Contains(printed, "could not retire the records") {
+		t.Errorf("the store printed %q, want the failure only on the record the CLI says", printed)
 	}
 	if named := fmt.Sprintf("pid %d ", os.Getpid()); !strings.Contains(account, named) {
 		t.Errorf("account = %q, want this holder named despite the failed sweep", account)
@@ -1124,8 +1160,9 @@ func TestWaitEndsInTheLockOnceTheQueueDrains(t *testing.T) {
 	)
 	var waits []LockWait
 	ctx := WithLockObserver(context.Background(), LockObserver{
-		Waited: func(w LockWait) { waits = append(waits, w) },
-		Held:   func(LockHold) {},
+		Waited:   func(w LockWait) { waits = append(waits, w) },
+		Held:     func(LockHold) {},
+		Recorded: func(LockRecord) {},
 	})
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 

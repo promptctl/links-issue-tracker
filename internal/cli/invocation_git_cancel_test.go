@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os/exec"
 	"strconv"
@@ -39,7 +40,7 @@ func TestInvocationRecordsACancelledGit(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	parent, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ctx := invocationContext(parent, recorder)
+	ctx := invocationContext(parent, recorder, io.Discard)
 	done := make(chan error, 1)
 	go func() {
 		_, err := gitcmd.Command(ctx, gitcmd.Spec{}, "ls-remote", url).Output()

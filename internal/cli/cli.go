@@ -63,7 +63,7 @@ func Run(ctx context.Context, inv Invocation) (err error) {
 	}()
 	// Every store lock this run takes records this run's command line as its
 	// holder, not the process's, which one process running several runs shares.
-	ctx = store.WithHolderCommand(invocationContext(ctx, recorder), strings.Join(append([]string{"lit"}, inv.Args...), " "))
+	ctx = store.WithHolderCommand(invocationContext(ctx, recorder, inv.Stderr), strings.Join(append([]string{"lit"}, inv.Args...), " "))
 	return dispatch(ctx, inv)
 }
 

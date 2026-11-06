@@ -97,12 +97,13 @@ func envInTrace(env environ.Env, recorder *telemetry.Recorder) environ.Env {
 // past a second parent or a loop. And what a rank set decided. Each key
 // starts empty so an invocation that met none says so, not nothing.
 // [LAW:nothing-unseen] [LAW:single-enforcer]
-func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
+func invocationContext(ctx context.Context, recorder *telemetry.Recorder, stderr io.Writer) context.Context {
 	event := telemetry.With(ctx, recorder)
 	telemetry.Append(event, "git.cancels")
 	telemetry.Append(event, "dolt.journal_warnings")
 	telemetry.Append(event, "lock.waits")
 	telemetry.Append(event, "lock.holds")
+	telemetry.Append(event, "lock.records")
 	telemetry.Append(event, "rank.respaces")
 	telemetry.Max(event, "rank.longest_key", 0)
 	telemetry.Count(event, "rank.ancestry_levels", 0)
@@ -113,6 +114,10 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	ctx = store.WithLockObserver(event, store.LockObserver{
 		Waited: func(wait store.LockWait) { telemetry.Append(event, "lock.waits", lockWaitValue(wait)) },
 		Held:   func(hold store.LockHold) { telemetry.Append(event, "lock.holds", lockHoldValue(hold)) },
+		Recorded: func(record store.LockRecord) {
+			telemetry.Append(event, "lock.records", lockRecordValue(record))
+			printLockRecordFailures(stderr, record)
+		},
 	})
 	met := newAncestryMet(event)
 	ctx = store.WithRankObserver(ctx, store.RankObserver{
@@ -206,6 +211,28 @@ func lockWaitValue(w store.LockWait) map[string]any {
 		"lock.wait.waited_ms":     w.Waited.Milliseconds(),
 		"lock.wait.progress_seen": w.ProgressSeen,
 		"lock.wait.outcome":       string(w.Outcome),
+	}
+}
+
+// lockRecordValue is one lock.records occurrence.
+func lockRecordValue(r store.LockRecord) map[string]any {
+	return map[string]any{
+		"lock.record.lock":          r.Lock,
+		"lock.record.sweep_retired": r.SweepRetired,
+		"lock.record.sweep_error":   telemetry.ErrorText(r.SweepErr),
+		"lock.record.publish_error": telemetry.ErrorText(r.PublishErr),
+	}
+}
+
+// printLockRecordFailures says what an acquisition's holder-record upkeep
+// could not do. Neither failure cost the lock, so each is a notice, not an
+// error.
+func printLockRecordFailures(stderr io.Writer, r store.LockRecord) {
+	if r.SweepErr != nil {
+		fmt.Fprintf(stderr, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", r.Path, r.SweepErr)
+	}
+	if r.PublishErr != nil {
+		fmt.Fprintf(stderr, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", r.Path, r.PublishErr)
 	}
 }
 
