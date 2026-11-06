@@ -153,7 +153,7 @@ func appendUnparseableTail(t *testing.T, path string) {
 }
 
 // An invocation that met nothing Dolt observes says so for each observer:
-// git.cancels and dolt.journal_warnings are [], not absent.
+// git.cancels, git.gc_failures and dolt.journal_warnings are [], not absent.
 func TestAnInvocationThatMetNoneRecordsEmptyObservations(t *testing.T) {
 	t.Parallel()
 	recorder := telemetry.Begin(telemetry.Event{})
@@ -168,7 +168,7 @@ func TestAnInvocationThatMetNoneRecordsEmptyObservations(t *testing.T) {
 	if err := json.Unmarshal(line, &ev); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"git.cancels", "dolt.journal_warnings"} {
+	for _, key := range []string{"git.cancels", "git.gc_failures", "dolt.journal_warnings"} {
 		if got := string(ev.Occurrences[key]); got != "[]" {
 			t.Errorf("%s = %q, want []", key, got)
 		}

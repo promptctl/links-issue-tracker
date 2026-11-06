@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
+	"github.com/dolthub/dolt/go/store/blobstore"
 	"github.com/dolthub/dolt/go/store/nbs"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -84,13 +85,14 @@ func envInTrace(env environ.Env, recorder *telemetry.Recorder) environ.Env {
 // open event, and the observers that put Dolt's own facts on that event,
 // which reach lit only as text through the SQL driver, while the context
 // reaches the work Dolt does under it. One puts on the event every git run
-// its context ended, Dolt's git included. The other puts there every
+// its context ended, Dolt's git included. A second puts there every gc a
+// git-remote store's close ran that failed. A third puts there every
 // recoverable journal problem a store opened under it reported, such as an
 // index a read open passed over to read the whole journal, in place of the
-// logrus line on stderr Dolt writes by default. A third puts there the store's
+// logrus line on stderr Dolt writes by default. A fourth puts there the store's
 // lock waits and LOCK holds: every acquisition that found its lock held, and
 // every write engine's hold of Dolt's LOCK with what it told the writers
-// behind it. A fourth puts there what a write that stood did to rank keys: each
+// behind it. A fifth puts there what a write that stood did to rank keys: each
 // respace, and the longest key written, and what reads paid to learn tree order:
 // the queries of parent edges they ran and the edges those returned, the
 // deepest chain an ancestry built from them held, and every child it placed
@@ -100,6 +102,7 @@ func envInTrace(env environ.Env, recorder *telemetry.Recorder) environ.Env {
 func invocationContext(ctx context.Context, recorder *telemetry.Recorder) context.Context {
 	event := telemetry.With(ctx, recorder)
 	telemetry.Append(event, "git.cancels")
+	telemetry.Append(event, "git.gc_failures")
 	telemetry.Append(event, "dolt.journal_warnings")
 	telemetry.Append(event, "lock.waits")
 	telemetry.Append(event, "lock.holds")
@@ -135,6 +138,9 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 	})
 	ctx = nbs.WithJournalWarningObserver(ctx, func(warning nbs.JournalWarning) {
 		telemetry.Append(event, "dolt.journal_warnings", journalWarningValue(warning))
+	})
+	ctx = blobstore.WithGCFailureObserver(ctx, func(failure blobstore.GCFailure) {
+		telemetry.Append(event, "git.gc_failures", gcFailureValue(failure))
 	})
 	return gitcmd.WithObserver(ctx, func(cancelled *gitcmd.Cancelled) {
 		telemetry.Append(event, "git.cancels", gitCancelValue(cancelled))
@@ -253,6 +259,17 @@ func gitCancelValue(c *gitcmd.Cancelled) map[string]any {
 		"git.cancel.survivors":  c.Kill.Survivors,
 		"git.cancel.kill_error": telemetry.ErrorText(c.Kill.Err),
 		"git.cancel.output_cut": c.OutputCut,
+	}
+}
+
+// gcFailureValue is one git.gc_failures occurrence: the git-remote mirror a
+// store close ran gc in, and how that gc failed.
+func gcFailureValue(f blobstore.GCFailure) map[string]any {
+	return map[string]any{
+		"git.gc_failure.mirror":    f.Mirror,
+		"git.gc_failure.exit_code": f.ExitCode,
+		"git.gc_failure.output":    f.Output,
+		"git.gc_failure.error":     telemetry.ErrorText(f.Err),
 	}
 }
 
