@@ -167,12 +167,17 @@ the state the settle ended in.
 
 A push at the remote's own schema lands. A push is judged against R alone
 unless it raises the remote: with H ≤ R, no verdict compares H or R to the
-binary that pushes. The open admitted the writes the head carries, and the
-write it admits is the model's update of the columns this binary names,
-which leaves the columns a newer schema added as it found them; so a head at
-R carries R's columns intact, and pushing it regresses nothing. Whether a
-binary may write at a schema above its own is the open's judgement, made
-once; the push does not make it again under a stricter rule. The ceiling is
+binary that pushes. The open admitted the writes the head carries, under the
+store's minimum writer schema: the model's writes name this binary's
+columns, an update leaves the columns a newer schema added as it found them,
+and a write that re-creates one row (a new row, a single-valued relation
+edge) fills only the columns it knows, which is the case a migration whose
+column an older writer must fill declares the minimum writer schema for
+(`internal/store/migrations/README.md`); so a head at R carries what the
+open's rule admits, and pushing it regresses nothing that rule did not
+already allow. Whether a binary may write at a schema above its own is the
+open's judgement, made once; the push does not make it again under a
+stricter rule. The ceiling is
 the second condition on a raise, as rule 2 states it, and judges nothing
 else: a head at or below R sends no schema the remote does not already hold,
 since R reached the remote by a release's push and sits at or below its own
@@ -181,11 +186,12 @@ where a push at R above the hold lands; the guarantee was already scoped to
 binaries that read the row.) An unheld head below R is the lowering verdict's
 to refuse.
 
-The open's admission covers the model's write and no other. A write that
-re-creates rows from this binary's columns, a delete and an insert and never
-an update, resets the columns a newer schema added to their defaults on every
-row it touches: a regression within R's schema that no comparison of H to R
-would see, so it is refused where it writes, never at the push. The
+The open's admission covers the model's writes and no other. A write that
+re-creates rows wholesale from this binary's columns, a delete and an insert
+of every row it touches, resets the columns a newer schema added to their
+defaults on rows no one changed: a regression within R's schema that no
+comparison of H to R would see and no migration's declaration foresees, so
+it is refused where it writes, never at the push. The
 reconcile's replay is such a write, re-creating every row a folded commit
 changed, and the reconcile refuses a head whose schema is above this
 binary's (`RemoteSchemaAheadError`) before any write, on its captured read of

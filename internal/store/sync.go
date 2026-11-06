@@ -1308,7 +1308,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 // a branch this checkout holds no head of: with no R there is nothing a force
 // may replace, and a plain push creates a branch the remote lacks. A bare
 // `--force` would skip Dolt's fast-forward check and overwrite a head the
-// verdicts never read: a schema-ahead head regressed, a held one re-raised.
+// verdicts never read: an unheld lowering landed, a held head re-raised.
 // [LAW:single-enforcer] the one leased push, with its one stale classifier,
 // serves the history bound's re-root and `lit sync push --force` alike.
 func (s *Store) pushForcedWithinLock(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool) (storage.SyncPushResult, error) {

@@ -20,10 +20,12 @@ import (
 // UPDATE), so onto that head it would reset the columns the newer schema added
 // to their defaults on every row it touched: a regression within the remote's
 // schema, which no comparison of the sent head's schema to the remote's would
-// see. The open's admission of a write at that schema does not carry here,
-// because the write the open admits is the model's column-named UPDATE, which
-// leaves the columns it does not name as they were; a push of a head written
-// that way lands at the remote's schema and runs no such refusal
+// see. The open's admission of a write at that schema does not carry here:
+// the open admits the model's writes under the store's minimum writer schema,
+// which a migration declares for the columns an older writer must fill, and a
+// replay that re-creates every row a folded commit changed resets columns on
+// rows no declaration foresaw; a push of a head the open admitted lands at
+// the remote's schema and runs no such refusal
 // (design-docs/schema-reversibility.md, "A push at the remote's own schema
 // lands"). The lossless fix is a binary whose schema support reaches the
 // remote's version, so the error states that requirement and routes to `lit
