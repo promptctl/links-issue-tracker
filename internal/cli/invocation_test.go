@@ -2,8 +2,6 @@ package cli
 
 import (
 	"context"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"io"
 	"os"
 	"path/filepath"
@@ -16,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -81,11 +80,7 @@ func runEnv(t testing.TB) environ.Env {
 // this tree's own highest migration, so the suite exercises every migration
 // the tree carries. A test that sets entries of its own reads runEnv instead.
 func testEnv() environ.Env {
-	max, err := migrations.MaxVersion()
-	if err != nil {
-		panic("read the migration registry: " + err.Error())
-	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
+	return suiteenv.Of(os.Environ())
 }
 
 // A literal that leaves Env out holds the zero Env. Run refuses it, where the

@@ -2,14 +2,13 @@ package engine
 
 import (
 	"context"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestOpenRejectsUnknownMode pins that an unrecognized mode — including the
@@ -63,9 +62,5 @@ func TestEveryModeHasAnOpener(t *testing.T) {
 // Its released-schema ceiling is this tree's own highest migration, so the
 // suite exercises every migration the tree carries.
 func testEnv() environ.Env {
-	max, err := migrations.MaxVersion()
-	if err != nil {
-		panic("read the migration registry: " + err.Error())
-	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
+	return suiteenv.Of(os.Environ())
 }

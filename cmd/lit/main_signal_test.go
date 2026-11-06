@@ -8,8 +8,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"net"
 	"os"
 	"os/exec"
@@ -24,7 +22,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/trace"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -633,9 +633,5 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 // Its released-schema ceiling is this tree's own highest migration, so the
 // suite exercises every migration the tree carries.
 func testEnv() environ.Env {
-	max, err := migrations.MaxVersion()
-	if err != nil {
-		panic("read the migration registry: " + err.Error())
-	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
+	return suiteenv.Of(os.Environ())
 }
