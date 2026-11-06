@@ -464,12 +464,12 @@ func WithIssueFieldsOf(dst, src model.Issue) model.Issue {
 	return dst
 }
 
-// ProjectIssueFields is the field axis of a patch, projected: the post-patch
+// projectIssueFields is the field axis of a patch, projected: the post-patch
 // issue and one change row per field that actually moved, with no title or
 // lane refused. Pure, as ApplyIssueFields is; it is the part of that decision
 // that says what a write would store, for a caller weighing a value rather
 // than writing one (MergeReadOut).
-func ProjectIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, []model.FieldChange, error) {
+func projectIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, []model.FieldChange, error) {
 	// Encoded eagerly, so a prior is a snapshot of the value rather than a
 	// view onto data the projection is about to replace.
 	priors := make([]string, len(issueFields))
@@ -509,7 +509,7 @@ func ProjectIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue,
 // that disagreement as engine divergence rather than as the duplicated logic
 // it is. [LAW:effects-at-boundaries] [LAW:one-source-of-truth]
 func ApplyIssueFields(baseline model.Issue, in UpdateIssueInput) (model.Issue, []model.FieldChange, error) {
-	issue, changes, err := ProjectIssueFields(baseline, in)
+	issue, changes, err := projectIssueFields(baseline, in)
 	if err != nil {
 		return model.Issue{}, nil, err
 	}

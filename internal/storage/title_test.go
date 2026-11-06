@@ -63,8 +63,8 @@ func TestParseLane(t *testing.T) {
 }
 
 // A title or lane is admitted only when the patch moves it: over a stored
-// title no parser admits, restating it and writing another field land, the
-// projection never refuses, and moving it onto a new break is refused.
+// title no parser admits, restating it and writing another field land, and
+// moving it onto a new break of any kind is refused.
 func TestApplyIssueFieldsAdmitsOnlyAMovingTitleOrLane(t *testing.T) {
 	stored := model.Issue{ID: "lit-x-1", Title: "two\nlines", Lane: "a\rlane", IssueType: model.TypeTask}
 	restated, lane, description := stored.Title, stored.Lane, "described"
@@ -74,11 +74,9 @@ func TestApplyIssueFieldsAdmitsOnlyAMovingTitleOrLane(t *testing.T) {
 	for _, patch := range []storage.UpdateIssueInput{
 		{Title: textOf("new\nbreak")},
 		{Title: textOf("  ")},
+		{Title: textOf("line\u2028separated")},
 		{Lane: textOf("new\nlane")},
 	} {
-		if _, _, err := storage.ProjectIssueFields(stored, patch); err != nil {
-			t.Errorf("ProjectIssueFields(%+v) error = %v, want none: projection refuses no title or lane", patch, err)
-		}
 		_, _, err := storage.ApplyIssueFields(stored, patch)
 		if _, isValidation := err.(model.ValidationError); !isValidation {
 			t.Errorf("ApplyIssueFields(%+v) error = %v, want a ValidationError", patch, err)

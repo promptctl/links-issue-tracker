@@ -462,7 +462,7 @@ func followupLeaf() appLeaf {
 	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top] [--by <name>]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		onID := strings.TrimSpace(*on)
-		if onID == "" {
+		if onID == "" || strings.TrimSpace(*title) == "" {
 			return UsageError{Message: usage}
 		}
 		titleValue, err := storage.ParseTitle(*title)

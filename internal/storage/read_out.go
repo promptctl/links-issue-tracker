@@ -130,7 +130,7 @@ func (m *documentMerge) fields(i int, doc *BulkIssueSpec, basis map[string]strin
 	issue, standing := m.now.Issues[doc.ID]
 	var file map[string]string
 	if standing {
-		applied, _, err := ProjectIssueFields(issue, patch)
+		applied, _, err := projectIssueFields(issue, patch)
 		if err != nil {
 			return fmt.Errorf("bulk: doc %d (id %q): %w", i, doc.ID, err)
 		}
