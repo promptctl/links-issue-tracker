@@ -78,7 +78,7 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 		return nil, err
 	}
 	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
-	bootstrap, err := ensureDoltDatabase(ctx, stderr, doltRootDir, workspaceID)
+	bootstrap, err := ensureDoltDatabase(ctx, env, stderr, doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
 	}

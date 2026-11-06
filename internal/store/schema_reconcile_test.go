@@ -1499,7 +1499,7 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	if _, err := EnsureDatabase(ctx, testStderr(), doltRoot, "test-workspace-id"); err != nil {
+	if _, err := EnsureDatabase(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
 	seed, err := openStoreConnection(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id", engineWrite)

@@ -187,7 +187,14 @@ var doltWorkspaceMachinery = map[string][]string{
 	// live store counts toward that run, and it has no engine to ask, so the
 	// records are addressed by path beside ReceivedRefsPath. The tests reach
 	// the two paths to plant a record or to make one unwritable.
+	//
+	// A clone's git mirrors live outside its tree, under the mirror root
+	// (MirrorRootOf, MirrorRootEnvVar, MirrorBase), so the take seeds them
+	// (SeedCloneMirrors), sweeps a dead clone's (SweepMirrorBasesUnder) and the
+	// removal takes them with the clone (RemoveCloneMirrors).
 	"mirror clone and push": {
+		"MirrorRootOf", "MirrorRootEnvVar", "MirrorBase",
+		"SeedCloneMirrors", "SweepMirrorBasesUnder", "RemoveCloneMirrors",
 		"MirrorHoldBudget", "MirrorPushDeadline", "MirrorPushCancelLagObserved", "HistoryBoundDeadline",
 		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
 		"ReceiveDeadline", "ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",

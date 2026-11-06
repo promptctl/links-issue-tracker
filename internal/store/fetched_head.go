@@ -191,7 +191,11 @@ func LandFetchedHead(ctx context.Context, env environ.Env, stderr io.Writer, dol
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan := planRemoteCacheLanding(ctx, env, remoteCacheBaseAt(root), remoteCacheBaseAt(clone.root), remote)
+	mirrorRoot, err := MirrorRootOf(env)
+	if err != nil {
+		return LandedFetch{}, err
+	}
+	cachePlan := planRemoteCacheLanding(ctx, env, mirrorBaseOf(mirrorRoot, root), MirrorBase(mirrorRoot, clone.root), remote)
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, stderr, root)
 	if err != nil {
@@ -581,12 +585,6 @@ func openCloneChunkStore(ctx context.Context, cloneRoot string) (*doltdb.DoltDB,
 	return ddb, nil
 }
 
-// remoteCacheBaseAt is the git-remote-cache directory of the Dolt root at
-// root — Store.remoteCacheBase for a root with no Store open on it.
-func remoteCacheBaseAt(root string) string {
-	return filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
-}
-
 // remoteCacheLanding is what a fetch on the clone changed in its mirrors of the
 // remote, to be copied into the live store's mirrors. A clone starts with a
 // copy of the live mirrors, so without this the live mirror would never learn
@@ -603,7 +601,10 @@ type remoteCacheLanding struct {
 	unplanned error
 }
 
-type mirrorMove struct{ from, to, liveBase string }
+type mirrorMove struct {
+	from, to string
+	liveBase mirrorBaseEntry
+}
 
 type mirrorCopy struct {
 	liveRepo, cloneRepo string
@@ -636,19 +637,20 @@ type mirrorCopy struct {
 // same value costs nothing under the hold. A mirror that cannot be listed is
 // reported by the plan's apply and skipped, so a plan that is not carried out
 // reports nothing.
-func planRemoteCacheLanding(ctx context.Context, env environ.Env, liveBase string, cloneBase string, remote storage.RemoteName) remoteCacheLanding {
+func planRemoteCacheLanding(ctx context.Context, env environ.Env, live mirrorBaseEntry, cloneBase string, remote storage.RemoteName) remoteCacheLanding {
 	fetched := lastKnownRefNamespace + remote.String() + "/"
 	keys, err := listRemoteCacheKeys(cloneBase)
 	if err != nil {
 		return remoteCacheLanding{unplanned: err}
 	}
+	liveBase := live.dir
 	var plan remoteCacheLanding
 	var errs []error
 	for _, key := range keys {
 		cloneRepo := filepath.Join(cloneBase, key, "repo.git")
 		liveRepo := filepath.Join(liveBase, key, "repo.git")
 		if _, err := os.Stat(liveRepo); errors.Is(err, fs.ErrNotExist) {
-			plan.moves = append(plan.moves, mirrorMove{from: filepath.Join(cloneBase, key), to: filepath.Join(liveBase, key), liveBase: liveBase})
+			plan.moves = append(plan.moves, mirrorMove{from: filepath.Join(cloneBase, key), to: filepath.Join(liveBase, key), liveBase: live})
 			continue
 		} else if err != nil {
 			errs = append(errs, fmt.Errorf("stat the live mirror %s: %w", key, err))
@@ -696,8 +698,8 @@ func (p remoteCacheLanding) landedBy(record FetchedHeadRecord) remoteCacheLandin
 func (p remoteCacheLanding) apply(ctx context.Context, env environ.Env) error {
 	errs := []error{p.unplanned}
 	for _, m := range p.moves {
-		if err := os.MkdirAll(m.liveBase, 0o755); err != nil {
-			errs = append(errs, fmt.Errorf("create %s: %w", m.liveBase, err))
+		if err := m.liveBase.ensure(); err != nil {
+			errs = append(errs, err)
 			continue
 		}
 		if err := os.Rename(m.from, m.to); err != nil {

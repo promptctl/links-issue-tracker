@@ -240,7 +240,10 @@ func TestValidateDoltRootDirCleansPath(t *testing.T) {
 	if _, err := validateDoltRootDir("   "); err == nil {
 		t.Error("empty path must be rejected")
 	}
-	withSep := filepath.Join("foo", "dolt") + string(filepath.Separator)
+	if _, err := validateDoltRootDir(filepath.Join("foo", "dolt")); err == nil {
+		t.Error("a relative path must be rejected")
+	}
+	withSep := filepath.Join(t.TempDir(), "foo", "dolt") + string(filepath.Separator)
 	got, err := validateDoltRootDir(withSep)
 	if err != nil {
 		t.Fatalf("validateDoltRootDir: %v", err)

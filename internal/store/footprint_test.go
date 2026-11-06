@@ -126,13 +126,14 @@ func TestMeasureFootprintReadsEveryPart(t *testing.T) {
 	write(filepath.Join(nomsDir(doltRoot), "journal"), 100)
 	write(filepath.Join(nomsDir(doltRoot), oldGenDirName, "a"+archiveFileExt), 50)
 	write(filepath.Join(TempTableFilesDir(doltRoot), tempTableFilePrefix+"1"), 7)
-	write(filepath.Join(remoteCacheBaseFor(doltRoot), "k", "repo.git", "pack"), 1000)
+	mirrorBase := t.TempDir()
+	write(filepath.Join(mirrorBase, "k", "repo.git", "pack"), 1000)
 	write(filepath.Join(snapshotsDir, "2000-"+migrationSnapshotLabel+"-2000", "f"), 30)
 	write(filepath.Join(snapshotsDir, "3000-"+reconcileSnapshotLabel+"-3000", "f"), 20)
 	write(filepath.Join(snapshotsDir, "1000-mine", "f"), 5)
 	write(filepath.Join(snapshotsDir, ".take-in-flight", "f"), 3)
 
-	f, err := measureFootprint(doltRoot)
+	f, err := measureFootprint(doltRoot, mirrorBase)
 	if err != nil {
 		t.Fatalf("measureFootprint() error = %v", err)
 	}
@@ -164,7 +165,7 @@ func TestMeasureFootprintReadsEveryPart(t *testing.T) {
 // cache) still read as 0 when absent.
 func TestMeasureFootprintOfAnAbsentStoreFails(t *testing.T) {
 	t.Parallel()
-	_, err := measureFootprint(filepath.Join(t.TempDir(), "dolt"))
+	_, err := measureFootprint(filepath.Join(t.TempDir(), "dolt"), t.TempDir())
 	if !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "chunk store") {
 		t.Fatalf("measureFootprint() on an absent store error = %v, want the chunk store's absence", err)
 	}

@@ -104,6 +104,41 @@ func (e Env) HomeDir() (string, error) {
 	return "", errors.New(spelled + " is not defined")
 }
 
+// UserCacheDir is the user's cache directory, resolved as os.UserCacheDir
+// resolves it on this GOOS.
+func (e Env) UserCacheDir() (string, error) {
+	switch e.goos {
+	case "windows":
+		if dir := e.Get("LocalAppData"); dir != "" {
+			return dir, nil
+		}
+		return "", errors.New("%LocalAppData% is not defined")
+	case "darwin", "ios":
+		home, err := e.HomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, "Library", "Caches"), nil
+	case "plan9":
+		home, err := e.HomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(home, "lib", "cache"), nil
+	}
+	if dir := e.Get("XDG_CACHE_HOME"); dir != "" {
+		if !filepath.IsAbs(dir) {
+			return "", errors.New("path in $XDG_CACHE_HOME is relative")
+		}
+		return dir, nil
+	}
+	home, err := e.HomeDir()
+	if err != nil {
+		return "", errors.New("neither $XDG_CACHE_HOME nor $HOME are defined")
+	}
+	return filepath.Join(home, ".cache"), nil
+}
+
 // Without is the environment with every entry for the named keys removed.
 func (e Env) Without(keys ...string) Env {
 	kept := make([]string, 0, len(e.vars))

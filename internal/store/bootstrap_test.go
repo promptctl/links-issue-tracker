@@ -43,7 +43,7 @@ func TestHelperBootstrapRacer(t *testing.T) {
 	if _, _, err := LocalHasTickets(ctx, testEnv(), testStderr(), root, "test-workspace-id"); err != nil {
 		t.Fatalf("LocalHasTickets() error = %v", err)
 	}
-	bootstrap, err := EnsureDatabase(ctx, testStderr(), root, "test-workspace-id")
+	bootstrap, err := EnsureDatabase(ctx, testEnv(), testStderr(), root, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
@@ -220,7 +220,7 @@ func TestARacersContextEndsItsWaitNamingTheBuilder(t *testing.T) {
 func TestAnExistingStoresOpensPassABootstrapLockHolder(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "dolt")
-	if _, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id"); err != nil {
+	if _, err := EnsureDatabase(context.Background(), testEnv(), testStderr(), root, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() = %v", err)
 	}
 	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
@@ -234,7 +234,7 @@ func TestAnExistingStoresOpensPassABootstrapLockHolder(t *testing.T) {
 	})
 	for name, open := range map[string]func(context.Context) error{
 		"EnsureDatabase": func(ctx context.Context) error {
-			bootstrap, err := EnsureDatabase(ctx, testStderr(), root, "test-workspace-id")
+			bootstrap, err := EnsureDatabase(ctx, testEnv(), testStderr(), root, "test-workspace-id")
 			if err == nil && bootstrap != storage.BootstrapNone {
 				return fmt.Errorf("bootstrap = %v, want %v", bootstrap, storage.BootstrapNone)
 			}
@@ -287,7 +287,7 @@ func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "repo_state.json"), []byte("half-written"), 0o644); err != nil {
 			t.Fatalf("WriteFile() = %v", err)
 		}
-		bootstrap, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
+		bootstrap, err := EnsureDatabase(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
 		if err != nil || bootstrap != storage.BootstrapBuiltOverDeadBuild {
 			t.Fatalf("EnsureDatabase() over %s = %v, %v; want %v", dir, bootstrap, err, storage.BootstrapBuiltOverDeadBuild)
 		}
@@ -352,7 +352,7 @@ func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
 			tc.place(t, standing)
 			for open, run := range map[string]func() error{
 				"EnsureDatabase": func() error {
-					_, err := EnsureDatabase(context.Background(), testStderr(), root, "test-workspace-id")
+					_, err := EnsureDatabase(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
 					return err
 				},
 				"Open": func() error {
@@ -394,7 +394,7 @@ func TestBootstrapBuildsIntoARootThatHoldsNoDatabase(t *testing.T) {
 				t.Fatalf("WriteFile() = %v", err)
 			}
 		}
-		bootstrap, err := EnsureDatabase(ctx, testStderr(), root, "test-workspace-id")
+		bootstrap, err := EnsureDatabase(ctx, testEnv(), testStderr(), root, "test-workspace-id")
 		if err != nil || bootstrap != storage.BootstrapBuilt {
 			t.Fatalf("EnsureDatabase(root holding %q) = %v, %v; want %v", stray, bootstrap, err, storage.BootstrapBuilt)
 		}
@@ -426,7 +426,7 @@ func TestBootstrapForgetsReceivedRefsOnlyWhenItBuilds(t *testing.T) {
 		if err := WriteReceivedRefs(root, record); err != nil {
 			t.Fatalf("WriteReceivedRefs() = %v", err)
 		}
-		bootstrap, err := EnsureDatabase(ctx, testStderr(), root, "test-workspace-id")
+		bootstrap, err := EnsureDatabase(ctx, testEnv(), testStderr(), root, "test-workspace-id")
 		if err != nil || bootstrap != want {
 			t.Fatalf("EnsureDatabase() = %v, %v; want %v", bootstrap, err, want)
 		}

@@ -187,14 +187,15 @@ func gitCacheRootFor(doltRootDir string) string {
 	return filepath.Join(doltRootDir, doltDatabaseName)
 }
 
-// remoteCacheBase is where dbfactory keeps this store's mirrors.
+// remoteCacheBase is where dbfactory keeps this store's mirrors (MirrorBase).
 func (s *Store) remoteCacheBase() string {
-	return remoteCacheBaseFor(s.doltRootDir)
+	return s.mirrorBase
 }
 
-// remoteCacheBaseFor is where dbfactory keeps the mirrors of the store rooted
-// at doltRootDir.
-func remoteCacheBaseFor(doltRootDir string) string {
+// legacyRemoteCacheBase is where dbfactory kept the mirrors of the store
+// rooted at doltRootDir before they moved to its MirrorBase. Nothing writes
+// there now; the prune removes what an older lit left.
+func legacyRemoteCacheBase(doltRootDir string) string {
 	return filepath.Join(gitCacheRootFor(doltRootDir), dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 
@@ -343,14 +344,49 @@ func (s *Store) readAbandonedMirrors(ctx context.Context, base string) ([]string
 // lost commit: the store's own data lives in `.dolt/noms`, which this never
 // touches. That is why the prune reports rather than fails; it cannot damage
 // anything a push has not already made durable on the remote.
+//
+// The same pass removes what no open reaches by construction: the
+// in-repository cache an older lit kept (legacyRemoteCacheBase), and the bases
+// of repositories that were deleted (sweepOrphanedMirrorBases).
 func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 	base := s.remoteCacheBase()
 	read := func() ([]string, error) { return s.readAbandonedMirrors(ctx, base) }
-	abandoned, err := read()
-	if err != nil {
-		return remoteCachePruneOutcome{Problem: err.Error()}
+	var outcome remoteCachePruneOutcome
+	if abandoned, err := read(); err != nil {
+		outcome.Problem = err.Error()
+	} else {
+		outcome = collectAbandonedMirrors(base, abandoned, read)
 	}
-	return collectAbandonedMirrors(base, abandoned, read)
+	return joinPruneOutcomes(outcome, collectLegacyRemoteCache(s.doltRootDir), sweepOrphanedMirrorBases(s.mirrorRoot))
+}
+
+// collectLegacyRemoteCache removes the in-repository cache an older lit kept
+// for the store rooted at doltRootDir, counted as one mirror set removed.
+func collectLegacyRemoteCache(doltRootDir string) remoteCachePruneOutcome {
+	freed, removed, err := removeTreeCounting(legacyRemoteCacheBase(doltRootDir))
+	outcome := remoteCachePruneOutcome{Reclaimed: freed}
+	if err != nil {
+		outcome.Problem = fmt.Sprintf("remove the in-repository git remote cache: %v", err)
+	} else if removed {
+		outcome.Removed = 1
+	}
+	return outcome
+}
+
+// joinPruneOutcomes is the one outcome of several collections run in one
+// prune: their counts summed and their problems joined in order.
+func joinPruneOutcomes(outcomes ...remoteCachePruneOutcome) remoteCachePruneOutcome {
+	var joined remoteCachePruneOutcome
+	var problems []string
+	for _, o := range outcomes {
+		joined.Removed += o.Removed
+		joined.Reclaimed += o.Reclaimed
+		if o.Problem != "" {
+			problems = append(problems, o.Problem)
+		}
+	}
+	joined.Problem = strings.Join(problems, "; ")
+	return joined
 }
 
 // collectAbandonedMirrors removes the abandoned mirrors under base, reading the

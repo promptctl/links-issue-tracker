@@ -62,7 +62,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	if err != nil || observed.record() == nil {
 		t.Fatalf("askRemote() = %+v, %v; want the remote's advertisement", observed, err)
 	}
-	clone, err := takeReceiveClone(ctx, testStderr(t), ws)
+	clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}

@@ -226,6 +226,8 @@ func (c *Connector) openEngineWithRetry(ctx context.Context) (*engine.SqlEngine,
 		IsReadOnly: false,
 		ServerUser: "root",
 		Autocommit: true,
+
+		GitCacheBaseFor: c.cfg.GitCacheBaseFor,
 	}
 
 	// For deterministic retries on lock contention. A non-nil BackOff implies both

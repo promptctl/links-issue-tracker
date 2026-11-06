@@ -207,7 +207,7 @@ func TestAPushAboveTheRemotesHoldSendsNothing(t *testing.T) {
 	if got := headAt(t, ctx, producer); got != heldHead {
 		t.Fatalf("producer head moved to %s, want %s", got, heldHead)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused push = %v", err)
 	}
 	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != heldHead {
@@ -252,7 +252,7 @@ func TestALeasedPushAboveTheRemotesHoldSendsNothing(t *testing.T) {
 	if want := (SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: max, Ceiling: holdBy("origin/master's head", max-1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused lease = %v", err)
 	}
 	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != heldHead {
@@ -301,7 +301,7 @@ func TestASyncAgainstAHeldRemoteStopsAtTheLift(t *testing.T) {
 	if want := fmt.Sprintf("lift the remote head %q to current schema", heldHead); !strings.Contains(errors.Unwrap(refused).Error(), want) {
 		t.Errorf("refusal's cause %q does not name the read it stopped at, want %q", errors.Unwrap(refused), want)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused reconcile = %v", err)
 	}
 	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != heldHead {
@@ -594,7 +594,7 @@ func TestAnUnheldLoweringPushSendsNothingAndAHeldOneLands(t *testing.T) {
 	if want := (SchemaLoweringRequiresHoldError{Remote: "origin", Branch: "master", RemoteSchema: max, CommitSchema: max - 1}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused push = %v", err)
 	}
 	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != remoteHead {
@@ -611,7 +611,7 @@ func TestAnUnheldLoweringPushSendsNothingAndAHeldOneLands(t *testing.T) {
 	if _, err := st.SyncPush(ctx, origin, "master", false, false); err != nil {
 		t.Fatalf("SyncPush of the held head = %v", err)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone-held"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone-held"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the held push = %v", err)
 	}
 	if got, want := headAt(t, ctx, filepath.Join(base, "clone-held")), headCommit(t, ctx, st); got != want {
@@ -771,7 +771,7 @@ func TestADivergedRemoteLoweringPulledAndRunAgainLandsAHeldHead(t *testing.T) {
 	}
 
 	verify := filepath.Join(base, "verify")
-	if err := AdoptRemoteByClone(ctx, testStderr(), verify, "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), verify, "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the held push = %v", err)
 	}
 	if got, want := headAt(t, ctx, verify), headCommit(t, ctx, a); got != want {

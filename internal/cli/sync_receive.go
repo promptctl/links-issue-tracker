@@ -362,7 +362,7 @@ func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws work
 // is a could-not-attempt failure; a receive that ran and failed is in the
 // outcome, its trace already written.
 func receiveAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, observed remoteAdvertisement) (syncReceiveOutcome, error) {
-	clone, err := takeReceiveClone(ctx, stderr, ws)
+	clone, err := takeReceiveClone(ctx, stderr, env, ws)
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}

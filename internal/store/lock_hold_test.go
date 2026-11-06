@@ -488,7 +488,7 @@ func TestAWaitWhoseAttemptFailedReportsFailed(t *testing.T) {
 func TestABootstrapEnginesHoldIsReported(t *testing.T) {
 	reports := &heldReports{}
 	ctx := WithLockObserver(context.Background(), reports.observer())
-	if err := buildDoltRoot(ctx, testStderr(), filepath.Join(t.TempDir(), "staging"), "test-workspace-id"); err != nil {
+	if err := buildDoltRoot(ctx, testEnv(), testStderr(), filepath.Join(t.TempDir(), "staging"), "test-workspace-id"); err != nil {
 		t.Fatalf("buildDoltRoot() error = %v", err)
 	}
 	if holds, _ := reports.snapshot(); len(holds) != 2 {

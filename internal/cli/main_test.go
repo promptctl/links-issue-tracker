@@ -78,6 +78,7 @@ func TestMain(m *testing.M) {
 		{"XDG_STATE_HOME", "lit-cli-state-"},
 		{"XDG_CONFIG_HOME", "lit-cli-config-"},
 		{"DOLT_ROOT_PATH", "lit-cli-dolt-"},
+		{store.MirrorRootEnvVar, "lit-cli-mirrors-"},
 	} {
 		dir, err := os.MkdirTemp("", home.prefix)
 		if err != nil {

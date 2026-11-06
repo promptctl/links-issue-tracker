@@ -84,7 +84,7 @@ func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot string) {
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
-	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", newLockHold(context.Background(), testStderr(), doltRoot, engineWrite, &longPhase{}))
+	bootstrap, err := openDoltPool(testEnv(), doltRoot, "test-workspace-id", "", newLockHold(context.Background(), testStderr(), doltRoot, engineWrite, &longPhase{}))
 	if err != nil {
 		t.Fatalf("openDoltPool() bootstrap error = %v", err)
 	}
@@ -170,7 +170,7 @@ func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 	// EnsureDatabase over a pre-existing database is a no-op — branch
 	// normalization is owned by write opens, so a pre-made main-branch store
 	// stays on main here...
-	if _, err := EnsureDatabase(ctx, testStderr(), doltRoot, "test-workspace-id"); err != nil {
+	if _, err := EnsureDatabase(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
 	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch == "master" {

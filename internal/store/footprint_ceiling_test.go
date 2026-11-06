@@ -65,7 +65,7 @@ func divergeAndReconcile(t *testing.T, ctx context.Context, rounds int) (rootA, 
 // measureOrFatal reads a store's footprint the way MaintainIfDue does.
 func measureOrFatal(t *testing.T, doltRoot string) footprint {
 	t.Helper()
-	f, err := measureFootprint(doltRoot)
+	f, err := measureFootprint(doltRoot, MirrorBase(testMirrorRoot, doltRoot))
 	if err != nil {
 		t.Fatalf("measureFootprint(%s): %v", doltRoot, err)
 	}
@@ -222,7 +222,7 @@ func TestDoctorReportsAnUnreadableFootprintAndStillChecks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openFreshWorkspace(t)
-	sealed := filepath.Join(remoteCacheBaseFor(st.doltRootDir), "sealed")
+	sealed := filepath.Join(st.remoteCacheBase(), "sealed")
 	if err := os.MkdirAll(sealed, 0o755); err != nil {
 		t.Fatalf("make the sealed cache dir: %v", err)
 	}

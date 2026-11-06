@@ -152,7 +152,7 @@ func adoptRemoteTicketsBlocking(ctx context.Context, stderr io.Writer, env envir
 	// each blob once. The probe connection is closed; AdoptRemoteByClone takes
 	// the exclusive workspace hold and swaps the Dolt directory in place.
 	// [LAW:decomposition] adopt is a clone, not a fetch.
-	if err := store.AdoptRemoteByClone(ctx, stderr, ws.DatabasePath, ws.WorkspaceID, plan.remote, plan.url, plan.branch); err != nil {
+	if err := store.AdoptRemoteByClone(ctx, env, stderr, ws.DatabasePath, ws.WorkspaceID, plan.remote, plan.url, plan.branch); err != nil {
 		// The remote DID carry data (we checked before cloning), so an empty
 		// store here is a hazard, not a benign result: surface it loudly and name
 		// the refs/dolt/* data we could not adopt so the operator knows not to

@@ -81,6 +81,11 @@ type Config struct {
 	// opening read-only past it otherwise.
 	JournalReadOnly bool
 
+	// GitCacheBaseFor, when set, names the directory a database's git remote
+	// caches live in, given the database's root (dolt's
+	// engine.SqlEngineConfig.GitCacheBaseFor). Nil keeps them under the root.
+	GitCacheBaseFor func(root string) string
+
 	// Version is the Dolt environment version string used when loading repos (optional).
 	// If empty, the connector will use a reasonable default.
 	Version string

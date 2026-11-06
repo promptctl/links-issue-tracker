@@ -85,8 +85,8 @@ func TestEveryCopyEngineLeavesOutWhatItsOmissionNames(t *testing.T) {
 		{
 			name:    "clone",
 			omit:    cloneOmits,
-			held:    []string{"links/.dolt/noms/manifest", "links/.dolt/" + RemoteCacheDirName + "/key/repo.git/HEAD", "links/.dolt/" + TempTableFilesDirName + "/buffered_sink"},
-			leftOut: []string{"links/.dolt/noms/LOCK", "links/.dolt/stats/.dolt/noms/LOCK"},
+			held:    []string{"links/.dolt/noms/manifest", "links/.dolt/" + TempTableFilesDirName + "/buffered_sink"},
+			leftOut: []string{"links/.dolt/" + RemoteCacheDirName, "links/.dolt/noms/LOCK", "links/.dolt/stats/.dolt/noms/LOCK"},
 		},
 	}
 	for _, engine := range engines {

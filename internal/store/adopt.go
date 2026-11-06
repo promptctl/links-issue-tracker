@@ -219,7 +219,7 @@ func LocalHasTickets(ctx context.Context, env environ.Env, stderr io.Writer, dol
 // leftover from ever being opened as a store.
 // [LAW:types-are-the-program] "undefined partial state that looks valid" is
 // unrepresentable at this seam.
-func AdoptRemoteByClone(ctx context.Context, stderr io.Writer, doltRootDir, workspaceID string, remote storage.RemoteName, remoteURL, branch string) (err error) {
+func AdoptRemoteByClone(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir, workspaceID string, remote storage.RemoteName, remoteURL, branch string) (err error) {
 	cleanRoot, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return err
@@ -281,7 +281,7 @@ func AdoptRemoteByClone(ctx context.Context, stderr io.Writer, doltRootDir, work
 		return fmt.Errorf("set aside database before adopt: %w", err)
 	}
 
-	if cloneErr := cloneRemoteDatabase(ctx, stderr, cleanRoot, workspaceID, remote, remoteURL, branch); cloneErr != nil {
+	if cloneErr := cloneRemoteDatabase(ctx, env, stderr, cleanRoot, workspaceID, remote, remoteURL, branch); cloneErr != nil {
 		// dolt's own procedure cleans its clone target on most failures, but
 		// that is a fork-internal courtesy; lit owns its postcondition here: a
 		// RETURNED failure leaves no partial database and no marker, so the
@@ -335,8 +335,8 @@ func AdoptRemoteByClone(ctx context.Context, stderr io.Writer, doltRootDir, work
 // writes — so no explicit ref is needed. DOLT_CLONE --remote checks no name,
 // unlike DOLT_REMOTE add; remote being a storage.RemoteName is what keeps a
 // name Dolt cannot hold out of the clone. [LAW:parse-dont-validate]
-func cloneRemoteDatabase(ctx context.Context, stderr io.Writer, serverRoot, workspaceID string, remote storage.RemoteName, remoteURL, branch string) error {
-	db, hold, err := openHeldPool(ctx, stderr, serverRoot, workspaceID, "", engineWrite, &longPhase{})
+func cloneRemoteDatabase(ctx context.Context, env environ.Env, stderr io.Writer, serverRoot, workspaceID string, remote storage.RemoteName, remoteURL, branch string) error {
+	db, hold, err := openHeldPool(ctx, env, stderr, serverRoot, workspaceID, "", engineWrite, &longPhase{})
 	if err != nil {
 		return fmt.Errorf("open dolt for clone: %w", err)
 	}
