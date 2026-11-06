@@ -88,6 +88,22 @@ func TestList_IgnoresUnrecognizedNames(t *testing.T) {
 	}
 }
 
+func TestList_RefusesFileAtSnapshotsDir(t *testing.T) {
+	t.Parallel()
+	db := filepath.Join(t.TempDir(), "db")
+	snapshotsDir := DirFor(db)
+	if err := os.MkdirAll(filepath.Dir(snapshotsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(snapshotsDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(db)
+	if err == nil {
+		t.Fatalf("List with a file at the snapshots dir: want error, got %d snapshots and nil", len(list))
+	}
+}
+
 func TestList_IgnoresTmpAndReserveDirectories(t *testing.T) {
 	t.Parallel()
 	db := filepath.Join(t.TempDir(), "db")

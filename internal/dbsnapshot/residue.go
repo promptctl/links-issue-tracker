@@ -95,7 +95,7 @@ func collectOrphanedResidue(snapshotsDir string) error {
 // leftover from an earlier interrupted collection — collection stays
 // self-healing even if a producer reuses the exact original stamp.
 func condemnResidue(snapshotsDir string) ([]string, error) {
-	entries, err := os.ReadDir(snapshotsDir)
+	entries, err := readSnapshotsDir(snapshotsDir)
 	if err != nil {
 		return nil, fmt.Errorf("read snapshots dir: %w", err)
 	}
