@@ -229,7 +229,7 @@ func TestAStepIntoAnOutOfOrderGapAboveTheCeilingIsRefused(t *testing.T) {
 // unstamped build gets wrong.
 func TestARefusalNamesTheCeilingAndItsSource(t *testing.T) {
 	t.Parallel()
-	ceiling := version.SchemaCeiling{Max: 4, Source: "the checkout this lit was built from had no release tag"}
+	ceiling := version.SchemaCeiling{Max: 4, Bound: version.BoundReleased, Source: "the checkout this lit was built from had no release tag"}
 	for _, err := range []error{
 		&SchemaCeilingError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling},
 		&SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 5, Ceiling: ceiling},

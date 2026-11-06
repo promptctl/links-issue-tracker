@@ -1,5 +1,5 @@
-// Package suiteenv builds the environment every test suite runs lit under.
-// Only _test.go files import it.
+// Package suiteenv builds the environment a test suite runs lit's stores
+// under. Only _test.go files import it; depguard enforces that.
 package suiteenv
 
 import (
