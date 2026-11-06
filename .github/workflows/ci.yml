@@ -266,10 +266,14 @@ jobs:
       # schema through a 2-second client timeout with no retry, ahead of
       # linting, so a slow golangci-lint.run would fail the job with nothing
       # linted. The step after this one is the schema check instead, offline.
+      # install-mode goinstall builds the linter with go.mod's toolchain: a
+      # prebuilt release carries the gofmt of whatever Go built it, which can
+      # format differently from the gofmt developers run.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.15.0
+          install-mode: goinstall
           verify: false
 
       # An io/fs name built with path/filepath fails every lookup on Windows,
