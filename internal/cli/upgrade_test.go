@@ -653,6 +653,7 @@ func TestRunUpgradeOnAnOpenableWorkspacePastRunningSupportNamesNoDowngrade(t *te
 		// The reader's open built nothing, found nothing to migrate, and
 		// did not look for temp table files.
 		"bootstrap":                         "none",
+		"bootstrap.set_aside":               "",
 		"migration.snapshot":                "",
 		"migration.snapshot_left_out":       nil,
 		"migration.prune_error":             nil,

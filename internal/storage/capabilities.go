@@ -453,45 +453,52 @@ func (a SchemaAhead) EventRecord() map[string]any {
 	}
 }
 
-// Bootstrap is what an open did to make its database exist.
+// Bootstrap is what an open did to make its database exist. Its zero value
+// is "none": the database was already there, or the open is one that never
+// builds. Every other value is made by BuiltDatabase, so the facts about a
+// build exist only on a build.
 // [LAW:types-are-the-program] one value, not a built flag beside a discarded
-// flag: a discarded leftover is a fact about a build, so "discarded but built
-// nothing" has no value to be.
-type Bootstrap int
+// flag and a path: "discarded but built nothing" and "set aside but built
+// nothing" have no value to be.
+type Bootstrap struct {
+	built                bool
+	discardedDeadStaging bool
+	setAside             string
+}
 
-const (
-	// BootstrapNone: the database was already there, or the open is one that
-	// never builds.
-	BootstrapNone Bootstrap = iota
-	// BootstrapBuilt: the open found no database and built it.
-	BootstrapBuilt
-	// BootstrapBuiltOverDeadBuild: the open built the database after
-	// discarding what a builder that died mid-build left behind.
-	BootstrapBuiltOverDeadBuild
-)
+// BuiltDatabase is a build: discardedDeadStaging when it first removed a staging
+// root a builder that died mid-build left, and setAside the path it moved a
+// database directory holding no .dolt to, "" when none stood there.
+func BuiltDatabase(discardedDeadStaging bool, setAside string) Bootstrap {
+	return Bootstrap{built: true, discardedDeadStaging: discardedDeadStaging, setAside: setAside}
+}
 
 // Built reports whether the open built the database.
 func (b Bootstrap) Built() bool {
-	return b != BootstrapNone
+	return b.built
+}
+
+// SetAside is where the build moved a database directory that held no .dolt,
+// or "" when it moved none.
+func (b Bootstrap) SetAside() string {
+	return b.setAside
 }
 
 // String is the bootstrap as its event fact value.
 func (b Bootstrap) String() string {
-	switch b {
-	case BootstrapNone:
+	switch {
+	case !b.built:
 		return "none"
-	case BootstrapBuilt:
-		return "built"
-	case BootstrapBuiltOverDeadBuild:
+	case b.discardedDeadStaging:
 		return "built_over_dead_build"
 	default:
-		return fmt.Sprintf("Bootstrap(%d)", int(b))
+		return "built"
 	}
 }
 
 // EventRecord is the bootstrap as event facts.
 func (b Bootstrap) EventRecord() map[string]any {
-	return map[string]any{"bootstrap": b.String()}
+	return map[string]any{"bootstrap": b.String(), "bootstrap.set_aside": b.setAside}
 }
 
 // OpenMigration is what opening st did to its stored shape. An engine whose

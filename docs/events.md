@@ -208,7 +208,8 @@ working directory's.
 
 | Key | Meaning |
 | --- | --- |
-| `bootstrap` | `built` when the open found no database and built it; `built_over_dead_build` when it built it after removing what a lit process that died while building left behind; `none` when the database was already there, and for opens that only read. |
+| `bootstrap` | `built` when the open found no database and built it; `built_over_dead_build` when it built it after removing what a lit process that died while building left in its staging directory; `none` when the database was already there, and for opens that only read. |
+| `bootstrap.set_aside` | Where the build moved a database directory that held no `.dolt` (a sibling of the store's Dolt directory named `<dolt>.bootstrap-displaced-<nanoseconds>`), with everything in it, before building; `""` when there was none. The open also prints a `warning:` line on stderr naming both paths. |
 | `migration.snapshot` | The recovery snapshot the open took before migrating, or `""` when it took none. |
 | `migration.snapshot_left_out` | What that snapshot's copy left out: paths relative to the store's Dolt directory, such as `links/.dolt/git-remote-cache` (the remote's mirror, which the first fetch after a restore clones again), `links/.dolt/temptf` (temp table files a dead Dolt process left) and `links/.dolt/noms/LOCK`; `[]` when it left out nothing, and `null` when the open took no snapshot. |
 | `migration.prune_error` | Why lit's older recovery snapshots or the migration checkpoints could not be removed after the work they trail committed, or `null`. The command runs all the same, and prints a `warning: old migration snapshots or checkpoints were not removed:` line on stderr. |
