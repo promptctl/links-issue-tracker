@@ -495,7 +495,7 @@ func followupLeaf() appLeaf {
 		}
 		resolvedDescription := strings.TrimSpace(description.value())
 		if resolvedDescription == "" {
-			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID, origin.Issue.Title.Raw())
+			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID.Raw(), origin.Issue.Title.Raw())
 		}
 		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {
@@ -2376,7 +2376,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 		return err
 	}
 	for _, m := range result.Created {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", model.HoldRow(m.Ref), m.ID); err != nil {
 			return err
 		}
 	}
@@ -2452,7 +2452,7 @@ func printBulkApplied(stdout io.Writer, result storage.BulkApplyResult) error {
 		return err
 	}
 	for _, m := range result.Created {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", model.HoldRow(m.Ref), m.ID); err != nil {
 			return err
 		}
 	}

@@ -50,7 +50,7 @@ func (s Slot) String() string {
 	case ParentSlot:
 		return fmt.Sprintf("%s parent", s.Issue)
 	case BlockedBySlot:
-		return fmt.Sprintf("%s blocked-by %s", s.Issue, s.Name)
+		return fmt.Sprintf("%s blocked-by %s", s.Issue, model.ID(s.Name))
 	}
 	panic(fmt.Sprintf("storage: slot kind %d", s.Kind))
 }
@@ -112,6 +112,8 @@ func (v SlotValue) Display(slot Slot) string {
 		return issueFieldText(slot.Name).Show(v.text)
 	case slot.Kind == ParentSlot && v.text == "":
 		return "none"
+	case slot.Kind == ParentSlot:
+		return model.HoldRow(v.text)
 	}
 	return v.text
 }

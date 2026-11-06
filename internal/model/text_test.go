@@ -27,3 +27,19 @@ func TestTextPrintsHeldUnderEveryVerb(t *testing.T) {
 		t.Errorf("Raw() = %q, want the stored text", got)
 	}
 }
+
+// TestIDQuotesRawUnderQ pins that %q shows an id exactly as given, escapes and
+// all, so an error naming a rejected id shows the tab or break it carried,
+// while %s holds it to its row as Text does.
+func TestIDQuotesRawUnderQ(t *testing.T) {
+	t.Parallel()
+	id := ID("a\nb\tc")
+	for _, tc := range []struct{ format, want string }{
+		{"%s", "a" + QuotedBreak + "b c"},
+		{"%q", `"a\nb\tc"`},
+	} {
+		if got := fmt.Sprintf(tc.format, id); got != tc.want {
+			t.Errorf("Sprintf(%q) = %q, want %q", tc.format, got, tc.want)
+		}
+	}
+}

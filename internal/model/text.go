@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -36,8 +37,14 @@ func (id ID) Raw() string { return string(id) }
 // Trim is the id with surrounding whitespace removed, as a caller typed it.
 func (id ID) Trim() ID { return ID(strings.TrimSpace(string(id))) }
 
-// Format prints the id held to one row whatever the verb and width.
+// Format prints the id held to one row whatever the verb and width. %q quotes
+// the raw id: Go's escapes already keep it to one row, and they show exactly
+// which tab or invisible a rejected id carried.
 func (id ID) Format(f fmt.State, verb rune) {
+	if verb == 'q' {
+		formatHeld(f, 's', strconv.Quote(string(id)))
+		return
+	}
 	formatHeld(f, verb, HoldRow(string(id)))
 }
 
