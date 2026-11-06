@@ -40,7 +40,7 @@ func TestHydrationReadsCoverEveryID(t *testing.T) {
 	const epicCount = manyIDs
 	const label = "spans"
 
-	epics := make([]string, 0, epicCount)
+	epics := make([]model.ID, 0, epicCount)
 	for i := range epicCount {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("Epic %d", i)),
@@ -78,7 +78,7 @@ func TestHydrationReadsCoverEveryID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	byID := make(map[string]int, len(issues))
+	byID := make(map[model.ID]int, len(issues))
 	for i, issue := range issues {
 		byID[issue.ID] = i
 	}

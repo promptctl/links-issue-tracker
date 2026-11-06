@@ -976,7 +976,7 @@ func (f SyncFailure) collisionLines() []string {
 	}
 	out := []string{fmt.Sprintf("WHAT COLLIDED (%d id(s), each naming a different ticket on each side):", len(f.Collisions))}
 	for _, c := range merge.SortCollisions(f.Collisions) {
-		out = append(out, "  "+quoteRemote(c.IssueID).inline())
+		out = append(out, "  "+quoteRemote(c.IssueID.Raw()).inline())
 		out = append(out, describeCollisionSide("yours  (local) ", c.Ours)...)
 		out = append(out, describeCollisionSide("theirs (remote)", c.Theirs)...)
 	}
@@ -1004,7 +1004,7 @@ func describeCollisionSide(label string, issue model.Issue) []string {
 // The remote's ids are minted by a store this machine does not control and no
 // ingest boundary constrains their charset, so they are quoted like any other
 // remote value.
-func describeIDSet(ids []string) string {
+func describeIDSet(ids []model.ID) string {
 	if len(ids) == 0 {
 		return "(0)"
 	}
@@ -1013,10 +1013,10 @@ func describeIDSet(ids []string) string {
 
 // quoteRemoteEach quotes a list of remote-authored ids for inline joining, so a
 // renderer cannot quote some members and forget others.
-func quoteRemoteEach(ids []string) []string {
+func quoteRemoteEach(ids []model.ID) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, quoteRemote(id).inline())
+		out = append(out, quoteRemote(id.Raw()).inline())
 	}
 	return out
 }
@@ -1025,7 +1025,7 @@ func quoteRemoteEach(ids []string) []string {
 // states which ids are affected before the reader reaches the section below.
 func describeCollidedIDs(collisions []merge.Collision) string {
 	ordered := merge.SortCollisions(collisions)
-	ids := make([]string, 0, len(ordered))
+	ids := make([]model.ID, 0, len(ordered))
 	for _, c := range ordered {
 		ids = append(ids, c.IssueID)
 	}
@@ -1038,7 +1038,7 @@ func describeHeldFields(pending []merge.ProsePending) string {
 	ordered := merge.SortPending(pending)
 	names := make([]string, 0, len(ordered))
 	for _, p := range ordered {
-		names = append(names, fmt.Sprintf("%s·%s", quoteRemote(p.IssueID).inline(), p.Field))
+		names = append(names, fmt.Sprintf("%s·%s", quoteRemote(p.IssueID.Raw()).inline(), p.Field))
 	}
 	switch len(names) {
 	case 0:

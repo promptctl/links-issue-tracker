@@ -27,7 +27,7 @@ func statusSetFixture(t *testing.T) (h readyTestHarness, openID, inProgressID, c
 	}); err != nil {
 		t.Fatalf("Apply(done) error = %v", err)
 	}
-	return h, open.ID, started.ID, closed.ID
+	return h, open.ID.Raw(), started.ID.Raw(), closed.ID.Raw()
 }
 
 // TestListStatusSetSpansBucketsInOneListing is the links-listing-09m5

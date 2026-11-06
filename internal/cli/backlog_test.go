@@ -32,7 +32,7 @@ func newBacklogTestHarness(t testing.TB) backlogTestHarness {
 	}
 }
 
-func (h backlogTestHarness) createIssue(input storage.CreateIssueInput) (id string) {
+func (h backlogTestHarness) createIssue(input storage.CreateIssueInput) (id model.ID) {
 	h.t.Helper()
 	if input.Prefix == "" {
 		prefix, err := h.ap.Workspace.IssuePrefix.Mintable()
@@ -53,7 +53,7 @@ func (h backlogTestHarness) createIssue(input storage.CreateIssueInput) (id stri
 	return issue.ID
 }
 
-func (h backlogTestHarness) addDependency(dependentID, dependencyID string) {
+func (h backlogTestHarness) addDependency(dependentID, dependencyID model.ID) {
 	h.t.Helper()
 	if _, err := h.ap.Store.AddRelation(h.ctx, storage.AddRelationInput{
 		SrcID: dependentID, DstID: dependencyID, Type: "blocked-by", CreatedBy: "agent",
@@ -64,7 +64,7 @@ func (h backlogTestHarness) addDependency(dependentID, dependencyID string) {
 
 // addDependencyWithinEpic is addDependency for two leaves of one epic, an
 // edge only a reparent leaves behind (see storeBlocksWithinEpic).
-func (h backlogTestHarness) addDependencyWithinEpic(dependentID, dependencyID string) {
+func (h backlogTestHarness) addDependencyWithinEpic(dependentID, dependencyID model.ID) {
 	h.t.Helper()
 	prefix, err := h.ap.Workspace.IssuePrefix.Mintable()
 	if err != nil {
@@ -76,9 +76,9 @@ func (h backlogTestHarness) addDependencyWithinEpic(dependentID, dependencyID st
 // runBacklogIDs renders the backlog and extracts the issue ID leading each row,
 // in render order — the structured probe over the command's logic (which items,
 // in what order) read from the one canonical text surface.
-func (h backlogTestHarness) runBacklogIDs(args ...string) []string {
+func (h backlogTestHarness) runBacklogIDs(args ...string) []model.ID {
 	h.t.Helper()
-	return issueIDsFromText(h.runBacklogText(args...))
+	return model.IDsOf(issueIDsFromText(h.runBacklogText(args...)))
 }
 
 func (h backlogTestHarness) runBacklogText(args ...string) string {
@@ -93,10 +93,10 @@ func (h backlogTestHarness) runBacklogText(args ...string) string {
 // unblocksLineNames reports whether any "unblocks:" line names the id. Scoped to
 // that line rather than to the whole text, because an id also appears in
 // dependency lines and proves nothing there about the leverage line under test.
-func unblocksLineNames(text, id string) bool {
+func unblocksLineNames(text string, id model.ID) bool {
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "unblocks:") && strings.Contains(trimmed, id) {
+		if strings.HasPrefix(trimmed, "unblocks:") && strings.Contains(trimmed, id.Raw()) {
 			return true
 		}
 	}
@@ -180,7 +180,7 @@ func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 	h.addDependencyWithinEpic(b, a) // b is blocked
 
 	got := h.runBacklogIDs()
-	wantOrder := []string{a, b, c}
+	wantOrder := []model.ID{a, b, c}
 	if len(got) != len(wantOrder) {
 		t.Fatalf("len(got) = %d, want %d; got=%v", len(got), len(wantOrder), got)
 	}
@@ -203,10 +203,10 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 	h.addDependencyWithinEpic(blocked, blocker)
 
 	text := h.runBacklogText()
-	if !strings.Contains(text, "blocked by: "+blocker) {
+	if !strings.Contains(text, "blocked by: "+blocker.Raw()) {
 		t.Fatalf("expected 'blocked by: %s' for blocked item; got:\n%s", blocker, text)
 	}
-	if !strings.Contains(text, "unblocks: "+blocked) {
+	if !strings.Contains(text, "unblocks: "+blocked.Raw()) {
 		t.Fatalf("expected 'unblocks: %s' on blocker; got:\n%s", blocked, text)
 	}
 	if !strings.Contains(text, "blocked: needs-design") {
@@ -273,7 +273,7 @@ func TestBacklogIncludesInProgressInline(t *testing.T) {
 	}
 
 	got := h.runBacklogIDs()
-	wantOrder := []string{a, b, c}
+	wantOrder := []model.ID{a, b, c}
 	if len(got) != 3 {
 		t.Fatalf("len(got) = %d, want 3; got=%v", len(got), got)
 	}
@@ -362,7 +362,7 @@ func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
 	second := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Second"), Lane: storage.SharedLane, Topic: "gate", IssueType: "task", Priority: 1, ParentID: epic})
 
 	text := h.runBacklogText()
-	if want := "blocked: earlier sibling " + first + " still open"; !strings.Contains(text, want) {
+	if want := "blocked: earlier sibling " + first.Raw() + " still open"; !strings.Contains(text, want) {
 		t.Fatalf("backlog does not say why %s is held back: want %q; got:\n%s", second, want, text)
 	}
 
@@ -409,7 +409,7 @@ func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 }
 
 // start moves an issue to in_progress, for the --status case below.
-func (h backlogTestHarness) start(id string) {
+func (h backlogTestHarness) start(id model.ID) {
 	h.t.Helper()
 	if _, err := h.ap.Store.Apply(h.ctx, id, storage.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent"}); err != nil {
 		h.t.Fatalf("Apply(%s, start) error = %v", id, err)
@@ -431,12 +431,12 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		// build returns the prerequisite whose row must keep its leverage line,
 		// and the dependent the flags remove. The dependent is always created
 		// SECOND, so the prerequisite outranks it and stays on screen.
-		build func(h backlogTestHarness) (prerequisite, dependent string)
+		build func(h backlogTestHarness) (prerequisite, dependent model.ID)
 		args  []string
 	}{
 		{
 			name: "--type",
-			build: func(h backlogTestHarness) (string, string) {
+			build: func(h backlogTestHarness) (model.ID, model.ID) {
 				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic"})
 				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Prerequisite"), Topic: "nar", IssueType: "task", ParentID: e, Lane: storage.MustParseLane("p")})
 				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Dependent"), Topic: "nar", IssueType: "bug", ParentID: e, Lane: storage.MustParseLane("d")})
@@ -446,7 +446,7 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		},
 		{
 			name: "--status",
-			build: func(h backlogTestHarness) (string, string) {
+			build: func(h backlogTestHarness) (model.ID, model.ID) {
 				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic"})
 				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Prerequisite"), Topic: "nar", IssueType: "task", ParentID: e, Lane: storage.MustParseLane("p")})
 				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Dependent"), Topic: "nar", IssueType: "task", ParentID: e, Lane: storage.MustParseLane("d")})
@@ -457,7 +457,7 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		},
 		{
 			name: "--labels",
-			build: func(h backlogTestHarness) (string, string) {
+			build: func(h backlogTestHarness) (model.ID, model.ID) {
 				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic"})
 				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Prerequisite"), Topic: "nar", IssueType: "task", ParentID: e, Lane: storage.MustParseLane("p"), Labels: []string{"keep"}})
 				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Dependent"), Topic: "nar", IssueType: "task", ParentID: e, Lane: storage.MustParseLane("d")})
@@ -467,7 +467,7 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 		},
 		{
 			name: "--assignee",
-			build: func(h backlogTestHarness) (string, string) {
+			build: func(h backlogTestHarness) (model.ID, model.ID) {
 				e := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "home", IssueType: "epic"})
 				p := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Prerequisite"), Topic: "nar", IssueType: "task", ParentID: e, Lane: storage.MustParseLane("p"), Assignee: "alice"})
 				d := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Dependent"), Topic: "nar", IssueType: "task", ParentID: e, Lane: storage.MustParseLane("d")})
@@ -488,7 +488,7 @@ func TestBacklogUnblocksLinesSurviveTheStoreSideNarrowings(t *testing.T) {
 			}
 
 			text := h.runBacklogText(tc.args...)
-			if ids := issueIDsFromText(text); len(ids) != 1 || ids[0] != prerequisite {
+			if ids := issueIDsFromText(text); len(ids) != 1 || ids[0] != prerequisite.Raw() {
 				t.Fatalf("`lit backlog %v` printed %v, want exactly [%s] — the case needs the dependent gone and the prerequisite kept", tc.args, ids, prerequisite)
 			}
 			if !unblocksLineNames(text, dependent) {

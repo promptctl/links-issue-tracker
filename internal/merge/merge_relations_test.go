@@ -8,7 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-func edge(src, dst string, typ model.RelationType) model.Relation {
+func edge(src, dst model.ID, typ model.RelationType) model.Relation {
 	return model.Relation{SrcID: src, DstID: dst, Type: typ, CreatedAt: t1}
 }
 
@@ -23,7 +23,7 @@ func mergedEdges(t *testing.T, base, local, remote []model.Relation) []string {
 	got := ThreeWay(export("wsA", base), export("wsA", local), export("wsB", remote))
 	out := []string{}
 	for _, relation := range provisional(t, got).Relations {
-		out = append(out, relation.SrcID+">"+relation.DstID+":"+string(relation.Type))
+		out = append(out, relation.SrcID.Raw()+">"+relation.DstID.Raw()+":"+string(relation.Type))
 	}
 	sort.Strings(out)
 	return out
@@ -79,15 +79,15 @@ func TestThreeWayRelationRemovalIsNotResurrected(t *testing.T) {
 // the single-parent tiebreak prefers the larger parent id: a fix that only
 // worked when the tiebreak happened to agree would pass one ordering.
 func TestThreeWayReparentOnOneSideIsNotRevertedByTheOther(t *testing.T) {
-	for _, pair := range []struct{ old, new string }{{"p1", "p2"}, {"p2", "p1"}} {
+	for _, pair := range []struct{ old, new model.ID }{{"p1", "p2"}, {"p2", "p1"}} {
 		oldEdge, newEdge := edge("c1", pair.old, model.RelParentChild), edge("c1", pair.new, model.RelParentChild)
-		want := []string{"c1>" + pair.new + ":parent-child"}
-		t.Run("local reparents "+pair.old+" to "+pair.new, func(t *testing.T) {
+		want := []string{"c1>" + pair.new.Raw() + ":parent-child"}
+		t.Run("local reparents "+pair.old.Raw()+" to "+pair.new.Raw(), func(t *testing.T) {
 			if got := mergedEdges(t, []model.Relation{oldEdge}, []model.Relation{newEdge}, []model.Relation{oldEdge}); !equalStrings(got, want) {
 				t.Fatalf("relations = %v, want %v", got, want)
 			}
 		})
-		t.Run("remote reparents "+pair.old+" to "+pair.new, func(t *testing.T) {
+		t.Run("remote reparents "+pair.old.Raw()+" to "+pair.new.Raw(), func(t *testing.T) {
 			if got := mergedEdges(t, []model.Relation{oldEdge}, []model.Relation{oldEdge}, []model.Relation{newEdge}); !equalStrings(got, want) {
 				t.Fatalf("relations = %v, want %v", got, want)
 			}
@@ -156,7 +156,7 @@ func TestThreeWayCollisionDoesNotReadTheFilteredSideAsRemovingChildRows(t *testi
 	export, _ := got.Provisional()
 	edges := []string{}
 	for _, relation := range export.Relations {
-		edges = append(edges, relation.SrcID+">"+relation.DstID)
+		edges = append(edges, relation.SrcID.Raw()+">"+relation.DstID.Raw())
 	}
 	if want := []string{"epic.16>epic.a", "epic.b>epic.16"}; !equalStrings(edges, want) {
 		t.Errorf("relations = %v, want %v", edges, want)

@@ -12,7 +12,7 @@ import (
 
 // readOut is the document `lit ls --format yaml` prints for issue under
 // parent, blocked by blockers.
-func readOut(issue model.Issue, parent string, blockers ...string) storage.BulkIssueSpec {
+func readOut(issue model.Issue, parent model.ID, blockers ...model.ID) storage.BulkIssueSpec {
 	rel := storage.IssueRelations{Issue: issue}
 	if parent != "" {
 		rel.Parent = &model.Issue{ID: parent, IssueType: model.TypeEpic}
@@ -24,11 +24,11 @@ func readOut(issue model.Issue, parent string, blockers ...string) storage.BulkI
 }
 
 // standing is the store holding issue with the given parents and blockers.
-func standing(issue model.Issue, parents []string, blockers ...string) storage.CurrentState {
+func standing(issue model.Issue, parents []model.ID, blockers ...model.ID) storage.CurrentState {
 	return storage.CurrentState{
-		Issues:    map[string]model.Issue{issue.ID: issue},
-		Parents:   map[string][]string{issue.ID: parents},
-		BlockedBy: map[string][]string{issue.ID: blockers},
+		Issues:    map[model.ID]model.Issue{issue.ID: issue},
+		Parents:   map[model.ID][]model.ID{issue.ID: parents},
+		BlockedBy: map[model.ID][]model.ID{issue.ID: blockers},
 	}
 }
 
@@ -42,7 +42,7 @@ func mergeOK(t *testing.T, doc storage.BulkIssueSpec, now storage.CurrentState) 
 	if err != nil {
 		t.Fatalf("MergeReadOut error = %v", err)
 	}
-	file, err := storage.ParseBulkFile(merged, map[string]model.IssueType{doc.ID: now.Issues[doc.ID].IssueType, "lit-e": model.TypeEpic, "lit-f": model.TypeEpic})
+	file, err := storage.ParseBulkFile(merged, map[model.ID]model.IssueType{model.ID(doc.ID): now.Issues[model.ID(doc.ID)].IssueType, "lit-e": model.TypeEpic, "lit-f": model.TypeEpic})
 	if err != nil {
 		t.Fatalf("ParseBulkFile(the merged file) error = %v", err)
 	}
@@ -83,7 +83,7 @@ func TestAReadOutFileLeftAloneTakesTheValueNow(t *testing.T) {
 	doc.Title = &retitled
 	now := read
 	now.Lane = "their-lane"
-	got, kept := mergeOK(t, doc, standing(now, []string{"lit-e"}, "lit-b", "lit-y"))
+	got, kept := mergeOK(t, doc, standing(now, []model.ID{"lit-e"}, "lit-b", "lit-y"))
 	if *got.Title != retitled || *got.Lane != "their-lane" {
 		t.Errorf("title %q, lane %q; want the file's %q and the other writer's lane", *got.Title, *got.Lane, retitled)
 	}
@@ -104,7 +104,7 @@ func TestAReadOutEditOverAnotherWritersIsAConflict(t *testing.T) {
 	doc.Lane = &ours
 	now := read
 	now.Lane = "their-lane"
-	conflicts := mergeConflicts(t, doc, standing(now, []string{"lit-e"}))
+	conflicts := mergeConflicts(t, doc, standing(now, []model.ID{"lit-e"}))
 	if len(conflicts) != 1 || conflicts[0].Slot != (storage.Slot{Kind: storage.FieldSlot, Issue: read.ID, Name: "lane"}) || conflicts[0].Since != (storage.ReadOut{}) {
 		t.Fatalf("conflicts = %v, want one on the lane, against the read", conflicts)
 	}
@@ -122,7 +122,7 @@ func TestAReadOutEditAnotherWriterAlsoMadeLands(t *testing.T) {
 	doc.Lane = &same
 	now := read
 	now.Lane = model.Text(same)
-	got, kept := mergeOK(t, doc, standing(now, []string{"lit-e"}))
+	got, kept := mergeOK(t, doc, standing(now, []model.ID{"lit-e"}))
 	if *got.Lane != same || len(kept) != 0 {
 		t.Errorf("lane %q, kept %v; want %q and nothing kept", *got.Lane, kept, same)
 	}
@@ -138,7 +138,7 @@ func TestAReadOutValueIsComparedAsTheWriteWouldStoreIt(t *testing.T) {
 	doc.Labels, doc.Title = &reordered, &spaced
 	now := read
 	now.Labels, now.Title = model.Texts([]string{"gamma"}), "their title"
-	got, kept := mergeOK(t, doc, standing(now, []string{"lit-e"}))
+	got, kept := mergeOK(t, doc, standing(now, []model.ID{"lit-e"}))
 	if !slices.Equal(*got.Labels, []string{"gamma"}) || *got.Title != "their title" {
 		t.Errorf("labels %v, title %q; want the other writer's", *got.Labels, *got.Title)
 	}
@@ -154,7 +154,7 @@ func TestAReadOutBlockedByMergesEdgeByEdge(t *testing.T) {
 	doc := readOut(read, "lit-e", "lit-b")
 	edges := []string{"lit-z"}
 	doc.BlockedBy = &edges
-	got, kept := mergeOK(t, doc, standing(read, []string{"lit-e"}, "lit-b", "lit-y"))
+	got, kept := mergeOK(t, doc, standing(read, []model.ID{"lit-e"}, "lit-b", "lit-y"))
 	if !slices.Equal(*got.BlockedBy, []string{"lit-y", "lit-z"}) {
 		t.Errorf("blocked_by = %v, want [lit-y lit-z]", *got.BlockedBy)
 	}
@@ -172,17 +172,17 @@ func TestAReadOutParentResultIsStatedAsAMoveFromNow(t *testing.T) {
 	subEpic := model.Issue{ID: "lit-x-2", Title: "sub-epic", IssueType: model.TypeEpic}
 	clearedEpic := readOut(subEpic, "lit-e")
 	clearedEpic.Parent = &none
-	if got, _ := mergeOK(t, clearedEpic, standing(subEpic, []string{"lit-e"})); got.Parent == nil || *got.Parent != "" {
+	if got, _ := mergeOK(t, clearedEpic, standing(subEpic, []model.ID{"lit-e"})); got.Parent == nil || *got.Parent != "" {
 		t.Errorf("a sub-epic's cleared parent merged to %v, want a clear", got.Parent)
 	}
 	read := readIssue()
 	cleared := readOut(read, "lit-e")
 	cleared.Parent = &none
-	merged, err := storage.MergeReadOut([]storage.BulkIssueSpec{cleared}, standing(read, []string{"lit-e"}))
+	merged, err := storage.MergeReadOut([]storage.BulkIssueSpec{cleared}, standing(read, []model.ID{"lit-e"}))
 	if err != nil {
 		t.Fatalf("MergeReadOut error = %v", err)
 	}
-	if _, err := storage.ParseBulkFile(merged, map[string]model.IssueType{read.ID: model.TypeTask}); err == nil {
+	if _, err := storage.ParseBulkFile(merged, map[model.ID]model.IssueType{read.ID: model.TypeTask}); err == nil {
 		t.Error("the gate admitted a leaf's clear; want the detach refusal")
 	}
 	left := readOut(read, "lit-e")
@@ -197,7 +197,7 @@ func TestAReadOutKeyTheFileDeletesIsLeftAlone(t *testing.T) {
 	read := readIssue()
 	doc := readOut(read, "lit-e", "lit-b")
 	doc.Parent, doc.BlockedBy = nil, nil
-	got, kept := mergeOK(t, doc, standing(read, []string{"lit-f"}))
+	got, kept := mergeOK(t, doc, standing(read, []model.ID{"lit-f"}))
 	if got.Parent != nil || got.BlockedBy != nil || len(kept) != 0 {
 		t.Errorf("parent %v, blocked_by %v, kept %v; want nothing stated or kept", got.Parent, got.BlockedBy, kept)
 	}
@@ -229,7 +229,7 @@ func TestAReadOutOfARemovedIssueIsAConflict(t *testing.T) {
 // lands; a file that edited it conflicts, and the refusal names the repair.
 func TestAReadOutOfAChildWithTwoParentsNow(t *testing.T) {
 	read := readIssue()
-	twoParents := standing(read, []string{"lit-e", "lit-f"})
+	twoParents := standing(read, []model.ID{"lit-e", "lit-f"})
 	left := readOut(read, "lit-e")
 	title := "a new title"
 	left.Title = &title
@@ -283,7 +283,7 @@ func TestAMalformedBasisIsRefused(t *testing.T) {
 	noID := readOut(read, "lit-e")
 	noID.ID = ""
 	for name, doc := range map[string]storage.BulkIssueSpec{"an unknown field": unknown, "no id": noID} {
-		_, err := storage.MergeReadOut([]storage.BulkIssueSpec{doc}, standing(read, []string{"lit-e"}))
+		_, err := storage.MergeReadOut([]storage.BulkIssueSpec{doc}, standing(read, []model.ID{"lit-e"}))
 		var invalid model.ValidationError
 		if !errors.As(err, &invalid) {
 			t.Errorf("%s: error = %v, want a ValidationError", name, err)

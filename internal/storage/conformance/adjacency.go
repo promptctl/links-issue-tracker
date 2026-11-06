@@ -34,12 +34,12 @@ func adjacencyHoldsWhatItsEdgesName(t *testing.T, ctx context.Context, st storag
 		}
 	}
 	if _, err := st.Apply(ctx, subject.ID, storage.Change{
-		Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "ada",
+		Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID.Raw()}}, Actor: "ada",
 	}); err != nil {
 		t.Fatalf("Apply close-as-duplicate error = %v", err)
 	}
 
-	for _, id := range []string{subject.ID, epic.ID} {
+	for _, id := range []model.ID{subject.ID, epic.ID} {
 		detail, err := st.GetIssueDetail(ctx, id)
 		if err != nil {
 			t.Fatalf("GetIssueDetail(%s): %v", id, err)
@@ -73,14 +73,14 @@ func adjacencyHoldsWhatItsEdgesName(t *testing.T, ctx context.Context, st storag
 	if err != nil {
 		t.Fatalf("GetIssueAdjacency(%s): %v", subject.ID, err)
 	}
-	assertIssueIDs(t, "the subject's siblings", adjacency.Siblings, []string{origin.ID, followUp.ID})
-	assertIssueIDs(t, "the subject's blockers", adjacency.BlockedBy, []string{blocker.ID})
-	assertIssueIDs(t, "the subject's dependents", adjacency.Blocks, []string{dependent.ID})
-	assertIssueIDs(t, "the subject's related", adjacency.Related, []string{peer.ID})
+	assertIssueIDs(t, "the subject's siblings", adjacency.Siblings, []model.ID{origin.ID, followUp.ID})
+	assertIssueIDs(t, "the subject's blockers", adjacency.BlockedBy, []model.ID{blocker.ID})
+	assertIssueIDs(t, "the subject's dependents", adjacency.Blocks, []model.ID{dependent.ID})
+	assertIssueIDs(t, "the subject's related", adjacency.Related, []model.ID{peer.ID})
 	for _, one := range []struct {
 		name string
 		got  *model.Issue
-		want string
+		want model.ID
 	}{
 		{"Parent", adjacency.Parent, epic.ID},
 		{"RedirectTarget", adjacency.RedirectTarget, canonical.ID},
@@ -94,12 +94,12 @@ func adjacencyHoldsWhatItsEdgesName(t *testing.T, ctx context.Context, st storag
 	if err != nil {
 		t.Fatalf("GetIssueAdjacency(%s): %v", epic.ID, err)
 	}
-	assertIssueIDs(t, "the epic's children", above.Children, []string{origin.ID, subject.ID, followUp.ID})
+	assertIssueIDs(t, "the epic's children", above.Children, []model.ID{origin.ID, subject.ID, followUp.ID})
 	detail, err := st.GetIssueDetail(ctx, subject.ID)
 	if err != nil {
 		t.Fatalf("GetIssueDetail(%s): %v", subject.ID, err)
 	}
-	assertIssueIDs(t, "the subject's follow-ups", detail.FollowUps, []string{followUp.ID})
+	assertIssueIDs(t, "the subject's follow-ups", detail.FollowUps, []model.ID{followUp.ID})
 
 	_, err = st.GetIssueAdjacency(ctx, "no-such-issue")
 	assertNotFound(t, err, "issue", "GetIssueAdjacency")
@@ -124,12 +124,12 @@ func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, 
 		if _, err := st.RankToTop(ctx, outer.ID); err != nil {
 			t.Fatalf("RankToTop(%s): %v", outer.ID, err)
 		}
-		want := []string{firstLeaf.ID, secondLeaf.ID}
+		want := []model.ID{firstLeaf.ID, secondLeaf.ID}
 		if outer.ID == secondOuter.ID {
-			want = []string{secondLeaf.ID, firstLeaf.ID}
+			want = []model.ID{secondLeaf.ID, firstLeaf.ID}
 		}
-		assertIssueIDs(t, "a listing bound to the parents", mustList(t, ctx, st, storage.ListIssuesFilter{ParentIDs: []string{firstMiddle.ID, secondMiddle.ID}}), want)
-		assertIssueIDs(t, "a listing bound to the ids", mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []string{firstLeaf.ID, secondLeaf.ID}}), want)
+		assertIssueIDs(t, "a listing bound to the parents", mustList(t, ctx, st, storage.ListIssuesFilter{ParentIDs: []model.ID{firstMiddle.ID, secondMiddle.ID}}), want)
+		assertIssueIDs(t, "a listing bound to the ids", mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []model.ID{firstLeaf.ID, secondLeaf.ID}}), want)
 	}
 
 	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("third"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
@@ -139,11 +139,11 @@ func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, 
 			t.Fatalf("AddRelation: %v", err)
 		}
 	}
-	relations, err := st.GetRelationsByIDs(ctx, []string{subject.ID})
+	relations, err := st.GetRelationsByIDs(ctx, []model.ID{subject.ID})
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs: %v", err)
 	}
-	assertIssueIDs(t, "a ticket's blockers", relations[subject.ID].BlockedBy, []string{secondLeaf.ID, firstLeaf.ID})
+	assertIssueIDs(t, "a ticket's blockers", relations[subject.ID].BlockedBy, []model.ID{secondLeaf.ID, firstLeaf.ID})
 
 	hub := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("hub"), Lane: storage.SharedLane, Topic: "core", ParentID: third.ID})
 	for _, leaf := range []model.Issue{firstLeaf, secondLeaf} {
@@ -160,10 +160,10 @@ func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, 
 	if err != nil {
 		t.Fatalf("GetIssueAdjacency(%s): %v", subject.ID, err)
 	}
-	assertIssueIDs(t, "one ticket's blockers", adjacency.BlockedBy, []string{secondLeaf.ID, firstLeaf.ID})
+	assertIssueIDs(t, "one ticket's blockers", adjacency.BlockedBy, []model.ID{secondLeaf.ID, firstLeaf.ID})
 	if adjacency, err = st.GetIssueAdjacency(ctx, hub.ID); err != nil {
 		t.Fatalf("GetIssueAdjacency(%s): %v", hub.ID, err)
 	}
-	assertIssueIDs(t, "one ticket's dependents", adjacency.Blocks, []string{secondLeaf.ID, firstLeaf.ID})
-	assertIssueIDs(t, "one ticket's related", adjacency.Related, []string{secondLeaf.ID, firstLeaf.ID})
+	assertIssueIDs(t, "one ticket's dependents", adjacency.Blocks, []model.ID{secondLeaf.ID, firstLeaf.ID})
+	assertIssueIDs(t, "one ticket's related", adjacency.Related, []model.ID{secondLeaf.ID, firstLeaf.ID})
 }

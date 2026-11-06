@@ -17,6 +17,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -301,11 +302,11 @@ var doctorFixes = map[string]doctorFix{
 
 // joinCycle renders a cycle field: its members, or "none" for a check that ran
 // and found no loop.
-func joinCycle(members []string) string {
+func joinCycle(members []model.ID) string {
 	if len(members) == 0 {
 		return "none"
 	}
-	return strings.Join(members, "->")
+	return model.JoinIDs(members, "->")
 }
 
 // doctorFieldValue renders one field of the status line, substituting
@@ -473,7 +474,7 @@ func diagnoseThenRepair(ctx context.Context, progress io.Writer, repairer storag
 			// [LAW:no-silent-failure] The skip is stated. A run that printed only
 			// the cycle would read as though these repairs had run and found
 			// nothing.
-			fmt.Fprintf(progress, "doctor: skipping --fix %s because the hierarchy holds a cycle (%s); those repairs start from a read of the hierarchy, which refuses a loop — break it first, then re-run\n", strings.Join(withheld, ","), strings.Join(report.ParentCycle, " -> "))
+			fmt.Fprintf(progress, "doctor: skipping --fix %s because the hierarchy holds a cycle (%s); those repairs start from a read of the hierarchy, which refuses a loop — break it first, then re-run\n", strings.Join(withheld, ","), model.JoinIDs(report.ParentCycle, " -> "))
 		}
 		fixes = runnable
 	}

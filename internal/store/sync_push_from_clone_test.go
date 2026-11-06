@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -102,7 +103,8 @@ func TestAPushRefusedOverAPeersCommitsIsDiverged(t *testing.T) {
 // builds: the live store at liveRoot pushed c2 to the remote at remoteDir,
 // and the clone at cloneRoot, taken at c1, holds c3.
 type divergedClone struct {
-	liveRoot, cloneRoot, remoteDir, epicID string
+	liveRoot, cloneRoot, remoteDir string
+	epicID                         model.ID
 }
 
 func buildDivergedClone(t *testing.T, ctx context.Context) divergedClone {
@@ -121,7 +123,7 @@ func buildDivergedClone(t *testing.T, ctx context.Context) divergedClone {
 
 // commitTitled creates an issue titled title in the store at root and
 // returns the head commit it left.
-func commitTitled(t *testing.T, ctx context.Context, root, epicID, title string) string {
+func commitTitled(t *testing.T, ctx context.Context, root string, epicID model.ID, title string) string {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -116,7 +115,7 @@ func observedAncestry(observer RankObserver, links []storage.ParentLink) storage
 // rankClimbQuery reads the framing edges of frontier. The hint keeps it a run of
 // point lookups: unhinted the planner can merge-join relations with issues,
 // which costs the store's size and looks fine on a small store.
-func rankClimbQuery(frontier []string) (string, any) {
+func rankClimbQuery(frontier []model.ID) (string, any) {
 	set, arg := newIDSet(frontier).rows("frontier")
 	return rankLinksQuery(`/*+ JOIN_ORDER(frontier, r, p) LOOKUP_JOIN(frontier, r) LOOKUP_JOIN(r, p) */`, set+` JOIN relations r ON r.src_id = frontier.id`), arg
 }
@@ -129,8 +128,8 @@ func rankClimbQuery(frontier []string) (string, any) {
 // What comes back places ids and what contains them and nothing else: any other
 // issue reads as top level, and its Conflicts are only what the climb met. So it
 // stays inside the functions below, which are handed the rows it covers.
-func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (storage.RankAncestry, error) {
-	reached := make(map[string]bool, len(ids))
+func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []model.ID) (storage.RankAncestry, error) {
+	reached := make(map[model.ID]bool, len(ids))
 	for _, id := range ids {
 		reached[id] = true
 	}
@@ -160,7 +159,7 @@ func loadRankAncestryAbove(ctx context.Context, q rowQueryer, ids []string) (sto
 // issues with two or more neighbours on one side, and no query at all when none
 // has.
 func sortInTreeOrder(ctx context.Context, q rowQueryer, groups ...[]model.Issue) error {
-	var seed []string
+	var seed []model.ID
 	for _, group := range groups {
 		if len(group) > 1 {
 			for _, issue := range group {
@@ -183,7 +182,7 @@ func sortInTreeOrder(ctx context.Context, q rowQueryer, groups ...[]model.Issue)
 // its query has run, and the listing that reaches most of the store pays less
 // for the whole read than for a climb from every row, so it reads every framing
 // edge.
-func (s *Store) listingOrdering(ctx context.Context, specs []storage.SortSpec, selected []string, restricted bool) (func(a, b model.Issue) int, error) {
+func (s *Store) listingOrdering(ctx context.Context, specs []storage.SortSpec, selected []model.ID, restricted bool) (func(a, b model.Issue) int, error) {
 	var ancestry storage.RankAncestry
 	var err error
 	if restricted {
@@ -279,7 +278,7 @@ func (e rankEdge) outsideQuery() string {
 // and counting it halves the gap on every repeat of a move that has already
 // arrived. A write that moves nothing passes "", which no issue id is, so the
 // read excludes nothing.
-func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank, vacating string) (lower, upper string, err error) {
+func (e rankEdge) roomBesideTx(ctx context.Context, tx *sql.Tx, anchorRank string, vacating model.ID) (lower, upper string, err error) {
 	// An anchor holding no rank is not a key, and the comparison reads it
 	// differently at each end: `item_rank < ''` matches nothing, while
 	// `item_rank > ''` matches every rank there is. The same empty anchor would
@@ -435,7 +434,7 @@ func edgeFor(p storage.RankPlacement) (rankEdge, error) {
 // placement against stored keys goes through that one function, so an edge
 // whose key leaves no room past it is made room for exactly as a relative
 // move's neighbors are.
-func (e rankEdge) ranksBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, n int, vacating string) ([]string, error) {
+func (e rankEdge) ranksBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame, n int, vacating model.ID) ([]string, error) {
 	return ranksBetweenTx(ctx, tx, n, func() (string, string, error) {
 		edgeRank, err := frameEdgeRankTx(ctx, tx, f, e)
 		if err != nil {
@@ -457,7 +456,7 @@ func (e rankEdge) ranksBeyondTx(ctx context.Context, tx *sql.Tx, f storage.Frame
 // and the rank it holds there. Both come back empty when the frame has nothing
 // ranked in it — a fact about the frame, not a failure, and the one input
 // ranksBeyondTx needs to seed a fresh frame.
-func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (holderID, holderRank string, err error) {
+func frameEdgeHolderTx(ctx context.Context, tx *sql.Tx, f storage.Frame, edge rankEdge) (holderID model.ID, holderRank string, err error) {
 	rows, args := frameRowsQuery(f)
 	query := rows + fmt.Sprintf(` ORDER BY issues.item_rank %s LIMIT 1`, edge.order)
 	err = tx.QueryRowContext(ctx, query, args...).Scan(&holderID, &holderRank)
@@ -492,7 +491,7 @@ func frameHeadTx(ctx context.Context, tx *sql.Tx, f storage.Frame, n int) ([]ran
 // Built on frameColumn, the one SQL rendering of what contains what, so this
 // cannot drift from the rule every neighbor lookup is already scoped by.
 // [LAW:one-source-of-truth]
-func frameOfTx(ctx context.Context, tx *sql.Tx, issueID string) (storage.Frame, error) {
+func frameOfTx(ctx context.Context, tx *sql.Tx, issueID model.ID) (storage.Frame, error) {
 	query := fmt.Sprintf(`SELECT %s FROM issues WHERE id = ? AND deleted_at IS NULL`, frameColumn)
 	var f string
 	err := tx.QueryRowContext(ctx, query, issueID).Scan(&f)
@@ -528,7 +527,7 @@ func frameOfTx(ctx context.Context, tx *sql.Tx, issueID string) (storage.Frame, 
 // written by the same statement sequence: reading it afterwards would mean
 // placing the key before knowing which keyspace it belongs to.
 // [LAW:one-source-of-truth]
-func filingParentTx(ctx context.Context, tx *sql.Tx, parentID string) (storage.Frame, model.IssueType, error) {
+func filingParentTx(ctx context.Context, tx *sql.Tx, parentID model.ID) (storage.Frame, model.IssueType, error) {
 	if parentID == "" {
 		return storage.TopLevel, "", nil
 	}
@@ -557,7 +556,7 @@ func filingParentTx(ctx context.Context, tx *sql.Tx, parentID string) (storage.F
 // here does filter them, so without this gate the verbs would disagree about
 // what a deleted issue even is — one writing a key onto a row no view shows,
 // another failing deep inside its transaction on a missing row.
-func (s *Store) mustRankable(ctx context.Context, id string) (model.Issue, error) {
+func (s *Store) mustRankable(ctx context.Context, id model.ID) (model.Issue, error) {
 	issue, err := s.GetIssue(ctx, id)
 	if err != nil {
 		return model.Issue{}, err
@@ -594,7 +593,7 @@ func mutationValue[T any](ctx context.Context, s *Store, message string, fn func
 // rendering of "still live under this lock", so the rank paths that need that
 // answer ask the same question in the same words rather than each carrying its
 // own copy of the predicate. [LAW:single-enforcer]
-func requireLiveTx(ctx context.Context, q rowQueryer, id string) error {
+func requireLiveTx(ctx context.Context, q rowQueryer, id model.ID) error {
 	var live string
 	err := q.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ? AND deleted_at IS NULL`, id).Scan(&live)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -620,7 +619,7 @@ func requireLiveTx(ctx context.Context, q rowQueryer, id string) error {
 // writeRanksTx's UPDATE, which every key write in the store's rank paths runs,
 // so "a rank never lands on a deleted issue" has one enforcement site, and it
 // holds even if the read is ever removed or reordered. [LAW:single-enforcer]
-func writeRankTx(ctx context.Context, tx *sql.Tx, id, newRank, now string) error {
+func writeRankTx(ctx context.Context, tx *sql.Tx, id model.ID, newRank, now string) error {
 	if err := requireLiveTx(ctx, tx, id); err != nil {
 		return err
 	}
@@ -628,12 +627,12 @@ func writeRankTx(ctx context.Context, tx *sql.Tx, id, newRank, now string) error
 }
 
 // RankToTop moves an issue to the top of its own frame.
-func (s *Store) RankToTop(ctx context.Context, issueID string) (storage.RankEnd, error) {
+func (s *Store) RankToTop(ctx context.Context, issueID model.ID) (storage.RankEnd, error) {
 	return s.rankToEdge(ctx, issueID, storage.RankTop)
 }
 
 // RankToBottom moves an issue to the bottom of its own frame.
-func (s *Store) RankToBottom(ctx context.Context, issueID string) (storage.RankEnd, error) {
+func (s *Store) RankToBottom(ctx context.Context, issueID model.ID) (storage.RankEnd, error) {
 	return s.rankToEdge(ctx, issueID, storage.RankBottom)
 }
 
@@ -657,7 +656,7 @@ func (s *Store) RankToBottom(ctx context.Context, issueID string) (storage.RankE
 // move do. Creation asks a different population at the bottom — the whole
 // workspace, see nextRankForPlacement — and alone answers for an empty one, in
 // filingBoundsTx; the rest is shared through edgeFor rather than copied.
-func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storage.RankPlacement) (storage.RankEnd, error) {
+func (s *Store) rankToEdge(ctx context.Context, issueID model.ID, placement storage.RankPlacement) (storage.RankEnd, error) {
 	if _, err := s.mustRankable(ctx, issueID); err != nil {
 		return storage.RankEnd{}, err
 	}
@@ -712,8 +711,8 @@ func (s *Store) rankToEdge(ctx context.Context, issueID string, placement storag
 // frame's keys: resolved beforehand, a concurrent reparent leaves it naming a
 // container the representatives have already left, and the stack is written
 // into a keyspace nothing reads it in. [LAW:no-ambient-temporal-coupling]
-func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.RankSetResolution, storage.Frame, error) {
-	chains := make([][]string, len(ids))
+func resolveRankSet(ctx context.Context, q rowQueryer, ids []model.ID) ([]storage.RankSetResolution, storage.Frame, error) {
+	chains := make([][]model.ID, len(ids))
 	for i, id := range ids {
 		chain, err := ancestorChain(ctx, q, id)
 		if err != nil {
@@ -748,7 +747,7 @@ func resolveRankSet(ctx context.Context, q rowQueryer, ids []string) ([]storage.
 // or none does. Validates IDs exist and rejects duplicates before any write.
 // [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
 // transaction so partial-application states cannot occur.
-func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResult, error) {
+func (s *Store) RankSet(ctx context.Context, ids []model.ID) (storage.RankSetResult, error) {
 	if err := storage.ValidateRankSetIDs(ids); err != nil {
 		return storage.RankSetResult{}, err
 	}
@@ -771,7 +770,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		result := storage.RankSetResult{Resolutions: resolutions, Frame: f}
 		account := RankSetAccount{Frame: f, Named: len(ids)}
 		observer := rankObserverFrom(ctx)
-		ranked := make([]string, len(resolutions))
+		ranked := make([]model.ID, len(resolutions))
 		for i, r := range resolutions {
 			ranked[i] = r.RankedID
 		}
@@ -782,14 +781,14 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		}
 		// An order that has arrived writes nothing: its issues stand where they
 		// were asked to, and a stamp would say otherwise.
-		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id string) bool { return row.id == id }) {
+		if len(head) >= len(ranked) && slices.EqualFunc(head[:len(ranked)], ranked, func(row rankedIssue, id model.ID) bool { return row.id == id }) {
 			hear(ctx, func() { observer.RankSet(account) })
 			return result, nil
 		}
 		if err := refuseReversedTie(head[:min(len(ranked), len(head))], ranked); err != nil {
 			return storage.RankSetResult{}, err
 		}
-		position := make(map[string]int, len(head))
+		position := make(map[model.ID]int, len(head))
 		for i, row := range head {
 			position[row.id] = i
 		}
@@ -804,7 +803,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 		if err != nil {
 			return storage.RankSetResult{}, fmt.Errorf("rank set: %w", err)
 		}
-		held := make(map[string]string, len(run))
+		held := make(map[model.ID]string, len(run))
 		slots := slices.Clone(minted)
 		for _, row := range run {
 			held[row.id] = row.rank
@@ -847,7 +846,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) (storage.RankSetResul
 // over Below while the two share Key, against their ids. Its record names the
 // pair on the event of whichever command ran the rank set.
 type ReversedTieError struct {
-	Above, Below, Key string
+	Above, Below model.ID
+	Key          string
 }
 
 func (e ReversedTieError) Error() string {
@@ -866,7 +866,7 @@ var (
 // EventRecord puts the refused pair on the failed command's event, the one it
 // would have written above first.
 func (e ReversedTieError) EventRecord() (map[string]any, map[string]int) {
-	return map[string]any{"rank_set.refused_tie": []string{e.Above, e.Below}}, nil
+	return map[string]any{"rank_set.refused_tie": []string{e.Above.Raw(), e.Below.Raw()}}, nil
 }
 
 // refuseReversedTie refuses an order that sets one of the issues standing in the
@@ -874,8 +874,8 @@ func (e ReversedTieError) EventRecord() (map[string]any, map[string]int) {
 // listing breaks that tie by id. A minted key could write the pair, but a tie is
 // parted on purpose: the error names it with the move that gives each issue a key
 // of its own, and nothing is written. [LAW:no-silent-failure]
-func refuseReversedTie(places []rankedIssue, ranked []string) error {
-	held := make(map[string]string, len(places))
+func refuseReversedTie(places []rankedIssue, ranked []model.ID) error {
+	held := make(map[model.ID]string, len(places))
 	for _, row := range places {
 		held[row.id] = row.rank
 	}
@@ -893,8 +893,8 @@ func refuseReversedTie(places []rankedIssue, ranked []string) error {
 // share. A shared key cannot pass to another issue, because a listing breaks the
 // tie by id and the id might sort the wrong way. It stops rather than skips, so
 // the run stays the frame's first rows.
-func rankSetLeadingRun(head []rankedIssue, ranked []string) []rankedIssue {
-	named := make(map[string]struct{}, len(ranked))
+func rankSetLeadingRun(head []rankedIssue, ranked []model.ID) []rankedIssue {
+	named := make(map[model.ID]struct{}, len(ranked))
 	for _, id := range ranked {
 		named[id] = struct{}{}
 	}
@@ -911,8 +911,9 @@ func rankSetLeadingRun(head []rankedIssue, ranked []string) []rankedIssue {
 // issue — which a named issue's move is and a key rewritten under an issue that
 // stays put is not.
 type rankWrite struct {
-	id, rank string
-	touched  bool
+	id      model.ID
+	rank    string
+	touched bool
 }
 
 // writeRanksTx hands each issue the key its write names, one statement per id
@@ -927,8 +928,8 @@ type rankWrite struct {
 // here, so the liveness predicate on the UPDATE is the one enforcement of "a
 // rank never lands on a deleted issue" (see writeRankTx).
 func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now string) error {
-	byID := make(map[string]rankWrite, len(writes))
-	ids := make([]string, len(writes))
+	byID := make(map[model.ID]rankWrite, len(writes))
+	ids := make([]model.ID, len(writes))
 	longest := 0
 	for i, w := range writes {
 		byID[w.id] = w
@@ -972,14 +973,14 @@ func writeRanksTx(ctx context.Context, tx *sql.Tx, writes []rankWrite, now strin
 // deleted a moment later, would be re-read by nothing. The chain's seed is
 // where that id would otherwise stop being examined, so it is where the
 // examination belongs. [LAW:single-enforcer]
-func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, error) {
+func ancestorChain(ctx context.Context, q rowQueryer, id model.ID) ([]model.ID, error) {
 	if err := requireLiveTx(ctx, q, id); err != nil {
 		return nil, err
 	}
-	chain := []string{id}
-	seen := map[string]struct{}{id: {}}
+	chain := []model.ID{id}
+	seen := map[model.ID]struct{}{id: {}}
 	for cur := id; ; {
-		var parent string
+		var parent model.ID
 		err := q.QueryRowContext(ctx,
 			`SELECT r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
 			 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL
@@ -1008,8 +1009,8 @@ func ancestorChain(ctx context.Context, q rowQueryer, id string) ([]string, erro
 // standalone moves the epic (see storage.FrameRepresentatives). Ranking an
 // issue relative to its own container (or descendant) has no frame-coherent
 // meaning and is rejected. [LAW:no-silent-failure]
-func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, f storage.Frame, err error) {
-	reps, f, err := storage.FrameRepresentatives([][]string{issueChain, targetChain})
+func resolveComparableFrame(issueChain, targetChain []model.ID) (movedID, anchorID model.ID, f storage.Frame, err error) {
+	reps, f, err := storage.FrameRepresentatives([][]model.ID{issueChain, targetChain})
 	if err != nil {
 		return "", "", storage.TopLevel, err
 	}
@@ -1026,7 +1027,7 @@ func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID
 // never the invariant — writeRankTx re-establishes liveness under the lock and
 // owns "a rank never lands on a deleted issue", exactly as rankPairTx owns the
 // frame for the same reason. [LAW:parse-dont-validate]
-func (s *Store) checkRankPair(ctx context.Context, issueID, targetID string) error {
+func (s *Store) checkRankPair(ctx context.Context, issueID, targetID model.ID) error {
 	if issueID == targetID {
 		return model.ValidationError{Message: "cannot rank an issue relative to itself"}
 	}
@@ -1051,7 +1052,7 @@ func (s *Store) checkRankPair(ctx context.Context, issueID, targetID string) err
 //
 // [LAW:single-enforcer] Both relative rank ops route through this one
 // resolution so cross-frame semantics cannot drift between above and below.
-func rankPairTx(ctx context.Context, tx *sql.Tx, issueID, targetID string) (storage.RankMove, storage.Frame, error) {
+func rankPairTx(ctx context.Context, tx *sql.Tx, issueID, targetID model.ID) (storage.RankMove, storage.Frame, error) {
 	issueChain, err := ancestorChain(ctx, tx, issueID)
 	if err != nil {
 		return storage.RankMove{}, storage.TopLevel, err
@@ -1070,7 +1071,7 @@ func rankPairTx(ctx context.Context, tx *sql.Tx, issueID, targetID string) (stor
 // anchorRankTx reads the anchor's key inside the caller's transaction, since a key
 // another writer replaced is not the one asked for [LAW:no-ambient-temporal-coupling],
 // and finds no unranked anchor, whose "" would bound the move as an open end. [LAW:no-silent-failure]
-func anchorRankTx(ctx context.Context, tx *sql.Tx, anchorID string) (string, error) {
+func anchorRankTx(ctx context.Context, tx *sql.Tx, anchorID model.ID) (string, error) {
 	var anchorRank string
 	err := tx.QueryRowContext(ctx, `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, anchorID).Scan(&anchorRank)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1126,7 +1127,7 @@ func ranksBetweenTx(ctx context.Context, tx *sql.Tx, n int, bounds func() (lower
 
 // RankAbove moves an issue to rank immediately above the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
-func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
+func (s *Store) RankAbove(ctx context.Context, issueID, targetID model.ID) (storage.RankMove, error) {
 	if err := s.checkRankPair(ctx, issueID, targetID); err != nil {
 		return storage.RankMove{}, err
 	}
@@ -1172,7 +1173,7 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 
 // RankBelow moves an issue to rank immediately below the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
-func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
+func (s *Store) RankBelow(ctx context.Context, issueID, targetID model.ID) (storage.RankMove, error) {
 	if err := s.checkRankPair(ctx, issueID, targetID); err != nil {
 		return storage.RankMove{}, err
 	}
@@ -1378,12 +1379,12 @@ type rowQueryer interface {
 // raw column peek that would lie about an epic.
 // [LAW:one-source-of-truth] State classification rides the lifecycle here,
 // the same predicate ready uses for its rank_inversion annotations.
-func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
+func (s *Store) liveIssueIDs(ctx context.Context) (map[model.ID]struct{}, error) {
 	issues, err := s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})
 	if err != nil {
 		return nil, fmt.Errorf("list live issues: %w", err)
 	}
-	out := make(map[string]struct{}, len(issues))
+	out := make(map[model.ID]struct{}, len(issues))
 	for _, issue := range issues {
 		out[issue.ID] = struct{}{}
 	}
@@ -1418,8 +1419,8 @@ func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]storage.DependencyEdg
 }
 
 // blocksPrecedenceAdj builds the precedence adjacency dependency -> []dependent.
-func blocksPrecedenceAdj(edges []storage.DependencyEdge) map[string][]string {
-	adj := make(map[string][]string, len(edges))
+func blocksPrecedenceAdj(edges []storage.DependencyEdge) map[model.ID][]model.ID {
+	adj := make(map[model.ID][]model.ID, len(edges))
 	for _, e := range edges {
 		adj[e.Dependency] = append(adj[e.Dependency], e.Dependent)
 	}
@@ -1429,22 +1430,22 @@ func blocksPrecedenceAdj(edges []storage.DependencyEdge) map[string][]string {
 // findBlocksCycle returns one cycle in the blocks precedence graph as an
 // ordered, repeated-endpoint path (a -> b -> ... -> a), or nil when the graph
 // is acyclic. Node iteration is sorted so the reported cycle is deterministic.
-func findBlocksCycle(edges []storage.DependencyEdge) []string {
+func findBlocksCycle(edges []storage.DependencyEdge) []model.ID {
 	adj := blocksPrecedenceAdj(edges)
-	nodes := make([]string, 0, len(adj))
+	nodes := make([]model.ID, 0, len(adj))
 	for n := range adj {
 		nodes = append(nodes, n)
 	}
-	sort.Strings(nodes)
+	slices.Sort(nodes)
 	const (
 		white = 0
 		gray  = 1
 		black = 2
 	)
-	color := make(map[string]int)
-	var stack []string
-	var dfs func(string) []string
-	dfs = func(n string) []string {
+	color := make(map[model.ID]int)
+	var stack []model.ID
+	var dfs func(model.ID) []model.ID
+	dfs = func(n model.ID) []model.ID {
 		color[n] = gray
 		stack = append(stack, n)
 		for _, m := range adj[n] {
@@ -1452,7 +1453,7 @@ func findBlocksCycle(edges []storage.DependencyEdge) []string {
 			case gray:
 				for i, s := range stack {
 					if s == m {
-						return append(append([]string(nil), stack[i:]...), m)
+						return append(append([]model.ID(nil), stack[i:]...), m)
 					}
 				}
 			case white:

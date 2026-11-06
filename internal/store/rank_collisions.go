@@ -14,7 +14,7 @@ import (
 // their order in place of anything a caller ranked.
 type rankCollision struct {
 	key string
-	ids []string
+	ids []model.ID
 }
 
 // rankCollisions returns every key two or more of issues hold, in key order.
@@ -25,7 +25,7 @@ type rankCollision struct {
 // counts what it returns, a landing separates it, and the recovery gate refuses
 // a rebuild that holds it.
 func rankCollisions(issues []rankedIssue) []rankCollision {
-	holders := map[string][]string{}
+	holders := map[string][]model.ID{}
 	for _, issue := range issues {
 		if issue.rank == "" {
 			continue
@@ -48,7 +48,7 @@ func rankCollisions(issues []rankedIssue) []rankCollision {
 func describeRankCollisions(collisions []rankCollision) string {
 	described := make([]string, len(collisions))
 	for i, c := range collisions {
-		described[i] = fmt.Sprintf("%q shared by %s", c.key, strings.Join(c.ids, ", "))
+		described[i] = fmt.Sprintf("%q shared by %s", c.key, model.JoinIDs(c.ids, ", "))
 	}
 	return strings.Join(described, "; ")
 }
@@ -116,7 +116,7 @@ func separateRankCollisions(export model.Export) (model.Export, []storage.Rekeye
 		return export, nil, nil
 	}
 	slices.SortFunc(placed, compareRankedIssues)
-	from := make(map[string]string, len(placed))
+	from := make(map[model.ID]string, len(placed))
 	for _, issue := range placed {
 		from[issue.id] = issue.rank
 	}
@@ -125,7 +125,7 @@ func separateRankCollisions(export model.Export) (model.Export, []storage.Rekeye
 		return model.Export{}, nil, fmt.Errorf("separate shared rank keys (%s): %w", describeRankCollisions(collisions), err)
 	}
 
-	newRank := make(map[string]string, len(rewrites))
+	newRank := make(map[model.ID]string, len(rewrites))
 	rekeyed := make([]storage.Rekeyed, len(rewrites))
 	for i, rewrite := range rewrites {
 		newRank[rewrite.id] = rewrite.newRank

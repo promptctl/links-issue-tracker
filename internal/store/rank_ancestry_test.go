@@ -109,7 +109,7 @@ func TestAGroupOfOneClimbsNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 		levels, links = 0, 0
-		if _, err := st.GetRelationsByIDs(ctx, []string{third[0].ID, third[1].ID, first[0].ID}); err != nil {
+		if _, err := st.GetRelationsByIDs(ctx, []model.ID{third[0].ID, third[1].ID, first[0].ID}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -163,18 +163,18 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 	if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, "!", child.ID); err != nil {
 		t.Fatal(err)
 	}
-	relations, err := st.GetRelationsByIDs(ctx, []string{upper[0].ID})
+	relations, err := st.GetRelationsByIDs(ctx, []model.ID{upper[0].ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := issueIDs(relations[upper[0].ID].Children), []string{child.ID, kept.ID, later.ID}; !slices.Equal(got, want) {
+	if got, want := issueIDs(relations[upper[0].ID].Children), []model.ID{child.ID, kept.ID, later.ID}; !slices.Equal(got, want) {
 		t.Errorf("Children of %s = %v, want %v", upper[0].ID, got, want)
 	}
 	adjacency, err := st.GetIssueAdjacency(ctx, kept.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := issueIDs(adjacency.Siblings), []string{child.ID, later.ID}; !slices.Equal(got, want) {
+	if got, want := issueIDs(adjacency.Siblings), []model.ID{child.ID, later.ID}; !slices.Equal(got, want) {
 		t.Errorf("Siblings of %s = %v, want %v", kept.ID, got, want)
 	}
 }

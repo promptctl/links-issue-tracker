@@ -38,7 +38,7 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(blocked) error = %v", err)
 	}
-	if err := runDepAdd(t, ctx, io.Discard, ap, []string{blocked.ID, "--blocked-by", task.ID}); err != nil {
+	if err := runDepAdd(t, ctx, io.Discard, ap, []string{blocked.ID.Raw(), "--blocked-by", task.ID.Raw()}); err != nil {
 		t.Fatalf("dep add %s --blocked-by %s: %v", blocked.ID, task.ID, err)
 	}
 	runLs := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -60,15 +60,15 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 		{"new topic above the cap", runNew, []string{"--title", "t", "--topic", strings.Repeat("a", 31)}, ExitValidation, reasonValidationRefused},
 		{"new topic missing", runNew, []string{"--title", "t"}, ExitValidation, reasonValidationRefused},
 		{"new title missing", runNew, []string{"--topic", "fields"}, ExitValidation, reasonValidationRefused},
-		{"new assignee carrying a comma", runNew, []string{"--title", "t", "--topic", "fields", "--parent", epic.ID, "--assignee", "Doe, J"}, ExitValidation, reasonValidationRefused},
-		{"update title blanked", runUpdate, []string{task.ID, "--title", "  "}, ExitValidation, reasonValidationRefused},
-		{"update assignee carrying a comma", runUpdate, []string{task.ID, "--assignee", "Doe, J"}, ExitValidation, reasonValidationRefused},
-		{"update leaf to container", runUpdate, []string{task.ID, "--type", "epic"}, ExitValidation, reasonValidationRefused},
-		{"update container to leaf", runUpdate, []string{epic.ID, "--type", "task"}, ExitValidation, reasonValidationRefused},
-		{"update naming no field", runUpdate, []string{task.ID}, ExitUsage, reasonUsageError},
-		{"label add blank label", runLabelAdd, []string{task.ID, " "}, ExitValidation, reasonValidationRefused},
-		{"dep add self-loop", runDepAdd, []string{task.ID, "--blocked-by", task.ID}, ExitValidation, reasonValidationRefused},
-		{"dep add closing a blocked-by cycle", runDepAdd, []string{task.ID, "--blocked-by", blocked.ID}, ExitValidation, reasonValidationRefused},
+		{"new assignee carrying a comma", runNew, []string{"--title", "t", "--topic", "fields", "--parent", epic.ID.Raw(), "--assignee", "Doe, J"}, ExitValidation, reasonValidationRefused},
+		{"update title blanked", runUpdate, []string{task.ID.Raw(), "--title", "  "}, ExitValidation, reasonValidationRefused},
+		{"update assignee carrying a comma", runUpdate, []string{task.ID.Raw(), "--assignee", "Doe, J"}, ExitValidation, reasonValidationRefused},
+		{"update leaf to container", runUpdate, []string{task.ID.Raw(), "--type", "epic"}, ExitValidation, reasonValidationRefused},
+		{"update container to leaf", runUpdate, []string{epic.ID.Raw(), "--type", "task"}, ExitValidation, reasonValidationRefused},
+		{"update naming no field", runUpdate, []string{task.ID.Raw()}, ExitUsage, reasonUsageError},
+		{"label add blank label", runLabelAdd, []string{task.ID.Raw(), " "}, ExitValidation, reasonValidationRefused},
+		{"dep add self-loop", runDepAdd, []string{task.ID.Raw(), "--blocked-by", task.ID.Raw()}, ExitValidation, reasonValidationRefused},
+		{"dep add closing a blocked-by cycle", runDepAdd, []string{task.ID.Raw(), "--blocked-by", blocked.ID.Raw()}, ExitValidation, reasonValidationRefused},
 		{"ls unsupported sort field", runLs, []string{"--sort", "bogus"}, ExitValidation, reasonValidationRefused},
 		{"ls unknown state in --status", runLs, []string{"--status", "bogus"}, ExitValidation, reasonValidationRefused},
 		{"ls query term refused", runLs, []string{"--query", "has:nope"}, ExitValidation, reasonValidationRefused},

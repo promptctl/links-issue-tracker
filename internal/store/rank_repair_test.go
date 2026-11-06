@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
@@ -25,7 +26,7 @@ import (
 // stops ascending at the tenth id, where "100" sorts between "10" and "20", and
 // hands the repair an order that violates its sorted-by-rank precondition.
 // Deriving the width means no future caller can outgrow it.
-func seq(ids ...string) []rankedIssue {
+func seq(ids ...model.ID) []rankedIssue {
 	width := len(strconv.Itoa(len(ids) * 10))
 	order := make([]rankedIssue, len(ids))
 	for i, id := range ids {
@@ -38,7 +39,7 @@ func seq(ids ...string) []rankedIssue {
 // ranks written, everything else untouched, re-sorted by rank. It is the
 // caller's write loop, so a test can assert on the order the store would end up
 // holding rather than on the rewrite list's shape.
-func applyRewrites(order []rankedIssue, rewrites []rankRewrite) []string {
+func applyRewrites(order []rankedIssue, rewrites []rankRewrite) []model.ID {
 	final := make([]rankedIssue, len(order))
 	copy(final, order)
 	for _, rewrite := range rewrites {
@@ -49,19 +50,19 @@ func applyRewrites(order []rankedIssue, rewrites []rankRewrite) []string {
 		}
 	}
 	sort.SliceStable(final, func(i, j int) bool { return final[i].rank < final[j].rank })
-	ids := make([]string, len(final))
+	ids := make([]model.ID, len(final))
 	for i, item := range final {
 		ids[i] = item.id
 	}
 	return ids
 }
 
-func rewrittenIDs(rewrites []rankRewrite) []string {
-	ids := make([]string, len(rewrites))
+func rewrittenIDs(rewrites []rankRewrite) []model.ID {
+	ids := make([]model.ID, len(rewrites))
 	for i, rewrite := range rewrites {
 		ids[i] = rewrite.id
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	return ids
 }
 
@@ -87,7 +88,7 @@ func TestRepairRankOrderKeepsBandOrderWhileSinkingTheirDependent(t *testing.T) {
 	if got := rewrittenIDs(rewrites); len(got) != 1 || got[0] != "gate" {
 		t.Fatalf("repairRankOrder() rewrote %v, want only [gate] — the band waits on nothing, so nothing in it had to move", got)
 	}
-	want := []string{"zulu", "yankee", "xray", "whiskey", "victor", "gate"}
+	want := []model.ID{"zulu", "yankee", "xray", "whiskey", "victor", "gate"}
 	if got := applyRewrites(order, rewrites); !equalIDs(got, want) {
 		t.Fatalf("order after repair = %v, want %v", got, want)
 	}
@@ -106,7 +107,7 @@ func TestRepairRankOrderMovesOnlyWhatTheEdgeForces(t *testing.T) {
 	if got := rewrittenIDs(rewrites); len(got) != 1 || got[0] != "b" {
 		t.Fatalf("repairRankOrder() rewrote %v, want only [b]", got)
 	}
-	want := []string{"a", "c", "d", "e", "b", "f"}
+	want := []model.ID{"a", "c", "d", "e", "b", "f"}
 	if got := applyRewrites(order, rewrites); !equalIDs(got, want) {
 		t.Fatalf("order after repair = %v, want %v", got, want)
 	}
@@ -135,7 +136,7 @@ func TestRepairRankOrderToleratesDuplicateEdges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("repairRankOrder() error = %v", err)
 	}
-	if got := applyRewrites(order, rewrites); !equalIDs(got, []string{"b", "a"}) {
+	if got := applyRewrites(order, rewrites); !equalIDs(got, []model.ID{"b", "a"}) {
 		t.Fatalf("order after repair = %v, want [b a]", got)
 	}
 }
@@ -185,53 +186,53 @@ func TestRepairRankOrderWritesAHeldIssueOnlyWhereItSharesAKey(t *testing.T) {
 		order   []rankedIssue
 		held    []rankedIssue
 		edges   []storage.DependencyEdge
-		written []string
-		listed  []string
+		written []model.ID
+		listed  []model.ID
 	}{
 		{
 			name:    "the sort overtakes a held key",
 			order:   []rankedIssue{{id: "a", rank: "a"}, {id: "c", rank: "c"}, {id: "b", rank: "d"}},
 			held:    []rankedIssue{{id: "x", rank: "b"}},
 			edges:   []storage.DependencyEdge{{Dependent: "a", Dependency: "b"}, {Dependent: "c", Dependency: "a"}},
-			written: []string{"b"},
-			listed:  []string{"b", "a", "c"},
+			written: []model.ID{"b"},
+			listed:  []model.ID{"b", "a", "c"},
 		},
 		{
 			name:    "a held key above a waiting run",
 			order:   []rankedIssue{{id: "p", rank: "a"}, {id: "r", rank: "ab"}, {id: "s", rank: "ac"}, {id: "q", rank: "c"}},
 			held:    []rankedIssue{{id: "x", rank: "b"}},
 			edges:   []storage.DependencyEdge{{Dependent: "p", Dependency: "q"}, {Dependent: "r", Dependency: "q"}, {Dependent: "s", Dependency: "q"}},
-			written: []string{"q"},
-			listed:  []string{"q", "p", "r", "s"},
+			written: []model.ID{"q"},
+			listed:  []model.ID{"q", "p", "r", "s"},
 		},
 		{
 			name:    "a held key an ordered issue shares",
 			order:   []rankedIssue{{id: "a", rank: "a"}, {id: "b", rank: "b"}},
 			held:    []rankedIssue{{id: "x", rank: "a0"}},
-			written: []string{"x"},
-			listed:  []string{"a", "b"},
+			written: []model.ID{"x"},
+			listed:  []model.ID{"a", "b"},
 		},
 		{
 			name:    "a key two held issues share",
 			order:   []rankedIssue{{id: "a", rank: "a"}},
 			held:    []rankedIssue{{id: "x", rank: "b"}, {id: "y", rank: "b"}},
-			written: []string{"y"},
-			listed:  []string{"a"},
+			written: []model.ID{"y"},
+			listed:  []model.ID{"a"},
 		},
 		{
 			name:    "an unranked held issue, an all-zero one and a malformed one",
 			order:   []rankedIssue{{id: "a", rank: "a"}, {id: "b", rank: "b"}},
 			held:    []rankedIssue{{id: "unranked", rank: ""}, {id: "zero", rank: "00"}, {id: "malformed", rank: "c-"}},
 			edges:   []storage.DependencyEdge{{Dependent: "a", Dependency: "b"}},
-			written: []string{"b", "malformed", "zero"},
-			listed:  []string{"b", "a"},
+			written: []model.ID{"b", "malformed", "zero"},
+			listed:  []model.ID{"b", "a"},
 		},
 		{
 			name:    "an all-zero key two held issues share",
 			order:   []rankedIssue{{id: "a", rank: "a"}},
 			held:    []rankedIssue{{id: "x", rank: "0"}, {id: "y", rank: "0"}},
-			written: []string{"x", "y"},
-			listed:  []string{"a"},
+			written: []model.ID{"x", "y"},
+			listed:  []model.ID{"a"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -243,7 +244,7 @@ func TestRepairRankOrderWritesAHeldIssueOnlyWhereItSharesAKey(t *testing.T) {
 				t.Fatalf("repairRankOrder() rewrote %v, want %v", got, tc.written)
 			}
 			final := applyToOrder(slices.Concat(tc.order, tc.held), rewrites)
-			holders := map[string]string{}
+			holders := map[string]model.ID{}
 			for _, item := range final {
 				if !rank.Valid(rank.Significant(item.rank)) {
 					continue
@@ -253,7 +254,7 @@ func TestRepairRankOrderWritesAHeldIssueOnlyWhereItSharesAKey(t *testing.T) {
 				}
 				holders[rank.Significant(item.rank)] = item.id
 			}
-			listed := make([]string, 0, len(tc.listed))
+			listed := make([]model.ID, 0, len(tc.listed))
 			for _, item := range final {
 				if slices.ContainsFunc(tc.order, func(o rankedIssue) bool { return o.id == item.id }) {
 					listed = append(listed, item.id)
@@ -274,19 +275,19 @@ func TestRepairRankOrderNeverAnchorsAGapWithNoRoom(t *testing.T) {
 		name  string
 		order []rankedIssue
 		edge  storage.DependencyEdge
-		want  []string
+		want  []model.ID
 	}{
 		{
 			name:  "ranks differing only by trailing zeros",
 			order: []rankedIssue{{id: "u", rank: "U"}, {id: "v", rank: "V"}, {id: "v0", rank: "V0"}, {id: "w", rank: "W"}},
 			edge:  storage.DependencyEdge{Dependent: "v0", Dependency: "w"},
-			want:  []string{"u", "v", "w", "v0"},
+			want:  []model.ID{"u", "v", "w", "v0"},
 		},
 		{
 			name:  "an all-zero rank",
 			order: []rankedIssue{{id: "zero", rank: "0"}, {id: "one", rank: "1"}},
 			edge:  storage.DependencyEdge{Dependent: "zero", Dependency: "one"},
-			want:  []string{"one", "zero"},
+			want:  []model.ID{"one", "zero"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -304,7 +305,7 @@ func TestRepairRankOrderNeverAnchorsAGapWithNoRoom(t *testing.T) {
 	}
 }
 
-func equalIDs(got, want []string) bool {
+func equalIDs(got, want []model.ID) bool {
 	if len(got) != len(want) {
 		return false
 	}
@@ -319,10 +320,10 @@ func equalIDs(got, want []string) bool {
 // deliberatelyRank ranks ids into exactly the given order at the top of the
 // backlog and fails the test if that order happens to be the ids' own sort
 // order — a fixture that is already alphabetical cannot witness alphabetizing.
-func deliberatelyRank(t *testing.T, ctx context.Context, st *Store, ids []string) {
+func deliberatelyRank(t *testing.T, ctx context.Context, st *Store, ids []model.ID) {
 	t.Helper()
-	sorted := append([]string(nil), ids...)
-	sort.Strings(sorted)
+	sorted := append([]model.ID(nil), ids...)
+	slices.Sort(sorted)
 	if equalIDs(ids, sorted) {
 		t.Fatalf("fixture order %v is already the ids' sort order; it cannot detect a repair that sorts by id", ids)
 	}
@@ -332,9 +333,9 @@ func deliberatelyRank(t *testing.T, ctx context.Context, st *Store, ids []string
 }
 
 // ranksByID reads the stored rank of every named issue.
-func ranksByID(t *testing.T, ctx context.Context, st *Store, ids []string) map[string]string {
+func ranksByID(t *testing.T, ctx context.Context, st *Store, ids []model.ID) map[model.ID]string {
 	t.Helper()
-	ranks := make(map[string]string, len(ids))
+	ranks := make(map[model.ID]string, len(ids))
 	for _, id := range ids {
 		issue, err := st.GetIssue(ctx, id)
 		if err != nil {
@@ -346,8 +347,8 @@ func ranksByID(t *testing.T, ctx context.Context, st *Store, ids []string) map[s
 }
 
 // orderByRank returns ids sorted the way the backlog sorts them.
-func orderByRank(ranks map[string]string) []string {
-	ids := make([]string, 0, len(ranks))
+func orderByRank(ranks map[model.ID]string) []model.ID {
+	ids := make([]model.ID, 0, len(ranks))
 	for id := range ranks {
 		ids = append(ids, id)
 	}
@@ -357,7 +358,7 @@ func orderByRank(ranks map[string]string) []string {
 
 // createRankTestEpic creates the epic a test's ranked issues share, so they
 // are one frame.
-func createRankTestEpic(t *testing.T, ctx context.Context, st *Store) string {
+func createRankTestEpic(t *testing.T, ctx context.Context, st *Store) model.ID {
 	t.Helper()
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle("Rank epic"),
@@ -369,7 +370,7 @@ func createRankTestEpic(t *testing.T, ctx context.Context, st *Store) string {
 	return epic.ID
 }
 
-func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, epic, title string) string {
+func createRankTestIssue(t *testing.T, ctx context.Context, st *Store, epic model.ID, title string) model.ID {
 	t.Helper()
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle(title),
@@ -391,14 +392,15 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	epic := createRankTestEpic(t, ctx, st)
 
-	ids := make([]string, 0, 6)
+	ids := make([]model.ID, 0, 6)
 	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"} {
 		ids = append(ids, createRankTestIssue(t, ctx, st, epic, title))
 	}
 	// Rank them in reverse id order, so the deliberate order is exactly the one
 	// an id-sorting repair would destroy.
-	deliberate := append([]string(nil), ids...)
-	sort.Sort(sort.Reverse(sort.StringSlice(deliberate)))
+	deliberate := append([]model.ID(nil), ids...)
+	slices.Sort(deliberate)
+	slices.Reverse(deliberate)
 	deliberatelyRank(t, ctx, st, deliberate)
 	before := ranksByID(t, ctx, st, deliberate)
 
@@ -440,7 +442,7 @@ func TestFixRankInversionsMovesOnlyTheInvertedTicket(t *testing.T) {
 			t.Fatalf("issue %s rank %q -> %q; it was not inverted, so the repair must not have touched it", id, before[id], after[id])
 		}
 	}
-	want := []string{deliberate[0], deliberate[2], deliberate[3], deliberate[4], deliberate[1], deliberate[5]}
+	want := []model.ID{deliberate[0], deliberate[2], deliberate[3], deliberate[4], deliberate[1], deliberate[5]}
 	if got := orderByRank(after); !equalIDs(got, want) {
 		t.Fatalf("order after fix = %v, want %v", got, want)
 	}
@@ -463,14 +465,15 @@ func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	epic := createRankTestEpic(t, ctx, st)
 
-	band := make([]string, 0, 6)
+	band := make([]model.ID, 0, 6)
 	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot"} {
 		band = append(band, createRankTestIssue(t, ctx, st, epic, title))
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(band)))
+	slices.Sort(band)
+	slices.Reverse(band)
 	gate := createRankTestIssue(t, ctx, st, epic, "Gate")
 	// The gate sits mid-band, so two of its dependencies are ranked below it.
-	deliberate := append(append(append([]string(nil), band[:4]...), gate), band[4:]...)
+	deliberate := append(append(append([]model.ID(nil), band[:4]...), gate), band[4:]...)
 	deliberatelyRank(t, ctx, st, deliberate)
 	before := ranksByID(t, ctx, st, deliberate)
 
@@ -492,7 +495,7 @@ func TestFixRankInversionsPreservesTheBandBlockingOneGate(t *testing.T) {
 			t.Fatalf("band member %s rank %q -> %q; the band waits on nothing and must come out as it went in", id, before[id], after[id])
 		}
 	}
-	if got := orderByRank(after); !equalIDs(got, append(append([]string(nil), band...), gate)) {
+	if got := orderByRank(after); !equalIDs(got, append(append([]model.ID(nil), band...), gate)) {
 		t.Fatalf("order after fix = %v, want the band in its deliberate order followed by the gate %v", got, band)
 	}
 
@@ -533,9 +536,9 @@ func TestRepairRankOrderProperties(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
 	for trial := 0; trial < 300; trial++ {
 		size := 1 + rng.Intn(40)
-		ids := make([]string, size)
+		ids := make([]model.ID, size)
 		for i := range ids {
-			ids[i] = fmt.Sprintf("t%03d", i)
+			ids[i] = model.ID(fmt.Sprintf("t%03d", i))
 		}
 		order := seq(ids...)
 
@@ -561,7 +564,7 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		if len(repaired) != size {
 			t.Fatalf("trial %d: repaired order has %d issues, want %d — the repair must permute the backlog, not resize it", trial, len(repaired), size)
 		}
-		seen := make(map[string]struct{}, size)
+		seen := make(map[model.ID]struct{}, size)
 		for _, item := range repaired {
 			seen[item.id] = struct{}{}
 		}
@@ -571,11 +574,11 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		if left := invertedEdges(repaired, storage.NewDependencyOrder(storage.RankAncestry{}, edges), edges); len(left) != 0 {
 			t.Fatalf("trial %d: %d edge(s) still inverted after the repair, want 0", trial, len(left))
 		}
-		placed := make(map[string]int, size)
+		placed := make(map[model.ID]int, size)
 		for at, item := range repaired {
 			placed[item.id] = at
 		}
-		dependencies := make(map[string][]string, size)
+		dependencies := make(map[model.ID][]model.ID, size)
 		for _, e := range edges {
 			dependencies[e.Dependent] = append(dependencies[e.Dependent], e.Dependency)
 		}
@@ -584,7 +587,7 @@ func TestRepairRankOrderProperties(t *testing.T) {
 			for _, q := range ids[i+1:] {
 				overtaken := placed[q] < placed[p]
 				// q may itself be the dependency p was waiting on.
-				waiting := slices.ContainsFunc(dependencies[p], func(d string) bool { return placed[d] >= placed[q] })
+				waiting := slices.ContainsFunc(dependencies[p], func(d model.ID) bool { return placed[d] >= placed[q] })
 				if overtaken && !waiting {
 					t.Fatalf("trial %d: %s now stands ahead of %s, yet no dependency of %s is placed at or after %s — an issue may fall behind only while it waits on a dependency", trial, q, p, p, q)
 				}
@@ -618,7 +621,7 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 	keyOf := func(n, i int) string {
 		return fmt.Sprintf("%0*d", len(strconv.Itoa(n*10)), (i+1)*10)
 	}
-	ancestryOver := func(parent map[string]string, key map[string]string) storage.RankAncestry {
+	ancestryOver := func(parent map[model.ID]model.ID, key map[model.ID]string) storage.RankAncestry {
 		links := make([]storage.ParentLink, 0, len(parent))
 		for child, p := range parent {
 			links = append(links, storage.ParentLink{ChildID: child, ParentID: p, ParentRank: key[p]})
@@ -628,23 +631,23 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 	interleavedTrials := 0
 	for trial := 0; trial < 300; trial++ {
 		size := 1 + rng.Intn(40)
-		ids := make([]string, size)
-		parent := map[string]string{}
+		ids := make([]model.ID, size)
+		parent := map[model.ID]model.ID{}
 		for i := range ids {
-			ids[i] = fmt.Sprintf("t%03d", i)
+			ids[i] = model.ID(fmt.Sprintf("t%03d", i))
 			if i > 0 && rng.Intn(3) > 0 {
 				parent[ids[i]] = ids[rng.Intn(i)]
 			}
 		}
-		key := map[string]string{}
+		key := map[model.ID]string{}
 		for i, at := range rng.Perm(size) {
 			key[ids[i]] = keyOf(size, at)
 		}
-		hiddenAt := map[string]int{}
+		hiddenAt := map[model.ID]int{}
 		for i, at := range rng.Perm(size) {
 			hiddenAt[ids[i]] = at
 		}
-		live := map[string]struct{}{}
+		live := map[model.ID]struct{}{}
 		for _, id := range ids {
 			if rng.Intn(4) > 0 {
 				live[id] = struct{}{}
@@ -684,7 +687,7 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 			}
 			repairedKey[rewrite.id] = rewrite.newRank
 		}
-		holders := map[string]string{}
+		holders := map[string]model.ID{}
 		for id, k := range repairedKey {
 			if other, taken := holders[k]; taken {
 				t.Fatalf("trial %d: %s and %s both hold %q after the repair", trial, other, id, k)
@@ -698,7 +701,7 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 		}
 		// Within a frame, an issue falls behind a frame-mate that stood after
 		// it only while it waits on a dependency placed no earlier than that one.
-		waitsOn := map[string][]string{}
+		waitsOn := map[model.ID][]model.ID{}
 		for _, c := range constraints {
 			waitsOn[c.Dependent] = append(waitsOn[c.Dependent], c.Dependency)
 		}
@@ -710,7 +713,7 @@ func TestRepairRankOrderPropertiesAcrossFrames(t *testing.T) {
 					continue
 				}
 				overtaken := repairedKey[q] < repairedKey[p]
-				waiting := slices.ContainsFunc(waitsOn[p], func(d string) bool { return repairedKey[d] >= repairedKey[q] })
+				waiting := slices.ContainsFunc(waitsOn[p], func(d model.ID) bool { return repairedKey[d] >= repairedKey[q] })
 				if overtaken && !waiting {
 					t.Fatalf("trial %d: %s now stands ahead of its frame-mate %s, yet %s waits on nothing placed at or after it", trial, q, p, p)
 				}
@@ -744,7 +747,7 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	epic := createRankTestEpic(t, ctx, st)
 
-	ids := make([]string, 0, 8)
+	ids := make([]model.ID, 0, 8)
 	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"} {
 		ids = append(ids, createRankTestIssue(t, ctx, st, epic, title))
 	}
@@ -754,7 +757,7 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 			t.Fatalf("plant rank for %s: %v", item.id, err)
 		}
 	}
-	for _, edge := range []struct{ dependent, dependency string }{
+	for _, edge := range []struct{ dependent, dependency model.ID }{
 		{ids[0], ids[3]},
 		{ids[1], ids[3]},
 		{ids[5], ids[7]},
@@ -777,7 +780,7 @@ func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
 		t.Fatalf("FixRankInversions() = %d, want 3 — five of the eight already ascend, so three move", fixed)
 	}
 	repaired := ranksByID(t, ctx, st, ids)
-	want := []string{ids[2], ids[3], ids[0], ids[1], ids[4], ids[6], ids[7], ids[5]}
+	want := []model.ID{ids[2], ids[3], ids[0], ids[1], ids[4], ids[6], ids[7], ids[5]}
 	if got := orderByRank(repaired); !equalIDs(got, want) {
 		t.Fatalf("order after fix = %v, want %v", got, want)
 	}
@@ -819,11 +822,11 @@ func TestSmoothingWidensPastRanksThatLeaveNoRoom(t *testing.T) {
 	// member of the run on each side: SmoothingWindow/2 at or below the trigger,
 	// as many above, and one more past each end.
 	run := rank.SmoothingWindow + 2
-	ids := make([]string, 0, run+2)
+	ids := make([]model.ID, 0, run+2)
 	for i := 0; i < run+2; i++ {
 		ids = append(ids, createRankTestIssue(t, ctx, st, epic, fmt.Sprintf("Issue %d", i)))
 	}
-	planted := make(map[string]string, len(ids))
+	planted := make(map[model.ID]string, len(ids))
 	planted[ids[0]] = "U"
 	for i := 1; i <= run; i++ {
 		planted[ids[i]] = "V" + strings.Repeat("0", i-1)
@@ -855,7 +858,7 @@ func TestSmoothingWidensPastRanksThatLeaveNoRoom(t *testing.T) {
 	if got := orderByRank(after); !equalIDs(got, ids) {
 		t.Fatalf("order after smoothing = %v, want %v — smoothing must never reorder", got, ids)
 	}
-	for _, outside := range []string{ids[0], ids[run+1]} {
+	for _, outside := range []model.ID{ids[0], ids[run+1]} {
 		if after[outside] != planted[outside] {
 			t.Fatalf("smoothing rewrote %s from %q to %q; the window must stop at the first rank outside the run", outside, planted[outside], after[outside])
 		}
@@ -879,11 +882,11 @@ func TestSmoothingWidensPastAnAllZeroRun(t *testing.T) {
 	epic := createRankTestEpic(t, ctx, st)
 
 	run := rank.SmoothingWindow + 2
-	ids := make([]string, 0, run+1)
+	ids := make([]model.ID, 0, run+1)
 	for i := 0; i < run+1; i++ {
 		ids = append(ids, createRankTestIssue(t, ctx, st, epic, fmt.Sprintf("Issue %d", i)))
 	}
-	planted := make(map[string]string, len(ids))
+	planted := make(map[model.ID]string, len(ids))
 	for i := 0; i < run; i++ {
 		planted[ids[i]] = strings.Repeat("0", rank.SmoothingThreshold+i)
 	}
@@ -927,11 +930,11 @@ func TestSmoothingLeavesUnrankedIssuesUnranked(t *testing.T) {
 	epic := createRankTestEpic(t, ctx, st)
 
 	unranked := createRankTestIssue(t, ctx, st, epic, "Unranked")
-	ids := make([]string, 0, 3)
+	ids := make([]model.ID, 0, 3)
 	for i := 0; i < 3; i++ {
 		ids = append(ids, createRankTestIssue(t, ctx, st, epic, fmt.Sprintf("Issue %d", i)))
 	}
-	planted := map[string]string{unranked: "", ids[0]: "V", ids[1]: "V" + strings.Repeat("0", rank.SmoothingThreshold), ids[2]: "W"}
+	planted := map[model.ID]string{unranked: "", ids[0]: "V", ids[1]: "V" + strings.Repeat("0", rank.SmoothingThreshold), ids[2]: "W"}
 	for id, stored := range planted {
 		if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?", stored, id); err != nil {
 			t.Fatalf("plant rank for %s: %v", id, err)
@@ -950,11 +953,11 @@ func TestSmoothingLeavesUnrankedIssuesUnranked(t *testing.T) {
 		t.Fatalf("Commit() error = %v", err)
 	}
 
-	after := ranksByID(t, ctx, st, append([]string{unranked}, ids...))
+	after := ranksByID(t, ctx, st, append([]model.ID{unranked}, ids...))
 	if after[unranked] != "" {
 		t.Fatalf("smoothing ranked %s at %q; an unranked issue is not in any window", unranked, after[unranked])
 	}
-	if got := orderByRank(map[string]string{ids[0]: after[ids[0]], ids[1]: after[ids[1]], ids[2]: after[ids[2]]}); !equalIDs(got, ids) {
+	if got := orderByRank(map[model.ID]string{ids[0]: after[ids[0]], ids[1]: after[ids[1]], ids[2]: after[ids[2]]}); !equalIDs(got, ids) {
 		t.Fatalf("order after smoothing = %v, want %v", got, ids)
 	}
 	if after[ids[1]] == planted[ids[1]] {

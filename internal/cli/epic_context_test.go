@@ -23,7 +23,7 @@ type epicFixture struct {
 	// Nil — the default — is the no-policy case; a test that sets it is asking
 	// the missing-field gate to fire.
 	requiredFields []string
-	epicID         string
+	epicID         model.ID
 }
 
 func newEpicFixture(t *testing.T, epicTitle, epicDesc string) epicFixture {
@@ -40,7 +40,7 @@ func newEpicFixture(t *testing.T, epicTitle, epicDesc string) epicFixture {
 	return epicFixture{t: t, ctx: ctx, ap: ap, epicID: epic.ID}
 }
 
-func (f epicFixture) addChild(title string) string {
+func (f epicFixture) addChild(title string) model.ID {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle(title),
@@ -63,7 +63,7 @@ func (f epicFixture) addChild(title string) string {
 // growing a near-identical twin per axis. [LAW:one-type-per-behavior]
 // addEpicChild nests an epic inside the fixture's epic: the one child shape
 // that can itself hold children, since only an epic contains tickets.
-func (f epicFixture) addEpicChild(title string) string {
+func (f epicFixture) addEpicChild(title string) model.ID {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle(title),
@@ -76,7 +76,7 @@ func (f epicFixture) addEpicChild(title string) string {
 	return child.ID
 }
 
-func (f epicFixture) transition(id string, action model.Action) {
+func (f epicFixture) transition(id model.ID, action model.Action) {
 	f.t.Helper()
 	if _, err := f.ap.Store.Apply(f.ctx, id, storage.Change{Action: action, Actor: "test"}); err != nil {
 		f.t.Fatalf("transition(%s, %s) error = %v", id, action.Name(), err)
@@ -84,7 +84,7 @@ func (f epicFixture) transition(id string, action model.Action) {
 }
 
 // block makes blocked depend on blocker (blocks convention: src=dependent).
-func (f epicFixture) block(blocked, blocker string) {
+func (f epicFixture) block(blocked, blocker model.ID) {
 	f.t.Helper()
 	if _, err := f.ap.Store.AddRelation(f.ctx, storage.AddRelationInput{SrcID: blocked, DstID: blocker, Type: "blocked-by", CreatedBy: "test"}); err != nil {
 		f.t.Fatalf("AddRelation(blocks %s<-%s) error = %v", blocked, blocker, err)
@@ -93,7 +93,7 @@ func (f epicFixture) block(blocked, blocker string) {
 
 // blockWithinEpic is block for two leaves of one epic, an edge only a
 // reparent leaves behind (see storeBlocksWithinEpic).
-func (f epicFixture) blockWithinEpic(blocked, blocker string) {
+func (f epicFixture) blockWithinEpic(blocked, blocker model.ID) {
 	f.t.Helper()
 	prefix, err := f.ap.Workspace.IssuePrefix.Mintable()
 	if err != nil {
@@ -102,7 +102,7 @@ func (f epicFixture) blockWithinEpic(blocked, blocker string) {
 	storagetest.StoreBlocksWithinEpic(f.t, f.ctx, f.ap.Store, prefix.Value(), blocked, blocker)
 }
 
-func (f epicFixture) render(focused string) string {
+func (f epicFixture) render(focused model.ID) string {
 	f.t.Helper()
 	ec, err := buildEpicContext(f.ctx, f.ap.Store, f.requiredFields, f.epicID, focused)
 	if err != nil {
@@ -128,9 +128,9 @@ func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
 	out := f.render("")
 
 	wantLines := []string{
-		"    [deleted]     " + deleted + "  Dropped one",
-		"    [archived]    " + archived + "  Shelved one",
-		"    [ready]       " + live + "  Live one",
+		"    [deleted]     " + deleted.Raw() + "  Dropped one",
+		"    [archived]    " + archived.Raw() + "  Shelved one",
+		"    [ready]       " + live.Raw() + "  Live one",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
@@ -154,11 +154,11 @@ func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
 
 	out := f.render("")
 
-	want := "    [ready]       " + dependent + "  The dependent"
+	want := "    [ready]       " + dependent.Raw() + "  The dependent"
 	if !strings.Contains(out, want) {
 		t.Errorf("missing line %q in:\n%s", want, out)
 	}
-	if strings.Contains(out, blocker+" still open") || strings.Contains(out, "by "+blocker) {
+	if strings.Contains(out, blocker.Raw()+" still open") || strings.Contains(out, "by "+blocker.Raw()) {
 		t.Errorf("deleted blocker %s should not block, got:\n%s", blocker, out)
 	}
 }
@@ -168,7 +168,7 @@ func TestRenderEpicContextEmptyEpic(t *testing.T) {
 	f := newEpicFixture(t, "Empty epic", "# Why this exists\nbecause reasons")
 	out := f.render("")
 
-	if !strings.Contains(out, "Epic: "+f.epicID+" — Empty epic") {
+	if !strings.Contains(out, "Epic: "+f.epicID.Raw()+" — Empty epic") {
 		t.Errorf("missing epic header line in:\n%s", out)
 	}
 	if !strings.Contains(out, "Why: Why this exists") {
@@ -188,8 +188,8 @@ func TestRenderEpicContextAllClosed(t *testing.T) {
 	f.transition(c2, model.Done{})
 
 	out := f.render("")
-	for _, id := range []string{c1, c2} {
-		want := "    [closed]      " + id + "  "
+	for _, id := range []model.ID{c1, c2} {
+		want := "    [closed]      " + id.Raw() + "  "
 		if !strings.Contains(out, want) {
 			t.Errorf("missing closed line %q in:\n%s", want, out)
 		}
@@ -219,10 +219,10 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 	out := f.render(ready)
 
 	wantLines := []string{
-		"    [closed]      " + closed + "  Closed one  [lane: a]",
-		"    [in_progress] " + inProgress + "  Working one  [lane: b]",
-		"  ▶ [ready]       " + ready + "  Ready one  [lane: c]   (you are here)",
-		"    [blocked: blocker " + ready + " still open] " + blocked + "  Blocked one  [lane: d]",
+		"    [closed]      " + closed.Raw() + "  Closed one  [lane: a]",
+		"    [in_progress] " + inProgress.Raw() + "  Working one  [lane: b]",
+		"  ▶ [ready]       " + ready.Raw() + "  Ready one  [lane: c]   (you are here)",
+		"    [blocked: blocker " + ready.Raw() + " still open] " + blocked.Raw() + "  Blocked one  [lane: d]",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
@@ -231,14 +231,14 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 	}
 
 	// Rank order: children appear in creation order.
-	if idx(out, closed) > idx(out, inProgress) || idx(out, inProgress) > idx(out, ready) || idx(out, ready) > idx(out, blocked) {
+	if idx(out, closed.Raw()) > idx(out, inProgress.Raw()) || idx(out, inProgress.Raw()) > idx(out, ready.Raw()) || idx(out, ready.Raw()) > idx(out, blocked.Raw()) {
 		t.Errorf("children out of rank order:\n%s", out)
 	}
 }
 
 // addChildLane adds a child in a specific lane so the epic plan can show which
 // sub-sequence each child belongs to.
-func (f epicFixture) addChildLane(title, lane string) string {
+func (f epicFixture) addChildLane(title, lane string) model.ID {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle(title), Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID, Lane: storage.MustParseLane(lane),
@@ -263,13 +263,13 @@ func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
 
 	// A child with a lane shows its lane tag; the default (empty) lane child
 	// renders no tag.
-	if !strings.Contains(out, build+"  Build it  [lane: build]") {
+	if !strings.Contains(out, build.Raw()+"  Build it  [lane: build]") {
 		t.Errorf("missing lane tag for build child in:\n%s", out)
 	}
-	if !strings.Contains(out, docs+"  Document it  [lane: docs]") {
+	if !strings.Contains(out, docs.Raw()+"  Document it  [lane: docs]") {
 		t.Errorf("missing lane tag for docs child in:\n%s", out)
 	}
-	if strings.Contains(out, laneless+"  Sequential one  [lane:") {
+	if strings.Contains(out, laneless.Raw()+"  Sequential one  [lane:") {
 		t.Errorf("default-lane child should carry no lane tag, got:\n%s", out)
 	}
 }
@@ -286,7 +286,7 @@ func TestRenderEpicContextEarlierLaneMateHoldsSiblingBack(t *testing.T) {
 
 	out := f.render("")
 
-	want := "[blocked: earlier sibling " + first + " still open] " + second + "  Second"
+	want := "[blocked: earlier sibling " + first.Raw() + " still open] " + second.Raw() + "  Second"
 	if !strings.Contains(out, want) {
 		t.Errorf("second child is held back by %s; want %q in:\n%s", first, want, out)
 	}
@@ -320,7 +320,7 @@ func TestRenderEpicContextMissingRequiredFieldIsNotReady(t *testing.T) {
 
 	out := f.render("")
 
-	want := "[blocked: missing description] " + child + "  No description"
+	want := "[blocked: missing description] " + child.Raw() + "  No description"
 	if !strings.Contains(out, want) {
 		t.Errorf("child with no description is held back by the ready policy; want %q in:\n%s", want, out)
 	}
@@ -347,12 +347,12 @@ func TestRenderEpicContextNestedEpicChildIsClassified(t *testing.T) {
 
 	out := f.render("")
 
-	if !strings.Contains(out, inner.ID+"  Inner epic") {
+	if !strings.Contains(out, inner.ID.Raw()+"  Inner epic") {
 		t.Errorf("a nested epic should render as a child row, got:\n%s", out)
 	}
 	// It has no description, and the fixture requires one, so the ready policy
 	// reaches a container exactly as it reaches a leaf.
-	if !strings.Contains(out, "[blocked: missing description] "+inner.ID) {
+	if !strings.Contains(out, "[blocked: missing description] "+inner.ID.Raw()) {
 		t.Errorf("nested epic should carry the ready-policy reason, got:\n%s", out)
 	}
 }
@@ -402,7 +402,7 @@ func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 	f.blockWithinEpic(blocked, blocker)
 
 	out := f.render("")
-	want := "[blocked: blocker " + blocker + " still open; earlier sibling " + blocker + " still open] " + blocked + "  Blocked sibling"
+	want := "[blocked: blocker " + blocker.Raw() + " still open; earlier sibling " + blocker.Raw() + " still open] " + blocked.Raw() + "  Blocked sibling"
 	if !strings.Contains(out, want) {
 		t.Errorf("sibling blocker should be named, want %q in:\n%s", want, out)
 	}
@@ -417,12 +417,12 @@ func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
 	f.block(blocked, outsider)
 
 	out := f.render("")
-	want := "[blocked: blocker " + outsider + " still open] " + blocked + "  Blocked by outsider"
+	want := "[blocked: blocker " + outsider.Raw() + " still open] " + blocked.Raw() + "  Blocked by outsider"
 	if !strings.Contains(out, want) {
 		t.Errorf("external blocker should be named inline, want %q in:\n%s", want, out)
 	}
 	// The outsider is not a child, so it must not appear as its own row.
-	if strings.Contains(out, "  "+outsider+"  Outsider") {
+	if strings.Contains(out, "  "+outsider.Raw()+"  Outsider") {
 		t.Errorf("non-child blocker should not be listed as a child:\n%s", out)
 	}
 }
@@ -437,7 +437,7 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 	f.transition(blocker, model.Done{})
 
 	out := f.render("")
-	if !strings.Contains(out, "[ready]       "+blocked+"  Now ready") {
+	if !strings.Contains(out, "[ready]       "+blocked.Raw()+"  Now ready") {
 		t.Errorf("dependent should be ready once blocker closed:\n%s", out)
 	}
 	if strings.Contains(out, "[blocked:") {
@@ -448,7 +448,7 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 // outsider creates an issue outside the fixture's epic — inside an epic of its
 // own, since a task is never outside one — and returns its id: the external
 // endpoint for cross-epic edge tests.
-func (f epicFixture) outsider(title string) string {
+func (f epicFixture) outsider(title string) model.ID {
 	f.t.Helper()
 	out, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle(title),
@@ -485,7 +485,7 @@ func TestRenderEpicContextCrossEpicOneDirection(t *testing.T) {
 	if !strings.Contains(out, "Cross-epic dependencies:") {
 		t.Fatalf("expected cross-epic section, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Blocked from outside the epic:\n    "+child+" blocked by "+ext) {
+	if !strings.Contains(out, "Blocked from outside the epic:\n    "+child.Raw()+" blocked by "+ext.Raw()) {
 		t.Errorf("expected inbound edge %q blocked by %q in:\n%s", child, ext, out)
 	}
 	if strings.Contains(out, "Blocks outside the epic:") {
@@ -504,8 +504,8 @@ func TestRenderEpicContextCrossEpicBothDirections(t *testing.T) {
 
 	out := f.render("")
 	wantLines := []string{
-		"Blocks outside the epic:\n    " + downstream + " blocked by " + child,
-		"Blocked from outside the epic:\n    " + child + " blocked by " + upstream,
+		"Blocks outside the epic:\n    " + downstream.Raw() + " blocked by " + child.Raw(),
+		"Blocked from outside the epic:\n    " + child.Raw() + " blocked by " + upstream.Raw(),
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
@@ -607,8 +607,8 @@ func TestRenderEpicContextEpicNodeCrossEpicEdges(t *testing.T) {
 
 	out := f.render("")
 	wantLines := []string{
-		"Blocks outside the epic:\n    " + downstream + " blocked by " + f.epicID,
-		"Blocked from outside the epic:\n    " + f.epicID + " blocked by " + upstream,
+		"Blocks outside the epic:\n    " + downstream.Raw() + " blocked by " + f.epicID.Raw(),
+		"Blocked from outside the epic:\n    " + f.epicID.Raw() + " blocked by " + upstream.Raw(),
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {
@@ -658,8 +658,8 @@ func TestRenderEpicContextNamesTheCloseReason(t *testing.T) {
 	wontfix := f.addChild("Declined one")
 
 	f.transition(done, model.Done{})
-	f.transition(duplicate, model.Close{Outcome: model.Duplicate{Of: canonical}})
-	f.transition(superseded, model.Close{Outcome: model.Superseded{By: canonical}})
+	f.transition(duplicate, model.Close{Outcome: model.Duplicate{Of: canonical.Raw()}})
+	f.transition(superseded, model.Close{Outcome: model.Superseded{By: canonical.Raw()}})
 	f.transition(obsolete, model.Close{Outcome: model.Obsolete{}})
 	f.transition(wontfix, model.Close{Outcome: model.Wontfix{}})
 
@@ -669,11 +669,11 @@ func TestRenderEpicContextNamesTheCloseReason(t *testing.T) {
 	// overflow it, exactly as a blocked child's reasons do: the rare loud row
 	// gives up alignment so the common rows keep it.
 	wantLines := []string{
-		"    [closed]      " + done + "  Finished one",
-		"    [closed:duplicate] " + duplicate + "  Duplicated one",
-		"    [closed:superseded] " + superseded + "  Superseded one",
-		"    [closed:obsolete] " + obsolete + "  Obsolete one",
-		"    [closed:wontfix] " + wontfix + "  Declined one",
+		"    [closed]      " + done.Raw() + "  Finished one",
+		"    [closed:duplicate] " + duplicate.Raw() + "  Duplicated one",
+		"    [closed:superseded] " + superseded.Raw() + "  Superseded one",
+		"    [closed:obsolete] " + obsolete.Raw() + "  Obsolete one",
+		"    [closed:wontfix] " + wontfix.Raw() + "  Declined one",
 	}
 	for _, want := range wantLines {
 		if !strings.Contains(out, want) {

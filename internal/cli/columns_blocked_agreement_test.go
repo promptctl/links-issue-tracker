@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -25,7 +26,7 @@ import (
 // id. It routes through runListWithStore with the harness's own ready policy,
 // built exactly as runList builds it for a workspace store, so the
 // required-field reason is genuinely in play rather than configured away.
-func blockedCellFromLS(h readyTestHarness, id string) string {
+func blockedCellFromLS(h readyTestHarness, id model.ID) string {
 	h.t.Helper()
 	var out bytes.Buffer
 	if err := runListWithStore(h.t, h.ctx, &out, h.ap.Store, workspaceReadyPolicy(runEnv(h.t), h.ap), []string{"--columns", "id,blocked"}); err != nil {
@@ -41,7 +42,7 @@ func blockedCellFromLS(h readyTestHarness, id string) string {
 // blockedCellFromBacklog runs `lit backlog --columns id,blocked` and returns the
 // cell for id, alongside the whole output so a caller can prove the reason it
 // seeded actually fired.
-func blockedCellFromBacklog(h readyTestHarness, id string) (cell, out string) {
+func blockedCellFromBacklog(h readyTestHarness, id model.ID) (cell, out string) {
 	h.t.Helper()
 	rendered, err := runBacklogColumns(h, "id,blocked")
 	if err != nil {
@@ -130,7 +131,7 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 
 	for _, tc := range []struct {
 		kind string
-		id   string
+		id   model.ID
 		want string
 		// fired is text the backlog output must contain for the case to mean
 		// anything: it proves the reason this row was seeded for is the reason
@@ -139,8 +140,8 @@ func TestBlockedColumnAgreesAcrossSurfaces(t *testing.T) {
 		// would go on agreeing on "-" and passing.
 		fired string
 	}{
-		{kind: "open dependency", id: byDependency.ID, want: "blocked", fired: "blocked by: " + depBlocker.ID},
-		{kind: "earlier sibling pending", id: bySibling.ID, want: "blocked", fired: "earlier sibling " + firstSibling.ID + " still open"},
+		{kind: "open dependency", id: byDependency.ID, want: "blocked", fired: "blocked by: " + depBlocker.ID.Raw()},
+		{kind: "earlier sibling pending", id: bySibling.ID, want: "blocked", fired: "earlier sibling " + firstSibling.ID.Raw() + " still open"},
 		{kind: "missing required field", id: byMissingField.ID, want: "blocked", fired: "missing description"},
 		{kind: "needs design", id: byNeedsDesign.ID, want: "blocked", fired: NeedsDesignLabel},
 		{kind: "external", id: byExternal.ID, want: "blocked", fired: "blocked: " + ExternalLabel},

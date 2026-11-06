@@ -44,11 +44,11 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// unqualified "moved to the top" would read as the top of the backlog, so
 	// the frame it was scoped to has to be named.
 	var stdout bytes.Buffer
-	if err := runRank(t, ctx, &stdout, ap, []string{second.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{second.ID.Raw(), "--top"}); err != nil {
 		t.Fatalf("rank second --top error = %v", err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, second.ID+" is inside "+epic.ID) {
+	if !strings.Contains(out, second.ID.Raw()+" is inside "+epic.ID.Raw()) {
 		t.Errorf("rank --top output = %q, want it to name the epic %s the move was scoped to", out, epic.ID)
 	}
 	if !strings.Contains(out, "leaving the rest of the queue unchanged") {
@@ -71,11 +71,11 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// ticket either way, so an unchanged order reported as a promotion is the
 	// one outcome a reader cannot tell from a real one. [LAW:no-silent-failure]
 	stdout.Reset()
-	if err := runRank(t, ctx, &stdout, ap, []string{second.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{second.ID.Raw(), "--top"}); err != nil {
 		t.Fatalf("repeat rank second --top error = %v", err)
 	}
 	out = stdout.String()
-	if !strings.Contains(out, "is already at the top of "+epic.ID) {
+	if !strings.Contains(out, "is already at the top of "+epic.ID.Raw()) {
 		t.Errorf("no-op rank --top output = %q, want it to report the edge was already held", out)
 	}
 	if !strings.Contains(out, "nothing to rank") {
@@ -85,7 +85,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// what a successful move looks like, and printing it here is exactly the
 	// confusion the message exists to remove.
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.HasPrefix(line, second.ID+" [") {
+		if strings.HasPrefix(line, second.ID.Raw()+" [") {
 			t.Errorf("no-op rank --top printed a success summary line %q", line)
 		}
 	}
@@ -93,7 +93,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// A top-level issue's frame is the backlog, which the epic-scoped sentence
 	// must not claim to be an epic.
 	stdout.Reset()
-	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID.Raw(), "--top"}); err != nil {
 		t.Fatalf("rank standalone --top error = %v", err)
 	}
 	out = stdout.String()
@@ -108,7 +108,7 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	// TopLevel is the empty Frame, so an unrendered one would print "the top of
 	// ; nothing to rank".
 	stdout.Reset()
-	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID, "--top"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID.Raw(), "--top"}); err != nil {
 		t.Fatalf("repeat rank standalone --top error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "is already at the top of the backlog") {
@@ -145,16 +145,16 @@ func TestRankToBottomReportsItsFrame(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runRank(t, ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{first.ID.Raw(), "--bottom"}); err != nil {
 		t.Fatalf("rank first --bottom error = %v", err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, first.ID+" is inside "+epic.ID) {
+	if !strings.Contains(out, first.ID.Raw()+" is inside "+epic.ID.Raw()) {
 		t.Errorf("rank --bottom output = %q, want it to name the epic %s the move was scoped to", out, epic.ID)
 	}
 	// The word the user asked for, echoed back. An arm that kept "top" here
 	// would otherwise report the opposite of what it did.
-	if !strings.Contains(out, "ranked it to the bottom of "+epic.ID+"'s children") {
+	if !strings.Contains(out, "ranked it to the bottom of "+epic.ID.Raw()+"'s children") {
 		t.Errorf("rank --bottom output = %q, want it to say the move went to the bottom of the epic's children", out)
 	}
 
@@ -174,11 +174,11 @@ func TestRankToBottomReportsItsFrame(t *testing.T) {
 
 	// Repeating it writes nothing, and says so in the same words as the top edge.
 	stdout.Reset()
-	if err := runRank(t, ctx, &stdout, ap, []string{first.ID, "--bottom"}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{first.ID.Raw(), "--bottom"}); err != nil {
 		t.Fatalf("repeat rank first --bottom error = %v", err)
 	}
 	out = stdout.String()
-	if !strings.Contains(out, "is already at the bottom of "+epic.ID) {
+	if !strings.Contains(out, "is already at the bottom of "+epic.ID.Raw()) {
 		t.Errorf("no-op rank --bottom output = %q, want it to report the edge was already held", out)
 	}
 	if !strings.Contains(out, "nothing to rank") {

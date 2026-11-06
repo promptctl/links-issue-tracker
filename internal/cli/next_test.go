@@ -98,7 +98,7 @@ var sealedNextOutcomes = []struct {
 	{"the epic's next lane", ServedFromEpicLane{Row: sealedSumRow}, true},
 	{"the global pool", ServedFromNewLane{poolPick{Row: sealedSumRow}}, true},
 	{"the on-path dependency", ServedFromDependency{Row: sealedSumRow, Gates: "test-gated-1", Blocker: sealedSumRow.ID}, true},
-	{"past an exhausted scope", ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}}}, true},
+	{"past an exhausted scope", ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []model.ID{"test-epic-1"}}}, true},
 	{"past a scope the filter narrowed", ServedPastNarrowing{poolPick: poolPick{Row: sealedSumRow}, Narrowing: Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-hidden-1"}}}}, true},
 	{"exhausted carries none", Exhausted{}, false},
 	// Hidden is the ticket the filter kept from being served, so it must
@@ -229,10 +229,10 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	}
 
 	text := h.runNextText()
-	if !strings.Contains(text, inProgress.ID+" is already in progress in a lane you hold") {
+	if !strings.Contains(text, inProgress.ID.Raw()+" is already in progress in a lane you hold") {
 		t.Fatalf("next output = %q, want it to say %s is already in flight and ours", text, inProgress.ID)
 	}
-	if strings.Contains(text, lowerRanked.ID) {
+	if strings.Contains(text, lowerRanked.ID.Raw()) {
 		t.Fatalf("next output = %q, want %q not served while our own work is in flight", text, lowerRanked.ID)
 	}
 }
@@ -261,7 +261,7 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
 	text := h.runNextText()
 
-	if !strings.Contains(text, theirs.ID) {
+	if !strings.Contains(text, theirs.ID.Raw()) {
 		t.Fatalf("next = %q, want the lane's work in flight still handed back (%s)", text, theirs.ID)
 	}
 	if !strings.Contains(text, "claude_sess-peer") {
@@ -364,7 +364,7 @@ func TestRunNextServesTheNextTicketOfALaneWeHold(t *testing.T) {
 	}
 
 	text := h.runNextText()
-	if !strings.Contains(text, nextUp.ID) {
+	if !strings.Contains(text, nextUp.ID.Raw()) {
 		t.Fatalf("next output = %q, want %q served", text, nextUp.ID)
 	}
 	// The claim line beneath the row still prints "claimed here: …" — that is a
@@ -405,7 +405,7 @@ func TestRunNextServesAReadyTicketBehindABlockerThatIsNotStartable(t *testing.T)
 	if served.Row.ID != blockersBlocker.ID || served.Blocker != blockersBlocker.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blocker.ID, Through: blocker.ID}}) {
 		t.Fatalf("served %s blocking %s, gating %s via %v; want %s blocking itself, gating %s via [%s]", served.Row.ID, served.Blocker, served.Gates, served.Via, blockersBlocker.ID, gated.ID, blocker.ID)
 	}
-	if text, want := h.runNextText(), "(gates "+gated.ID+", which is on your path, through "+blocker.ID+")"; !strings.Contains(text, want) {
+	if text, want := h.runNextText(), "(gates "+gated.ID.Raw()+", which is on your path, through "+blocker.ID.Raw()+")"; !strings.Contains(text, want) {
 		t.Fatalf("next output = %q, want it to contain %q", text, want)
 	}
 }
@@ -458,7 +458,7 @@ func TestRunNextNamesTheTicketUnderAnEpicTheChainPassesThrough(t *testing.T) {
 	if !ok || served.Row.ID != upstream.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blockingEpic.ID, Through: under.ID}}) {
 		t.Fatalf("served %+v, want %s through %s under %s", served, upstream.ID, under.ID, blockingEpic.ID)
 	}
-	if text, want := h.runNextText(), "(gates "+gated.ID+", which is on your path, through "+under.ID+" under "+blockingEpic.ID+")"; !strings.Contains(text, want) {
+	if text, want := h.runNextText(), "(gates "+gated.ID.Raw()+", which is on your path, through "+under.ID.Raw()+" under "+blockingEpic.ID.Raw()+")"; !strings.Contains(text, want) {
 		t.Fatalf("next output = %q, want it to contain %q", text, want)
 	}
 }
@@ -493,7 +493,7 @@ func TestRunNextServesTheReadyBlockerOfAnEpicOurEpicWaitsOn(t *testing.T) {
 	if served.Row.ID != upstream.ID || served.Blocker != upstream.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blockingEpic.ID, Through: under.ID}}) {
 		t.Fatalf("served %s blocking %s, gating %s via %v; want %s blocking itself, gating %s through %s under %s", served.Row.ID, served.Blocker, served.Gates, served.Via, upstream.ID, gated.ID, under.ID, blockingEpic.ID)
 	}
-	if text, want := h.runNextText(), "(gates "+gated.ID+", which is on your path, through "+under.ID+" under "+blockingEpic.ID+")"; !strings.Contains(text, want) {
+	if text, want := h.runNextText(), "(gates "+gated.ID.Raw()+", which is on your path, through "+under.ID.Raw()+" under "+blockingEpic.ID.Raw()+")"; !strings.Contains(text, want) {
 		t.Fatalf("next output = %q, want it to contain %q", text, want)
 	}
 }
@@ -570,10 +570,10 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 
 	text := h.runNextText()
 	for _, want := range []string{
-		"no ready work in epic(s) " + epic.ID + " (1/2 done) — ",
-		blocker.ID + " (on your path but not startable right now",
-		upstream.ID + " (on your path but waiting on an event outside this repository",
-		"\nmove on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + elsewhere.ID + "`",
+		"no ready work in epic(s) " + epic.ID.Raw() + " (1/2 done) — ",
+		blocker.ID.Raw() + " (on your path but not startable right now",
+		upstream.ID.Raw() + " (on your path but waiting on an event outside this repository",
+		"\nmove on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + elsewhere.ID.Raw() + "`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("next output = %q, want it to contain %q", text, want)
@@ -634,10 +634,10 @@ func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
 	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Lower-ranked bug"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("bug")})
 
 	text := h.runNextText("--type", "bug")
-	if !strings.Contains(text, bug.ID) {
+	if !strings.Contains(text, bug.ID.Raw()) {
 		t.Fatalf("next --type bug output = %q, want %q picked", text, bug.ID)
 	}
-	if strings.Contains(text, task.ID) {
+	if strings.Contains(text, task.ID.Raw()) {
 		t.Fatalf("next --type bug output = %q, want %q filtered out despite outranking the bug", text, task.ID)
 	}
 }
@@ -661,7 +661,7 @@ func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
 	if strings.Contains(text, "no ready work in") {
 		t.Fatalf("next --type bug = %q, want the epic not called exhausted — %s is ready in it", text, second.ID)
 	}
-	want := "`lit next` without --type, --status, --labels or --assignee hands you " + second.ID + ", which this run's filter leaves out\nor take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + bug.ID + "`"
+	want := "`lit next` without --type, --status, --labels or --assignee hands you " + second.ID.Raw() + ", which this run's filter leaves out\nor take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + bug.ID.Raw() + "`"
 	if !strings.Contains(text, want) {
 		t.Fatalf("next --type bug = %q, want it to contain %q", text, want)
 	}
@@ -698,10 +698,10 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 	h.applyAction(mine.ID, model.Start{Assignee: "claude_sess-mine"}, "")
 
 	text := h.runNextText("--status", "in_progress")
-	if !strings.Contains(text, mine.ID) {
+	if !strings.Contains(text, mine.ID.Raw()) {
 		t.Fatalf("next --status in_progress = %q, want it to hand back %q — narrowing to in_progress is how an agent asks what it already holds", text, mine.ID)
 	}
-	if !strings.Contains(text, mine.ID+" is already in progress in a lane you hold") {
+	if !strings.Contains(text, mine.ID.Raw()+" is already in progress in a lane you hold") {
 		t.Fatalf("next --status in_progress = %q, want it reported as a resumption of %q and not a fresh start", text, mine.ID)
 	}
 }
@@ -725,7 +725,7 @@ func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *te
 	if err.Error() == "no ready work" {
 		t.Fatal("next --status in_progress = \"no ready work\" — the exact empty-backlog wording, for a backlog holding one live in_progress ticket")
 	}
-	if !strings.Contains(err.Error(), theirs.ID) {
+	if !strings.Contains(err.Error(), theirs.ID.Raw()) {
 		t.Fatalf("next --status in_progress = %q, want it to name %q rather than report the queue empty", err.Error(), theirs.ID)
 	}
 	if !strings.Contains(err.Error(), "another checkout holds right now") {
@@ -795,7 +795,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 	}{
 		{
 			name:       "exhausted",
-			outcome:    Exhausted{Epics: []string{"links-epic-abcd"}},
+			outcome:    Exhausted{Epics: []model.ID{"links-epic-abcd"}},
 			wantReason: reasonScopeExhausted,
 			wantAct:    "finish or hand off what you already hold",
 		},
@@ -821,7 +821,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 			name: "no work withheld by focus scope",
 			outcome: NoWork{
 				Unreachable: []rowReach{{ID: "links-gate-onpath", reading: reading{Kind: reachNotReady}}},
-				OffPath:     []string{"links-other-offpath"},
+				OffPath:     []model.ID{"links-other-offpath"},
 			},
 			wantReason: reasonNoReadyWork,
 			wantAct:    "lit next --all",
@@ -938,11 +938,11 @@ func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
 	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: inFlightRow}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: inFlightRow}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
-	want := inFlight.ID + " is in progress and assigned to claude_sess-peer, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`"
+	want := inFlight.ID.Raw() + " is in progress and assigned to claude_sess-peer, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`"
 	if !strings.Contains(text, want) {
 		t.Fatalf("render = %q, want it to contain %q", text, want)
 	}
@@ -968,7 +968,7 @@ func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
 	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	text := out.String()
@@ -997,7 +997,7 @@ func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
 	const reader = ""
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
 	if text := out.String(); !strings.Contains(text, "claude_sess-agent") {
@@ -1024,10 +1024,10 @@ func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.
 	const reader = "claude_sess-mine"
 
 	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, unassigned.ID)}, map[string]storage.IssueRelations{}, cc, reader, false); err != nil {
+	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, unassigned.ID)}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
 		t.Fatalf("renderNextOutcome() error = %v", err)
 	}
-	if text := out.String(); !strings.Contains(text, unassigned.ID+" is already in progress in a lane you hold — continue where you left off") {
+	if text := out.String(); !strings.Contains(text, unassigned.ID.Raw()+" is already in progress in a lane you hold — continue where you left off") {
 		t.Fatalf("render = %q, want the lane's own sentence — an empty assignee names no other session", text)
 	}
 }
@@ -1063,30 +1063,30 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	}{
 		{"a lane already held says nothing", ServedFromClaim{Row: freshRow}, ""},
 		{"own work in flight is reported as the state it is in", ResumedOwnWork{Row: inFlightRow},
-			inFlight.ID + " is already in progress in a lane you hold — continue where you left off"},
+			inFlight.ID.Raw() + " is already in progress in a lane you hold — continue where you left off"},
 		{"the epic's next lane names what a start would lock", ServedFromEpicLane{Row: freshRow, Lane: freshLane},
-			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
+			"run `lit start " + fresh.ID.Raw() + "` to claim lane a1 of epic " + epicA.ID.Raw() + " (a second lane of an epic you already hold a lane in)"},
 		{"abandoned work says it is in flight and unheld before the same claim advice", ServedFromNewLane{poolPick{Row: inFlightRow, Lane: inFlightLane}},
-			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID},
+			inFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + inFlight.ID.Raw() + "` to claim lane a2 of epic " + epicA.ID.Raw()},
 		// Step 2 serves abandoned in-flight rows too, so the epic's next lane
 		// can carry one: the one place the state-dependent sentence and the
 		// fixed suffix are concatenated. Pinned whole, because a product left
 		// partly covered is where a tautology survives.
 		{"the epic's next lane serves abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
-			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (a second lane of an epic you already hold a lane in)"},
+			inFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + inFlight.ID.Raw() + "` to claim lane a2 of epic " + epicA.ID.Raw() + " (a second lane of an epic you already hold a lane in)"},
 		// Step 1b, both states. Its qualifier concatenates onto the
 		// state-dependent sentence exactly as step 2's does, so the product
 		// needs both cells: a ready row and an abandoned one. This is the pick
 		// an agent is least likely to predict, and these two cells pin that it
 		// never renders the global pool's line verbatim.
 		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID, Blocker: fresh.ID},
-			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (gates " + inFlight.ID + ", which is on your path)"},
+			"run `lit start " + fresh.ID.Raw() + "` to claim lane a1 of epic " + epicA.ID.Raw() + " (gates " + inFlight.ID.Raw() + ", which is on your path)"},
 		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID, Blocker: inFlight.ID},
-			inFlight.ID + " is in progress and nobody holds it — run `lit start " + inFlight.ID + "` to claim lane a2 of epic " + epicA.ID + " (gates " + fresh.ID + ", which is on your path)"},
+			inFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + inFlight.ID.Raw() + "` to claim lane a2 of epic " + epicA.ID.Raw() + " (gates " + fresh.ID.Raw() + ", which is on your path)"},
 		// Work under an epic that blocks has no edge of its own to the row it
 		// frees, so the line names the epic between them.
 		{"work under a blocking epic names the epic that gates", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: "test-gated", Blocker: epicA.ID},
-			"run `lit start " + fresh.ID + "` to claim lane a1 of epic " + epicA.ID + " (it is in epic " + epicA.ID + ", which gates test-gated on your path)"},
+			"run `lit start " + fresh.ID.Raw() + "` to claim lane a1 of epic " + epicA.ID.Raw() + " (it is in epic " + epicA.ID.Raw() + ", which gates test-gated on your path)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
@@ -1095,7 +1095,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 			}
 			out := buf.String()
 			if tc.want == "" {
-				if !strings.HasPrefix(out, fresh.ID) {
+				if !strings.HasPrefix(out, fresh.ID.Raw()) {
 					t.Fatalf("ServedFromClaim printed %q; its contract is that no claim is established and nothing is said above the row", out)
 				}
 				return
@@ -1126,7 +1126,7 @@ func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 	text := h.runNextText()
 	after := h.issueDetail(target.ID)
 
-	if !strings.Contains(text, target.ID) {
+	if !strings.Contains(text, target.ID.Raw()) {
 		t.Fatalf("next output = %q, want it to serve %q — this test asserts nothing if the row was never picked", text, target.ID)
 	}
 	if after.State() != before.State() {
@@ -1143,12 +1143,12 @@ func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 	// perfect tense skips `lit start` and works unclaimed, which is the harm the
 	// state assertions above prove has not happened but the line could still
 	// report.
-	for _, lie := range []string{"starting " + target.ID, "claims " + target.ID, "taking over " + target.ID, "resuming " + target.ID} {
+	for _, lie := range []string{"starting " + target.ID.Raw(), "claims " + target.ID.Raw(), "taking over " + target.ID.Raw(), "resuming " + target.ID.Raw()} {
 		if strings.Contains(text, lie) {
 			t.Fatalf("next output = %q contains %q — it reports a side effect this command does not have", text, lie)
 		}
 	}
-	if !strings.Contains(text, "run `lit start "+target.ID+"`") {
+	if !strings.Contains(text, "run `lit start "+target.ID.Raw()+"`") {
 		t.Fatalf("next output = %q, want it to name the command that would actually claim %q", text, target.ID)
 	}
 }
@@ -1188,7 +1188,7 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 	if pool == dep {
 		t.Fatalf("the global pool and the on-path dependency render identically as %q — the pick an agent cannot predict is the one that must explain itself", pool)
 	}
-	if !strings.Contains(dep, blocked.ID) {
+	if !strings.Contains(dep, blocked.ID.Raw()) {
 		t.Fatalf("dependency pick rendered %q, want it to name the blocked row %q it unblocks", dep, blocked.ID)
 	}
 	if strings.Contains(pool, "gates") {

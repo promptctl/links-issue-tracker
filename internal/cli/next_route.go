@@ -113,9 +113,9 @@ type poolPick struct {
 type ServedFromDependency struct {
 	Row     annotation.AnnotatedIssue
 	Lane    model.LaneID
-	Gates   string
+	Gates   model.ID
 	Via     []hop
-	Blocker string
+	Blocker model.ID
 }
 
 // hop is one link of a prerequisite chain: the prerequisite, and the ticket the
@@ -126,16 +126,16 @@ type ServedFromDependency struct {
 // `lit show` on the gated row lists the epic, and `lit show` on the next link
 // lists the ticket.
 type hop struct {
-	Prerequisite string
-	Through      string
+	Prerequisite model.ID
+	Through      model.ID
 }
 
 // ids is the hop as the ids it passes, the epic before the ticket under it.
-func (h hop) ids() []string {
+func (h hop) ids() []model.ID {
 	if h.Through == h.Prerequisite {
-		return []string{h.Prerequisite}
+		return []model.ID{h.Prerequisite}
 	}
-	return []string{h.Prerequisite, h.Through}
+	return []model.ID{h.Prerequisite, h.Through}
 }
 
 // name is how an announcement names the hop. [LAW:one-source-of-truth]
@@ -225,12 +225,12 @@ type ServedPastNarrowing struct {
 // classifier reading the routing verdict rather than a copy of it that could drift
 // from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
-	Epics       []string
+	Epics       []model.ID
 	Progress    claims.Progress
 	OwnProgress claims.Progress
 	Blocked     []blockerReach
 	Held        []rowReach
-	OffPath     []string
+	OffPath     []model.ID
 	Narrowing   *Narrowed
 }
 
@@ -292,7 +292,7 @@ type reading struct {
 // it. Row is the gathered row Kind was read from: the row itself, or for a
 // dependency, the ticket that would clear it.
 type rowReach struct {
-	ID string
+	ID model.ID
 	reading
 }
 
@@ -306,9 +306,9 @@ func (r rowReach) name() string { return workName(r.ID, r.Row.ID) }
 // workName names a dependency by the work read through it: "<work> under
 // <dependency>" when the work is a ticket under it, and the dependency's own id
 // when the work is the dependency itself or there is none in view.
-func workName(dependency, work string) string {
+func workName(dependency, work model.ID) string {
 	if work == "" || work == dependency {
-		return dependency
+		return fmt.Sprint(dependency)
 	}
 	return fmt.Sprintf("%s under %s", work, dependency)
 }
@@ -355,7 +355,7 @@ func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model
 // [LAW:types-are-the-program]
 type NoWork struct {
 	Unreachable []rowReach
-	OffPath     []string
+	OffPath     []model.ID
 }
 
 func (ServedFromClaim) isNextOutcome()      {}
@@ -443,7 +443,7 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // public-checkout self may match, so ownership and the start gate cannot drift
 // apart on it. [LAW:single-enforcer]
 func ownScope(standings claims.Standings, self model.Attribution) ownWork {
-	own := ownWork{lanes: map[model.LaneID]bool{}, epics: map[string]bool{}}
+	own := ownWork{lanes: map[model.LaneID]bool{}, epics: map[model.ID]bool{}}
 	for lane, standing := range standings {
 		if relationOf(standing, self) != laneOurs {
 			continue
@@ -464,7 +464,7 @@ func ownScope(standings claims.Standings, self model.Attribution) ownWork {
 // The zero value holds nothing, which is the checkout that holds no lane.
 type ownWork struct {
 	lanes map[model.LaneID]bool
-	epics map[string]bool
+	epics map[model.ID]bool
 }
 
 // holds reports whether this checkout holds the lane itself.
@@ -526,7 +526,7 @@ func (o ownWork) holdsAny() bool { return len(o.lanes) > 0 }
 // epicsAbove climbs to tell which rows sit under an epic. evidence is the
 // reading standings were derived from; routing counts a stopped scope's
 // progress from it, since rows hold no closed ticket to count.
-func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, epics map[string]storage.IssueRelations, standings claims.Standings, evidence claims.Evidence, self model.Attribution, scope focusScope, asked storage.IssueCriteria) NextOutcome {
+func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.IssueRelations, epics map[model.ID]storage.IssueRelations, standings claims.Standings, evidence claims.Evidence, self model.Attribution, scope focusScope, asked storage.IssueCriteria) NextOutcome {
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}
@@ -689,13 +689,13 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 // capacityFor about them — so they travel as ids on a list of their own
 // rather than as a kind reachOf could be asked for, and no diagnostic can word
 // them as a verdict about the row. [LAW:types-are-the-program]
-func withheldByScope(rows []annotation.AnnotatedIssue) []string {
+func withheldByScope(rows []annotation.AnnotatedIssue) []model.ID {
 	return rowIDs(rows)
 }
 
 // rowIDs names rows by id, in the order given.
-func rowIDs(rows []annotation.AnnotatedIssue) []string {
-	ids := make([]string, len(rows))
+func rowIDs(rows []annotation.AnnotatedIssue) []model.ID {
+	ids := make([]model.ID, len(rows))
 	for i, row := range rows {
 		ids[i] = row.ID
 	}
@@ -734,7 +734,7 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 // have to learn which walks populate it. [LAW:types-are-the-program]
 type gatedDep struct {
 	depReach
-	Gates string
+	Gates model.ID
 	Via   []hop
 }
 
@@ -751,7 +751,7 @@ type gatedDep struct {
 // could see, not an answer reachOf gives, so it is the absence of a reading
 // rather than a kind of one. [LAW:types-are-the-program]
 type depReach struct {
-	ID   string
+	ID   model.ID
 	Best *reading
 }
 
@@ -812,7 +812,7 @@ type blockerReach struct {
 // not the kind: the kind is the best of that work, and a held kind outranks
 // not-ready, so it keeps no trace of what the rest waits on. With no work in
 // view nothing seen holds a dependency, so an out-of-view one is clearable.
-func blockersOf(deps []gatedDep, workToward map[string][]annotation.AnnotatedIssue) []blockerReach {
+func blockersOf(deps []gatedDep, workToward map[model.ID][]annotation.AnnotatedIssue) []blockerReach {
 	blockers := make([]blockerReach, len(deps))
 	for i, dep := range deps {
 		waitsElsewhere := slices.ContainsFunc(workToward[dep.ID], func(work annotation.AnnotatedIssue) bool {
@@ -827,7 +827,7 @@ func blockersOf(deps []gatedDep, workToward map[string][]annotation.AnnotatedIss
 // readingsOf splits the blockers by whether the run could read them: the ones
 // with work in view as the rows they are, and the ids of the ones without, each
 // in walk order.
-func readingsOf(blockers []blockerReach) (inView []rowReach, outOfView []string) {
+func readingsOf(blockers []blockerReach) (inView []rowReach, outOfView []model.ID) {
 	for _, blocker := range blockers {
 		row, ok := blocker.read()
 		if !ok {
@@ -847,8 +847,8 @@ func readingsOf(blockers []blockerReach) (inView []rowReach, outOfView []string)
 // epicsAbove the blocker annotator passes an epic's blockers down with, so
 // "under this epic" means one thing to readiness and to routing.
 // [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
-func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]storage.IssueRelations) map[string][]annotation.AnnotatedIssue {
-	work := make(map[string][]annotation.AnnotatedIssue, len(rows))
+func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[model.ID]storage.IssueRelations) map[model.ID][]annotation.AnnotatedIssue {
+	work := make(map[model.ID][]annotation.AnnotatedIssue, len(rows))
 	for _, row := range rows {
 		work[row.ID] = append(work[row.ID], row)
 		for epic := range epicsAbove(details[row.ID], epics) {
@@ -902,7 +902,7 @@ func workTowardEach(rows []annotation.AnnotatedIssue, details, epics map[string]
 // the prerequisite's lane: an earlier lane-mate's is the lane of the row
 // waiting behind it, known even when the lane-mate is not a gathered row; any
 // other's is known only from work toward it in view.
-func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue) []gatedDep {
+func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[model.ID][]annotation.AnnotatedIssue) []gatedDep {
 	// onPath is a row whose prerequisites gate the scope: an in-scope row, or
 	// work toward a prerequisite its chain already collected, carrying the hops
 	// between the two.
@@ -914,15 +914,15 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 	// the waiter's own, known even when the lane-mate is not a gathered row.
 	// Read off every row before the walk starts, so whether such a lane-mate
 	// is inside the scope does not depend on which chain reaches it first.
-	placed := map[string]model.LaneID{}
+	placed := map[model.ID]model.LaneID{}
 	for _, row := range rows {
 		for _, prerequisite := range ClassifyReadiness(row.Annotations).Prerequisites() {
 			if prerequisite.inWaitersLane() {
-				placed[prerequisite.Detail] = laneOf(row)
+				placed[prerequisite.ticket()] = laneOf(row)
 			}
 		}
 	}
-	seen := map[string]bool{}
+	seen := map[model.ID]bool{}
 	var deps []gatedDep
 	for _, gated := range rows {
 		if !inScope(laneOf(gated)) {
@@ -935,7 +935,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 				continue
 			}
 			for _, prerequisite := range ClassifyReadiness(at.row.Annotations).Prerequisites() {
-				id := prerequisite.Detail
+				id := prerequisite.ticket()
 				if seen[id] {
 					continue
 				}
@@ -991,7 +991,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // unservable: the steps before each call already took every servable row the
 // walk's scope admits, so by the time we are here each of them is routeAround
 // by construction.
-func onPathDependency(deps []gatedDep, serves func(annotation.AnnotatedIssue) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[string][]annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID) (ServedFromDependency, bool) {
+func onPathDependency(deps []gatedDep, serves func(annotation.AnnotatedIssue) bool, reachFor func(annotation.AnnotatedIssue) reachKind, workToward map[model.ID][]annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID) (ServedFromDependency, bool) {
 	for _, dep := range deps {
 		for _, work := range workToward[dep.ID] {
 			if serves(work) && reachFor(work) == reachTakeable {
@@ -1105,7 +1105,7 @@ func (o Exhausted) scope() string {
 	if len(o.Epics) == 0 {
 		return "your claimed lane(s)"
 	}
-	return fmt.Sprintf("epic(s) %s", strings.Join(o.Epics, ", "))
+	return fmt.Sprintf("epic(s) %s", model.JoinIDs(o.Epics, ", "))
 }
 
 // reachNotes is what a diagnostic says about the rows of each kind, indexed by
@@ -1176,13 +1176,17 @@ const maxNamedPerKind = 12
 // long it may get. The remainder is counted rather
 // than dropped: an agent told "and 135 more" still learns the true scale of what
 // it cannot start. [LAW:no-silent-failure]
-func nameCapped(items []string, sep string) string {
+func nameCapped[T any](items []T, sep string) string {
+	named := make([]string, len(items))
+	for i, item := range items {
+		named[i] = fmt.Sprint(item)
+	}
 	// [LAW:dataflow-not-control-flow] the last inch of rendering, where the two
 	// arms are different sentences rather than an operation one of them skips.
 	if len(items) <= maxNamedPerKind {
-		return strings.Join(items, sep)
+		return strings.Join(named, sep)
 	}
-	return fmt.Sprintf("%s and %d more", strings.Join(items[:maxNamedPerKind], sep), len(items)-maxNamedPerKind)
+	return fmt.Sprintf("%s and %d more", strings.Join(named[:maxNamedPerKind], sep), len(items)-maxNamedPerKind)
 }
 
 // describeReach renders a clause for each kind that has rows, most this
@@ -1208,7 +1212,7 @@ func describeReach(rows []rowReach, lead string, notes reachNotes) string {
 // Every list a diagnostic names is rendered through it, so the cap lives here:
 // no clause can grow a second answer to how long it may get.
 // [LAW:single-enforcer]
-func clause(lead string, ids []string, note string) string {
+func clause[T any](lead string, ids []T, note string) string {
 	if len(ids) == 0 {
 		return ""
 	}

@@ -19,12 +19,12 @@ import (
 
 // listedOrder is the ids of the placed issues in export, in the order every
 // listing puts them: key, then id.
-func listedOrder(export model.Export) []string {
+func listedOrder(export model.Export) []model.ID {
 	placed := placedIssues(export)
 	slices.SortFunc(placed, func(a, b rankedIssue) int {
-		return cmp.Or(strings.Compare(a.rank, b.rank), strings.Compare(a.id, b.id))
+		return cmp.Or(strings.Compare(a.rank, b.rank), cmp.Compare(a.id, b.id))
 	})
-	ids := make([]string, len(placed))
+	ids := make([]model.ID, len(placed))
 	for i, issue := range placed {
 		ids[i] = issue.id
 	}
@@ -52,7 +52,7 @@ func TestSeparateRankCollisionsKeepsEveryListingInOrder(t *testing.T) {
 		n := 1 + rng.Intn(12)
 		export := model.Export{}
 		for _, id := range rng.Perm(n) {
-			issue := model.Issue{ID: fmt.Sprintf("t-%02d", id), Rank: pool[rng.Intn(len(pool))]}
+			issue := model.Issue{ID: model.ID(fmt.Sprintf("t-%02d", id)), Rank: pool[rng.Intn(len(pool))]}
 			if rng.Intn(5) == 0 {
 				issue.SetRetention(model.Deleted{At: deletedAt})
 			}
@@ -84,7 +84,7 @@ func TestSeparateRankCollisionsKeepsEveryListingInOrder(t *testing.T) {
 		if want, have := listedOrder(model.Export{Issues: before}), listedOrder(got); !slices.Equal(want, have) {
 			t.Errorf("round %d: listed order %v, want %v (from %+v)", round, have, want, before)
 		}
-		changed := map[string]string{}
+		changed := map[model.ID]string{}
 		for i, issue := range before {
 			_, deleted := issue.Retention().(model.Deleted)
 			if (deleted || issue.Rank == "") && got.Issues[i].Rank != issue.Rank {
@@ -177,27 +177,27 @@ func TestSeparateRankCollisionsLandsAKeyWithNoRoomBesideIt(t *testing.T) {
 	if collisions := rankCollisions(placedIssues(got)); len(collisions) != 0 {
 		t.Errorf("%+v still shares keys: %s", got.Issues, describeRankCollisions(collisions))
 	}
-	if want, have := []string{"t-1", "t-2", "t-3", "t-4"}, listedOrder(got); !slices.Equal(have, want) {
+	if want, have := []model.ID{"t-1", "t-2", "t-3", "t-4"}, listedOrder(got); !slices.Equal(have, want) {
 		t.Errorf("listed order %v, want %v", have, want)
 	}
 }
 
 // plantRank writes key onto id behind every rank verb's back: the state a
 // merge or an old restore leaves.
-func plantRank(t *testing.T, ctx context.Context, st *Store, id, key string) {
+func plantRank(t *testing.T, ctx context.Context, st *Store, id model.ID, key string) {
 	t.Helper()
 	if err := st.ExecRawForTest(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, key, id); err != nil {
 		t.Fatalf("plant rank %q on %s: %v", key, id, err)
 	}
 }
 
-func listedIDs(t *testing.T, ctx context.Context, st *Store) []string {
+func listedIDs(t *testing.T, ctx context.Context, st *Store) []model.ID {
 	t.Helper()
 	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}
-	ids := make([]string, len(issues))
+	ids := make([]model.ID, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
 	}
@@ -234,9 +234,9 @@ func TestDoctorCountsSharedRankKeysAndTheRepairSeparatesThemInOrder(t *testing.T
 		t.Errorf("DuplicateRanks = %d, want 2: each planted key, the closed holder's included", report.DuplicateRanks)
 	}
 	for _, pair := range [][2]model.Issue{{epics[0], epics[2]}, {epics[1], done}} {
-		holders := []string{pair[0].ID, pair[1].ID}
+		holders := []model.ID{pair[0].ID, pair[1].ID}
 		slices.Sort(holders)
-		want := fmt.Sprintf("%q shared by %s", pair[0].Rank, strings.Join(holders, ", "))
+		want := fmt.Sprintf("%q shared by %s", pair[0].Rank, model.JoinIDs(holders, ", "))
 		if !slices.ContainsFunc(report.Warnings, func(w string) bool { return strings.Contains(w, want) }) {
 			t.Errorf("Warnings = %v, want one naming %s", report.Warnings, want)
 		}
@@ -272,7 +272,7 @@ func TestRestoreSeparatesASharedRankKey(t *testing.T) {
 	}
 	shared := backup.Issues[0].Rank
 	backup.Issues[2].Rank = shared
-	holders := []string{backup.Issues[0].ID, backup.Issues[2].ID}
+	holders := []model.ID{backup.Issues[0].ID, backup.Issues[2].ID}
 	slices.Sort(holders)
 	wantOrder := listedOrder(backup)
 
@@ -322,7 +322,7 @@ func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 	}
 	second, third, fourth := epics[1], epics[2], epics[3]
 
-	placeAboveSecond := func(root, id string) {
+	placeAboveSecond := func(root string, id model.ID) {
 		t.Helper()
 		st := openOrFatal(t, ctx, root)
 		if _, err := st.RankAbove(ctx, id, second); err != nil {
@@ -353,12 +353,12 @@ func TestSyncReconcileSeparatesTheKeyTwoReplicasMintedAlike(t *testing.T) {
 	if res.State != storage.SyncReconcileLinearized {
 		t.Fatalf("reconcile state = %q, want %q", res.State, storage.SyncReconcileLinearized)
 	}
-	holders := []string{third, fourth}
+	holders := []model.ID{third, fourth}
 	slices.Sort(holders)
 	if len(res.Rekeyed) != 1 || res.Rekeyed[0].IssueID != holders[0] {
 		t.Fatalf("Rekeyed = %+v, want %s, the first-listed of the two epics placed between the same neighbours %v", res.Rekeyed, holders[0], holders)
 	}
-	wantOrder := []string{first, holders[0], holders[1], second}
+	wantOrder := []model.ID{first, holders[0], holders[1], second}
 	if got := listedIDs(t, ctx, syncB); !slices.Equal(got, wantOrder) {
 		t.Errorf("B lists %v, want %v", got, wantOrder)
 	}

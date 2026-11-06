@@ -35,7 +35,7 @@ func formatEpicLine(epic *annotation.ParentEpicRef) string {
 	if epic == nil {
 		return ""
 	}
-	return fmt.Sprintf("epic: %s  %s", model.HoldRow(epic.ID), epic.Title)
+	return fmt.Sprintf("epic: %s  %s", epic.ID, epic.Title)
 }
 
 // printEpicLine renders the indented "epic:" context line shown identically
@@ -50,7 +50,7 @@ func printEpicLine(w io.Writer, indent string, epic *annotation.ParentEpicRef) e
 // beside printEpicLine so ParentEpicRef's nil case is answered in one file
 // rather than at each caller that needs the id to compare.
 // [LAW:single-enforcer]
-func epicID(epic *annotation.ParentEpicRef) string {
+func epicID(epic *annotation.ParentEpicRef) model.ID {
 	if epic == nil {
 		return ""
 	}
@@ -74,16 +74,20 @@ func printContextLine(w io.Writer, indent, text string) error {
 // emits nothing, so callers pass the list rather than branching on its length.
 // [LAW:one-type-per-behavior] both lines are one behavior differing only in
 // label and data. [LAW:dataflow-not-control-flow]
-func printIDListLine(w io.Writer, indent, label string, ids []string) error {
+func printIDListLine[T any](w io.Writer, indent, label string, ids []T) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "%s%s: %s\n", indent, label, strings.Join(ids, ", "))
+	named := make([]string, len(ids))
+	for i, id := range ids {
+		named[i] = fmt.Sprint(id)
+	}
+	_, err := fmt.Fprintf(w, "%s%s: %s\n", indent, label, strings.Join(named, ", "))
 	return err
 }
 
 func printIssueSummary(w io.Writer, issue model.Issue) error {
-	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", model.HoldRow(issue.ID), formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))
+	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))
 	return err
 }
 
@@ -135,7 +139,7 @@ func parseListFormat(formatExpr, columnsExpr string) (string, issueListRenderer,
 
 // columnar is a format that projects the selected columns, one row per issue,
 // loading the derived cells the columns name.
-func columnar(print func(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error) listFormat {
+func columnar(print func(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[model.ID]derivedColumns) error) listFormat {
 	return func(columnsExpr string) (issueListRenderer, error) {
 		columns, err := parseColumnSelection(columnsExpr)
 		if err != nil {
@@ -185,7 +189,7 @@ func updateDocuments(columnsExpr string) (issueListRenderer, error) {
 	}, nil
 }
 
-func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error {
+func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[model.ID]derivedColumns) error {
 	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(columnNames(columns), "\t"))); err != nil {
 		return err
@@ -198,7 +202,7 @@ func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, ce
 	return tw.Flush()
 }
 
-func printIssueLines(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[string]derivedColumns) error {
+func printIssueLines(w io.Writer, issues []model.Issue, columns []columnSpec, cells map[model.ID]derivedColumns) error {
 	for _, issue := range issues {
 		if _, err := fmt.Fprintln(w, formatIssueColumns(issue, columns, " | ", cells)); err != nil {
 			return err
@@ -248,7 +252,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// IDs of open issues that depend on this one, i.e. would lose this as an
 	// open dependency when it closes. Empty list = no leverage; line omitted.
 	if ids := openUnblockIDs(detail.Blocks); len(ids) > 0 {
-		if _, err := fmt.Fprintf(w, "unblocks: %s\n", strings.Join(ids, ", ")); err != nil {
+		if _, err := fmt.Fprintf(w, "unblocks: %s\n", model.JoinIDs(ids, ", ")); err != nil {
 			return err
 		}
 	}
@@ -343,7 +347,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 // `description` are field names a caller reasonably tries as columns.
 // [LAW:one-source-of-truth]
 var issueFieldNames = map[string]func(model.IssueDetail) string{
-	"id":          func(d model.IssueDetail) string { return model.HoldRow(d.Issue.ID) },
+	"id":          func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.ID) },
 	"title":       func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.Title) },
 	"description": func(d model.IssueDetail) string { return d.Issue.Description },
 	"prompt":      func(d model.IssueDetail) string { return d.Issue.Prompt },
@@ -357,7 +361,7 @@ var issueFieldNames = map[string]func(model.IssueDetail) string{
 	"labels":      func(d model.IssueDetail) string { return joinTexts(d.Issue.Labels, ",") },
 	"rank":        func(d model.IssueDetail) string { return model.HoldRow(d.Issue.Rank) },
 	"lane":        func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.Lane) },
-	"follows_up":  func(d model.IssueDetail) string { return model.HoldRow(d.Issue.FollowsUp) },
+	"follows_up":  func(d model.IssueDetail) string { return fmt.Sprint(d.Issue.FollowsUp) },
 	"created_at":  func(d model.IssueDetail) string { return d.Issue.CreatedAt.Format(time.RFC3339) },
 	"updated_at":  func(d model.IssueDetail) string { return d.Issue.UpdatedAt.Format(time.RFC3339) },
 }
@@ -505,7 +509,7 @@ func historyVersions(detail model.IssueDetail) map[string][]string {
 // empty Events slice honestly prints just the header rather than fabricating
 // a line.
 func printIssueHistory(w io.Writer, detail model.IssueDetail, versions map[string][]string) error {
-	id := model.HoldRow(detail.Issue.ID)
+	id := detail.Issue.ID
 	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", id, detail.Issue.Title); err != nil {
 		return err
 	}
@@ -652,7 +656,7 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 		// The standing marker is why the group is worth reading at all: the
 		// agent learns where each referenced issue stands inline, without a
 		// second 'lit show' per id.
-		if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", model.HoldRow(issue.ID), issueStanding(issue), issue.Title); err != nil {
+		if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", issue.ID, issueStanding(issue), issue.Title); err != nil {
 			return err
 		}
 	}
@@ -719,14 +723,14 @@ func resolutionSuffix(resolution *model.Resolution) string {
 // column, because columnSourceFor makes the loader satisfy the maximum rung any
 // selected column asks for.
 type derivedColumns struct {
-	parentID string
+	parentID model.ID
 	blocked  bool
 }
 
 // The columns a projection can name — and the data each is computed from — are
 // the column registry's to state; see columns.go.
 
-func formatIssueColumns(issue model.Issue, columns []columnSpec, delimiter string, cells map[string]derivedColumns) string {
+func formatIssueColumns(issue model.Issue, columns []columnSpec, delimiter string, cells map[model.ID]derivedColumns) string {
 	values := make([]string, 0, len(columns))
 	for _, column := range columns {
 		// Reading a nil map yields the zero derivedColumns — "-" for an issue
@@ -820,8 +824,8 @@ func stalenessThresholdClause(threshold time.Duration) string {
 
 // openUnblockIDs returns the IDs of issues from blocks that are still live —
 // the set this issue's closure would actually unblock from a "ready" perspective.
-func openUnblockIDs(blocks []model.Issue) []string {
-	ids := make([]string, 0, len(blocks))
+func openUnblockIDs(blocks []model.Issue) []model.ID {
+	ids := make([]model.ID, 0, len(blocks))
 	for _, b := range blocks {
 		if !b.InPlay() {
 			continue
@@ -869,7 +873,7 @@ func printCloseAdjacency(w io.Writer, adjacency storage.IssueAdjacency) error {
 		return err
 	}
 	if ids := openUnblockIDs(adjacency.Blocks); len(ids) > 0 {
-		if _, err := fmt.Fprintf(w, "\nunblocks: %s\n", strings.Join(ids, ", ")); err != nil {
+		if _, err := fmt.Fprintf(w, "\nunblocks: %s\n", model.JoinIDs(ids, ", ")); err != nil {
 			return err
 		}
 	}

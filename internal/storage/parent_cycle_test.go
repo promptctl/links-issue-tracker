@@ -10,7 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-func blockedBy(dependent, dependency string) model.Relation {
+func blockedBy(dependent, dependency model.ID) model.Relation {
 	return model.Relation{SrcID: dependent, DstID: dependency, Type: model.RelBlockedBy, CreatedAt: born, CreatedBy: "seed"}
 }
 
@@ -21,50 +21,50 @@ func TestBreakParentCyclesCutsTheGreatestMembersEdgeInEachLoop(t *testing.T) {
 	cases := []struct {
 		name      string
 		relations []model.Relation
-		want      map[string][]string
+		want      map[model.ID][]model.ID
 		cuts      []storage.Unlooped
 	}{
 		{
 			name:      "two epics under each other",
 			relations: []model.Relation{under("a", "b"), under("b", "a")},
-			want:      map[string][]string{"a": {"b"}},
-			cuts:      []storage.Unlooped{{IssueID: "b", Parent: "a", Cycle: []string{"a", "b"}}},
+			want:      map[model.ID][]model.ID{"a": {"b"}},
+			cuts:      []storage.Unlooped{{IssueID: "b", Parent: "a", Cycle: []model.ID{"a", "b"}}},
 		},
 		{
 			name:      "a three-member loop",
 			relations: []model.Relation{under("a", "b"), under("b", "c"), under("c", "a")},
-			want:      map[string][]string{"a": {"b"}, "b": {"c"}},
-			cuts:      []storage.Unlooped{{IssueID: "c", Parent: "a", Cycle: []string{"a", "b", "c"}}},
+			want:      map[model.ID][]model.ID{"a": {"b"}, "b": {"c"}},
+			cuts:      []storage.Unlooped{{IssueID: "c", Parent: "a", Cycle: []model.ID{"a", "b", "c"}}},
 		},
 		{
 			// a hangs below a b<->c loop, so the loop does not begin where the
 			// walk does; a's own edge is not part of it and stays.
 			name:      "a loop entered from a tail",
 			relations: []model.Relation{under("a", "b"), under("b", "c"), under("c", "b")},
-			want:      map[string][]string{"a": {"b"}, "b": {"c"}},
-			cuts:      []storage.Unlooped{{IssueID: "c", Parent: "b", Cycle: []string{"b", "c"}}},
+			want:      map[model.ID][]model.ID{"a": {"b"}, "b": {"c"}},
+			cuts:      []storage.Unlooped{{IssueID: "c", Parent: "b", Cycle: []model.ID{"b", "c"}}},
 		},
 		{
 			name:      "an issue under itself",
 			relations: []model.Relation{under("e", "e")},
-			want:      map[string][]string{},
-			cuts:      []storage.Unlooped{{IssueID: "e", Parent: "e", Cycle: []string{"e"}}},
+			want:      map[model.ID][]model.ID{},
+			cuts:      []storage.Unlooped{{IssueID: "e", Parent: "e", Cycle: []model.ID{"e"}}},
 		},
 		{
 			// x holds two parents, root and y; only the edge back from y closes a
 			// loop, so x keeps both of its own.
 			name:      "a child with two parents, one of them in a loop",
 			relations: []model.Relation{under("x", "root"), under("x", "y"), under("y", "x")},
-			want:      map[string][]string{"x": {"root", "y"}},
-			cuts:      []storage.Unlooped{{IssueID: "y", Parent: "x", Cycle: []string{"x", "y"}}},
+			want:      map[model.ID][]model.ID{"x": {"root", "y"}},
+			cuts:      []storage.Unlooped{{IssueID: "y", Parent: "x", Cycle: []model.ID{"x", "y"}}},
 		},
 		{
 			name:      "two separate loops",
 			relations: []model.Relation{under("p", "q"), under("q", "p"), under("r", "s"), under("s", "r")},
-			want:      map[string][]string{"p": {"q"}, "r": {"s"}},
+			want:      map[model.ID][]model.ID{"p": {"q"}, "r": {"s"}},
 			cuts: []storage.Unlooped{
-				{IssueID: "q", Parent: "p", Cycle: []string{"p", "q"}},
-				{IssueID: "s", Parent: "r", Cycle: []string{"r", "s"}},
+				{IssueID: "q", Parent: "p", Cycle: []model.ID{"p", "q"}},
+				{IssueID: "s", Parent: "r", Cycle: []model.ID{"r", "s"}},
 			},
 		},
 	}
@@ -114,10 +114,10 @@ func TestALoopTwoClonesMergeIntoIsCutOnLanding(t *testing.T) {
 		t.Fatal("ThreeWay() held no provisional export")
 	}
 	out, cuts := storage.BreakParentCycles(merged)
-	if got, want := parents(out), map[string][]string{"a": {"b"}}; !reflect.DeepEqual(got, want) {
+	if got, want := parents(out), map[model.ID][]model.ID{"a": {"b"}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("parent edges = %v, want %v", got, want)
 	}
-	if want := []storage.Unlooped{{IssueID: "b", Parent: "a", Cycle: []string{"a", "b"}}}; !reflect.DeepEqual(cuts, want) {
+	if want := []storage.Unlooped{{IssueID: "b", Parent: "a", Cycle: []model.ID{"a", "b"}}}; !reflect.DeepEqual(cuts, want) {
 		t.Errorf("cuts = %+v, want %+v", cuts, want)
 	}
 }

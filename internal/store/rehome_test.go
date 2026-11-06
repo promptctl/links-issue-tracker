@@ -89,25 +89,25 @@ func TestHomeStrandedHomesWhatMigration00007Homes(t *testing.T) {
 	seedContainmentShapes(seeded)
 	out, _ := storage.HomeStranded(seeded.export)
 
-	parents := map[string][]string{}
+	parents := map[model.ID][]model.ID{}
 	for _, r := range out.Relations {
 		if r.Type == model.RelParentChild {
 			parents[r.SrcID] = append(parents[r.SrcID], r.DstID)
 		}
 	}
 	for id, want := range containmentHomes {
-		got := parents[id]
-		if (want == "" && len(got) != 0) || (want != "" && !reflect.DeepEqual(got, []string{want})) {
+		got := parents[model.ID(id)]
+		if (want == "" && len(got) != 0) || (want != "" && !reflect.DeepEqual(got, []model.ID{model.ID(want)})) {
 			t.Errorf("%s parents = %v, want %q as 00007 leaves it", id, got, want)
 		}
 	}
-	lanes := map[string]string{}
+	lanes := map[model.ID]string{}
 	for _, issue := range out.Issues {
 		lanes[issue.ID] = issue.Lane.Raw()
 	}
 	for id, want := range containmentLanes {
-		if lanes[id] != want {
-			t.Errorf("%s lane = %q, want %q as 00007 leaves it", id, lanes[id], want)
+		if lanes[model.ID(id)] != want {
+			t.Errorf("%s lane = %q, want %q as 00007 leaves it", id, lanes[model.ID(id)], want)
 		}
 	}
 }
@@ -117,7 +117,7 @@ type exportSeeder struct{ export model.Export }
 
 func (s *exportSeeder) issue(row seedRow) {
 	topic, title := row.topicAndTitle()
-	issue := model.Issue{ID: row.id, Title: model.Text(title), IssueType: model.IssueType(row.issueType), Topic: model.Text(topic), Rank: row.rank, Lane: model.Text(row.lane), CreatedAt: migrationSeedBorn, UpdatedAt: migrationSeedBorn}
+	issue := model.Issue{ID: model.ID(row.id), Title: model.Text(title), IssueType: model.IssueType(row.issueType), Topic: model.Text(topic), Rank: row.rank, Lane: model.Text(row.lane), CreatedAt: migrationSeedBorn, UpdatedAt: migrationSeedBorn}
 	if row.deleted {
 		issue.SetRetention(model.Deleted{At: migrationSeedBorn})
 	}
@@ -125,7 +125,7 @@ func (s *exportSeeder) issue(row seedRow) {
 }
 
 func (s *exportSeeder) parent(child, parent string) {
-	s.export.Relations = append(s.export.Relations, model.Relation{SrcID: child, DstID: parent, Type: model.RelParentChild, CreatedAt: migrationSeedBorn, CreatedBy: "seed"})
+	s.export.Relations = append(s.export.Relations, model.Relation{SrcID: model.ID(child), DstID: model.ID(parent), Type: model.RelParentChild, CreatedAt: migrationSeedBorn, CreatedBy: "seed"})
 }
 
 var migrationSeedBorn = time.Date(2026, time.March, 1, 9, 0, 0, 0, time.UTC)
@@ -279,7 +279,7 @@ func createEpicAndPush(t *testing.T, ctx context.Context, root, title string) {
 
 // assertHomedUnder fails unless child's one parent is epic, that epic is the
 // unfiled epic, and Doctor reports nothing: no ticket is left outside an epic.
-func assertHomedUnder(t *testing.T, ctx context.Context, st *Store, child, epic string) {
+func assertHomedUnder(t *testing.T, ctx context.Context, st *Store, child, epic model.ID) {
 	t.Helper()
 	if got := readParent(t, ctx, st, child); got != epic {
 		t.Errorf("%s parent = %q, want %q", child, got, epic)

@@ -21,7 +21,7 @@ func attributionWantActor() string { return "claude_" + attributionSessionID }
 
 // newAttributionIssue creates a task inside an epic of its own and returns the
 // task's id.
-func newAttributionIssue(t *testing.T, ap *app.App, title string) string {
+func newAttributionIssue(t *testing.T, ap *app.App, title string) model.ID {
 	t.Helper()
 	ctx := context.Background()
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
@@ -47,7 +47,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "label target")
 		var out bytes.Buffer
-		if err := runLeaf(t, labelAddLeaf(), ctx, &out, ap, []string{id, "urgent"}); err != nil {
+		if err := runLeaf(t, labelAddLeaf(), ctx, &out, ap, []string{id.Raw(), "urgent"}); err != nil {
 			t.Fatalf("runLabelAdd error = %v", err)
 		}
 		assertLabelActor(t, ap, id, "urgent", want)
@@ -59,7 +59,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		child := newAttributionIssue(t, ap, "child")
 		parent := seedEpicRaw(t, context.Background(), ap, "parent", "attribution")
 		var out bytes.Buffer
-		if err := runLeaf(t, parentSetLeaf(), ctx, &out, ap, []string{"--child", child, "--parent", parent}); err != nil {
+		if err := runLeaf(t, parentSetLeaf(), ctx, &out, ap, []string{"--child", child.Raw(), "--parent", parent.Raw()}); err != nil {
 			t.Fatalf("runParentSet error = %v", err)
 		}
 		assertRelationActor(t, ap, child, model.RelParentChild, want)
@@ -71,7 +71,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		blocked := newAttributionIssue(t, ap, "blocked")
 		blocker := newAttributionIssue(t, ap, "blocker")
 		var out bytes.Buffer
-		if err := runLeaf(t, depAddLeaf(), ctx, &out, ap, []string{blocked, "--blocked-by", blocker}); err != nil {
+		if err := runLeaf(t, depAddLeaf(), ctx, &out, ap, []string{blocked.Raw(), "--blocked-by", blocker.Raw()}); err != nil {
 			t.Fatalf("runDepAdd error = %v", err)
 		}
 		assertRelationActor(t, ap, blocked, model.RelBlockedBy, want)
@@ -82,7 +82,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "bulk label target")
 		var out bytes.Buffer
-		if err := runLeaf(t, bulkLabelLeaf(), ctx, &out, ap, []string{"add", "--ids", id, "--label", "urgent"}); err != nil {
+		if err := runLeaf(t, bulkLabelLeaf(), ctx, &out, ap, []string{"add", "--ids", id.Raw(), "--label", "urgent"}); err != nil {
 			t.Fatalf("runBulkLabel error = %v", err)
 		}
 		assertLabelActor(t, ap, id, "urgent", want)
@@ -93,7 +93,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "bulk close target")
 		var out bytes.Buffer
-		if err := runLeaf(t, bulkTransitionLeaf(closeSpec)(), ctx, &out, ap, []string{"--ids", id, "--resolution", "obsolete", "--reason", "done"}); err != nil {
+		if err := runLeaf(t, bulkTransitionLeaf(closeSpec)(), ctx, &out, ap, []string{"--ids", id.Raw(), "--resolution", "obsolete", "--reason", "done"}); err != nil {
 			t.Fatalf("runBulkClose error = %v", err)
 		}
 		assertCloseEventActor(t, ap, id, want)
@@ -104,7 +104,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "bulk comment target")
 		var out bytes.Buffer
-		if err := runLeaf(t, bulkCommentLeaf(), ctx, &out, ap, []string{"--ids", id, "--body", "note"}); err != nil {
+		if err := runLeaf(t, bulkCommentLeaf(), ctx, &out, ap, []string{"--ids", id.Raw(), "--body", "note"}); err != nil {
 			t.Fatalf("bulk comment error = %v", err)
 		}
 		detail, err := ap.Store.GetIssueDetail(ctx, id)
@@ -117,7 +117,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 	})
 }
 
-func assertLabelActor(t *testing.T, ap *app.App, issueID, label, want string) {
+func assertLabelActor(t *testing.T, ap *app.App, issueID model.ID, label, want string) {
 	t.Helper()
 	export, err := ap.Store.Export(context.Background())
 	if err != nil {
@@ -134,7 +134,7 @@ func assertLabelActor(t *testing.T, ap *app.App, issueID, label, want string) {
 	t.Fatalf("label %q on %q not found in export", label, issueID)
 }
 
-func assertRelationActor(t *testing.T, ap *app.App, issueID string, relType model.RelationType, want string) {
+func assertRelationActor(t *testing.T, ap *app.App, issueID model.ID, relType model.RelationType, want string) {
 	t.Helper()
 	rels, err := ap.Store.ListRelationsForIssue(context.Background(), issueID, relType)
 	if err != nil {
@@ -150,7 +150,7 @@ func assertRelationActor(t *testing.T, ap *app.App, issueID string, relType mode
 	}
 }
 
-func assertCloseEventActor(t *testing.T, ap *app.App, issueID, want string) {
+func assertCloseEventActor(t *testing.T, ap *app.App, issueID model.ID, want string) {
 	t.Helper()
 	detail, err := ap.Store.GetIssueDetail(context.Background(), issueID)
 	if err != nil {

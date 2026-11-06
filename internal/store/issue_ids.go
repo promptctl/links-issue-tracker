@@ -4,17 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // newIssueID mints the id for a new issue. Top-level and child ids differ only
 // in the namespace they hang under and the population that sets their hash
 // length; the minting rule itself is one function in issueid, reached the same
 // way from both. [LAW:one-type-per-behavior]
-func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, title string, description string, createdBy string, createdAt time.Time, parentID string) (string, error) {
+func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, title string, description string, createdBy string, createdAt time.Time, parentID model.ID) (model.ID, error) {
 	content := issueid.Content{
 		Topic:       topic,
 		Title:       title,
@@ -29,13 +29,14 @@ func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, ti
 	// A purged id is taken for good: other tickets' text, follow-ups and
 	// redirects still name it, and a new ticket wearing it would answer for
 	// the purged one.
-	return issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
+	minted, err := issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
 		var count int
 		if err := tx.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM issues WHERE id = ?) + (SELECT COUNT(*) FROM purges WHERE issue_id = ?)`, candidate, candidate).Scan(&count); err != nil {
 			return false, err
 		}
 		return count > 0, nil
 	})
+	return model.ID(minted), err
 }
 
 // idSpace resolves which id-space a new issue is minted into and how populated
@@ -47,8 +48,8 @@ func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, ti
 // over the LOCAL rows is a claim about every row that exists anywhere, and two
 // disconnected stores holding the same rows make that claim identically.
 // [LAW:one-source-of-truth]
-func idSpace(ctx context.Context, tx *sql.Tx, prefix, topic, parentID string) (issueid.Namespace, int, error) {
-	if strings.TrimSpace(parentID) == "" {
+func idSpace(ctx context.Context, tx *sql.Tx, prefix, topic string, parentID model.ID) (issueid.Namespace, int, error) {
+	if parentID.Trim() == "" {
 		population, err := countTopLevelIssues(ctx, tx)
 		if err != nil {
 			return "", 0, err
@@ -59,14 +60,14 @@ func idSpace(ctx context.Context, tx *sql.Tx, prefix, topic, parentID string) (i
 	if err != nil {
 		return "", 0, err
 	}
-	return issueid.ChildNamespace(parentID), population, nil
+	return issueid.ChildNamespace(parentID.Raw()), population, nil
 }
 
 // countChildren counts the direct children already recorded under parentID.
 // Parentage is read from the relations table, the only place it lives — an id
 // prefix scan would also sweep up grandchildren and would take the id shape as
 // evidence of structure it does not own. [LAW:one-source-of-truth]
-func countChildren(ctx context.Context, tx *sql.Tx, parentID string) (int, error) {
+func countChildren(ctx context.Context, tx *sql.Tx, parentID model.ID) (int, error) {
 	var count int
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM relations WHERE dst_id = ? AND type = 'parent-child'`, parentID).Scan(&count); err != nil {

@@ -60,7 +60,7 @@ func ParseImportTreeFile(specs []ImportTreeSpec) ([]FileCreate, error) {
 // cycle the file states is refused here whatever kinds of document close it.
 // Its type is the one it is stored with, which is the type the reparent write
 // judges it by. [LAW:one-source-of-truth]
-func ParseBulkFile(merged MergedFile, existingTypes map[string]model.IssueType) (BulkFile, error) {
+func ParseBulkFile(merged MergedFile, existingTypes map[model.ID]model.IssueType) (BulkFile, error) {
 	specs := merged.specs
 	file, creates, err := parseBulkSpecs(specs)
 	if err != nil {
@@ -70,7 +70,7 @@ func ParseBulkFile(merged MergedFile, existingTypes map[string]model.IssueType) 
 		doc := fileDocument{name: fmt.Sprintf("doc %d", i), localID: spec.LocalID, issueType: creates[i].issue.IssueType, parent: valueOr(spec.Parent, ""), blockedBy: valueOr(spec.BlockedBy, nil)}
 		if spec.ID != "" {
 			doc.name = fmt.Sprintf("doc %d (id %q)", i, spec.ID)
-			doc.id, doc.issueType = spec.ID, existingTypes[spec.ID]
+			doc.id, doc.issueType = spec.ID, existingTypes[model.ID(spec.ID)]
 		}
 		return doc
 	}), existingTypes)
@@ -215,7 +215,7 @@ func resolveFileReferences[S any](specs []S, documentOf func(int, S) fileDocumen
 // the store holds one wherever an epic waits on a leaf of another epic that
 // waits on a leaf of the first — so it is no refusal here either, and a
 // selection read out of the store goes back in. [LAW:single-enforcer]
-func judgeReferences(format string, refs fileReferences, existingTypes map[string]model.IssueType) ([]int, error) {
+func judgeReferences(format string, refs fileReferences, existingTypes map[model.ID]model.IssueType) ([]int, error) {
 	if err := rejectBlocksWithinFileEpics(format, refs, existingTypes); err != nil {
 		return nil, err
 	}
@@ -317,8 +317,8 @@ func writeOrder(refs fileReferences) []int {
 // the type it is stored with. An existing parent is keyed apart from the
 // documents, whatever its id spells. An edge whose judgment needs a real id's
 // own place is the write's to judge. [LAW:single-enforcer]
-func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingTypes map[string]model.IssueType) error {
-	node := strconv.Itoa
+func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingTypes map[model.ID]model.IssueType) error {
+	node := func(i int) model.ID { return model.ID(strconv.Itoa(i)) }
 	tree := make(EpicTree, len(refs.parent)+len(refs.existingParent))
 	for i, p := range refs.parent {
 		if refs.docs[p].issueType.IsContainer() {
@@ -326,8 +326,8 @@ func rejectBlocksWithinFileEpics(format string, refs fileReferences, existingTyp
 		}
 	}
 	for i, id := range refs.existingParent {
-		if existingTypes[id].IsContainer() {
-			tree.Place(node(i), refs.docs[i].issueType, "existing "+id)
+		if existingTypes[model.ID(id)].IsContainer() {
+			tree.Place(node(i), refs.docs[i].issueType, model.ID("existing "+id))
 		}
 	}
 	for i, deps := range refs.blockedBy {
@@ -411,11 +411,11 @@ func parseImportTreeSpecs(specs []ImportTreeSpec) (map[int]FileCreate, error) {
 			if !ok {
 				return nil, model.ValidationError{Message: fmt.Sprintf("import: spec %q references missing parent %q", spec.LocalID, spec.Parent)}
 			}
-			if err := RejectParentThatIsNotAContainer(spec.Parent, parentType); err != nil {
+			if err := RejectParentThatIsNotAContainer(model.ID(spec.Parent), parentType); err != nil {
 				return nil, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 			}
 		}
-		if err := RejectLeafWithoutParent(types[spec.LocalID], spec.Parent); err != nil {
+		if err := RejectLeafWithoutParent(types[spec.LocalID], model.ID(spec.Parent)); err != nil {
 			return nil, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
 		if err := rejectRepeatedBlockedBy(spec.BlockedBy); err != nil {
@@ -498,7 +498,7 @@ func parseBulkSpecs(specs []BulkIssueSpec) (BulkFile, map[int]FileCreate, error)
 			return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 		}
 		if ranks {
-			file.Ranked = append(file.Ranked, FileRef{id: spec.ID, index: i})
+			file.Ranked = append(file.Ranked, FileRef{id: model.ID(spec.ID), index: i})
 		}
 
 		if spec.ID != "" {
@@ -511,10 +511,10 @@ func parseBulkSpecs(specs []BulkIssueSpec) (BulkFile, map[int]FileCreate, error)
 			}
 			seenID[spec.ID] = struct{}{}
 			if spec.Parent != nil {
-				file.Reparents = append(file.Reparents, FileReparent{ID: spec.ID, Parent: *spec.Parent})
+				file.Reparents = append(file.Reparents, FileReparent{ID: model.ID(spec.ID), Parent: *spec.Parent})
 			}
 			if spec.BlockedBy != nil {
-				file.BlockedBy = append(file.BlockedBy, FileBlockedBy{ID: spec.ID, BlockedBy: *spec.BlockedBy})
+				file.BlockedBy = append(file.BlockedBy, FileBlockedBy{ID: model.ID(spec.ID), BlockedBy: *spec.BlockedBy})
 			}
 			// The document states a field exactly when the patch it becomes
 			// does, so the question is asked of that patch; a document that
@@ -530,7 +530,7 @@ func parseBulkSpecs(specs []BulkIssueSpec) (BulkFile, map[int]FileCreate, error)
 				}
 				continue
 			}
-			file.Updates = append(file.Updates, BulkUpdate{ID: spec.ID, Patch: patch})
+			file.Updates = append(file.Updates, BulkUpdate{ID: model.ID(spec.ID), Patch: patch})
 			continue
 		}
 
@@ -549,12 +549,12 @@ func parseBulkSpecs(specs []BulkIssueSpec) (BulkFile, map[int]FileCreate, error)
 	for i, spec := range specs {
 		parent := valueOr(spec.Parent, "")
 		if create, isCreate := creates[i]; isCreate {
-			if err := RejectLeafWithoutParent(create.issue.IssueType, parent); err != nil {
+			if err := RejectLeafWithoutParent(create.issue.IssueType, model.ID(parent)); err != nil {
 				return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 			}
 		}
 		if parentType, inFile := localTypes[parent]; inFile {
-			if err := RejectParentThatIsNotAContainer(parent, parentType); err != nil {
+			if err := RejectParentThatIsNotAContainer(model.ID(parent), parentType); err != nil {
 				return BulkFile{}, nil, fmt.Errorf("bulk: doc %d: %w", i, err)
 			}
 		}

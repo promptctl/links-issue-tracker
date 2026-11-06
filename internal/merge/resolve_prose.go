@@ -28,7 +28,7 @@ type Fingerprint string
 const fingerprintBytes = 6
 
 func (p ProsePending) Fingerprint() Fingerprint {
-	sum := sha256.Sum256([]byte(p.IssueID + "\x00" + string(p.Field) + "\x00" + p.Base + "\x00" + p.Ours + "\x00" + p.Theirs))
+	sum := sha256.Sum256([]byte(p.IssueID.Raw() + "\x00" + string(p.Field) + "\x00" + p.Base + "\x00" + p.Ours + "\x00" + p.Theirs))
 	return Fingerprint(hex.EncodeToString(sum[:fingerprintBytes]))
 }
 
@@ -64,7 +64,7 @@ type ProseResolution struct {
 // [LAW:types-are-the-program] Making the place a comparable key lets the bijection
 // check be a set comparison, not field-by-field prose.
 type proseKey struct {
-	IssueID string
+	IssueID model.ID
 	Field   ProseField
 }
 
@@ -94,7 +94,7 @@ type ProseTexts map[ProseField]string
 //
 // It is pure: the live pending set comes from the MergeResult, the merged text
 // from the agent — no IO, no clock. [LAW:effects-at-boundaries]
-func MatchProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, map[string]ProseTexts, bool) {
+func MatchProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, map[model.ID]ProseTexts, bool) {
 	// Each pending field is addressed by the fingerprint of its LIVE conflict, so
 	// one lookup settles both which field a resolution is for and that it was
 	// merged against THIS conflict, not a since-changed one.
@@ -134,7 +134,7 @@ func MatchProseResolutions(result MergeResult, resolutions []ProseResolution) (m
 	if !ok {
 		return model.Export{}, nil, false
 	}
-	texts := make(map[string]ProseTexts, len(resolvedByKey))
+	texts := make(map[model.ID]ProseTexts, len(resolvedByKey))
 	for key, text := range resolvedByKey {
 		if texts[key.IssueID] == nil {
 			texts[key.IssueID] = ProseTexts{}

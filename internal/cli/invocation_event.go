@@ -153,12 +153,12 @@ func invocationContext(ctx context.Context, recorder *telemetry.Recorder) contex
 type ancestryMet struct {
 	event     context.Context
 	mu        sync.Mutex
-	conflicts map[string]struct{}
-	loops     map[string]struct{}
+	conflicts map[model.ID]struct{}
+	loops     map[model.ID]struct{}
 }
 
 func newAncestryMet(event context.Context) *ancestryMet {
-	return &ancestryMet{event: event, conflicts: map[string]struct{}{}, loops: map[string]struct{}{}}
+	return &ancestryMet{event: event, conflicts: map[model.ID]struct{}{}, loops: map[model.ID]struct{}{}}
 }
 
 func (m *ancestryMet) record(shape storage.AncestryShape) {
@@ -169,14 +169,14 @@ func (m *ancestryMet) record(shape storage.AncestryShape) {
 	for _, conflict := range shape.Conflicts {
 		if firstMeeting(m.conflicts, conflict.ChildID) {
 			conflicts = append(conflicts, map[string]any{
-				"rank.ancestry_conflict.child":   conflict.ChildID,
+				"rank.ancestry_conflict.child":   conflict.ChildID.Raw(),
 				"rank.ancestry_conflict.parents": slices.Clone(conflict.Parents),
 			})
 		}
 	}
 	for _, child := range shape.Loops {
 		if firstMeeting(m.loops, child) {
-			loops = append(loops, map[string]any{"rank.ancestry_loop.child": child})
+			loops = append(loops, map[string]any{"rank.ancestry_loop.child": child.Raw()})
 		}
 	}
 	// One append a key per build: each append copies what the key holds.
@@ -189,7 +189,7 @@ func (m *ancestryMet) record(shape storage.AncestryShape) {
 }
 
 // firstMeeting marks child seen and says whether it was not already.
-func firstMeeting(seen map[string]struct{}, child string) bool {
+func firstMeeting(seen map[model.ID]struct{}, child model.ID) bool {
 	if _, ok := seen[child]; ok {
 		return false
 	}

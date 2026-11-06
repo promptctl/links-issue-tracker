@@ -21,12 +21,12 @@ var (
 // laneWithProgress builds an epic-major lane of `total` members, the first
 // `done` closed, and — if activeID is non-empty — the member right after
 // them in_progress under that id; every remaining member is plain open.
-func laneWithProgress(t *testing.T, done, total int, activeID string) (claims.Evidence, model.LaneID) {
+func laneWithProgress(t *testing.T, done, total int, activeID model.ID) (claims.Evidence, model.LaneID) {
 	t.Helper()
 	epic := model.Issue{ID: "E", IssueType: model.TypeEpic}
 	children := make([]model.Issue, 0, total)
 	for i := 0; i < total; i++ {
-		id := "leaf" + string(rune('0'+i))
+		id := model.ID("leaf" + string(rune('0'+i)))
 		state := model.StateOpen
 		switch {
 		case i < done:
@@ -45,7 +45,7 @@ func laneWithProgress(t *testing.T, done, total int, activeID string) (claims.Ev
 		t.Fatalf("hydrate epic: %v", err)
 	}
 	issues := append([]model.Issue{epicHydrated}, children...)
-	parents := map[string]string{}
+	parents := map[model.ID]model.ID{}
 	for _, c := range children {
 		parents[c.ID] = epicHydrated.ID
 	}

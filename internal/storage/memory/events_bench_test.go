@@ -27,7 +27,7 @@ func benchListEvents(b *testing.B, rows int) {
 	if err != nil {
 		b.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	ids := make([]string, 0, rows)
+	ids := make([]model.ID, 0, rows)
 	for i := range rows {
 		issue, err := engine.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "bench", Title: storage.MustParseTitle(fmt.Sprintf("row %d", i)), Lane: storage.SharedLane, Topic: "env", ParentID: epic.ID})
 		if err != nil {

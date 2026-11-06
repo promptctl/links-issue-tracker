@@ -22,12 +22,12 @@ func TestIssueOrderingBreaksTiesByIDWhateverOrderTheRowsArriveIn(t *testing.T) {
 		}
 		sorted := slices.Clone(handed)
 		slices.SortStableFunc(sorted, order)
-		got := make([]string, 0, len(sorted))
+		got := make([]model.ID, 0, len(sorted))
 		for _, issue := range sorted {
 			got = append(got, issue.ID)
 		}
 		// Descending reverses the named key, never the tie-break.
-		if want := []string{"a", "b", "c"}; !slices.Equal(got, want) {
+		if want := []model.ID{"a", "b", "c"}; !slices.Equal(got, want) {
 			t.Errorf("desc=%v: tied rows ordered %v, want %v", desc, got, want)
 		}
 	}

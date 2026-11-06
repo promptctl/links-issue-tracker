@@ -26,7 +26,7 @@ type Replacement struct {
 // A ticket is its id and its birth (created_at), so one the export holds under
 // the same id but born at another instant is removed too.
 type Removed struct {
-	IssueID string     `json:"issue_id"`
+	IssueID model.ID   `json:"issue_id"`
 	Title   model.Text `json:"title"`
 }
 
@@ -34,7 +34,7 @@ type Removed struct {
 // share one: the key it held, and the key it holds now. Its place in every
 // listing is unchanged: only the tie that the id used to break is gone.
 type Rekeyed struct {
-	IssueID string `json:"issue_id"`
-	From    string `json:"from"`
-	Rank    string `json:"rank"`
+	IssueID model.ID `json:"issue_id"`
+	From    string   `json:"from"`
+	Rank    string   `json:"rank"`
 }

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,7 +33,7 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 		return model.Comment{}, model.Issue{}, err
 	}
 	comment := model.Comment{
-		ID:        "cmt-" + uuid.NewString(),
+		ID:        model.ID("cmt-" + uuid.NewString()),
 		IssueID:   in.IssueID,
 		Body:      body,
 		CreatedAt: e.clock.Now(),
@@ -46,11 +45,11 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 
 // DeleteComment reports what it removed, so a deletion is describable without
 // a prior read.
-func (e *Engine) DeleteComment(ctx context.Context, commentID string) (model.Comment, error) {
+func (e *Engine) DeleteComment(ctx context.Context, commentID model.ID) (model.Comment, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	id := strings.TrimSpace(commentID)
+	id := commentID.Trim()
 	if id == "" {
 		return model.Comment{}, model.ValidationError{Message: "comment id is required"}
 	}
@@ -63,7 +62,7 @@ func (e *Engine) DeleteComment(ctx context.Context, commentID string) (model.Com
 	return deleted, nil
 }
 
-func (e *Engine) commentsFor(issueID string) []model.Comment {
+func (e *Engine) commentsFor(issueID model.ID) []model.Comment {
 	return e.commentsWhere(func(c model.Comment) bool { return c.IssueID == issueID })
 }
 
@@ -88,7 +87,7 @@ func (e *Engine) commentsWhere(keep func(model.Comment) bool) []model.Comment {
 // loses its row. It is the one label write, shared by the create path and the
 // field patch, so the stored rows can only ever be the canonical form, and a
 // write never re-authors a label it did not add. [LAW:single-enforcer]
-func (e *Engine) setLabels(issueID string, names []string, now time.Time, createdBy string) {
+func (e *Engine) setLabels(issueID model.ID, names []string, now time.Time, createdBy string) {
 	author := storage.Actor(createdBy)
 	held := e.labels[issueID]
 	rows := make([]model.Label, 0, len(names))
@@ -162,7 +161,7 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 // guard somewhere deciding it is exempt. The same two arms live in the Dolt
 // store's rejectCycleTx; this is one rule rendered twice, not two.
 // [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
-func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID string) error {
+func (e *Engine) rejectCycle(relType model.RelationType, srcID, dstID model.ID) error {
 	switch relType {
 	case model.RelBlockedBy:
 		// A rank order is a total order, and one honoring every blocked-by edge
@@ -209,11 +208,11 @@ func (e *Engine) epicTree() storage.EpicTree {
 //
 // The edge runs child -> parent, so the loop closes exactly when the parent is
 // already at or below the child.
-func (e *Engine) rejectParentCycle(childID, parentID string) error {
+func (e *Engine) rejectParentCycle(childID, parentID model.ID) error {
 	if childID == parentID {
 		return model.ValidationError{Message: fmt.Sprintf("parent-child: %s cannot be its own parent", childID)}
 	}
-	parentOf := map[string]string{}
+	parentOf := map[model.ID]model.ID{}
 	for _, rel := range e.relations {
 		if rel.Type == model.RelParentChild {
 			parentOf[rel.SrcID] = rel.DstID
@@ -221,7 +220,7 @@ func (e *Engine) rejectParentCycle(childID, parentID string) error {
 	}
 	// seen bounds the walk on data that already holds a cycle, so a store
 	// written before this rule existed reports it rather than hanging here.
-	seen := map[string]struct{}{parentID: {}}
+	seen := map[model.ID]struct{}{parentID: {}}
 	for at := parentOf[parentID]; at != ""; at = parentOf[at] {
 		if at == childID {
 			return model.ValidationError{Message: fmt.Sprintf("parent-child: cannot make %s a child of %s — %s is already below %s in the hierarchy, so this edge would close a parent cycle, which has no root", childID, parentID, parentID, childID)}
@@ -238,21 +237,21 @@ func (e *Engine) rejectParentCycle(childID, parentID string) error {
 // graph. A self-edge is the degenerate one; a longer one exists when the new
 // dependent already precedes the new dependency, since the new edge asserts
 // the reverse.
-func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
+func (e *Engine) rejectBlocksCycle(dependent, dependency model.ID) error {
 	if dependent == dependency {
 		return storage.RelationRuleError{Rule: storage.RuleSelfLoop, Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
 	// dependency -> dependents: who is forced to come after whom.
-	precedes := map[string][]string{}
+	precedes := map[model.ID][]model.ID{}
 	for _, rel := range e.relations {
 		if rel.Type != model.RelBlockedBy {
 			continue
 		}
 		precedes[rel.DstID] = append(precedes[rel.DstID], rel.SrcID)
 	}
-	seen := map[string]struct{}{}
-	var reaches func(from string) bool
-	reaches = func(from string) bool {
+	seen := map[model.ID]struct{}{}
+	var reaches func(from model.ID) bool
+	reaches = func(from model.ID) bool {
 		for _, next := range precedes[from] {
 			if next == dependency {
 				return true
@@ -273,13 +272,13 @@ func (e *Engine) rejectBlocksCycle(dependent, dependency string) error {
 	return nil
 }
 
-func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error {
+func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID model.ID, relType model.RelationType) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)
 	if !e.hasRelation(srcID, dstID, relType) {
-		return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
+		return storage.NotFoundError{Entity: "relation", ID: model.ID(fmt.Sprintf("src=%s dst=%s type=%s", srcID.Raw(), dstID.Raw(), relType))}
 	}
 	// Removing a parent-child edge is a detach whatever the caller, so it
 	// meets ClearParent's rule: a leaf keeps a parent, judged against the
@@ -304,7 +303,7 @@ func (e *Engine) RemoveRelation(ctx context.Context, srcID, dstID string, relTyp
 // direction, in storage.RelationOrdering. The variadic types argument narrows rather than
 // switching behavior: naming no type means every type, never no types.
 // [LAW:dataflow-not-control-flow]
-func (e *Engine) ListRelationsForIssue(ctx context.Context, issueID string, types ...model.RelationType) ([]model.Relation, error) {
+func (e *Engine) ListRelationsForIssue(ctx context.Context, issueID model.ID, types ...model.RelationType) ([]model.Relation, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -323,13 +322,13 @@ func (e *Engine) ListRelationsForIssue(ctx context.Context, issueID string, type
 // GetRelationsByIDs is the batch neighborhood read: one call for many issues,
 // counterparts hydrated, without the per-issue comment and history cost
 // GetIssueDetail pays. An id nobody could find is simply absent from the map.
-func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
+func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []model.ID) (map[model.ID]storage.IssueRelations, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	pos := e.positions()
 	ancestry := e.rankAncestry(pos)
-	out := map[string]storage.IssueRelations{}
+	out := map[model.ID]storage.IssueRelations{}
 	for _, id := range ids {
 		if _, done := out[id]; done {
 			continue
@@ -354,15 +353,15 @@ func (e *Engine) GetRelationsByIDs(ctx context.Context, ids []string) (map[strin
 
 // ParentByChild maps each child to its parent, keeping the lower id when restored
 // data gives a child two — the rule the contract states for both engines.
-func (e *Engine) ParentByChild(ctx context.Context) (map[string]string, error) {
+func (e *Engine) ParentByChild(ctx context.Context) (map[model.ID]model.ID, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.parentByChild(), nil
 }
 
 // parentByChild is ParentByChild for callers already holding e.mu.
-func (e *Engine) parentByChild() map[string]string {
-	out := map[string]string{}
+func (e *Engine) parentByChild() map[model.ID]model.ID {
+	out := map[model.ID]model.ID{}
 	for _, rel := range e.relations {
 		if held, ok := out[rel.SrcID]; rel.Type == model.RelParentChild && (!ok || rel.DstID < held) {
 			out[rel.SrcID] = rel.DstID
@@ -374,14 +373,14 @@ func (e *Engine) parentByChild() map[string]string {
 // LaneFamily reads the family model.LaneFamily names, retention ignored. This
 // engine holds every event in full, so it has no Changes to save by omitting
 // them.
-func (e *Engine) LaneFamily(ctx context.Context, issueID string) (claims.Family, error) {
+func (e *Engine) LaneFamily(ctx context.Context, issueID model.ID) (claims.Family, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	family := model.LaneFamily(issueID, e.relations)
 	parents := e.parentByChild()
-	maps.DeleteFunc(parents, func(child, _ string) bool { return !family[child] })
-	parentTypes := map[string]model.IssueType{}
+	maps.DeleteFunc(parents, func(child, _ model.ID) bool { return !family[child] })
+	parentTypes := map[model.ID]model.IssueType{}
 	for _, parent := range parents {
 		parentTypes[parent] = e.issues[parent].issueType
 	}
@@ -405,7 +404,7 @@ func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (mode
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if strings.TrimSpace(in.ChildID) == "" || strings.TrimSpace(in.ParentID) == "" {
+	if in.ChildID.Trim() == "" || in.ParentID.Trim() == "" {
 		return model.Relation{}, model.ValidationError{Message: "child and parent ids are required"}
 	}
 	if in.ChildID == in.ParentID {
@@ -425,7 +424,7 @@ func (e *Engine) SetParent(ctx context.Context, in storage.SetParentInput) (mode
 // Clearing a child that has no parent is the state asked for, answered with
 // storage.RelationAbsentError, which is satisfied rather than a removal it
 // did not make. [LAW:no-silent-failure]
-func (e *Engine) ClearParent(ctx context.Context, childID string) error {
+func (e *Engine) ClearParent(ctx context.Context, childID model.ID) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -437,7 +436,7 @@ func (e *Engine) ClearParent(ctx context.Context, childID string) error {
 // storage.RelationAbsentError — the Dolt engine's clearParentTx, rendered over
 // this engine's slices. The record is read for its type alone, so this
 // answers on a hierarchy holding a loop. [LAW:one-source-of-truth]
-func (e *Engine) clearParent(childID string) error {
+func (e *Engine) clearParent(childID model.ID) error {
 	child, err := e.mustRecord(childID)
 	if err != nil {
 		return err
@@ -454,7 +453,7 @@ func (e *Engine) clearParent(childID string) error {
 // detachParents removes every parent edge of childID, judging nothing: the
 // raw half of a clear, and a bulk reparent's detach before the attach that
 // judges the child's new place.
-func (e *Engine) detachParents(childID string) int {
+func (e *Engine) detachParents(childID model.ID) int {
 	return e.dropRelations(func(rel model.Relation) bool {
 		return rel.SrcID == childID && rel.Type == model.RelParentChild
 	})
@@ -471,7 +470,7 @@ func (e *Engine) DependencyOrder(ctx context.Context) (storage.DependencyOrder, 
 	if err != nil {
 		return storage.DependencyOrder{}, err
 	}
-	live := make(map[string]struct{}, len(listed))
+	live := make(map[model.ID]struct{}, len(listed))
 	for _, issue := range listed {
 		live[issue.ID] = struct{}{}
 	}
@@ -488,7 +487,7 @@ func (e *Engine) DependencyOrder(ctx context.Context) (storage.DependencyOrder, 
 
 // incidentRelations returns every edge touching issueID in either direction,
 // in storage.RelationOrdering.
-func (e *Engine) incidentRelations(issueID string) []model.Relation {
+func (e *Engine) incidentRelations(issueID model.ID) []model.Relation {
 	return e.relationsWhere(func(rel model.Relation) bool { return rel.SrcID == issueID || rel.DstID == issueID })
 }
 
@@ -510,17 +509,17 @@ func (e *Engine) relationsWhere(keep func(model.Relation) bool) []model.Relation
 // cardinality sets the scope, every edge of the type from src for a
 // single-valued type and the identical edge otherwise, as the Dolt engine's
 // rejectHeldRelationTx reads it. [LAW:dataflow-not-control-flow]
-func (e *Engine) relationHeld(srcID, dstID string, relType model.RelationType) bool {
-	var inScope []string
+func (e *Engine) relationHeld(srcID, dstID model.ID, relType model.RelationType) bool {
+	var inScope []model.ID
 	for _, rel := range e.relations {
 		if rel.SrcID == srcID && rel.Type == relType && (relType.SingleValuedFromSrc() || rel.DstID == dstID) {
 			inScope = append(inScope, rel.DstID)
 		}
 	}
-	return slices.Equal(inScope, []string{dstID})
+	return slices.Equal(inScope, []model.ID{dstID})
 }
 
-func (e *Engine) hasRelation(srcID, dstID string, relType model.RelationType) bool {
+func (e *Engine) hasRelation(srcID, dstID model.ID, relType model.RelationType) bool {
 	return slices.ContainsFunc(e.relations, func(rel model.Relation) bool {
 		return rel.SrcID == srcID && rel.DstID == dstID && rel.Type == relType
 	})
@@ -538,7 +537,7 @@ func (e *Engine) dropRelations(matches func(model.Relation) bool) int {
 // parentsLeftWithout counts childID's parent-child edges other than the one to
 // parentID: the parents it keeps once that edge is gone, which a detach and a
 // purge of parentID both judge it by.
-func (e *Engine) parentsLeftWithout(childID, parentID string) int {
+func (e *Engine) parentsLeftWithout(childID, parentID model.ID) int {
 	count := 0
 	for _, rel := range e.relations {
 		if rel.SrcID == childID && rel.Type == model.RelParentChild && rel.DstID != parentID {
@@ -554,7 +553,7 @@ func (e *Engine) parentsLeftWithout(childID, parentID string) int {
 // (a blocked-by edge reads "src blocked-by dst", which makes BlockedBy and
 // Blocks the two readings of one edge set) lives in exactly one place.
 // [LAW:single-enforcer]
-func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos map[string]int, ancestry storage.RankAncestry) (storage.IssueRelations, error) {
+func (e *Engine) bucketRelations(focalID model.ID, relations []model.Relation, pos map[model.ID]int, ancestry storage.RankAncestry) (storage.IssueRelations, error) {
 	out := storage.IssueRelations{Children: []model.Issue{}, BlockedBy: []model.Issue{}, Blocks: []model.Issue{}}
 	for _, rel := range relations {
 		// Which bucket an edge lands in is a function of its type and which
@@ -562,7 +561,7 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 		// enumerated once. An edge whose counterpart has vanished is simply
 		// not in the result; callers iterating known-present ids never see
 		// the hole.
-		bucket, otherID := (*[]model.Issue)(nil), ""
+		bucket, otherID := (*[]model.Issue)(nil), model.ID("")
 		switch {
 		case rel.Type == model.RelBlockedBy && rel.SrcID == focalID:
 			bucket, otherID = &out.BlockedBy, rel.DstID
@@ -598,7 +597,7 @@ func (e *Engine) bucketRelations(focalID string, relations []model.Relation, pos
 // relatedIssues returns the hydrated related-to counterparts of focalID. It is
 // GetIssueAdjacency's concern alone — no batch consumer wants peer links, which
 // is why they stay out of the shared IssueRelations shape.
-func (e *Engine) relatedIssues(focalID string, relations []model.Relation, pos map[string]int, ancestry storage.RankAncestry) ([]model.Issue, error) {
+func (e *Engine) relatedIssues(focalID model.ID, relations []model.Relation, pos map[model.ID]int, ancestry storage.RankAncestry) ([]model.Issue, error) {
 	out := []model.Issue{}
 	for _, rel := range relations {
 		if rel.Type != model.RelRelatedTo {

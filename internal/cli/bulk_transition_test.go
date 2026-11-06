@@ -18,7 +18,7 @@ import (
 
 // bulkFailures runs a bulk transition and returns its unlanded items' errors by
 // id and the run's reason, failing the test unless some item did not land.
-func bulkFailures(t *testing.T, h readyTestHarness, stdout io.Writer, spec transitionSpec, args ...string) (map[string]error, commandReason) {
+func bulkFailures(t *testing.T, h readyTestHarness, stdout io.Writer, spec transitionSpec, args ...string) (map[model.ID]error, commandReason) {
 	t.Helper()
 	err := runLeaf(t, bulkTransitionLeaf(spec)(), h.ctx, stdout, h.ap, args)
 	var bulk BulkError
@@ -28,7 +28,7 @@ func bulkFailures(t *testing.T, h readyTestHarness, stdout io.Writer, spec trans
 	if got := ExitCode(err); got == ExitOK {
 		t.Fatalf("bulk %s ExitCode = %d, want non-zero", spec.name, got)
 	}
-	failed := map[string]error{}
+	failed := map[model.ID]error{}
 	for _, f := range bulk.Unlanded {
 		failed[f.IssueID] = f.Err
 	}
@@ -42,11 +42,11 @@ func TestBulkOpenReopensTheRestAndFailsTheTicketOpenRefuses(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "epic"})
-	child := func(title string) string {
+	child := func(title string) model.ID {
 		return h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic.ID}).ID
 	}
 	first, archived, second := child("first"), child("archived"), child("second")
-	for _, id := range []string{first, archived, second} {
+	for _, id := range []model.ID{first, archived, second} {
 		h.applyAction(id, model.Done{}, "")
 	}
 	h.applyAction(archived, model.Archive{}, "")
@@ -56,7 +56,7 @@ func TestBulkOpenReopensTheRestAndFailsTheTicketOpenRefuses(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	failed, _ := bulkFailures(t, h, &out, openSpec, "--ids", first+","+archived+","+second)
+	failed, _ := bulkFailures(t, h, &out, openSpec, "--ids", model.JoinIDs([]model.ID{first, archived, second}, ","))
 
 	if len(failed) != 1 || failed[archived] == nil {
 		t.Fatalf("failures = %v, want exactly %s", failed, archived)
@@ -64,10 +64,10 @@ func TestBulkOpenReopensTheRestAndFailsTheTicketOpenRefuses(t *testing.T) {
 	if failed[archived].Error() != single.Error() {
 		t.Errorf("bulk open's error for %s = %q, want lit open's %q", archived, failed[archived], single)
 	}
-	if want := first + " ok\n" + second + " ok\n"; out.String() != want {
+	if want := first.Raw() + " ok\n" + second.Raw() + " ok\n"; out.String() != want {
 		t.Errorf("stdout = %q, want %q", out.String(), want)
 	}
-	for _, id := range []string{first, second} {
+	for _, id := range []model.ID{first, second} {
 		if got := h.issueDetail(id).StatusValue(); got != string(model.StateOpen) {
 			t.Errorf("%s status = %s, want open", id, got)
 		}
@@ -93,7 +93,7 @@ func TestBulkTransitionsRefuseWhatTheSingleVerbRefusesInItsWords(t *testing.T) {
 				if single == nil {
 					t.Fatalf("lit %s on the %s succeeded; the test needs a refusal", spec.name, target)
 				}
-				failed, reason := bulkFailures(t, h, io.Discard, spec, append([]string{"--ids", id}, actionFlags[spec.name]...)...)
+				failed, reason := bulkFailures(t, h, io.Discard, spec, append([]string{"--ids", id.Raw()}, actionFlags[spec.name]...)...)
 				got := failed[id]
 				if got == nil {
 					t.Fatalf("bulk %s failures = %v, want %s", spec.name, failed, id)
@@ -125,12 +125,12 @@ func TestBulkStartRefusesAHeldLaneUnlessTaken(t *testing.T) {
 	h.asCheckout(h.ap.Stream.Value())
 
 	var out bytes.Buffer
-	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID+","+free.ID)
+	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID.Raw()+","+free.ID.Raw())
 	var refusal takeoverUnconfirmedError
 	if len(failed) != 1 || !errors.As(failed[contested.ID], &refusal) {
 		t.Fatalf("failures = %v, want only %s, refused by the takeover gate", failed, contested.ID)
 	}
-	if !strings.Contains(out.String(), free.ID+" ok\n") || strings.Contains(out.String(), contested.ID) {
+	if !strings.Contains(out.String(), free.ID.Raw()+" ok\n") || strings.Contains(out.String(), contested.ID.Raw()) {
 		t.Errorf("stdout = %q, want %s ok and no mention of %s", out.String(), free.ID, contested.ID)
 	}
 	if got := h.issueDetail(contested.ID).StatusValue(); got != string(model.StateOpen) {
@@ -138,7 +138,7 @@ func TestBulkStartRefusesAHeldLaneUnlessTaken(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", contested.ID, "--take"}); err != nil {
+	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", contested.ID.Raw(), "--take"}); err != nil {
 		t.Fatalf("bulk start --take error = %v", err)
 	}
 	if got := h.issueDetail(contested.ID).StatusValue(); got != string(model.StateInProgress) {
@@ -164,7 +164,7 @@ func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 	// replace with a fresh one.
 	var out bytes.Buffer
 	done := bulkTransitionLeaf(doneSpec)()
-	positional, err := parseLeaf(h.ctx, done, []string{"--ids", unplanned + "," + closed + "," + missing}, dirInvocation(t, t.TempDir(), &out, &out, nil))
+	positional, err := parseLeaf(h.ctx, done, []string{"--ids", unplanned.Raw() + "," + closed.Raw() + "," + missing}, dirInvocation(t, t.TempDir(), &out, &out, nil))
 	if err != nil {
 		t.Fatalf("parse bulk done error = %v", err)
 	}
@@ -175,7 +175,7 @@ func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 	// A done's plan warning prints as `lit done` prints it, ahead of the
 	// item's ok line.
 	warning := "warning: finished without an approved plan: "
-	if w, ok := strings.Index(out.String(), warning), strings.Index(out.String(), unplanned+" ok\n"); w < 0 || ok < 0 || w > ok {
+	if w, ok := strings.Index(out.String(), warning), strings.Index(out.String(), unplanned.Raw()+" ok\n"); w < 0 || ok < 0 || w > ok {
 		t.Errorf("stdout = %q, want %q ahead of %q", out.String(), warning, unplanned+" ok")
 	}
 
@@ -196,8 +196,8 @@ func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 		got = append(got, item{id: entry["bulk.item.id"].(string), standing: facts["done.plan_standing"], failed: entry["bulk.item.error"] != nil})
 	}
 	want := []item{
-		{id: unplanned, standing: "no_plan"},
-		{id: closed, standing: "already_closed"},
+		{id: unplanned.Raw(), standing: "no_plan"},
+		{id: closed.Raw(), standing: "already_closed"},
 		{id: missing, standing: nil, failed: true},
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -212,7 +212,7 @@ type applyRefusingStore struct {
 	err error
 }
 
-func (s applyRefusingStore) Apply(context.Context, string, storage.ChangePlan) (storage.Applied, error) {
+func (s applyRefusingStore) Apply(context.Context, model.ID, storage.ChangePlan) (storage.Applied, error) {
 	return storage.Applied{}, s.err
 }
 
@@ -235,7 +235,7 @@ func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
 	refusal := errors.New("store refused the write")
 	h.ap.Store = applyRefusingStore{Store: live, err: refusal}
 	var out bytes.Buffer
-	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID, "--take")
+	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID.Raw(), "--take")
 	if !errors.Is(failed[contested.ID], refusal) {
 		t.Fatalf("failures = %v, want %s failed with %v", failed, contested.ID, refusal)
 	}
@@ -245,10 +245,10 @@ func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
 
 	h.ap.Store = live
 	out.Reset()
-	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", contested.ID, "--take"}); err != nil {
+	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", contested.ID.Raw(), "--take"}); err != nil {
 		t.Fatalf("bulk start --take error = %v", err)
 	}
-	if line, ok := strings.Index(out.String(), takeover), strings.Index(out.String(), contested.ID+" ok\n"); line < 0 || ok < 0 || line > ok {
+	if line, ok := strings.Index(out.String(), takeover), strings.Index(out.String(), contested.ID.Raw()+" ok\n"); line < 0 || ok < 0 || line > ok {
 		t.Errorf("stdout = %q, want the takeover line ahead of %s ok", out.String(), contested.ID)
 	}
 }
@@ -269,7 +269,7 @@ func TestBulkItemEntryCarriesWhatItsErrorDeclared(t *testing.T) {
 	t.Parallel()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	err := runBulkOver(ctx, io.Discard, []string{"a"}, func(context.Context, string) (string, error) {
+	err := runBulkOver(ctx, io.Discard, []model.ID{"a"}, func(context.Context, model.ID) (string, error) {
 		return "", fmt.Errorf("apply: %w", recordedItemError{})
 	})
 	var bulk BulkError
@@ -303,7 +303,7 @@ func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
 	ctx := telemetry.With(context.Background(), recorder)
 	closed := errors.New("stdout closed")
 	refused := model.ValidationError{Message: "refused"}
-	err := runBulkOver(ctx, failingWriter{err: closed}, []string{"a", "b", "c"}, func(_ context.Context, issueID string) (string, error) {
+	err := runBulkOver(ctx, failingWriter{err: closed}, []model.ID{"a", "b", "c"}, func(_ context.Context, issueID model.ID) (string, error) {
 		if issueID == "a" {
 			return "", refused
 		}
@@ -316,7 +316,7 @@ func TestBulkStoppedByStdoutReportsWhatItCollected(t *testing.T) {
 	if len(bulk.Unlanded) != 1 || bulk.Unlanded[0].IssueID != "a" {
 		t.Errorf("Unlanded = %+v, want only a", bulk.Unlanded)
 	}
-	if bulk.Stopped == nil || bulk.Stopped.IssueID != "b" || !errors.Is(bulk.Stopped.Err, closed) || !slices.Equal(bulk.Stopped.NotRun, []string{"c"}) {
+	if bulk.Stopped == nil || bulk.Stopped.IssueID != "b" || !errors.Is(bulk.Stopped.Err, closed) || !slices.Equal(bulk.Stopped.NotRun, []model.ID{"c"}) {
 		t.Fatalf("Stopped = %+v, want b's report refused with %v and c not run", bulk.Stopped, closed)
 	}
 	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
@@ -349,7 +349,7 @@ func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
 	t.Parallel()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	err := runBulkOver(ctx, failingWriter{err: errors.New("stdout closed")}, []string{"a"}, func(context.Context, string) (string, error) {
+	err := runBulkOver(ctx, failingWriter{err: errors.New("stdout closed")}, []model.ID{"a"}, func(context.Context, model.ID) (string, error) {
 		return "", nil
 	})
 	if reason := commandErrorReason(err); reason != reasonBulkPartialFailure {
@@ -369,7 +369,7 @@ func TestBulkStoppedAtItsLastReportIsAPartialFailure(t *testing.T) {
 func TestBulkStoppedMidReportCarriesOnlyWhatStdoutDidNotPrint(t *testing.T) {
 	t.Parallel()
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
-	err := runBulkOver(ctx, failingWriter{took: 2, err: errors.New("no space")}, []string{"ab"}, func(context.Context, string) (string, error) {
+	err := runBulkOver(ctx, failingWriter{took: 2, err: errors.New("no space")}, []model.ID{"ab"}, func(context.Context, model.ID) (string, error) {
 		return "", nil
 	})
 	var bulk BulkError
@@ -403,18 +403,18 @@ func TestStartUsageNamesTake(t *testing.T) {
 // runBulkRecorded runs `lit bulk <spec.name>` over ids, resolved through the
 // bulk family's own row, under a recorder of the test's own; it requires every
 // item to land and returns the run's bulk.items entries as (id, error) pairs.
-func runBulkRecorded(t *testing.T, h readyTestHarness, spec transitionSpec, ids []string) [][2]any {
+func runBulkRecorded(t *testing.T, h readyTestHarness, spec transitionSpec, ids []model.ID) [][2]any {
 	t.Helper()
 	row, err := bulkFamily.resolve(underInvocation(h.ctx), []string{spec.name})
 	if err != nil {
 		t.Fatalf("lit bulk %s does not resolve: %v", spec.name, err)
 	}
 	var out bytes.Buffer
-	ev, err := recordLeaf(row.declare(), h.ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), h.ap, []string{"--ids", strings.Join(ids, ",")})
+	ev, err := recordLeaf(row.declare(), h.ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), h.ap, []string{"--ids", model.JoinIDs(ids, ",")})
 	if err != nil {
 		t.Fatalf("bulk %s error = %v", spec.name, err)
 	}
-	if want := strings.Join(ids, " ok\n") + " ok\n"; out.String() != want {
+	if want := model.JoinIDs(ids, " ok\n") + " ok\n"; out.String() != want {
 		t.Errorf("bulk %s stdout = %q, want %q", spec.name, out.String(), want)
 	}
 	var items [][2]any
@@ -458,7 +458,7 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 			}
 			h.applyAction(ids[1], model.Start{Assignee: "ada"}, "")
 			h.applyAction(ids[2], model.Done{}, "")
-			state := func(id string) model.IssueDetail {
+			state := func(id model.ID) model.IssueDetail {
 				t.Helper()
 				d, err := h.ap.Store.GetIssueDetail(h.ctx, id)
 				if err != nil {
@@ -466,7 +466,7 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 				}
 				return model.IssueDetail{Issue: d.Issue, Relations: d.Relations, Comments: d.Comments}
 			}
-			prior := map[string]model.IssueDetail{}
+			prior := map[model.ID]model.IssueDetail{}
 			for _, id := range ids {
 				prior[id] = state(id)
 			}
@@ -475,7 +475,7 @@ func TestBulkRetentionVerbsRoundTripTheirInverse(t *testing.T) {
 			}
 			wantItems := make([][2]any, len(ids))
 			for i, id := range ids {
-				wantItems[i] = [2]any{id, nil}
+				wantItems[i] = [2]any{id.Raw(), nil}
 			}
 
 			if got := runBulkRecorded(t, h, pair.out, ids); !reflect.DeepEqual(got, wantItems) {
@@ -549,7 +549,7 @@ func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *
 			}
 			before := h.issueDetail(stuck)
 			var out bytes.Buffer
-			failed, reason := bulkFailures(t, h, &out, tc.spec, "--ids", stuck+","+landed)
+			failed, reason := bulkFailures(t, h, &out, tc.spec, "--ids", stuck.Raw()+","+landed.Raw())
 			if reason != reasonBulkPartialFailure {
 				t.Errorf("bulk %s reason = %s (exit %d), want bulk_partial_failure: %s landed", tc.spec.name, reason, reason.exit, landed)
 			}
@@ -562,7 +562,7 @@ func TestBulkRetentionVerbsAnswerEachTicketTheyCannotMoveAsTheSingleVerbDoes(t *
 			if got := failed[stuck]; got.Error() != single.Error() || reflect.TypeOf(got) != reflect.TypeOf(single) {
 				t.Errorf("bulk %s error = %q (%T), want lit %s's %q (%T)", tc.spec.name, got, got, tc.spec.name, single, single)
 			}
-			if want := landed + " ok\n"; out.String() != want {
+			if want := landed.Raw() + " ok\n"; out.String() != want {
 				t.Errorf("bulk %s stdout = %q, want %q", tc.spec.name, out.String(), want)
 			}
 		})

@@ -16,7 +16,7 @@ const brokenTitle = "two\nlines"
 
 // seedStoredTitle restores the store with the issue id's title set to title,
 // the one way a title no parser admits reaches the store.
-func seedStoredTitle(t *testing.T, st *Store, id, title string) {
+func seedStoredTitle(t *testing.T, st *Store, id model.ID, title string) {
 	t.Helper()
 	ctx := context.Background()
 	export, err := st.Export(ctx)

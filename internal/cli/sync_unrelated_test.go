@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -70,9 +71,9 @@ func TestSyncFailureBlockUnrelatedInventory(t *testing.T) {
 		Ahead:  3,
 		Behind: 2,
 		Inventory: &storage.UnrelatedInventory{
-			OnlyLocal:  []string{"proj-local1", "proj-local2"},
-			OnlyRemote: []string{"proj-remote1"},
-			OnBoth:     []string{"proj-shared1"},
+			OnlyLocal:  []model.ID{"proj-local1", "proj-local2"},
+			OnlyRemote: []model.ID{"proj-remote1"},
+			OnBoth:     []model.ID{"proj-shared1"},
 		},
 	}
 	block := failure.blockString()
@@ -101,7 +102,7 @@ func TestSyncFailureBlockUnrelatedInventoryEmptySide(t *testing.T) {
 		Remote: "origin",
 		Branch: "master",
 		Inventory: &storage.UnrelatedInventory{
-			OnlyLocal:  []string{"proj-local1"},
+			OnlyLocal:  []model.ID{"proj-local1"},
 			OnlyRemote: nil,
 			OnBoth:     nil,
 		},
@@ -133,8 +134,8 @@ func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 		Ahead:  1,
 		Behind: 1,
 		Unrelated: &storage.UnrelatedInventory{
-			OnlyLocal:  []string{"proj-onlylocal"},
-			OnlyRemote: []string{"proj-onlyremote"},
+			OnlyLocal:  []model.ID{"proj-onlylocal"},
+			OnlyRemote: []model.ID{"proj-onlyremote"},
 		},
 	}, false)
 
@@ -153,7 +154,7 @@ func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 // identical both-sides view of one divergence.
 func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
 	t.Parallel()
-	inv := &storage.UnrelatedInventory{OnlyLocal: []string{"proj-l"}, OnBoth: []string{"proj-b"}}
+	inv := &storage.UnrelatedInventory{OnlyLocal: []model.ID{"proj-l"}, OnBoth: []model.ID{"proj-b"}}
 	failure, held := syncFailureFromPull(remoteName(t, "origin"), "master", storage.SyncPullResult{
 		State:     storage.SyncPullUnrelated,
 		Unrelated: inv,
@@ -204,9 +205,9 @@ func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
 	t.Parallel()
 	inv := &storage.UnrelatedInventory{
-		OnlyLocal:  []string{"proj-localA", "proj-localB"},
-		OnlyRemote: []string{"proj-remoteA"},
-		OnBoth:     []string{"proj-shared"},
+		OnlyLocal:  []model.ID{"proj-localA", "proj-localB"},
+		OnlyRemote: []model.ID{"proj-remoteA"},
+		OnBoth:     []model.ID{"proj-shared"},
 	}
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 
@@ -255,7 +256,7 @@ func TestReportTakeOutcomeEmptyDiscard(t *testing.T) {
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
 	if err := reportTakeOutcome(testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:     storage.SyncReconcileTookRemote,
-		Unrelated: &storage.UnrelatedInventory{OnlyRemote: []string{"proj-remoteA"}},
+		Unrelated: &storage.UnrelatedInventory{OnlyRemote: []model.ID{"proj-remoteA"}},
 	}); err != nil {
 		t.Fatalf("reportTakeOutcome: %v", err)
 	}
@@ -320,7 +321,7 @@ func TestReportTakeOutcomeNamesPurgedAndCarried(t *testing.T) {
 	var out strings.Builder
 	if err := reportTakeOutcome(testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:         storage.SyncReconcileTookRemote,
-		Unrelated:     &storage.UnrelatedInventory{OnlyLocal: []string{"proj-localA"}, Purged: []string{"proj-purged"}},
+		Unrelated:     &storage.UnrelatedInventory{OnlyLocal: []model.ID{"proj-localA"}, Purged: []model.ID{"proj-purged"}},
 		CarriedPurges: 2,
 	}); err != nil {
 		t.Fatalf("reportTakeOutcome: %v", err)

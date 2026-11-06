@@ -38,17 +38,17 @@ func (RelationRuleError) RefusesCommand() {}
 // that sits directly under an epic, with those epics and its own type. An
 // issue under no epic has no entry. A parent that is not an epic is left out,
 // so a climb ends there, where readiness's own climb (epicsAbove) ends.
-type EpicTree map[string]EpicPlacement
+type EpicTree map[model.ID]EpicPlacement
 
 // EpicPlacement is one issue's entry in an EpicTree. Epics holds more than one
 // id only in restored data, which the single-parent rule never gated.
 type EpicPlacement struct {
-	Epics []string
+	Epics []model.ID
 	Type  model.IssueType
 }
 
 // Place records that child, of childType, sits directly under epic.
-func (t EpicTree) Place(child string, childType model.IssueType, epic string) {
+func (t EpicTree) Place(child model.ID, childType model.IssueType, epic model.ID) {
 	placement := t[child]
 	placement.Type = childType
 	placement.Epics = append(placement.Epics, epic)
@@ -74,7 +74,7 @@ func (t EpicTree) Place(child string, childType model.IssueType, epic string) {
 // readiness reads the workspace as it is and stays correct, and lit doctor
 // names each such edge (RefusedBlocks).
 // [LAW:single-enforcer] [LAW:one-source-of-truth]
-func RejectBlocksWithinEpic(tree EpicTree, dependent, dependency string) error {
+func RejectBlocksWithinEpic(tree EpicTree, dependent, dependency model.ID) error {
 	if climbsTo(tree, dependent, dependency) || climbsTo(tree, dependency, dependent) || leafSiblings(tree, dependent, dependency) {
 		return RelationRuleError{Rule: RuleSameEpic, Message: SameEpicBlocksRejectionMessage}
 	}
@@ -96,18 +96,18 @@ func RefusedBlocks(tree EpicTree, edges []DependencyEdge) []DependencyEdge {
 // leafSiblings reports whether a and b are two leaves directly under one
 // epic. An issue is not its own sibling; a self-edge is the cycle check's to
 // refuse. An issue under no epic has the zero placement, which shares no epic.
-func leafSiblings(tree EpicTree, a, b string) bool {
+func leafSiblings(tree EpicTree, a, b model.ID) bool {
 	placeA, placeB := tree[a], tree[b]
 	return a != b && !placeA.Type.IsContainer() && !placeB.Type.IsContainer() &&
-		slices.ContainsFunc(placeA.Epics, func(epic string) bool { return slices.Contains(placeB.Epics, epic) })
+		slices.ContainsFunc(placeA.Epics, func(epic model.ID) bool { return slices.Contains(placeB.Epics, epic) })
 }
 
 // climbsTo reports whether walking up tree from `from` reaches `to`.
 // seen bounds the walk, because data written before the parent-cycle rule can
 // already hold a loop, and this check must not be what hangs on it.
-func climbsTo(tree EpicTree, from, to string) bool {
-	seen := map[string]struct{}{from: {}}
-	for stack := []string{from}; len(stack) > 0; {
+func climbsTo(tree EpicTree, from, to model.ID) bool {
+	seen := map[model.ID]struct{}{from: {}}
+	for stack := []model.ID{from}; len(stack) > 0; {
 		at := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		for _, parent := range tree[at].Epics {
@@ -125,21 +125,21 @@ func climbsTo(tree EpicTree, from, to string) bool {
 }
 
 type AddCommentInput struct {
-	IssueID   string
+	IssueID   model.ID
 	Body      model.CommentBody
 	CreatedBy string
 }
 
 type AddRelationInput struct {
-	SrcID     string
-	DstID     string
+	SrcID     model.ID
+	DstID     model.ID
 	Type      model.RelationType
 	CreatedBy string
 }
 
 type SetParentInput struct {
-	ChildID   string
-	ParentID  string
+	ChildID   model.ID
+	ParentID  model.ID
 	CreatedBy string
 }
 

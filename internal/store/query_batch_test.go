@@ -7,15 +7,16 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // makeEpics creates n epics at the bottom of the workspace and returns their
 // ids in creation order, which is also their rank order. Epics, because the
 // callers name them as parents and as the whole top level of the workspace.
-func makeEpics(t *testing.T, ctx context.Context, st *Store, n int, titlef string) []string {
+func makeEpics(t *testing.T, ctx context.Context, st *Store, n int, titlef string) []model.ID {
 	t.Helper()
-	ids := make([]string, 0, n)
+	ids := make([]model.ID, 0, n)
 	for i := range n {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf(titlef, i)),
@@ -78,7 +79,7 @@ func TestListIssuesByParentIDsAnswersForEveryParent(t *testing.T) {
 
 	const count = manyIDs
 	parents := makeEpics(t, ctx, st, count, "parent %d")
-	children := make([]string, 0, count)
+	children := make([]model.ID, 0, count)
 	for i, parent := range parents {
 		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("child %d", i)),
@@ -109,7 +110,7 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 
 	const count = manyIDs
 	parents := makeEpics(t, ctx, st, count, "parent %d")
-	children := make([]string, 0, count)
+	children := make([]model.ID, 0, count)
 	for i, parent := range parents {
 		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("child %d", i)),
@@ -123,7 +124,7 @@ func TestListIssuesByIDsIntersectsParentIDs(t *testing.T) {
 	}
 	// Children from the start, the middle and the end, and — the case that
 	// separates an intersection from a union — one id that is nobody's child.
-	wanted := []string{children[0], children[count/2], children[count-1]}
+	wanted := []model.ID{children[0], children[count/2], children[count-1]}
 	asked := append(slices.Clone(wanted), parents[0])
 
 	got, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: asked, ParentIDs: parents})
@@ -148,7 +149,7 @@ func TestListIssuesEmptySelectionVersusBlankFilter(t *testing.T) {
 	all := makeEpics(t, ctx, st, 3, "row %d")
 	childless := all[0]
 
-	narrowed, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{childless}})
+	narrowed, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{childless}})
 	if err != nil {
 		t.Fatalf("ListIssues(childless parent) error = %v", err)
 	}
@@ -156,7 +157,7 @@ func TestListIssuesEmptySelectionVersusBlankFilter(t *testing.T) {
 		t.Fatalf("ListIssues(childless parent) = %v, want no rows — an empty selection is not an absent filter", issueIDs(narrowed))
 	}
 
-	blank, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: []string{"", "   "}})
+	blank, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: []model.ID{"", "   "}})
 	if err != nil {
 		t.Fatalf("ListIssues(blank ids) error = %v", err)
 	}
@@ -176,9 +177,9 @@ func TestRankSetRepeatedIsAFixedPoint(t *testing.T) {
 	st := openIssueStore(t, ctx)
 
 	ids := makeEpics(t, ctx, st, 6, "row %d")
-	stack := []string{ids[5], ids[4], ids[3]}
+	stack := []model.ID{ids[5], ids[4], ids[3]}
 
-	ranksAfter := func(round int) map[string]string {
+	ranksAfter := func(round int) map[model.ID]string {
 		if _, err := st.RankSet(ctx, stack); err != nil {
 			t.Fatalf("RankSet(round %d) error = %v", round, err)
 		}
@@ -189,7 +190,7 @@ func TestRankSetRepeatedIsAFixedPoint(t *testing.T) {
 		if got := issueIDs(listed)[:len(stack)]; !slices.Equal(got, stack) {
 			t.Fatalf("round %d top of workspace = %v, want %v", round, got, stack)
 		}
-		out := map[string]string{}
+		out := map[model.ID]string{}
 		for _, issue := range listed {
 			out[issue.ID] = issue.Rank
 		}

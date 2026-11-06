@@ -14,7 +14,7 @@ import (
 // createChildLocally adds one child under parentID and leaves it uncommitted to
 // any remote — the id it gets is whatever the LOCAL store computes, which is the
 // whole point: nothing coordinates the number across machines.
-func createChildLocally(t *testing.T, ctx context.Context, root, workspace, parentID, title, description string) string {
+func createChildLocally(t *testing.T, ctx context.Context, root, workspace string, parentID model.ID, title, description string) model.ID {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, workspace)
 	if err != nil {
@@ -46,7 +46,7 @@ func createChildLocally(t *testing.T, ctx context.Context, root, workspace, pare
 // writes whatever ids its file names. Reconcile refuses two rows under one id
 // however they came to share it, so these tests state the shared id outright
 // rather than leaning on a minter. [LAW:behavior-not-structure]
-func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace, oldID, newID string) {
+func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace string, oldID, newID model.ID) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, workspace)
 	if err != nil {
@@ -61,7 +61,7 @@ func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace, oldID
 	if err != nil {
 		t.Fatalf("Export(%s): %v", root, err)
 	}
-	swap := func(id string) string {
+	swap := func(id model.ID) model.ID {
 		if id == oldID {
 			return newID
 		}
@@ -210,8 +210,8 @@ func TestTwoDisconnectedStoresMintDistinctChildIDs(t *testing.T) {
 	if oursID == theirsID {
 		t.Fatalf("both stores minted %q for two unrelated jobs; a child id must not be a locally-counted position", oursID)
 	}
-	for _, id := range []string{oursID, theirsID} {
-		if !strings.HasPrefix(id, epicID+".") {
+	for _, id := range []model.ID{oursID, theirsID} {
+		if !strings.HasPrefix(id.Raw(), epicID.Raw()+".") {
 			t.Fatalf("child id = %q, want it to hang under the epic %q", id, epicID)
 		}
 	}
@@ -230,7 +230,7 @@ func TestTwoDisconnectedStoresMintDistinctChildIDs(t *testing.T) {
 	if res.State == storage.SyncReconcileIDCollision {
 		t.Fatalf("reconcile refused a collision between %q and %q; distinct ids must not collide", oursID, theirsID)
 	}
-	for _, id := range []string{oursID, theirsID} {
+	for _, id := range []model.ID{oursID, theirsID} {
 		if _, err := syncB.GetIssue(ctx, id); err != nil {
 			t.Fatalf("GetIssue(%s) after reconcile: %v; both machines' tickets must survive", id, err)
 		}
@@ -287,7 +287,7 @@ func TestSyncPullSurfacesIDCollision(t *testing.T) {
 // B's own text and its own birth certificate — the shape two independently created
 // backlogs reach on their own, and the one the combine resolution must refuse
 // rather than union.
-func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, remoteURL string) string {
+func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, remoteURL string) model.ID {
 	t.Helper()
 	stA, err := Open(ctx, testEnv(), testStderr(), rootA, "wsA")
 	if err != nil {
@@ -404,7 +404,7 @@ func TestSyncReconcileCombineRefusesIDCollision(t *testing.T) {
 // export replace an ordinary `lit import` bottoms out in — the only path that
 // deletes an issues row. Afterwards the id is absent from local head and present
 // only in the commit above it.
-func removeIssueLocally(t *testing.T, ctx context.Context, root, workspace, id string) {
+func removeIssueLocally(t *testing.T, ctx context.Context, root, workspace string, id model.ID) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, workspace)
 	if err != nil {

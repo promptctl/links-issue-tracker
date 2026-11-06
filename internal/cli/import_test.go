@@ -289,7 +289,7 @@ func TestRunImportYAMLUpdatesByID(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	path := writeImportFile(t, "update.yml", `
-id: `+created.ID+`
+id: `+created.ID.Raw()+`
 title: After
 labels: [reviewed]
 `)
@@ -330,9 +330,9 @@ func TestRunImportYAMLMixedFileIsLegal(t *testing.T) {
 title: Fresh
 type: task
 topic: import
-parent: `+epic+`
+parent: `+epic.Raw()+`
 ---
-id: `+existing.ID+`
+id: `+existing.ID.Raw()+`
 priority: 1
 `)
 	var stdout bytes.Buffer
@@ -411,7 +411,7 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	path := writeImportFile(t, "update.yaml", "id: "+created.ID+"\ntitle: After\n")
+	path := writeImportFile(t, "update.yaml", "id: "+created.ID.Raw()+"\ntitle: After\n")
 	var stdout bytes.Buffer
 	if err := runLeaf(t, importTreeLeaf(), ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
 		t.Fatalf("runImportTree(yaml update --by) error = %v", err)
@@ -439,12 +439,14 @@ func TestRunImportAttributesCreatesToBy(t *testing.T) {
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	for _, tc := range []struct {
 		file string
-		body func(epic string) string
+		body func(epic model.ID) string
 	}{
-		{"tree.json", func(string) string {
+		{"tree.json", func(model.ID) string {
 			return `[{"local_id":"e1","title":"Imported epic","type":"epic","topic":"import","priority":0},{"local_id":"t1","parent":"e1","title":"Imported","type":"task","topic":"import","priority":0}]`
 		}},
-		{"create.yaml", func(epic string) string { return "title: Imported\ntype: task\ntopic: import\nparent: " + epic + "\n" }},
+		{"create.yaml", func(epic model.ID) string {
+			return "title: Imported\ntype: task\ntopic: import\nparent: " + epic.Raw() + "\n"
+		}},
 	} {
 		t.Run(tc.file, func(t *testing.T) {
 			t.Parallel()
@@ -469,12 +471,12 @@ func TestRunImportAttributesCreatesToBy(t *testing.T) {
 }
 
 // importedIDs is the real id of every ticket an import's output maps.
-func importedIDs(t *testing.T, output string) []string {
+func importedIDs(t *testing.T, output string) []model.ID {
 	t.Helper()
-	var ids []string
+	var ids []model.ID
 	for _, line := range strings.Split(output, "\n") {
 		if _, id, ok := strings.Cut(line, " -> "); ok {
-			ids = append(ids, strings.TrimSpace(id))
+			ids = append(ids, model.ID(strings.TrimSpace(id)))
 		}
 	}
 	if len(ids) == 0 {
@@ -496,7 +498,7 @@ func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	path := writeImportFile(t, "reason.yaml", `
-id: `+created.ID+`
+id: `+created.ID.Raw()+`
 priority: 1
 reason: "  padded reason  "
 `)

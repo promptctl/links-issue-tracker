@@ -42,7 +42,7 @@ func TestListQuerySupersetMatchesDiscreteFlags(t *testing.T) {
 
 	// Both forms must actually surface the archived and deleted issues; otherwise
 	// identical-but-empty output would pass vacuously.
-	for _, id := range []string{arch.ID, del.ID} {
+	for _, id := range []string{arch.ID.Raw(), del.ID.Raw()} {
 		if !strings.Contains(queryForm, id) {
 			t.Fatalf("query form omitted included issue %q; output:\n%s", id, queryForm)
 		}
@@ -51,12 +51,12 @@ func TestListQuerySupersetMatchesDiscreteFlags(t *testing.T) {
 	// Baseline: without the visibility tokens the archived and deleted issues are
 	// hidden, proving the tokens are what surfaced them.
 	bare := runLs(t, h.ap)
-	for _, id := range []string{a.ID, b.ID, c.ID} {
+	for _, id := range []string{a.ID.Raw(), b.ID.Raw(), c.ID.Raw()} {
 		if !strings.Contains(bare, id) {
 			t.Fatalf("bare ls omitted active issue %q; output:\n%s", id, bare)
 		}
 	}
-	for _, id := range []string{arch.ID, del.ID} {
+	for _, id := range []string{arch.ID.Raw(), del.ID.Raw()} {
 		if strings.Contains(bare, id) {
 			t.Fatalf("bare ls leaked hidden issue %q; output:\n%s", id, bare)
 		}

@@ -52,7 +52,7 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending, build
 	// machine this one does not control, and no ingest boundary constrains the id —
 	// so each reaches the envelope only through quoteRemote. [LAW:single-enforcer]
 	for _, p := range ordered {
-		fmt.Fprintf(&b, "── %s · %s · fingerprint %s ──\n", quoteRemote(p.IssueID).inline(), p.Field, p.Fingerprint())
+		fmt.Fprintf(&b, "── %s · %s · fingerprint %s ──\n", quoteRemote(p.IssueID.Raw()).inline(), p.Field, p.Fingerprint())
 		writeProseSection(&b, "base", p.Base)
 		writeProseSection(&b, "ours", p.Ours)
 		writeProseSection(&b, "theirs", p.Theirs)

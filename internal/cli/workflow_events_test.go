@@ -11,7 +11,7 @@ import (
 // hydratedIssue builds a model.Issue with a real lifecycle (State() works)
 // without a store — model.HydrateStatus is the pure boundary the model
 // package itself exposes for exactly this. [LAW:effects-at-boundaries]
-func hydratedIssue(t *testing.T, id string, labels []string, state model.State) model.Issue {
+func hydratedIssue(t *testing.T, id model.ID, labels []string, state model.State) model.Issue {
 	t.Helper()
 	issue, err := model.HydrateStatus(model.Issue{ID: id, IssueType: model.TypeTask, Labels: model.Texts(labels)}, model.StatusView{Value: state})
 	if err != nil {

@@ -7,15 +7,16 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // childrenOutput runs `lit children <id>` and returns the captured stdout — the
 // listing surface, alongside showOutput's detail surface.
-func childrenOutput(t *testing.T, ap *app.App, id string) string {
+func childrenOutput(t *testing.T, ap *app.App, id model.ID) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := runChildren(t, context.Background(), &buf, ap, []string{id}); err != nil {
+	if err := runChildren(t, context.Background(), &buf, ap, []string{id.Raw()}); err != nil {
 		t.Fatalf("runChildren(%s) error = %v", id, err)
 	}
 	return buf.String()
@@ -42,7 +43,7 @@ func TestReparentedChildLeavesTheEpicOnEverySurface(t *testing.T) {
 	leaves := f.addChild("Child leaves")
 	other := seedEpicRaw(t, f.ctx, f.ap, "Other epic", "other")
 
-	if !strings.HasPrefix(leaves, f.epicID+".") {
+	if !strings.HasPrefix(leaves.Raw(), f.epicID.Raw()+".") {
 		t.Fatalf("premise gone: child id %q no longer carries the epic prefix %q, so this test no longer pins prefix-derived membership", leaves, f.epicID)
 	}
 
@@ -64,10 +65,10 @@ func TestReparentedChildLeavesTheEpicOnEverySurface(t *testing.T) {
 		{"lit children <epic>", childrenOutput(t, f.ap, f.epicID)},
 		{"lit show <epic>", epicView},
 	} {
-		if strings.Contains(surface.out, leaves) {
+		if strings.Contains(surface.out, leaves.Raw()) {
 			t.Errorf("%s lists %s, which was reparented out of the epic:\n%s", surface.name, leaves, surface.out)
 		}
-		if !strings.Contains(surface.out, stays) {
+		if !strings.Contains(surface.out, stays.Raw()) {
 			t.Errorf("%s dropped %s, which is still a child:\n%s", surface.name, stays, surface.out)
 		}
 	}
@@ -83,13 +84,13 @@ func TestReparentedChildLeavesTheEpicOnEverySurface(t *testing.T) {
 	// still spells the old epic, so the old epic's absence is asserted on the
 	// header that names an epic by id, where the old id would stand alone.
 	out := showOutput(t, f.ap, leaves)
-	if !strings.Contains(out, "\nparent:\n- "+other) {
+	if !strings.Contains(out, "\nparent:\n- "+other.Raw()) {
 		t.Errorf("show %s does not name %s as its parent after the reparent:\n%s", leaves, other, out)
 	}
-	if !strings.Contains(out, "Epic: "+other+" ") {
+	if !strings.Contains(out, "Epic: "+other.Raw()+" ") {
 		t.Errorf("show %s does not render the epic header for %s after the reparent:\n%s", leaves, other, out)
 	}
-	if strings.Contains(out, "Epic: "+f.epicID+" ") {
+	if strings.Contains(out, "Epic: "+f.epicID.Raw()+" ") {
 		t.Errorf("show %s still renders the old epic's header after the reparent:\n%s", leaves, out)
 	}
 }

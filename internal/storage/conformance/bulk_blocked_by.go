@@ -15,9 +15,9 @@ import (
 // tasksInEpicsOfTheirOwn creates n tasks, each under an epic of its own: a
 // blocked_by between two leaves of one epic is refused, since rank orders
 // them, so a chain across tasks needs one epic apiece.
-func tasksInEpicsOfTheirOwn(t *testing.T, ctx context.Context, st storage.Store, n int) []string {
+func tasksInEpicsOfTheirOwn(t *testing.T, ctx context.Context, st storage.Store, n int) []model.ID {
 	t.Helper()
-	ids := make([]string, n)
+	ids := make([]model.ID, n)
 	for i := range n {
 		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(fmt.Sprintf("epic %d", i)), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 		ids[i] = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(fmt.Sprintf("task %d", i)), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}).ID
@@ -26,13 +26,13 @@ func tasksInEpicsOfTheirOwn(t *testing.T, ctx context.Context, st storage.Store,
 }
 
 // blockersOf lists the issues id is blocked by, sorted.
-func blockersOf(t *testing.T, ctx context.Context, st storage.Store, id string) []string {
+func blockersOf(t *testing.T, ctx context.Context, st storage.Store, id model.ID) []model.ID {
 	t.Helper()
 	rels, err := st.ListRelationsForIssue(ctx, id, model.RelBlockedBy)
 	if err != nil {
 		t.Fatalf("ListRelationsForIssue(%s) error = %v", id, err)
 	}
-	var blockers []string
+	var blockers []model.ID
 	for _, rel := range rels {
 		if rel.SrcID == id {
 			blockers = append(blockers, rel.DstID)
@@ -44,18 +44,23 @@ func blockersOf(t *testing.T, ctx context.Context, st storage.Store, id string) 
 
 // blockedByGraph is every blocked-by edge out of ids, one "a<-b" per edge, so
 // a test can say a file left exactly the edges it states and no others.
-func blockedByGraph(t *testing.T, ctx context.Context, st storage.Store, ids []string) []string {
+func blockedByGraph(t *testing.T, ctx context.Context, st storage.Store, ids []model.ID) []string {
 	t.Helper()
 	var edges []string
 	for _, id := range ids {
 		for _, blocker := range blockersOf(t, ctx, st, id) {
-			edges = append(edges, id+"<-"+blocker)
+			edges = append(edges, id.Raw()+"<-"+blocker.Raw())
 		}
 	}
 	return edges
 }
 
-func blockedBy(ids ...string) *[]string { return &ids }
+// blockedBy is a blocked_by set of refs: real ids, or local_ids as untyped
+// constants.
+func blockedBy(refs ...model.ID) *[]string {
+	out := model.RawIDs(refs)
+	return &out
+}
 
 // aBulkFileWiresADependencyChainAcrossExistingIssues is the batch case the
 // update document's blocked_by exists for: a chain across five existing
@@ -63,11 +68,11 @@ func blockedBy(ids ...string) *[]string { return &ids }
 // stating the set its issue already holds is reported as held.
 func aBulkFileWiresADependencyChainAcrossExistingIssues(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	ids := tasksInEpicsOfTheirOwn(t, ctx, st, 5)
-	specs := []storage.BulkIssueSpec{{ID: ids[0], BlockedBy: blockedBy()}}
+	specs := []storage.BulkIssueSpec{{ID: ids[0].Raw(), BlockedBy: blockedBy()}}
 	var want []string
 	for i := 1; i < 5; i++ {
-		specs = append(specs, storage.BulkIssueSpec{ID: ids[i], BlockedBy: blockedBy(ids[i-1])})
-		want = append(want, ids[i]+"<-"+ids[i-1])
+		specs = append(specs, storage.BulkIssueSpec{ID: ids[i].Raw(), BlockedBy: blockedBy(ids[i-1])})
+		want = append(want, ids[i].Raw()+"<-"+ids[i-1].Raw())
 	}
 
 	result, err := st.BulkApply(ctx, prefix, "ada", specs)
@@ -91,24 +96,24 @@ func aBulkFileWiresADependencyChainAcrossExistingIssues(t *testing.T, ctx contex
 func aBulkFileClosingADependencyCycleChangesNothing(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	for _, c := range []struct {
 		name  string
-		specs func(ids []string) []storage.BulkIssueSpec
+		specs func(ids []model.ID) []storage.BulkIssueSpec
 	}{
-		{"by the file's own documents", func(ids []string) []storage.BulkIssueSpec {
+		{"by the file's own documents", func(ids []model.ID) []storage.BulkIssueSpec {
 			return []storage.BulkIssueSpec{
-				{ID: ids[4], BlockedBy: blockedBy()},
-				{ID: ids[0], BlockedBy: blockedBy(ids[3])},
-				{ID: ids[3], BlockedBy: blockedBy(ids[0])},
+				{ID: ids[4].Raw(), BlockedBy: blockedBy()},
+				{ID: ids[0].Raw(), BlockedBy: blockedBy(ids[3])},
+				{ID: ids[3].Raw(), BlockedBy: blockedBy(ids[0])},
 			}
 		}},
-		{"through an edge already stored", func(ids []string) []storage.BulkIssueSpec {
+		{"through an edge already stored", func(ids []model.ID) []storage.BulkIssueSpec {
 			// ids[2] <- ids[1] <- ids[0] is stored, so ids[0] <- ids[2]
 			// closes the cycle through ids[1]'s document, which restates the
 			// edge it holds.
 			return []storage.BulkIssueSpec{
-				{ID: ids[4], BlockedBy: blockedBy()},
-				{ID: ids[3], BlockedBy: blockedBy(ids[4])},
-				{ID: ids[1], BlockedBy: blockedBy(ids[0])},
-				{ID: ids[0], BlockedBy: blockedBy(ids[2])},
+				{ID: ids[4].Raw(), BlockedBy: blockedBy()},
+				{ID: ids[3].Raw(), BlockedBy: blockedBy(ids[4])},
+				{ID: ids[1].Raw(), BlockedBy: blockedBy(ids[0])},
+				{ID: ids[0].Raw(), BlockedBy: blockedBy(ids[2])},
 			}
 		}},
 	} {
@@ -142,9 +147,9 @@ func aBulkFileReplacesABlockedBySetWhole(t *testing.T, ctx context.Context, st s
 			mustBlock(t, ctx, st, a, c)
 			mustBlock(t, ctx, st, d, b)
 			specs := []storage.BulkIssueSpec{
-				{ID: a, BlockedBy: blockedBy(b)},
-				{ID: c, BlockedBy: blockedBy(a)},
-				{ID: d, BlockedBy: blockedBy()},
+				{ID: a.Raw(), BlockedBy: blockedBy(b)},
+				{ID: c.Raw(), BlockedBy: blockedBy(a)},
+				{ID: d.Raw(), BlockedBy: blockedBy()},
 			}
 			if reversed {
 				slices.Reverse(specs)
@@ -154,7 +159,7 @@ func aBulkFileReplacesABlockedBySetWhole(t *testing.T, ctx context.Context, st s
 			if err != nil {
 				t.Fatalf("BulkApply error = %v", err)
 			}
-			assertStrings(t, "blocked-by edges", blockedByGraph(t, ctx, st, ids), []string{a + "<-" + b, c + "<-" + a})
+			assertStrings(t, "blocked-by edges", blockedByGraph(t, ctx, st, ids), []string{a.Raw() + "<-" + b.Raw(), c.Raw() + "<-" + a.Raw()})
 			if result.EdgesAdded != 2 || result.EdgesRemoved != 2 {
 				t.Errorf("edges added, removed = %d, %d, want 2, 2", result.EdgesAdded, result.EdgesRemoved)
 			}
@@ -194,8 +199,8 @@ func aBulkFileRefusalNamesTheTargetAsTheFileStatesIt(t *testing.T, ctx context.C
 	title := "c"
 
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{LocalID: "c", Title: &title, IssueType: ptr("task"), Topic: ptr("core"), Parent: ptr(epic.ID)},
-		{ID: x.ID, BlockedBy: blockedBy("c")},
+		{LocalID: "c", Title: &title, IssueType: ptr("task"), Topic: ptr("core"), Parent: ptr(epic.ID.Raw())},
+		{ID: x.ID.Raw(), BlockedBy: blockedBy("c")},
 	})
 	want := fmt.Sprintf("bulk: blocked_by of %q -> %q: %s", x.ID, "c", storage.SameEpicBlocksRejectionMessage)
 	if err == nil || !strings.Contains(err.Error(), want) {
@@ -221,8 +226,8 @@ func aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx
 			x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("x"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
 			y := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("y"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
 			specs := []storage.BulkIssueSpec{
-				{ID: x.ID, BlockedBy: blockedBy(y.ID)},
-				{ID: y.ID, Parent: ptr(away.ID)},
+				{ID: x.ID.Raw(), BlockedBy: blockedBy(y.ID)},
+				{ID: y.ID.Raw(), Parent: ptr(away.ID.Raw())},
 			}
 			if reversed {
 				slices.Reverse(specs)
@@ -231,13 +236,13 @@ func aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx
 			if _, err := st.BulkApply(ctx, prefix, "ada", specs); err != nil {
 				t.Fatalf("BulkApply error = %v", err)
 			}
-			assertStrings(t, "x's blockers", blockersOf(t, ctx, st, x.ID), []string{y.ID})
-			assertStrings(t, "y's parents", parentsOf(t, ctx, st, y.ID), []string{away.ID})
+			assertStrings(t, "x's blockers", blockersOf(t, ctx, st, x.ID), []model.ID{y.ID})
+			assertStrings(t, "y's parents", parentsOf(t, ctx, st, y.ID), []model.ID{away.ID})
 
 			z := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("z"), Lane: storage.SharedLane, Topic: "core", ParentID: away.ID})
 			into := []storage.BulkIssueSpec{
-				{ID: x.ID, BlockedBy: blockedBy(y.ID, z.ID)},
-				{ID: z.ID, Parent: ptr(home.ID)},
+				{ID: x.ID.Raw(), BlockedBy: blockedBy(y.ID, z.ID)},
+				{ID: z.ID.Raw(), Parent: ptr(home.ID.Raw())},
 			}
 			if reversed {
 				slices.Reverse(into)
@@ -246,8 +251,8 @@ func aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx
 			if err == nil || !strings.Contains(err.Error(), storage.SameEpicBlocksRejectionMessage) {
 				t.Fatalf("BulkApply moving z in beside x = %v, want the blocked_by inside one epic refused", err)
 			}
-			assertStrings(t, "x's blockers after the refusal", blockersOf(t, ctx, st, x.ID), []string{y.ID})
-			assertStrings(t, "z's parents after the refusal", parentsOf(t, ctx, st, z.ID), []string{away.ID})
+			assertStrings(t, "x's blockers after the refusal", blockersOf(t, ctx, st, x.ID), []model.ID{y.ID})
+			assertStrings(t, "z's parents after the refusal", parentsOf(t, ctx, st, z.ID), []model.ID{away.ID})
 		})
 	}
 }

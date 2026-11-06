@@ -26,7 +26,7 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	create := func(title string, issueType model.IssueType, parent string) string {
+	create := func(title string, issueType model.IssueType, parent model.ID) model.ID {
 		t.Helper()
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "refusals", IssueType: issueType, ParentID: parent})
 		if err != nil {
@@ -38,10 +38,10 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	live := create("live", "task", epic)
 	archived := create("archived", "task", epic)
 	gone := create("deleted", "task", epic)
-	if err := runTransition(t, ctx, io.Discard, ap, []string{archived}, archiveSpec); err != nil {
+	if err := runTransition(t, ctx, io.Discard, ap, []string{archived.Raw()}, archiveSpec); err != nil {
 		t.Fatalf("archive %s: %v", archived, err)
 	}
-	if err := runTransition(t, ctx, io.Discard, ap, []string{gone}, deleteSpec); err != nil {
+	if err := runTransition(t, ctx, io.Discard, ap, []string{gone.Raw()}, deleteSpec); err != nil {
 		t.Fatalf("delete %s: %v", gone, err)
 	}
 	// Two siblings sharing a key, a state the contract cannot express, planted
@@ -64,7 +64,7 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 	depAdd := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runLeaf(t, depAddLeaf(), ctx, stdout, ap, args)
 	}
-	if err := depAdd(t, ctx, io.Discard, ap, []string{live, "--blocked-by", dependency}); err != nil {
+	if err := depAdd(t, ctx, io.Discard, ap, []string{live.Raw(), "--blocked-by", dependency.Raw()}); err != nil {
 		t.Fatalf("dep add %s --blocked-by %s: %v", live, dependency, err)
 	}
 	parentSet := func(t testing.TB, ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -90,26 +90,26 @@ func TestDeterministicAnswersAreNeverRetried(t *testing.T) {
 		wantCode int
 		reason   commandReason
 	}{
-		{"comment add blank body", commentAdd, []string{live, "--body", "  "}, ExitValidation, reasonValidationRefused},
+		{"comment add blank body", commentAdd, []string{live.Raw(), "--body", "  "}, ExitValidation, reasonValidationRefused},
 		{"comment rm blank id", commentRm, []string{"  "}, ExitValidation, reasonValidationRefused},
-		{"rank a deleted issue to the top", runRank, []string{gone, "--top"}, ExitValidation, reasonValidationRefused},
-		{"rank against a deleted issue", runRank, []string{live, "--above", gone}, ExitValidation, reasonValidationRefused},
-		{"rank an issue against itself", runRank, []string{live, "--above", live}, ExitValidation, reasonValidationRefused},
-		{"rank an issue against its own epic", runRank, []string{live, "--above", epic}, ExitValidation, reasonValidationRefused},
-		{"rank set naming a deleted issue", runRankSet, []string{gone, live}, ExitValidation, reasonValidationRefused},
-		{"rank set naming an id twice", runRankSet, []string{live, live}, ExitValidation, reasonValidationRefused},
-		{"rank set naming an empty id", runRankSet, []string{live, ""}, ExitValidation, reasonValidationRefused},
-		{"rank set reversing a shared key", runRankSet, []string{tiedHigh, tiedLow}, ExitValidation, reasonValidationRefused},
-		{"rank set naming an issue and its epic", runRankSet, []string{live, epic}, ExitValidation, reasonValidationRefused},
-		{"archive a deleted issue", transition(archiveSpec), []string{gone}, ExitValidation, reasonValidationRefused},
-		{"unarchive a deleted issue", transition(unarchiveSpec), []string{gone}, ExitValidation, reasonValidationRefused},
-		{"restore an archived issue", transition(restoreSpec), []string{archived}, ExitValidation, reasonValidationRefused},
-		{"archive an archived issue", transition(archiveSpec), []string{archived}, ExitNoWork, reasonStateAlreadyHolds},
-		{"unarchive a live issue", transition(unarchiveSpec), []string{live}, ExitNoWork, reasonStateAlreadyHolds},
-		{"delete a deleted issue", transition(deleteSpec), []string{gone}, ExitNoWork, reasonStateAlreadyHolds},
-		{"restore a live issue", transition(restoreSpec), []string{live}, ExitNoWork, reasonStateAlreadyHolds},
-		{"dep add an edge that already exists", depAdd, []string{live, "--blocked-by", dependency}, ExitNoWork, reasonStateAlreadyHolds},
-		{"parent set the parent it already has", parentSet, []string{"--child", live, "--parent", epic}, ExitNoWork, reasonStateAlreadyHolds},
+		{"rank a deleted issue to the top", runRank, []string{gone.Raw(), "--top"}, ExitValidation, reasonValidationRefused},
+		{"rank against a deleted issue", runRank, []string{live.Raw(), "--above", gone.Raw()}, ExitValidation, reasonValidationRefused},
+		{"rank an issue against itself", runRank, []string{live.Raw(), "--above", live.Raw()}, ExitValidation, reasonValidationRefused},
+		{"rank an issue against its own epic", runRank, []string{live.Raw(), "--above", epic.Raw()}, ExitValidation, reasonValidationRefused},
+		{"rank set naming a deleted issue", runRankSet, []string{gone.Raw(), live.Raw()}, ExitValidation, reasonValidationRefused},
+		{"rank set naming an id twice", runRankSet, []string{live.Raw(), live.Raw()}, ExitValidation, reasonValidationRefused},
+		{"rank set naming an empty id", runRankSet, []string{live.Raw(), ""}, ExitValidation, reasonValidationRefused},
+		{"rank set reversing a shared key", runRankSet, []string{tiedHigh.Raw(), tiedLow.Raw()}, ExitValidation, reasonValidationRefused},
+		{"rank set naming an issue and its epic", runRankSet, []string{live.Raw(), epic.Raw()}, ExitValidation, reasonValidationRefused},
+		{"archive a deleted issue", transition(archiveSpec), []string{gone.Raw()}, ExitValidation, reasonValidationRefused},
+		{"unarchive a deleted issue", transition(unarchiveSpec), []string{gone.Raw()}, ExitValidation, reasonValidationRefused},
+		{"restore an archived issue", transition(restoreSpec), []string{archived.Raw()}, ExitValidation, reasonValidationRefused},
+		{"archive an archived issue", transition(archiveSpec), []string{archived.Raw()}, ExitNoWork, reasonStateAlreadyHolds},
+		{"unarchive a live issue", transition(unarchiveSpec), []string{live.Raw()}, ExitNoWork, reasonStateAlreadyHolds},
+		{"delete a deleted issue", transition(deleteSpec), []string{gone.Raw()}, ExitNoWork, reasonStateAlreadyHolds},
+		{"restore a live issue", transition(restoreSpec), []string{live.Raw()}, ExitNoWork, reasonStateAlreadyHolds},
+		{"dep add an edge that already exists", depAdd, []string{live.Raw(), "--blocked-by", dependency.Raw()}, ExitNoWork, reasonStateAlreadyHolds},
+		{"parent set the parent it already has", parentSet, []string{"--child", live.Raw(), "--parent", epic.Raw()}, ExitNoWork, reasonStateAlreadyHolds},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -38,9 +38,9 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 	// Three real edits: two title renames plus a priority bump, so the trail has
 	// several distinct field transitions to render.
 	edits := [][]string{
-		{issue.ID, "--title", "Renamed once", "--by", "editor"},
-		{issue.ID, "--title", "Renamed twice", "--by", "editor"},
-		{issue.ID, "--priority", "1", "--by", "editor"},
+		{issue.ID.Raw(), "--title", "Renamed once", "--by", "editor"},
+		{issue.ID.Raw(), "--title", "Renamed twice", "--by", "editor"},
+		{issue.ID.Raw(), "--priority", "1", "--by", "editor"},
 	}
 	for _, args := range edits {
 		if err := runUpdate(t, ctx, &bytes.Buffer{}, ap, args); err != nil {
@@ -49,13 +49,13 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runHistory(t, ctx, &stdout, ap, []string{issue.ID}); err != nil {
+	if err := runHistory(t, ctx, &stdout, ap, []string{issue.ID.Raw()}); err != nil {
 		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
 
 	// Header identifies the ticket by id + final title, then the labelled trail.
-	for _, want := range []string{issue.ID, "Renamed twice", "\nhistory:\n"} {
+	for _, want := range []string{issue.ID.Raw(), "Renamed twice", "\nhistory:\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("lit history output missing %q in:\n%s", want, out)
 		}
@@ -93,16 +93,16 @@ func seedProseHistory(t *testing.T, ctx context.Context, ap *app.App) string {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	edits := [][]string{
-		{issue.ID, "--description", "second draft\nline two", "--by", "editor"},
-		{issue.ID, "--description", "third draft", "--title", "Renamed", "--by", "editor"},
-		{issue.ID, "--prompt", "new prompt", "--by", "editor"},
+		{issue.ID.Raw(), "--description", "second draft\nline two", "--by", "editor"},
+		{issue.ID.Raw(), "--description", "third draft", "--title", "Renamed", "--by", "editor"},
+		{issue.ID.Raw(), "--prompt", "new prompt", "--by", "editor"},
 	}
 	for _, args := range edits {
 		if err := runUpdate(t, ctx, &bytes.Buffer{}, ap, args); err != nil {
 			t.Fatalf("runUpdate(%v) error = %v", args, err)
 		}
 	}
-	return issue.ID
+	return issue.ID.Raw()
 }
 
 // TestRunHistoryShowsLongTextChangesAsVersions is the trail an agent reads: a
@@ -183,13 +183,13 @@ func TestRunHistoryVersionPastTheRecordIsNotFound(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runHistory(t, ctx, &stdout, ap, []string{untouched.ID, "--version", "description@1"}); err != nil || stdout.String() != "only draft\n" {
+	if err := runHistory(t, ctx, &stdout, ap, []string{untouched.ID.Raw(), "--version", "description@1"}); err != nil || stdout.String() != "only draft\n" {
 		t.Fatalf("runHistory(%s --version description@1) = %q, %v; want the current text", untouched.ID, stdout.String(), err)
 	}
 	for _, tc := range []struct{ id, ref, want string }{
 		{id, "description@4", "holds 3 versions of description"},
-		{untouched.ID, "description@2", "holds 1 version of description"},
-		{untouched.ID, "prompt@1", "holds 0 versions of prompt"},
+		{untouched.ID.Raw(), "description@2", "holds 1 version of description"},
+		{untouched.ID.Raw(), "prompt@1", "holds 0 versions of prompt"},
 	} {
 		err := runHistory(t, ctx, &bytes.Buffer{}, ap, []string{tc.id, "--version", tc.ref})
 		if ExitCode(err) != ExitNotFound || commandErrorReason(err) != reasonVersionNotFound || !strings.Contains(err.Error(), tc.want) {
@@ -345,12 +345,12 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 		facts   func(telemetry.Event) map[string]any
 		changed bool
 	}{
-		{labelAddLeaf(), []string{issue.ID, "perf", "--by", "adder"}, single, true},
-		{labelAddLeaf(), []string{issue.ID, "perf", "--by", "re-adder"}, single, false},
-		{labelRmLeaf(), []string{issue.ID, "perf", "--by", "remover"}, single, true},
-		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-adder"}, bulkItem, true},
-		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-re-adder"}, bulkItem, false},
-		{bulkLabelLeaf(), []string{"rm", "--ids", issue.ID, "--label", "gpu", "--by", "bulk-remover"}, bulkItem, true},
+		{labelAddLeaf(), []string{issue.ID.Raw(), "perf", "--by", "adder"}, single, true},
+		{labelAddLeaf(), []string{issue.ID.Raw(), "perf", "--by", "re-adder"}, single, false},
+		{labelRmLeaf(), []string{issue.ID.Raw(), "perf", "--by", "remover"}, single, true},
+		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID.Raw(), "--label", "gpu", "--by", "bulk-adder"}, bulkItem, true},
+		{bulkLabelLeaf(), []string{"add", "--ids", issue.ID.Raw(), "--label", "gpu", "--by", "bulk-re-adder"}, bulkItem, false},
+		{bulkLabelLeaf(), []string{"rm", "--ids", issue.ID.Raw(), "--label", "gpu", "--by", "bulk-remover"}, bulkItem, true},
 	} {
 		ev, err := recordLeaf(step.verb, ctx, dirInvocation(t, t.TempDir(), &bytes.Buffer{}, io.Discard, nil), ap, step.args)
 		if err != nil {
@@ -362,7 +362,7 @@ func TestRunHistoryListsLabelVerbs(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runLeaf(t, historyLeaf(), ctx, &stdout, ap, []string{issue.ID}); err != nil {
+	if err := runLeaf(t, historyLeaf(), ctx, &stdout, ap, []string{issue.ID.Raw()}); err != nil {
 		t.Fatalf("runHistory() error = %v", err)
 	}
 	out := stdout.String()
@@ -398,11 +398,11 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if err := runUpdate(t, ctx, io.Discard, ap, []string{issue.ID, "--description", "second"}); err != nil {
+	if err := runUpdate(t, ctx, io.Discard, ap, []string{issue.ID.Raw(), "--description", "second"}); err != nil {
 		t.Fatalf("update error = %v", err)
 	}
 
-	ev, err := recordLeaf(historyLeaf(), ctx, dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil), ap, []string{issue.ID})
+	ev, err := recordLeaf(historyLeaf(), ctx, dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil), ap, []string{issue.ID.Raw()})
 	if err != nil {
 		t.Fatalf("history error = %v", err)
 	}
@@ -422,7 +422,7 @@ func TestHistoryEventSaysWhatItNumberedAndLookedUp(t *testing.T) {
 		number int
 		found  bool
 	}{{"description@2", 2, true}, {"description@3", 3, false}} {
-		ev, err := recordLeaf(historyLeaf(), ctx, dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil), ap, []string{issue.ID, "--version", tc.ref})
+		ev, err := recordLeaf(historyLeaf(), ctx, dirInvocation(t, t.TempDir(), io.Discard, io.Discard, nil), ap, []string{issue.ID.Raw(), "--version", tc.ref})
 		if tc.found != (err == nil) || (!tc.found && !errors.As(err, new(storage.VersionNotFoundError))) {
 			t.Fatalf("history --version %s error = %v, want found %v", tc.ref, err, tc.found)
 		}

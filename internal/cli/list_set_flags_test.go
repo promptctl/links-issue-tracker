@@ -37,7 +37,7 @@ func setFlagFixture(t *testing.T) (h readyTestHarness, bugA, taskAB, featB strin
 	bug := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("bug a"), IssueType: model.TypeBug, Topic: "filtering", Labels: []string{"a"}, Assignee: "ann", ParentID: epic.ID, Lane: storage.MustParseLane("bug")})
 	task := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("task ab"), IssueType: model.TypeTask, Topic: "filtering", Labels: []string{"a", "b"}, Assignee: "bob", ParentID: epic.ID, Lane: storage.MustParseLane("task")})
 	feat := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("feature b"), IssueType: model.TypeFeature, Topic: "filtering", Labels: []string{"b"}, Assignee: "cy", ParentID: epic.ID, Lane: storage.MustParseLane("feature")})
-	return h, bug.ID, task.ID, feat.ID
+	return h, bug.ID.Raw(), task.ID.Raw(), feat.ID.Raw()
 }
 
 // TestListSetFlagsWidenAcrossEverySpelling is the links-listing-uhc0

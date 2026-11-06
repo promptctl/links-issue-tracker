@@ -128,7 +128,7 @@ func (l LocalCheckouts) PresenceOf(at model.Attribution) Presence {
 	if !at.Present() || at.Workspace() != l.workspace {
 		return Unprovable
 	}
-	if presence, found := l.live[at.Stream()]; found {
+	if presence, found := l.live[at.Stream().Raw()]; found {
 		return presence
 	}
 	return Gone

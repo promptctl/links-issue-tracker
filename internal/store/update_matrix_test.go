@@ -85,7 +85,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 	for _, issueType := range model.IssueTypes() {
 		for _, combo := range combos {
 			t.Run(string(issueType)+"/"+combo.name, func(t *testing.T) {
-				var parentID string
+				var parentID model.ID
 				if !issueType.IsContainer() {
 					parentID = home.ID
 				}

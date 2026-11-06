@@ -33,11 +33,11 @@ type MergedFile struct {
 
 // ReadOutIDs is the issues a bulk file's read-out documents name, which an
 // engine reads as CurrentState under its write's lock for MergeReadOut.
-func ReadOutIDs(specs []BulkIssueSpec) []string {
-	var ids []string
+func ReadOutIDs(specs []BulkIssueSpec) []model.ID {
+	var ids []model.ID
 	for _, spec := range specs {
 		if spec.Basis != nil {
-			ids = append(ids, spec.ID)
+			ids = append(ids, model.ID(spec.ID))
 		}
 	}
 	return ids
@@ -127,7 +127,7 @@ func (m *documentMerge) fields(i int, doc *BulkIssueSpec, basis map[string]strin
 	if err != nil {
 		return fmt.Errorf("bulk: doc %d (id %q): %w", i, doc.ID, err)
 	}
-	issue, standing := m.now.Issues[doc.ID]
+	issue, standing := m.now.Issues[model.ID(doc.ID)]
 	var file map[string]string
 	if standing {
 		applied, _, err := projectIssueFields(issue, patch)
@@ -141,7 +141,7 @@ func (m *documentMerge) fields(i int, doc *BulkIssueSpec, basis map[string]strin
 		if !covered || !field.stated(patch) {
 			continue
 		}
-		slot := Slot{Kind: FieldSlot, Issue: doc.ID, Name: field.name}
+		slot := Slot{Kind: FieldSlot, Issue: model.ID(doc.ID), Name: field.name}
 		if merged, ok := m.slot(slot, base, FieldValue(file[field.name])); ok {
 			if err := field.restore(doc, merged.text); err != nil {
 				return fmt.Errorf("bulk: doc %d (id %q): %w", i, doc.ID, err)
@@ -157,7 +157,7 @@ func (m *documentMerge) fields(i int, doc *BulkIssueSpec, basis map[string]strin
 // results is what stands, as the two parents of a child the file left alone
 // do: no document can state them, and `lit doctor` repairs them.
 func (m *documentMerge) parent(doc *BulkIssueSpec, base string) {
-	slot := Slot{Kind: ParentSlot, Issue: doc.ID}
+	slot := Slot{Kind: ParentSlot, Issue: model.ID(doc.ID)}
 	merged, ok := m.slot(slot, ParentsValue(parentSet(base)).digest(), ParentsValue(parentSet(*doc.Parent)))
 	if !ok {
 		return
@@ -176,11 +176,11 @@ func (m *documentMerge) parent(doc *BulkIssueSpec, base string) {
 // blockedBy merges a stated blocked-by set edge by edge, every edge the base,
 // the file or now holds, and states the set that results whole.
 func (m *documentMerge) blockedBy(doc *BulkIssueSpec, base []string) {
-	edges := slices.Concat(base, *doc.BlockedBy, m.now.BlockedBy[doc.ID])
+	edges := slices.Concat(base, *doc.BlockedBy, model.RawIDs(m.now.BlockedBy[model.ID(doc.ID)]))
 	slices.Sort(edges)
 	merged := []string{}
 	for _, blocker := range slices.Compact(edges) {
-		slot := Slot{Kind: BlockedBySlot, Issue: doc.ID, Name: blocker}
+		slot := Slot{Kind: BlockedBySlot, Issue: model.ID(doc.ID), Name: blocker}
 		value, ok := m.slot(slot, EdgeValue(slices.Contains(base, blocker)).digest(), EdgeValue(slices.Contains(*doc.BlockedBy, blocker)))
 		if ok && value == EdgeValue(true) {
 			merged = append(merged, blocker)
@@ -209,9 +209,9 @@ func (m *documentMerge) slot(slot Slot, base string, file SlotValue) (SlotValue,
 }
 
 // parentSet is a document's parent as a set: none for the empty string.
-func parentSet(parent string) []string {
+func parentSet(parent string) []model.ID {
 	if parent == "" {
 		return nil
 	}
-	return []string{parent}
+	return []model.ID{model.ID(parent)}
 }

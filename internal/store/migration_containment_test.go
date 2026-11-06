@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pressly/goose/v3"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // containmentFixture is a store stepped back to schema v6 with a helper for
@@ -308,7 +309,7 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 	}
 
 	for id, want := range containmentHomes {
-		if got := readParent(t, ctx, f.st, id); got != want {
+		if got := readParent(t, ctx, f.st, model.ID(id)); got != model.ID(want) {
 			t.Errorf("after Up: %s parent = %q, want %q", id, got, want)
 		}
 	}
@@ -373,7 +374,7 @@ func TestContainmentMigrationHomesEveryLeaf(t *testing.T) {
 		"acme-core-aa11.1":   "acme-core-aa11",
 	}
 	for id, want := range wantRestored {
-		if got := readParent(t, ctx, f.st, id); got != want {
+		if got := readParent(t, ctx, f.st, model.ID(id)); got != model.ID(want) {
 			t.Errorf("after Down: %s parent = %q, want %q", id, got, want)
 		}
 	}

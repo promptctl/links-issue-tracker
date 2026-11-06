@@ -7,11 +7,11 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-func epic(id string) *model.Issue {
+func epic(id model.ID) *model.Issue {
 	return &model.Issue{ID: id, IssueType: model.TypeEpic}
 }
 
-func task(id, lane string) model.Issue {
+func task(id model.ID, lane string) model.Issue {
 	return model.Issue{ID: id, Lane: model.Text(lane), IssueType: model.TypeTask}
 }
 

@@ -19,7 +19,8 @@ import (
 func (s *Store) Purge(ctx context.Context, in storage.PurgeInput) (storage.PurgeResult, error) {
 	var result storage.PurgeResult
 	err := s.withMutation(ctx, "purge issue", func(ctx context.Context, tx *sql.Tx) error {
-		var id, createdAt string
+		var id model.ID
+		var createdAt string
 		if err := tx.QueryRowContext(ctx, `SELECT id, created_at FROM issues WHERE id = ?`, in.IssueID).Scan(&id, &createdAt); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return storage.NotFoundError{Entity: "issue", ID: in.IssueID}
@@ -84,7 +85,7 @@ func scanPurge(rows *sql.Rows) (model.Purge, error) {
 
 // detachedChildrenTx reads every child filed under parentID, with the parent
 // edges it keeps once its edge to parentID is gone.
-func detachedChildrenTx(ctx context.Context, tx *sql.Tx, parentID string) ([]storage.DetachedChild, error) {
+func detachedChildrenTx(ctx context.Context, tx *sql.Tx, parentID model.ID) ([]storage.DetachedChild, error) {
 	rows, err := tx.QueryContext(ctx, `
 SELECT r.src_id, c.issue_type, COUNT(o.dst_id)
 FROM relations r

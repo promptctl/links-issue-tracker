@@ -30,7 +30,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 
 	const goroutines = 10
 	var mu sync.Mutex
-	createdIDs := make([]string, 0, goroutines)
+	createdIDs := make([]model.ID, 0, goroutines)
 
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Concurrent epic"), Lane: storage.SharedLane, Topic: "concurrent", IssueType: "epic"})
 	if err != nil {
@@ -74,7 +74,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetIssue(%s) error = %v", id, err)
 		}
-		if !strings.HasPrefix(issue.ID, "test-concurrent-") {
+		if !strings.HasPrefix(issue.ID.Raw(), "test-concurrent-") {
 			t.Fatalf("issue.ID = %q, want test-concurrent- prefix", issue.ID)
 		}
 		if issue.Topic != "concurrent" {
@@ -117,7 +117,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 
 	// Pre-create issues for update/comment/transition goroutines.
 	const preCreateCount = 10
-	issues := make([]string, preCreateCount)
+	issues := make([]model.ID, preCreateCount)
 	for i := range issues {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 			Title: storage.MustParseTitle(fmt.Sprintf("Pre-create %d", i)), Lane: storage.SharedLane,
@@ -144,9 +144,9 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 
 	// Plan: create new issues with the mixed-test label.
 	const newCount = 5
-	commentPlan := make(map[string]string, 5)                       // issueID -> comment body
-	priorityPlan := make(map[string]model.Priority, preCreateCount) // issueID -> expected priority
-	transitionPlan := map[string]string{}                           // issueID -> expected status
+	commentPlan := make(map[model.ID]string, 5)                       // issueID -> comment body
+	priorityPlan := make(map[model.ID]model.Priority, preCreateCount) // issueID -> expected priority
+	transitionPlan := map[model.ID]string{}                           // issueID -> expected status
 
 	for i := range newCount {
 		eg.Go(func() error {

@@ -2,6 +2,7 @@ package merge
 
 import (
 	"reflect"
+	"slices"
 	"sort"
 	"time"
 
@@ -66,11 +67,11 @@ const (
 // the other edited: only the edited side holds it, so only its child rows do.
 // [LAW:types-are-the-program] which rows belong is a fact about (id, side), so
 // that is the shape the child merges read.
-type issueScope map[string]side
+type issueScope map[model.ID]side
 
 // admits reports whether a child row of issueID, read from that side, belongs to
 // the merged export. An id the merge dropped admits neither side.
-func (s issueScope) admits(issueID string, from side) bool { return s[issueID]&from != 0 }
+func (s issueScope) admits(issueID model.ID, from side) bool { return s[issueID]&from != 0 }
 
 // sidedRows is one side's rows together with the side they came from.
 type sidedRows[T any] struct {
@@ -180,17 +181,17 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		ExportedAt:  local.ExportedAt,
 		Issues:      mergedIssues,
 		Relations:   mergeRelations(scope, base.Relations, local.Relations, remote.Relations),
-		Comments:    mergeRecords(scope, local.Comments, remote.Comments, func(c model.Comment) (string, string) { return c.ID, c.IssueID }),
+		Comments:    mergeRecords(scope, local.Comments, remote.Comments, func(c model.Comment) (model.ID, model.ID) { return c.ID, c.IssueID }),
 		Labels:      mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
-		Events:      mergeRecords(scope, local.Events, remote.Events, func(e model.IssueEvent) (string, string) { return e.ID, e.IssueID }),
+		Events:      mergeRecords(scope, local.Events, remote.Events, func(e model.IssueEvent) (model.ID, model.ID) { return e.ID, e.IssueID }),
 		Purges:      purges,
-		PlanReviews: mergeRecords(scope, local.PlanReviews, remote.PlanReviews, func(r model.PlanReview) (string, string) { return r.ID, r.IssueID }),
+		PlanReviews: mergeRecords(scope, local.PlanReviews, remote.PlanReviews, func(r model.PlanReview) (model.ID, model.ID) { return r.ID, r.IssueID }),
 	}
 	return MergeResult{export: merged, Pending: pending, Collisions: SortCollisions(collisions)}
 }
 
-func mapIssues(issues []model.Issue) map[string]model.Issue {
-	out := make(map[string]model.Issue, len(issues))
+func mapIssues(issues []model.Issue) map[model.ID]model.Issue {
+	out := make(map[model.ID]model.Issue, len(issues))
 	for _, issue := range issues {
 		out[issue.ID] = issue
 	}
@@ -205,18 +206,18 @@ func optionalIssuePtr(issue model.Issue, ok bool) *model.Issue {
 	return &copy
 }
 
-func unionIssueIDs(maps ...map[string]model.Issue) []string {
-	set := map[string]struct{}{}
+func unionIssueIDs(maps ...map[model.ID]model.Issue) []model.ID {
+	set := map[model.ID]struct{}{}
 	for _, mapped := range maps {
 		for id := range mapped {
 			set[id] = struct{}{}
 		}
 	}
-	out := make([]string, 0, len(set))
+	out := make([]model.ID, 0, len(set))
 	for id := range set {
 		out = append(out, id)
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
@@ -235,7 +236,7 @@ func issueEqual(left *model.Issue, right *model.Issue) bool {
 }
 
 type issueProjection struct {
-	ID          string
+	ID          model.ID
 	Title       model.Text
 	Description string
 	Prompt      string
@@ -247,7 +248,7 @@ type issueProjection struct {
 	Rank        string
 	Lane        model.Text
 	Labels      []model.Text
-	FollowsUp   string
+	FollowsUp   model.ID
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	Retention   model.Retention
@@ -348,7 +349,7 @@ func mergeMembers[K comparable, R any](admits func(K, side) bool, keyOf func(R) 
 
 func mergeRelations(scope issueScope, base, locals, remotes []model.Relation) []model.Relation {
 	type key struct {
-		Src, Dst string
+		Src, Dst model.ID
 		Type     model.RelationType
 	}
 	out := mergeMembers(
@@ -379,7 +380,7 @@ func mergeRelations(scope issueScope, base, locals, remotes []model.Relation) []
 // other can still union into a loop; the landing every merged export goes
 // through cuts it and says so (storage.BreakParentCycles). [LAW:single-enforcer]
 func enforceSingleParent(relations []model.Relation) []model.Relation {
-	parentOf := map[string]model.Relation{}
+	parentOf := map[model.ID]model.Relation{}
 	out := make([]model.Relation, 0, len(relations))
 	for _, relation := range relations {
 		if relation.Type != model.RelParentChild {
@@ -401,8 +402,8 @@ func enforceSingleParent(relations []model.Relation) []model.Relation {
 // under their own id and never edited, comments, events and plan reviews — keeping
 // every row of an issue the merge kept, once, by id. keys reads a row's id and
 // the issue it belongs to. [LAW:one-type-per-behavior]
-func mergeRecords[R any](scope issueScope, locals, remotes []R, keys func(R) (id, issueID string)) []R {
-	merged := map[string]R{}
+func mergeRecords[R any](scope issueScope, locals, remotes []R, keys func(R) (id, issueID model.ID)) []R {
+	merged := map[model.ID]R{}
 	for _, sided := range bothSidesOf(locals, remotes) {
 		for _, row := range sided.rows {
 			id, issueID := keys(row)
@@ -412,11 +413,11 @@ func mergeRecords[R any](scope issueScope, locals, remotes []R, keys func(R) (id
 			merged[id] = row
 		}
 	}
-	ids := make([]string, 0, len(merged))
+	ids := make([]model.ID, 0, len(merged))
 	for id := range merged {
 		ids = append(ids, id)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	out := make([]R, len(ids))
 	for i, id := range ids {
 		out[i] = merged[id]
@@ -431,7 +432,10 @@ func mergeRecords[R any](scope issueScope, locals, remotes []R, keys func(R) (id
 // label table is authoritative (issue.Labels is a derived view); this is where
 // removal must be honored.
 func mergeLabels(scope issueScope, base, locals, remotes []model.Label) []model.Label {
-	type key struct{ IssueID, Name string }
+	type key struct {
+		IssueID model.ID
+		Name    string
+	}
 	out := mergeMembers(
 		func(k key, from side) bool { return scope.admits(k.IssueID, from) },
 		func(l model.Label) key { return key{IssueID: l.IssueID, Name: l.Name} },

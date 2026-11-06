@@ -24,8 +24,8 @@ import (
 // [LAW:one-source-of-truth] the history holds the text; the review holds only
 // the name of it.
 type PlanReview struct {
-	ID         string      `json:"id"`
-	IssueID    string      `json:"issue_id"`
+	ID         ID          `json:"id"`
+	IssueID    ID          `json:"issue_id"`
 	PlanDigest PlanDigest  `json:"plan_digest"`
 	Verdict    PlanVerdict `json:"verdict"`
 	// Laws are the laws the verdict cites, in their canonical order: sorted,

@@ -86,7 +86,7 @@ func (e *Engine) selects(issue model.Issue, filter storage.ListIssuesFilter, cri
 // parent's retention: the edge is what makes an issue a child, so a deleted
 // parent's children are still its children to a listing that names it. Empty
 // criteria constrain nothing, as on every other axis.
-func (e *Engine) matchesParents(childID string, parentIDs []string) bool {
+func (e *Engine) matchesParents(childID model.ID, parentIDs []model.ID) bool {
 	if len(parentIDs) == 0 {
 		return true
 	}
@@ -112,7 +112,7 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 // lookup applies (frames), keyed as rankAt renders it. Every edge goes in, so
 // a child two edges claim is placed and reported exactly as in the SQL engine.
 // [LAW:one-source-of-truth]
-func (e *Engine) rankAncestry(pos map[string]int) storage.RankAncestry {
+func (e *Engine) rankAncestry(pos map[model.ID]int) storage.RankAncestry {
 	var links []storage.ParentLink
 	for _, rel := range e.relations {
 		if e.frames(rel) {

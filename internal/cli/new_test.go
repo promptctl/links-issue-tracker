@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -48,7 +49,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	if err := runNew(t, ctx, &stdout, ap, []string{
 		"--title", "Tighten repro",
 		"--topic", "renderer",
-		"--parent", parent.ID,
+		"--parent", parent.ID.Raw(),
 		"--type", "task",
 		"--priority", "1",
 	}); err != nil {
@@ -58,10 +59,10 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	createdID := firstIssueID(t, stdout.String())
 	// The id hangs under the parent; the segment beneath it is a content hash,
 	// not a position, so nothing asserts its value. [LAW:behavior-not-structure]
-	if !strings.HasPrefix(createdID, parent.ID+".") {
+	if !strings.HasPrefix(createdID, parent.ID.Raw()+".") {
 		t.Fatalf("created.ID = %q, want it to hang under %q", createdID, parent.ID)
 	}
-	created, err := ap.Store.GetIssue(ctx, createdID)
+	created, err := ap.Store.GetIssue(ctx, model.ID(createdID))
 	if err != nil {
 		t.Fatalf("GetIssue(%s) error = %v", createdID, err)
 	}
@@ -97,7 +98,7 @@ func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
 	}
 	var got []string
 	for _, is := range issues {
-		got = append(got, is.ID)
+		got = append(got, is.ID.Raw())
 	}
 	want := []string{promoted, first, second}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
@@ -134,7 +135,7 @@ func TestRunNewAppendsWithinItsFrame(t *testing.T) {
 
 	rankOf := func(id string) string {
 		t.Helper()
-		issue, err := ap.Store.GetIssue(ctx, id)
+		issue, err := ap.Store.GetIssue(ctx, model.ID(id))
 		if err != nil {
 			t.Fatalf("GetIssue(%s) error = %v", id, err)
 		}
@@ -191,11 +192,11 @@ func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
 	if err := runLeaf(t, newLeaf(), ctx, &stdout, ap, []string{
-		"--title", "Born unclaimed", "--topic", "lifecycle", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
+		"--title", "Born unclaimed", "--topic", "lifecycle", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle").Raw(),
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
-	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	created, err := ap.Store.GetIssue(ctx, model.ID(firstIssueID(t, stdout.String())))
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
@@ -213,11 +214,11 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
 	if err := runLeaf(t, newLeaf(), ctx, &stdout, ap, []string{
-		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
+		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--parent", seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle").Raw(),
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
-	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	created, err := ap.Store.GetIssue(ctx, model.ID(firstIssueID(t, stdout.String())))
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
@@ -264,7 +265,7 @@ func TestRunNewEpicWithoutParentIsTopLevel(t *testing.T) {
 	if err := runNew(t, ctx, &stdout, ap, []string{"--title", "A home", "--topic", "lifecycle", "--type", "epic"}); err != nil {
 		t.Fatalf("runNew(--type epic, no --parent) error = %v", err)
 	}
-	detail, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, stdout.String()))
+	detail, err := ap.Store.GetIssueDetail(ctx, model.ID(firstIssueID(t, stdout.String())))
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}

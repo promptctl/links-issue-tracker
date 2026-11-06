@@ -49,7 +49,7 @@ func newFrameFixture(t *testing.T, ctx context.Context, st *Store) frameFixture 
 // createTopLevelIssue files one issue at the bottom of the top-level frame and
 // returns its id. It is an epic because that is the only thing the top level
 // holds; the cases that use it are about keys in a frame, not about types.
-func createTopLevelIssue(t *testing.T, ctx context.Context, st *Store, title string) string {
+func createTopLevelIssue(t *testing.T, ctx context.Context, st *Store, title string) model.ID {
 	t.Helper()
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle(title),
@@ -63,9 +63,9 @@ func createTopLevelIssue(t *testing.T, ctx context.Context, st *Store, title str
 
 // makeTopLevelIssues files n issues at the bottom of the top-level frame, in
 // order, and returns their ids. Epics, for the reason createTopLevelIssue is.
-func makeTopLevelIssues(t *testing.T, ctx context.Context, st *Store, n int, titlef string) []string {
+func makeTopLevelIssues(t *testing.T, ctx context.Context, st *Store, n int, titlef string) []model.ID {
 	t.Helper()
-	ids := make([]string, 0, n)
+	ids := make([]model.ID, 0, n)
 	for i := range n {
 		ids = append(ids, createTopLevelIssue(t, ctx, st, fmt.Sprintf(titlef, i)))
 	}
@@ -74,7 +74,7 @@ func makeTopLevelIssues(t *testing.T, ctx context.Context, st *Store, n int, tit
 
 // makeChildrenOf files one leaf per title under epicID, each in its own lane,
 // and returns them in filing order.
-func makeChildrenOf(t *testing.T, ctx context.Context, st *Store, epicID string, titles ...string) []model.Issue {
+func makeChildrenOf(t *testing.T, ctx context.Context, st *Store, epicID model.ID, titles ...string) []model.Issue {
 	t.Helper()
 	issues := make([]model.Issue, 0, len(titles))
 	for _, title := range titles {
@@ -98,9 +98,9 @@ func openingKey(t *testing.T) string {
 	return key
 }
 
-func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.Issue) map[string]string {
+func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.Issue) map[model.ID]string {
 	t.Helper()
-	out := make(map[string]string, len(issues))
+	out := make(map[model.ID]string, len(issues))
 	for _, issue := range issues {
 		got, err := st.GetIssue(ctx, issue.ID)
 		if err != nil {
@@ -130,7 +130,7 @@ func mustBefore(t *testing.T, r string) string {
 // question about the keyspace every frame shares, so the bound is found by
 // scanning the ranks the test already holds — the same population the store
 // queries, read independently of it.
-func mustTopOf(t *testing.T, ranks map[string]string, anchor string) string {
+func mustTopOf(t *testing.T, ranks map[model.ID]string, anchor string) string {
 	t.Helper()
 	below := ""
 	for _, other := range ranks {
@@ -143,7 +143,7 @@ func mustTopOf(t *testing.T, ranks map[string]string, anchor string) string {
 
 // mustBottomOf is the same statement at the other end: the midpoint between the
 // key trailing a frame and the nearest key the workspace holds above it.
-func mustBottomOf(t *testing.T, ranks map[string]string, anchor string) string {
+func mustBottomOf(t *testing.T, ranks map[model.ID]string, anchor string) string {
 	t.Helper()
 	above := ""
 	for _, other := range ranks {
@@ -164,7 +164,7 @@ func mustBetween(t *testing.T, lower, upper string) string {
 }
 
 // noRoomFixture names the issues of TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue.
-type noRoomFixture struct{ upper, lower, moved string }
+type noRoomFixture struct{ upper, lower, moved model.ID }
 
 // A key placed against stored keys that leave no room lands where it was asked
 // to anyway: between a relative move's neighbors, or past a frame's edge. The
@@ -179,40 +179,40 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 		upper, lower string // the neighbors' planted ranks; an empty upper deletes that neighbor
 		// place performs the placement and returns the ids that must now sort
 		// strictly ascending.
-		place func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string
+		place func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID
 	}{
-		{"above", "10", "100", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+		{"above", "10", "100", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			if _, err := st.RankAbove(ctx, ids.moved, ids.lower); err != nil {
 				t.Fatalf("RankAbove error = %v", err)
 			}
-			return []string{ids.upper, ids.moved, ids.lower}
+			return []model.ID{ids.upper, ids.moved, ids.lower}
 		}},
-		{"below", "10", "100", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+		{"below", "10", "100", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			if _, err := st.RankBelow(ctx, ids.moved, ids.upper); err != nil {
 				t.Fatalf("RankBelow error = %v", err)
 			}
-			return []string{ids.upper, ids.moved, ids.lower}
+			return []model.ID{ids.upper, ids.moved, ids.lower}
 		}},
-		{"above an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+		{"above an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			if _, err := st.RankAbove(ctx, ids.moved, ids.lower); err != nil {
 				t.Fatalf("RankAbove error = %v", err)
 			}
-			return []string{ids.moved, ids.lower}
+			return []model.ID{ids.moved, ids.lower}
 		}},
-		{"to the top past an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+		{"to the top past an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			if _, err := st.RankToTop(ctx, ids.moved); err != nil {
 				t.Fatalf("RankToTop error = %v", err)
 			}
-			return []string{ids.moved, ids.lower}
+			return []model.ID{ids.moved, ids.lower}
 		}},
-		{"rank set past an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+		{"rank set past an all-zero frame leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			other := createTopLevelIssue(t, ctx, st, "Other")
-			if _, err := st.RankSet(ctx, []string{other, ids.moved}); err != nil {
+			if _, err := st.RankSet(ctx, []model.ID{other, ids.moved}); err != nil {
 				t.Fatalf("RankSet error = %v", err)
 			}
-			return []string{other, ids.moved, ids.lower}
+			return []model.ID{other, ids.moved, ids.lower}
 		}},
-		{"created at the top past the only ranked row, all zeros", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+		{"created at the top past the only ranked row, all zeros", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			// The issue being created is not stored yet, so the respace around
 			// "0" finds that one row and nothing else.
 			if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", ids.moved); err != nil {
@@ -222,14 +222,14 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateIssue(top) error = %v", err)
 			}
-			return []string{created.ID, ids.lower}
+			return []model.ID{created.ID, ids.lower}
 		}},
-		{"created at the top past an all-zero leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []string {
+		{"created at the top past an all-zero leader", "", "0", func(t *testing.T, ctx context.Context, st *Store, ids noRoomFixture) []model.ID {
 			created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Created"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankTop})
 			if err != nil {
 				t.Fatalf("CreateIssue(top) error = %v", err)
 			}
-			return []string{created.ID, ids.lower}
+			return []model.ID{created.ID, ids.lower}
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestPlacementMakesRoomBetweenKeysThatPadToTheSameValue(t *testing.T) {
 				lower: createTopLevelIssue(t, ctx, st, "Lower"),
 				moved: createTopLevelIssue(t, ctx, st, "Moved"),
 			}
-			planted := map[string]string{ids.lower: tc.lower, ids.moved: "z"}
+			planted := map[model.ID]string{ids.lower: tc.lower, ids.moved: "z"}
 			if tc.upper != "" {
 				planted[ids.upper] = tc.upper
 			} else if err := st.ExecRawForTest(ctx, "UPDATE issues SET deleted_at = ? WHERE id = ?", "2026-01-01T00:00:00Z", ids.upper); err != nil {
@@ -396,7 +396,7 @@ func TestRankSetMixedFrameResolvesChildToEpic(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, fx.children)
 
-	result, err := st.RankSet(ctx, []string{fx.standalone.ID, fx.children[1].ID})
+	result, err := st.RankSet(ctx, []model.ID{fx.standalone.ID, fx.children[1].ID})
 	if err != nil {
 		t.Fatalf("RankSet(standalone, child) error = %v", err)
 	}
@@ -433,7 +433,7 @@ func TestRankSetAcrossTwoEpicsRanksRepresentatives(t *testing.T) {
 	fx2 := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, append(fx1.children, fx2.children...))
 
-	result, err := st.RankSet(ctx, []string{fx2.children[0].ID, fx1.children[2].ID})
+	result, err := st.RankSet(ctx, []model.ID{fx2.children[0].ID, fx1.children[2].ID})
 	if err != nil {
 		t.Fatalf("RankSet(child2, child1) error = %v", err)
 	}
@@ -463,7 +463,7 @@ func TestRankSetSameEpicSiblingsRanksSiblingsDirectly(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, []model.Issue{fx.epic, fx.standalone})
 
-	result, err := st.RankSet(ctx, []string{fx.children[2].ID, fx.children[0].ID, fx.children[1].ID})
+	result, err := st.RankSet(ctx, []model.ID{fx.children[2].ID, fx.children[0].ID, fx.children[1].ID})
 	if err != nil {
 		t.Fatalf("RankSet(siblings) error = %v", err)
 	}
@@ -498,7 +498,7 @@ func TestRankSetDuplicateRepresentativesRejected(t *testing.T) {
 	fx := newFrameFixture(t, ctx, st)
 	before := currentRanks(t, ctx, st, append([]model.Issue{fx.epic, fx.standalone}, fx.children...))
 
-	_, err := st.RankSet(ctx, []string{fx.children[0].ID, fx.standalone.ID, fx.children[1].ID})
+	_, err := st.RankSet(ctx, []model.ID{fx.children[0].ID, fx.standalone.ID, fx.children[1].ID})
 	if err == nil || !strings.Contains(err.Error(), "both resolve to") {
 		t.Fatalf("RankSet(C1, X, C2) error = %v, want duplicate-representative rejection", err)
 	}
@@ -517,10 +517,10 @@ func TestRankSetWithOwnContainerRejected(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
 
-	if _, err := st.RankSet(ctx, []string{fx.epic.ID, fx.children[0].ID}); err == nil || !strings.Contains(err.Error(), "inside") {
+	if _, err := st.RankSet(ctx, []model.ID{fx.epic.ID, fx.children[0].ID}); err == nil || !strings.Contains(err.Error(), "inside") {
 		t.Errorf("RankSet(epic, own child) error = %v, want containment rejection", err)
 	}
-	if _, err := st.RankSet(ctx, []string{fx.children[0].ID, fx.epic.ID}); err == nil || !strings.Contains(err.Error(), "inside") {
+	if _, err := st.RankSet(ctx, []model.ID{fx.children[0].ID, fx.epic.ID}); err == nil || !strings.Contains(err.Error(), "inside") {
 		t.Errorf("RankSet(child, own epic) error = %v, want containment rejection", err)
 	}
 }
@@ -612,7 +612,7 @@ func TestRankToEdgeReportsAnUnmovableIssue(t *testing.T) {
 	// C1 already leads its siblings, and the epic already leads the top level.
 	for _, tc := range []struct {
 		name      string
-		id        string
+		id        model.ID
 		wantFrame storage.Frame
 	}{
 		{"leading child", fx.children[0].ID, storage.Frame(fx.epic.ID)},
@@ -644,19 +644,19 @@ func TestResolveComparableFrame(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name                    string
-		issueChain, targetChain []string
-		wantMoved, wantAnchor   string
+		issueChain, targetChain []model.ID
+		wantMoved, wantAnchor   model.ID
 		wantFrame               storage.Frame
 		wantErr                 bool
 	}{
-		{name: "both top-level", issueChain: []string{"x"}, targetChain: []string{"y"}, wantMoved: "x", wantAnchor: "y", wantFrame: storage.TopLevel},
-		{name: "siblings same epic", issueChain: []string{"c1", "e"}, targetChain: []string{"c2", "e"}, wantMoved: "c1", wantAnchor: "c2", wantFrame: "e"},
-		{name: "standalone vs child", issueChain: []string{"x"}, targetChain: []string{"c", "e"}, wantMoved: "x", wantAnchor: "e", wantFrame: storage.TopLevel},
-		{name: "child vs standalone", issueChain: []string{"c", "e"}, targetChain: []string{"x"}, wantMoved: "e", wantAnchor: "x", wantFrame: storage.TopLevel},
-		{name: "children of two epics", issueChain: []string{"c1", "e1"}, targetChain: []string{"c2", "e2"}, wantMoved: "e1", wantAnchor: "e2", wantFrame: storage.TopLevel},
-		{name: "grandchild vs child of shared epic", issueChain: []string{"g", "s", "e"}, targetChain: []string{"c", "e"}, wantMoved: "s", wantAnchor: "c", wantFrame: "e"},
-		{name: "issue inside target", issueChain: []string{"c", "e"}, targetChain: []string{"e"}, wantErr: true},
-		{name: "target inside issue", issueChain: []string{"e"}, targetChain: []string{"c", "e"}, wantErr: true},
+		{name: "both top-level", issueChain: []model.ID{"x"}, targetChain: []model.ID{"y"}, wantMoved: "x", wantAnchor: "y", wantFrame: storage.TopLevel},
+		{name: "siblings same epic", issueChain: []model.ID{"c1", "e"}, targetChain: []model.ID{"c2", "e"}, wantMoved: "c1", wantAnchor: "c2", wantFrame: "e"},
+		{name: "standalone vs child", issueChain: []model.ID{"x"}, targetChain: []model.ID{"c", "e"}, wantMoved: "x", wantAnchor: "e", wantFrame: storage.TopLevel},
+		{name: "child vs standalone", issueChain: []model.ID{"c", "e"}, targetChain: []model.ID{"x"}, wantMoved: "e", wantAnchor: "x", wantFrame: storage.TopLevel},
+		{name: "children of two epics", issueChain: []model.ID{"c1", "e1"}, targetChain: []model.ID{"c2", "e2"}, wantMoved: "e1", wantAnchor: "e2", wantFrame: storage.TopLevel},
+		{name: "grandchild vs child of shared epic", issueChain: []model.ID{"g", "s", "e"}, targetChain: []model.ID{"c", "e"}, wantMoved: "s", wantAnchor: "c", wantFrame: "e"},
+		{name: "issue inside target", issueChain: []model.ID{"c", "e"}, targetChain: []model.ID{"e"}, wantErr: true},
+		{name: "target inside issue", issueChain: []model.ID{"e"}, targetChain: []model.ID{"c", "e"}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -823,7 +823,7 @@ func TestFrameResolutionRefusesADeletedNamedIssue(t *testing.T) {
 	// exactly why nothing downstream would have caught the deletion.
 	var resolveErr error
 	if err := st.withMutation(ctx, "frame-resolution-liveness-test", func(ctx context.Context, tx *sql.Tx) error {
-		_, _, resolveErr = resolveRankSet(ctx, tx, []string{child.ID, fx.standalone.ID})
+		_, _, resolveErr = resolveRankSet(ctx, tx, []model.ID{child.ID, fx.standalone.ID})
 		return nil
 	}); err != nil {
 		t.Fatalf("withMutation error = %v", err)
@@ -865,7 +865,7 @@ func TestRelativeMoveRefusesAnUnrankedAnchor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue(%s) error = %v", moved, err)
 	}
-	for name, move := range map[string]func(context.Context, string, string) (storage.RankMove, error){
+	for name, move := range map[string]func(context.Context, model.ID, model.ID) (storage.RankMove, error){
 		"above": st.RankAbove,
 		"below": st.RankBelow,
 	} {
@@ -1021,7 +1021,7 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 	// sits beside: the child lands just past its epic, not past everything in
 	// the workspace. Filing it at the far end would read as LAST in every view
 	// that sorts a child by its own key, which is what --top did not ask for.
-	if want := mustBottomOf(t, map[string]string{first.ID: first.Rank, epic.ID: epic.Rank, trailing.ID: trailing.Rank}, epic.Rank); only.Rank != want {
+	if want := mustBottomOf(t, map[model.ID]string{first.ID: first.Rank, epic.ID: epic.Rank, trailing.ID: trailing.Rank}, epic.Rank); only.Rank != want {
 		t.Errorf("the first child filed --top took rank %q, want %q = the room just past its epic %q", only.Rank, want, epic.Rank)
 	}
 	if !(only.Rank > epic.Rank && only.Rank < trailing.Rank) {
@@ -1034,7 +1034,7 @@ func TestCreateAtTopOfAnEmptyFrameTakesADistinctKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(second child, --top) error = %v", err)
 	}
-	ranksNow := map[string]string{first.ID: first.Rank, epic.ID: epic.Rank, only.ID: only.Rank}
+	ranksNow := map[model.ID]string{first.ID: first.Rank, epic.ID: epic.Rank, only.ID: only.Rank}
 	if want := mustTopOf(t, ranksNow, only.Rank); second.Rank != want {
 		t.Errorf("the second child filed --top took rank %q, want %q = the room above its frame's leading key %q", second.Rank, want, only.Rank)
 	}
@@ -1092,7 +1092,7 @@ func TestRelativeMoveDrawsItsRoomFromTheWholeWorkspace(t *testing.T) {
 	}
 
 	after := currentRanks(t, ctx, st, []model.Issue{epic, standalone, child})
-	if want := mustBottomOf(t, map[string]string{epic.ID: epic.Rank, standalone.ID: standalone.Rank, child.ID: child.Rank}, standalone.Rank); after[epic.ID] != want {
+	if want := mustBottomOf(t, map[model.ID]string{epic.ID: epic.Rank, standalone.ID: standalone.Rank, child.ID: child.Rank}, standalone.Rank); after[epic.ID] != want {
 		t.Errorf("the moved epic has rank %q, want %q = the room below its anchor %q", after[epic.ID], want, standalone.Rank)
 	}
 	if after[epic.ID] == after[child.ID] {
@@ -1159,7 +1159,7 @@ func TestRankToEdgeOfAFrameWithNoRankedMemberFilesBesideItsContainer(t *testing.
 	// It lands beside the issue that frames it, which is the only key an empty
 	// frame offers. Filing it past the workspace's last key would put it after
 	// the trailing issue, which is what --bottom of a frame does not mean.
-	if want := mustBottomOf(t, map[string]string{standalone.ID: standalone.Rank, epic.ID: epic.Rank, trailing.ID: trailing.Rank}, epic.Rank); after.Rank != want {
+	if want := mustBottomOf(t, map[model.ID]string{standalone.ID: standalone.Rank, epic.ID: epic.Rank, trailing.ID: trailing.Rank}, epic.Rank); after.Rank != want {
 		t.Errorf("the child took rank %q, want %q = the room just past its epic %q", after.Rank, want, epic.Rank)
 	}
 	if !(after.Rank > epic.Rank && after.Rank < trailing.Rank) {
@@ -1202,7 +1202,7 @@ func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 		children = append(children, child)
 	}
 
-	ids := []string{children[1].ID, children[0].ID}
+	ids := []model.ID{children[1].ID, children[0].ID}
 	if _, err := st.RankSet(ctx, ids); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
@@ -1225,7 +1225,7 @@ func TestRankSetOverAWholeFrameIsIdempotent(t *testing.T) {
 			t.Errorf("rank set among an epic's children moved %s: rank %q -> %q", outside.ID, outside.Rank, held[outside.ID])
 		}
 	}
-	seen := map[string]string{}
+	seen := map[string]model.ID{}
 	for id, r := range held {
 		if other, dup := seen[r]; dup {
 			t.Errorf("issues %s and %s both hold rank %q", other, id, r)
@@ -1272,12 +1272,12 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 		t.Fatalf("the reparented opener holds %q, want the opening key %q; reparenting must not rewrite a rank", held, openingKey(t))
 	}
 
-	if _, err := st.RankSet(ctx, []string{other.ID, epic.ID}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{other.ID, epic.ID}); err != nil {
 		t.Fatalf("RankSet(every top-level issue) error = %v", err)
 	}
 
 	after := currentRanks(t, ctx, st, []model.Issue{epic, other, opener})
-	for _, id := range []string{epic.ID, other.ID} {
+	for _, id := range []model.ID{epic.ID, other.ID} {
 		if after[id] == after[opener.ID] {
 			t.Errorf("rank set wrote %q onto %s, the key %s holds inside the epic; a rank orders one issue", after[id], id, opener.ID)
 		}
@@ -1286,7 +1286,7 @@ func TestRankSetOverEveryTopLevelIssueTakesADistinctKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListIssues error = %v", err)
 	}
-	holder := map[string]string{}
+	holder := map[string]model.ID{}
 	for _, issue := range listed {
 		if issue.Rank == "" {
 			continue
@@ -1340,7 +1340,7 @@ func TestFilingIntoAContainerWithNoRankOfItsOwnFallsBackToTheWorkspace(t *testin
 		t.Fatal("the child was filed with no rank at all")
 	}
 	// The container offers no key, so the workspace's last one bounds it.
-	if want := mustBottomOf(t, map[string]string{standalone.ID: standalone.Rank, trailing.ID: trailing.Rank}, trailing.Rank); child.Rank != want {
+	if want := mustBottomOf(t, map[model.ID]string{standalone.ID: standalone.Rank, trailing.ID: trailing.Rank}, trailing.Rank); child.Rank != want {
 		t.Errorf("the child took rank %q, want %q = the room past the workspace's last key %q", child.Rank, want, trailing.Rank)
 	}
 	for _, other := range []model.Issue{standalone, trailing} {
@@ -1433,7 +1433,7 @@ func TestRankSetWritesOnlyTheIssuesItNamed(t *testing.T) {
 
 	ids := makeTopLevelIssues(t, ctx, st, 7, "row %d")
 	before := storedKeys(t, ctx, st)
-	named := []string{ids[4], ids[3]}
+	named := []model.ID{ids[4], ids[3]}
 	if _, err := st.RankSet(ctx, named); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
@@ -1463,7 +1463,7 @@ func TestRankSetHandsRoundTheKeysOfTheIssuesLeadingTheFrame(t *testing.T) {
 
 	ids := makeTopLevelIssues(t, ctx, st, 4, "row %d")
 	before := storedKeys(t, ctx, st)
-	if _, err := st.RankSet(ctx, []string{ids[1], ids[0]}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{ids[1], ids[0]}); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
 	after := storedKeys(t, ctx, st)
@@ -1477,13 +1477,13 @@ func TestRankSetHandsRoundTheKeysOfTheIssuesLeadingTheFrame(t *testing.T) {
 	}
 }
 
-func storedKeys(t *testing.T, ctx context.Context, st *Store) map[string]string {
+func storedKeys(t *testing.T, ctx context.Context, st *Store) map[model.ID]string {
 	t.Helper()
 	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	keys := make(map[string]string, len(listed))
+	keys := make(map[model.ID]string, len(listed))
 	for _, issue := range listed {
 		keys[issue.ID] = issue.Rank
 	}
@@ -1510,7 +1510,7 @@ func TestRankSetStampsOnlyTheIssuesItNamed(t *testing.T) {
 
 	ranked := created.Add(time.Hour)
 	st.clock = func() time.Time { return ranked }
-	if _, err := st.RankSet(ctx, []string{c.ID, a.ID}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{c.ID, a.ID}); err != nil {
 		t.Fatalf("RankSet(C, A) error = %v", err)
 	}
 
@@ -1553,7 +1553,7 @@ func TestRankSetStampsByPlaceAndNotByKey(t *testing.T) {
 
 	ranked := created.Add(time.Hour)
 	st.clock = func() time.Time { return ranked }
-	if _, err := st.RankSet(ctx, []string{a.ID, b.ID, d.ID}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{a.ID, b.ID, d.ID}); err != nil {
 		t.Fatalf("RankSet(A, B, D) error = %v", err)
 	}
 
@@ -1599,14 +1599,14 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 			ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
 			slices.Sort(ids)
 			low, high, other := ids[0], ids[1], ids[2]
-			for id, key := range map[string]string{low: "M", high: "M", other: "T"} {
+			for id, key := range map[model.ID]string{low: "M", high: "M", other: "T"} {
 				if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, key, id); err != nil {
 					t.Fatalf("plant %q on %s: %v", key, id, err)
 				}
 			}
-			named := []string{low, high}
+			named := []model.ID{low, high}
 			if tc.reversed {
-				named = []string{high, low}
+				named = []model.ID{high, low}
 			}
 			before, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 			if err != nil {
@@ -1619,7 +1619,7 @@ func TestRankSetOverIssuesSharingAKey(t *testing.T) {
 				t.Fatalf("ListIssues() error = %v", listErr)
 			}
 			if tc.wantError != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "lit rank "+high+" --above "+low) {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) || !strings.Contains(err.Error(), "lit rank "+high.Raw()+" --above "+low.Raw()) {
 					t.Fatalf("RankSet(%v) error = %v, want a refusal naming the tie and the move that separates it", named, err)
 				}
 				// The tie stays until a different command separates it, so the
@@ -1656,7 +1656,7 @@ func midpoint(a, b string) (string, error) {
 
 // plantKeys hands each issue a key directly, as an import can, sharing one if
 // two are given it.
-func plantKeys(t *testing.T, ctx context.Context, st *Store, keys map[string]string) {
+func plantKeys(t *testing.T, ctx context.Context, st *Store, keys map[model.ID]string) {
 	t.Helper()
 	for id, key := range keys {
 		if _, err := st.db.ExecContext(ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, key, id); err != nil {
@@ -1677,16 +1677,16 @@ func TestRankSetNeverHandsOnAKeyAnUnnamedIssueShares(t *testing.T) {
 	ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
 	slices.Sort(ids)
 	low, high, other := ids[0], ids[1], ids[2]
-	plantKeys(t, ctx, st, map[string]string{low: "M", high: "M", other: "T"})
+	plantKeys(t, ctx, st, map[model.ID]string{low: "M", high: "M", other: "T"})
 
-	if _, err := st.RankSet(ctx, []string{low, other}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{low, other}); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
 	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	if got, want := issueIDs(after), []string{low, other, high}; !slices.Equal(got, want) {
+	if got, want := issueIDs(after), []model.ID{low, other, high}; !slices.Equal(got, want) {
 		t.Fatalf("order after rank set = %v, want %v", got, want)
 	}
 }
@@ -1714,17 +1714,17 @@ func TestRankSetMintsPastATieItCannotHandRound(t *testing.T) {
 
 			ids := makeTopLevelIssues(t, ctx, st, len(tc.keys), "row %d")
 			slices.Sort(ids)
-			planted := make(map[string]string, len(ids))
+			planted := make(map[model.ID]string, len(ids))
 			for i, id := range ids {
 				planted[id] = tc.keys[i]
 			}
 			plantKeys(t, ctx, st, planted)
 
-			named := make([]string, len(tc.named))
+			named := make([]model.ID, len(tc.named))
 			for i, index := range tc.named {
 				named[i] = ids[index]
 			}
-			want := make([]string, len(tc.want))
+			want := make([]model.ID, len(tc.want))
 			for i, index := range tc.want {
 				want[i] = ids[index]
 			}
@@ -1738,7 +1738,7 @@ func TestRankSetMintsPastATieItCannotHandRound(t *testing.T) {
 			if got := issueIDs(after); !slices.Equal(got, want) {
 				t.Fatalf("order after RankSet(%v) = %v, want %v", named, got, want)
 			}
-			held := make(map[string]string, len(after))
+			held := make(map[string]model.ID, len(after))
 			for _, issue := range after {
 				if mate, taken := held[issue.Rank]; taken && slices.Contains(named, issue.ID) {
 					t.Fatalf("%s took the key %q %s holds", issue.ID, issue.Rank, mate)
@@ -1759,15 +1759,15 @@ func TestRankSetRefusalNamesTheMoveThatClearsIt(t *testing.T) {
 	ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
 	slices.Sort(ids)
 	low, high, other := ids[0], ids[1], ids[2]
-	plantKeys(t, ctx, st, map[string]string{low: "M", high: "M", other: "T"})
+	plantKeys(t, ctx, st, map[model.ID]string{low: "M", high: "M", other: "T"})
 
-	if _, err := st.RankSet(ctx, []string{high, low}); err == nil {
+	if _, err := st.RankSet(ctx, []model.ID{high, low}); err == nil {
 		t.Fatal("RankSet error = nil, want a refusal of the tie")
 	}
 	if _, err := st.RankAbove(ctx, high, low); err != nil {
 		t.Fatalf("RankAbove() error = %v", err)
 	}
-	if _, err := st.RankSet(ctx, []string{high, low}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{high, low}); err != nil {
 		t.Fatalf("RankSet after the move the refusal named: %v", err)
 	}
 }
@@ -1781,9 +1781,9 @@ func TestRankSetNamesAKeyItCannotPlaceBeside(t *testing.T) {
 	st := openIssueStore(t, ctx)
 
 	ids := makeTopLevelIssues(t, ctx, st, 3, "row %d")
-	plantKeys(t, ctx, st, map[string]string{ids[0]: "M-1"})
+	plantKeys(t, ctx, st, map[model.ID]string{ids[0]: "M-1"})
 
-	_, err := st.RankSet(ctx, []string{ids[1], ids[2]})
+	_, err := st.RankSet(ctx, []model.ID{ids[1], ids[2]})
 	if err == nil || !strings.Contains(err.Error(), `"M-1"`) {
 		t.Fatalf("RankSet error = %v, want one naming the key %q", err, "M-1")
 	}
@@ -1802,10 +1802,10 @@ func TestRankSetOfAnOrderThatHasArrivedOnATieWritesNothing(t *testing.T) {
 	ids := makeTopLevelIssues(t, ctx, st, 2, "row %d")
 	slices.Sort(ids)
 	low, high := ids[0], ids[1]
-	plantKeys(t, ctx, st, map[string]string{low: "M", high: "M"})
+	plantKeys(t, ctx, st, map[model.ID]string{low: "M", high: "M"})
 	st.clock = func() time.Time { return created.Add(time.Hour) }
 
-	if _, err := st.RankSet(ctx, []string{low}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{low}); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
 	got, err := st.GetIssue(ctx, low)
@@ -1843,9 +1843,9 @@ func TestRankSetReadsATieInIDOrder(t *testing.T) {
 					}
 				}
 				slices.Sort(ids)
-				plantKeys(t, ctx, st, map[string]string{ids[0]: "M", ids[1]: "M", ids[2]: "M"})
+				plantKeys(t, ctx, st, map[model.ID]string{ids[0]: "M", ids[1]: "M", ids[2]: "M"})
 
-				if _, err := st.RankSet(ctx, []string{ids[at]}); err != nil {
+				if _, err := st.RankSet(ctx, []model.ID{ids[at]}); err != nil {
 					t.Fatalf("RankSet error = %v", err)
 				}
 				byID, err := st.ListIssues(ctx, storage.ListIssuesFilter{IDs: ids})
@@ -1876,14 +1876,14 @@ func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
 		t.Fatalf("unrank %s: %v", b, err)
 	}
 
-	if _, err := st.RankSet(ctx, []string{b, c}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{b, c}); err != nil {
 		t.Fatalf("RankSet naming an unranked issue error = %v", err)
 	}
 	after, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	if got, want := issueIDs(after), []string{b, c, a}; !slices.Equal(got, want) {
+	if got, want := issueIDs(after), []model.ID{b, c, a}; !slices.Equal(got, want) {
 		t.Fatalf("order after rank set = %v, want %v", got, want)
 	}
 	assertDistinctStoredRanks(t, after)
@@ -1893,7 +1893,7 @@ func TestRankSetPlacesANamedIssueThatHoldsNoKey(t *testing.T) {
 // another listed issue holds.
 func assertDistinctStoredRanks(t *testing.T, issues []model.Issue) {
 	t.Helper()
-	seen := map[string]string{}
+	seen := map[string]model.ID{}
 	for _, issue := range issues {
 		if issue.Rank == "" {
 			t.Errorf("%s holds no key", issue.ID)

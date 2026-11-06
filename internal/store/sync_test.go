@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -57,7 +58,7 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 // it again, returning the epic's id: every leaf a test then commits lives
 // inside it. The create is one commit of its own, landed before the test's
 // first.
-func seedSyncEpic(t *testing.T, ctx context.Context, doltRoot, workspace string) string {
+func seedSyncEpic(t *testing.T, ctx context.Context, doltRoot, workspace string) model.ID {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, workspace)
 	if err != nil {

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -72,8 +71,8 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("unrelated reconcile carried no both-sides inventory")
 	}
-	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
-	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, []string{remoteIssueID})
+	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []model.ID{localEpicID, localIssueID})
+	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, []model.ID{remoteIssueID})
 	assertIDSet(t, "on-both", res.Unrelated.OnBoth, nil)
 
 	// No partial write: the data branch never moved, no scratch branch was left, and
@@ -130,7 +129,7 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	}
 	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, localOnly)
 	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, remoteOnly)
-	assertIDSet(t, "on-both", res.Unrelated.OnBoth, []string{shared})
+	assertIDSet(t, "on-both", res.Unrelated.OnBoth, []model.ID{shared})
 }
 
 // ownerApprovedTakeToken exercises the owner-approval gate on the way to a
@@ -187,12 +186,12 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("take-remote carried no inventory to report the discard")
 	}
-	assertIDSet(t, "only-local (discarded)", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
-	assertIDSet(t, "only-remote (kept)", res.Unrelated.OnlyRemote, []string{remoteIssueID})
+	assertIDSet(t, "only-local (discarded)", res.Unrelated.OnlyLocal, []model.ID{localEpicID, localIssueID})
+	assertIDSet(t, "only-remote (kept)", res.Unrelated.OnlyRemote, []model.ID{remoteIssueID})
 
 	// Local content now equals the remote: the remote issue is present, the local-only
 	// issue is gone.
-	assertLocalIssueIDs(t, ctx, syncB, []string{remoteIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []model.ID{remoteIssueID})
 
 	// Sync is clean: local head equals the remote head, so freshness is up-to-date, not
 	// diverged, and no push is needed.
@@ -238,12 +237,12 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("take-local carried no inventory to report the discard")
 	}
-	assertIDSet(t, "only-remote (discarded)", res.Unrelated.OnlyRemote, []string{remoteIssueID})
-	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
+	assertIDSet(t, "only-remote (discarded)", res.Unrelated.OnlyRemote, []model.ID{remoteIssueID})
+	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []model.ID{localEpicID, localIssueID})
 
 	// Local content is the local backlog wholesale: the local issue survives, the
 	// remote-only issue is dropped.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []model.ID{localEpicID, localIssueID})
 
 	// Local is now a fast-forwardable descendant of the remote head: not diverged,
 	// strictly ahead, so the push fast-forwards. [LAW:one-source-of-truth] the head is
@@ -275,7 +274,7 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID})
+	assertLocalIssueIDs(t, ctx, syncA, []model.ID{localEpicID, localIssueID})
 }
 
 // TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide pins the gate's binding
@@ -373,10 +372,10 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	}
 	assertIDSet(t, "kept only-local", res.Unrelated.OnlyLocal, localOnly)
 	assertIDSet(t, "kept only-remote", res.Unrelated.OnlyRemote, remoteOnly)
-	assertIDSet(t, "field-merged on-both", res.Unrelated.OnBoth, []string{shared})
+	assertIDSet(t, "field-merged on-both", res.Unrelated.OnBoth, []model.ID{shared})
 
 	// Nothing dropped: local now holds the UNION of every id from both sides.
-	assertLocalIssueIDs(t, ctx, syncB, slices.Concat(localOnly, remoteOnly, []string{shared}))
+	assertLocalIssueIDs(t, ctx, syncB, slices.Concat(localOnly, remoteOnly, []model.ID{shared}))
 
 	// The union is a fast-forwardable descendant of the remote head, so the push converges
 	// the remote onto it (the mirror of take-local, but keeping BOTH sides).
@@ -404,7 +403,7 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, slices.Concat(localOnly, remoteOnly, []string{shared}))
+	assertLocalIssueIDs(t, ctx, syncA, slices.Concat(localOnly, remoteOnly, []model.ID{shared}))
 }
 
 // TestSyncReconcileCombineHoldsAndFinalizesProse drives the ticket's per-issue-overlap
@@ -469,7 +468,7 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 		t.Fatalf("finalized combine state = %q, want %q", res.State, storage.SyncReconcileCombined)
 	}
 	// The union is present AND the shared id carries the agent's merged title — nothing dropped.
-	assertLocalIssueIDs(t, ctx, syncB, slices.Concat(localOnly, remoteOnly, []string{shared}))
+	assertLocalIssueIDs(t, ctx, syncB, slices.Concat(localOnly, remoteOnly, []model.ID{shared}))
 	got := getIssueOrFatal(t, ctx, syncB, shared)
 	if got.Title != "merged A and B shared title" {
 		t.Fatalf("shared title after combine finalize = %q, want the agent's merged text", got.Title)
@@ -484,7 +483,7 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 // title so the shared id's free text diverges with no base. Each side's unique issues live
 // inside an epic of that side's own, which is unique to it too. Returns (onlyLocalIDs,
 // onlyRemoteIDs, sharedID).
-func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB, remoteURL, sharedTitleOnB string) ([]string, []string, string) {
+func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB, remoteURL, sharedTitleOnB string) ([]model.ID, []model.ID, model.ID) {
 	t.Helper()
 	stA, err := Open(ctx, testEnv(), testStderr(), rootA, "wsA")
 	if err != nil {
@@ -555,7 +554,7 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	if err := syncBSetup.Close(); err != nil {
 		t.Fatalf("Close(B setup): %v", err)
 	}
-	return []string{localEpic.ID, localOnly.ID}, []string{remoteEpic.ID, remoteOnly.ID}, shared.ID
+	return []model.ID{localEpic.ID, localOnly.ID}, []model.ID{remoteEpic.ID, remoteOnly.ID}, shared.ID
 }
 
 // TestSyncResolveUnrelatedRefusesSharedHistory proves take-one is scoped to unrelated
@@ -679,13 +678,13 @@ func TestUnrelatedResolutionValid(t *testing.T) {
 // assertLocalIssueIDs fails unless the store's data branch holds exactly want issue
 // ids — the wholesale-take assertion that the chosen side survived and the other's
 // unique issues were dropped.
-func assertLocalIssueIDs(t *testing.T, ctx context.Context, st *Store, want []string) {
+func assertLocalIssueIDs(t *testing.T, ctx context.Context, st *Store, want []model.ID) {
 	t.Helper()
 	export, err := st.Export(ctx)
 	if err != nil {
 		t.Fatalf("Export for local issue ids: %v", err)
 	}
-	got := make([]string, 0, len(export.Issues))
+	got := make([]model.ID, 0, len(export.Issues))
 	for _, issue := range export.Issues {
 		got = append(got, issue.ID)
 	}
@@ -694,7 +693,7 @@ func assertLocalIssueIDs(t *testing.T, ctx context.Context, st *Store, want []st
 
 // issueByID returns the issue with id from an export, failing the test if absent —
 // a missing planted issue would silently weaken the partition assertion.
-func issueByID(t *testing.T, export model.Export, id string) model.Issue {
+func issueByID(t *testing.T, export model.Export, id model.ID) model.Issue {
 	t.Helper()
 	for _, issue := range export.Issues {
 		if issue.ID == id {
@@ -707,12 +706,12 @@ func issueByID(t *testing.T, export model.Export, id string) model.Issue {
 
 // assertIDSet fails unless got holds exactly want, order-independent. Both are
 // sorted first so the comparison is over set membership, not ordering.
-func assertIDSet(t *testing.T, label string, got, want []string) {
+func assertIDSet(t *testing.T, label string, got, want []model.ID) {
 	t.Helper()
-	gotSorted := append([]string(nil), got...)
-	wantSorted := append([]string(nil), want...)
-	sort.Strings(gotSorted)
-	sort.Strings(wantSorted)
+	gotSorted := append([]model.ID(nil), got...)
+	wantSorted := append([]model.ID(nil), want...)
+	slices.Sort(gotSorted)
+	slices.Sort(wantSorted)
 	if len(gotSorted) == 0 && len(wantSorted) == 0 {
 		return
 	}
@@ -777,7 +776,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 
 	// Contents equal the union, and the spine fast-forward-pushes; the remote
 	// side converges onto it.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID, remoteIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []model.ID{localEpicID, localIssueID, remoteIssueID})
 	assertWorkingSetClean(t, ctx, syncB)
 	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("fast-forward SyncPush(B) after combine: %v", err)
@@ -794,7 +793,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID, remoteIssueID})
+	assertLocalIssueIDs(t, ctx, syncA, []model.ID{localEpicID, localIssueID, remoteIssueID})
 }
 
 // TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance is the same
@@ -850,7 +849,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 
 	// Contents are local's backlog wholesale, and the spine fast-forward-pushes;
 	// the remote side converges onto it.
-	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []model.ID{localEpicID, localIssueID})
 	assertWorkingSetClean(t, ctx, syncB)
 	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("fast-forward SyncPush(B) after take-local: %v", err)
@@ -867,7 +866,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID})
+	assertLocalIssueIDs(t, ctx, syncA, []model.ID{localEpicID, localIssueID})
 }
 
 // assertFoldedSpine fails unless the replayed spine is exactly the folded
@@ -899,7 +898,7 @@ func assertFoldedSpine(t *testing.T, spine []spineEntry, foldedMessages []string
 
 // addCommentLocal comments on an issue and leaves it local (unpushed) — a
 // third distinct data-commit message for provenance fixtures.
-func addCommentLocal(t *testing.T, ctx context.Context, root, id, body string) {
+func addCommentLocal(t *testing.T, ctx context.Context, root string, id model.ID, body string) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
@@ -928,7 +927,7 @@ const forkEpicCommitMessage = "plant fork epic"
 // forkEpicCommitMessage rather than created: the provenance tests identify
 // each of this store's data commits by its message, so the issue's "create
 // issue" has to stay the one commit that says so.
-func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL string) (string, string) {
+func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL string) (model.ID, model.ID) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
@@ -1044,7 +1043,7 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 			assertLinearSpineToRemoteHead(t, ctx, syncB, res.RemoteHead)
 			spine := spineSince(t, ctx, syncB, res.RemoteHead)
 			assertFoldedSpine(t, spine, foldedMessages, originals, combineCommitMessage)
-			assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID, remoteIssueID})
+			assertLocalIssueIDs(t, ctx, syncB, []model.ID{localEpicID, localIssueID, remoteIssueID})
 			assertScratchBranchCleanedUp(t, ctx, syncB)
 			assertWorkingSetClean(t, ctx, syncB)
 		})

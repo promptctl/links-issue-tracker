@@ -20,7 +20,7 @@ func TestNextOutcomesBecomeStatuslineFacts(t *testing.T) {
 	inFlight := hydratedIssue(t, "t-1", nil, model.StateInProgress)
 	inFlight.Title = "One"
 	lanemates := []model.Issue{inFlight, hydratedIssue(t, "t-2", nil, model.StateClosed), hydratedIssue(t, "t-3", nil, model.StateOpen)}
-	parents := map[string]string{}
+	parents := map[model.ID]model.ID{}
 	for _, issue := range lanemates {
 		parents[issue.ID] = epic.ID
 	}

@@ -56,7 +56,7 @@ func TestThreeWayEmitsProsePendingForConcurrentTitleRewrite(t *testing.T) {
 // is the whole mechanism of `lit sync reconcile combine`, proven here at the pure boundary.
 func TestThreeWayEmptyBaseUnionsUnrelatedSides(t *testing.T) {
 	now := time.Now().UTC()
-	mk := func(id, title string) model.Issue {
+	mk := func(id model.ID, title string) model.Issue {
 		return issueWithStatus(t, model.Issue{ID: id, Title: model.Text(title), IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
 	}
 	local := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{mk("only-local", "L"), mk("shared", "from-B")}}
@@ -66,11 +66,11 @@ func TestThreeWayEmptyBaseUnionsUnrelatedSides(t *testing.T) {
 	settled := provisional(t, result)
 
 	// The union carries every unique id AND the shared id — nothing dropped.
-	got := map[string]bool{}
+	got := map[model.ID]bool{}
 	for _, issue := range settled.Issues {
 		got[issue.ID] = true
 	}
-	for _, want := range []string{"only-local", "only-remote", "shared"} {
+	for _, want := range []model.ID{"only-local", "only-remote", "shared"} {
 		if !got[want] {
 			t.Errorf("union missing %q: %+v", want, settled.Issues)
 		}
@@ -127,7 +127,7 @@ func TestIssueEqualTreatsNilAndEmptyLabelsAsEquivalent(t *testing.T) {
 // issueClosedWith builds a closed leaf that is byte-for-byte identical across
 // calls except for its resolution — fixed timestamps keep the resolution the
 // ONLY varying field, so a detected change can only be the resolution divergence.
-func issueClosedWith(t *testing.T, id string, closedAt time.Time, resolution model.Resolution) model.Issue {
+func issueClosedWith(t *testing.T, id model.ID, closedAt time.Time, resolution model.Resolution) model.Issue {
 	t.Helper()
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	res := resolution
@@ -197,7 +197,7 @@ func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 	if len(provisional(t, result).Issues) != 2 {
 		t.Fatalf("issues = %#v", provisional(t, result).Issues)
 	}
-	merged := map[string]string{}
+	merged := map[model.ID]string{}
 	for _, issue := range provisional(t, result).Issues {
 		merged[issue.ID] = issue.Title.Raw()
 	}

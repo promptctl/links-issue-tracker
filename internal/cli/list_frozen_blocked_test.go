@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -55,7 +56,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 				Prefix: "frozen", Title: storage.MustParseTitle("Ungated"), Topic: "frozen", IssueType: "task", Description: "d", ParentID: epic.ID, Lane: storage.MustParseLane("ungated"),
 			})
 
-			cellOf := func(id string, args ...string) string {
+			cellOf := func(id model.ID, args ...string) string {
 				t.Helper()
 				var out bytes.Buffer
 				args = append([]string{"--columns", "id,blocked"}, args...)
@@ -80,7 +81,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 			}
 
 			var sink bytes.Buffer
-			for _, id := range []string{gated.ID, ungated.ID} {
+			for _, id := range []string{gated.ID.Raw(), ungated.ID.Raw()} {
 				if err := runTransition(t, h.ctx, &sink, h.ap, []string{id}, freeze.spec); err != nil {
 					t.Fatalf("runTransition(%s %s): %v", freeze.spec.name, id, err)
 				}
@@ -93,7 +94,7 @@ func TestBlockedColumnOnFrozenRows(t *testing.T) {
 				[]string{"--columns", "id,blocked"}); err != nil {
 				t.Fatalf("lit ls after %s: %v", freeze.spec.name, err)
 			}
-			if got := plain.String(); strings.Contains(got, gated.ID) {
+			if got := plain.String(); strings.Contains(got, gated.ID.Raw()) {
 				t.Fatalf("%s is still listed without %s after %s; this test would then be "+
 					"asserting nothing about frozen rows:\n%s", gated.ID, freeze.flag, freeze.spec.name, got)
 			}

@@ -14,9 +14,9 @@ import (
 
 // driveTransition runs a transition through the real CLI to completion. Every
 // lifecycle transition is single-phase: one invocation performs the action.
-func driveTransition(t *testing.T, ctx context.Context, ap *app.App, id string, spec transitionSpec, extra ...string) {
+func driveTransition(t *testing.T, ctx context.Context, ap *app.App, id model.ID, spec transitionSpec, extra ...string) {
 	t.Helper()
-	args := append([]string{id}, extra...)
+	args := append([]string{id.Raw()}, extra...)
 	if err := runTransition(t, ctx, &bytes.Buffer{}, ap, args, spec); err != nil {
 		t.Fatalf("runTransition(%s %s) error = %v", spec.name, id, err)
 	}
@@ -41,7 +41,7 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 	// `lit done` is single-phase: one invocation closes the ticket and prints
 	// the post-close capture-deposit guidance. There is no preview/apply token.
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw()}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done) error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "has been closed") {
@@ -180,7 +180,7 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 			// `close` requires a resolution at its command boundary; supply a valid
 			// one so the cell reaches the deeper container rejection rather than the
 			// parse rejection. The other actions take no resolution.
-			baseArgs := []string{epic.ID}
+			baseArgs := []string{epic.ID.Raw()}
 			if spec.name == "close" {
 				baseArgs = append(baseArgs, "--resolution", "wontfix")
 			}
@@ -216,12 +216,12 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if err := runTransition(t, ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--by", "agent-alice"}, startSpec); err != nil {
+	if err := runTransition(t, ctx, &bytes.Buffer{}, ap, []string{issue.ID.Raw(), "--by", "agent-alice"}, startSpec); err != nil {
 		t.Fatalf("runTransition(first start) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID, "--by", "agent-bob"}, startSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--by", "agent-bob"}, startSpec); err != nil {
 		t.Fatalf("runTransition(reclaim) error = %v, want success with notice", err)
 	}
 	out := stdout.String()
@@ -261,12 +261,12 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	err = runTransition(t, ctx, &stdout, ap, []string{epic.ID, "--by", "tester"}, startSpec)
+	err = runTransition(t, ctx, &stdout, ap, []string{epic.ID.Raw(), "--by", "tester"}, startSpec)
 	if err == nil {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
 	stdout.Reset()
-	if err := runTransition(t, ctx, &stdout, ap, []string{leaf.ID, "--by", "tester"}, startSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{leaf.ID.Raw(), "--by", "tester"}, startSpec); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, leaf.ID)
@@ -302,7 +302,7 @@ func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 
 	for _, status := range []string{"in_progress", "closed", "open"} {
 		var stdout bytes.Buffer
-		err := runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--status", status})
+		err := runUpdate(t, ctx, &stdout, ap, []string{created.ID.Raw(), "--status", status})
 		if err == nil {
 			t.Fatalf("runUpdate(--status %s) error = nil, want rejection", status)
 		}
@@ -350,7 +350,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--priority", "1", "--assignee", "alice", "--labels", "api,urgent"}); err != nil {
+	if err := runUpdate(t, ctx, &stdout, ap, []string{created.ID.Raw(), "--priority", "1", "--assignee", "alice", "--labels", "api,urgent"}); err != nil {
 		t.Fatalf("runUpdate(field flags) error = %v", err)
 	}
 
@@ -379,13 +379,13 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 		"--title", "Wire prompt field",
 		"--topic", "prompts",
 		"--type", "task",
-		"--parent", seedEpicRaw(t, ctx, ap, "Prompts", "prompts"),
+		"--parent", seedEpicRaw(t, ctx, ap, "Prompts", "prompts").Raw(),
 		"--priority", "1",
 		"--prompt", "Render at 1024x768 and verify no NaNs.",
 	}); err != nil {
 		t.Fatalf("runNew(--prompt) error = %v", err)
 	}
-	createdID := firstIssueID(t, newOut.String())
+	createdID := model.ID(firstIssueID(t, newOut.String()))
 	created, err := ap.Store.GetIssue(ctx, createdID)
 	if err != nil {
 		t.Fatalf("GetIssue(new) error = %v", err)
@@ -395,7 +395,7 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 	}
 
 	var upOut bytes.Buffer
-	if err := runUpdate(t, ctx, &upOut, ap, []string{created.ID, "--prompt", "Run --headless instead."}); err != nil {
+	if err := runUpdate(t, ctx, &upOut, ap, []string{created.ID.Raw(), "--prompt", "Run --headless instead."}); err != nil {
 		t.Fatalf("runUpdate(--prompt) error = %v", err)
 	}
 	updated, err := ap.Store.GetIssue(ctx, created.ID)
@@ -426,7 +426,7 @@ func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	// --reason alone (no field flags and no --status) must still be rejected
 	// because there is nothing to record the reason on.
 	var stdout bytes.Buffer
-	err = runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--reason", "no fields here"})
+	err = runUpdate(t, ctx, &stdout, ap, []string{created.ID.Raw(), "--reason", "no fields here"})
 	if err == nil {
 		t.Fatal("runUpdate(--reason with no fields) error = nil, want validation error")
 	}
@@ -450,7 +450,7 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(t, ctx, &stdout, ap, []string{epic.ID, "--title", "Renamed epic", "--description", "New body"}); err != nil {
+	if err := runUpdate(t, ctx, &stdout, ap, []string{epic.ID.Raw(), "--title", "Renamed epic", "--description", "New body"}); err != nil {
 		t.Fatalf("runUpdate(epic --title --description) error = %v", err)
 	}
 
@@ -499,7 +499,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runUpdate(t, ctx, &stdout, ap, []string{created.ID, "--status="})
+	err = runUpdate(t, ctx, &stdout, ap, []string{created.ID.Raw(), "--status="})
 	if err == nil {
 		t.Fatal("runUpdate(--status=) error = nil, want rejection")
 	}
@@ -552,7 +552,7 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw()}, startSpec); err != nil {
 		t.Fatalf("runTransition(start without --by) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, issue.ID)
@@ -581,7 +581,7 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw()}, startSpec); err != nil {
 		t.Fatalf("runTransition(start) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, issue.ID)
@@ -595,7 +595,7 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 
 // lastEventActorForAction returns the actor recorded on the most recent event
 // with the given action — the durable "who performed this transition" signal.
-func lastEventActorForAction(t *testing.T, ap *app.App, ctx context.Context, id, action string) string {
+func lastEventActorForAction(t *testing.T, ap *app.App, ctx context.Context, id model.ID, action string) string {
 	t.Helper()
 	detail, err := ap.Store.GetIssueDetail(ctx, id)
 	if err != nil {
@@ -681,7 +681,7 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(t, ctx, &stdout, ap, []string{issue.ID, "--assignee", ""}); err != nil {
+	if err := runUpdate(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--assignee", ""}); err != nil {
 		t.Fatalf("runUpdate(--assignee \"\") error = %v", err)
 	}
 	updated, err := ap.Store.GetIssue(ctx, issue.ID)
@@ -710,7 +710,7 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(t, ctx, &stdout, ap, []string{issue.ID, "--assignee", "claude_other-session"}); err != nil {
+	if err := runUpdate(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--assignee", "claude_other-session"}); err != nil {
 		t.Fatalf("runUpdate(--assignee other) error = %v", err)
 	}
 	updated, err := ap.Store.GetIssue(ctx, issue.ID)

@@ -30,8 +30,9 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	if err != nil {
 		return storage.BulkApplyResult{}, err
 	}
-	existingTypes := map[string]model.IssueType{}
-	for _, id := range storage.BulkExistingRefs(merged) {
+	existingTypes := map[model.ID]model.IssueType{}
+	for _, ref := range storage.BulkExistingRefs(merged) {
+		id := model.ID(ref)
 		if issue, ok := e.issues[id]; ok {
 			existingTypes[id] = issue.issueType
 		}
@@ -78,9 +79,9 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 // currentState is the store as it stands for ids: each issue it still holds,
 // whole, with its parent set and its blocked-by set, each in id order as the
 // Dolt engine reads them. An id it no longer holds is absent.
-func (e *Engine) currentState(ids []string) (storage.CurrentState, error) {
+func (e *Engine) currentState(ids []model.ID) (storage.CurrentState, error) {
 	pos := e.positions()
-	now := storage.CurrentState{Issues: map[string]model.Issue{}, Parents: map[string][]string{}, BlockedBy: map[string][]string{}}
+	now := storage.CurrentState{Issues: map[model.ID]model.Issue{}, Parents: map[model.ID][]model.ID{}, BlockedBy: map[model.ID][]model.ID{}}
 	for _, id := range ids {
 		rec, ok := e.issues[id]
 		if !ok {
@@ -92,11 +93,11 @@ func (e *Engine) currentState(ids []string) (storage.CurrentState, error) {
 		}
 		now.Issues[id] = issue
 	}
-	named := map[string]bool{}
+	named := map[model.ID]bool{}
 	for _, id := range ids {
 		named[id] = true
 	}
-	targets := map[model.RelationType]map[string][]string{model.RelParentChild: now.Parents, model.RelBlockedBy: now.BlockedBy}
+	targets := map[model.RelationType]map[model.ID][]model.ID{model.RelParentChild: now.Parents, model.RelBlockedBy: now.BlockedBy}
 	for _, rel := range e.relations {
 		if out, ok := targets[rel.Type]; ok && named[rel.SrcID] {
 			out[rel.SrcID] = append(out[rel.SrcID], rel.DstID)
@@ -152,14 +153,14 @@ type edgeWriter struct {
 	actor string
 }
 
-func (w edgeWriter) Edges(id string, relType model.RelationType) ([]model.Relation, error) {
+func (w edgeWriter) Edges(id model.ID, relType model.RelationType) ([]model.Relation, error) {
 	if _, err := w.e.mustRecord(id); err != nil {
 		return nil, err
 	}
 	return w.e.relationsWhere(func(rel model.Relation) bool { return rel.SrcID == id && rel.Type == relType }), nil
 }
 
-func (w edgeWriter) Add(id, target string, relType model.RelationType) error {
+func (w edgeWriter) Add(id, target model.ID, relType model.RelationType) error {
 	_, err := w.e.addRelation(storage.AddRelationInput{SrcID: id, DstID: target, Type: relType, CreatedBy: w.actor})
 	return err
 }
@@ -171,7 +172,7 @@ func (w edgeWriter) Remove(edge model.Relation) error {
 	return nil
 }
 
-func (e *Engine) wireDependency(dependent, dependency, actor string) error {
+func (e *Engine) wireDependency(dependent, dependency model.ID, actor string) error {
 	_, err := e.addRelation(storage.AddRelationInput{
 		SrcID: dependent, DstID: dependency, Type: model.RelBlockedBy, CreatedBy: actor,
 	})
@@ -183,11 +184,11 @@ func (e *Engine) wireDependency(dependent, dependency, actor string) error {
 // caller's report all read the same resolution rather than three that could
 // disagree. [LAW:one-source-of-truth]
 type batchIDs struct {
-	byIndex   []string
-	byLocalID map[string]string
+	byIndex   []model.ID
+	byLocalID map[string]model.ID
 	// createdIDs is the ids this batch made, oldest first: the order the
 	// file's edge and rank steps name its creates in.
-	createdIDs []string
+	createdIDs []model.ID
 	// mappings is the caller's report: every create as (ref, real id), in
 	// creation order, which is what keeps the rendered report identical run
 	// to run.
@@ -195,10 +196,10 @@ type batchIDs struct {
 }
 
 func newBatch(size int) *batchIDs {
-	return &batchIDs{byIndex: make([]string, size), byLocalID: map[string]string{}, createdIDs: make([]string, 0, size)}
+	return &batchIDs{byIndex: make([]model.ID, size), byLocalID: map[string]model.ID{}, createdIDs: make([]model.ID, 0, size)}
 }
 
-func (b *batchIDs) created(index int, localID, realID string) {
+func (b *batchIDs) created(index int, localID string, realID model.ID) {
 	b.byIndex[index] = realID
 	b.createdIDs = append(b.createdIDs, realID)
 	b.mappings = append(b.mappings, storage.NewIDMapping(localID, realID))
@@ -207,17 +208,17 @@ func (b *batchIDs) created(index int, localID, realID string) {
 	}
 }
 
-func (b *batchIDs) realID(index int) string { return b.byIndex[index] }
+func (b *batchIDs) realID(index int) model.ID { return b.byIndex[index] }
 
 // resolve maps a reference against this batch's names by the one rule every
 // engine resolves a file's references by. [LAW:one-source-of-truth]
-func (b *batchIDs) resolve(ref string) string { return storage.ResolveRef(ref, b.byLocalID) }
+func (b *batchIDs) resolve(ref string) model.ID { return storage.ResolveRef(ref, b.byLocalID) }
 
 // resolveLocal maps a reference that must be local. A tree import validates
 // every reference against the file before the first create, so an unresolved
 // one here would be a name nothing in the batch answers to — and an empty
 // result is what the create path reads as "no parent", which is why the
 // validation, not this lookup, is what makes it total.
-func (b *batchIDs) resolveLocal(ref string) string { return b.byLocalID[ref] }
+func (b *batchIDs) resolveLocal(ref string) model.ID { return b.byLocalID[ref] }
 
 func (b *batchIDs) createdMappings() []storage.IDMapping { return b.mappings }

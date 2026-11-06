@@ -143,7 +143,7 @@ func TestColumnsBlankExpressionKeepsDefaultProjection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
-	want := []string{issue.ID, "open", "dflt", "T"}
+	want := []string{issue.ID.Raw(), "open", "dflt", "T"}
 	for _, args := range [][]string{
 		{},
 		{"--columns", ""},

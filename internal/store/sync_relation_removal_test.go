@@ -69,7 +69,7 @@ func TestSyncReconcileKeepsADependencyThisCloneRemoved(t *testing.T) {
 	}
 }
 
-func mustCreateTask(t *testing.T, ctx context.Context, st *Store, epicID, title string) model.Issue {
+func mustCreateTask(t *testing.T, ctx context.Context, st *Store, epicID model.ID, title string) model.Issue {
 	t.Helper()
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epicID})
 	if err != nil {

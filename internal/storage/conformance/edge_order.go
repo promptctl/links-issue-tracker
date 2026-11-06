@@ -1,9 +1,9 @@
 package conformance
 
 import (
+	"cmp"
 	"context"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +35,7 @@ func relationsAndCommentsAreTotallyOrdered(t *testing.T, ctx context.Context, st
 	for _, title := range []string{"one", "two", "three", "four", "five", "six"} {
 		peers = append(peers, mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}))
 	}
-	slices.SortFunc(peers, func(a, b model.Issue) int { return strings.Compare(b.ID, a.ID) })
+	slices.SortFunc(peers, func(a, b model.Issue) int { return cmp.Compare(b.ID, a.ID) })
 	for _, group := range []struct {
 		at    time.Time
 		peers []model.Issue
@@ -101,8 +101,8 @@ func assertRelationsOrdered(t *testing.T, read string, rels []model.Relation) {
 			t.Errorf("%s: relations step backwards in time at index %d: %s after %s", read, i, cur.CreatedAt, prev.CreatedAt)
 			continue
 		}
-		prevKey := [3]string{prev.SrcID, prev.DstID, string(prev.Type)}
-		curKey := [3]string{cur.SrcID, cur.DstID, string(cur.Type)}
+		prevKey := [3]string{prev.SrcID.Raw(), prev.DstID.Raw(), string(prev.Type)}
+		curKey := [3]string{cur.SrcID.Raw(), cur.DstID.Raw(), string(cur.Type)}
 		if cur.CreatedAt.Equal(prev.CreatedAt) && !keyAscends(prevKey[:], curKey[:]) {
 			t.Errorf("%s: relations sharing an instant are not ascending by (src, dst, type) at index %d: %v after %v", read, i, curKey, prevKey)
 		}

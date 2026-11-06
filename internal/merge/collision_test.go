@@ -248,14 +248,14 @@ func TestThreeWayDoesNotFuseCollidingChildRows(t *testing.T) {
 		})
 	}
 	endpoints := []model.Issue{open(t, "epic.a"), open(t, "epic.b")}
-	side := func(ws string, hour int, title, suffix, endpoint string) model.Export {
+	side := func(ws string, hour int, title, suffix string, endpoint model.ID) model.Export {
 		return model.Export{
 			WorkspaceID: ws,
 			Issues:      append([]model.Issue{sixteen(hour, title)}, endpoints...),
 			Relations:   []model.Relation{{SrcID: "epic.16", DstID: endpoint, Type: model.RelBlockedBy, CreatedAt: born(hour)}},
-			Comments:    []model.Comment{{ID: "c-" + suffix, IssueID: "epic.16", Body: suffix, CreatedAt: born(hour)}},
+			Comments:    []model.Comment{{ID: model.ID("c-" + suffix), IssueID: "epic.16", Body: suffix, CreatedAt: born(hour)}},
 			Labels:      []model.Label{{IssueID: "epic.16", Name: suffix, CreatedAt: born(hour)}},
-			Events:      []model.IssueEvent{{ID: "e-" + suffix, IssueID: "epic.16", Reason: model.Text(suffix), CreatedAt: born(hour)}},
+			Events:      []model.IssueEvent{{ID: model.ID("e-" + suffix), IssueID: "epic.16", Reason: model.Text(suffix), CreatedAt: born(hour)}},
 		}
 	}
 	local := side("wsA", 9, "Wire the release watchdog", "ours", "epic.a")

@@ -33,11 +33,11 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 
 	// Moved-side resolution: ranking the child against the standalone moves the epic.
 	var stdout bytes.Buffer
-	if err := runRank(t, ctx, &stdout, ap, []string{child.ID, "--above", standalone.ID}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{child.ID.Raw(), "--above", standalone.ID.Raw()}); err != nil {
 		t.Fatalf("rank child --above standalone error = %v", err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, child.ID+" is inside "+epic.ID) {
+	if !strings.Contains(out, child.ID.Raw()+" is inside "+epic.ID.Raw()) {
 		t.Errorf("rank output = %q, want moved-side resolution note naming %s and %s", out, child.ID, epic.ID)
 	}
 	// [LAW:behavior-not-structure] The contract is that the issue-summary line
@@ -45,7 +45,7 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 	// (the success output ends with a quickstart breadcrumb).
 	summaryFound := false
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.HasPrefix(line, epic.ID+" [") {
+		if strings.HasPrefix(line, epic.ID.Raw()+" [") {
 			summaryFound = true
 		}
 	}
@@ -55,10 +55,10 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 
 	// Anchor-side resolution: ranking the standalone against the child anchors to the epic.
 	stdout.Reset()
-	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID, "--below", child.ID}); err != nil {
+	if err := runRank(t, ctx, &stdout, ap, []string{standalone.ID.Raw(), "--below", child.ID.Raw()}); err != nil {
 		t.Fatalf("rank standalone --below child error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), child.ID+" is inside "+epic.ID) {
+	if !strings.Contains(stdout.String(), child.ID.Raw()+" is inside "+epic.ID.Raw()) {
 		t.Errorf("rank output = %q, want anchor-side resolution note", stdout.String())
 	}
 }
@@ -86,7 +86,7 @@ func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateIssue(%s) error = %v", title, err)
 		}
-		children = append(children, child.ID)
+		children = append(children, child.ID.Raw())
 	}
 	// Top-level, so an epic: the backlog frame holds epics and nothing else.
 	outsider, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Outsider"), Lane: storage.SharedLane, Topic: "set", IssueType: "epic", Placement: storage.RankBottom})
@@ -100,20 +100,20 @@ func TestRankSetNamesTheFrameItStackedIn(t *testing.T) {
 		t.Fatalf("rank set siblings error = %v", err)
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "at the top of "+epic.ID) {
+	if !strings.Contains(out, "at the top of "+epic.ID.Raw()) {
 		t.Errorf("rank set output = %q, want it to name the epic %s the stack landed in", out, epic.ID)
 	}
 
 	// Top level: the summary must name the backlog rather than an epic.
 	stdout.Reset()
-	if err := runRankSet(t, ctx, &stdout, ap, []string{outsider.ID, epic.ID}); err != nil {
+	if err := runRankSet(t, ctx, &stdout, ap, []string{outsider.ID.Raw(), epic.ID.Raw()}); err != nil {
 		t.Fatalf("rank set top-level error = %v", err)
 	}
 	out = stdout.String()
 	if !strings.Contains(out, "at the top of the backlog") {
 		t.Errorf("rank set output = %q, want it to name the backlog for a top-level stack", out)
 	}
-	if strings.Contains(out, "at the top of "+epic.ID) {
+	if strings.Contains(out, "at the top of "+epic.ID.Raw()) {
 		t.Errorf("rank set output = %q, named the epic %s for a stack that landed at the top level", out, epic.ID)
 	}
 }

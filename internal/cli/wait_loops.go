@@ -17,7 +17,7 @@ import (
 // usually one, but a sibling can also depend on the sibling ahead of it, and
 // cutting one of two links between a pair leaves the pair waiting.
 type waitHop struct {
-	waiter, prereq string
+	waiter, prereq model.ID
 	kinds          []waitKind
 }
 
@@ -54,7 +54,7 @@ func findWaitLoops(ctx context.Context, st storage.Store) ([]waitLoop, error) {
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, len(issues))
+	ids := make([]model.ID, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
 	}
@@ -64,9 +64,9 @@ func findWaitLoops(ctx context.Context, st storage.Store) ([]waitLoop, error) {
 		return nil, err
 	}
 	holds := heldAgainst(settleWaits(graph, nil))
-	hops := make(map[string][]waitHop, len(graph))
+	hops := make(map[model.ID][]waitHop, len(graph))
 	for waiter, links := range graph {
-		kinds := map[string][]waitKind{}
+		kinds := map[model.ID][]waitKind{}
 		for _, link := range links {
 			if holds(link) {
 				kinds[link.prereq] = append(kinds[link.prereq], link.kind)
@@ -84,8 +84,8 @@ func findWaitLoops(ctx context.Context, st storage.Store) ([]waitLoop, error) {
 // loopsIn returns, in id order, the shortest loop through each issue that waits
 // on itself and lies on no loop already named, so every issue a loop holds
 // appears on at least one of them.
-func loopsIn(graph map[string][]waitHop) []waitLoop {
-	named := map[string]bool{}
+func loopsIn(graph map[model.ID][]waitHop) []waitLoop {
+	named := map[model.ID]bool{}
 	var loops []waitLoop
 	for _, start := range stuck(graph) {
 		if named[start] {
@@ -105,16 +105,16 @@ func loopsIn(graph map[string][]waitHop) []waitLoop {
 // stuck returns, sorted, the issues that can never finish: what is left once
 // every issue whose prereqs can all finish is peeled away. Only those can be on
 // a loop, so a backlog with none costs one pass over its links.
-func stuck(graph map[string][]waitHop) []string {
-	pending := make(map[string]int, len(graph))
-	waitedOnBy := map[string][]string{}
+func stuck(graph map[model.ID][]waitHop) []model.ID {
+	pending := make(map[model.ID]int, len(graph))
+	waitedOnBy := map[model.ID][]model.ID{}
 	for waiter, hops := range graph {
 		pending[waiter] = len(hops)
 		for _, hop := range hops {
 			waitedOnBy[hop.prereq] = append(waitedOnBy[hop.prereq], waiter)
 		}
 	}
-	var free []string
+	var free []model.ID
 	for prereq := range waitedOnBy {
 		if _, waits := graph[prereq]; !waits {
 			free = append(free, prereq)
@@ -129,7 +129,7 @@ func stuck(graph map[string][]waitHop) []string {
 			}
 		}
 	}
-	var left []string
+	var left []model.ID
 	for waiter, n := range pending {
 		if n > 0 {
 			left = append(left, waiter)
@@ -141,10 +141,10 @@ func stuck(graph map[string][]waitHop) []string {
 
 // shortestLoop returns the shortest loop from start back to itself, or nil
 // when start waits on nothing that leads back to it.
-func shortestLoop(graph map[string][]waitHop, start string) waitLoop {
-	via := map[string]waitHop{}
-	for frontier := []string{start}; len(frontier) > 0; {
-		var next []string
+func shortestLoop(graph map[model.ID][]waitHop, start model.ID) waitLoop {
+	via := map[model.ID]waitHop{}
+	for frontier := []model.ID{start}; len(frontier) > 0; {
+		var next []model.ID
 		for _, waiter := range frontier {
 			for _, hop := range graph[waiter] {
 				if hop.prereq == start {
@@ -186,9 +186,9 @@ func printWaitLoops(w io.Writer, loops []waitLoop) error {
 		for i, hop := range loop {
 			links := make([]string, len(hop.kinds))
 			for j, kind := range hop.kinds {
-				links[j] = waitPhrases[kind] + " " + hop.prereq
+				links[j] = fmt.Sprintf("%s %s", waitPhrases[kind], hop.prereq)
 			}
-			clauses[i] = hop.waiter + " " + strings.Join(links, " and ")
+			clauses[i] = fmt.Sprintf("%s %s", hop.waiter, strings.Join(links, " and "))
 		}
 		if _, err := fmt.Fprintf(w, "wait loop: %s — none of these is ready until one of the links is removed or one of the issues is closed\n", strings.Join(clauses, ", ")); err != nil {
 			return err

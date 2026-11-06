@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -19,8 +18,8 @@ import (
 // return it unreworded, so they cannot word or classify the refusal
 // differently.
 type FrameContainmentError struct {
-	ContainerID string
-	ContainedID string
+	ContainerID model.ID
+	ContainedID model.ID
 }
 
 func (e FrameContainmentError) Error() string {
@@ -39,11 +38,11 @@ var _ model.Refusal = FrameContainmentError{}
 // carry the "rank set: " prefix.
 // [LAW:one-source-of-truth] Both engines run this one check, so they cannot
 // word or classify these refusals differently.
-func ValidateRankSetIDs(ids []string) error {
+func ValidateRankSetIDs(ids []model.ID) error {
 	if len(ids) == 0 {
 		return model.ValidationError{Message: "rank set: need at least 1 ID to establish order"}
 	}
-	seen := make(map[string]struct{}, len(ids))
+	seen := make(map[model.ID]struct{}, len(ids))
 	for _, id := range ids {
 		if id == "" {
 			return model.ValidationError{Message: "rank set: empty ID in input"}
@@ -63,9 +62,9 @@ func ValidateRankSetIDs(ids []string) error {
 // the part of it that fits would misrepresent the request.
 // [LAW:no-silent-failure] [LAW:one-source-of-truth] Both engines resolve
 // through this one pairing.
-func RankSetResolutions(ids, reps []string) ([]RankSetResolution, error) {
+func RankSetResolutions(ids, reps []model.ID) ([]RankSetResolution, error) {
 	resolutions := make([]RankSetResolution, len(ids))
-	namedByRep := make(map[string]string, len(ids))
+	namedByRep := make(map[model.ID]model.ID, len(ids))
 	for i, id := range ids {
 		if prior, dup := namedByRep[reps[i]]; dup {
 			return nil, model.ValidationError{Message: fmt.Sprintf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])}
@@ -83,8 +82,8 @@ func RankSetResolutions(ids, reps []string) ([]RankSetResolution, error) {
 // Callers surface the substitution to the user — moving an issue other than
 // the one named must never be silent. [LAW:no-silent-failure]
 type RankMove struct {
-	MovedID  string
-	AnchorID string
+	MovedID  model.ID
+	AnchorID model.ID
 }
 
 // Frame names the keyspace an issue's rank is read within: the id of the
@@ -111,8 +110,8 @@ const TopLevel Frame = ""
 // frame. It is what an engine hands [NewRankAncestry]; which edges qualify is
 // the same rule each engine's frame lookup applies.
 type ParentLink struct {
-	ChildID    string
-	ParentID   string
+	ChildID    model.ID
+	ParentID   model.ID
 	ParentRank string
 }
 
@@ -139,9 +138,9 @@ type ParentLink struct {
 // doctor to name. A chain that loops ends where it repeats, and its child is
 // recorded in Shape.
 type RankAncestry struct {
-	places    map[string][]rankPlace
+	places    map[model.ID][]rankPlace
 	conflicts []ParentConflict
-	loops     []string
+	loops     []model.ID
 	deepest   int
 }
 
@@ -151,7 +150,7 @@ type RankAncestry struct {
 type AncestryShape struct {
 	Deepest   int
 	Conflicts []ParentConflict
-	Loops     []string
+	Loops     []model.ID
 }
 
 // rankPlace is one step of an issue's path through tree order: a key, and the
@@ -163,48 +162,48 @@ type AncestryShape struct {
 // subtrees.
 type rankPlace struct {
 	rank string
-	id   string
+	id   model.ID
 }
 
 func (p rankPlace) compare(q rankPlace) int {
-	return cmp.Or(strings.Compare(p.rank, q.rank), strings.Compare(p.id, q.id))
+	return cmp.Or(cmp.Compare(p.rank, q.rank), cmp.Compare(p.id, q.id))
 }
 
 // ParentConflict is a child that more than one framing edge claims, with
 // every parent claiming it, lowest id first. The write boundary keeps one
 // parent per child, so only restored data carries it.
 type ParentConflict struct {
-	ChildID string
-	Parents []string
+	ChildID model.ID
+	Parents []model.ID
 }
 
 // Finding is the conflict as `lit doctor` reports it.
 func (c ParentConflict) Finding() string {
-	return fmt.Sprintf("%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent set --child %s --parent <the epic it belongs under>', which replaces every parent it holds with that one", c.ChildID, len(c.Parents), strings.Join(c.Parents, ", "), c.Parents[0], c.ChildID)
+	return fmt.Sprintf("%s has %d parents (%s); it lists under %s, the lowest id, until one remains — run 'lit parent set --child %s --parent <the epic it belongs under>', which replaces every parent it holds with that one", c.ChildID, len(c.Parents), model.JoinIDs(c.Parents, ", "), c.Parents[0], c.ChildID)
 }
 
 // NewRankAncestry builds the ancestry from an engine's framing edges.
 func NewRankAncestry(links []ParentLink) RankAncestry {
-	claims := map[string][]ParentLink{}
+	claims := map[model.ID][]ParentLink{}
 	for _, link := range links {
 		claims[link.ChildID] = append(claims[link.ChildID], link)
 	}
-	parentOf := make(map[string]ParentLink, len(claims))
+	parentOf := make(map[model.ID]ParentLink, len(claims))
 	var conflicts []ParentConflict
 	for child, edges := range claims {
-		slices.SortFunc(edges, func(a, b ParentLink) int { return strings.Compare(a.ParentID, b.ParentID) })
+		slices.SortFunc(edges, func(a, b ParentLink) int { return cmp.Compare(a.ParentID, b.ParentID) })
 		parentOf[child] = edges[0]
 		if len(edges) > 1 {
-			parents := make([]string, len(edges))
+			parents := make([]model.ID, len(edges))
 			for i, edge := range edges {
 				parents[i] = edge.ParentID
 			}
 			conflicts = append(conflicts, ParentConflict{ChildID: child, Parents: parents})
 		}
 	}
-	slices.SortFunc(conflicts, func(a, b ParentConflict) int { return strings.Compare(a.ChildID, b.ChildID) })
-	places := make(map[string][]rankPlace, len(parentOf))
-	var loops []string
+	slices.SortFunc(conflicts, func(a, b ParentConflict) int { return cmp.Compare(a.ChildID, b.ChildID) })
+	places := make(map[model.ID][]rankPlace, len(parentOf))
+	var loops []model.ID
 	deepest := 0
 	for child := range parentOf {
 		chain, onLoop := placesOf(child, parentOf)
@@ -221,8 +220,8 @@ func NewRankAncestry(links []ParentLink) RankAncestry {
 // placesOf walks child's chain up to its root, or to the first container it
 // would revisit, and says whether child is itself on the loop: a ticket below a
 // loop reaches it too, but cutting one of the loop's own edges repairs both.
-func placesOf(child string, parentOf map[string]ParentLink) (places []rankPlace, onLoop bool) {
-	visited := map[string]struct{}{child: {}}
+func placesOf(child model.ID, parentOf map[model.ID]ParentLink) (places []rankPlace, onLoop bool) {
+	visited := map[model.ID]struct{}{child: {}}
 	for link, ok := parentOf[child]; ok; link, ok = parentOf[link.ParentID] {
 		if _, seen := visited[link.ParentID]; seen {
 			onLoop = link.ParentID == child
@@ -298,10 +297,10 @@ func SortSiblings(issues []model.Issue) {
 // the rank keyspace; this resolution makes every write frame-coherent.
 // [LAW:single-enforcer] The one resolution core behind every rank verb in both
 // engines, and behind [RankAncestry.Representatives].
-func FrameRepresentatives(chains [][]string) ([]string, Frame, error) {
-	memberships := make([]map[string]int, len(chains))
+func FrameRepresentatives(chains [][]model.ID) ([]model.ID, Frame, error) {
+	memberships := make([]map[model.ID]int, len(chains))
 	for i, chain := range chains {
-		m := make(map[string]int, len(chain))
+		m := make(map[model.ID]int, len(chain))
 		for idx, id := range chain {
 			m[id] = idx
 		}
@@ -322,7 +321,7 @@ func FrameRepresentatives(chains [][]string) ([]string, Frame, error) {
 	// ancestor. The issue itself is never it: in two or more chains that
 	// would be the containment refused above, and a lone chain's frame is its
 	// issue's parent.
-	lcaID := ""
+	var lcaID model.ID
 	for _, id := range chains[0][1:] {
 		inAll := true
 		for _, m := range memberships[1:] {
@@ -336,7 +335,7 @@ func FrameRepresentatives(chains [][]string) ([]string, Frame, error) {
 			break
 		}
 	}
-	reps := make([]string, len(chains))
+	reps := make([]model.ID, len(chains))
 	for i, chain := range chains {
 		if lcaID == "" {
 			reps[i] = chain[len(chain)-1]
@@ -354,11 +353,11 @@ func FrameRepresentatives(chains [][]string) ([]string, Frame, error) {
 // by: [FrameRepresentatives] over their places in the ancestry. ok is false
 // when x and y are one issue or one contains the other, which tree order
 // orders and no key can.
-func (a RankAncestry) Representatives(x, y string) (xRep, yRep string, ok bool) {
+func (a RankAncestry) Representatives(x, y model.ID) (xRep, yRep model.ID, ok bool) {
 	if x == y {
 		return "", "", false
 	}
-	reps, _, err := FrameRepresentatives([][]string{a.chain(x), a.chain(y)})
+	reps, _, err := FrameRepresentatives([][]model.ID{a.chain(x), a.chain(y)})
 	// Containment is the one refusal FrameRepresentatives makes.
 	if err != nil {
 		return "", "", false
@@ -367,9 +366,9 @@ func (a RankAncestry) Representatives(x, y string) (xRep, yRep string, ok bool) 
 }
 
 // chain is id followed by its containers, innermost first.
-func (a RankAncestry) chain(id string) []string {
+func (a RankAncestry) chain(id model.ID) []model.ID {
 	places := a.places[id]
-	chain := make([]string, 0, len(places)+1)
+	chain := make([]model.ID, 0, len(places)+1)
 	chain = append(chain, id)
 	for i := len(places) - 1; i >= 0; i-- {
 		chain = append(chain, places[i].id)
@@ -419,8 +418,8 @@ type RankEnd struct {
 // the substitution — ranking a different issue than named is never silent.
 // [LAW:no-silent-failure]
 type RankSetResolution struct {
-	NamedID  string `json:"named_id"`
-	RankedID string `json:"ranked_id"`
+	NamedID  model.ID `json:"named_id"`
+	RankedID model.ID `json:"ranked_id"`
 }
 
 // RankSetResult reports what a rank-set request did: the per-id substitutions,

@@ -99,5 +99,5 @@ func started(progress claims.LaneProgress, worked model.Issue) statusline.Starte
 // lit show prints, so the file and lit agree when the file is written;
 // docs/statusline.md says when it goes stale. [LAW:one-source-of-truth]
 func phaseRead(worked ticketState) statusline.PhaseRead {
-	return statusline.PhaseRead{ID: worked.issue.ID, Phase: string(worked.phase)}
+	return statusline.PhaseRead{ID: worked.issue.ID.Raw(), Phase: string(worked.phase)}
 }

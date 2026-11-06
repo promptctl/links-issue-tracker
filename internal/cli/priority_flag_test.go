@@ -51,13 +51,13 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					"--title", "priority round trip",
 					"--topic", "priority",
 					"--type", "task",
-					"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
+					"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority").Raw(),
 					"--priority", raw,
 				}); err != nil {
 					t.Fatalf("runNew(--priority %q) error = %v", raw, err)
 				}
 				createdID := firstIssueID(t, newOut.String())
-				created, err := ap.Store.GetIssue(ctx, createdID)
+				created, err := ap.Store.GetIssue(ctx, model.ID(createdID))
 				if err != nil {
 					t.Fatalf("GetIssue(%s) error = %v", createdID, err)
 				}
@@ -85,7 +85,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 				if err := runUpdate(t, ctx, &updateOut, ap, []string{createdID, "--priority", otherRaw}); err != nil {
 					t.Fatalf("runUpdate(--priority %q) error = %v", otherRaw, err)
 				}
-				updated, err := ap.Store.GetIssue(ctx, createdID)
+				updated, err := ap.Store.GetIssue(ctx, model.ID(createdID))
 				if err != nil {
 					t.Fatalf("GetIssue(%s) after update error = %v", createdID, err)
 				}
@@ -102,7 +102,7 @@ func TestPriorityFlagAcceptsEveryWordTheReadSurfacesPrint(t *testing.T) {
 					t.Fatalf("runFollowup(--priority %q) error = %v", raw, err)
 				}
 				followupID := firstIssueID(t, followupOut.String())
-				followup, err := ap.Store.GetIssue(ctx, followupID)
+				followup, err := ap.Store.GetIssue(ctx, model.ID(followupID))
 				if err != nil {
 					t.Fatalf("GetIssue(%s) error = %v", followupID, err)
 				}
@@ -184,11 +184,11 @@ func TestPriorityFlagDefaultsToNormal(t *testing.T) {
 		"--title", "no priority flag",
 		"--topic", "priority",
 		"--type", "task",
-		"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
+		"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority").Raw(),
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
-	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	created, err := ap.Store.GetIssue(ctx, model.ID(firstIssueID(t, stdout.String())))
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
@@ -230,12 +230,12 @@ func TestPriorityFlagToleratesPastedCaseAndSpace(t *testing.T) {
 				"--title", "pasted priority",
 				"--topic", "priority",
 				"--type", "task",
-				"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority"),
+				"--parent", seedEpicRaw(t, ctx, ap, "Priority", "priority").Raw(),
 				"--priority", raw,
 			}); err != nil {
 				t.Fatalf("runNew(--priority %q) error = %v", raw, err)
 			}
-			created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+			created, err := ap.Store.GetIssue(ctx, model.ID(firstIssueID(t, stdout.String())))
 			if err != nil {
 				t.Fatalf("GetIssue() error = %v", err)
 			}

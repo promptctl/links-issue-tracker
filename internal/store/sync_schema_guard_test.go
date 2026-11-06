@@ -29,7 +29,7 @@ const (
 // lands. Returns the seeded issue id and the future version. This binary
 // cannot itself produce that version: the state the reconcile refuses to
 // replay onto, and a push of a head at that version lands.
-func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) (string, int64) {
+func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) (model.ID, int64) {
 	t.Helper()
 	registryMax, err := migrations.MaxVersion()
 	if err != nil {
@@ -362,7 +362,7 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 // future goose schema version, and pushes — all while the remote is still at the
 // current schema, so the push is not self-blocked. The remote head then sits at a
 // schema this binary cannot produce.
-func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
+func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root string, id model.ID, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in) // commits the divergent edit
 	registryMax, err := migrations.MaxVersion()

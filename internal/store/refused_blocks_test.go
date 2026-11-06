@@ -17,7 +17,7 @@ func TestDoctorNamesABlockedByEdgeAReparentLeftInsideOneEpic(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	create := func(title, issueType, parentID string) model.Issue {
+	create := func(title, issueType string, parentID model.ID) model.Issue {
 		t.Helper()
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "blocks", IssueType: model.IssueType(issueType), ParentID: parentID, Placement: storage.RankBottom})
 		if err != nil {
@@ -58,7 +58,7 @@ func TestDoctorNamesABlockedByEdgeAReparentLeftInsideOneEpic(t *testing.T) {
 	if want := []storage.DependencyEdge{{Dependent: a.ID, Dependency: b.ID}}; !equalEdges(report.RefusedBlocks, want) {
 		t.Fatalf("Doctor().RefusedBlocks = %v, want %v", report.RefusedBlocks, want)
 	}
-	wantRepair := "'lit dep rm " + a.ID + " --blocked-by " + b.ID + "'"
+	wantRepair := "'lit dep rm " + a.ID.Raw() + " --blocked-by " + b.ID.Raw() + "'"
 	if len(report.Warnings) != 1 || !strings.Contains(report.Warnings[0], wantRepair) {
 		t.Fatalf("Doctor().Warnings = %v, want one warning naming %s", report.Warnings, wantRepair)
 	}

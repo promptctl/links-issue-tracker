@@ -44,12 +44,12 @@ const edgeFlagsUsage = "--blocked-by <blocker-id> | --related-to <peer-id>"
 // flag repeated is refused while parsing (as every String flag is), and a flag given counts
 // as naming its edge even when its value is empty, so `--blocked-by ""` beside
 // `--related-to X` is refused rather than read as the related-to edge alone.
-func registerEdgeFlags(fs *cobraFlagSet) func(usage string) (model.RelationType, string, error) {
+func registerEdgeFlags(fs *cobraFlagSet) func(usage string) (model.RelationType, model.ID, error) {
 	values := make([]*string, len(edgeFlags))
 	for i, row := range edgeFlags {
 		values[i] = fs.String(row.name, "", row.usage)
 	}
-	return func(usage string) (model.RelationType, string, error) {
+	return func(usage string) (model.RelationType, model.ID, error) {
 		var named []int
 		for i, row := range edgeFlags {
 			if fs.Changed(row.name) {
@@ -59,7 +59,7 @@ func registerEdgeFlags(fs *cobraFlagSet) func(usage string) (model.RelationType,
 		if len(named) != 1 || strings.TrimSpace(*values[named[0]]) == "" {
 			return "", "", UsageError{Message: usage}
 		}
-		return edgeFlags[named[0]].rel, *values[named[0]], nil
+		return edgeFlags[named[0]].rel, model.ID(*values[named[0]]), nil
 	}
 }
 
@@ -78,7 +78,7 @@ func depAddLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		issueID := positional[0]
+		issueID := model.ID(positional[0])
 		// Self-loop check: a relation from an issue to itself is meaningless and
 		// would otherwise corrupt downstream blocker traversals. Cheap to catch
 		// here; transitive cycle detection is the store's.
@@ -110,7 +110,7 @@ func depRmLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		if err := ap.Store.RemoveRelation(ctx, positional[0], otherID, rt); err != nil {
+		if err := ap.Store.RemoveRelation(ctx, model.ID(positional[0]), otherID, rt); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintln(inv.Stdout, "ok"); err != nil {
@@ -170,7 +170,7 @@ func depLsLeaf() appLeaf {
 			}
 			typeFilter = append(typeFilter, rt)
 		}
-		relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], typeFilter...)
+		relations, err := ap.Store.ListRelationsForIssue(ctx, model.ID(positional[0]), typeFilter...)
 		if err != nil {
 			return err
 		}

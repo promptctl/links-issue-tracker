@@ -611,8 +611,8 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 	}
 	for _, rec := range records[collRelations] {
 		export.Relations = append(export.Relations, model.Relation{
-			SrcID:     cellString(rec["src_id"]),
-			DstID:     cellString(rec["dst_id"]),
+			SrcID:     model.ID(cellString(rec["src_id"])),
+			DstID:     model.ID(cellString(rec["dst_id"])),
 			Type:      model.RelationTypeFromStored(cellString(rec["type"])), // [LAW:single-enforcer] exception: lifeboat salvage conserves bytes, reading a pre-v8 store's spelling as today's; Doctor re-checks
 			CreatedAt: cellTime(rec["created_at"]),
 			CreatedBy: model.Text(cellString(rec["created_by"])),
@@ -620,8 +620,8 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 	}
 	for _, rec := range records[collComments] {
 		export.Comments = append(export.Comments, model.Comment{
-			ID:        cellString(rec["id"]),
-			IssueID:   cellString(rec["issue_id"]),
+			ID:        model.ID(cellString(rec["id"])),
+			IssueID:   model.ID(cellString(rec["issue_id"])),
 			Body:      cellString(rec["body"]),
 			CreatedAt: cellTime(rec["created_at"]),
 			CreatedBy: model.Text(cellString(rec["created_by"])),
@@ -629,7 +629,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 	}
 	for _, rec := range records[collLabels] {
 		export.Labels = append(export.Labels, model.Label{
-			IssueID:   cellString(rec["issue_id"]),
+			IssueID:   model.ID(cellString(rec["issue_id"])),
 			Name:      cellString(rec["name"]),
 			CreatedAt: cellTime(rec["created_at"]),
 			CreatedBy: model.Text(cellString(rec["created_by"])),
@@ -639,11 +639,11 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 	// Build events, then graft change rows onto them by event_id. Index by id so
 	// the nesting is a lookup, not a scan per change.
 	events := make([]model.IssueEvent, 0, len(records[collEvents]))
-	byID := map[string]int{}
+	byID := map[model.ID]int{}
 	for _, rec := range records[collEvents] {
 		ev := model.IssueEvent{
-			ID:        cellString(rec["id"]),
-			IssueID:   cellString(rec["issue_id"]),
+			ID:        model.ID(cellString(rec["id"])),
+			IssueID:   model.ID(cellString(rec["issue_id"])),
 			Action:    cellString(rec["action"]),
 			Reason:    model.Text(cellString(rec["reason"])),
 			Actor:     model.Text(cellString(rec["actor"])),
@@ -658,7 +658,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 		events = append(events, ev)
 	}
 	for _, rec := range records[collEventChanges] {
-		eventID := cellString(rec["event_id"])
+		eventID := model.ID(cellString(rec["event_id"]))
 		idx, ok := byID[eventID]
 		if !ok {
 			return model.Export{}, fmt.Errorf("event change references unknown event_id %q", eventID)
@@ -672,7 +672,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 	export.Events = events
 	for _, rec := range records[collPurges] {
 		export.Purges = append(export.Purges, model.Purge{
-			IssueID:        cellString(rec["issue_id"]),
+			IssueID:        model.ID(cellString(rec["issue_id"])),
 			IssueCreatedAt: cellTime(rec["issue_created_at"]),
 			PurgedAt:       cellTime(rec["purged_at"]),
 			PurgedBy:       cellString(rec["purged_by"]),
@@ -680,8 +680,8 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 	}
 	for _, rec := range records[collPlanReviews] {
 		export.PlanReviews = append(export.PlanReviews, model.PlanReview{
-			ID:         cellString(rec["id"]),
-			IssueID:    cellString(rec["issue_id"]),
+			ID:         model.ID(cellString(rec["id"])),
+			IssueID:    model.ID(cellString(rec["issue_id"])),
 			PlanDigest: model.PlanDigest(cellString(rec["plan_digest"])),
 			Verdict:    model.PlanVerdict(cellString(rec["verdict"])),
 			Laws:       splitLaws(cellString(rec["laws"])),
@@ -700,7 +700,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 // members lose nothing durable. [LAW:single-enforcer]
 func buildIssue(rec map[string]any) (model.Issue, error) {
 	issue := model.Issue{
-		ID:          cellString(rec["id"]),
+		ID:          model.ID(cellString(rec["id"])),
 		Title:       model.Text(cellString(rec["title"])),
 		Description: cellString(rec["description"]),
 		Prompt:      cellString(rec["prompt"]),
@@ -713,7 +713,7 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		Topic:     model.Text(cellString(rec["topic"])),
 		Assignee:  model.Text(cellString(rec["assignee"])),
 		Rank:      cellString(rec["rank"]),
-		FollowsUp: cellString(rec["follows_up"]),
+		FollowsUp: model.ID(cellString(rec["follows_up"])),
 		CreatedAt: cellTime(rec["created_at"]),
 		UpdatedAt: cellTime(rec["updated_at"]),
 	}

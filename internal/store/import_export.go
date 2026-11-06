@@ -55,8 +55,8 @@ var auditLogTables = []string{"issue_events", "issue_event_changes"}
 
 func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	report := storage.HealthReport{
-		DependencyCycle: []string{},
-		ParentCycle:     []string{},
+		DependencyCycle: []model.ID{},
+		ParentCycle:     []model.ID{},
 		Unchecked:       []string{},
 		Errors:          []string{},
 		Warnings:        []string{},
@@ -229,7 +229,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	// above. [LAW:nothing-unseen]
 	report.Interleaved = dependencies.Interleaved()
 	for _, group := range report.Interleaved {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges", strings.Join(group, ", ")))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges", model.JoinIDs(group, ", ")))
 	}
 	// No rank verb places a key one placed issue holds onto another, and a
 	// landing separates the keys it brings in, so this names what neither stood
@@ -259,7 +259,7 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	// so this reports a cycle exactly when the repair refuses.
 	if cycle := blocksCycle(order, live); len(cycle) > 0 {
 		report.DependencyCycle = cycle
-		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", model.JoinIDs(cycle, " -> ")))
 	}
 	// A blocked-by edge the same-epic rule now refuses is one the store came to
 	// hold without that rule's write boundary standing in front of it: a
@@ -339,7 +339,8 @@ ORDER BY 1, 3`)
 	defer rows.Close()
 	var loose, underLeaf []string
 	for rows.Next() {
-		var id, issueType, parentID string
+		var id, parentID model.ID
+		var issueType string
 		if err := rows.Scan(&id, &issueType, &parentID); err != nil {
 			return containment{}, err
 		}
@@ -403,8 +404,9 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) (sto
 // heldTicket is the identity and title of one ticket the store holds: what a
 // replace needs to name the tickets it removes.
 type heldTicket struct {
-	id, title string
-	born      time.Time
+	id    model.ID
+	title string
+	born  time.Time
 }
 
 // heldTicketsTx reads every ticket the store holds, archived and deleted
@@ -435,7 +437,7 @@ func heldTicketsTx(ctx context.Context, tx *sql.Tx) ([]heldTicket, error) {
 // which the replace writes over this one. [LAW:one-source-of-truth] a ticket's
 // identity is its id and birth, as Purge.Names reads it.
 func removedBy(held []heldTicket, landed model.Export) []storage.Removed {
-	bornOf := make(map[string]time.Time, len(landed.Issues))
+	bornOf := make(map[model.ID]time.Time, len(landed.Issues))
 	for _, issue := range landed.Issues {
 		bornOf[issue.ID] = issue.CreatedAt
 	}
@@ -558,7 +560,7 @@ func issueRowValues(issue model.Issue) []any {
 	archivedCol, deletedCol := retentionColumns(issue)
 	return []any{
 		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, status, priority,
-		issue.IssueType, issueid.NormalizeSlug(issue.Topic.Raw()), issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp),
+		issue.IssueType, issueid.NormalizeSlug(issue.Topic.Raw()), issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp.Raw()),
 		issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt,
 		nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()),
 		archivedCol, deletedCol,
@@ -615,7 +617,7 @@ func insertEventTx(ctx context.Context, tx *sql.Tx, event model.IssueEvent) erro
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano),
-		nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())); err != nil {
+		nullableString(event.Attribution.Stream().Raw()), nullableString(event.Attribution.Workspace())); err != nil {
 		return fmt.Errorf("insert issue event %s: %w", event.ID, err)
 	}
 	for _, change := range event.Changes {

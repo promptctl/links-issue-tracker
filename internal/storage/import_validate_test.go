@@ -78,19 +78,19 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			return err
 		}, `bulk: doc 2 blocked_by "a"` + sameEpic},
 		{"bulk: two tasks under one existing epic, one blocked by the other", func() error {
-			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "bug", "lit-epic", "a")}), map[string]model.IssueType{"lit-epic": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "bug", "lit-epic", "a")}), map[model.ID]model.IssueType{"lit-epic": model.TypeEpic})
 			return err
 		}, `bulk: doc 1 blocked_by "a"` + sameEpic},
 		{"bulk: two tasks under one existing task, which is no epic and the create refuses, are accepted", func() error {
-			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-task"), create("", "task", "lit-task", "a")}), map[string]model.IssueType{"lit-task": model.TypeTask})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-task"), create("", "task", "lit-task", "a")}), map[model.ID]model.IssueType{"lit-task": model.TypeTask})
 			return err
 		}, ""},
 		{"bulk: two tasks under one id naming no issue, which the create refuses, are accepted", func() error {
-			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-gone"), create("", "task", "lit-gone", "a")}), map[string]model.IssueType{})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-gone"), create("", "task", "lit-gone", "a")}), map[model.ID]model.IssueType{})
 			return err
 		}, ""},
 		{"bulk: a task under an existing epic blocked by a task under another", func() error {
-			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "task", "lit-other", "a")}), map[string]model.IssueType{"lit-epic": model.TypeEpic, "lit-other": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("a", "task", "lit-epic"), create("", "task", "lit-other", "a")}), map[model.ID]model.IssueType{"lit-epic": model.TypeEpic, "lit-other": model.TypeEpic})
 			return err
 		}, ""},
 		{"bulk: a task blocked by a real id, which the write judges, is accepted", func() error {
@@ -118,11 +118,11 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 			return err
 		}, "bulk: doc 1: " + RejectParentThatIsNotAContainer("t", model.TypeTask).Error()},
 		{"bulk: a task blocked by an epic it sits under through an epic the file moves there", func() error {
-			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), {ID: "lit-x", Parent: ptr("e")}, create("", "task", "lit-x", "e")}), map[string]model.IssueType{"lit-x": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), {ID: "lit-x", Parent: ptr("e")}, create("", "task", "lit-x", "e")}), map[model.ID]model.IssueType{"lit-x": model.TypeEpic})
 			return err
 		}, `bulk: doc 2 blocked_by "e"` + sameEpic},
 		{"bulk: the same task under an epic the file leaves where it is, is accepted", func() error {
-			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "lit-x", "e")}), map[string]model.IssueType{"lit-x": model.TypeEpic})
+			_, err := ParseBulkFile(handWritten([]BulkIssueSpec{create("e", "epic", ""), create("", "task", "lit-x", "e")}), map[model.ID]model.IssueType{"lit-x": model.TypeEpic})
 			return err
 		}, ""},
 		{"bulk: an update document that only reparents is accepted", func() error {
@@ -164,7 +164,7 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 				{ID: "lit-x", Parent: ptr("lit-f"), BlockedBy: ptr([]string{"lit-b"})},
 			}),
 
-				map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-f": model.TypeEpic, "lit-b": model.TypeTask, "lit-x": model.TypeTask})
+				map[model.ID]model.IssueType{"lit-e": model.TypeEpic, "lit-f": model.TypeEpic, "lit-b": model.TypeTask, "lit-x": model.TypeTask})
 
 			return err
 		}, ""},
@@ -176,7 +176,7 @@ func TestImportGateJudgesTheFilesReferences(t *testing.T) {
 				{ID: "lit-x", Parent: ptr("lit-e"), BlockedBy: ptr([]string{"lit-e"})},
 			}),
 
-				map[string]model.IssueType{"lit-e": model.TypeEpic, "lit-x": model.TypeTask})
+				map[model.ID]model.IssueType{"lit-e": model.TypeEpic, "lit-x": model.TypeTask})
 
 			return err
 		}, `bulk: doc 1 (id "lit-x") blocked_by "lit-e"` + sameEpic},
@@ -316,15 +316,15 @@ func TestABulkFileOrderingIsItsRankTopDocumentsInFileOrder(t *testing.T) {
 	}
 	// root is written before the leaf filed under it, so the ids the write
 	// mints arrive in the reverse of the file's order.
-	created := []string{"created-root", "created-leaf"}
-	if got, want := file.RankedIDs(created), []string{"created-leaf", "lit-a-1", "lit-b-2", "created-root"}; !slices.Equal(got, want) {
+	created := []model.ID{"created-root", "created-leaf"}
+	if got, want := file.RankedIDs(created), []model.ID{"created-leaf", "lit-a-1", "lit-b-2", "created-root"}; !slices.Equal(got, want) {
 		t.Errorf("RankedIDs = %v, want %v", got, want)
 	}
-	var updated []string
+	var updated []model.ID
 	for _, u := range file.Updates {
 		updated = append(updated, u.ID)
 	}
-	if want := []string{"lit-b-2", "lit-c-3"}; !slices.Equal(updated, want) {
+	if want := []model.ID{"lit-b-2", "lit-c-3"}; !slices.Equal(updated, want) {
 		t.Errorf("updates = %v, want %v: a document stating only rank writes no field change", updated, want)
 	}
 

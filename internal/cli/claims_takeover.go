@@ -81,7 +81,7 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 // Enforcement lives here and only here per [LAW:single-enforcer]: `lit
 // start` is the one command that transfers a claim, so it is the one place
 // that gates the transfer.
-func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID string, prior model.Issue, start model.Start, take bool) (afterApply, error) {
+func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior model.Issue, start model.Start, take bool) (afterApply, error) {
 	// A takeover is worth confirming only for a start that can land. Issue.Apply
 	// refuses a frozen issue and a container whoever holds the lane, so its
 	// refusal answers first; gating first would send the caller to --take and

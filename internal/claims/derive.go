@@ -165,7 +165,7 @@ func contestants(holder model.Attribution, activity map[model.Attribution]time.T
 		if order := activity[b].Compare(activity[a]); order != 0 {
 			return order
 		}
-		return strings.Compare(a.Stream(), b.Stream())
+		return strings.Compare(a.Stream().Raw(), b.Stream().Raw())
 	})
 	return contested
 }

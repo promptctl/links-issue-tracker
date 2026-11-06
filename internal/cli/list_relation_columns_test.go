@@ -11,10 +11,10 @@ import (
 )
 
 // lineForID returns the single `lit ls` output line whose first field is id.
-func lineForID(t *testing.T, out, id string) string {
+func lineForID(t *testing.T, out string, id model.ID) string {
 	t.Helper()
 	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-		if strings.HasPrefix(line, id+" ") || line == id {
+		if strings.HasPrefix(line, id.Raw()+" ") || line == id.Raw() {
 			return line
 		}
 	}
@@ -96,15 +96,15 @@ func TestListRelationColumns(t *testing.T) {
 	}
 
 	cases := []struct {
-		id         string
+		id         model.ID
 		wantParent string
 		wantBlocks string
 	}{
 		{epic.ID, "-", "-"}, // top-level: nothing above it
-		{child.ID, epic.ID, "-"},
-		{openBlocker.ID, upstream.ID, "-"},
-		{blockedByOpen.ID, other.ID, "blocked"},
-		{blockedByClosed.ID, other.ID, "-"}, // blocker is closed → not live → not blocked
+		{child.ID, epic.ID.Raw(), "-"},
+		{openBlocker.ID, upstream.ID.Raw(), "-"},
+		{blockedByOpen.ID, other.ID.Raw(), "blocked"},
+		{blockedByClosed.ID, other.ID.Raw(), "-"}, // blocker is closed → not live → not blocked
 	}
 	for _, tc := range cases {
 		got := fieldsOf(lineForID(t, relOut.String(), tc.id))
@@ -125,11 +125,11 @@ func TestListRelationColumns(t *testing.T) {
 		t.Fatalf("runListWithStore(default): %v", err)
 	}
 	childLine := fieldsOf(lineForID(t, defOut.String(), child.ID))
-	want := []string{child.ID, "open", "rel", "Child"}
+	want := []string{child.ID.Raw(), "open", "rel", "Child"}
 	if strings.Join(childLine, "|") != strings.Join(want, "|") {
 		t.Errorf("default projection: got %v, want %v", childLine, want)
 	}
-	if strings.Contains(defOut.String(), epic.ID+" | -") || strings.Contains(defOut.String(), "blocked") {
+	if strings.Contains(defOut.String(), epic.ID.Raw()+" | -") || strings.Contains(defOut.String(), "blocked") {
 		t.Errorf("default projection leaked relationship columns:\n%s", defOut.String())
 	}
 }

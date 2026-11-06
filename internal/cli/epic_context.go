@@ -88,7 +88,7 @@ type epicChild struct {
 type EpicContext struct {
 	Epic      model.Issue
 	Children  []epicChild
-	Focused   string
+	Focused   model.ID
 	CrossEpic crossEpicEdges
 }
 
@@ -98,8 +98,8 @@ type EpicContext struct {
 // endpoint decides only which subsection the edge lands in, never the line
 // format.
 type crossEpicEdge struct {
-	Blocked string
-	Blocker string
+	Blocked model.ID
+	Blocker model.ID
 }
 
 // crossEpicEdges partitions the boundary-crossing edges by which side is
@@ -166,7 +166,7 @@ func classifyChildStatus(child model.Issue, readiness IssueReadiness) childStatu
 // relations are fetched once; they feed the status classification and the
 // cross-epic edge collection, so there is one resolved source per issue rather
 // than a separate fetch per concern.
-func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []string, epicID, focusedChildID string) (EpicContext, error) {
+func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []string, epicID, focusedChildID model.ID) (EpicContext, error) {
 	epic, err := issueRelationsOf(ctx, st, epicID)
 	if err != nil {
 		return EpicContext{}, err
@@ -183,7 +183,7 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 	// The plan is never narrowed to a focus path — it is the epic's own child
 	// list, and a partial plan would still read as the whole one — so it asks
 	// for no focus walk at all.
-	annotated, err := annotateIssues(ctx, st, requiredFields, epic.Children, map[string]storage.IssueRelations{epicID: epic})
+	annotated, err := annotateIssues(ctx, st, requiredFields, epic.Children, map[model.ID]storage.IssueRelations{epicID: epic})
 	if err != nil {
 		return EpicContext{}, err
 	}
@@ -223,8 +223,8 @@ func buildEpicContext(ctx context.Context, st storage.Store, requiredFields []st
 // path renders unconditionally on its presence rather than re-deriving the
 // cases at the callsite.
 type epicTarget struct {
-	EpicID  string
-	Focused string
+	EpicID  model.ID
+	Focused model.ID
 }
 
 // epicViewFor classifies an issue into the epic plan it belongs to. A container
@@ -297,8 +297,8 @@ func writeEpicContext(w io.Writer, ec *EpicContext) error {
 // its children — which is the membership test that decides whether a blocks
 // edge crosses the boundary. The epic id is included so an edge between a child
 // and its own epic is intra-epic, never surfaced as a cross-epic dependency.
-func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
-	set := make(map[string]struct{}, len(children)+1)
+func epicMemberIDs(epicID model.ID, children []model.Issue) map[model.ID]struct{} {
+	set := make(map[model.ID]struct{}, len(children)+1)
 	set[epicID] = struct{}{}
 	for _, child := range children {
 		set[child.ID] = struct{}{}
@@ -314,7 +314,7 @@ func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
 // inPlayExcluding.
 // [LAW:one-source-of-truth] Both the member test and the counterpart filter ask
 // InPlay, so the two ends of an edge answer "still live" the same way.
-func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[string]struct{}) {
+func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[model.ID]struct{}) {
 	if !member.Issue.InPlay() {
 		return
 	}
@@ -334,7 +334,7 @@ func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[str
 // [LAW:one-source-of-truth] InPlay, not State() != StateClosed: an archived or
 // deleted counterpart has left the flow exactly as a closed one has, and the
 // name says which question is asked.
-func inPlayExcluding(others []model.Issue, excluded map[string]struct{}) []model.Issue {
+func inPlayExcluding(others []model.Issue, excluded map[model.ID]struct{}) []model.Issue {
 	var out []model.Issue
 	for _, other := range others {
 		if _, skip := excluded[other.ID]; skip {
@@ -376,7 +376,7 @@ func (x crossEpicEdges) empty() bool {
 // are here)".
 func renderEpicContext(ec EpicContext) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Epic: %s — %s\n", model.HoldRow(ec.Epic.ID), ec.Epic.Title)
+	fmt.Fprintf(&b, "Epic: %s — %s\n", ec.Epic.ID, ec.Epic.Title)
 	fmt.Fprintf(&b, "Why: %s\n", firstLine(ec.Epic.Description))
 	b.WriteString("\nChildren:\n")
 	b.WriteString(renderChildren(ec.Children, ec.Focused))
@@ -387,7 +387,7 @@ func renderEpicContext(ec EpicContext) string {
 // renderChildren renders the children block: the rank-ordered rows, or
 // "(none)" when the epic has none. The empty case is a property of the list,
 // not a branch the caller has to remember.
-func renderChildren(children []epicChild, focused string) string {
+func renderChildren(children []epicChild, focused model.ID) string {
 	if len(children) == 0 {
 		return "  (none)\n"
 	}
@@ -438,7 +438,7 @@ func renderChildLine(child epicChild, focused bool) string {
 	if focused {
 		prefix, suffix = "  ▶ ", "   (you are here)"
 	}
-	return fmt.Sprintf("%s%-*s %s  %s%s%s", prefix, statusMarkerWidth, child.Status.marker(), model.HoldRow(child.Issue.ID), child.Issue.Title, laneTag(child.Issue.Lane), suffix) + "\n"
+	return fmt.Sprintf("%s%-*s %s  %s%s%s", prefix, statusMarkerWidth, child.Status.marker(), child.Issue.ID, child.Issue.Title, laneTag(child.Issue.Lane), suffix) + "\n"
 }
 
 // laneTag renders a child's lane as an inline tag so the epic plan shows which

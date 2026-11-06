@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -217,9 +218,9 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, row := range [][3]string{
-		{under.ID, host.ID, "parent-child"},
-		{first.ID, second.ID, "blocked-by"},
-		{second.ID, first.ID, "blocked-by"},
+		{under.ID.Raw(), host.ID.Raw(), "parent-child"},
+		{first.ID.Raw(), second.ID.Raw(), "blocked-by"},
+		{second.ID.Raw(), first.ID.Raw(), "blocked-by"},
 	} {
 		if err := raw.ExecRawForTest(h.ctx,
 			`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, 'import')`,
@@ -229,12 +230,12 @@ func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	}
 
 	containment := []string{
-		"warning: tickets outside an epic: " + loose.ID + " (task) (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
-		"warning: tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task) (only an epic contains tickets; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
+		"warning: tickets outside an epic: " + loose.ID.Raw() + " (task) (every ticket except an epic lives inside one; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
+		"warning: tickets under a parent that is not an epic: " + under.ID.Raw() + " under " + host.ID.Raw() + " (task) (only an epic contains tickets; move each into the epic it belongs to with 'lit parent set --child <id> --parent <epic-id>')",
 	}
 	// The cycle may be named from either member; both rotations are the same cycle.
-	cycleLine := func(a, b string) string {
-		return "warning: blocked-by dependency cycle: " + a + " -> " + b + " -> " + a + " (no rank order exists; remove one edge with 'lit dep rm' to break it)"
+	cycleLine := func(a, b model.ID) string {
+		return "warning: blocked-by dependency cycle: " + a.Raw() + " -> " + b.Raw() + " -> " + a.Raw() + " (no rank order exists; remove one edge with 'lit dep rm' to break it)"
 	}
 	assertWarnings := func(t *testing.T, got string) {
 		t.Helper()
@@ -333,7 +334,7 @@ func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
 	if err := raw.ExecRawForTest(h.ctx, `UPDATE issues SET item_rank = ? WHERE id = ?`, first.Rank, third.ID); err != nil {
 		t.Fatalf("plant the shared key: %v", err)
 	}
-	holders := []string{first.ID, third.ID}
+	holders := []string{first.ID.Raw(), third.ID.Raw()}
 	slices.Sort(holders)
 
 	facts, out := runDoctorRecorded(t, h)
@@ -377,7 +378,7 @@ func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
 		row := findRow(h.runWorkableAnnotated(workableFilter{}, 0), lateTask.ID)
 		return ClassifyReadiness(row.Annotations).RankInversions()
 	}
-	if got := inversions(); !slices.Equal(got, []string{earlyTask.ID}) {
+	if got := inversions(); !slices.Equal(got, []string{earlyTask.ID.Raw()}) {
 		t.Errorf("queue rank inversions of %s = %v, want [%s]", lateTask.ID, got, earlyTask.ID)
 	}
 
@@ -526,7 +527,7 @@ func TestDoctorNamesABlockedByEdgeBetweenTwoLeavesOfOneEpic(t *testing.T) {
 	}
 	want := "warning: blocked-by edge within one epic's work: " + second.ID + " blocked by " + first.ID
 	repair := "remove it with 'lit dep rm " + second.ID + " --blocked-by " + first.ID + "'"
-	if !strings.Contains(out, want) || !strings.Contains(out, repair) {
+	if !strings.Contains(out, want.Raw()) || !strings.Contains(out, repair.Raw()) {
 		t.Errorf("doctor output missing the warning %q naming %q:\n%s", want, repair, out)
 	}
 }

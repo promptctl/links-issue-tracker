@@ -44,17 +44,17 @@ func TestRunFollowupFilesBesideTheClosedTicket(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runFollowup(t, ctx, &stdout, ap, []string{
-		"--on", closed.ID,
+		"--on", closed.ID.Raw(),
 		"--title", "Surface stale cache rows in doctor",
 	}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
 
-	createdID := firstIssueID(t, stdout.String())
+	createdID := model.ID(firstIssueID(t, stdout.String()))
 	// The id hangs under the epic, not under the closed ticket; the segment
 	// beneath it is a content hash, not a position, so nothing asserts its
 	// value. [LAW:behavior-not-structure]
-	if !strings.HasPrefix(createdID, epic.ID+".") {
+	if !strings.HasPrefix(createdID.Raw(), epic.ID.Raw()+".") {
 		t.Fatalf("created.ID = %q, want it to hang under the epic %q", createdID, epic.ID)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, createdID)
@@ -71,7 +71,7 @@ func TestRunFollowupFilesBesideTheClosedTicket(t *testing.T) {
 	if created.Topic != closed.Topic {
 		t.Fatalf("created.Topic = %q, want inherited %q", created.Topic, closed.Topic)
 	}
-	if !strings.Contains(created.Description, closed.ID) {
+	if !strings.Contains(created.Description, closed.ID.Raw()) {
 		t.Fatalf("created.Description = %q, want reference to %q", created.Description, closed.ID)
 	}
 	if created.IssueType != "task" {
@@ -110,7 +110,7 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	}
 
 	var refused bytes.Buffer
-	err = runFollowup(t, ctx, &refused, ap, []string{"--on", closed.ID, "--title", "Tie it off"})
+	err = runFollowup(t, ctx, &refused, ap, []string{"--on", closed.ID.Raw(), "--title", "Tie it off"})
 	var validation model.ValidationError
 	if !errors.As(err, &validation) {
 		t.Fatalf("runFollowup(task beside a top-level epic) error = %v (%T), want model.ValidationError", err, err)
@@ -120,10 +120,10 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runFollowup(t, ctx, &stdout, ap, []string{"--on", closed.ID, "--title", "Tie it off", "--type", "epic"}); err != nil {
+	if err := runFollowup(t, ctx, &stdout, ap, []string{"--on", closed.ID.Raw(), "--title", "Tie it off", "--type", "epic"}); err != nil {
 		t.Fatalf("runFollowup(--type epic) error = %v", err)
 	}
-	detail, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, stdout.String()))
+	detail, err := ap.Store.GetIssueDetail(ctx, model.ID(firstIssueID(t, stdout.String())))
 	if err != nil {
 		t.Fatalf("GetIssueDetail error = %v", err)
 	}
@@ -141,10 +141,10 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 		t.Fatalf("CreateIssue(home epic) error = %v", err)
 	}
 	var filed bytes.Buffer
-	if err := runFollowup(t, ctx, &filed, ap, []string{"--on", closed.ID, "--title", "Tie it off", "--parent", home.ID}); err != nil {
+	if err := runFollowup(t, ctx, &filed, ap, []string{"--on", closed.ID.Raw(), "--title", "Tie it off", "--parent", home.ID.Raw()}); err != nil {
 		t.Fatalf("runFollowup(--parent) error = %v", err)
 	}
-	task, err := ap.Store.GetIssueDetail(ctx, firstIssueID(t, filed.String()))
+	task, err := ap.Store.GetIssueDetail(ctx, model.ID(firstIssueID(t, filed.String())))
 	if err != nil {
 		t.Fatalf("GetIssueDetail error = %v", err)
 	}
@@ -166,7 +166,7 @@ func TestShowRendersTheFollowUpLinkOnBothEnds(t *testing.T) {
 	closed := seedOpenIssueRaw(t, ctx, ap, "Origin")
 
 	var sink bytes.Buffer
-	if err := runFollowup(t, ctx, &sink, ap, []string{"--on", closed, "--title", "Follow-up"}); err != nil {
+	if err := runFollowup(t, ctx, &sink, ap, []string{"--on", closed.Raw(), "--title", "Follow-up"}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
 	followUp := firstIssueID(t, sink.String())
@@ -175,11 +175,11 @@ func TestShowRendersTheFollowUpLinkOnBothEnds(t *testing.T) {
 	if err := runShow(t, ctx, &out, ap, []string{followUp}); err != nil {
 		t.Fatalf("runShow(%s) error = %v", followUp, err)
 	}
-	if text := out.String(); !strings.Contains(text, "follows_up:\n- "+closed) || strings.Contains(text, "parent:\n- "+closed) {
+	if text := out.String(); !strings.Contains(text, "follows_up:\n- "+closed.Raw()) || strings.Contains(text, "parent:\n- "+closed.Raw()) {
 		t.Fatalf("show of the follow-up wants a follows_up group naming %s and no parent group naming it; got:\n%s", closed, text)
 	}
 	out.Reset()
-	if err := runShow(t, ctx, &out, ap, []string{closed}); err != nil {
+	if err := runShow(t, ctx, &out, ap, []string{closed.Raw()}); err != nil {
 		t.Fatalf("runShow(%s) error = %v", closed, err)
 	}
 	if text := out.String(); !strings.Contains(text, "follow_ups:\n- "+followUp) || strings.Contains(text, "children:") {
@@ -206,7 +206,7 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 
 	var stdout bytes.Buffer
 	if err := runFollowup(t, ctx, &stdout, ap, []string{
-		"--on", parent.ID,
+		"--on", parent.ID.Raw(),
 		"--title", "Add sync metrics surface",
 		"--description", "Custom description for the follow-up.",
 		"--topic", "observability",
@@ -217,7 +217,7 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
 
-	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	created, err := ap.Store.GetIssue(ctx, model.ID(firstIssueID(t, stdout.String())))
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
@@ -286,11 +286,11 @@ func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	}
 	var stdout bytes.Buffer
 	if err := runLeaf(t, followupLeaf(), ctx, &stdout, ap, []string{
-		"--on", parent.ID, "--title", "Surfaced follow-up",
+		"--on", parent.ID.Raw(), "--title", "Surfaced follow-up",
 	}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
-	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	created, err := ap.Store.GetIssue(ctx, model.ID(firstIssueID(t, stdout.String())))
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
@@ -317,9 +317,9 @@ func TestFollowupEventSaysWhereItsParentCameFrom(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--on", leaf.ID}, "on_parent"},
-		{[]string{"--on", leaf.ID, "--parent", other}, "flag"},
-		{[]string{"--on", epic, "--type", "epic"}, "none"},
+		{[]string{"--on", leaf.ID.Raw()}, "on_parent"},
+		{[]string{"--on", leaf.ID.Raw(), "--parent", other.Raw()}, "flag"},
+		{[]string{"--on", epic.Raw(), "--type", "epic"}, "none"},
 	} {
 		var stdout bytes.Buffer
 		ev, err := recordLeaf(followupLeaf(), ctx, dirInvocation(t, t.TempDir(), &stdout, &stdout, nil), ap, append(tc.args, "--title", "Follow-up"))

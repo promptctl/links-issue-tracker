@@ -46,7 +46,7 @@ func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T
 	}
 
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--resolution", "wontfix"}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close) error = %v", err)
 	}
 	want := "Ticket " + issue.ID + " closed without finishing — check for a duplicate."
@@ -75,7 +75,7 @@ func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw()}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done) error = %v", err)
 	}
 	got := stdout.String()

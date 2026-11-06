@@ -388,7 +388,7 @@ func assertWorkingSetClean(t *testing.T, ctx context.Context, st *Store) {
 // seedOldSchemaRemote creates one issue (inside an epic) at root, downgrades
 // the store below the resolution migration, then pushes — so the remote head
 // is a pre-migration commit. Returns the issue id.
-func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
+func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) model.ID {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
@@ -425,7 +425,7 @@ func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 // forward to edit), downgrades back below the resolution migration, and pushes —
 // so the remote advances to a SECOND pre-migration commit that diverges from the
 // base. This is the old-binary machine writing a stale-schema commit.
-func advanceOldSchemaRemote(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
+func advanceOldSchemaRemote(t *testing.T, ctx context.Context, root string, id model.ID, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in) // Open() migrates to registry max, then edits
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")

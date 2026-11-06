@@ -40,7 +40,7 @@ func (e *Engine) Purge(ctx context.Context, in storage.PurgeInput) (storage.Purg
 
 // detachedChildren is every child filed under parentID, with the parent edges
 // it keeps once its edge to parentID is gone.
-func (e *Engine) detachedChildren(parentID string) []storage.DetachedChild {
+func (e *Engine) detachedChildren(parentID model.ID) []storage.DetachedChild {
 	var out []storage.DetachedChild
 	for _, rel := range e.relations {
 		if rel.Type != model.RelParentChild || rel.DstID != parentID {

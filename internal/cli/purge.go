@@ -6,6 +6,7 @@ import (
 	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -27,7 +28,7 @@ func purgeLeaf() appLeaf {
 		}
 		// Read first, so a missing id is reported before anyone is asked to
 		// confirm.
-		issue, err := ap.Store.GetIssue(ctx, positional[0])
+		issue, err := ap.Store.GetIssue(ctx, model.ID(positional[0]))
 		if err != nil {
 			return err
 		}
@@ -40,7 +41,7 @@ func purgeLeaf() appLeaf {
 		}
 		// The statusline file holds titles, and a ticket is often purged for
 		// what its text says.
-		ap.Statusline.Record(statusline.Invalidated{ID: result.Purge.IssueID})
+		ap.Statusline.Record(statusline.Invalidated{ID: result.Purge.IssueID.Raw()})
 		telemetry.Record(ctx, nil, result.EventRecord())
 		_, err = fmt.Fprintf(inv.Stdout, "purged %s (comments=%d labels=%d edges=%d events=%d plan_reviews=%d)\n",
 			result.Purge.IssueID, result.Comments, result.Labels, result.Relations, result.Events, result.PlanReviews)
@@ -52,7 +53,7 @@ func purgeLeaf() appLeaf {
 // asked, and anything else is refused. Neither the prompt nor any other line
 // the command prints shows the ticket's text: a ticket is often purged because
 // of what it says, and terminal output lands in scrollback, captures and logs.
-func confirmPurge(stdin io.Reader, stdout io.Writer, id string, yes bool) error {
+func confirmPurge(stdin io.Reader, stdout io.Writer, id model.ID, yes bool) error {
 	if yes {
 		return nil
 	}

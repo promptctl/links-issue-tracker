@@ -42,7 +42,7 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	}
 
 	var refused bytes.Buffer
-	err = runLeaf(t, purgeLeaf(), ctx, &refused, ap, []string{doomed.ID})
+	err = runLeaf(t, purgeLeaf(), ctx, &refused, ap, []string{doomed.ID.Raw()})
 	var unconfirmed purgeUnconfirmedError
 	if !errors.As(err, &unconfirmed) {
 		t.Fatalf("purge without --yes error = %v, want purgeUnconfirmedError", err)
@@ -61,7 +61,7 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	invocation := telemetry.Begin(telemetry.Event{})
 	purge := purgeLeaf()
 	invoked := telemetry.With(ctx, invocation)
-	positional, err := parseLeaf(invoked, purge, []string{doomed.ID, "--yes"}, dirInvocation(t, t.TempDir(), &stdout, &stdout, nil))
+	positional, err := parseLeaf(invoked, purge, []string{doomed.ID.Raw(), "--yes"}, dirInvocation(t, t.TempDir(), &stdout, &stdout, nil))
 	if err != nil {
 		t.Fatalf("parse purge --yes error = %v", err)
 	}

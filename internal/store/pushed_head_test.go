@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -425,7 +426,7 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 // ticket those commits file into, and returns its id. It is its own commit so
 // each later commit() is exactly one commit, which the ahead-by-one reads
 // depend on.
-func seedCommitEpic(t *testing.T, ctx context.Context, doltRoot string) string {
+func seedCommitEpic(t *testing.T, ctx context.Context, doltRoot string) model.ID {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
 	if err != nil {

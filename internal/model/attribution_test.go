@@ -30,11 +30,11 @@ func TestNewAttributionAdmitsOnlyCompleteOrAbsent(t *testing.T) {
 			// An absent pair must be absent in BOTH halves. Asserting only
 			// Present() would pass for a value that kept one half around to leak
 			// through an accessor later.
-			if !tc.wantPresent && (got.Stream() != "" || got.Workspace() != "") {
+			if !tc.wantPresent && (got.Stream().Raw() != "" || got.Workspace() != "") {
 				t.Fatalf("absent pair retained content: stream=%q workspace=%q",
 					got.Stream(), got.Workspace())
 			}
-			if tc.wantPresent && (got.Stream() != tc.stream || got.Workspace() != tc.workspace) {
+			if tc.wantPresent && (got.Stream().Raw() != tc.stream || got.Workspace() != tc.workspace) {
 				t.Fatalf("complete pair = (%q, %q), want (%q, %q)",
 					got.Stream(), got.Workspace(), tc.stream, tc.workspace)
 			}

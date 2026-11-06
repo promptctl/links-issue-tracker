@@ -53,7 +53,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		},
 		Store: st,
 	}
-	issueID = seedOpenIssueRaw(t, ctx, ap, "Ticket in the foreign store")
+	issueID = seedOpenIssueRaw(t, ctx, ap, "Ticket in the foreign store").Raw()
 	if err := st.Close(); err != nil {
 		t.Fatalf("store.Close() error = %v", err)
 	}

@@ -424,7 +424,7 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 
 // withoutIssue drops an issue and every row that hangs off it, producing the
 // export a merge projection yields for an id that exists on only one side.
-func withoutIssue(export model.Export, id string) model.Export {
+func withoutIssue(export model.Export, id model.ID) model.Export {
 	export.Issues = filterRows(export.Issues, func(i model.Issue) bool { return i.ID != id })
 	export.Relations = filterRows(export.Relations, func(r model.Relation) bool { return r.SrcID != id && r.DstID != id })
 	export.Comments = filterRows(export.Comments, func(c model.Comment) bool { return c.IssueID != id })

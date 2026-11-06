@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -22,7 +21,7 @@ import (
 // Children come back in order, because siblings compare on their own keys; the
 // edges that cross frames wait for the caller's sortInTreeOrder, which reads
 // once for every subject.
-func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) storage.IssueRelations {
+func bucketRelations(focalID model.ID, relations []model.Relation, issuesByID map[model.ID]model.Issue) storage.IssueRelations {
 	out := storage.IssueRelations{
 		Children:  []model.Issue{},
 		BlockedBy: []model.Issue{},
@@ -62,7 +61,7 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 // relatedFrom returns the hydrated "related-to" counterparts of focalID. It is
 // GetIssueAdjacency's concern only — no batch consumer needs related edges, so
 // it stays out of the shared IssueRelations shape.
-func relatedFrom(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) []model.Issue {
+func relatedFrom(focalID model.ID, relations []model.Relation, issuesByID map[model.ID]model.Issue) []model.Issue {
 	out := []model.Issue{}
 	for _, rel := range relations {
 		if rel.Type != model.RelRelatedTo {
@@ -86,7 +85,7 @@ func relatedFrom(focalID string, relations []model.Relation, issuesByID map[stri
 // the sibling set, which GetIssueAdjacency reads for lit show and the done/close
 // view.
 // [LAW:one-source-of-truth] Sibling derivation decided once, here.
-func siblingsOf(focalID string, parentChildren []model.Issue) []model.Issue {
+func siblingsOf(focalID model.ID, parentChildren []model.Issue) []model.Issue {
 	out := make([]model.Issue, 0, len(parentChildren))
 	for _, child := range parentChildren {
 		if child.ID == focalID {
@@ -104,22 +103,22 @@ func siblingsOf(focalID string, parentChildren []model.Issue) []model.Issue {
 // known-present ids never observe the hole.
 // [LAW:dataflow-not-control-flow] Those queries feed a pure bucketing pass — the
 // per-subject work is map lookups, not extra round-trips.
-func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
+func (s *Store) GetRelationsByIDs(ctx context.Context, ids []model.ID) (map[model.ID]storage.IssueRelations, error) {
 	subjects := dedupeStrings(ids)
 	if len(subjects) == 0 {
-		return map[string]storage.IssueRelations{}, nil
+		return map[model.ID]storage.IssueRelations{}, nil
 	}
 	relations, err := s.listRelationsForIDs(ctx, subjects)
 	if err != nil {
 		return nil, err
 	}
-	subjectSet := make(map[string]struct{}, len(subjects))
-	needed := make(map[string]struct{}, len(subjects))
+	subjectSet := make(map[model.ID]struct{}, len(subjects))
+	needed := make(map[model.ID]struct{}, len(subjects))
 	for _, id := range subjects {
 		subjectSet[id] = struct{}{}
 		needed[id] = struct{}{}
 	}
-	bySubject := make(map[string][]model.Relation, len(subjects))
+	bySubject := make(map[model.ID][]model.Relation, len(subjects))
 	for _, rel := range relations {
 		needed[rel.SrcID] = struct{}{}
 		needed[rel.DstID] = struct{}{}
@@ -134,7 +133,7 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]storage.IssueRelations, len(subjects))
+	out := make(map[model.ID]storage.IssueRelations, len(subjects))
 	crossFrame := make([][]model.Issue, 0, 2*len(subjects))
 	for _, id := range subjects {
 		issue, ok := issuesByID[id]
@@ -154,7 +153,7 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 
 // ParentByChild is one query over the relations table: no id list to batch and no
 // issue to hydrate, which is the whole of its advantage over GetRelationsByIDs.
-func (s *Store) ParentByChild(ctx context.Context) (map[string]string, error) {
+func (s *Store) ParentByChild(ctx context.Context) (map[model.ID]model.ID, error) {
 	return s.queryParentByChild(ctx, `relations r`)
 }
 
@@ -162,15 +161,15 @@ func (s *Store) ParentByChild(ctx context.Context) (map[string]string, error) {
 // that binds relations as r and takes args. MIN is the two-parent rule the
 // contract states, stated once whatever the read covers.
 // [LAW:one-source-of-truth]
-func (s *Store) queryParentByChild(ctx context.Context, from string, args ...any) (map[string]string, error) {
+func (s *Store) queryParentByChild(ctx context.Context, from string, args ...any) (map[model.ID]model.ID, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT r.src_id, MIN(r.dst_id) FROM `+from+` WHERE r.type = ? GROUP BY r.src_id`, append(args, string(model.RelParentChild))...)
 	if err != nil {
 		return nil, fmt.Errorf("list parent ids: %w", err)
 	}
 	defer rows.Close()
-	out := map[string]string{}
+	out := map[model.ID]model.ID{}
 	for rows.Next() {
-		var childID, parentID string
+		var childID, parentID model.ID
 		if err := rows.Scan(&childID, &parentID); err != nil {
 			return nil, fmt.Errorf("scan parent ids: %w", err)
 		}
@@ -199,7 +198,7 @@ var structuralRelationTypes = []model.RelationType{model.RelBlockedBy, model.Rel
 // conjunctive queries keep every range a point and the analysis linear.
 // [LAW:carrying-cost] the merge code below is the whole price; the OR's price
 // would grow with every ticket filed.
-func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.Relation, error) {
+func (s *Store) listRelationsForIDs(ctx context.Context, ids []model.ID) ([]model.Relation, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -226,7 +225,7 @@ var relationEndpointColumns = map[string]struct{}{"src_id": {}, "dst_id": {}}
 // their union again, because two ordered halves do not make an ordered union.
 // The halves' own sorts are the price of one read path: queryRelations sorts
 // whatever it returns. [LAW:single-enforcer]
-func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []string) ([]model.Relation, error) {
+func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []model.ID) ([]model.Relation, error) {
 	if _, ok := relationEndpointColumns[column]; !ok {
 		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)
 	}
@@ -293,9 +292,9 @@ func mergeRelations(bySrc, byDst []model.Relation) []model.Relation {
 }
 
 // dedupeStrings returns the distinct values of ids preserving first-seen order.
-func dedupeStrings(ids []string) []string {
-	seen := make(map[string]struct{}, len(ids))
-	out := make([]string, 0, len(ids))
+func dedupeStrings[T ~string](ids []T) []T {
+	seen := make(map[T]struct{}, len(ids))
+	out := make([]T, 0, len(ids))
 	for _, id := range ids {
 		if _, ok := seen[id]; ok {
 			continue
@@ -307,8 +306,8 @@ func dedupeStrings(ids []string) []string {
 }
 
 // mapKeys returns the keys of set in unspecified order.
-func mapKeys(set map[string]struct{}) []string {
-	out := make([]string, 0, len(set))
+func mapKeys(set map[model.ID]struct{}) []model.ID {
+	out := make([]model.ID, 0, len(set))
 	for k := range set {
 		out = append(out, k)
 	}
@@ -398,9 +397,9 @@ func rejectHeldRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) e
 		return fmt.Errorf("read relations %s (%s): %w", rel.SrcID, rel.Type, err)
 	}
 	defer rows.Close()
-	var inScope []string
+	var inScope []model.ID
 	for rows.Next() {
-		var dstID string
+		var dstID model.ID
 		if err := rows.Scan(&dstID); err != nil {
 			return fmt.Errorf("scan relation %s (%s): %w", rel.SrcID, rel.Type, err)
 		}
@@ -409,7 +408,7 @@ func rejectHeldRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) e
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("read relations %s (%s): %w", rel.SrcID, rel.Type, err)
 	}
-	if slices.Equal(inScope, []string{rel.DstID}) {
+	if slices.Equal(inScope, []model.ID{rel.DstID}) {
 		return storage.RelationExistsError{SrcID: rel.SrcID, DstID: rel.DstID, Type: rel.Type}
 	}
 	return nil
@@ -447,7 +446,7 @@ func rejectCycleTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 // the existence proof the relation writes take for it. It hydrates nothing —
 // no parent chain is climbed — so it is safe on a hierarchy holding a loop,
 // which is what ClearParent needs it for.
-func issueTypeTx(ctx context.Context, tx *sql.Tx, issueID string) (model.IssueType, error) {
+func issueTypeTx(ctx context.Context, tx *sql.Tx, issueID model.ID) (model.IssueType, error) {
 	var issueType model.IssueType
 	if err := tx.QueryRowContext(ctx, `SELECT issue_type FROM issues WHERE id = ?`, issueID).Scan(&issueType); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -493,7 +492,7 @@ func setSingleValuedEdgeTx(ctx context.Context, tx *sql.Tx, rel model.Relation) 
 // new dependency through existing blocked-by edges, since the new edge asserts the
 // reverse. The check runs inside the mutation tx so it sees a consistent
 // snapshot of existing edges.
-func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency string) error {
+func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency model.ID) error {
 	if dependent == dependency {
 		return storage.RelationRuleError{Rule: storage.RuleSelfLoop, Message: fmt.Sprintf("blocked-by: %s cannot be blocked by itself", dependent)}
 	}
@@ -523,7 +522,7 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 // already at or below child: walking up from parent reaches child. Each step
 // reads one issue's parents, so the check costs the ancestors it climbs and not
 // the store.
-func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string) error {
+func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID model.ID) error {
 	if childID == parentID {
 		return model.ValidationError{Message: fmt.Sprintf("parent-child: %s cannot be its own parent", childID)}
 	}
@@ -532,9 +531,9 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	// is somewhere in here. seen bounds the walk, because data written before
 	// this rule can already hold a loop, and the check meant to prevent one must
 	// not be the thing that hangs on it.
-	above := map[string][]string{}
-	seen := map[string]struct{}{parentID: {}}
-	for stack := []string{parentID}; len(stack) > 0; {
+	above := map[model.ID][]model.ID{}
+	seen := map[model.ID]struct{}{parentID: {}}
+	for stack := []model.ID{parentID}; len(stack) > 0; {
 		at := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		parents, err := parentsOfIssue(ctx, tx, at)
@@ -563,7 +562,7 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 	// [LAW:one-source-of-truth] The same detector Doctor reports with, asked
 	// about the subgraph this edge would attach to rather than the workspace.
 	if cycle := storage.ParentCycle(above); len(cycle) > 0 {
-		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); %s, then retry", childID, parentID, parentID, strings.Join(cycle, " -> "), storage.ParentCycleRepair)
+		return fmt.Errorf("parent-child: cannot make %s a child of %s — the hierarchy above %s already holds a cycle (%s); %s, then retry", childID, parentID, parentID, model.JoinIDs(cycle, " -> "), storage.ParentCycleRepair)
 	}
 	return nil
 }
@@ -593,12 +592,12 @@ func rejectParentCycle(ctx context.Context, tx *sql.Tx, childID, parentID string
 // child here would be a theorem about the data that the restore path falsifies,
 // and the detector exists for precisely that data.
 // [LAW:types-are-the-program] The strongest theorem that is still true.
-func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, error) {
+func loadParentEdges(ctx context.Context, q rowQueryer) (map[model.ID][]model.ID, error) {
 	edges, err := queryParentEdges(ctx, q, "TRUE")
 	if err != nil {
 		return nil, err
 	}
-	parentOf := make(map[string][]string, len(edges))
+	parentOf := make(map[model.ID][]model.ID, len(edges))
 	for _, edge := range edges {
 		parentOf[edge.child] = append(parentOf[edge.child], edge.parent)
 	}
@@ -608,7 +607,7 @@ func loadParentEdges(ctx context.Context, q rowQueryer) (map[string][]string, er
 // parentsOfIssue is every parent one issue's stored edges name, the statement of
 // model.parentsOf. It reads relations alone, so neither a lifecycle predicate
 // nor a parent row that is gone narrows it.
-func parentsOfIssue(ctx context.Context, q rowQueryer, issueID string) ([]string, error) {
+func parentsOfIssue(ctx context.Context, q rowQueryer, issueID model.ID) ([]model.ID, error) {
 	rows, err := q.QueryContext(ctx, `SELECT dst_id FROM `+relationsBySrc+` AND type = ?`, issueID, string(model.RelParentChild))
 	if err != nil {
 		return nil, fmt.Errorf("query parents of %s: %w", issueID, err)
@@ -643,7 +642,7 @@ var epicParentPredicate = fmt.Sprintf("p.issue_type IN (%s)", quotedIssueTypeLis
 // from one of them can take, with each child's type. That is all of the tree
 // storage.RejectBlocksWithinEpic reads about two endpoints, and a parent loop
 // ends the climb at the first issue it already placed.
-func epicTreeAbove(ctx context.Context, q rowQueryer, ids ...string) (storage.EpicTree, error) {
+func epicTreeAbove(ctx context.Context, q rowQueryer, ids ...model.ID) (storage.EpicTree, error) {
 	tree := storage.EpicTree{}
 	for stack := slices.Clone(ids); len(stack) > 0; {
 		at := stack[len(stack)-1]
@@ -680,7 +679,7 @@ func loadEpicTree(ctx context.Context, q rowQueryer) (storage.EpicTree, error) {
 
 // parentEdge is one stored parent-child row, with its child's type.
 type parentEdge struct {
-	child, parent string
+	child, parent model.ID
 	childType     model.IssueType
 }
 
@@ -715,7 +714,7 @@ func queryParentEdges(ctx context.Context, q rowQueryer, parentFilter string, ar
 	return edges, nil
 }
 
-func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error {
+func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID model.ID, relType model.RelationType) error {
 	srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)
 	return s.withMutation(ctx, "remove relation", func(ctx context.Context, tx *sql.Tx) error {
 		// [LAW:single-enforcer] the relations DELETE lives in deleteRelationRowTx,
@@ -726,7 +725,7 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 			return err
 		}
 		if affected == 0 {
-			return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
+			return storage.NotFoundError{Entity: "relation", ID: model.ID(fmt.Sprintf("src=%s dst=%s type=%s", srcID.Raw(), dstID.Raw(), relType))}
 		}
 		// Removing a parent-child edge is a detach whatever the caller, so it
 		// meets ClearParent's rule: a leaf keeps a parent. Judged after
@@ -751,7 +750,7 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 // restricted to the given types; no types means no restriction.
 // [LAW:dataflow-not-control-flow] The absent-filter case is the empty filter
 // set, not a sentinel string.
-func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, types ...model.RelationType) ([]model.Relation, error) {
+func (s *Store) ListRelationsForIssue(ctx context.Context, issueID model.ID, types ...model.RelationType) ([]model.Relation, error) {
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
 		return nil, err
 	}
@@ -776,7 +775,7 @@ func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, types
 }
 
 func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model.Relation, error) {
-	if strings.TrimSpace(in.ChildID) == "" || strings.TrimSpace(in.ParentID) == "" {
+	if in.ChildID.Trim() == "" || in.ParentID.Trim() == "" {
 		return model.Relation{}, model.ValidationError{Message: "child and parent ids are required"}
 	}
 	if in.ChildID == in.ParentID {
@@ -816,7 +815,7 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 // and "that issue has no parent" send the operator to different places, and
 // collapsing them into the DELETE's rows-affected would report a typo'd id as
 // a missing edge. [LAW:no-silent-failure]
-func (s *Store) ClearParent(ctx context.Context, childID string) error {
+func (s *Store) ClearParent(ctx context.Context, childID model.ID) error {
 	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
 		return clearParentTx(ctx, tx, childID)
 	})
@@ -827,7 +826,7 @@ func (s *Store) ClearParent(ctx context.Context, childID string) error {
 // parent is the state asked for, answered with storage.RelationAbsentError.
 // The type read also proves the child exists, so an unknown id is reported as
 // a missing issue, not as a parent already absent. [LAW:single-enforcer]
-func clearParentTx(ctx context.Context, tx *sql.Tx, childID string) error {
+func clearParentTx(ctx context.Context, tx *sql.Tx, childID model.ID) error {
 	childType, err := issueTypeTx(ctx, tx, childID)
 	if err != nil {
 		return err
@@ -847,7 +846,7 @@ func clearParentTx(ctx context.Context, tx *sql.Tx, childID string) error {
 
 // detachParentsTx removes every parent edge of childID on tx, judging nothing:
 // it is the raw half of a clear.
-func detachParentsTx(ctx context.Context, tx *sql.Tx, childID string) (int64, error) {
+func detachParentsTx(ctx context.Context, tx *sql.Tx, childID model.ID) (int64, error) {
 	res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
 	if err != nil {
 		return 0, fmt.Errorf("delete parent relation: %w", err)

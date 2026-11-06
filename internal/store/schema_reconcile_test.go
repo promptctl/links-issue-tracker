@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -49,7 +50,7 @@ import (
 // created outside one (storage.RejectLeafWithoutParent), so each seeded task
 // below names this epic as its parent and the migration under test finds it
 // already homed.
-func reconcileSeedEpic(t *testing.T, ctx context.Context, st *Store, topic string) string {
+func reconcileSeedEpic(t *testing.T, ctx context.Context, st *Store, topic string) model.ID {
 	t.Helper()
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Seed epic"), Lane: storage.SharedLane, Topic: topic, IssueType: "epic", Priority: 0})
 	if err != nil {
@@ -282,7 +283,7 @@ func TestReconcileNormalizesLegacyStatusValues(t *testing.T) {
 
 	// Each legacy status maps to its canonical counterpart, and the row
 	// itself survives. closed_at gets nulled for non-closed; do not assert it.
-	cases := map[string]string{
+	cases := map[model.ID]string{
 		"legacy-todo":   "open",
 		"legacy-inprog": "in_progress",
 		"legacy-done":   "closed",
@@ -634,7 +635,7 @@ func seedCanonicalIssueHistory(t *testing.T, st *Store) {
 // from an explicit empty string (strPtr("")) — historically both
 // shapes appear in real workspaces and both must normalize to NULL
 // in issue_events.action.
-func insertLegacyHistory(t *testing.T, st *Store, id, issueID string, action *string, reason string, fromStatus, toStatus *string, createdAt, createdBy string) {
+func insertLegacyHistory(t *testing.T, st *Store, id, issueID model.ID, action *string, reason string, fromStatus, toStatus *string, createdAt, createdBy string) {
 	t.Helper()
 	ctx := context.Background()
 	if err := st.ExecRawForTest(ctx,
@@ -729,8 +730,8 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	}
 	// All eight rows show up in issue_events with the canonical mapping.
 	type translatedEvent struct {
-		ID        string
-		IssueID   string
+		ID        model.ID
+		IssueID   model.ID
 		Action    sql.NullString
 		Reason    string
 		Actor     string
@@ -744,7 +745,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 		t.Fatalf("query translated events error = %v", err)
 	}
 	defer rows.Close()
-	got := map[string]translatedEvent{}
+	got := map[model.ID]translatedEvent{}
 	for rows.Next() {
 		var e translatedEvent
 		if err := rows.Scan(&e.ID, &e.IssueID, &e.Action, &e.Reason, &e.Actor, &e.CreatedAt); err != nil {
@@ -759,8 +760,9 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 		t.Fatalf("expected 8 translated events, got %d: %+v", len(got), got)
 	}
 	cases := []struct {
-		id, action, reason, actor string
-		actionIsNull              bool
+		id                    model.ID
+		action, reason, actor string
+		actionIsNull          bool
 	}{
 		{id: "hist-start", action: "start", reason: "began work", actor: "alice"},
 		{id: "hist-comment-null", reason: "added context", actor: "alice", actionIsNull: true},

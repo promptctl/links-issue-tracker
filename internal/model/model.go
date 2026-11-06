@@ -81,7 +81,7 @@ var (
 // capability data carries the behavior distinction without splitting shared
 // issue behavior across duplicate types.
 type Issue struct {
-	ID          string `json:"id"`
+	ID          ID     `json:"id"`
 	Title       Text   `json:"title"`
 	Description string `json:"description"`
 	Prompt      string `json:"prompt,omitempty"`
@@ -109,7 +109,7 @@ type Issue struct {
 	// no later write can move it. The hierarchy no longer carries this link —
 	// a follow-up is parented beside the ticket it follows up, not under it —
 	// so this field is the one record of it. [LAW:one-source-of-truth]
-	FollowsUp string    `json:"follows_up,omitempty"`
+	FollowsUp ID        `json:"follows_up,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
@@ -200,7 +200,7 @@ func (i Issue) InPlay() bool {
 // this value. LaneOf is the only way to obtain one, which makes "this LaneID came
 // from a real issue" a property of the type.
 type LaneID struct {
-	epic string
+	epic ID
 	key  string
 	solo bool
 }
@@ -228,7 +228,7 @@ type LaneID struct {
 // is going.
 func LaneOf(issue Issue, parent *Issue) LaneID {
 	if parent == nil || !parent.IsContainer() {
-		return LaneID{key: issue.ID, solo: true}
+		return LaneID{key: issue.ID.Raw(), solo: true}
 	}
 	return LaneID{epic: parent.ID, key: issue.Lane.Raw()}
 }
@@ -239,7 +239,7 @@ func LaneOf(issue Issue, parent *Issue) LaneID {
 // editable field, so the family is the widest set any lane of issueID's could
 // hold, which is the scope the lane readers compare events at. The Dolt engine
 // states the same family as SQL over its relations table.
-func LaneFamily(issueID string, relations []Relation) map[string]bool {
+func LaneFamily(issueID ID, relations []Relation) map[ID]bool {
 	family := FiledUnder(parentsOf(issueID, relations), relations)
 	family[issueID] = true
 	return family
@@ -247,8 +247,8 @@ func LaneFamily(issueID string, relations []Relation) map[string]bool {
 
 // FiledUnder is every issue filed under one of parents: the family a create
 // filed there is stamped after, named before any relation records it.
-func FiledUnder(parents []string, relations []Relation) map[string]bool {
-	filed := map[string]bool{}
+func FiledUnder(parents []ID, relations []Relation) map[ID]bool {
+	filed := map[ID]bool{}
 	for _, rel := range relations {
 		if rel.Type == RelParentChild && slices.Contains(parents, rel.DstID) {
 			filed[rel.SrcID] = true
@@ -259,8 +259,8 @@ func FiledUnder(parents []string, relations []Relation) map[string]bool {
 
 // parentsOf is every issue relations file issueID under. Containment leaves
 // one; restored data can leave more, and the family takes them all.
-func parentsOf(issueID string, relations []Relation) []string {
-	var parents []string
+func parentsOf(issueID ID, relations []Relation) []ID {
+	var parents []ID
 	for _, rel := range relations {
 		if rel.Type == RelParentChild && rel.SrcID == issueID {
 			parents = append(parents, rel.DstID)
@@ -271,8 +271,8 @@ func parentsOf(issueID string, relations []Relation) []string {
 
 // Epic is the id of the epic that scopes this lane, empty for a lane of one.
 // Key is the lane's spelling within that epic, or the solo issue's id.
-func (l LaneID) Epic() string { return l.epic }
-func (l LaneID) Key() string  { return l.key }
+func (l LaneID) Epic() ID    { return l.epic }
+func (l LaneID) Key() string { return l.key }
 
 // String renders the lane for logs and test failures — a reader who is grepping
 // output and knows the grammar. Epic-scoped lanes read as "epic#lane" and a lane
@@ -283,7 +283,7 @@ func (l LaneID) String() string {
 	if l.solo {
 		return l.key
 	}
-	return l.epic + "#" + l.key
+	return l.epic.Raw() + "#" + l.key
 }
 
 // Format prints the lane as String does, each part held to its row, so a
@@ -294,7 +294,7 @@ func (l LaneID) Format(f fmt.State, verb rune) {
 		formatHeld(f, verb, HoldRow(l.key))
 		return
 	}
-	formatHeld(f, verb, HoldRow(l.epic)+"#"+HoldRow(l.key))
+	formatHeld(f, verb, HoldRow(l.epic.Raw())+"#"+HoldRow(l.key))
 }
 
 // Describe renders the lane for a sentence a person or an agent reads, and
@@ -319,9 +319,9 @@ func (l LaneID) Describe() (string, bool) {
 		return "", false
 	}
 	if l.key == "" {
-		return fmt.Sprintf("the default lane of epic %s", HoldRow(l.epic)), true
+		return fmt.Sprintf("the default lane of epic %s", l.epic), true
 	}
-	return fmt.Sprintf("lane %s of epic %s", HoldRow(l.key), HoldRow(l.epic)), true
+	return fmt.Sprintf("lane %s of epic %s", HoldRow(l.key), l.epic), true
 }
 
 // Capabilities reports the issue's structural lifecycle capabilities. Whether an
@@ -370,7 +370,7 @@ func (i Issue) mustLifecycle() lifecycle.Lifecycle {
 // which is refused. [LAW:parse-dont-validate] the discriminator is kept in the
 // type rather than re-derived downstream from progress counts.
 type ContainerActionError struct {
-	ID       string
+	ID       ID
 	Action   ActionName
 	Target   State
 	State    State
@@ -444,7 +444,7 @@ func (e ContainerActionError) childClause() string {
 // [LAW:single-enforcer] Raised only by Issue.Apply, which both storage engines
 // call, so there is one refusal and no per-engine copy of its wording.
 type FrozenIssueError struct {
-	ID        string
+	ID        ID
 	Retention lifecycle.Retention
 	Thaw      lifecycle.RetentionAction
 }
@@ -638,7 +638,7 @@ func (i Issue) lifecycleOrError() (lifecycle.Lifecycle, error) {
 }
 
 type issueJSON struct {
-	ID          string                `json:"id"`
+	ID          ID                    `json:"id"`
 	Title       Text                  `json:"title"`
 	Description string                `json:"description"`
 	Prompt      string                `json:"prompt,omitempty"`
@@ -651,7 +651,7 @@ type issueJSON struct {
 	Rank        string                `json:"rank"`
 	Lane        Text                  `json:"lane"`
 	Labels      []Text                `json:"labels"`
-	FollowsUp   string                `json:"follows_up,omitempty"`
+	FollowsUp   ID                    `json:"follows_up,omitempty"`
 	CreatedAt   time.Time             `json:"created_at"`
 	UpdatedAt   time.Time             `json:"updated_at"`
 	ClosedAt    *time.Time            `json:"closed_at,omitempty"`
@@ -785,23 +785,23 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 }
 
 type Relation struct {
-	SrcID     string       `json:"src_id"`
-	DstID     string       `json:"dst_id"`
+	SrcID     ID           `json:"src_id"`
+	DstID     ID           `json:"dst_id"`
 	Type      RelationType `json:"type"`
 	CreatedAt time.Time    `json:"created_at"`
 	CreatedBy Text         `json:"created_by"`
 }
 
 type Comment struct {
-	ID        string    `json:"id"`
-	IssueID   string    `json:"issue_id"`
+	ID        ID        `json:"id"`
+	IssueID   ID        `json:"issue_id"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy Text      `json:"created_by"`
 }
 
 type Label struct {
-	IssueID   string    `json:"issue_id"`
+	IssueID   ID        `json:"issue_id"`
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy Text      `json:"created_by"`
@@ -872,7 +872,7 @@ func NewAttribution(stream, workspace string) Attribution {
 // Stream is the opaque token of the checkout that produced the work; Workspace
 // is the opaque id of the store it was produced under. Both are empty exactly
 // when the pair is absent, never independently.
-func (a Attribution) Stream() string    { return a.stream }
+func (a Attribution) Stream() Text      { return Text(a.stream) }
 func (a Attribution) Workspace() string { return a.workspace }
 
 // IsZero reports the absent pair. encoding/json consults it for `omitzero`, so
@@ -938,8 +938,8 @@ func (a *Attribution) UnmarshalJSON(data []byte) error {
 // Attribution is append-only historical fact: written once when the event is
 // recorded, never rewritten, and absent on every event older than the feature.
 type IssueEvent struct {
-	ID          string        `json:"id"`
-	IssueID     string        `json:"issue_id"`
+	ID          ID            `json:"id"`
+	IssueID     ID            `json:"issue_id"`
 	Action      string        `json:"action,omitempty"`
 	Reason      Text          `json:"reason"`
 	Actor       Text          `json:"actor"`
@@ -1008,7 +1008,7 @@ type Export struct {
 // v1ExportHistory is the legacy history row produced by Version 1 exports.
 // Version 2 replaces the "history" array with the richer "events" schema.
 type v1ExportHistory struct {
-	IssueID    string    `json:"issue_id"`
+	IssueID    ID        `json:"issue_id"`
 	Action     string    `json:"action"`
 	FromStatus string    `json:"from_status"`
 	ToStatus   string    `json:"to_status"`
@@ -1021,10 +1021,10 @@ type v1ExportHistory struct {
 // row's content so that merging two v1 exports never produces duplicate IDs
 // for different events. Identical rows produce the same ID (safe dedup); rows
 // with any differing field produce a distinct ID (safe merge).
-func v1EventID(issueID, action, fromStatus, toStatus, createdBy string, createdAt time.Time) string {
-	key := strings.Join([]string{issueID, action, fromStatus, toStatus, createdBy, createdAt.Format(time.RFC3339Nano)}, "|")
+func v1EventID(issueID ID, action, fromStatus, toStatus, createdBy string, createdAt time.Time) ID {
+	key := strings.Join([]string{issueID.Raw(), action, fromStatus, toStatus, createdBy, createdAt.Format(time.RFC3339Nano)}, "|")
 	sum := sha256.Sum256([]byte(key))
-	return "evt-v1-" + hex.EncodeToString(sum[:8])
+	return ID("evt-v1-" + hex.EncodeToString(sum[:8]))
 }
 
 // UnmarshalJSON handles v1 (history array), v2 (events array, blocked-by edges

@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -30,7 +31,7 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 		labels = append(labels, rows...)
 	}
 	slices.SortFunc(labels, func(a, b model.Label) int {
-		return cmpThen(strings.Compare(a.IssueID, b.IssueID), strings.Compare(a.Name, b.Name))
+		return cmpThen(cmp.Compare(a.IssueID, b.IssueID), strings.Compare(a.Name, b.Name))
 	})
 	return model.Export{
 		Version:     model.ExportVersion,

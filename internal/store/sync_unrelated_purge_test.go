@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -36,9 +37,9 @@ func TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge(t *testing.T) {
 	}
 	// The inventory the owner approved names the shared ticket as purged, not
 	// as local work the take keeps.
-	assertIDSet(t, "purged", res.Unrelated.Purged, []string{sharedID})
-	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []string{localEpicID, localIssueID})
-	assertLocalIssueIDs(t, ctx, syncB, []string{localEpicID, localIssueID})
+	assertIDSet(t, "purged", res.Unrelated.Purged, []model.ID{sharedID})
+	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []model.ID{localEpicID, localIssueID})
+	assertLocalIssueIDs(t, ctx, syncB, []model.ID{localEpicID, localIssueID})
 	assertPurged(t, ctx, syncB, sharedID)
 
 	if _, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
@@ -52,7 +53,7 @@ func TestSyncResolveUnrelatedTakeLocalKeepsTheRemotesPurge(t *testing.T) {
 	if _, err := syncA.SyncReceive(ctx, remoteName(t, "origin"), "master"); err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
-	assertLocalIssueIDs(t, ctx, syncA, []string{localEpicID, localIssueID})
+	assertLocalIssueIDs(t, ctx, syncA, []model.ID{localEpicID, localIssueID})
 	assertPurged(t, ctx, syncA, sharedID)
 }
 
@@ -81,7 +82,7 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeRemote): %v", err)
 	}
-	assertIDSet(t, "purged", res.Unrelated.Purged, []string{sharedID})
+	assertIDSet(t, "purged", res.Unrelated.Purged, []model.ID{sharedID})
 	assertIDSet(t, "only-remote (kept)", res.Unrelated.OnlyRemote, nil)
 	if res.CarriedPurges != 1 {
 		t.Errorf("CarriedPurges = %d, want 1", res.CarriedPurges)
@@ -115,7 +116,7 @@ func TestSyncResolveUnrelatedTakeRemoteCarriesTheLocalPurge(t *testing.T) {
 // shareIssue copies one issue row, birth and all, from one store into another
 // whose history is unrelated, the way a restore from the first store's export
 // would: afterwards both histories hold the same ticket.
-func shareIssue(t *testing.T, ctx context.Context, fromRoot, toRoot, id string) {
+func shareIssue(t *testing.T, ctx context.Context, fromRoot, toRoot string, id model.ID) {
 	t.Helper()
 	from := openOrFatal(t, ctx, fromRoot)
 	source, err := from.Export(ctx)
@@ -137,7 +138,7 @@ func shareIssue(t *testing.T, ctx context.Context, fromRoot, toRoot, id string) 
 	}
 }
 
-func purgeIssue(t *testing.T, ctx context.Context, root, id string) {
+func purgeIssue(t *testing.T, ctx context.Context, root string, id model.ID) {
 	t.Helper()
 	st := openOrFatal(t, ctx, root)
 	defer func() { _ = st.Close() }()
@@ -146,7 +147,7 @@ func purgeIssue(t *testing.T, ctx context.Context, root, id string) {
 	}
 }
 
-func purgeAndPush(t *testing.T, ctx context.Context, root, id string) {
+func purgeAndPush(t *testing.T, ctx context.Context, root string, id model.ID) {
 	t.Helper()
 	purgeIssue(t, ctx, root, id)
 	sync := openSyncOrFatal(t, ctx, root)
@@ -158,7 +159,7 @@ func purgeAndPush(t *testing.T, ctx context.Context, root, id string) {
 
 // assertPurged fails unless the store holds exactly one purge record and it
 // names id.
-func assertPurged(t *testing.T, ctx context.Context, st *Store, id string) {
+func assertPurged(t *testing.T, ctx context.Context, st *Store, id model.ID) {
 	t.Helper()
 	export, err := st.Export(ctx)
 	if err != nil {
@@ -200,7 +201,7 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 			sharedID := seedPrePurgeRemote(t, ctx, rootA, remoteURL)
 			forkUnrelatedClone(t, ctx, rootB, remoteURL)
 			shareIssue(t, ctx, rootA, rootB, sharedID)
-			want := []string{sharedID}
+			want := []model.ID{sharedID}
 			if tc.purge {
 				purgeIssue(t, ctx, rootB, sharedID)
 				want = nil
@@ -253,7 +254,7 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 // seedPrePurgeRemote is seedReconcileRemote with the seed store stepped back
 // below the purges migration before its first push, so the remote head is the
 // shape a released lit writes.
-func seedPrePurgeRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
+func seedPrePurgeRemote(t *testing.T, ctx context.Context, root, remoteURL string) model.ID {
 	t.Helper()
 	st := openOrFatal(t, ctx, root)
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("seed"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})

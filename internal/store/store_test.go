@@ -30,15 +30,15 @@ func openIssueStore(t testing.TB, ctx context.Context) *Store {
 	return st
 }
 
-func issueIDs(issues []model.Issue) []string {
-	ids := make([]string, 0, len(issues))
+func issueIDs(issues []model.Issue) []model.ID {
+	ids := make([]model.ID, 0, len(issues))
 	for _, issue := range issues {
 		ids = append(ids, issue.ID)
 	}
 	return ids
 }
 
-func containsIssueID(issues []model.Issue, id string) bool {
+func containsIssueID(issues []model.Issue, id model.ID) bool {
 	for _, issue := range issues {
 		if issue.ID == id {
 			return true
@@ -264,12 +264,12 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 	cases := []struct {
 		name     string
 		statuses []model.State
-		want     map[string]bool
+		want     map[model.ID]bool
 	}{
-		{name: "default open+in_progress", statuses: []model.State{model.StateOpen, model.StateInProgress}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: true, closedEpic.ID: false}},
-		{name: "open only", statuses: []model.State{model.StateOpen}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: false, closedEpic.ID: false}},
-		{name: "in_progress only", statuses: []model.State{model.StateInProgress}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: true, closedEpic.ID: false}},
-		{name: "closed only", statuses: []model.State{model.StateClosed}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: false, closedEpic.ID: true}},
+		{name: "default open+in_progress", statuses: []model.State{model.StateOpen, model.StateInProgress}, want: map[model.ID]bool{openEpic.ID: true, mixedEpic.ID: true, closedEpic.ID: false}},
+		{name: "open only", statuses: []model.State{model.StateOpen}, want: map[model.ID]bool{openEpic.ID: true, mixedEpic.ID: false, closedEpic.ID: false}},
+		{name: "in_progress only", statuses: []model.State{model.StateInProgress}, want: map[model.ID]bool{openEpic.ID: false, mixedEpic.ID: true, closedEpic.ID: false}},
+		{name: "closed only", statuses: []model.State{model.StateClosed}, want: map[model.ID]bool{openEpic.ID: false, mixedEpic.ID: false, closedEpic.ID: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -277,7 +277,7 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ListIssues(%v) error = %v", tc.statuses, err)
 			}
-			got := map[string]bool{}
+			got := map[model.ID]bool{}
 			for _, issue := range issues {
 				got[issue.ID] = true
 			}
@@ -640,7 +640,7 @@ func TestAddRelationRejectsTransitiveBlocksCycle(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	// Each issue sits in an epic of its own: between two leaves of one epic a
 	// blocked-by edge is refused whether or not it closes a cycle.
-	mk := func(title string) string {
+	mk := func(title string) model.ID {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title + " epic"), Lane: storage.SharedLane, Topic: "cycle", IssueType: "epic", Priority: 1})
 		if err != nil {
 			t.Fatalf("CreateIssue(%s epic) error = %v", title, err)
@@ -705,7 +705,7 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	}
 	// Insert the mutually-blocking pair directly, simulating data that entered
 	// through a path that does not run the AddRelation cycle guard.
-	for _, e := range [][2]string{{a.ID, b.ID}, {b.ID, a.ID}} {
+	for _, e := range [][2]model.ID{{a.ID, b.ID}, {b.ID, a.ID}} {
 		if _, err := st.db.ExecContext(ctx,
 			`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`,
 			e[0], e[1], time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
@@ -774,7 +774,7 @@ func TestStoreCreateIssueUsesBeadsCompatibleIDFormat(t *testing.T) {
 	}
 
 	re := regexp.MustCompile(`^test-renderer-[0-9a-z]{3,8}$`)
-	if !re.MatchString(issue.ID) {
+	if !re.MatchString(issue.ID.Raw()) {
 		t.Fatalf("issue.ID = %q, want test-renderer-<3-8 base36 chars>", issue.ID)
 	}
 	if issue.Topic != "renderer" {
@@ -866,7 +866,7 @@ func TestCreateIssueNormalizesAndClampsConfiguredPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if !strings.HasPrefix(issue.ID, "renderer-pla-") {
+	if !strings.HasPrefix(issue.ID.Raw(), "renderer-pla-") {
 		t.Fatalf("issue.ID = %q, want it to start with %q", issue.ID, "renderer-pla-")
 	}
 }
@@ -945,7 +945,7 @@ func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 	// Parentage still rides the id, which is what every reader of an id's shape
 	// keys on — the top-level population count excludes ids carrying a dot.
 	for _, child := range []model.Issue{childOne, childTwo} {
-		suffix, ok := strings.CutPrefix(child.ID, parent.ID+".")
+		suffix, ok := strings.CutPrefix(child.ID.Raw(), parent.ID.Raw()+".")
 		if !ok {
 			t.Fatalf("child id = %q, want it to hang under %q", child.ID, parent.ID)
 		}
@@ -1082,7 +1082,7 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 		IssueTypes:    []model.IssueType{model.TypeTask},
 		Assignees:     []string{"bmf"},
 		SearchTerms:   []string{"renderer", "draw prep"},
-		IDs:           []string{issueA.ID, issueB.ID},
+		IDs:           []model.ID{issueA.ID, issueB.ID},
 		LabelsAll:     []string{"renderer"},
 		HasComments:   &hasComments,
 		UpdatedAfter:  &before,
@@ -1123,13 +1123,13 @@ func TestCreateIssuePlacement(t *testing.T) {
 
 	// The three share one frame, the epic, so the epic's children are the
 	// order a placement lands in.
-	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{epic.ID}})
+	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID}})
 	if err != nil {
 		t.Fatalf("ListIssues(epic) error = %v", err)
 	}
 	got := issueIDs(issues)
-	want := []string{promoted.ID, first.ID, second.ID}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
+	want := []model.ID{promoted.ID, first.ID, second.ID}
+	if model.JoinIDs(got, ",") != model.JoinIDs(want, ",") {
 		t.Fatalf("rank order = %#v, want %#v (creation order by default, RankTop promoted to front)", got, want)
 	}
 }
@@ -1151,11 +1151,11 @@ func TestStoreListByParentDefaultsToRankOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(childB) error = %v", err)
 	}
-	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{parent.ID}})
+	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{parent.ID}})
 	if err != nil {
 		t.Fatalf("ListIssues(parent) error = %v", err)
 	}
-	if got, want := issueIDs(children), []string{childA.ID, childB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := issueIDs(children), []model.ID{childA.ID, childB.ID}; model.JoinIDs(got, ",") != model.JoinIDs(want, ",") {
 		t.Fatalf("ListIssues(parent) ids = %#v, want %#v", got, want)
 	}
 }
@@ -1232,16 +1232,16 @@ func TestStoreGetIssueDetailDefaultsRelatedIssueGroupsToRankOrder(t *testing.T) 
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if got, want := issueIDs(detail.BlockedBy), []string{depA.ID, depB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := issueIDs(detail.BlockedBy), []model.ID{depA.ID, depB.ID}; model.JoinIDs(got, ",") != model.JoinIDs(want, ",") {
 		t.Fatalf("BlockedBy ids = %#v, want %#v", got, want)
 	}
-	if got, want := issueIDs(detail.Blocks), []string{blockedA.ID, blockedB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := issueIDs(detail.Blocks), []model.ID{blockedA.ID, blockedB.ID}; model.JoinIDs(got, ",") != model.JoinIDs(want, ",") {
 		t.Fatalf("Blocks ids = %#v, want %#v", got, want)
 	}
-	if got, want := issueIDs(detail.Children), []string{childA.ID, childB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := issueIDs(detail.Children), []model.ID{childA.ID, childB.ID}; model.JoinIDs(got, ",") != model.JoinIDs(want, ",") {
 		t.Fatalf("Children ids = %#v, want %#v", got, want)
 	}
-	if got, want := issueIDs(detail.Related), []string{relatedA.ID, relatedB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := issueIDs(detail.Related), []model.ID{relatedA.ID, relatedB.ID}; model.JoinIDs(got, ",") != model.JoinIDs(want, ",") {
 		t.Fatalf("Related ids = %#v, want %#v", got, want)
 	}
 }
@@ -1967,7 +1967,7 @@ func TestListByParentReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
 		t.Fatalf("Apply(close) error = %v", err)
 	}
 
-	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{root.ID}})
+	children, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{root.ID}})
 	if err != nil {
 		t.Fatalf("ListIssues(parent) error = %v", err)
 	}
@@ -2406,7 +2406,7 @@ func TestCloseAsDuplicateRecordsRedirectTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(dup) error = %v", err)
 	}
-	closed, err := st.Apply(ctx, dup.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
+	closed, err := st.Apply(ctx, dup.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID.Raw()}}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("Apply(close duplicate) error = %v", err)
 	}
@@ -2432,7 +2432,7 @@ func TestCloseAsDuplicateRecordsRedirectTarget(t *testing.T) {
 			t.Fatalf("Relations = %#v, want no related-to edge — the redirect is a column, not an edge", detail.Relations)
 		}
 	}
-	if got := closed.Issue.RedirectTargetValue(); got == nil || *got != canonical.ID {
+	if got := closed.Issue.RedirectTargetValue(); got == nil || *got != canonical.ID.Raw() {
 		t.Fatalf("RedirectTargetValue() = %v, want %s", got, canonical.ID)
 	}
 }
@@ -2513,7 +2513,7 @@ func TestCloseRedirectToSelfRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	_, err = st.Apply(ctx, issue.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: issue.ID}}, Actor: "tester"})
+	_, err = st.Apply(ctx, issue.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: issue.ID.Raw()}}, Actor: "tester"})
 	if err == nil {
 		t.Fatal("Apply(close as duplicate of itself) error = nil, want rejection")
 	}
@@ -2549,11 +2549,11 @@ func TestCloseRedirectToArchivedCanonicalAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(dup) error = %v", err)
 	}
-	closed, err := st.Apply(ctx, dup.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
+	closed, err := st.Apply(ctx, dup.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID.Raw()}}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("Apply(close duplicate-of archived canonical) error = %v, want success", err)
 	}
-	if got := closed.Issue.RedirectTargetValue(); got == nil || *got != canonical.ID {
+	if got := closed.Issue.RedirectTargetValue(); got == nil || *got != canonical.ID.Raw() {
 		t.Fatalf("RedirectTargetValue() = %v, want %s", got, canonical.ID)
 	}
 }
@@ -2582,11 +2582,11 @@ func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(dup) error = %v", err)
 	}
-	_, err = st.Apply(ctx, dup.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
+	_, err = st.Apply(ctx, dup.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID.Raw()}}, Actor: "tester"})
 	if err == nil {
 		t.Fatal("Apply(close duplicate-of deleted canonical) error = nil, want rejection")
 	}
-	if !strings.Contains(err.Error(), canonical.ID) || !strings.Contains(err.Error(), "deleted") {
+	if !strings.Contains(err.Error(), canonical.ID.Raw()) || !strings.Contains(err.Error(), "deleted") {
 		t.Fatalf("error = %v, want the target and its retention state named", err)
 	}
 	loaded, err := st.GetIssue(ctx, dup.ID)
@@ -2877,7 +2877,7 @@ func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
 	}
 
 	// Apply absolute order [C, A, B] at the top, regardless of creation order.
-	if _, err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{c.ID, a.ID, b.ID}); err != nil {
 		t.Fatalf("RankSet() error = %v", err)
 	}
 	all, err := st.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0})
@@ -2885,7 +2885,7 @@ func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
 	got := issueIDs(all)
-	want := []string{c.ID, a.ID, b.ID}
+	want := []model.ID{c.ID, a.ID, b.ID}
 	if len(got) < 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
 		t.Fatalf("ListIssues() top 3 ids = %#v, want prefix %#v", got, want)
 	}
@@ -2903,7 +2903,7 @@ func TestRankSetRejectsDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	if _, err := st.RankSet(ctx, []string{a.ID, a.ID}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if _, err := st.RankSet(ctx, []model.ID{a.ID, a.ID}); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("RankSet(duplicates) error = %v, want duplicate-id error", err)
 	}
 }
@@ -2957,7 +2957,7 @@ func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 	}
 
 	// Add per-child blocks: A blocks B.1, B.2, B.3.
-	for _, childID := range []string{childB1.ID, childB2.ID, childB3.ID} {
+	for _, childID := range []model.ID{childB1.ID, childB2.ID, childB3.ID} {
 		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: childID, DstID: epicA.ID, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 			t.Fatalf("AddRelation(per-child block %s) error = %v", childID, err)
 		}
@@ -2969,7 +2969,7 @@ func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 	}
 
 	// Remove per-child blocks.
-	for _, childID := range []string{childB1.ID, childB2.ID, childB3.ID} {
+	for _, childID := range []model.ID{childB1.ID, childB2.ID, childB3.ID} {
 		if err := st.RemoveRelation(ctx, childID, epicA.ID, "blocked-by"); err != nil {
 			t.Errorf("RemoveRelation(per-child block %s) error = %v", childID, err)
 		}
@@ -3010,7 +3010,7 @@ func TestStoreGetIssueDetailSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail(focus) error = %v", err)
 	}
-	if got, want := issueIDs(detail.Siblings), []string{first.ID, third.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+	if got, want := issueIDs(detail.Siblings), []model.ID{first.ID, third.ID}; model.JoinIDs(got, ",") != model.JoinIDs(want, ",") {
 		t.Fatalf("Siblings ids = %#v, want %#v (rank order, self excluded)", got, want)
 	}
 	if containsIssueID(detail.Siblings, focus.ID) {
@@ -3081,7 +3081,7 @@ func TestDeleteArchivedIssueDropsArchiveStamp(t *testing.T) {
 
 // currentHistory is issueID's history as it stands now, which a plan made
 // against a stale snapshot of the row still reads, as Apply's would.
-func currentHistory(t *testing.T, ctx context.Context, st *Store, issueID string) []model.IssueEvent {
+func currentHistory(t *testing.T, ctx context.Context, st *Store, issueID model.ID) []model.IssueEvent {
 	t.Helper()
 	events, err := st.ListEvents(ctx, issueID)
 	if err != nil {

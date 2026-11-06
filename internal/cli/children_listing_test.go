@@ -40,24 +40,24 @@ func TestChildrenIsLsWithAParent(t *testing.T) {
 		{"--query", "status:closed", "--columns", "id,parent"},
 	} {
 		var children, ls bytes.Buffer
-		if err := runChildren(t, f.ctx, &children, f.ap, append([]string{f.epicID}, flags...)); err != nil {
+		if err := runChildren(t, f.ctx, &children, f.ap, append([]string{f.epicID.Raw()}, flags...)); err != nil {
 			t.Fatalf("children %s %v error = %v", f.epicID, flags, err)
 		}
-		if err := runListWithStore(t, f.ctx, &ls, f.ap.Store, workspaceReadyPolicy(runEnv(t), f.ap), append([]string{"--parent", f.epicID}, flags...)); err != nil {
+		if err := runListWithStore(t, f.ctx, &ls, f.ap.Store, workspaceReadyPolicy(runEnv(t), f.ap), append([]string{"--parent", f.epicID.Raw()}, flags...)); err != nil {
 			t.Fatalf("ls --parent %s %v error = %v", f.epicID, flags, err)
 		}
 		if children.String() != ls.String() {
 			t.Fatalf("children %v printed\n%s\nls --parent printed\n%s", flags, children.String(), ls.String())
 		}
-		if strings.Contains(children.String(), grandchild.ID) {
+		if strings.Contains(children.String(), grandchild.ID.Raw()) {
 			t.Fatalf("children %v listed grandchild %s; want direct children only:\n%s", flags, grandchild.ID, children.String())
 		}
 	}
 
 	// The flags reach the listing rather than being accepted and dropped: the
 	// closed child is present only when the status set asks for it.
-	closedOnly := runLs(t, f.ap, "--parent", f.epicID, "--status", "closed")
-	if !strings.Contains(closedOnly, first) || strings.Contains(closedOnly, second) {
+	closedOnly := runLs(t, f.ap, "--parent", f.epicID.Raw(), "--status", "closed")
+	if !strings.Contains(closedOnly, first.Raw()) || strings.Contains(closedOnly, second.Raw()) {
 		t.Fatalf("ls --parent %s --status closed =\n%s\nwant only the closed child %s", f.epicID, closedOnly, first)
 	}
 }
@@ -121,17 +121,17 @@ func TestChildrenFindsTheParentAmongFlags(t *testing.T) {
 	f := newEpicFixture(t, "Listing epic", "# Why\nthe plan")
 	child := f.addChild("Only child")
 	for _, args := range [][]string{
-		{"--include-archived", f.epicID},
-		{"--has-comments=false", "--include-deleted", f.epicID, "--format", "table"},
-		{"--", f.epicID},
+		{"--include-archived", f.epicID.Raw()},
+		{"--has-comments=false", "--include-deleted", f.epicID.Raw(), "--format", "table"},
+		{"--", f.epicID.Raw()},
 		// Trimmed like a --parent id.
-		{" " + f.epicID + " "},
+		{" " + f.epicID.Raw() + " "},
 	} {
 		var out bytes.Buffer
 		if err := runChildren(t, f.ctx, &out, f.ap, args); err != nil {
 			t.Fatalf("children %v error = %v", args, err)
 		}
-		if !strings.Contains(out.String(), child) {
+		if !strings.Contains(out.String(), child.Raw()) {
 			t.Fatalf("children %v =\n%s\nwant the child %s", args, out.String(), child)
 		}
 	}
@@ -150,9 +150,9 @@ func TestListingRefusesAnEmptyParent(t *testing.T) {
 	}{
 		{lsSurface, []string{"--parent="}},
 		{lsSurface, []string{"--parent", " , "}},
-		{lsSurface, []string{"--parent", f.epicID, "--parent="}},
-		{lsSurface, []string{"--parent", f.epicID + ","}},
-		{childrenSurface, []string{f.epicID, "--parent="}},
+		{lsSurface, []string{"--parent", f.epicID.Raw(), "--parent="}},
+		{lsSurface, []string{"--parent", f.epicID.Raw() + ","}},
+		{childrenSurface, []string{f.epicID.Raw(), "--parent="}},
 	}
 	for _, tc := range cases {
 		var out bytes.Buffer
@@ -180,8 +180,8 @@ func TestLsRepeatedParentIsAUnion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(grandchild) error = %v", err)
 	}
-	got := runLs(t, f.ap, "--parent", f.epicID, "--parent", second)
-	for _, id := range []string{first, second, grandchild.ID} {
+	got := runLs(t, f.ap, "--parent", f.epicID.Raw(), "--parent", second.Raw())
+	for _, id := range []string{first.Raw(), second.Raw(), grandchild.ID.Raw()} {
 		if !strings.Contains(got, id) {
 			t.Fatalf("ls --parent %s --parent %s =\n%s\nwant %s listed", f.epicID, second, got, id)
 		}

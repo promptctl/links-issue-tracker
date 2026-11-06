@@ -37,6 +37,7 @@
 package conformance
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -329,7 +330,7 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 		name      string
 		got, want string
 	}{
-		{"ID", read.ID, created.ID},
+		{"ID", read.ID.Raw(), created.ID.Raw()},
 		{"Title", read.Title.Raw(), created.Title.Raw()},
 		{"Description", read.Description, created.Description},
 		{"Prompt", read.Prompt, created.Prompt},
@@ -933,7 +934,7 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 		}
 		var found []model.IssueEvent
 		for _, event := range events {
-			if event.Action == string(model.ActionStart) && event.Attribution.Stream() == stream {
+			if event.Action == string(model.ActionStart) && event.Attribution.Stream().Raw() == stream {
 				found = append(found, event)
 			}
 		}
@@ -1035,7 +1036,7 @@ func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Conte
 		t.Fatalf("Apply takeover start error = %v", err)
 	}
 	var lane []model.IssueEvent
-	for _, id := range []string{held.ID, sibling.ID} {
+	for _, id := range []model.ID{held.ID, sibling.ID} {
 		events, err := st.ListEvents(ctx, id)
 		if err != nil {
 			t.Fatalf("ListEvents(%s) error = %v", id, err)
@@ -1077,13 +1078,13 @@ func aWriteOnASlowClockSortsAfterTheHistoryItSaw(t *testing.T, ctx context.Conte
 func aStampIsPastTheNewestInstantNotTheNewestSpelling(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	older := time.Date(2026, 1, 1, 0, 0, 5, 0, time.UTC)
 	newer := older.Add(500 * time.Millisecond)
-	retitle := func(id, title string) {
+	retitle := func(id model.ID, title string) {
 		t.Helper()
 		if _, err := st.Apply(ctx, id, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "ada"}); err != nil {
 			t.Fatalf("Apply(%s, title) error = %v", id, err)
 		}
 	}
-	newestEvent := func(id string) model.IssueEvent {
+	newestEvent := func(id model.ID) model.IssueEvent {
 		t.Helper()
 		events, err := st.ListEvents(ctx, id)
 		if err != nil {
@@ -1215,7 +1216,7 @@ func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st st
 	} {
 		clk.Pin(group.at)
 		for _, title := range group.titles {
-			for _, id := range []string{subject.ID, other.ID} {
+			for _, id := range []model.ID{subject.ID, other.ID} {
 				if _, err := st.Apply(ctx, id, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
 					t.Fatalf("Apply title %q to %s error = %v", title, id, err)
 				}
@@ -1224,7 +1225,7 @@ func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st st
 	}
 	// A lifecycle verb as well as field edits, so the history under test is the
 	// mixed kind a claimant is actually read out of.
-	for _, id := range []string{subject.ID, other.ID} {
+	for _, id := range []model.ID{subject.ID, other.ID} {
 		if _, err := st.Apply(ctx, id, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 			t.Fatalf("Apply start to %s error = %v", id, err)
 		}
@@ -1251,7 +1252,7 @@ func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st st
 // arrived sorted is a no-op; stating the order here is what keeps the
 // expectation from inheriting ListAllEvents' ordering as an assumption instead
 // of asserting the contract's own rule.
-func sameIssueInOrder(all []model.IssueEvent, issueID string) []model.IssueEvent {
+func sameIssueInOrder(all []model.IssueEvent, issueID model.ID) []model.IssueEvent {
 	mine := make([]model.IssueEvent, 0, len(all))
 	for _, event := range all {
 		if event.IssueID == issueID {
@@ -1300,26 +1301,26 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk 
 	for _, tc := range []struct {
 		name   string
 		filter storage.ListIssuesFilter
-		want   []string
+		want   []model.ID
 	}{
-		{"by status", storage.ListIssuesFilter{Statuses: []model.State{model.StateInProgress}}, []string{epic.ID, task.ID}},
-		{"by type", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug}}, []string{bug.ID}},
-		{"excluding a type", storage.ListIssuesFilter{ExcludeIssueTypes: []model.IssueType{model.TypeBug}}, []string{epic.ID, task.ID}},
-		{"by assignee", storage.ListIssuesFilter{Assignees: []string{"grace"}}, []string{task.ID}},
-		{"by id", storage.ListIssuesFilter{IDs: []string{bug.ID}}, []string{bug.ID}},
-		{"by search term", storage.ListIssuesFilter{SearchTerms: []string{"widget"}}, []string{bug.ID}},
-		{"search matches topic too", storage.ListIssuesFilter{SearchTerms: []string{"parser"}}, []string{task.ID}},
-		{"by all labels", storage.ListIssuesFilter{LabelsAll: []string{"perf", "ui"}}, []string{bug.ID}},
+		{"by status", storage.ListIssuesFilter{Statuses: []model.State{model.StateInProgress}}, []model.ID{epic.ID, task.ID}},
+		{"by type", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug}}, []model.ID{bug.ID}},
+		{"excluding a type", storage.ListIssuesFilter{ExcludeIssueTypes: []model.IssueType{model.TypeBug}}, []model.ID{epic.ID, task.ID}},
+		{"by assignee", storage.ListIssuesFilter{Assignees: []string{"grace"}}, []model.ID{task.ID}},
+		{"by id", storage.ListIssuesFilter{IDs: []model.ID{bug.ID}}, []model.ID{bug.ID}},
+		{"by search term", storage.ListIssuesFilter{SearchTerms: []string{"widget"}}, []model.ID{bug.ID}},
+		{"search matches topic too", storage.ListIssuesFilter{SearchTerms: []string{"parser"}}, []model.ID{task.ID}},
+		{"by all labels", storage.ListIssuesFilter{LabelsAll: []string{"perf", "ui"}}, []model.ID{bug.ID}},
 		{"by a label the issue lacks", storage.ListIssuesFilter{LabelsAll: []string{"perf", "absent"}}, nil},
-		{"by comment presence", storage.ListIssuesFilter{HasComments: &hasComments}, []string{bug.ID}},
-		{"updated before the future", storage.ListIssuesFilter{UpdatedBefore: &future}, []string{epic.ID, bug.ID, task.ID}},
+		{"by comment presence", storage.ListIssuesFilter{HasComments: &hasComments}, []model.ID{bug.ID}},
+		{"updated before the future", storage.ListIssuesFilter{UpdatedBefore: &future}, []model.ID{epic.ID, bug.ID, task.ID}},
 		{"updated after the future", storage.ListIssuesFilter{UpdatedAfter: &future}, nil},
-		{"updated after the past", storage.ListIssuesFilter{UpdatedAfter: &past}, []string{epic.ID, bug.ID, task.ID}},
+		{"updated after the past", storage.ListIssuesFilter{UpdatedAfter: &past}, []model.ID{epic.ID, bug.ID, task.ID}},
 		// Criteria are ANDed across axes: a filter naming two axes selects the
 		// intersection, so no caller can widen a listing by adding a criterion.
 		{"two axes intersect", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeBug}, Assignees: []string{"grace"}}, nil},
 		// A slice is ORed within itself.
-		{"one axis unions", storage.ListIssuesFilter{Assignees: []string{"ada", "grace"}}, []string{bug.ID, task.ID}},
+		{"one axis unions", storage.ListIssuesFilter{Assignees: []string{"ada", "grace"}}, []model.ID{bug.ID, task.ID}},
 	} {
 		got := mustList(t, ctx, st, tc.filter)
 		assertIssueIDs(t, tc.name, got, tc.want)
@@ -1345,22 +1346,22 @@ func listByParent(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	for _, tc := range []struct {
 		name   string
 		filter storage.ListIssuesFilter
-		want   []string
+		want   []model.ID
 	}{
 		// Direct children only, in the canonical rank order: the grandchild
 		// belongs to second, not to the epic.
-		{"direct children of one parent", storage.ListIssuesFilter{ParentIDs: []string{epic.ID}}, []string{first.ID, second.ID}},
-		{"a child can itself be a parent", storage.ListIssuesFilter{ParentIDs: []string{second.ID}}, []string{grandchild.ID}},
-		{"a leaf parent has no children", storage.ListIssuesFilter{ParentIDs: []string{cousin.ID}}, nil},
-		{"parents union", storage.ListIssuesFilter{ParentIDs: []string{epic.ID, other.ID}}, []string{first.ID, second.ID, cousin.ID}},
-		{"parent intersects another axis", storage.ListIssuesFilter{ParentIDs: []string{epic.ID}, Statuses: []model.State{model.StateInProgress}}, []string{first.ID}},
+		{"direct children of one parent", storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID}}, []model.ID{first.ID, second.ID}},
+		{"a child can itself be a parent", storage.ListIssuesFilter{ParentIDs: []model.ID{second.ID}}, []model.ID{grandchild.ID}},
+		{"a leaf parent has no children", storage.ListIssuesFilter{ParentIDs: []model.ID{cousin.ID}}, nil},
+		{"parents union", storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID, other.ID}}, []model.ID{first.ID, second.ID, cousin.ID}},
+		{"parent intersects another axis", storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID}, Statuses: []model.State{model.StateInProgress}}, []model.ID{first.ID}},
 	} {
 		assertIssueIDs(t, tc.name, mustList(t, ctx, st, tc.filter), tc.want)
 	}
 
 	// An unknown parent is not a parent with no children: the listing says so
 	// rather than answering with the empty list a childless parent gets.
-	_, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []string{epic.ID, "no-such-issue"}})
+	_, err := st.ListIssues(ctx, storage.ListIssuesFilter{ParentIDs: []model.ID{epic.ID, "no-such-issue"}})
 	assertNotFound(t, err, "issue", "ListIssues under a missing parent")
 }
 
@@ -1380,14 +1381,14 @@ func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.S
 
 	// Retention is the one axis whose default is a filter rather than an
 	// absence: saying nothing means "only what is in the flow".
-	assertIssueIDs(t, "default listing", mustList(t, ctx, st, storage.ListIssuesFilter{}), []string{epic.ID, live.ID})
+	assertIssueIDs(t, "default listing", mustList(t, ctx, st, storage.ListIssuesFilter{}), []model.ID{epic.ID, live.ID})
 	assertIssueIDs(t, "including archived",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true}), []string{epic.ID, live.ID, archived.ID})
+		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true}), []model.ID{epic.ID, live.ID, archived.ID})
 	assertIssueIDs(t, "including deleted",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}), []string{epic.ID, live.ID, deleted.ID})
+		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeDeleted: true}), []model.ID{epic.ID, live.ID, deleted.ID})
 	assertIssueIDs(t, "including both",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true}),
-		[]string{epic.ID, live.ID, archived.ID, deleted.ID})
+		[]model.ID{epic.ID, live.ID, archived.ID, deleted.ID})
 }
 
 func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -1400,16 +1401,16 @@ func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store, clk
 
 	assertIssueIDs(t, "sorted by title ascending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
-		[]string{a.ID, b.ID, c.ID, epic.ID})
+		[]model.ID{a.ID, b.ID, c.ID, epic.ID})
 	assertIssueIDs(t, "sorted by title descending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title", Desc: true}}}),
-		[]string{epic.ID, c.ID, b.ID, a.ID})
+		[]model.ID{epic.ID, c.ID, b.ID, a.ID})
 
 	// Limit truncates the ordered result rather than sampling it, so a limited
 	// listing is the head of the unlimited one.
-	assertIssueIDs(t, "limited to two", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 2}), []string{epic.ID, b.ID})
+	assertIssueIDs(t, "limited to two", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 2}), []model.ID{epic.ID, b.ID})
 	// Zero is not a limit of zero; it is the absence of a limit.
-	assertIssueIDs(t, "unlimited", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 0}), []string{epic.ID, b.ID, a.ID, c.ID})
+	assertIssueIDs(t, "unlimited", mustList(t, ctx, st, storage.ListIssuesFilter{Limit: 0}), []model.ID{epic.ID, b.ID, a.ID, c.ID})
 
 	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "nonsense"}}}); err == nil {
 		t.Error("sorting by an unknown field succeeded; want an error")
@@ -1430,7 +1431,7 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("same"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("same"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
-	ascending := []string{epic.ID, first.ID, second.ID, third.ID}
+	ascending := []model.ID{epic.ID, first.ID, second.ID, third.ID}
 	slices.Sort(ascending)
 	assertIssueIDs(t, "tied titles ordered by id",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
@@ -1446,7 +1447,7 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store,
 	// answer for it, since that key would put the rows back in ascending order.
 	assertIssueIDs(t, "sorted by id descending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "id", Desc: true}}}),
-		[]string{ascending[3], ascending[2], ascending[1], ascending[0]})
+		[]model.ID{ascending[3], ascending[2], ascending[1], ascending[0]})
 }
 
 // listOrdersByEachValueKey pins what each key that reads one of an issue's
@@ -1493,13 +1494,13 @@ func listOrdersByEachValueKey(t *testing.T, ctx context.Context, st storage.Stor
 		clk.Pin(laterInstant)
 		first := mustCreate(t, ctx, st, row.first)
 
-		pair := []string{first.ID, second.ID}
+		pair := []model.ID{first.ID, second.ID}
 		assertIssueIDs(t, "sorted by "+row.key+" ascending",
 			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key}, {Field: "created_at"}}}),
-			[]string{first.ID, second.ID})
+			[]model.ID{first.ID, second.ID})
 		assertIssueIDs(t, "sorted by "+row.key+" descending",
 			mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: row.key, Desc: true}, {Field: "created_at", Desc: true}}}),
-			[]string{second.ID, first.ID})
+			[]model.ID{second.ID, first.ID})
 	}
 }
 
@@ -1532,17 +1533,17 @@ func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage
 	// of the listing — leading ascending on its absent value, trailing
 	// descending — so both directions below fail loudly rather than one of them
 	// passing either way.
-	onlyLeavesAndEpic := []string{closedLeaf.ID, openLeaf.ID, epic.ID}
+	onlyLeavesAndEpic := []model.ID{closedLeaf.ID, openLeaf.ID, epic.ID}
 
 	// "closed" < "in_progress" < "open" as tokens, and the epic derives
 	// in_progress, so it sorts BETWEEN the two leaves in both directions.
 	assertIssueIDs(t, "container sorts among the leaves ascending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: onlyLeavesAndEpic, SortBy: []storage.SortSpec{{Field: "status"}}}),
-		[]string{closedLeaf.ID, epic.ID, openLeaf.ID})
+		[]model.ID{closedLeaf.ID, epic.ID, openLeaf.ID})
 
 	assertIssueIDs(t, "container sorts among the leaves descending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: onlyLeavesAndEpic, SortBy: []storage.SortSpec{{Field: "status", Desc: true}}}),
-		[]string{openLeaf.ID, epic.ID, closedLeaf.ID})
+		[]model.ID{openLeaf.ID, epic.ID, closedLeaf.ID})
 }
 
 // stampsComeFromTheClock states the clock seam itself: an engine stamps what
@@ -1623,19 +1624,19 @@ func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage
 		}
 	}
 
-	pair := []string{older.ID, newer.ID}
+	pair := []model.ID{older.ID, newer.ID}
 	assertIssueIDs(t, "sorted by created_at ascending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at"}, {Field: "updated_at"}}}),
-		[]string{older.ID, newer.ID})
+		[]model.ID{older.ID, newer.ID})
 	assertIssueIDs(t, "sorted by created_at descending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "created_at", Desc: true}, {Field: "updated_at", Desc: true}}}),
-		[]string{newer.ID, older.ID})
+		[]model.ID{newer.ID, older.ID})
 	assertIssueIDs(t, "sorted by updated_at ascending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at"}, {Field: "created_at"}}}),
-		[]string{newer.ID, older.ID})
+		[]model.ID{newer.ID, older.ID})
 	assertIssueIDs(t, "sorted by updated_at descending",
 		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: pair, SortBy: []storage.SortSpec{{Field: "updated_at", Desc: true}, {Field: "created_at", Desc: true}}}),
-		[]string{older.ID, newer.ID})
+		[]model.ID{older.ID, newer.ID})
 }
 
 // eventsAreTotallyOrdered pins the history ordering to (created_at, id), and
@@ -2075,7 +2076,7 @@ func rankSetStaysInsideItsFrame(t *testing.T, ctx context.Context, st storage.St
 	before := mustGet(t, ctx, st, outsider.ID).Rank
 	epicBefore := mustGet(t, ctx, st, epic.ID).Rank
 
-	if _, err := st.RankSet(ctx, []string{c3.ID, c1.ID}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{c3.ID, c1.ID}); err != nil {
 		t.Fatalf("RankSet among siblings error = %v", err)
 	}
 
@@ -2133,13 +2134,13 @@ func rankSetOverAWholeFramePermutesItsKeys(t *testing.T, ctx context.Context, st
 		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c2"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}),
 		mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c3"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}),
 	}
-	frame := map[string]struct{}{}
+	frame := map[model.ID]struct{}{}
 	for _, child := range children {
 		frame[child.ID] = struct{}{}
 	}
 	before := ranksByID(mustList(t, ctx, st, storage.ListIssuesFilter{}))
 
-	named := []string{children[2].ID, children[0].ID, children[1].ID}
+	named := []model.ID{children[2].ID, children[0].ID, children[1].ID}
 	if _, err := st.RankSet(ctx, named); err != nil {
 		t.Fatalf("RankSet over every child error = %v", err)
 	}
@@ -2181,7 +2182,7 @@ func rankSetFromMidFrameLeadsIt(t *testing.T, ctx context.Context, st storage.St
 	fourth := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("fourth"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	childKey, innerKey := mustGet(t, ctx, st, child.ID).Rank, mustGet(t, ctx, st, inner.ID).Rank
 
-	named := []string{third.ID, second.ID}
+	named := []model.ID{third.ID, second.ID}
 	if _, err := st.RankSet(ctx, named); err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
@@ -2206,15 +2207,15 @@ func rankSetFromMidFrameLeadsIt(t *testing.T, ctx context.Context, st storage.St
 	}
 }
 
-func ranksByID(issues []model.Issue) map[string]string {
-	out := make(map[string]string, len(issues))
+func ranksByID(issues []model.Issue) map[model.ID]string {
+	out := make(map[model.ID]string, len(issues))
 	for _, issue := range issues {
 		out[issue.ID] = issue.Rank
 	}
 	return out
 }
 
-func childrenOf(issues []model.Issue, frame map[string]struct{}) []model.Issue {
+func childrenOf(issues []model.Issue, frame map[model.ID]struct{}) []model.Issue {
 	var out []model.Issue
 	for _, issue := range issues {
 		if _, in := frame[issue.ID]; in {
@@ -2265,7 +2266,7 @@ func rankVerbsRefuseADeletedIssue(t *testing.T, ctx context.Context, st storage.
 		{"RankAbove", func() error { _, err := st.RankAbove(ctx, gone.ID, sibling.ID); return err }},
 		{"RankBelow", func() error { _, err := st.RankBelow(ctx, gone.ID, sibling.ID); return err }},
 		{"RankAbove(anchor)", func() error { _, err := st.RankAbove(ctx, sibling.ID, gone.ID); return err }},
-		{"RankSet", func() error { _, err := st.RankSet(ctx, []string{gone.ID, sibling.ID}); return err }},
+		{"RankSet", func() error { _, err := st.RankSet(ctx, []model.ID{gone.ID, sibling.ID}); return err }},
 	}
 	// The message is asserted whole, not merely as "some error", and compared
 	// against one expectation for both engines — which is the only thing that
@@ -2329,15 +2330,15 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "after the epic is moved past its own children", listed,
-		[]string{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
+		[]model.ID{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
 	assertIssueIDs(t, "descending is the same order reversed",
 		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "rank", Desc: true}}}),
-		[]string{grandchild.ID, nested.ID, child.ID, epic.ID, last.ID, outer.ID})
+		[]model.ID{grandchild.ID, nested.ID, child.ID, epic.ID, last.ID, outer.ID})
 	// The epic's key orders its descendants even in a listing that leaves the
 	// epic out.
 	assertIssueIDs(t, "a listing without the container still orders by it",
-		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []string{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID}}),
-		[]string{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID})
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []model.ID{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID}}),
+		[]model.ID{outer.ID, last.ID, child.ID, nested.ID, grandchild.ID})
 
 	if _, err := st.RankAbove(ctx, epic.ID, outer.ID); err != nil {
 		t.Fatalf("RankAbove(epic, outer) error = %v", err)
@@ -2347,13 +2348,13 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 
 	// Displaced: a rank set names only the outsiders, and the epic takes the
 	// last of its frame's keys, past everything inside it.
-	if _, err := st.RankSet(ctx, []string{outer.ID, last.ID}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{outer.ID, last.ID}); err != nil {
 		t.Fatalf("RankSet(outer, last) error = %v", err)
 	}
 	listed = mustList(t, ctx, st, storage.ListIssuesFilter{})
 	assertDistinctRanks(t, listed)
 	assertIssueIDs(t, "after a rank set displaces the epic past its own children", listed,
-		[]string{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
+		[]model.ID{outer.ID, last.ID, epic.ID, child.ID, nested.ID, grandchild.ID})
 
 	// A view's group of related issues follows the same rule: dependencies
 	// spread over three frames list in tree order, not by their own keys.
@@ -2367,7 +2368,7 @@ func aContainerListsBeforeEverythingInsideIt(t *testing.T, ctx context.Context, 
 		t.Fatalf("GetIssueDetail(%s) error = %v", outer.ID, err)
 	}
 	assertIssueIDs(t, "an issue's dependencies across frames", detail.BlockedBy,
-		[]string{last.ID, epic.ID, grandchild.ID})
+		[]model.ID{last.ID, epic.ID, grandchild.ID})
 }
 
 // rankIntentsResolveAcrossFrames is why the anchored verbs report a RankMove
@@ -2411,7 +2412,7 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("b"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("c"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 
-	result, err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID})
+	result, err := st.RankSet(ctx, []model.ID{c.ID, a.ID, b.ID})
 	if err != nil {
 		t.Fatalf("RankSet error = %v", err)
 	}
@@ -2423,7 +2424,7 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, cl
 	if len(resolutions) != 3 {
 		t.Fatalf("RankSet returned %d resolutions, want 3", len(resolutions))
 	}
-	for i, want := range []string{c.ID, a.ID, b.ID} {
+	for i, want := range []model.ID{c.ID, a.ID, b.ID} {
 		if resolutions[i].NamedID != want {
 			t.Errorf("resolution %d NamedID = %q, want %q", i, resolutions[i].NamedID, want)
 		}
@@ -2478,7 +2479,7 @@ func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, 
 	if err != nil {
 		t.Fatalf("GetIssueDetail(origin) error = %v", err)
 	}
-	assertIssueIDs(t, "follow-ups of the origin", originDetail.FollowUps, []string{first.ID, second.ID})
+	assertIssueIDs(t, "follow-ups of the origin", originDetail.FollowUps, []model.ID{first.ID, second.ID})
 	if originDetail.FollowsUp != nil {
 		t.Errorf("origin detail.FollowsUp = %v, want none", originDetail.FollowsUp)
 	}
@@ -2492,7 +2493,7 @@ func followUpsLinkBothWays(t *testing.T, ctx context.Context, st storage.Store, 
 	var recorded bool
 	for _, event := range events {
 		for _, change := range event.Changes {
-			if event.Action == "created" && change.Field == "follows_up" && change.From == "" && change.To == origin.ID {
+			if event.Action == "created" && change.Field == "follows_up" && change.From == "" && change.To == origin.ID.Raw() {
 				recorded = true
 			}
 		}
@@ -2541,7 +2542,7 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("duplicate"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	closed, err := st.Apply(ctx, duplicate.ID, storage.Change{
-		Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "ada",
+		Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID.Raw()}}, Actor: "ada",
 	})
 	if err != nil {
 		t.Fatalf("Apply close-as-duplicate error = %v", err)
@@ -2554,7 +2555,7 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 	if resolution := closed.Issue.ResolutionValue(); resolution == nil || *resolution != model.ResolutionDuplicate {
 		t.Errorf("Resolution after close = %v, want duplicate", resolution)
 	}
-	if target := closed.Issue.RedirectTargetValue(); target == nil || *target != canonical.ID {
+	if target := closed.Issue.RedirectTargetValue(); target == nil || *target != canonical.ID.Raw() {
 		t.Errorf("RedirectTarget after close = %v, want %s", target, canonical.ID)
 	}
 	if closed.Issue.ClosedAtValue() == nil {
@@ -2578,7 +2579,7 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 	})
 	assertNotFound(t, err, "issue", "closing as a duplicate of a missing issue")
 	if _, err := st.Apply(ctx, duplicate.ID, storage.Change{
-		Action: model.Close{Outcome: model.Duplicate{Of: duplicate.ID}}, Actor: "ada",
+		Action: model.Close{Outcome: model.Duplicate{Of: duplicate.ID.Raw()}}, Actor: "ada",
 	}); err == nil {
 		t.Error("closing an issue as a duplicate of itself succeeded; want an error")
 	}
@@ -2713,7 +2714,7 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 	// not reach the stored one.
 	failed.Laws[0] = "rewritten"
 
-	judging := func(plan string) []string {
+	judging := func(plan string) []model.ID {
 		t.Helper()
 		detail, err := st.GetIssueDetail(ctx, issue.ID)
 		if err != nil {
@@ -2735,7 +2736,7 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 		if want := []model.Law{"carrying-cost", "one-source-of-truth"}; !slices.Equal(detail.PlanReviews[1].Laws, want) {
 			t.Fatalf("stored fail's laws = %v, want %v: unchanged by a write through the review AddPlanReview returned", detail.PlanReviews[1].Laws, want)
 		}
-		var ids []string
+		var ids []model.ID
 		for _, r := range detail.PlanReviews {
 			if r.Judges(detail.Issue.Plan) {
 				ids = append(ids, r.ID)
@@ -2743,7 +2744,7 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 		}
 		return ids
 	}
-	if got := judging("remove the retry"); !slices.Equal(got, []string{passed.ID}) {
+	if got := judging("remove the retry"); !slices.Equal(got, []model.ID{passed.ID}) {
 		t.Errorf("reviews of the current plan = %v, want only the pass of v2", got)
 	}
 	revise("remove the retry and its flag")
@@ -2751,7 +2752,7 @@ func aPlanReviewJudgesOneVersion(t *testing.T, ctx context.Context, st storage.S
 		t.Errorf("reviews of a revised plan = %v, want none: a verdict on one text says nothing about another", got)
 	}
 	revise("add a retry")
-	if got := judging("add a retry"); !slices.Equal(got, []string{failed.ID}) {
+	if got := judging("add a retry"); !slices.Equal(got, []model.ID{failed.ID}) {
 		t.Errorf("reviews of a plan returned to v1's text = %v, want the fail of v1", got)
 	}
 
@@ -2946,7 +2947,7 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 		t.Fatalf("AddRelation error = %v", err)
 	}
 
-	byID, err := st.GetRelationsByIDs(ctx, []string{epic.ID, child.ID, dependency.ID})
+	byID, err := st.GetRelationsByIDs(ctx, []model.ID{epic.ID, child.ID, dependency.ID})
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs error = %v", err)
 	}
@@ -2958,13 +2959,13 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 	if childEdges.Parent == nil || childEdges.Parent.ID != epic.ID {
 		t.Errorf("child Parent = %+v, want the epic", childEdges.Parent)
 	}
-	assertIssueIDs(t, "child BlockedBy", childEdges.BlockedBy, []string{dependency.ID})
+	assertIssueIDs(t, "child BlockedBy", childEdges.BlockedBy, []model.ID{dependency.ID})
 
-	assertIssueIDs(t, "epic Children", byID[epic.ID].Children, []string{child.ID})
+	assertIssueIDs(t, "epic Children", byID[epic.ID].Children, []model.ID{child.ID})
 
 	// BlockedBy and Blocks are the two readings of one edge set, which is why
 	// the dependency sees the child under Blocks without a second row existing.
-	assertIssueIDs(t, "dependency Blocks", byID[dependency.ID].Blocks, []string{child.ID})
+	assertIssueIDs(t, "dependency Blocks", byID[dependency.ID].Blocks, []model.ID{child.ID})
 
 	// An id nobody asked about is simply not in the map; asking about none is
 	// an empty result, not an error.
@@ -2989,7 +2990,7 @@ func parentByChildMapsEveryChild(t *testing.T, ctx context.Context, st storage.S
 	gone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("gone epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
 	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("deleted"), Lane: storage.SharedLane, Topic: "core", ParentID: gone.ID})
 	for _, step := range []struct {
-		id     string
+		id     model.ID
 		action model.Action
 	}{{archived.ID, model.Archive{}}, {shelved.ID, model.Archive{}}, {deleted.ID, model.Delete{}}, {gone.ID, model.Delete{}}} {
 		if _, err := st.Apply(ctx, step.id, storage.Change{Action: step.action, Actor: "ada"}); err != nil {
@@ -3004,7 +3005,7 @@ func parentByChildMapsEveryChild(t *testing.T, ctx context.Context, st storage.S
 	if err != nil {
 		t.Fatalf("ParentByChild error = %v", err)
 	}
-	want := map[string]string{
+	want := map[model.ID]model.ID{
 		nested.ID: epic.ID, live.ID: nested.ID, shelved.ID: epic.ID, archived.ID: shelved.ID,
 		gone.ID: epic.ID, deleted.ID: gone.ID, dependency.ID: other.ID,
 	}
@@ -3026,14 +3027,14 @@ func rankInversionsReadTreeOrder(t *testing.T, ctx context.Context, st storage.S
 	earlyTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("early task"), Lane: storage.SharedLane, Topic: "core", ParentID: early.ID})
 	top := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	topTask := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("top task"), Lane: storage.SharedLane, Topic: "core", ParentID: top.ID})
-	for _, id := range []string{late.ID, top.ID} {
+	for _, id := range []model.ID{late.ID, top.ID} {
 		if _, err := st.RankToTop(ctx, id); err != nil {
 			t.Fatalf("RankToTop(%s) error = %v", id, err)
 		}
 	}
 	mustBlock(t, ctx, st, lateTask.ID, earlyTask.ID)
 	mustBlock(t, ctx, st, earlyTask.ID, topTask.ID)
-	listed := mustListIDs(t, ctx, st, []string{top.ID, topTask.ID, late.ID, lateTask.ID, early.ID, earlyTask.ID})
+	listed := mustListIDs(t, ctx, st, []model.ID{top.ID, topTask.ID, late.ID, lateTask.ID, early.ID, earlyTask.ID})
 	order, err := st.DependencyOrder(ctx)
 	if err != nil {
 		t.Fatalf("DependencyOrder error = %v", err)
@@ -3058,17 +3059,17 @@ func interleavedEpicsHoldNoRankInversion(t *testing.T, ctx context.Context, st s
 	middle := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("middle"), Lane: storage.SharedLane, Topic: "core", ParentID: second.ID})
 	mustBlock(t, ctx, st, later.ID, middle.ID)
 	mustBlock(t, ctx, st, middle.ID, base.ID)
-	listed := mustListIDs(t, ctx, st, []string{first.ID, later.ID, base.ID, second.ID, middle.ID})
+	listed := mustListIDs(t, ctx, st, []model.ID{first.ID, later.ID, base.ID, second.ID, middle.ID})
 	order, err := st.DependencyOrder(ctx)
 	if err != nil {
 		t.Fatalf("DependencyOrder error = %v", err)
 	}
-	epics := []string{first.ID, second.ID}
+	epics := []model.ID{first.ID, second.ID}
 	slices.Sort(epics)
-	if got := order.Interleaved(); !slices.EqualFunc(got, [][]string{epics}, slices.Equal) {
+	if got := order.Interleaved(); !slices.EqualFunc(got, [][]model.ID{epics}, slices.Equal) {
 		t.Errorf("Interleaved() = %v, want [%v]", got, epics)
 	}
-	for _, edge := range [][2]string{{later.ID, middle.ID}, {middle.ID, base.ID}} {
+	for _, edge := range [][2]model.ID{{later.ID, middle.ID}, {middle.ID, base.ID}} {
 		if order.Inverted(listed[edge[0]], listed[edge[1]]) {
 			t.Errorf("Inverted(%s blocked by %s) = true, want false: the epics are interleaved", edge[0], edge[1])
 		}
@@ -3096,7 +3097,7 @@ func interleavedEpicsHoldNoRankInversion(t *testing.T, ctx context.Context, st s
 }
 
 // mustBlock records dependent blocked by dependency.
-func mustBlock(t *testing.T, ctx context.Context, st storage.Store, dependent, dependency string) {
+func mustBlock(t *testing.T, ctx context.Context, st storage.Store, dependent, dependency model.ID) {
 	t.Helper()
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddRelation(%s blocked by %s) error = %v", dependent, dependency, err)
@@ -3105,14 +3106,14 @@ func mustBlock(t *testing.T, ctx context.Context, st storage.Store, dependent, d
 
 // mustListIDs lists every issue, asserts the listing is want, and returns the
 // listed issues by id.
-func mustListIDs(t *testing.T, ctx context.Context, st storage.Store, want []string) map[string]model.Issue {
+func mustListIDs(t *testing.T, ctx context.Context, st storage.Store, want []model.ID) map[model.ID]model.Issue {
 	t.Helper()
 	listed, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues error = %v", err)
 	}
 	assertIssueIDs(t, "listing", listed, want)
-	byID := make(map[string]model.Issue, len(listed))
+	byID := make(map[model.ID]model.Issue, len(listed))
 	for _, issue := range listed {
 		byID[issue.ID] = issue
 	}
@@ -3129,7 +3130,7 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: child.ID, ParentID: epic.ID, CreatedBy: "ada"}); err != nil {
 		t.Fatalf("SetParent error = %v", err)
 	}
-	assertIssueIDs(t, "children of the epic", mustChildren(t, ctx, st, epic.ID), []string{child.ID})
+	assertIssueIDs(t, "children of the epic", mustChildren(t, ctx, st, epic.ID), []model.ID{child.ID})
 
 	// An issue has at most one parent, so reparenting replaces rather than
 	// adds: the old parent loses the child in the same act.
@@ -3137,7 +3138,7 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *cloc
 		t.Fatalf("SetParent reparent error = %v", err)
 	}
 	assertIssueIDs(t, "children of the old epic", mustChildren(t, ctx, st, epic.ID), nil)
-	assertIssueIDs(t, "children of the new epic", mustChildren(t, ctx, st, other.ID), []string{child.ID})
+	assertIssueIDs(t, "children of the new epic", mustChildren(t, ctx, st, other.ID), []model.ID{child.ID})
 
 	if err := st.ClearParent(ctx, child.ID); err != nil {
 		t.Fatalf("ClearParent error = %v", err)
@@ -3231,33 +3232,33 @@ func anImportFileThatBreaksARuleIsRefusedWhole(t *testing.T, ctx context.Context
 		{"BulkApply(a label the create refuses, after a create that would land)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, Labels: &commaLabel})},
 		{"BulkApply(an update that empties a title, after a create that would land)", bulk(epic("e", ""),
-			storage.BulkIssueSpec{ID: existing.ID, Title: &blank})},
+			storage.BulkIssueSpec{ID: existing.ID.Raw(), Title: &blank})},
 		{"BulkApply(an update with a label the update refuses, after a create that would land)", bulk(epic("e", ""),
-			storage.BulkIssueSpec{ID: existing.ID, Labels: &commaLabel})},
+			storage.BulkIssueSpec{ID: existing.ID.Raw(), Labels: &commaLabel})},
 		{"BulkApply(an assignee the create refuses, after a create that would land)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, Assignee: &commaAssignee})},
 		{"BulkApply(an update with an assignee the update refuses, after a create that would land)", bulk(epic("e", ""),
-			storage.BulkIssueSpec{ID: existing.ID, Assignee: &commaAssignee})},
+			storage.BulkIssueSpec{ID: existing.ID.Raw(), Assignee: &commaAssignee})},
 		{"BulkApply(a duplicate local_id)", bulk(epic("a", ""), epic("a", ""))},
 		{"BulkApply(a blocked_by cycle)", bulk(epic("a", "b"), epic("b", "a"))},
 		{"BulkApply(a blocked_by naming one existing issue twice)", bulk(
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: ptr([]string{existing.ID, existing.ID})})},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &epicType, BlockedBy: ptr(model.RawIDs([]model.ID{existing.ID, existing.ID}))})},
 		{"BulkApply(a task with no local_id blocked by the epic it sits under)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: ptr([]string{"e"})})},
 		{"BulkApply(a task blocked by a task beside it under one epic)", bulk(epic("e", ""),
 			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e")},
 			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), BlockedBy: ptr([]string{"a"})})},
 		{"BulkApply(an update, then a task blocked by a task beside it under an existing epic)", bulk(
-			storage.BulkIssueSpec{ID: existing.ID, Title: &renamed},
-			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID)},
-			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID), BlockedBy: ptr([]string{"a"})})},
+			storage.BulkIssueSpec{ID: existing.ID.Raw(), Title: &renamed},
+			storage.BulkIssueSpec{LocalID: "a", Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID.Raw())},
+			storage.BulkIssueSpec{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(existing.ID.Raw()), BlockedBy: ptr([]string{"a"})})},
 		// Whether a task may become an epic is read off the issue it names, so
 		// only the update's own write can judge it, after the create, the
 		// reparent, the ordering and the update ahead of it.
 		{"BulkApply(a create, a reparent under it with rank: top and an update, then a leaf turned epic)", bulk(epic("e", ""),
-			storage.BulkIssueSpec{ID: mover.ID, Parent: ptr("e"), Rank: &top},
-			storage.BulkIssueSpec{ID: existing.ID, Title: &renamed},
-			storage.BulkIssueSpec{ID: crosser.ID, IssueType: &epicType})},
+			storage.BulkIssueSpec{ID: mover.ID.Raw(), Parent: ptr("e"), Rank: &top},
+			storage.BulkIssueSpec{ID: existing.ID.Raw(), Title: &renamed},
+			storage.BulkIssueSpec{ID: crosser.ID.Raw(), IssueType: &epicType})},
 	} {
 		// The file breaks a field rule or an edge rule, so the refusal is any
 		// Refusal, not one type.
@@ -3285,7 +3286,7 @@ func anImportFileRefusedAtAWriteWritesNothing(t *testing.T, ctx context.Context,
 	blocked := tasksInEpicsOfTheirOwn(t, ctx, st, 3)
 	mustBlock(t, ctx, st, blocked[0], blocked[1])
 	title, topic, epicType, taskType, renamed, top := "imported", "core", "epic", "task", "renamed", "top"
-	update := storage.BulkIssueSpec{ID: existing.ID, Title: &renamed}
+	update := storage.BulkIssueSpec{ID: existing.ID.Raw(), Title: &renamed}
 	for _, file := range []struct {
 		what  string
 		specs []storage.BulkIssueSpec
@@ -3300,12 +3301,12 @@ func anImportFileRefusedAtAWriteWritesNothing(t *testing.T, ctx context.Context,
 			{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr("e"), Rank: &top}}},
 		{"an epic, an issue moved under it with rank: top and an update, then an update of an issue that does not exist", []storage.BulkIssueSpec{
 			{LocalID: "e", Title: &title, Topic: &topic, IssueType: &epicType},
-			{ID: mover.ID, Parent: ptr("e"), Rank: &top},
+			{ID: mover.ID.Raw(), Parent: ptr("e"), Rank: &top},
 			update,
 			{ID: "no-such-issue", Title: &renamed}}},
 		{"an epic's parent cleared and a blocked_by set replaced, then an update of an issue that does not exist", []storage.BulkIssueSpec{
-			{ID: nested.ID, Parent: ptr("")},
-			{ID: blocked[0], BlockedBy: blockedBy(blocked[2])},
+			{ID: nested.ID.Raw(), Parent: ptr("")},
+			{ID: blocked[0].Raw(), BlockedBy: blockedBy(blocked[2])},
 			{ID: "no-such-issue", Title: &renamed}}},
 	} {
 		before := mustExport(t, ctx, st)
@@ -3365,7 +3366,7 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 		t.Error("AddRelation(parent-child onto a leaf) succeeded; want a refusal")
 	}
 	assertIssueIDs(t, "children of the leaf after the refusals", mustChildren(t, ctx, st, leaf.ID), nil)
-	assertIssueIDs(t, "children of the epic after the refusals", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID, nested.ID})
+	assertIssueIDs(t, "children of the epic after the refusals", mustChildren(t, ctx, st, epic.ID), []model.ID{leaf.ID, nested.ID})
 
 	// The two file imports are gated before their first write: a file with a
 	// loose leaf, or a leaf named as a parent, is refused whole, with nothing
@@ -3436,14 +3437,14 @@ func everyTicketLivesInsideAContainer(t *testing.T, ctx context.Context, st stor
 			t.Errorf("%s on a leaf error = %q; want it to name lit parent set as the move", detach.door, err)
 		}
 	}
-	assertIssueIDs(t, "children of the epic after the detach refusals", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID, nested.ID})
+	assertIssueIDs(t, "children of the epic after the detach refusals", mustChildren(t, ctx, st, epic.ID), []model.ID{leaf.ID, nested.ID})
 
 	// A nested epic is the one thing a detach lifts to the top level, through
 	// either door; the second finds nothing left to remove.
 	if err := st.RemoveRelation(ctx, nested.ID, epic.ID, model.RelParentChild); err != nil {
 		t.Fatalf("RemoveRelation(nested epic's parent edge) error = %v; an epic may be top-level", err)
 	}
-	assertIssueIDs(t, "children of the epic after lifting the nested epic", mustChildren(t, ctx, st, epic.ID), []string{leaf.ID})
+	assertIssueIDs(t, "children of the epic after lifting the nested epic", mustChildren(t, ctx, st, epic.ID), []model.ID{leaf.ID})
 	assertParentAbsent(t, st.ClearParent(ctx, nested.ID), nested.ID, "ClearParent of the lifted epic")
 
 	// A missing edge is still reported as missing before the rule is judged,
@@ -3467,12 +3468,12 @@ func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store,
 
 	// Precondition that gives the case teeth: the chain really is root > mid >
 	// leaf, so each refusal below is refusing a loop rather than a nonsense id.
-	assertIssueIDs(t, "children of the root", mustChildren(t, ctx, st, root.ID), []string{mid.ID})
-	assertIssueIDs(t, "children of the mid epic", mustChildren(t, ctx, st, mid.ID), []string{leaf.ID})
+	assertIssueIDs(t, "children of the root", mustChildren(t, ctx, st, root.ID), []model.ID{mid.ID})
+	assertIssueIDs(t, "children of the mid epic", mustChildren(t, ctx, st, mid.ID), []model.ID{leaf.ID})
 
 	refusals := []struct {
 		what          string
-		child, parent string
+		child, parent model.ID
 	}{
 		{"a parent under its own child", root.ID, mid.ID},
 		{"a root under its own grandchild", root.ID, leaf.ID},
@@ -3488,8 +3489,8 @@ func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store,
 	}
 
 	// Every refusal left the tree exactly as it found it.
-	assertIssueIDs(t, "children of the root after the refusals", mustChildren(t, ctx, st, root.ID), []string{mid.ID})
-	assertIssueIDs(t, "children of the mid epic after the refusals", mustChildren(t, ctx, st, mid.ID), []string{leaf.ID})
+	assertIssueIDs(t, "children of the root after the refusals", mustChildren(t, ctx, st, root.ID), []model.ID{mid.ID})
+	assertIssueIDs(t, "children of the mid epic after the refusals", mustChildren(t, ctx, st, mid.ID), []model.ID{leaf.ID})
 
 	// A move that closes no loop still works, or the rule has simply broken
 	// reparenting.
@@ -3497,7 +3498,7 @@ func theHierarchyStaysATree(t *testing.T, ctx context.Context, st storage.Store,
 	if _, err := st.SetParent(ctx, storage.SetParentInput{ChildID: leaf.ID, ParentID: sibling.ID}); err != nil {
 		t.Fatalf("SetParent(leaf under an unrelated epic) error = %v; this move closes no cycle", err)
 	}
-	assertIssueIDs(t, "children of the sibling epic", mustChildren(t, ctx, st, sibling.ID), []string{leaf.ID})
+	assertIssueIDs(t, "children of the sibling epic", mustChildren(t, ctx, st, sibling.ID), []model.ID{leaf.ID})
 	assertIssueIDs(t, "children of the mid epic after the move", mustChildren(t, ctx, st, mid.ID), nil)
 }
 
@@ -3514,7 +3515,7 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 
 	refusedPairs := []struct {
 		what                  string
-		dependent, dependency string
+		dependent, dependency model.ID
 	}{
 		{"a leaf blocking its grandparent epic", root.ID, leaf.ID},
 		{"a grandparent epic blocking its leaf", leaf.ID, root.ID},
@@ -3527,7 +3528,7 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 		_, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: r.dependent, DstID: r.dependency, Type: model.RelBlockedBy})
 		assertHierarchyBlocksRefused(t, err, "AddRelation("+r.what+")")
 	}
-	for _, id := range []string{root.ID, mid.ID, leaf.ID, child.ID} {
+	for _, id := range []model.ID{root.ID, mid.ID, leaf.ID, child.ID} {
 		edges, err := st.ListRelationsForIssue(ctx, id, model.RelBlockedBy)
 		if err != nil {
 			t.Fatalf("ListRelationsForIssue(%s) error = %v", id, err)
@@ -3551,7 +3552,7 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 	held := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("held leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: holder.ID})
 	accepted := []struct {
 		what                  string
-		dependent, dependency string
+		dependent, dependency model.ID
 	}{
 		{"a sub-epic blocking its sibling sub-epic", holder.ID, mid.ID},
 		{"a sub-epic blocking a leaf under its sibling", mid.ID, held.ID},
@@ -3575,7 +3576,7 @@ func blocksNeverRunsAlongTheHierarchy(t *testing.T, ctx context.Context, st stor
 
 	title, topic, issueType := "bulk leaf", "core", "task"
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: ptr(mid.ID), BlockedBy: ptr([]string{root.ID})},
+		{Title: &title, Topic: &topic, IssueType: &issueType, Parent: ptr(mid.ID.Raw()), BlockedBy: ptr(model.RawIDs([]model.ID{root.ID}))},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf depending on its grandparent epic)")
 }
@@ -3599,7 +3600,7 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 	// A leaf is not its own sibling: its self-edge is refused as a self-edge.
 	_, err = st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: first.ID, Type: model.RelBlockedBy})
 	assertRuleRefused(t, err, storage.RuleSelfLoop, "AddRelation(a leaf blocked by itself)")
-	if want := first.ID + " cannot be blocked by itself"; err == nil || !strings.Contains(err.Error(), want) {
+	if want := first.ID.Raw() + " cannot be blocked by itself"; err == nil || !strings.Contains(err.Error(), want) {
 		t.Errorf("AddRelation(a leaf blocked by itself) error = %v, want it to carry %q", err, want)
 	}
 	edges, err := st.ListRelationsForIssue(ctx, second.ID, model.RelBlockedBy)
@@ -3625,13 +3626,13 @@ func blocksNeverOrdersTwoLeavesOfOneEpic(t *testing.T, ctx context.Context, st s
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by the leaf beside it, epic in the file)")
 	_, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(epic.ID), BlockedBy: ptr([]string{first.ID})},
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: ptr(epic.ID.Raw()), BlockedBy: ptr(model.RawIDs([]model.ID{first.ID}))},
 	})
 	assertHierarchyBlocksRefused(t, err, "BulkApply(a leaf blocked by an existing leaf beside it)")
 
 	accepted := []struct {
 		what                  string
-		dependent, dependency string
+		dependent, dependency model.ID
 	}{
 		{"a leaf blocked by the sub-epic beside it", first.ID, sub.ID},
 		{"a sub-epic blocked by the leaf beside it", sub.ID, first.ID},
@@ -3720,7 +3721,7 @@ func issueIdentitiesCoverEveryRow(t *testing.T, ctx context.Context, st storage.
 		{ID: archived.ID, Topic: "renderer"},
 		{ID: deleted.ID, Topic: "renderer"},
 	}
-	slices.SortFunc(want, func(a, b storage.IssueIdentity) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(want, func(a, b storage.IssueIdentity) int { return cmp.Compare(a.ID, b.ID) })
 	if !slices.Equal(got, want) {
 		t.Errorf("ListIssueIdentities = %v, want %v", got, want)
 	}
@@ -3747,7 +3748,7 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	//
 	// The pinned clock is what supplies the tie. Every event below shares one
 	// instant, so a broken export fails every run.
-	tied := make([]string, 0, 3)
+	tied := make([]model.ID, 0, 3)
 	for _, name := range []string{"a", "b", "c"} {
 		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("tied " + name), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 		title := "started " + name
@@ -3768,11 +3769,11 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	// Export is the differential oracle's surface, so it is the WHOLE store —
 	// out-of-flow issues included. An export that honored the listing default
 	// would silently drop archived work from every backup and every diff.
-	leaves := append([]string{child.ID, archived.ID}, tied...)
-	assertIssueIDs(t, "exported issues", export.Issues, append([]string{epic.ID}, leaves...))
+	leaves := append([]model.ID{child.ID, archived.ID}, tied...)
+	assertIssueIDs(t, "exported issues", export.Issues, append([]model.ID{epic.ID}, leaves...))
 	// Every leaf holds a parent edge to the epic, and the export carries each
 	// one — the archived leaf's included.
-	var parented []string
+	var parented []model.ID
 	for _, rel := range export.Relations {
 		if rel.Type != model.RelParentChild || rel.DstID != epic.ID {
 			t.Errorf("exported relation %+v, want a parent edge onto the epic", rel)
@@ -3815,8 +3816,8 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 
 // eventIDsOf renders an event sequence as its ids, so an ordering failure names
 // the sequence instead of dumping whole structs.
-func eventIDsOf(events []model.IssueEvent) []string {
-	ids := make([]string, 0, len(events))
+func eventIDsOf(events []model.IssueEvent) []model.ID {
+	ids := make([]model.ID, 0, len(events))
 	for _, event := range events {
 		ids = append(ids, event.ID)
 	}
@@ -3853,15 +3854,15 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 	if !ok {
 		t.Fatalf("BulkApply Created = %+v, want a leaf entry", result.Created)
 	}
-	assertIssueIDs(t, "children wired by local id", mustChildren(t, ctx, st, rootID), []string{leafID})
+	assertIssueIDs(t, "children wired by local id", mustChildren(t, ctx, st, rootID), []model.ID{leafID})
 
 	// A document that names a real id is an update, not a second create.
 	newTitle := "retitled by bulk"
-	result, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{{ID: leafID, Title: &newTitle}})
+	result, err = st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{{ID: leafID.Raw(), Title: &newTitle}})
 	if err != nil {
 		t.Fatalf("BulkApply update error = %v", err)
 	}
-	assertStrings(t, "bulk updated ids", result.Updated, []string{leafID})
+	assertStrings(t, "bulk updated ids", result.Updated, []model.ID{leafID})
 	if len(result.Created) != 0 {
 		t.Errorf("BulkApply Created = %+v, want none for an update-only batch", result.Created)
 	}
@@ -3890,9 +3891,9 @@ func bulkFileOrdersItsRankTopDocuments(t *testing.T, ctx context.Context, st sto
 	}
 	top := "top"
 	var specs []storage.BulkIssueSpec
-	var want []string
+	var want []model.ID
 	for _, n := range []int{7, 2, 9, 0, 5, 3, 8, 1, 6, 4} {
-		specs = append(specs, storage.BulkIssueSpec{ID: epics[n].ID, Rank: &top})
+		specs = append(specs, storage.BulkIssueSpec{ID: epics[n].ID.Raw(), Rank: &top})
 		want = append(want, epics[n].ID)
 	}
 	want = append(want, epics[10].ID, epics[11].ID)
@@ -3934,7 +3935,7 @@ func bulkFileRanksACreateAtTheTopOfItsEpic(t *testing.T, ctx context.Context, st
 	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	title, topic, task, top := "new", "core", "task", "top"
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &task, Parent: ptr(epic.ID), Rank: &top},
+		{Title: &title, Topic: &topic, IssueType: &task, Parent: ptr(epic.ID.Raw()), Rank: &top},
 	})
 	if err != nil {
 		t.Fatalf("BulkApply error = %v", err)
@@ -3946,8 +3947,8 @@ func bulkFileRanksACreateAtTheTopOfItsEpic(t *testing.T, ctx context.Context, st
 	if result.Ranked.Frame != storage.Frame(epic.ID) {
 		t.Errorf("the ordering landed in frame %q, want the epic %s", result.Ranked.Frame, epic.ID)
 	}
-	frame := map[string]struct{}{created: {}, first.ID: {}, second.ID: {}}
-	assertIssueIDs(t, "the epic's children", childrenOf(mustList(t, ctx, st, storage.ListIssuesFilter{}), frame), []string{created, first.ID, second.ID})
+	frame := map[model.ID]struct{}{created: {}, first.ID: {}, second.ID: {}}
+	assertIssueIDs(t, "the epic's children", childrenOf(mustList(t, ctx, st, storage.ListIssuesFilter{}), frame), []model.ID{created, first.ID, second.ID})
 }
 
 func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
@@ -3970,7 +3971,7 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store,
 	rootID := mustCreatedID(t, result.Created, "root")
 	leafID := mustCreatedID(t, result.Created, "leaf")
 	otherID := mustCreatedID(t, result.Created, "other")
-	assertIssueIDs(t, "imported children", mustChildren(t, ctx, st, rootID), []string{leafID, otherID})
+	assertIssueIDs(t, "imported children", mustChildren(t, ctx, st, rootID), []model.ID{leafID, otherID})
 
 	// blocked_by in the file means "this issue is blocked by that one", so the
 	// dependent is the edge's src.
@@ -3984,7 +3985,7 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store,
 }
 
 // createdID looks up one create's real id in a result's ordered report.
-func createdID(created []storage.IDMapping, ref string) (string, bool) {
+func createdID(created []storage.IDMapping, ref string) (model.ID, bool) {
 	for _, m := range created {
 		if m.Ref == ref {
 			return m.ID, true
@@ -3993,7 +3994,7 @@ func createdID(created []storage.IDMapping, ref string) (string, bool) {
 	return "", false
 }
 
-func mustCreatedID(t *testing.T, created []storage.IDMapping, ref string) string {
+func mustCreatedID(t *testing.T, created []storage.IDMapping, ref string) model.ID {
 	t.Helper()
 	id, ok := createdID(created, ref)
 	if !ok {
@@ -4021,7 +4022,7 @@ func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store
 	st.AttributeTo("stream-token")
 	after := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("attributed"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
-	byIssue := map[string][]model.IssueEvent{}
+	byIssue := map[model.ID][]model.IssueEvent{}
 	for _, e := range mustEvents(t, ctx, st) {
 		byIssue[e.IssueID] = append(byIssue[e.IssueID], e)
 	}
@@ -4056,7 +4057,7 @@ func observersHearEveryChange(t *testing.T, ctx context.Context, st storage.Stor
 	task := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("task"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	type heard struct {
 		action model.Action
-		id     string
+		id     model.ID
 		title  string
 	}
 	var got []heard
@@ -4076,12 +4077,12 @@ func observersHearEveryChange(t *testing.T, ctx context.Context, st storage.Stor
 	// its refusal is never heard: it was never made.
 	bulkTitle, neverTitle := "by bulk", "never"
 	if _, err := st.BulkApply(ctx, "", "ada", []storage.BulkIssueSpec{
-		{ID: task.ID, Title: &neverTitle},
-		{ID: task.ID + "-missing", Title: &neverTitle},
+		{ID: task.ID.Raw(), Title: &neverTitle},
+		{ID: task.ID.Raw() + "-missing", Title: &neverTitle},
 	}); err == nil {
 		t.Fatal("BulkApply naming a missing issue succeeded; want an error")
 	}
-	if _, err := st.BulkApply(ctx, "", "ada", []storage.BulkIssueSpec{{ID: task.ID, Title: &bulkTitle}}); err != nil {
+	if _, err := st.BulkApply(ctx, "", "ada", []storage.BulkIssueSpec{{ID: task.ID.Raw(), Title: &bulkTitle}}); err != nil {
 		t.Fatal(err)
 	}
 	want := []heard{
@@ -4149,7 +4150,7 @@ func mustList(t *testing.T, ctx context.Context, st storage.Store, filter storag
 	return issues
 }
 
-func mustGet(t *testing.T, ctx context.Context, st storage.Store, id string) model.Issue {
+func mustGet(t *testing.T, ctx context.Context, st storage.Store, id model.ID) model.Issue {
 	t.Helper()
 	issue, err := st.GetIssue(ctx, id)
 	if err != nil {
@@ -4160,9 +4161,9 @@ func mustGet(t *testing.T, ctx context.Context, st storage.Store, id string) mod
 
 // mustChildren lists every child of parentID the edge records, in every
 // retention state, so a membership assertion is never narrowed by visibility.
-func mustChildren(t *testing.T, ctx context.Context, st storage.Store, parentID string) []model.Issue {
+func mustChildren(t *testing.T, ctx context.Context, st storage.Store, parentID model.ID) []model.Issue {
 	t.Helper()
-	return mustList(t, ctx, st, storage.ListIssuesFilter{ParentIDs: []string{parentID}, IncludeArchived: true, IncludeDeleted: true})
+	return mustList(t, ctx, st, storage.ListIssuesFilter{ParentIDs: []model.ID{parentID}, IncludeArchived: true, IncludeDeleted: true})
 }
 
 func mustEvents(t *testing.T, ctx context.Context, st storage.Store) []model.IssueEvent {
@@ -4177,14 +4178,14 @@ func mustEvents(t *testing.T, ctx context.Context, st storage.Store) []model.Iss
 // assertOrder pins the order of a default (unsorted) listing, which is the
 // only surface through which rank is observable across engines — the Rank
 // value itself is an engine's own encoding and is deliberately never asserted.
-func assertOrder(t *testing.T, ctx context.Context, st storage.Store, what string, want ...string) {
+func assertOrder(t *testing.T, ctx context.Context, st storage.Store, what string, want ...model.ID) {
 	t.Helper()
 	assertIssueIDs(t, what, mustList(t, ctx, st, storage.ListIssuesFilter{}), want)
 }
 
 // assertState reads an issue back and pins its derived state, including the
 // out-of-flow issues a default listing would not show.
-func assertState(t *testing.T, ctx context.Context, st storage.Store, id string, want model.State, why string) {
+func assertState(t *testing.T, ctx context.Context, st storage.Store, id model.ID, want model.State, why string) {
 	t.Helper()
 	issue, err := st.GetIssue(ctx, id)
 	if err != nil {
@@ -4198,7 +4199,7 @@ func assertState(t *testing.T, ctx context.Context, st storage.Store, id string,
 // assertPrecedes pins a relative position without pinning the whole listing,
 // for the cases where the contract states which of two issues comes first and
 // says nothing about what else sits between them.
-func assertPrecedes(t *testing.T, issues []model.Issue, first, second string) {
+func assertPrecedes(t *testing.T, issues []model.Issue, first, second model.ID) {
 	t.Helper()
 	firstAt, secondAt := -1, -1
 	for i, issue := range issues {
@@ -4225,7 +4226,7 @@ func assertPrecedes(t *testing.T, issues []model.Issue, first, second string) {
 // the id tiebreak instead of by anything a caller ranked.
 func assertDistinctRanks(t *testing.T, issues []model.Issue) {
 	t.Helper()
-	holder := make(map[string]string, len(issues))
+	holder := make(map[string]model.ID, len(issues))
 	for _, issue := range issues {
 		if issue.Rank == "" {
 			continue
@@ -4238,9 +4239,9 @@ func assertDistinctRanks(t *testing.T, issues []model.Issue) {
 	}
 }
 
-func assertIssueIDs(t *testing.T, what string, got []model.Issue, want []string) {
+func assertIssueIDs(t *testing.T, what string, got []model.Issue, want []model.ID) {
 	t.Helper()
-	ids := make([]string, 0, len(got))
+	ids := make([]model.ID, 0, len(got))
 	for _, issue := range got {
 		ids = append(ids, issue.ID)
 	}
@@ -4251,9 +4252,9 @@ func assertIssueIDs(t *testing.T, what string, got []model.Issue, want []string)
 // empty one compare equal on purpose: "there is nothing here" is one fact, and
 // an engine that spelled it as nil rather than as a zero-length slice has not
 // behaved differently.
-func assertStrings(t *testing.T, what string, got, want []string) {
+func assertStrings[S ~string](t *testing.T, what string, got, want []S) {
 	t.Helper()
-	if strings.Join(got, "|") != strings.Join(want, "|") {
+	if !slices.Equal(got, want) {
 		t.Errorf("%s = %v, want %v", what, got, want)
 	}
 }
@@ -4311,7 +4312,7 @@ func assertNotFound(t *testing.T, err error, entity, what string) {
 
 // assertParentAbsent pins the satisfied answer to clearing a parent that is
 // not there: the child it names and the relation type, not a refusal.
-func assertParentAbsent(t *testing.T, err error, childID, what string) {
+func assertParentAbsent(t *testing.T, err error, childID model.ID, what string) {
 	t.Helper()
 	want := storage.RelationAbsentError{SrcID: childID, Type: model.RelParentChild}
 	var absent storage.RelationAbsentError

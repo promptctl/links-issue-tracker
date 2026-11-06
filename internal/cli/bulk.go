@@ -41,12 +41,12 @@ var bulkFamily = commandFamily[appSubcommand]{
 
 // bulkLabelOp is the per-issue mutation a bulk label action applies. The actor
 // is the resolved acting identity for the invocation, not a raw flag value.
-type bulkLabelOp func(ctx context.Context, ap *app.App, issueID, label, actor string) error
+type bulkLabelOp func(ctx context.Context, ap *app.App, issueID model.ID, label, actor string) error
 
 // unlandedItem pairs a bulk-operation target with the error its change did not
 // land on: a refusal, a fault, or a state that already holds.
 type unlandedItem struct {
-	IssueID string
+	IssueID model.ID
 	Err     error
 }
 
@@ -76,16 +76,16 @@ type BulkError struct {
 // write (links-observability-gvpn.4j3).
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
 type bulkStop struct {
-	IssueID   string
+	IssueID   model.ID
 	Unprinted string
 	Err       error
-	NotRun    []string
+	NotRun    []model.ID
 }
 
 func (s bulkStop) String() string {
 	stop := fmt.Sprintf("%s landed and stdout did not print %q of its report, which stopped the run", s.IssueID, s.Unprinted)
 	if len(s.NotRun) > 0 {
-		stop += " before " + strings.Join(s.NotRun, ", ")
+		stop += " before " + model.JoinIDs(s.NotRun, ", ")
 	}
 	return fmt.Sprintf("%s: %v", stop, s.Err)
 }
@@ -134,7 +134,7 @@ func (e BulkError) Error() string {
 // the event itself, the second item's facts would replace the first's. The
 // event's fact bulk.not_run lists the ids the run never reached, [] when it
 // reached them all. [LAW:nothing-unseen]
-func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op func(ctx context.Context, issueID string) (notice string, err error)) error {
+func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []model.ID, op func(ctx context.Context, issueID model.ID) (notice string, err error)) error {
 	var unlanded []unlandedItem
 	var stopped *bulkStop
 	reached := 0
@@ -145,13 +145,13 @@ func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op fu
 		errFacts, errCounts := model.ErrorRecord(err)
 		telemetry.Record(itemCtx, errFacts, errCounts)
 		facts, counts := closeScope()
-		report := notice + issueID + " ok\n"
+		report := fmt.Sprintf("%s%s ok\n", notice, issueID)
 		printed, reportErr := 0, error(nil)
 		if err == nil {
 			printed, reportErr = io.WriteString(stdout, report)
 		}
 		telemetry.Append(ctx, "bulk.items", map[string]any{
-			"bulk.item.id":           issueID,
+			"bulk.item.id":           issueID.Raw(),
 			"bulk.item.error":        telemetry.ErrorText(err),
 			"bulk.item.reason":       itemReason(err),
 			"bulk.item.report_error": telemetry.ErrorText(reportErr),
@@ -165,7 +165,7 @@ func runBulkOver(ctx context.Context, stdout io.Writer, issueIDs []string, op fu
 			stopped = &bulkStop{IssueID: issueID, Unprinted: report[printed:], Err: reportErr, NotRun: issueIDs[reached+1:]}
 		}
 	}
-	telemetry.Set(ctx, "bulk.not_run", issueIDs[reached:])
+	telemetry.Set(ctx, "bulk.not_run", model.RawIDs(issueIDs[reached:]))
 	if len(unlanded) > 0 || stopped != nil {
 		return BulkError{Ran: len(issueIDs), Unlanded: unlanded, Stopped: stopped}
 	}
@@ -185,11 +185,11 @@ func itemReason(err error) *string {
 var bulkLabelFamily = commandFamily[bulkLabelOp]{
 	usage: "usage: lit bulk label <add|rm> ...",
 	subcommands: []subcommandRow[bulkLabelOp]{
-		{name: "add", payload: func(ctx context.Context, ap *app.App, issueID, label, actor string) error {
+		{name: "add", payload: func(ctx context.Context, ap *app.App, issueID model.ID, label, actor string) error {
 			_, err := applyLabelEdit(ctx, ap, issueID, storage.AddLabel{Name: label, Actor: actor})
 			return err
 		}},
-		{name: "rm", payload: func(ctx context.Context, ap *app.App, issueID, label, actor string) error {
+		{name: "rm", payload: func(ctx context.Context, ap *app.App, issueID model.ID, label, actor string) error {
 			_, err := applyLabelEdit(ctx, ap, issueID, storage.RemoveLabel{Name: label, Actor: actor})
 			return err
 		}},
@@ -202,9 +202,9 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 // single-value flag would close B and skip A without a word.
 // [LAW:no-silent-failure] [LAW:single-enforcer] one declaration, so the bulk
 // commands cannot disagree about which ids they were given.
-func registerBulkIDs(fs *cobraFlagSet) func() ([]string, error) {
+func registerBulkIDs(fs *cobraFlagSet) func() ([]model.ID, error) {
 	ids := fs.StringArray("ids", "Issue IDs, comma-separated or repeated")
-	return func() ([]string, error) {
+	return func() ([]model.ID, error) {
 		issueIDs, err := parseIDSet(*ids)
 		if err != nil {
 			return nil, err
@@ -248,7 +248,7 @@ func bulkLabelLeaf() appLeaf {
 			return err
 		}
 		actor := resolveActor(inv.Env)
-		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
+		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID model.ID) (string, error) {
 			return "", op(ctx, ap, issueID, *label, actor)
 		})
 	}}
@@ -275,7 +275,7 @@ func bulkCommentLeaf() appLeaf {
 			return err
 		}
 		actor := resolveActor(inv.Env)
-		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
+		return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID model.ID) (string, error) {
 			comment, _, err := addComment(ctx, ap, issueID, commentBody, actor)
 			return commentLine(comment), err
 		})
@@ -307,7 +307,7 @@ func bulkTransitionLeaf(spec transitionSpec) appLeafFn {
 			if err != nil {
 				return err
 			}
-			return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID string) (string, error) {
+			return runBulkOver(ctx, inv.Stdout, issueIDs, func(ctx context.Context, issueID model.ID) (string, error) {
 				did, err := applyTransition(ctx, inv, ap, issueID, action, actor, *reason, authorize)
 				return did.notice, err
 			})

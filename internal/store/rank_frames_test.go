@@ -21,7 +21,7 @@ func twoEpics(t *testing.T, ctx context.Context, st *Store) (first, firstTask, s
 	return first, firstTask, second, secondTask
 }
 
-func blockOrFatal(t *testing.T, ctx context.Context, st *Store, dependent, dependency string) {
+func blockOrFatal(t *testing.T, ctx context.Context, st *Store, dependent, dependency model.ID) {
 	t.Helper()
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: dependency, Type: "blocked-by", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(%s blocked by %s): %v", dependent, dependency, err)
@@ -30,13 +30,13 @@ func blockOrFatal(t *testing.T, ctx context.Context, st *Store, dependent, depen
 
 // storedRanks reads every issue's key through the listing rather than the
 // repair's own loader, so a loader that dropped an issue cannot hide it here.
-func storedRanks(t *testing.T, ctx context.Context, st *Store) map[string]string {
+func storedRanks(t *testing.T, ctx context.Context, st *Store) map[model.ID]string {
 	t.Helper()
 	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true})
 	if err != nil {
 		t.Fatalf("ListIssues: %v", err)
 	}
-	ranks := make(map[string]string, len(issues))
+	ranks := make(map[model.ID]string, len(issues))
 	for _, issue := range issues {
 		ranks[issue.ID] = issue.Rank
 	}
@@ -45,17 +45,17 @@ func storedRanks(t *testing.T, ctx context.Context, st *Store) map[string]string
 
 // rankInversionsOf names the dependencies of id that DependencyOrder reads as
 // inverted, the question the queue's annotation asks of each row.
-func rankInversionsOf(t *testing.T, ctx context.Context, st *Store, id string) []string {
+func rankInversionsOf(t *testing.T, ctx context.Context, st *Store, id model.ID) []model.ID {
 	t.Helper()
 	order, err := st.DependencyOrder(ctx)
 	if err != nil {
 		t.Fatalf("DependencyOrder: %v", err)
 	}
-	relations, err := st.GetRelationsByIDs(ctx, []string{id})
+	relations, err := st.GetRelationsByIDs(ctx, []model.ID{id})
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs(%s): %v", id, err)
 	}
-	var inverted []string
+	var inverted []model.ID
 	for _, dependency := range relations[id].BlockedBy {
 		if order.Inverted(relations[id].Issue, dependency) {
 			inverted = append(inverted, dependency.ID)
@@ -88,7 +88,7 @@ func TestARankInversionAcrossFramesIsReadAndRepairedInTreeOrder(t *testing.T) {
 	if report.RankInversions != 1 {
 		t.Errorf("Doctor.RankInversions = %d, want 1", report.RankInversions)
 	}
-	if got := rankInversionsOf(t, ctx, st, firstTask.ID); !slices.Equal(got, []string{secondTask.ID}) {
+	if got := rankInversionsOf(t, ctx, st, firstTask.ID); !slices.Equal(got, []model.ID{secondTask.ID}) {
 		t.Errorf("RankInversions of %s = %v, want [%s]", firstTask.ID, got, secondTask.ID)
 	}
 
@@ -105,7 +105,7 @@ func TestARankInversionAcrossFramesIsReadAndRepairedInTreeOrder(t *testing.T) {
 			t.Errorf("%s key %q -> %q; the repair must move an epic, not a task inside one", task.ID, before[task.ID], after[task.ID])
 		}
 	}
-	if want := []string{second.ID, secondTask.ID, first.ID, firstTask.ID}; !slices.Equal(listedIDs(t, ctx, st), want) {
+	if want := []model.ID{second.ID, secondTask.ID, first.ID, firstTask.ID}; !slices.Equal(listedIDs(t, ctx, st), want) {
 		t.Errorf("listing after repair = %v, want %v", listedIDs(t, ctx, st), want)
 	}
 	report, err = st.Doctor(ctx)
@@ -199,7 +199,7 @@ func TestEpicsWhoseTasksWaitOnEachOtherAreInterleaved(t *testing.T) {
 	fourthTask := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("fourth task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: fourth.ID})
 	blockOrFatal(t, ctx, st, thirdTask.ID, fourthTask.ID)
 	before := storedRanks(t, ctx, st)
-	interleaved := []string{first.ID, second.ID}
+	interleaved := []model.ID{first.ID, second.ID}
 	slices.Sort(interleaved)
 
 	report, err := st.Doctor(ctx)
@@ -209,14 +209,14 @@ func TestEpicsWhoseTasksWaitOnEachOtherAreInterleaved(t *testing.T) {
 	if len(report.DependencyCycle) != 0 {
 		t.Errorf("Doctor.DependencyCycle = %v, want none: no issue waits on itself", report.DependencyCycle)
 	}
-	if !slices.EqualFunc(report.Interleaved, [][]string{interleaved}, slices.Equal) {
+	if !slices.EqualFunc(report.Interleaved, [][]model.ID{interleaved}, slices.Equal) {
 		t.Errorf("Doctor.Interleaved = %v, want [%v]", report.Interleaved, interleaved)
 	}
 	if report.RankInversions != 1 {
 		t.Errorf("Doctor.RankInversions = %d, want 1: %s waits on %s, and the interleaved edges are not counted", report.RankInversions, thirdTask.ID, fourthTask.ID)
 	}
 	if !slices.ContainsFunc(report.Warnings, func(w string) bool {
-		return strings.HasPrefix(w, "interleaved: "+strings.Join(interleaved, ", ")+" — ")
+		return strings.HasPrefix(w, "interleaved: "+model.JoinIDs(interleaved, ", ")+" — ")
 	}) {
 		t.Errorf("Warnings = %v, want one naming %v interleaved", report.Warnings, interleaved)
 	}
@@ -225,7 +225,7 @@ func TestEpicsWhoseTasksWaitOnEachOtherAreInterleaved(t *testing.T) {
 		t.Fatalf("FixRankInversions: %v, want the inversion beside the interleaved epics repaired", err)
 	}
 	after := storedRanks(t, ctx, st)
-	for _, id := range []string{first.ID, second.ID, firstTask.ID, firstOther.ID, secondTask.ID, secondOther.ID} {
+	for _, id := range []model.ID{first.ID, second.ID, firstTask.ID, firstOther.ID, secondTask.ID, secondOther.ID} {
 		if after[id] != before[id] {
 			t.Errorf("rank of %s = %q after the repair, want it untouched %q", id, after[id], before[id])
 		}
@@ -237,7 +237,7 @@ func TestEpicsWhoseTasksWaitOnEachOtherAreInterleaved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Doctor after the repair: %v", err)
 	}
-	if report.RankInversions != 0 || !slices.EqualFunc(report.Interleaved, [][]string{interleaved}, slices.Equal) {
+	if report.RankInversions != 0 || !slices.EqualFunc(report.Interleaved, [][]model.ID{interleaved}, slices.Equal) {
 		t.Errorf("after the repair RankInversions = %d, Interleaved = %v; want 0 and [%v]", report.RankInversions, report.Interleaved, interleaved)
 	}
 }
@@ -253,7 +253,7 @@ func TestADependencyCycleThroughAContainerIsReported(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	epic, task, _, _ := twoEpics(t, ctx, st)
 	sibling := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: epic.ID})
-	for _, edge := range [][2]string{{task.ID, sibling.ID}, {epic.ID, task.ID}, {sibling.ID, epic.ID}} {
+	for _, edge := range [][2]model.ID{{task.ID, sibling.ID}, {epic.ID, task.ID}, {sibling.ID, epic.ID}} {
 		if _, err := st.db.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`, edge[0], edge[1], "2026-01-01T00:00:00Z"); err != nil {
 			t.Fatalf("plant %s blocked by %s: %v", edge[0], edge[1], err)
 		}
@@ -267,7 +267,7 @@ func TestADependencyCycleThroughAContainerIsReported(t *testing.T) {
 	if len(cycle) != 4 || cycle[0] != cycle[3] || !slices.Contains(cycle, epic.ID) || !slices.Contains(cycle, task.ID) || !slices.Contains(cycle, sibling.ID) {
 		t.Fatalf("Doctor.DependencyCycle = %v, want the loop through %s, %s and %s", cycle, epic.ID, task.ID, sibling.ID)
 	}
-	if _, err := st.FixRankInversions(ctx); err == nil || !strings.Contains(err.Error(), strings.Join(cycle, " -> ")) {
+	if _, err := st.FixRankInversions(ctx); err == nil || !strings.Contains(err.Error(), model.JoinIDs(cycle, " -> ")) {
 		t.Fatalf("FixRankInversions error = %v, want a refusal naming %v", err, cycle)
 	}
 }
@@ -313,7 +313,7 @@ func TestTheRankRepairWritesNoKeyAClosedIssueHolds(t *testing.T) {
 		t.Fatalf("FixRankInversions: %v", err)
 	}
 	ranks := storedRanks(t, ctx, st)
-	holders := map[string]string{}
+	holders := map[string]model.ID{}
 	for id, key := range ranks {
 		if other, taken := holders[key]; taken {
 			t.Errorf("%s and %s both hold %q after the repair", other, id, key)
@@ -332,7 +332,7 @@ func TestTheRankRepairLeavesAClosedIssueItNeedNotMove(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	keys := map[string]string{}
+	keys := map[model.ID]string{}
 	epic := func(title, key string) model.Issue {
 		e := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
 		task := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title + " task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: e.ID})

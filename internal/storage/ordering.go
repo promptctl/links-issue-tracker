@@ -32,14 +32,14 @@ import (
 // where this falls from the engines' side.
 func sortKeys(ancestry RankAncestry) map[string]func(a, b model.Issue) int {
 	return map[string]func(a, b model.Issue) int{
-		"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
-		"title":      func(a, b model.Issue) int { return strings.Compare(a.Title.Raw(), b.Title.Raw()) },
-		"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
+		"id":         func(a, b model.Issue) int { return cmp.Compare(a.ID, b.ID) },
+		"title":      func(a, b model.Issue) int { return cmp.Compare(a.Title.Raw(), b.Title.Raw()) },
+		"status":     func(a, b model.Issue) int { return cmp.Compare(string(a.State()), string(b.State())) },
 		"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
 		"rank":       ancestry.Compare,
-		"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
-		"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic.Raw(), b.Topic.Raw()) },
-		"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee.Raw(), b.Assignee.Raw()) },
+		"type":       func(a, b model.Issue) int { return cmp.Compare(string(a.IssueType), string(b.IssueType)) },
+		"topic":      func(a, b model.Issue) int { return cmp.Compare(a.Topic.Raw(), b.Topic.Raw()) },
+		"assignee":   func(a, b model.Issue) int { return cmp.Compare(a.Assignee.Raw(), b.Assignee.Raw()) },
 		"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
 		"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
 	}
@@ -77,7 +77,7 @@ func IssueOrdering(specs []SortSpec, ancestry RankAncestry) (func(a, b model.Iss
 		}
 		compares = append(compares, compare)
 	}
-	compares = append(compares, func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) })
+	compares = append(compares, func(a, b model.Issue) int { return cmp.Compare(a.ID, b.ID) })
 	return func(a, b model.Issue) int {
 		for _, compare := range compares {
 			if result := compare(a, b); result != 0 {
@@ -104,14 +104,14 @@ func IssueOrdering(specs []SortSpec, ancestry RankAncestry) (func(a, b model.Iss
 // Comparing instants is what the rule means; the encoding an engine happens to
 // store is not the contract's business, and no engine gets to substitute it.
 func EventOrdering(a, b model.IssueEvent) int {
-	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
 }
 
 // PlanReviewOrdering is the order [IssueReader.GetIssueDetail] and an export
 // carry plan reviews in: EventOrdering's rule, for the same reason — oldest
 // first by the instant, ties by id.
 func PlanReviewOrdering(a, b model.PlanReview) int {
-	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
 }
 
 // RelationOrdering is the order an export, [IssueReader.GetIssueDetail] and
@@ -125,9 +125,9 @@ func PlanReviewOrdering(a, b model.PlanReview) int {
 func RelationOrdering(a, b model.Relation) int {
 	return cmp.Or(
 		a.CreatedAt.Compare(b.CreatedAt),
-		strings.Compare(a.SrcID, b.SrcID),
-		strings.Compare(a.DstID, b.DstID),
-		strings.Compare(string(a.Type), string(b.Type)),
+		cmp.Compare(a.SrcID, b.SrcID),
+		cmp.Compare(a.DstID, b.DstID),
+		cmp.Compare(string(a.Type), string(b.Type)),
 	)
 }
 
@@ -135,5 +135,5 @@ func RelationOrdering(a, b model.Relation) int {
 // carry comments in: EventOrdering's rule — oldest first by the instant, ties
 // by id.
 func CommentOrdering(a, b model.Comment) int {
-	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
 }

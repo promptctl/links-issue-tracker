@@ -778,7 +778,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if issueType == "" {
 		issueType = model.TypeTask
 	}
-	parentID := strings.TrimSpace(in.ParentID)
+	parentID := in.ParentID.Trim()
 	labels, err := canonicalizeLabels(in.Labels)
 	if err != nil {
 		return model.Issue{}, err
@@ -826,7 +826,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			Lane:        model.Text(lane),
 			Labels:      model.Texts(labels),
 			Assignee:    model.Text(assignee),
-			FollowsUp:   strings.TrimSpace(in.FollowsUp),
+			FollowsUp:   in.FollowsUp.Trim(),
 			CreatedAt:   now,
 			UpdatedAt:   now,
 		}
@@ -874,7 +874,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			id, title, description, agent_prompt, work_plan, status, priority, issue_type, topic, assignee, item_rank, lane, follows_up, created_at, updated_at, closed_at, archived_at, deleted_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Plan, statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
-				issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
+				issue.AssigneeValue(), issue.Rank, issue.Lane, nullableString(issue.FollowsUp.Raw()), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
 				return fmt.Errorf("insert issue: %w", err)
 			}
 			if parentID != "" {
@@ -912,7 +912,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			// the create event carries it: `lit history` shows which ticket this
 			// one was filed on. [LAW:nothing-unseen]
 			if issue.FollowsUp != "" {
-				createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp})
+				createChanges = append(createChanges, model.FieldChange{Field: "follows_up", From: "", To: issue.FollowsUp.Raw()})
 			}
 			if err := s.recordEvent(ctx, tx, issue.ID, model.ActionCreated, "issue created", createdBy, now, createChanges); err != nil {
 				return err
@@ -1124,7 +1124,7 @@ func (s *Store) scanListRows(ctx context.Context, query string, args []any) ([]i
 // relations table happened to store. ListIssues' comparator runs over the rows
 // afterwards and is stable, so this is what keeps the order of equal-sorting
 // rows the same from call to call.
-func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesFilter) ([]string, bool, error) {
+func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesFilter) ([]model.ID, bool, error) {
 	selected := storage.TrimmedNonEmpty(filter.IDs)
 	restricted := len(selected) > 0
 	if len(filter.ParentIDs) > 0 {
@@ -1140,11 +1140,11 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 			// The rule beside idSet governs an id set wherever it is tested,
 			// not only where it is rendered into SQL.
 			// [LAW:one-type-per-behavior]
-			keep := make(map[string]bool, len(selected))
+			keep := make(map[model.ID]bool, len(selected))
 			for _, id := range selected {
 				keep[id] = true
 			}
-			children = slices.DeleteFunc(children, func(id string) bool { return !keep[id] })
+			children = slices.DeleteFunc(children, func(id model.ID) bool { return !keep[id] })
 		}
 		selected, restricted = children, true
 	}
@@ -1157,14 +1157,14 @@ func (s *Store) selectedIssueIDs(ctx context.Context, filter storage.ListIssuesF
 // and the hint keeps the join a run of point lookups there: unhinted it plans as
 // a hash join over the whole table, and an EXISTS form would run a correlated
 // subquery per outer row.
-func childIDsQuery(parentIDs []string) (string, any) {
+func childIDsQuery(parentIDs []model.ID) (string, any) {
 	parents, arg := newIDSet(parentIDs).rows("parents")
 	return `SELECT /*+ JOIN_ORDER(parents, r) LOOKUP_JOIN(parents, r) */ r.src_id FROM ` + parents + ` JOIN relations r ON r.dst_id = parents.id WHERE r.type = ?`, arg
 }
 
 // childIDsOfParents returns the ids of the direct children of the named
 // parents. This is the parent filter's whole implementation.
-func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []string) ([]string, error) {
+func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []model.ID) ([]model.ID, error) {
 	query, arg := childIDsQuery(parentIDs)
 	rows, err := s.db.QueryContext(ctx, query, arg, string(model.RelParentChild))
 	if err != nil {
@@ -1174,11 +1174,11 @@ func (s *Store) childIDsOfParents(ctx context.Context, parentIDs []string) ([]st
 }
 
 // scanIDColumn reads a single-column id result and closes it.
-func scanIDColumn(rows *sql.Rows) ([]string, error) {
+func scanIDColumn(rows *sql.Rows) ([]model.ID, error) {
 	defer rows.Close()
-	out := []string{}
+	out := []model.ID{}
 	for rows.Next() {
-		var id string
+		var id model.ID
 		if err := rows.Scan(&id); err != nil {
 			return nil, err
 		}
@@ -1190,7 +1190,7 @@ func scanIDColumn(rows *sql.Rows) ([]string, error) {
 // requireIssues answers NotFoundError for the first id naming no issue row, in
 // the order given. It reads existence only — a soft-deleted issue still exists —
 // so it agrees with GetIssue about what an id names.
-func (s *Store) requireIssues(ctx context.Context, ids []string) error {
+func (s *Store) requireIssues(ctx context.Context, ids []model.ID) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -1203,7 +1203,7 @@ func (s *Store) requireIssues(ctx context.Context, ids []string) error {
 	if err != nil {
 		return err
 	}
-	found := make(map[string]bool, len(present))
+	found := make(map[model.ID]bool, len(present))
 	for _, id := range present {
 		found[id] = true
 	}
@@ -1286,7 +1286,7 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 	return issues[:limit]
 }
 
-func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetail, error) {
+func (s *Store) GetIssueDetail(ctx context.Context, id model.ID) (model.IssueDetail, error) {
 	adjacency, err := s.GetIssueAdjacency(ctx, id)
 	if err != nil {
 		return model.IssueDetail{}, err
@@ -1311,7 +1311,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 }
 
 // GetIssueAdjacency reads what the issue's row and edges name.
-func (s *Store) GetIssueAdjacency(ctx context.Context, id string) (storage.IssueAdjacency, error) {
+func (s *Store) GetIssueAdjacency(ctx context.Context, id model.ID) (storage.IssueAdjacency, error) {
 	issue, err := s.GetIssue(ctx, id)
 	if err != nil {
 		return storage.IssueAdjacency{}, err
@@ -1327,8 +1327,8 @@ func (s *Store) GetIssueAdjacency(ctx context.Context, id string) (storage.Issue
 	// redirect target and the ticket this one follows up join the same
 	// batch — hydrating them costs no extra query.
 	relatedIDs := collectRelatedIssueIDs(id, relations)
-	if target := issue.RedirectTargetValue(); target != nil && !slices.Contains(relatedIDs, *target) {
-		relatedIDs = append(relatedIDs, *target)
+	if target := issue.RedirectTargetValue(); target != nil && !slices.Contains(relatedIDs, model.ID(*target)) {
+		relatedIDs = append(relatedIDs, model.ID(*target))
 	}
 	if issue.FollowsUp != "" && !slices.Contains(relatedIDs, issue.FollowsUp) {
 		relatedIDs = append(relatedIDs, issue.FollowsUp)
@@ -1364,7 +1364,7 @@ func (s *Store) GetIssueAdjacency(ctx context.Context, id string) (storage.Issue
 	// getIssuesByIDs' hole-skipping contract.
 	var redirectTarget *model.Issue
 	if target := issue.RedirectTargetValue(); target != nil {
-		if hydrated, ok := relatedByID[*target]; ok {
+		if hydrated, ok := relatedByID[model.ID(*target)]; ok {
 			redirectTarget = &hydrated
 		}
 	}
@@ -1389,8 +1389,8 @@ func (s *Store) GetIssueAdjacency(ctx context.Context, id string) (storage.Issue
 // retention state, as the edge records them: a child archived out of a listing
 // is still the parent's child. It reads no ancestry, so a wide parent costs its
 // children and not a climb from each of them.
-func (s *Store) childrenOf(ctx context.Context, parentID string) ([]model.Issue, error) {
-	ids, err := s.childIDsOfParents(ctx, []string{parentID})
+func (s *Store) childrenOf(ctx context.Context, parentID model.ID) ([]model.Issue, error) {
+	ids, err := s.childIDsOfParents(ctx, []model.ID{parentID})
 	if err != nil {
 		return nil, err
 	}
@@ -1406,7 +1406,7 @@ func (s *Store) childrenOf(ctx context.Context, parentID string) ([]model.Issue,
 // order, as the reverse reading of follows_up: from the row, never from the
 // graph, a follow-up whose row has vanished hydrating as absent.
 // [LAW:one-source-of-truth]
-func (s *Store) followUpsOf(ctx context.Context, focalID string) ([]model.Issue, error) {
+func (s *Store) followUpsOf(ctx context.Context, focalID model.ID) ([]model.Issue, error) {
 	ids, err := s.followUpIDsOf(ctx, focalID)
 	if err != nil {
 		return nil, err
@@ -1424,7 +1424,7 @@ func (s *Store) followUpsOf(ctx context.Context, focalID string) ([]model.Issue,
 // followUpIDsOf returns the ids of every ticket filed as a follow-up of
 // focalID — the reverse reading of issues.follows_up. Every retention state,
 // as the column records it: an archived follow-up is still a follow-up.
-func (s *Store) followUpIDsOf(ctx context.Context, focalID string) ([]string, error) {
+func (s *Store) followUpIDsOf(ctx context.Context, focalID model.ID) ([]model.ID, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM issues WHERE follows_up = ?`, focalID)
 	if err != nil {
 		return nil, fmt.Errorf("list follow-ups of %s: %w", focalID, err)
@@ -1434,10 +1434,10 @@ func (s *Store) followUpIDsOf(ctx context.Context, focalID string) ([]string, er
 
 // collectRelatedIssueIDs returns every distinct counterparty id referenced
 // by relations, excluding the focal id itself.
-func collectRelatedIssueIDs(focalID string, relations []model.Relation) []string {
-	seen := make(map[string]struct{}, len(relations)*2)
-	ids := make([]string, 0, len(relations))
-	add := func(candidate string) {
+func collectRelatedIssueIDs(focalID model.ID, relations []model.Relation) []model.ID {
+	seen := make(map[model.ID]struct{}, len(relations)*2)
+	ids := make([]model.ID, 0, len(relations))
+	add := func(candidate model.ID) {
 		if candidate == "" || candidate == focalID {
 			return
 		}
@@ -1458,9 +1458,9 @@ func collectRelatedIssueIDs(focalID string, relations []model.Relation) []string
 // Missing ids (deleted/archived/never-existed) are simply absent from the
 // returned map; callers decide whether absence is an error or merely a hole
 // to skip. Empty input returns an empty map without querying.
-func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]model.Issue, error) {
+func (s *Store) getIssuesByIDs(ctx context.Context, ids []model.ID) (map[model.ID]model.Issue, error) {
 	if len(ids) == 0 {
-		return map[string]model.Issue{}, nil
+		return map[model.ID]model.Issue{}, nil
 	}
 	named, arg := newIDSet(ids).rows("named")
 	scanned, err := s.scanIssueRows(ctx, `SELECT `+issueColumnsQualified+` FROM `+named+` JOIN issues i ON i.id = named.id`, []any{arg})
@@ -1471,7 +1471,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]model.Issue, len(hydrated))
+	out := make(map[model.ID]model.Issue, len(hydrated))
 	for _, issue := range hydrated {
 		out[issue.ID] = issue
 	}
@@ -1480,7 +1480,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 
 // hydratedIssues is getIssuesByIDs' rows as a list for the caller to order, empty
 // and never nil when none exist.
-func (s *Store) hydratedIssues(ctx context.Context, ids []string) ([]model.Issue, error) {
+func (s *Store) hydratedIssues(ctx context.Context, ids []model.ID) ([]model.Issue, error) {
 	byID, err := s.getIssuesByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
@@ -1493,16 +1493,16 @@ func (s *Store) hydratedIssues(ctx context.Context, ids []string) ([]model.Issue
 // hierarchy holding a parent loop, which hydration refuses
 // (storage.ParentCycleError) — the state a caller clearing a parent is there
 // to repair, as ClearParent explains.
-func (s *Store) issueTypesByIDs(ctx context.Context, ids []string) (map[string]model.IssueType, error) {
+func (s *Store) issueTypesByIDs(ctx context.Context, ids []model.ID) (map[model.ID]model.IssueType, error) {
 	named, arg := newIDSet(ids).rows("named")
 	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.issue_type FROM `+named+` JOIN issues i ON i.id = named.id`, arg)
 	if err != nil {
 		return nil, fmt.Errorf("load issue types: %w", err)
 	}
 	defer rows.Close()
-	types := make(map[string]model.IssueType, len(ids))
+	types := make(map[model.ID]model.IssueType, len(ids))
 	for rows.Next() {
-		var id string
+		var id model.ID
 		var issueType model.IssueType
 		if err := rows.Scan(&id, &issueType); err != nil {
 			return nil, fmt.Errorf("scan loaded issue type: %w", err)
@@ -1536,7 +1536,7 @@ func (s *Store) scanIssueRows(ctx context.Context, query string, args []any) ([]
 	return scanned, nil
 }
 
-func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
+func (s *Store) GetIssue(ctx context.Context, id model.ID) (model.Issue, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+issueColumnsBare+` FROM issues WHERE id = ?`, id)
 	scanned, err := scanIssue(row)
 	if err != nil {
@@ -1620,7 +1620,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 // history queries. The claimant is the (assignee, checkout) pair, never the assignee alone: two
 // checkouts of one identity taking a lane from each other move nothing on the row and everything on
 // the record.
-func (s *Store) Apply(ctx context.Context, id string, plan storage.ChangePlan) (storage.Applied, error) {
+func (s *Store) Apply(ctx context.Context, id model.ID, plan storage.ChangePlan) (storage.Applied, error) {
 	c, applied, err := s.apply(ctx, id, plan)
 	if err != nil {
 		return storage.Applied{}, err
@@ -1661,7 +1661,7 @@ func hear(ctx context.Context, heard ...owed) {
 
 // apply writes the change plan decides and tells no observer; Apply notifies
 // with the change it returns.
-func (s *Store) apply(ctx context.Context, id string, plan storage.ChangePlan) (storage.Change, storage.Applied, error) {
+func (s *Store) apply(ctx context.Context, id model.ID, plan storage.ChangePlan) (storage.Change, storage.Applied, error) {
 	// [LAW:no-ambient-temporal-coupling] The read, the stamp, the plan and the
 	// write share one commit-lock hold, so no write lands between what the plan
 	// read and what it writes: the holder a start takes the ticket from, the
@@ -1776,7 +1776,7 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 		return model.Comment{}, model.Issue{}, err
 	}
 	now := s.clock.Now()
-	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: model.Text(storage.Actor(in.CreatedBy))}
+	comment := model.Comment{ID: model.ID("cmt-" + uuid.NewString()), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: model.Text(storage.Actor(in.CreatedBy))}
 	if err := s.withMutation(ctx, "add comment", func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
 			return fmt.Errorf("insert comment: %w", err)
@@ -1788,8 +1788,8 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 	return comment, issue, nil
 }
 
-func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comment, error) {
-	id := strings.TrimSpace(commentID)
+func (s *Store) DeleteComment(ctx context.Context, commentID model.ID) (model.Comment, error) {
+	id := commentID.Trim()
 	if id == "" {
 		return model.Comment{}, model.ValidationError{Message: "comment id is required"}
 	}
@@ -1921,7 +1921,7 @@ func (s *Store) planPhaseMove(issue model.Issue, history []model.IssueEvent, at 
 // field write. A noop plan records that the target state and assignee already
 // hold, so no write is owed. [LAW:decomposition]
 type transitionWrite struct {
-	issueID           string
+	issueID           model.ID
 	toStatus          string
 	postAssignee      string
 	now               time.Time
@@ -2076,7 +2076,7 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 // the history format is the same encoding the columns store. applyTx is the
 // write half: one UPDATE plus the event.
 type retentionWrite struct {
-	issueID string
+	issueID model.ID
 	now     time.Time
 	// nextArchived/nextDeleted are the pair Retain produced, as the
 	// retentionColumns projection the columns store.
@@ -2173,17 +2173,17 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 // [LAW:composability] A free function of (ctx, tx, values): it depends on no
 // Store state, so it carries no receiver — its signature advertises exactly
 // what it reads, matching its siblings currentRetentionTx / requireIssueExistsTx.
-func validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID string, resolution *model.Resolution, target *string) error {
+func validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID model.ID, resolution *model.Resolution, target *string) error {
 	if target == nil {
 		if resolution != nil && resolution.RedirectsToCanonical() {
 			return fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
 		}
 		return nil
 	}
-	if *target == closingID {
+	if model.ID(*target) == closingID {
 		return fmt.Errorf("cannot redirect %s to itself", closingID)
 	}
-	retention, err := currentRetentionTx(ctx, tx, *target)
+	retention, err := currentRetentionTx(ctx, tx, model.ID(*target))
 	if err != nil {
 		return err
 	}
@@ -2196,7 +2196,7 @@ func validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID string, r
 // currentRetentionTx reads the live retention state of issueID inside tx, for
 // validateRedirectTarget's existence and Deleted checks. The pair decodes
 // through the single RetentionFromTimestamps boundary like every other read.
-func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID string) (model.Retention, error) {
+func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID model.ID) (model.Retention, error) {
 	var archivedAt, deletedAt sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT archived_at, deleted_at FROM issues WHERE id = ?`, issueID).Scan(&archivedAt, &deletedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -2222,7 +2222,7 @@ func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID string) (model.
 // leaving no window between them. [LAW:no-ambient-temporal-coupling]
 // Existence is read where the write happens, not earlier. It accepts retained
 // (archived/deleted) rows — no deleted_at filter.
-func requireIssueExistsTx(ctx context.Context, tx *sql.Tx, issueID string) error {
+func requireIssueExistsTx(ctx context.Context, tx *sql.Tx, issueID model.ID) error {
 	var one int
 	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM issues WHERE id = ?`, issueID).Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -2280,7 +2280,7 @@ const (
 
 // listRelations returns every relation incident to one issue, of every type,
 // as listRelationsForIDs does for the structural types of many.
-func (s *Store) listRelations(ctx context.Context, issueID string) ([]model.Relation, error) {
+func (s *Store) listRelations(ctx context.Context, issueID model.ID) ([]model.Relation, error) {
 	bySrc, err := queryRelations(ctx, s.db, relationsBySrc, issueID)
 	if err != nil {
 		return nil, err
@@ -2389,9 +2389,9 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 // here — the row-at-a-time recordEvent, and a reconcile's settled export,
 // whose events reach the same tables through applyExportDelta — so two
 // writers of history cannot stamp an event two ways. [LAW:single-enforcer]
-func (s *Store) newEvent(issueID, action, reason, actor string, at time.Time, changes []model.FieldChange) model.IssueEvent {
+func (s *Store) newEvent(issueID model.ID, action, reason, actor string, at time.Time, changes []model.FieldChange) model.IssueEvent {
 	event := model.IssueEvent{
-		ID:        "evt-" + uuid.NewString(),
+		ID:        model.ID("evt-" + uuid.NewString()),
 		IssueID:   issueID,
 		Action:    strings.TrimSpace(action),
 		Reason:    model.Text(strings.TrimSpace(reason)),
@@ -2410,7 +2410,7 @@ func (s *Store) newEvent(issueID, action, reason, actor string, at time.Time, ch
 // recordEvent writes a mutation's history: the event newEvent mints for it,
 // through insertEventTx, the one writer of issue_events rows. [LAW:single-enforcer]
 // Every mutation site computes its field-change diff and routes through here.
-func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, at time.Time, changes []model.FieldChange) error {
+func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID model.ID, action, reason, actor string, at time.Time, changes []model.FieldChange) error {
 	return insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, at, changes))
 }
 
@@ -2424,7 +2424,7 @@ func (s *Store) stampEdit(issue model.Issue, at time.Time, reason, actor string,
 	return issue, event
 }
 
-func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comment, error) {
+func (s *Store) listComments(ctx context.Context, issueID model.ID) ([]model.Comment, error) {
 	return queryComments(ctx, s.db, `comments WHERE issue_id = ?`, issueID)
 }
 
@@ -2467,7 +2467,7 @@ func queryComments(ctx context.Context, q rowQueryer, from string, args ...any) 
 // The parents are read first and the statement walks down from them because a
 // join of relations to itself costs a read of the family about a fifth more:
 // 44ms over 37ms at 3,999 children and 39,990 events.
-func (s *Store) laneFamilyEvents(ctx context.Context, columns, issueID string) (string, []any, error) {
+func (s *Store) laneFamilyEvents(ctx context.Context, columns string, issueID model.ID) (string, []any, error) {
 	parents, err := parentsOfIssue(ctx, s.db, issueID)
 	if err != nil {
 		return "", nil, err
@@ -2497,7 +2497,7 @@ func filedUnderEvents(columns string) string {
 
 // laneFamilyHistory reads the lane family's history as bare events: an instant
 // and an attribution, no Changes, which is what claims.Family asks of them.
-func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+func (s *Store) laneFamilyHistory(ctx context.Context, issueID model.ID) ([]model.IssueEvent, error) {
 	selection, args, err := s.laneFamilyEvents(ctx, eventColumns+`, NULL AS field, NULL AS from_value, NULL AS to_value`, issueID)
 	if err != nil {
 		return nil, err
@@ -2511,7 +2511,7 @@ func (s *Store) laneFamilyHistory(ctx context.Context, issueID string) ([]model.
 
 // newestInLaneFamily is the newest instant in issueID's lane family's history,
 // the instant a write to issueID is stamped past.
-func (s *Store) newestInLaneFamily(ctx context.Context, issueID string) (time.Time, error) {
+func (s *Store) newestInLaneFamily(ctx context.Context, issueID model.ID) (time.Time, error) {
 	selection, args, err := s.laneFamilyEvents(ctx, `e.created_at`, issueID)
 	if err != nil {
 		return time.Time{}, err
@@ -2526,7 +2526,7 @@ func (s *Store) newestInLaneFamily(ctx context.Context, issueID string) (time.Ti
 // newestFiledUnder is the newest instant in the history of every issue filed
 // under parentID: the instant a create filed there is stamped past. No issue
 // is filed under the empty parent.
-func (s *Store) newestFiledUnder(ctx context.Context, parentID string) (time.Time, error) {
+func (s *Store) newestFiledUnder(ctx context.Context, parentID model.ID) (time.Time, error) {
 	newest, err := s.newestInstant(ctx, filedUnderEvents(`e.created_at`), parentID, string(model.RelParentChild))
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read the newest instant filed under %q: %w", parentID, err)
@@ -2565,7 +2565,7 @@ func (s *Store) newestInstant(ctx context.Context, selection string, args ...any
 // lists issues, which is what keeps a start off the store's size, and parents
 // are read for their type alone because hydrating one hydrates its whole
 // subtree.
-func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, error) {
+func (s *Store) LaneFamily(ctx context.Context, issueID model.ID) (claims.Family, error) {
 	events, err := s.laneFamilyHistory(ctx, issueID)
 	if err != nil {
 		return claims.Family{}, err
@@ -2594,7 +2594,7 @@ func (s *Store) LaneFamily(ctx context.Context, issueID string) (claims.Family, 
 // laneFamilyIDs is the id of every issue in issueID's lane family, walked as
 // laneFamilyEvents walks it: down from issueID's parents. Its reads carry no
 // lifecycle predicate, so no issue's retention can reach it.
-func (s *Store) laneFamilyIDs(ctx context.Context, issueID string) ([]string, error) {
+func (s *Store) laneFamilyIDs(ctx context.Context, issueID model.ID) ([]model.ID, error) {
 	parents, err := parentsOfIssue(ctx, s.db, issueID)
 	if err != nil {
 		return nil, err
@@ -2612,7 +2612,7 @@ func (s *Store) StampCorrections() storage.StampCorrections {
 	return s.stamps.StampCorrections()
 }
 
-func (s *Store) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+func (s *Store) ListEvents(ctx context.Context, issueID model.ID) ([]model.IssueEvent, error) {
 	events, err := s.queryEvents(ctx, issueEventsQuery, issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue events: %w", err)
@@ -2681,9 +2681,10 @@ func (s *Store) queryEvents(ctx context.Context, selection string, args ...any) 
 	// Ordered list of events; idx maps event ID to its position in out so each
 	// change row can be appended to the right event without a second query.
 	out := []model.IssueEvent{}
-	idx := map[string]int{}
+	idx := map[model.ID]int{}
 	for rows.Next() {
-		var evtID, evtIssueID, evtReason, evtActor, evtCreatedAt string
+		var evtID, evtIssueID model.ID
+		var evtReason, evtActor, evtCreatedAt string
 		var action, evtStream, evtWorkspace, cField, cFrom, cTo sql.NullString
 		if err := rows.Scan(&evtID, &evtIssueID, &action, &evtReason, &evtActor, &evtCreatedAt, &evtStream, &evtWorkspace, &cField, &cFrom, &cTo); err != nil {
 			return nil, err
@@ -2786,7 +2787,7 @@ func rowFields(row partialIssue, labels []string) model.Issue {
 // it into a returned model.Issue.
 // [LAW:single-enforcer] Store hydration, not raw row decoding, owns lifecycle construction.
 type partialIssue struct {
-	ID          string
+	ID          model.ID
 	Title       string
 	Description string
 	Prompt      string
@@ -2798,7 +2799,7 @@ type partialIssue struct {
 	Rank        string
 	Lane        string
 	Labels      []string
-	FollowsUp   string
+	FollowsUp   model.ID
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	Retention   model.Retention
@@ -2893,12 +2894,12 @@ func scanIssue(row issueScanner) (issueRow, error) {
 		return issueRow{}, err
 	}
 	issue.Prompt = prompt.String
-	issue.FollowsUp = followsUp.String
+	issue.FollowsUp = model.ID(followsUp.String)
 	return parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
 }
 
-func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
-	var parentID string
+func scanIssueWithParent(row issueScanner) (model.ID, issueRow, error) {
+	var parentID model.ID
 	var issue partialIssue
 	var prompt sql.NullString
 	var status sql.NullString
@@ -2909,7 +2910,7 @@ func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
 		return "", issueRow{}, err
 	}
 	issue.Prompt = prompt.String
-	issue.FollowsUp = followsUp.String
+	issue.FollowsUp = model.ID(followsUp.String)
 	parsed, err := parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
 	return parentID, parsed, err
 }
@@ -3015,7 +3016,7 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 // row, nearest first; a row the caller asked for has none. It is a list that
 // shares its tail, so extending it for a child costs one node.
 type descent struct {
-	id string
+	id model.ID
 	up *descent
 }
 
@@ -3023,8 +3024,8 @@ type descent struct {
 // when id is not on it. A child already on its own chain is a parent cycle:
 // the chain from its parent up to it is the loop, each the child of the next,
 // and the child of the first.
-func (d *descent) loopTo(id string) []string {
-	var loop []string
+func (d *descent) loopTo(id model.ID) []model.ID {
+	var loop []model.ID
 	for at := d; at != nil; at = at.up {
 		loop = append(loop, at.id)
 		if at.id == id {
@@ -3044,7 +3045,7 @@ func (s *Store) hydrateBelow(ctx context.Context, rows []issueRow, chains []*des
 	if len(rows) == 0 {
 		return []model.Issue{}, nil
 	}
-	issueIDs := make([]string, 0, len(rows))
+	issueIDs := make([]model.ID, 0, len(rows))
 	for _, row := range rows {
 		issueIDs = append(issueIDs, row.Issue.ID)
 	}
@@ -3052,8 +3053,8 @@ func (s *Store) hydrateBelow(ctx context.Context, rows []issueRow, chains []*des
 	if err != nil {
 		return nil, err
 	}
-	epicIDs := make([]string, 0, len(rows))
-	below := make(map[string]*descent, len(rows))
+	epicIDs := make([]model.ID, 0, len(rows))
+	below := make(map[model.ID]*descent, len(rows))
 	for i, row := range rows {
 		if row.Issue.IssueType.IsContainer() {
 			epicIDs = append(epicIDs, row.Issue.ID)
@@ -3088,8 +3089,8 @@ func (s *Store) hydrateBelow(ctx context.Context, rows []issueRow, chains []*des
 // lifecycleChildrenByEpicIDs hydrates the children of each epic in epicIDs,
 // grouped by epic. below holds each epic's chain, the epic itself nearest, and
 // every child is hydrated under its epic's.
-func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string, below map[string]*descent) (map[string][]model.Issue, error) {
-	out := make(map[string][]model.Issue, len(epicIDs))
+func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []model.ID, below map[model.ID]*descent) (map[model.ID][]model.Issue, error) {
+	out := make(map[model.ID][]model.Issue, len(epicIDs))
 
 	// [LAW:dataflow-not-control-flow] Hydrate every epic's children in a single
 	// pass rather than once per epic. A parallel parentID slice carries the epic
@@ -3122,7 +3123,7 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 
 // scanLifecycleChildRows runs the children query and reads its rows, returning
 // each child beside the epic it hangs from.
-func (s *Store) scanLifecycleChildRows(ctx context.Context, epics idSet) ([]issueRow, []string, error) {
+func (s *Store) scanLifecycleChildRows(ctx context.Context, epics idSet) ([]issueRow, []model.ID, error) {
 	epicRows, arg := epics.rows("epics")
 	// [LAW:one-source-of-truth] Active containers derive progress from active children; archived/deleted containers keep a full child snapshot so their lifecycle state does not collapse to empty/open.
 	// Children-of-epic visibility truth table:
@@ -3144,7 +3145,7 @@ func (s *Store) scanLifecycleChildRows(ctx context.Context, epics idSet) ([]issu
 	}
 	defer rows.Close()
 	childRows := make([]issueRow, 0, len(epics.ids))
-	parentIDs := make([]string, 0, len(epics.ids))
+	parentIDs := make([]model.ID, 0, len(epics.ids))
 	for rows.Next() {
 		parentID, child, err := scanIssueWithParent(rows)
 		if err != nil {
@@ -3161,16 +3162,17 @@ func (s *Store) scanLifecycleChildRows(ctx context.Context, epics idSet) ([]issu
 
 // loadLabelsByIssueIDs reads the labels of every issue in issueIDs, each
 // issue's in label order.
-func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []string) (map[string][]string, error) {
+func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []model.ID) (map[model.ID][]string, error) {
 	named, arg := newIDSet(issueIDs).rows("named")
 	rows, err := s.db.QueryContext(ctx, `SELECT l.issue_id, l.label FROM `+named+` JOIN labels l ON l.issue_id = named.id ORDER BY l.label ASC`, arg)
 	if err != nil {
 		return nil, fmt.Errorf("load labels by issue ids: %w", err)
 	}
 	defer rows.Close()
-	out := map[string][]string{}
+	out := map[model.ID][]string{}
 	for rows.Next() {
-		var issueID, label string
+		var issueID model.ID
+		var label string
 		if err := rows.Scan(&issueID, &label); err != nil {
 			return nil, err
 		}

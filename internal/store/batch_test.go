@@ -5,12 +5,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // openBatchStore opens a migrated store holding one epic, the parent the
 // batches below create under.
-func openBatchStore(t *testing.T, ctx context.Context) (*Store, string) {
+func openBatchStore(t *testing.T, ctx context.Context) (*Store, model.ID) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), migratedDoltDir(t), "ws")
 	if err != nil {
@@ -26,10 +27,11 @@ func openBatchStore(t *testing.T, ctx context.Context) (*Store, string) {
 
 // refusedFile is a bulk file whose first document lands and whose second is
 // refused at its write: it names a parent no issue answers to.
-func refusedFile(epic string) []storage.BulkIssueSpec {
+func refusedFile(epic model.ID) []storage.BulkIssueSpec {
 	title, topic, taskType := "lands", "topic", "task"
+	parent := epic.Raw()
 	return []storage.BulkIssueSpec{
-		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: &epic},
+		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: &parent},
 		{Title: &title, Topic: &topic, IssueType: &taskType, Parent: strptr("nowhere-1")},
 	}
 }
@@ -162,7 +164,8 @@ func TestABatchStartRetriesPastGCContention(t *testing.T) {
 		return nil
 	}
 	title, topic, taskType := "lands", "topic", "task"
-	result, err := st.BulkApply(ctx, "test", "ada", []storage.BulkIssueSpec{{Title: &title, Topic: &topic, IssueType: &taskType, Parent: &epic}})
+	parent := epic.Raw()
+	result, err := st.BulkApply(ctx, "test", "ada", []storage.BulkIssueSpec{{Title: &title, Topic: &topic, IssueType: &taskType, Parent: &parent}})
 	st.commitWorkingSetHookForTest = nil
 	if err != nil {
 		t.Fatalf("BulkApply() error = %v; want the contended start retried", err)

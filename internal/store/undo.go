@@ -54,17 +54,18 @@ func (r revision) table(name string) string {
 // issueFieldsAt reads each of ids at r as its row's issue with no lifecycle
 // (rowFields), beside its row's lifecycle columns. An id absent at r is absent
 // from both maps. A rank write re-keys thousands of ids, so they are an idSet.
-func (s *Store) issueFieldsAt(ctx context.Context, r revision, ids []string) (map[string]model.Issue, map[string]model.StatusView, error) {
-	issues := map[string]model.Issue{}
-	statuses := map[string]model.StatusView{}
+func (s *Store) issueFieldsAt(ctx context.Context, r revision, ids []model.ID) (map[model.ID]model.Issue, map[model.ID]model.StatusView, error) {
+	issues := map[model.ID]model.Issue{}
+	statuses := map[model.ID]model.StatusView{}
 	named, arg := newIDSet(ids).rows("named")
 	rows, err := s.scanIssueRows(ctx, `SELECT `+issueColumnsQualified+` FROM `+named+` JOIN `+r.table("issues")+` i ON i.id = named.id`, []any{arg})
 	if err != nil {
 		return nil, nil, err
 	}
-	labels := map[string][]string{}
+	labels := map[model.ID][]string{}
 	if err := s.queryRows(ctx, `SELECT l.issue_id, l.label FROM `+named+` JOIN `+r.table("labels")+` l ON l.issue_id = named.id ORDER BY l.label`, []any{arg}, func(rows *sql.Rows) error {
-		var issue, label string
+		var issue model.ID
+		var label string
 		if err := rows.Scan(&issue, &label); err != nil {
 			return err
 		}
@@ -82,11 +83,11 @@ func (s *Store) issueFieldsAt(ctx context.Context, r revision, ids []string) (ma
 
 // edgeTargetsAt reads, for each of srcs, the issues its edges of relType point
 // at, at r.
-func (s *Store) edgeTargetsAt(ctx context.Context, r revision, relType model.RelationType, srcs []string) (map[string][]string, error) {
-	targets := map[string][]string{}
+func (s *Store) edgeTargetsAt(ctx context.Context, r revision, relType model.RelationType, srcs []model.ID) (map[model.ID][]model.ID, error) {
+	targets := map[model.ID][]model.ID{}
 	named, arg := newIDSet(srcs).rows("named")
 	err := s.queryRows(ctx, `SELECT e.src_id, e.dst_id FROM `+named+` JOIN `+r.table("relations")+` e ON e.src_id = named.id WHERE e.type = ? ORDER BY e.dst_id`, []any{arg, string(relType)}, func(rows *sql.Rows) error {
-		var src, dst string
+		var src, dst model.ID
 		if err := rows.Scan(&src, &dst); err != nil {
 			return err
 		}
@@ -161,7 +162,7 @@ func (s *Store) namedWrites(ctx context.Context, ids []string) ([]write, error) 
 	}
 	for _, id := range ids {
 		if _, ok := found[id]; !ok {
-			return nil, fmt.Errorf("%w: history past the kept window is gone, and a sync replay gives local writes new ids; `lit undo list` shows the current ids", storage.NotFoundError{Entity: "write", ID: id})
+			return nil, fmt.Errorf("%w: history past the kept window is gone, and a sync replay gives local writes new ids; `lit undo list` shows the current ids", storage.NotFoundError{Entity: "write", ID: model.ID(id)})
 		}
 	}
 	writes := slices.Collect(maps.Values(found))
@@ -358,7 +359,7 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 		case relType == model.RelParentChild:
 			children = append(children, src)
 		case relType == model.RelBlockedBy:
-			slot := storage.Slot{Kind: storage.BlockedBySlot, Issue: src, Name: dst}
+			slot := storage.Slot{Kind: storage.BlockedBySlot, Issue: model.ID(src), Name: dst}
 			rows.BlockedBy = append(rows.BlockedBy, storage.Move{Slot: slot, From: storage.EdgeValue(key.removed()), To: storage.EdgeValue(key.added())})
 		default:
 			outside(fmt.Sprintf("%s %s %s edge", src, relType, dst), "`lit dep` adds and removes it")
@@ -386,13 +387,13 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 			outside(fmt.Sprintf("history event %s: its %s change rewritten", change[0], change[1]), "")
 		}
 	}
-	if rows.Records, err = s.eventsAt(ctx, after, added); err != nil {
+	if rows.Records, err = s.eventsAt(ctx, after, model.IDsOf(added)); err != nil {
 		return rows, err
 	}
-	if err := s.readFieldMoves(ctx, before, after, uniqueSorted(fieldIDs), &rows, outside); err != nil {
+	if err := s.readFieldMoves(ctx, before, after, model.IDsOf(uniqueSorted(fieldIDs)), &rows, outside); err != nil {
 		return rows, err
 	}
-	if err := s.readParentMoves(ctx, before, after, uniqueSorted(children), &rows); err != nil {
+	if err := s.readParentMoves(ctx, before, after, model.IDsOf(uniqueSorted(children)), &rows); err != nil {
 		return rows, err
 	}
 	return rows, nil
@@ -401,7 +402,7 @@ func (s *Store) writeRows(ctx context.Context, w write, headSchema int64) (stora
 // readFieldMoves reads ids on both sides of a write: each editable field whose
 // value differs is a move, and anything else of the row that differs, other
 // than updated_at, is outside what a document can put back.
-func (s *Store) readFieldMoves(ctx context.Context, before, after revision, ids []string, rows *storage.WriteRows, outside func(what, reverse string)) error {
+func (s *Store) readFieldMoves(ctx context.Context, before, after revision, ids []model.ID, rows *storage.WriteRows, outside func(what, reverse string)) error {
 	was, wasStatus, err := s.issueFieldsAt(ctx, before, ids)
 	if err != nil {
 		return err
@@ -445,7 +446,7 @@ func (s *Store) readFieldMoves(ctx context.Context, before, after revision, ids 
 }
 
 // readParentMoves reads each child's parent set on both sides of a write.
-func (s *Store) readParentMoves(ctx context.Context, before, after revision, children []string, rows *storage.WriteRows) error {
+func (s *Store) readParentMoves(ctx context.Context, before, after revision, children []model.ID, rows *storage.WriteRows) error {
 	was, err := s.edgeTargetsAt(ctx, before, model.RelParentChild, children)
 	if err != nil {
 		return err
@@ -465,7 +466,7 @@ func (s *Store) readParentMoves(ctx context.Context, before, after revision, chi
 
 // eventsAt reads the events ids at r with their change rows, through
 // queryEvents, the one reader of events.
-func (s *Store) eventsAt(ctx context.Context, r revision, ids []string) ([]model.IssueEvent, error) {
+func (s *Store) eventsAt(ctx context.Context, r revision, ids []model.ID) ([]model.IssueEvent, error) {
 	named, arg := newIDSet(ids).rows("named")
 	selection := `SELECT ` + eventColumns + `, c.field, c.from_value, c.to_value FROM ` + named + ` JOIN ` + r.table("issue_events") + ` e ON e.id = named.id LEFT JOIN ` + r.table("issue_event_changes") + ` c ON c.event_id = e.id`
 	events, err := s.queryEvents(ctx, selection, arg)
@@ -558,7 +559,7 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 	var heard []owed
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
 		ctx = context.WithValue(ctx, hearingKey{}, &heard)
-		var named []string
+		var named []model.ID
 		for _, delta := range deltas {
 			for _, move := range delta.Moves() {
 				named = append(named, move.Slot.Issue)
@@ -596,7 +597,7 @@ func (s *Store) RevertWrites(ctx context.Context, ids []string, actor string) (s
 // that read each side of a write: each issue it still holds, whole, with its
 // parent set and its blocked-by set. An id it no longer holds is absent, so it
 // is known removed.
-func (s *Store) currentState(ctx context.Context, ids []string) (storage.CurrentState, error) {
+func (s *Store) currentState(ctx context.Context, ids []model.ID) (storage.CurrentState, error) {
 	issues, _, err := s.issueFieldsAt(ctx, liveRevision, ids)
 	if err != nil {
 		return storage.CurrentState{}, err

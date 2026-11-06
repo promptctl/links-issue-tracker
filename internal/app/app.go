@@ -160,7 +160,7 @@ func New(ws workspace.Info, st storage.Store, stream workspace.StreamID) *App {
 
 // StatuslineTicket is issue as the statusline file shows it.
 func StatuslineTicket(issue model.Issue) statusline.Ticket {
-	return statusline.Ticket{ID: issue.ID, Title: issue.Title.Raw(), Description: issue.Description}
+	return statusline.Ticket{ID: issue.ID.Raw(), Title: issue.Title.Raw(), Description: issue.Description}
 }
 
 // changeStatuslineFacts is what a change tells the statusline file. Every
@@ -176,11 +176,11 @@ func changeStatuslineFacts(action model.Action, issue model.Issue) statusline.Fa
 	switch action := action.(type) {
 	case nil:
 	case model.SetPhase:
-		facts.Record(statusline.PhaseRead{ID: issue.ID, Phase: string(action.Phase)})
+		facts.Record(statusline.PhaseRead{ID: issue.ID.Raw(), Phase: string(action.Phase)})
 	case model.Start:
 		// Recorded by authorizeStart's afterApply, with the lane's count.
 	default:
-		facts.Record(statusline.Invalidated{ID: issue.ID})
+		facts.Record(statusline.Invalidated{ID: issue.ID.Raw()})
 	}
 	return facts
 }

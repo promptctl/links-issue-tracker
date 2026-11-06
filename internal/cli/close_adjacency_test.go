@@ -7,12 +7,13 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // seedTaskUnder creates a task with the given title inside the epic parentID,
 // returning the new task's id.
-func seedTaskUnder(t *testing.T, ctx context.Context, ap *app.App, title, parentID string) string {
+func seedTaskUnder(t *testing.T, ctx context.Context, ap *app.App, title string, parentID model.ID) model.ID {
 	t.Helper()
 	return seedTaskIn(t, ctx, ap, title, parentID)
 }
@@ -44,27 +45,27 @@ func TestCloseRendersLiveAdjacency(t *testing.T) {
 	}
 	// Close the sibling that must not appear as live adjacency.
 	var sink bytes.Buffer
-	if err := runTransition(t, ctx, &sink, ap, []string{closedSibling}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{closedSibling.Raw()}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done closedSibling) error = %v", err)
 	}
 
 	var out bytes.Buffer
-	if err := runTransition(t, ctx, &out, ap, []string{focal}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &out, ap, []string{focal.Raw()}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done focal) error = %v", err)
 	}
 	text := out.String()
 
 	for _, want := range []string{
-		"parent:\n- " + parent,
-		"siblings:\n- " + openSibling,
-		"related:\n- " + related,
-		"unblocks: " + dependent,
+		"parent:\n- " + parent.Raw(),
+		"siblings:\n- " + openSibling.Raw(),
+		"related:\n- " + related.Raw(),
+		"unblocks: " + dependent.Raw(),
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("close adjacency missing %q; got:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, closedSibling) {
+	if strings.Contains(text, closedSibling.Raw()) {
 		t.Fatalf("closed sibling %s leaked into live adjacency:\n%s", closedSibling, text)
 	}
 }
@@ -82,11 +83,11 @@ func TestCloseWithNoAdjacencyPrintsNothing(t *testing.T) {
 	id := seedTaskUnder(t, ctx, ap, "Lonely ticket", epic)
 
 	var out bytes.Buffer
-	if err := runTransition(t, ctx, &out, ap, []string{id, "--resolution", "obsolete"}, closeSpec); err != nil {
+	if err := runTransition(t, ctx, &out, ap, []string{id.Raw(), "--resolution", "obsolete"}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close obsolete) error = %v", err)
 	}
 	text := out.String()
-	if !strings.Contains(text, "parent:\n- "+epic) {
+	if !strings.Contains(text, "parent:\n- "+epic.Raw()) {
 		t.Fatalf("lonely close omitted the epic it lives inside; got:\n%s", text)
 	}
 	for _, group := range []string{"siblings:", "related:", "unblocks:"} {
@@ -109,11 +110,11 @@ func TestCloseAdjacencyOnlyOnFinish(t *testing.T) {
 
 	// Drive focal to closed, then reopen it; only the reopen output is inspected.
 	var sink bytes.Buffer
-	if err := runTransition(t, ctx, &sink, ap, []string{focal}, doneSpec); err != nil {
+	if err := runTransition(t, ctx, &sink, ap, []string{focal.Raw()}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done focal) error = %v", err)
 	}
 	var out bytes.Buffer
-	if err := runTransition(t, ctx, &out, ap, []string{focal}, openSpec); err != nil {
+	if err := runTransition(t, ctx, &out, ap, []string{focal.Raw()}, openSpec); err != nil {
 		t.Fatalf("runTransition(reopen focal) error = %v", err)
 	}
 	if strings.Contains(out.String(), "siblings:") {

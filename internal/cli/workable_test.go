@@ -69,7 +69,7 @@ func TestWorkableStatusAcceptsLegalValues(t *testing.T) {
 	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Open leaf"), Lane: storage.SharedLane, Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	text := h.runWorkableText("--status", "open")
-	if !strings.Contains(text, issue.ID) {
+	if !strings.Contains(text, issue.ID.Raw()) {
 		t.Fatalf("backlog --status open output = %q, want %q listed", text, issue.ID)
 	}
 
@@ -80,7 +80,7 @@ func TestWorkableStatusAcceptsLegalValues(t *testing.T) {
 		t.Fatalf("backlog --status in_progress error = %v, want nil", err)
 	}
 	text = h.runWorkableText("--status", "in_progress")
-	if strings.Contains(text, issue.ID) {
+	if strings.Contains(text, issue.ID.Raw()) {
 		t.Fatalf("backlog --status in_progress output = %q, want %q filtered out", text, issue.ID)
 	}
 }

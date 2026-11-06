@@ -40,16 +40,16 @@ func (s *Store) unrelatedInventory(ctx context.Context, localHead, remoteHead st
 	// [LAW:single-enforcer] "this record purged that ticket" is Purge.Names,
 	// the test every merge and restore applies.
 	records := model.UnionPurges(localPurges, remotePurges)
-	purged := map[string]bool{}
-	for _, held := range []map[string]model.Issue{local, remote} {
+	purged := map[model.ID]bool{}
+	for _, held := range []map[model.ID]model.Issue{local, remote} {
 		for id, issue := range held {
 			if slices.ContainsFunc(records, func(p model.Purge) bool { return p.Names(issue) }) {
 				purged[id] = true
 			}
 		}
 	}
-	kept := func(held map[string]model.Issue) map[string]bool {
-		ids := map[string]bool{}
+	kept := func(held map[model.ID]model.Issue) map[model.ID]bool {
+		ids := map[model.ID]bool{}
 		for id := range held {
 			if !purged[id] {
 				ids[id] = true
@@ -103,8 +103,8 @@ func queryAsOf(ctx context.Context, db *sql.DB, commitHash, queryFormat string, 
 
 // issuesAtCommit reads the issues present at a commit, by id, each carrying its
 // id and birth — the two fields a purge record names a ticket by.
-func issuesAtCommit(ctx context.Context, db *sql.DB, commitHash string) (map[string]model.Issue, error) {
-	issues := map[string]model.Issue{}
+func issuesAtCommit(ctx context.Context, db *sql.DB, commitHash string) (map[model.ID]model.Issue, error) {
+	issues := map[model.ID]model.Issue{}
 	err := queryAsOf(ctx, db, commitHash, `SELECT id, created_at FROM issues AS OF '%s'`, func(rows *sql.Rows) error {
 		var issue model.Issue
 		var createdAt string
@@ -124,10 +124,10 @@ func issuesAtCommit(ctx context.Context, db *sql.DB, commitHash string) (map[str
 
 // eventTicketsAtCommit reads the ticket events present at a commit: each
 // event's id, mapped to the id of the ticket it records.
-func eventTicketsAtCommit(ctx context.Context, db *sql.DB, commitHash string) (map[string]string, error) {
-	events := map[string]string{}
+func eventTicketsAtCommit(ctx context.Context, db *sql.DB, commitHash string) (map[model.ID]model.ID, error) {
+	events := map[model.ID]model.ID{}
 	err := queryAsOf(ctx, db, commitHash, `SELECT id, issue_id FROM issue_events AS OF '%s'`, func(rows *sql.Rows) error {
-		var id, ticketID string
+		var id, ticketID model.ID
 		if err := rows.Scan(&id, &ticketID); err != nil {
 			return err
 		}

@@ -127,7 +127,7 @@ func TestAReadOutOfAStoredBreakTitleMergesAndIsAdmittedByItsWrite(t *testing.T) 
 			if err != nil {
 				t.Fatalf("MergeReadOut error = %v", err)
 			}
-			file, err := storage.ParseBulkFile(merged, map[string]model.IssueType{read.ID: model.TypeTask})
+			file, err := storage.ParseBulkFile(merged, map[model.ID]model.IssueType{read.ID: model.TypeTask})
 			if err != nil {
 				t.Fatalf("ParseBulkFile error = %v", err)
 			}

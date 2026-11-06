@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -15,16 +16,16 @@ import (
 // loads are the contract under test.
 type countingGraphSource struct {
 	storage.Store
-	fetched []string
+	fetched []model.ID
 }
 
-func (c *countingGraphSource) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
+func (c *countingGraphSource) GetRelationsByIDs(ctx context.Context, ids []model.ID) (map[model.ID]storage.IssueRelations, error) {
 	c.fetched = append(c.fetched, ids...)
 	return c.Store.GetRelationsByIDs(ctx, ids)
 }
 
-func (c *countingGraphSource) fetchCounts() map[string]int {
-	counts := make(map[string]int, len(c.fetched))
+func (c *countingGraphSource) fetchCounts() map[model.ID]int {
+	counts := make(map[model.ID]int, len(c.fetched))
 	for _, id := range c.fetched {
 		counts[id]++
 	}
@@ -77,7 +78,7 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 	// Seeded walk: donate the relations the listing pipeline already holds for the
 	// epic and its children. Every walk subject is covered, so none must reach the
 	// store.
-	seed, err := h.ap.Store.GetRelationsByIDs(h.ctx, []string{epic.ID, c1.ID, c2.ID})
+	seed, err := h.ap.Store.GetRelationsByIDs(h.ctx, []model.ID{epic.ID, c1.ID, c2.ID})
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs(seed) error = %v", err)
 	}

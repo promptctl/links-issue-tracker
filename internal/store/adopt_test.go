@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // TestLocalHasTicketsDoesNotCreateStore proves the adopt gate can answer "is
@@ -74,7 +76,7 @@ func TestAdoptRemoteByCloneBootstrapsAndReAdopts(t *testing.T) {
 	assertHasIssueAfterAdopt(t, ctx, consumer, id)
 }
 
-func assertHasIssueAfterAdopt(t *testing.T, ctx context.Context, root, id string) {
+func assertHasIssueAfterAdopt(t *testing.T, ctx context.Context, root string, id model.ID) {
 	t.Helper()
 	st, err := OpenForRead(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {

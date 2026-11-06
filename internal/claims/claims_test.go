@@ -33,7 +33,7 @@ var (
 	// bothLive is a machine that enumerated its worktrees and found both local
 	// streams present. assumeLive is the zero value — a machine that cannot
 	// check and therefore prunes nothing.
-	bothLive   = claims.NewLocalCheckouts(workspaceID, unlocked(streamA.Stream(), streamB.Stream()))
+	bothLive   = claims.NewLocalCheckouts(workspaceID, unlocked(streamA.Stream().Raw(), streamB.Stream().Raw()))
 	assumeLive = claims.LocalCheckouts{}
 )
 
@@ -52,7 +52,7 @@ func ago(d time.Duration) time.Time { return now.Add(-d) }
 
 // leaf builds a hydrated ticket. Claim derivation reads lifecycle state, so an
 // unhydrated issue would panic rather than answer.
-func leaf(t *testing.T, id, lane string, state model.State) model.Issue {
+func leaf(t *testing.T, id model.ID, lane string, state model.State) model.Issue {
 	t.Helper()
 	issue, err := model.HydrateStatus(
 		model.Issue{ID: id, Lane: model.Text(lane), IssueType: model.TypeTask},
@@ -64,7 +64,7 @@ func leaf(t *testing.T, id, lane string, state model.State) model.Issue {
 	return issue
 }
 
-func container(t *testing.T, id string, children ...model.Issue) model.Issue {
+func container(t *testing.T, id model.ID, children ...model.Issue) model.Issue {
 	t.Helper()
 	issue, err := model.HydrateAllOf(model.Issue{ID: id, IssueType: model.TypeEpic}, children)
 	if err != nil {
@@ -77,33 +77,33 @@ func container(t *testing.T, id string, children ...model.Issue) model.Issue {
 // constructor there is. Neither needs a hydrated issue, because lane identity is
 // a structural fact — the epic's id and the lane's spelling — and reads no
 // lifecycle at all.
-func laneIn(epic, key string) model.LaneID {
+func laneIn(epic model.ID, key string) model.LaneID {
 	parent := model.Issue{ID: epic, IssueType: model.TypeEpic}
 	return model.LaneOf(model.Issue{ID: "any-member", Lane: model.Text(key)}, &parent)
 }
 
-func soloLane(id string) model.LaneID {
+func soloLane(id model.ID) model.LaneID {
 	return model.LaneOf(model.Issue{ID: id}, nil)
 }
 
-func event(id, issueID string, action model.ActionName, at time.Time, by model.Attribution) model.IssueEvent {
+func event(id, issueID model.ID, action model.ActionName, at time.Time, by model.Attribution) model.IssueEvent {
 	return model.IssueEvent{ID: id, IssueID: issueID, Action: string(action), CreatedAt: at, Attribution: by}
 }
 
 // epicOf assembles an epic over the given children and returns the parent map
 // NewEvidence wants, so every case states only the children it cares about.
-func epicOf(t *testing.T, children ...model.Issue) (issues []model.Issue, parents map[string]string) {
+func epicOf(t *testing.T, children ...model.Issue) (issues []model.Issue, parents map[model.ID]model.ID) {
 	t.Helper()
 	epic := container(t, epicID, children...)
 	issues = append([]model.Issue{epic}, children...)
-	parents = map[string]string{}
+	parents = map[model.ID]model.ID{}
 	for _, child := range children {
 		parents[child.ID] = epic.ID
 	}
 	return issues, parents
 }
 
-func derive(t *testing.T, issues []model.Issue, parents map[string]string, events []model.IssueEvent, local claims.LocalCheckouts) claims.Standings {
+func derive(t *testing.T, issues []model.Issue, parents map[model.ID]model.ID, events []model.IssueEvent, local claims.LocalCheckouts) claims.Standings {
 	t.Helper()
 	evidence, err := claims.NewEvidence(issues, parents, events)
 	if err != nil {
@@ -200,7 +200,7 @@ func TestPredicateGrid(t *testing.T) {
 			events: []model.IssueEvent{
 				event("e1", "T1", model.ActionStart, ago(2*time.Hour), streamA),
 			},
-			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream())),
+			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream().Raw())),
 			want:  claims.Unclaimed{},
 		},
 	}
@@ -249,7 +249,7 @@ func TestVoidEvidenceFallsThroughToTheNextEstablisher(t *testing.T) {
 	standings := derive(t, issues, parents, []model.IssueEvent{
 		event("e1", "T1", model.ActionStart, ago(4*time.Hour), streamB),
 		event("e2", "T2", model.ActionStart, ago(time.Hour), streamA),
-	}, claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream())))
+	}, claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream().Raw())))
 
 	assertStanding(t, standings.Of(laneIn(epicID, "")), held(streamB, ago(4*time.Hour), ago(4*time.Hour)))
 }
@@ -285,17 +285,17 @@ func TestExpiredClaimPresenceGrid(t *testing.T) {
 	}{
 		{
 			name:  "absent — git lists no such worktree, so the evidence is disproven and the lane reverts",
-			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream())),
+			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamB.Stream().Raw())),
 			want:  claims.Unclaimed{},
 		},
 		{
 			name:  "present — a worktree on disk outlives its session routinely, so it sustains nothing",
-			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamA.Stream())),
+			local: claims.NewLocalCheckouts(workspaceID, unlocked(streamA.Stream().Raw())),
 			want:  claims.Unclaimed{},
 		},
 		{
 			name:  "locked — the holder set an explicit do-not-disturb, and the hold stands past the clock",
-			local: claims.NewLocalCheckouts(workspaceID, []claims.LiveCheckout{{Stream: streamA.Stream(), Locked: true}}),
+			local: claims.NewLocalCheckouts(workspaceID, []claims.LiveCheckout{{Stream: streamA.Stream().Raw(), Locked: true}}),
 			want:  claims.Held{Tenure: tenure},
 		},
 		{
@@ -322,7 +322,7 @@ func TestExpiredClaimPresenceGrid(t *testing.T) {
 func TestLockDoesNotOutrankProvenAbsence(t *testing.T) {
 	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress))
 	// streamB is enumerated and locked; streamA, the holder, is not listed at all.
-	local := claims.NewLocalCheckouts(workspaceID, []claims.LiveCheckout{{Stream: streamB.Stream(), Locked: true}})
+	local := claims.NewLocalCheckouts(workspaceID, []claims.LiveCheckout{{Stream: streamB.Stream().Raw(), Locked: true}})
 	standings := derive(t, issues, parents, []model.IssueEvent{
 		event("e1", "T1", model.ActionStart, ago(72*time.Hour), streamA),
 	}, local)
@@ -464,7 +464,7 @@ func TestCrossEpicDependencyClaimsOnlyItsOwnLane(t *testing.T) {
 	epic := container(t, epicID, mine)
 
 	issues := []model.Issue{epic, other, mine, dependency, neighbour}
-	parents := map[string]string{mine.ID: epic.ID, dependency.ID: other.ID, neighbour.ID: other.ID}
+	parents := map[model.ID]model.ID{mine.ID: epic.ID, dependency.ID: other.ID, neighbour.ID: other.ID}
 
 	standings := derive(t, issues, parents, []model.IssueEvent{
 		event("e1", "D1", model.ActionStart, ago(time.Hour), streamA),
@@ -528,7 +528,7 @@ func TestEvidenceRefusesAPartialRead(t *testing.T) {
 // a plausible partition, and a wrong one.
 func TestEvidenceRefusesAnUnsuppliedParent(t *testing.T) {
 	child := leaf(t, "T1", "", model.StateOpen)
-	if _, err := claims.NewEvidence([]model.Issue{child}, map[string]string{child.ID: epicID}, nil); err == nil {
+	if _, err := claims.NewEvidence([]model.Issue{child}, map[model.ID]model.ID{child.ID: epicID}, nil); err == nil {
 		t.Fatal("NewEvidence() with a parent that was not supplied = nil error, want a refusal")
 	}
 }
@@ -541,7 +541,7 @@ func familyOf(t *testing.T, events []model.IssueEvent) claims.Family {
 	return claims.Family{
 		Issues:        issues[1:],
 		ParentByChild: parents,
-		ParentTypes:   map[string]model.IssueType{epicID: model.TypeEpic},
+		ParentTypes:   map[model.ID]model.IssueType{epicID: model.TypeEpic},
 		Events:        events,
 	}
 }

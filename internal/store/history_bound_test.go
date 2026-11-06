@@ -46,7 +46,7 @@ func unfiredBound(t *testing.T) storage.BoundWindow {
 // sync push` and the pre-push hook do, keeping bound as every landed push
 // does, and returns what the bound did and the push's collection below the
 // cut, zero when it ran none.
-func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bound historywindow.Window) (storage.HistoryBound, storage.Collection) {
+func compactPush(t *testing.T, ctx context.Context, root string, epic model.ID, title string, bound historywindow.Window) (storage.HistoryBound, storage.Collection) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
@@ -307,7 +307,7 @@ func TestABoundKeptOnTheMirrorsCloneCollectsNothing(t *testing.T) {
 // backlogGrewBy reports whether after holds every issue of before, with the
 // same title, and one more titled title.
 func backlogGrewBy(before, after model.Export, title string) bool {
-	titles := map[string]string{}
+	titles := map[model.ID]string{}
 	for _, issue := range after.Issues {
 		titles[issue.ID] = issue.Title.Raw()
 	}

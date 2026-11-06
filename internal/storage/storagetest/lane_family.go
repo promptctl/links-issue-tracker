@@ -67,7 +67,7 @@ func sameProgress(a, b claims.LaneProgress) bool {
 	return a.Progress == b.Progress && activeID(a) == activeID(b)
 }
 
-func activeID(progress claims.LaneProgress) string {
+func activeID(progress claims.LaneProgress) model.ID {
 	if progress.Active == nil {
 		return ""
 	}
