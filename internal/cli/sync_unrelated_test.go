@@ -128,7 +128,7 @@ func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
-	err := reportReconcileResult(underInvocation(context.Background()), testStderr(t), runEnv(t), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:  storage.SyncReconcileUnrelated,
 		Ahead:  1,
 		Behind: 1,
@@ -173,7 +173,7 @@ func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
-	err := reportReconcileResult(underInvocation(context.Background()), testStderr(t), runEnv(t), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:  storage.SyncReconcileUnrelated,
 		Ahead:  7,
 		Behind: 7,

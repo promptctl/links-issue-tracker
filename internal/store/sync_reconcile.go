@@ -1061,24 +1061,20 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// to fail the reconcile — the replay already committed, and returning an error here
 	// would report a successful reconcile as failed (and a retry would find it already
 	// resolved). A leftover un-pruned snapshot is inert, exactly like the leftover
-	// scratch branch leaveScratch tolerates, so pruneAfterLanding reports it and
-	// returns nothing. [LAW:no-silent-failure] loud, but not a false failure over a
+	// scratch branch leaveScratch tolerates, so pruneAfterLanding records it for the
+	// command to report. [LAW:no-silent-failure] loud, but not a false failure over a
 	// durable success.
 	s.pruneAfterLanding(ctx)
 	return replayLanding{replayed: replayed, landing: landing}, nil
 }
 
 // pruneAfterLanding rolls the recovery snapshots off once a reconcile's outcome
-// has durably landed, prints a failure where it happens, and records the prune
-// for the event's reconcile.snapshot_prunes, one occurrence per prune: an
-// invocation can reconcile more than once, and a reconcile can fail after its
-// landing, and neither loses a prune. Every reconcile landing prunes through
-// it. [LAW:single-enforcer] [LAW:nothing-unseen]
+// has durably landed and records the prune for SnapshotPrunes, which the sync
+// session's close prints and puts on the event: an invocation can reconcile
+// more than once, and a reconcile can fail after its landing, and neither
+// loses a prune. Every reconcile landing prunes through it. [LAW:single-enforcer]
 func (s *Store) pruneAfterLanding(ctx context.Context) {
 	_, err := s.pruneAutomaticSnapshots(ctx)
-	if err != nil {
-		fmt.Fprintf(s.stderr, "lit: could not prune old recovery snapshots (what the reconcile landed is kept): %v\n", err)
-	}
 	s.snapshotPrunes = append(s.snapshotPrunes, storage.SnapshotPrune{Err: err})
 }
 
