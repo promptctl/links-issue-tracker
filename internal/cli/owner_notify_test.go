@@ -148,39 +148,46 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 
 // TestForegroundReconcileNotDivergedEndsTheEpisodes pins that a foreground
 // reconcile answering not-diverged ends every settle-ended episode and retires
-// the pending block, the schema kinds included: the store raises the receive
-// half's schema refusals only inside the replay of a diverged plan, so a
-// not-diverged answer proves every condition that half pages is gone. Two
-// reviews read this arm the opposite way; the wiring is pinned so the next
-// reader has the answer.
+// the pending block, and ends the remote-schema episode on what its plan read
+// of the remote head: a head within support ends it, a head ahead of this
+// binary leaves it standing, since a not-diverged answer by itself proves
+// nothing about the remote's schema.
 func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	notDiverged := storage.SyncReconcileResult{State: storage.SyncReconcileNotDiverged}
+	aheadNotDiverged := storage.SyncReconcileResult{State: storage.SyncReconcileNotDiverged, RemoteSchemaAhead: storage.RemoteSchemaAhead{RemoteSchema: 9, BinarySupportedMax: 8}}
 
 	plantSettleEndedEpisodes(t, ws)
 	var out strings.Builder
 	if err := reportTakeOutcome(testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", notDiverged); err != nil {
 		t.Fatalf("reportTakeOutcome: %v", err)
 	}
-	requireSettleEndedEpisodesEnded(t, ws, "take not-diverged")
+	requireSettleEndedEpisodesEnded(t, ws, "take not-diverged", storage.RemoteSchemaAhead{})
 
 	plantSettleEndedEpisodes(t, ws)
 	out.Reset()
 	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult: %v", err)
 	}
-	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged")
+	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged", storage.RemoteSchemaAhead{})
+
+	plantSettleEndedEpisodes(t, ws)
+	out.Reset()
+	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", aheadNotDiverged, false); err != nil {
+		t.Fatalf("reportReconcileResult(ahead): %v", err)
+	}
+	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged against an ahead remote", aheadNotDiverged.RemoteSchemaAhead)
 }
 
-// plantSettleEndedEpisodes leaves a live marker of every kind a settle ends
-// and a pending sync-failure block, the state a settle must clear.
+// plantSettleEndedEpisodes leaves a live marker of every kind a settle can
+// end and a pending sync-failure block, the state a settle must clear.
 func plantSettleEndedEpisodes(t *testing.T, ws workspace.Info) {
 	t.Helper()
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		t.Fatalf("mkdir storage dir: %v", err)
 	}
-	for _, kind := range ownerNotifySettleEndedKinds {
+	for _, kind := range kindsEndedBy(endedBySettle, endedBySchemaRead) {
 		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte("fp"), 0o644); err != nil {
 			t.Fatalf("write %s marker: %v", kind, err)
 		}
@@ -190,17 +197,65 @@ func plantSettleEndedEpisodes(t *testing.T, ws workspace.Info) {
 	}
 }
 
-// requireSettleEndedEpisodesEnded fails unless every marker a settle ends and
-// the pending block are gone; surface names what was supposed to end them.
-func requireSettleEndedEpisodesEnded(t *testing.T, ws workspace.Info, surface string) {
+// requireSettleEndedEpisodesEnded fails unless every marker a settle that
+// read the remote head at remote ends, and the pending block, are gone, and
+// unless the remote-schema marker still stands when that read was ahead;
+// surface names what was supposed to end them.
+func requireSettleEndedEpisodesEnded(t *testing.T, ws workspace.Info, surface string, remote storage.RemoteSchemaAhead) {
 	t.Helper()
-	for _, kind := range ownerNotifySettleEndedKinds {
+	ended := kindsEndedBy(settleProofs(remote)...)
+	for _, kind := range ended {
 		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("%s left the %s episode live (stat err=%v)", surface, kind, err)
 		}
 	}
+	schema := ownerNotifyKind(syncFailureRemoteSchemaAhead)
+	if _, err := os.Stat(ownerNotifyMarkerPath(ws, schema)); remote.Ahead() && err != nil {
+		t.Fatalf("%s ended the %s episode though it read the remote head ahead of this binary: %v", surface, schema, err)
+	}
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("%s left the pending block waiting (stat err=%v)", surface, err)
+	}
+}
+
+// TestKindsEndedByIsTheOneTable pins the ender table: every class that pages
+// under its own kind has an ender, so none can page and never clear; the
+// divergence kinds and the ceiling lift end on a settle alone; the push kinds
+// end on a landed push alone; and the remote schema ahead, detected by both
+// halves, ends on a landed push or on a read of the remote head within
+// support, never on a settle's state alone.
+func TestKindsEndedByIsTheOneTable(t *testing.T) {
+	t.Parallel()
+	// The classes with no ender of their own: an unsettled receive, whose
+	// episode is its run of stops, and the two the push half pages as
+	// push_failed. Every other class, and push_failed itself, has one.
+	noEnder := []syncFailureClass{syncFailureReceiveUnsettled, syncFailurePushDiverged, syncFailureForcedPushStale}
+	for _, class := range syncFailureClasses {
+		enders := ownerNotifyEnders[ownerNotifyKind(class)]
+		if slices.Contains(noEnder, class) != (len(enders) == 0) {
+			t.Fatalf("class %q has %d enders; the table and the paging set disagree", class, len(enders))
+		}
+	}
+	if len(ownerNotifyEnders[ownerNotifyPushFailed]) == 0 {
+		t.Fatalf("%s has no ender", ownerNotifyPushFailed)
+	}
+	if len(ownerNotifyEnders) != len(syncFailureClasses)-len(noEnder)+1 {
+		t.Fatalf("the table holds %d kinds; want every paging class plus %s", len(ownerNotifyEnders), ownerNotifyPushFailed)
+	}
+	schema := ownerNotifyKind(syncFailureRemoteSchemaAhead)
+	if slices.Contains(kindsEndedBy(endedBySettle), schema) {
+		t.Fatalf("a settle's state alone ends %s", schema)
+	}
+	for _, proof := range []episodeEnder{endedByPush, endedBySchemaRead} {
+		if !slices.Contains(kindsEndedBy(proof), schema) {
+			t.Fatalf("proof %d does not end %s", proof, schema)
+		}
+	}
+	if got := kindsEndedBy(settleProofs(storage.RemoteSchemaAhead{RemoteSchema: 9, BinarySupportedMax: 8})...); slices.Contains(got, schema) {
+		t.Fatalf("a settle that read the remote head ahead ends %s: %v", schema, got)
+	}
+	if got := kindsEndedBy(settleProofs(storage.RemoteSchemaAhead{})...); !slices.Contains(got, schema) {
+		t.Fatalf("a settle that read the remote head within support does not end %s: %v", schema, got)
 	}
 }
 
@@ -447,13 +502,13 @@ func TestLandedPushEndsEveryPushEndedKind(t *testing.T) {
 		t.Fatalf("mkdir storage dir: %v", err)
 	}
 	standing := ownerNotifyKind(syncFailureSchemaCeilingLift)
-	for _, kind := range append(slices.Clone(ownerNotifyPushEndedKinds), standing) {
+	for _, kind := range append(kindsEndedBy(endedByPush), standing) {
 		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte(string(kind)+" origin/master\n"), 0o644); err != nil {
 			t.Fatalf("plant %s marker: %v", kind, err)
 		}
 	}
 	observePushOutcomeForOwner(context.Background(), testStderr(t), runEnv(t), ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"}, SyncFailure{}, false)
-	for _, kind := range ownerNotifyPushEndedKinds {
+	for _, kind := range kindsEndedBy(endedByPush) {
 		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("a landed push left the %s episode standing (stat err=%v)", kind, err)
 		}
@@ -516,8 +571,22 @@ func TestEndSettleEndedEpisodesClearsEveryKind(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	plantSettleEndedEpisodes(t, ws)
-	endSettleEndedEpisodes(testStderr(t), ws)
-	requireSettleEndedEpisodesEnded(t, ws, "a settle")
+	endSettleEndedEpisodes(testStderr(t), ws, storage.RemoteSchemaAhead{})
+	requireSettleEndedEpisodesEnded(t, ws, "a settle", storage.RemoteSchemaAhead{})
+}
+
+// TestASettleAgainstAnAheadRemoteLeavesTheSchemaEpisode pins the hole the
+// read closes: a settle that landed or sat on a head whose schema is ahead of
+// this binary converged, so the divergence kinds end and the block retires,
+// and the remote-schema episode stands, so the next refused push is a repeat
+// inside the cooldown rather than a new page.
+func TestASettleAgainstAnAheadRemoteLeavesTheSchemaEpisode(t *testing.T) {
+	t.Parallel()
+	ws := notifyTestWorkspace(t)
+	ahead := storage.RemoteSchemaAhead{RemoteSchema: 9, BinarySupportedMax: 8}
+	plantSettleEndedEpisodes(t, ws)
+	endSettleEndedEpisodes(testStderr(t), ws, ahead)
+	requireSettleEndedEpisodesEnded(t, ws, "a settle against an ahead remote", ahead)
 }
 
 // TestSyncReceiveOutcomeSettledCleanly pins which receive outcomes end a

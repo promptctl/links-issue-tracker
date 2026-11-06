@@ -83,32 +83,62 @@ func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteNam
 	return s.remoteHeadAt(ctx, head, remote, branch)
 }
 
-// refuseSchemaAhead is the schema-ahead verdict on a remote head's schema the
-// caller read: it refuses when that schema is above this binary's schema
-// support, so no push authors a commit below the remote head's schema. A
-// remote this store holds no head of is not ahead. The push runs it on the
-// tracking head, the leased push on the lease's expected commit, the
-// reconcile on its captured anchor. remote and branch are carried only to
-// name the failure for the sync-failure contract. [LAW:single-enforcer] the
-// one detection of "remote schema ahead" every write to a remote runs.
-func refuseSchemaAhead(remote storage.RemoteName, branch string, remoteHead remoteSchema) error {
+// freshnessHeadSchema is the schema and schema hold of the head a freshness
+// judged (SyncFreshness.RemoteHead), or unknownRemoteSchema when the branch
+// never synced. A settle and a reconcile plan read the remote through it, so
+// the head whose freshness they report and the head whose schema they report
+// are one read of the tracking ref: a diverged plan's remote head is the
+// commit its schema was read AS OF, never a second resolution of the ref.
+// [LAW:one-source-of-truth] [LAW:no-ambient-temporal-coupling]
+func (s *Store) freshnessHeadSchema(ctx context.Context, fresh storage.SyncFreshness, remote storage.RemoteName, branch string) (remoteSchema, error) {
+	if !fresh.Synced {
+		return unknownRemoteSchema(), nil
+	}
+	return s.remoteHeadAt(ctx, fresh.RemoteHead, remote, branch)
+}
+
+// judgeSchemaAhead is the schema-ahead verdict on a remote head's schema the
+// caller read: the head's schema against this binary's schema support, zero
+// when the head is within it. A remote this store holds no head of is not
+// ahead. Every settle reports it, and every write to a remote refuses on it
+// (refuseSchemaAhead), so the owner channel ends the episode on the same
+// judgement the guard raised it from. [LAW:single-enforcer] the one judgement
+// of "remote schema ahead".
+func judgeSchemaAhead(remoteHead remoteSchema) (storage.RemoteSchemaAhead, error) {
 	if !remoteHead.known {
-		return nil
+		return storage.RemoteSchemaAhead{}, nil
 	}
 	support, err := version.CarriedSchemaSupport()
 	if err != nil {
-		return err
+		return storage.RemoteSchemaAhead{}, err
 	}
 	// [LAW:dataflow-not-control-flow] The comparison runs every call; the two
-	// versions are the values that decide block-vs-proceed, not a mode.
+	// versions are the values that decide, not a mode.
 	if remoteHead.version <= support.Max {
-		return nil
+		return storage.RemoteSchemaAhead{}, nil
+	}
+	return storage.RemoteSchemaAhead{RemoteSchema: remoteHead.version, BinarySupportedMax: support.Max}, nil
+}
+
+// refuseSchemaAhead refuses a write to remote/branch whose head is at a
+// schema above this binary's support, so no push authors a commit below the
+// remote head's schema. The push runs it on the tracking head, the leased
+// push on the lease's expected commit, the reconcile on its captured plan's
+// read. A landing (the behind fast-forward, a take-remote with nothing to
+// carry) authors no commit and runs no refusal: it adopts the head at any
+// schema, and the open decides what this binary may do with the store it
+// finds. remote and branch are carried only to name the failure for the
+// sync-failure contract.
+func refuseSchemaAhead(remote storage.RemoteName, branch string, remoteHead remoteSchema) error {
+	ahead, err := judgeSchemaAhead(remoteHead)
+	if err != nil || !ahead.Ahead() {
+		return err
 	}
 	return &RemoteSchemaAheadError{
 		Remote:             remote.String(),
 		Branch:             branch,
-		RemoteVersion:      remoteHead.version,
-		BinarySupportedMax: support.Max,
+		RemoteVersion:      ahead.RemoteSchema,
+		BinarySupportedMax: ahead.BinarySupportedMax,
 	}
 }
 

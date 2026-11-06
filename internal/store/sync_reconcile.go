@@ -328,10 +328,21 @@ type reconcilePlan struct {
 	localHead  string
 	remoteHead string
 	base       storage.ReconcileBase
+	// remoteSchema is the remote head's schema and hold, read once, in every
+	// state, AS OF the head the freshness judged (freshnessHeadSchema), with
+	// the reader the push judges a remote head by (remoteHeadAt): the replay's
+	// guard refuses on it and the result reports it. remoteHead is the commit
+	// it was read AS OF, so the head the replay lands on is the head the guard
+	// judged. [LAW:one-source-of-truth] one read of the head per reconcile.
+	remoteSchema remoteSchema
+	// schemaAhead is remoteSchema judged against this binary's support.
+	schemaAhead storage.RemoteSchemaAhead
 }
 
 // captureReconcilePlan reads the reconcile decision state under the already-held
-// commit lock. When the branch is not diverged it returns early with diverged=false
+// commit lock. In every state it reads the remote head's schema, so a
+// not-diverged answer reports what it learned about the remote as a replay
+// does. When the branch is not diverged it returns early with diverged=false
 // and no anchors (nothing to reconcile); when diverged it captures the data branch,
 // both heads, and the base in one pass: the heads' merge base, or, when they
 // share no history, what the fork point offers, a base the remote head does not
@@ -345,6 +356,12 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteN
 		return reconcilePlan{}, err
 	}
 	plan.ahead, plan.behind = fresh.Ahead, fresh.Behind
+	if plan.remoteSchema, err = s.freshnessHeadSchema(ctx, fresh, remote, branch); err != nil {
+		return reconcilePlan{}, err
+	}
+	if plan.schemaAhead, err = judgeSchemaAhead(plan.remoteSchema); err != nil {
+		return reconcilePlan{}, err
+	}
 	if fresh.State() != storage.SyncDiverged {
 		// Only a divergence needs a reconcile; every other state is the receive/push
 		// side's job. [LAW:dataflow-not-control-flow] the freshness value selects the
@@ -352,7 +369,7 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteN
 		return plan, nil
 	}
 	plan.diverged = true
-	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
+	plan.remoteHead = plan.remoteSchema.head
 	plan.dataBranch, err = activeBranch(ctx, s.db)
 	if err != nil {
 		return reconcilePlan{}, err
@@ -360,10 +377,6 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteN
 	plan.localHead, err = readDoltHead(ctx, s.db)
 	if err != nil {
 		return reconcilePlan{}, fmt.Errorf("read local head: %w", err)
-	}
-	plan.remoteHead, err = commitHashOfRef(ctx, s.db, trackingRef)
-	if err != nil {
-		return reconcilePlan{}, err
 	}
 	plan.base = fresh.Base
 	s.reconcileBases = append(s.reconcileBases, plan.base)
@@ -408,6 +421,7 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 			return err
 		}
 		result.Ahead, result.Behind = plan.ahead, plan.behind
+		result.RemoteSchemaAhead = plan.schemaAhead
 		if !plan.diverged {
 			result.State = storage.SyncReconcileNotDiverged
 			return nil
@@ -444,12 +458,12 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 			// two-way union; combineFromAnchors is the only difference from the shared path.
 			// [LAW:dataflow-not-control-flow] the handling value selects the export producer,
 			// not a duplicated engine.
-			return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+			return s.replayUnderGuard(ctx, remote, trimmedBranch, plan, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
 				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, head)
 			})
 		}
 
-		return s.replayUnderGuard(ctx, remote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+		return s.replayUnderGuard(ctx, remote, trimmedBranch, plan, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
 			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, baseCommit, head)
 		})
 	})
@@ -467,26 +481,22 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 // and carry ONE snapshot guard across GC-contention retries so exactly one recovery point of
 // the pre-reconcile head is taken however many attempts run.
 // [LAW:single-enforcer] the mutation envelope is written once; the body is the only variable.
-// [LAW:no-ambient-temporal-coupling] the schema-ahead read reuses the captured remoteHead, so
-// no concurrent fetch can shift the decision between guard and replay.
+// [LAW:no-ambient-temporal-coupling] the schema-ahead verdict is on the plan's captured read
+// of the remote head, so no concurrent fetch can shift the decision between guard and replay.
 // A lift the body refuses at the ceiling leaves as SchemaCeilingLiftError, named for this
 // remote and branch (nameLiftRefusal), as the schema-ahead refusal above is.
-// The fetched head's schema and hold are read here, once, AS OF the captured
-// commit, with the reader the push judges a remote head by (remoteHeadAt), so
-// a refusal here and one at the push name the head the same way. The hold
-// rides into the body as the head's own value (fetchedHead): the first lift of
-// that head refuses under it, before any merge or prose hold asks the operator
-// for work a refusal would discard. [LAW:one-source-of-truth] one read of the
-// hold per reconcile, however many attempts and branches lift the head.
-func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch, head fetchedHead) error) error {
-	remoteSchema, err := s.remoteHeadAt(ctx, remoteHead, remote, branch)
-	if err != nil {
+// The fetched head's schema and hold were read with the plan, once, with the
+// reader the push judges a remote head by (remoteHeadAt), so a refusal
+// here and one at the push name the head the same way. The hold rides into
+// the body as the head's own value (fetchedHead): the first lift of that head
+// refuses under it, before any merge or prose hold asks the operator for work
+// a refusal would discard. [LAW:one-source-of-truth] one read of the hold per
+// reconcile, however many attempts and branches lift the head.
+func (s *Store) replayUnderGuard(ctx context.Context, remote storage.RemoteName, branch string, plan reconcilePlan, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch, head fetchedHead) error) error {
+	if err := refuseSchemaAhead(remote, branch, plan.remoteSchema); err != nil {
 		return err
 	}
-	if err := refuseSchemaAhead(remote, branch, remoteSchema); err != nil {
-		return err
-	}
-	head := fetchedHead{hash: remoteHead, hold: remoteSchema.hold}
+	head := fetchedHead{hash: plan.remoteHead, hold: plan.remoteSchema.hold}
 	// A leftover scratch branch is inert to a reconcile — never the data
 	// branch, never pushed — so a sweep that fails is reported and the
 	// reconcile goes on. [LAW:no-silent-failure]

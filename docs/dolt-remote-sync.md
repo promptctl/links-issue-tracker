@@ -443,11 +443,18 @@ event's facts in the environment:
 Notifications are de-duplicated **per episode**: the first detection of a
 condition fires immediately, re-detections of the same ongoing condition are
 suppressed (re-pinging at most daily while it persists), and the episode ends
-when the condition resolves — a landed push ends `push_failed` and every
-schema refusal the push detects, a settle (a converged reconcile, a settle
-after an unsettled run or after a lifted hold or an upgrade) ends the
-divergence kinds and every schema refusal the reconcile detects — so the
-*next* occurrence notifies immediately again. A failed hook is loud on stderr,
+when the condition resolves, so the *next* occurrence notifies immediately
+again. A landed push ends `push_failed` and every schema refusal the push
+detects. A settle (a converged reconcile, a settle after an unsettled run or
+after a lifted hold) ends the divergence kinds and `schema_ceiling_lift`.
+`remote_schema_ahead`, which both halves detect, ends on the one fact both
+judge: a landed push, or a settle whose read of the remote head found its
+schema within this lit's support. Every settle reads the remote head's
+schema, whatever state it ends in; a settle that lands or sits on a head
+whose schema is ahead leaves that episode standing, so the next refused push
+is a repeat inside the cooldown rather than a new page. (A landing adopts the
+head at any schema; what this lit may then do with the store is the open's
+rule, and `lit upgrade` is the remedy either names.) A failed hook is loud on stderr,
 recorded in the sync traces, and retried on the next detection. Empty (the
 default) configures no channel and runs nothing; `LIT_DISABLE_AUTO_SYNC=1`
 suppresses the hook along with all other automatic sync side effects.

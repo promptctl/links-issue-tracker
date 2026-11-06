@@ -415,6 +415,10 @@ func syncPullLeaf() syncLeaf {
 		// along shared history. [LAW:nothing-unseen]
 		telemetry.Set(ctx, "pull.state", string(result.State))
 		telemetry.Set(ctx, "pull.base", string(result.Base))
+		// The remote head's schema when it is ahead of this binary, 0 otherwise:
+		// what the settle learned about the remote, beside how it settled.
+		telemetry.Set(ctx, "pull.remote_schema_ahead", result.RemoteSchemaAhead.RemoteSchema)
+		pullTraceMetadata["remote_schema_ahead"] = fmt.Sprintf("%d", result.RemoteSchemaAhead.RemoteSchema)
 		// A held free-text conflict is a non-transient divergence the agent must
 		// resolve: it routes through the one sync-failure contract and is RETURNED, so
 		// the command exits ExitConflict — the same exit `lit sync reconcile` gives for
@@ -430,8 +434,9 @@ func syncPullLeaf() syncLeaf {
 		landingMetadata(pullTraceMetadata, result.Landing)
 		recordSyncCommandTrace(inv.Stderr, inv.Env, ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 		// A pull that completed without a held state converged (or found nothing to
-		// converge): the divergence episode, if one was notified, is over.
-		endSettleEndedEpisodes(inv.Stderr, ws)
+		// converge): the divergence episode, if one was notified, is over, and the
+		// remote-schema episode too when the settle read the head within support.
+		endSettleEndedEpisodes(inv.Stderr, ws, result.RemoteSchemaAhead)
 		return printSyncPullOutcome(inv.Stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State, landing: result.Landing}, *verbose)
 	}}
 }

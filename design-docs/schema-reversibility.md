@@ -151,6 +151,20 @@ open brings a store forward and a release's `lit sync push` sends it.
 Binaries released before the row existed do not read it. The guarantee holds
 from the first release that does.
 
+A landing adopts the remote head at any schema. The receive's behind
+fast-forward and a take-remote with nothing to carry move the branch to the
+fetched head and author no commit, so the refusal that keeps a binary from
+writing below a newer remote's schema (`RemoteSchemaAheadError`) has nothing
+to guard there, and neither does the hold. What the binary may then do with
+the store it finds is the open's one rule: a held lower head migrates no
+further than its hold, and a head above the binary's schema is readable while
+its baseline shape is intact and writable while the binary supports the
+store's minimum writer schema, refused otherwise with `lit upgrade` named.
+The same landing is what lets a lowered remote bring a client down. Every
+settle reads the remote head's schema against the binary and reports it, so
+the owner channel ends a remote-schema-ahead episode on that read, never on
+the state the settle ended in.
+
 ## What rule 2 means, precisely
 
 Let R be the remote head's schema and H the schema of the head a push sends.

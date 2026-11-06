@@ -28,6 +28,11 @@ import (
 type remoteSchema struct {
 	version int64
 	known   bool
+	// head is the commit the schema and hold were read AS OF, "" when the
+	// remote is unknown. A verdict on this value is a verdict on that commit,
+	// so a replay onto head replays onto the head the guard judged.
+	// [LAW:parse-dont-validate] the proof names what it proves.
+	head string
 	// hold is the schema hold recorded at the head (schema_hold.go): the
 	// ceiling a push to this remote may not send a commit above.
 	hold version.SchemaCeiling
@@ -56,7 +61,7 @@ func (s *Store) remoteHeadAt(ctx context.Context, commitHash string, remote stor
 	if err != nil {
 		return remoteSchema{}, err
 	}
-	return remoteSchema{version: remoteVersion, known: true, hold: hold}, nil
+	return remoteSchema{version: remoteVersion, known: true, hold: hold, head: commitHash}, nil
 }
 
 // SchemaRaiseRequiresReleaseError refuses a push that would raise a remote's

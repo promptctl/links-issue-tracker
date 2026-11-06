@@ -14,6 +14,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -60,40 +61,75 @@ type ownerNotifyKind string
 
 const ownerNotifyPushFailed ownerNotifyKind = "push_failed"
 
-// The two groups below are the enders: a kind pages only if some outcome ends
-// its episode, and the mapping reads these lists, so a class cannot page and
-// never clear, or clear and never page. [LAW:one-source-of-truth]
+// episodeEnder is a proof a sync outcome carries that a condition is gone. A
+// kind's episode ends on any of its enders; an outcome ends every kind one of
+// its proofs is an ender of. [LAW:types-are-the-program] the proof is named,
+// so a kind cannot be ended by an outcome that only looks like proof: a
+// settle's state says a divergence converged, and says nothing about the
+// remote's schema unless the settle read it.
+type episodeEnder int
 
-// ownerNotifySettleEndedKinds is the group one settle ends: any converged state
-// (fast-forwarded, linearized, combined, taken, not-diverged) resolves a
-// divergence, and the receive half raises its two schema refusals only inside
-// the reconcile's replay of a diverged plan, so every one of those states
-// proves that replay passed. A remote schema ahead is push-detected as well,
-// and a settle that ran no replay proves nothing about it; which settles are
-// proof is open under the remote-ceiling epic.
-var ownerNotifySettleEndedKinds = []ownerNotifyKind{
-	ownerNotifyKind(syncFailureProseHeld),
-	ownerNotifyKind(syncFailureDivergedUnresolved),
-	ownerNotifyKind(syncFailureUnrelatedHistories),
-	ownerNotifyKind(syncFailureIDCollision),
-	ownerNotifyKind(syncFailureRemoteSchemaAhead),
-	ownerNotifyKind(syncFailureSchemaCeilingLift),
+const (
+	// endedBySettle: a settle against the remote converged or found nothing
+	// to converge (fast-forwarded, linearized, combined, taken, not-diverged).
+	// It proves a divergence gone. The receive half raises a lift refused by
+	// the ceiling only inside the replay of a diverged plan, and the one
+	// settle that completes without that replay against a head it cannot
+	// lift, a take-remote with nothing to carry, hands the head to the open,
+	// which refuses it itself.
+	endedBySettle episodeEnder = iota
+	// endedByPush: a push landed, so it passed every guard the push runs.
+	endedByPush
+	// endedBySchemaRead: an outcome read the remote head's schema and found
+	// it within this binary's support. Every settle carries that read
+	// (storage.RemoteSchemaAhead), whatever state it ended in, and a landed
+	// push made it on the way through its guard.
+	endedBySchemaRead
+)
+
+// ownerNotifyEnders is each paging kind's enders. A kind pages only if some
+// outcome ends its episode, and the mapping reads this table, so a class
+// cannot page and never clear, or clear and never page. A remote schema
+// ahead is detected by both halves (the push's guard, the reconcile's replay)
+// and ended by the one fact both judge: the remote head's schema is within
+// support. An unsettled receive is absent: its episode is its run of stops,
+// keyed by when the run began, and a settle ends the run itself.
+// [LAW:one-source-of-truth]
+var ownerNotifyEnders = map[ownerNotifyKind][]episodeEnder{
+	ownerNotifyKind(syncFailureProseHeld):                  {endedBySettle},
+	ownerNotifyKind(syncFailureDivergedUnresolved):         {endedBySettle},
+	ownerNotifyKind(syncFailureUnrelatedHistories):         {endedBySettle},
+	ownerNotifyKind(syncFailureIDCollision):                {endedBySettle},
+	ownerNotifyKind(syncFailureSchemaCeilingLift):          {endedBySettle},
+	ownerNotifyKind(syncFailureRemoteSchemaAhead):          {endedByPush, endedBySchemaRead},
+	ownerNotifyPushFailed:                                  {endedByPush},
+	ownerNotifyKind(syncFailureSchemaCeiling):              {endedByPush},
+	ownerNotifyKind(syncFailureSchemaRaiseRequiresRelease): {endedByPush},
+	ownerNotifyKind(syncFailureSchemaLoweringRequiresHold): {endedByPush},
 }
 
-// ownerNotifyPushEndedKinds is the group one landed push ends: push_failed,
-// and every schema refusal the push's guard raises (a remote schema ahead of
-// this binary, a commit above the ceiling, a raise from no release, an unheld
-// lowering). A push that landed passed each of those guards, so it is proof
-// each is gone. A remote schema ahead is in both groups: the push and the
-// reconcile's replay each detect it, and either a landed push or a settle
-// ends it. A lift refused by the ceiling is receive-side, and a landed push
-// says nothing about it.
-var ownerNotifyPushEndedKinds = []ownerNotifyKind{
-	ownerNotifyPushFailed,
-	ownerNotifyKind(syncFailureRemoteSchemaAhead),
-	ownerNotifyKind(syncFailureSchemaCeiling),
-	ownerNotifyKind(syncFailureSchemaRaiseRequiresRelease),
-	ownerNotifyKind(syncFailureSchemaLoweringRequiresHold),
+// kindsEndedBy is every kind at least one of proofs ends, in a fixed order,
+// so the markers an outcome clears are a function of the proofs it carries.
+// [LAW:dataflow-not-control-flow]
+func kindsEndedBy(proofs ...episodeEnder) []ownerNotifyKind {
+	var kinds []ownerNotifyKind
+	for kind, enders := range ownerNotifyEnders {
+		if slices.ContainsFunc(enders, func(e episodeEnder) bool { return slices.Contains(proofs, e) }) {
+			kinds = append(kinds, kind)
+		}
+	}
+	slices.Sort(kinds)
+	return kinds
+}
+
+// settleProofs is what a settle proves, given the remote head's schema it
+// read: that the branch converged, and, when the read found the head within
+// this binary's support, that the remote's schema is not ahead.
+func settleProofs(remote storage.RemoteSchemaAhead) []episodeEnder {
+	if remote.Ahead() {
+		return []episodeEnder{endedBySettle}
+	}
+	return []episodeEnder{endedBySettle, endedBySchemaRead}
 }
 
 // ownerNotifyEvent is one owner-relevant occurrence: what degraded (Kind), the
@@ -148,7 +184,7 @@ func (ev ownerNotifyEvent) fingerprint() string {
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	kind := ownerNotifyKind(failure.Class)
 	switch {
-	case slices.Contains(ownerNotifySettleEndedKinds, kind) || slices.Contains(ownerNotifyPushEndedKinds, kind):
+	case len(ownerNotifyEnders[kind]) > 0:
 		return ownerNotifyEvent{
 			Kind:    kind,
 			Summary: failure.whatLine(),
@@ -341,7 +377,7 @@ func clearOwnerNotify(stderr io.Writer, ws workspace.Info, kinds ...ownerNotifyK
 func observePushOutcomeForOwner(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, rec pushOutcomeRecord, refusal SyncFailure, refused bool) {
 	switch {
 	case rec.Decision == pushDecisionPushed:
-		clearOwnerNotify(stderr, ws, ownerNotifyPushEndedKinds...)
+		clearOwnerNotify(stderr, ws, kindsEndedBy(endedByPush)...)
 	case rec.failed() && refused:
 		notifyOwnerForFailure(ctx, stderr, env, ws, refusal)
 	case rec.failed():

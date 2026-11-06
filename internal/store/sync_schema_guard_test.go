@@ -345,3 +345,92 @@ func TestRemoteSchemaAheadErrorStatesTheRequirement(t *testing.T) {
 		t.Errorf("refusal named a build to install by identity:\n%s", msg)
 	}
 }
+
+// TestABehindLandingAdoptsAnAheadHeadAndReportsIt pins the decision on the
+// receive's landing: a clone that is merely behind a remote whose head is at
+// a schema above this binary lands that head (the landing authors no commit,
+// so there is nothing for the schema-ahead refusal to guard; the open decides
+// what this binary may do with the store it finds), and every settle reports
+// the remote head's schema against this binary as a value, whatever state it
+// ended in: the behind landing, the up-to-date settle after it, and the
+// reconcile's not-diverged answer. A surface that ends the remote-schema
+// episode reads that value instead of inferring it from the state.
+func TestABehindLandingAdoptsAnAheadHeadAndReportsIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+	registryMax, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatalf("MaxVersion: %v", err)
+	}
+
+	// The remote starts at the current schema; B adopts it and writes nothing.
+	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+	// A advances the remote and raises it to a future schema; B is now behind.
+	advanceRemoteToFutureSchema(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("from-a")})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer syncB.Close()
+	origin := remoteName(t, "origin")
+	want := storage.RemoteSchemaAhead{RemoteSchema: registryMax + 1, BinarySupportedMax: registryMax}
+
+	landed, err := syncB.SyncReceive(ctx, origin, "master")
+	if err != nil {
+		t.Fatalf("SyncReceive(B behind an ahead remote) error = %v, want the landing", err)
+	}
+	if landed.State != storage.SyncReceiveFastForwarded || landed.RemoteSchemaAhead != want {
+		t.Fatalf("SyncReceive = %+v, want fast_forwarded reporting %+v", landed, want)
+	}
+	tracking, err := commitHashOfRef(ctx, syncB.db, "remotes/origin/master")
+	if err != nil {
+		t.Fatalf("tracking head: %v", err)
+	}
+	if head := headCommit(t, ctx, syncB); head != tracking {
+		t.Fatalf("local head %q after the landing, want the remote head %q", head, tracking)
+	}
+
+	// Sitting on the head, the settle still reads and reports it.
+	settled, err := syncB.SyncReceive(ctx, origin, "master")
+	if err != nil {
+		t.Fatalf("SyncReceive(B up to date) error = %v", err)
+	}
+	if settled.State != storage.SyncReceiveUpToDate || settled.RemoteSchemaAhead != want {
+		t.Fatalf("SyncReceive = %+v, want up_to_date reporting %+v", settled, want)
+	}
+	// And so does a reconcile that finds nothing to reconcile.
+	rec, err := syncB.SyncReconcile(ctx, origin, "master")
+	if err != nil {
+		t.Fatalf("SyncReconcile(B not diverged) error = %v", err)
+	}
+	if rec.State != storage.SyncReconcileNotDiverged || rec.RemoteSchemaAhead != want {
+		t.Fatalf("SyncReconcile = %+v, want not_diverged reporting %+v", rec, want)
+	}
+}
+
+// TestASettleReportsAHeadWithinSupportAsNotAhead is the other half of the
+// read: against a remote at this binary's own schema the settle reports the
+// zero value, the one that ends a remote-schema episode.
+func TestASettleReportsAHeadWithinSupportAsNotAhead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+	seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer syncB.Close()
+	settled, err := syncB.SyncReceive(ctx, remoteName(t, "origin"), "master")
+	if err != nil {
+		t.Fatalf("SyncReceive error = %v", err)
+	}
+	if settled.RemoteSchemaAhead != (storage.RemoteSchemaAhead{}) || settled.RemoteSchemaAhead.Ahead() {
+		t.Fatalf("a remote at this binary's schema reported as ahead: %+v", settled.RemoteSchemaAhead)
+	}
+}
