@@ -7,17 +7,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
+// futureColumn is the column the future schema added to issues, and
+// futureColumnValue the value the seeded issue holds in it: a field this
+// binary's model does not name, so a write that keeps it is the model's
+// column-named update and a write that resets it re-created the row.
+const (
+	futureColumn      = "future_note"
+	futureColumnValue = "kept by the newer schema"
+)
+
 // seedFutureSchemaRemote seeds a remote whose head records a goose schema version
 // ABOVE this binary's registry max — the shape a NEWER binary leaves behind after
-// advancing the shared remote. It stamps a synthetic future goose_db_version row
-// and pushes; the first push is to an empty remote, so the schema guard is a no-op
-// and the bump lands. Returns the seeded issue id and the future version. This
-// binary cannot itself produce that version — which is exactly the state the
-// schema guard must refuse to write over.
+// advancing the shared remote. It adds futureColumn to issues, sets the seeded
+// issue's value in it, stamps a synthetic future goose_db_version row and
+// pushes; the first push is to an empty remote, so it creates the branch and
+// lands. Returns the seeded issue id and the future version. This binary
+// cannot itself produce that version: the state the reconcile refuses to
+// replay onto, and a push of a head at that version lands.
 func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) (string, int64) {
 	t.Helper()
 	registryMax, err := migrations.MaxVersion()
@@ -37,6 +48,14 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL s
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`ALTER TABLE issues ADD COLUMN `+futureColumn+` text NOT NULL DEFAULT ''`); err != nil {
+		t.Fatalf("add the future schema's column: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE issues SET `+futureColumn+` = ? WHERE id = ?`, futureColumnValue, issue.ID); err != nil {
+		t.Fatalf("set the future schema's column: %v", err)
 	}
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, future); err != nil {
@@ -157,8 +176,10 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 	}
 }
 
-// refuseTrackingHeadAhead is the push's schema-ahead verdict on a branch's
-// tracking head, as pushWithinLock composes it.
+// refuseTrackingHeadAhead is the schema-ahead verdict on a branch's tracking
+// head: the reconcile's refusal (refuseSchemaAhead) judged off the read of R
+// a push makes, so the detection tests judge the one verdict on a fetched
+// head without driving a divergence.
 func (s *Store) refuseTrackingHeadAhead(ctx context.Context, remote storage.RemoteName, branch string) error {
 	remoteHead, err := s.trackingHeadSchema(ctx, remote, branch)
 	if err != nil {
@@ -167,11 +188,17 @@ func (s *Store) refuseTrackingHeadAhead(ctx context.Context, remote storage.Remo
 	return refuseSchemaAhead(remote, branch, remoteHead)
 }
 
-// TestSyncPushRefusesWhenRemoteSchemaAhead is the push-path acceptance: a clone at
-// max M pushing onto a remote whose head is at schema N>M is refused with the typed
-// error and ZERO commits reach the remote — a fresh clone still sees the pre-push
-// state, so no --force-style regression happened.
-func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
+// TestAPushAtTheRemotesOwnSchemaLands is the push-path acceptance of the
+// decision in design-docs/schema-reversibility.md ("A push at the remote's
+// own schema lands"): a checkout that adopted a remote head at a schema above
+// this binary's, and wrote under it as the open admits, pushes. A fresh clone
+// sees the edit, the remote head's schema after the push is still the ahead
+// version, and the column the newer schema added still holds its value on the
+// edited row: the write was the model's column-named update and the push
+// carried the row as written, so a commit at R is no regression. This
+// binary's released ceiling (testEnv: the registry max) is below R, so the
+// landing also pins that the ceiling judges a raise only.
+func TestAPushAtTheRemotesOwnSchemaLands(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
@@ -180,40 +207,104 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	rootC := filepath.Join(base, "c")
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	id, _ := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
+	id, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
-	// B edits locally — a would-be fast-forward push onto the remote.
+	// B's open admits the write: the store is ahead of the binary with its
+	// baseline intact and no minimum writer schema above the binary's.
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("from-b")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	_, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
-	var ahead *RemoteSchemaAheadError
-	if !errors.As(err, &ahead) {
-		t.Fatalf("SyncPush onto ahead remote = %v, want *RemoteSchemaAheadError", err)
+	pushed, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
+	if err != nil {
+		t.Fatalf("SyncPush at the remote's own schema = %v, want the push to land", err)
+	}
+	if head := trackingSchema(t, ctx, syncB); head.head != pushed.Head || head.version != future {
+		t.Fatalf("remote head after the push = %+v, want the pushed head %s at schema %d", head, pushed.Head, future)
 	}
 	// syncB is done with its work; close before opening rootC below and hold
-	// nothing open past this point. (rootB comes from unrelatedDoltDir with
-	// its own t.TempDir parent, so the two stores' workspace/commit lock
-	// paths are independent — the early close is hygiene, not a lock-sharing
-	// requirement.)
+	// nothing open past this point.
 	if err := syncB.Close(); err != nil {
 		t.Fatalf("syncB.Close(): %v", err)
 	}
 
-	// Property: zero commits reached the remote. A fresh clone still sees the seed
-	// state, without B's edit.
+	// A fresh clone sees B's edit.
 	adoptRemote(t, ctx, rootC, remoteURL)
 	stC, err := Open(ctx, testEnv(), testStderr(), rootC, "ws")
 	if err != nil {
 		t.Fatalf("Open(C): %v", err)
 	}
 	defer stC.Close()
-	got := getIssueOrFatal(t, ctx, stC, id)
-	if got.Lane == "from-b" {
-		t.Fatalf("B's edit reached the remote despite the schema-ahead refusal (lane=%q)", got.Lane)
+	if got := getIssueOrFatal(t, ctx, stC, id); got.Lane != "from-b" {
+		t.Fatalf("B's edit did not reach the remote (lane=%q, want %q)", got.Lane, "from-b")
+	}
+	// The newer schema's column survived B's write and the push on the row B
+	// edited: the write B's open admitted named only this binary's columns.
+	var note string
+	if err := stC.db.QueryRowContext(ctx, `SELECT `+futureColumn+` FROM issues WHERE id = ?`, id).Scan(&note); err != nil {
+		t.Fatalf("read the future schema's column at C: %v", err)
+	}
+	if note != futureColumnValue {
+		t.Fatalf("the future schema's column on the edited row = %q, want %q: B's write or push reset a column this binary does not know", note, futureColumnValue)
+	}
+}
+
+// TestAReconcileOntoARemoteWhoseSchemaIsAheadIsRefusedBeforeAnyWrite drives
+// the one refusal the schema-ahead verdict still makes, at its site: a
+// checkout that adopted a remote head at a schema above this binary's, and
+// diverged from it, runs the three-way reconcile, and replayUnderGuard
+// refuses before any write (design-docs/schema-reversibility.md). The typed
+// error carries both versions, the checkout's head has not moved, no scratch
+// branch is left behind, and the remote still holds the newer schema's column
+// value on the row both sides edited. A's second push, at the remote's own
+// schema from this binary, is the push that lands.
+func TestAReconcileOntoARemoteWhoseSchemaIsAheadIsRefusedBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	id, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
+	registryMax, _ := migrations.MaxVersion()
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	// A edits LANE and pushes; B edits PRIORITY locally, so B is diverged
+	// from a remote head at the future schema.
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("alpha")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer syncB.Close()
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+	_, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
+	var ahead *RemoteSchemaAheadError
+	if !errors.As(err, &ahead) {
+		t.Fatalf("SyncReconcile onto a remote at a newer schema = %v, want *RemoteSchemaAheadError", err)
+	}
+	if ahead.RemoteVersion != future || ahead.BinarySupportedMax != registryMax {
+		t.Fatalf("refusal = %+v, want RemoteVersion=%d BinarySupportedMax=%d", ahead, future, registryMax)
+	}
+	if got := headCommit(t, ctx, syncB); got != headBefore {
+		t.Fatalf("the refused reconcile moved B's head: %s -> %s", headBefore, got)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	if head := trackingSchema(t, ctx, syncB); head.version != future {
+		t.Fatalf("remote head after the refusal = %+v, want it still at schema %d", head, future)
+	}
+	var note string
+	if err := syncB.db.QueryRowContext(ctx,
+		`SELECT `+futureColumn+` FROM issues AS OF 'remotes/origin/master' WHERE id = ?`, id).Scan(&note); err != nil {
+		t.Fatalf("read the future schema's column at the remote head: %v", err)
+	}
+	if note != futureColumnValue {
+		t.Fatalf("the future schema's column at the remote head = %q, want %q", note, futureColumnValue)
 	}
 }
 

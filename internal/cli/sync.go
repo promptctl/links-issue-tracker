@@ -641,12 +641,13 @@ func pushLiveStore(ctx context.Context, inv Invocation, ws workspace.Info, sessi
 	// the skipped/ok outcome is never printed over a failed push.
 	recordPushedAdvertisement(inv.Stderr, ws, outcome.proven)
 	if outcome.pushErr != nil {
-		// A remote schema ahead of this binary, and a push refused over a
-		// peer's commits, surface as the one sync-failure contract rather
-		// than the raw non-fast-forward/refusal string: the first exits
-		// ExitValidation as the schema-ahead refusal it wraps, naming `lit
-		// upgrade`, the second exits 5 naming the pull that merges the peer's
-		// commits. [LAW:single-enforcer]
+		// A push's schema refusals (ceiling, raise, lowering) and a push
+		// refused over a peer's commits surface as the one sync-failure
+		// contract rather than the raw non-fast-forward/refusal string; the
+		// last exits 5 naming the pull that merges the peer's commits. A
+		// remote schema ahead of this binary is no push refusal: a push at
+		// the remote's own schema lands, and the reconcile that pull runs is
+		// what refuses it. [LAW:single-enforcer]
 		return asSyncFailure(outcome.pushErr)
 	}
 	return printSyncPushOutcome(inv.Stdout, outcome, options.verbose)

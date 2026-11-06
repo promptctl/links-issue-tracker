@@ -475,8 +475,9 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 
 // replayUnderGuard runs a mutating reconcile body — the shared-history three-way OR the
 // no-base combine — inside the one safety envelope both need: refuse a schema-ahead remote
-// BEFORE any write (adopting an ahead head would author replay commits below its schema and
-// drop every field the newer schema added), sweep any scratch branch a killed run abandoned
+// BEFORE any write (the replay re-creates every row it changes from this binary's columns,
+// so onto an ahead head it would reset the newer schema's fields on every row it touched;
+// RemoteSchemaAheadError), sweep any scratch branch a killed run abandoned
 // (the commit lock guarantees every one is an orphan), derive this run's unique scratch name,
 // and carry ONE snapshot guard across GC-contention retries so exactly one recovery point of
 // the pre-reconcile head is taken however many attempts run.

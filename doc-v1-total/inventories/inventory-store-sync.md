@@ -193,7 +193,7 @@ That is `compactAndPush`; `SyncCompactAndPush` then runs `keepHistoryBoundAfter`
 
 `pushWithinLock` (`sync.go`):
 1. `requireSyncArg("remote", remote)`, then `requireSyncArg("branch", branch)` (`sync.go`).
-2. `s.guardRemoteSchemaAhead(ctx, remote, branch)` runs first (`sync.go`).
+2. `s.trackingHeadSchema(ctx, remote, branch)` reads R once, and `refuseSchemaSend` runs the ceiling, raise and lowering verdicts on it before the push; a remote whose schema is ahead of this binary is no refusal here, since a push at the remote's own schema lands (`sync.go`).
 3. Args built in order: `"--set-upstream"` if `setUpstream`, `"--force"` if `force`, then the remote, then `fmt.Sprintf("HEAD:%s", branch)` (`sync.go`).
 4. `head` = `headCommitWithinLock` (`SELECT commit_hash FROM dolt_log() LIMIT 1`, trimmed; error `"read head commit: %w"`), read before the push so a failed read fails an attempt that has sent nothing (`sync.go`).
 5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). The error goes through `classifyPushFailure`: a `RemoteUnreachableError` is wrapped `"push remote %q: %w"` by its type; otherwise an error that wraps one of `pushRefusals` — `doltdb.ErrIsAhead`, `actions.ErrCantFF`, `datas.ErrMergeNeeded` (the target rejections Dolt reports as non-fast-forward) or `doltdb.ErrNoCommonAncestor` — is the remote's refusal, `pushRefusedError{remote, cause}`; any other (a stale lease, one that never opened, a write the remote's storage failed, an ended context) is wrapped `"push remote %q: %w"`, with the same text. Every refusal comes from the fast-forward check a forced push skips. Test: `TestOnlyARefusedPushIsFollowedAndRetried` (`sync_push_refusal_test.go`).
@@ -418,16 +418,13 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `BinarySupportedMax int64`. It declares `SchemaAheadOfBinary()`, so it is a `model.SchemaAhead` (`sync_schema_guard.go`).
 
 `Error()` (`sync_schema_guard.go`) renders:
-``"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema — run `lit upgrade` to install a lit that supports schema version %d"`` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).
+``"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to reconcile onto its head, since the replay would re-create every row it changes from this binary's columns and reset the newer schema's fields — run `lit upgrade` to install a lit that supports schema version %d"`` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).
 
 ### 4.2 Guard paths
 
-`guardRemoteSchemaAhead(ctx, remote, branch)` (`sync_schema_guard.go`) — the **push** entry:
-1. Both args required.
-2. `trackingHeadHash(remote, branch)`; `!synced` → **no-op, return nil** (a branch that never synced has no remote head to fall behind) (`sync_schema_guard.go`).
-3. else `guardCommitSchemaAhead(remote, branch, head)`.
+`refuseSchemaAhead(remote, branch, remoteHead)` (`sync_schema_guard.go`) is the **reconcile's** refusal alone, run by `replayUnderGuard` (`sync_reconcile.go`) on the plan's captured read of the remote head before any write. A push runs no schema-ahead refusal: `refuseSchemaSend` (`sync.go`) judges the head it sends against the remote head's schema (the ceiling on a raise, the raise rule, the lowering rule), so a head at the remote's own schema lands (`design-docs/schema-reversibility.md`). A never-synced branch has no remote head (`unknownRemoteSchema`), which is never ahead.
 
-`guardCommitSchemaAhead(ctx, remote, branch, commitHash)` (`sync_schema_guard.go`) — shared core, also called directly by the reconcile with its already-captured `remoteHead`:
+`judgeSchemaAhead(remoteHead)` (`sync_schema_guard.go`) — shared core, which every settle reports as `storage.RemoteSchemaAhead`:
 1. `version.CarriedSchemaSupport()` → `support`.
 2. `remoteHeadSchema(commitHash)` → `remoteVersion`.
 3. `remoteVersion <= support.Max` → nil.
@@ -450,7 +447,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 
 ### 4.3 Who is and is not guarded
 
-- Every push (`pushWithinLock`, which requires its branch): guarded (`sync.go`). Test `TestSyncPushRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`).
+- A push (`pushWithinLock`, which requires its branch): not guarded (`sync.go`). A push at the remote's own schema lands; the ceiling, raise and lowering verdicts are the push's only schema refusals. Test `TestAPushAtTheRemotesOwnSchemaLands` (`sync_schema_guard_test.go`).
 - Every reconcile that replays (three-way, combine, take-local, and take-remote carrying purge records): guarded inside `replayUnderGuard` before any write (`sync_reconcile.go`, `sync_unrelated_take.go`). Tests `TestSyncReconcileRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`), `TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote` (`sync_unrelated_test.go`).
 - **take-remote with no purge records to carry is exempt** — it authors no commit and adopting an ahead head is a safe recovery (`sync_unrelated_take.go`).
 - Other tests: `TestRemoteHeadSchemaReadsVersion` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaAheadDetects` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaNotAheadAtOrBelowMax` (`sync_schema_guard_test.go`).

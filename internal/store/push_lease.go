@@ -53,13 +53,11 @@ func (s *Store) pushLeasedWithinLock(ctx context.Context, remote storage.RemoteN
 	}
 	// [LAW:single-enforcer] the same schema refusals every push runs, with R
 	// read from the one commit a held lease can replace: expected. The
-	// tracking ref may lag it, and a lease over a schema-ahead head would
-	// regress the shared remote to this binary's schema.
+	// tracking ref may lag it, and a lease over a head at a newer schema than
+	// the source's would lower the shared remote, which the lowering verdict
+	// refuses unless the source is held.
 	remoteHead, err := s.remoteHeadAt(ctx, trimmedExpected, remote, trimmedBranch)
 	if err != nil {
-		return "", none, err
-	}
-	if err := refuseSchemaAhead(remote, trimmedBranch, remoteHead); err != nil {
 		return "", none, err
 	}
 	sourceHead, err := commitHashOfRef(ctx, s.db, trimmedSource)

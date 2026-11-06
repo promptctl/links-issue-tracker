@@ -354,7 +354,7 @@ func TestEveryClassRendersItsOwnBlock(t *testing.T) {
 	// not a divergence.
 	schemaAhead := SyncFailure{Class: syncFailureRemoteSchemaAhead, Remote: "origin", Branch: "master",
 		RemoteAhead: &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}}
-	if want := "lit sync cannot write to the remote's backlog until this lit is upgraded, and needs you.\n"; !strings.HasPrefix(schemaAhead.blockString(), agentInstructionsOpen+"\n"+want) {
+	if want := "lit sync cannot reconcile with the remote's backlog until this lit is upgraded, and needs you.\n"; !strings.HasPrefix(schemaAhead.blockString(), agentInstructionsOpen+"\n"+want) {
 		t.Errorf("remote_schema_ahead block does not open with %q:\n%s", want, schemaAhead.blockString())
 	}
 }

@@ -245,8 +245,9 @@ type SyncReceiveResult struct {
 // every run, whatever state the branch is in, so the value is a fact the
 // settle established, never one inferred from the state it ended in: a
 // landing adopts a head at any schema, and only this read says whether a
-// write to that remote would be refused. [LAW:parse-dont-validate] the
-// verdict the push's guard refuses on, carried as a value.
+// reconcile onto that remote would be refused (a push of a head at the
+// remote's schema lands). [LAW:parse-dont-validate] the verdict the
+// reconcile's guard refuses on, carried as a value.
 type RemoteSchemaAhead struct {
 	RemoteSchema       int64 `json:"remote_schema"`
 	BinarySupportedMax int64 `json:"binary_supported_max"`

@@ -246,10 +246,11 @@ func TestKindsEndedByIsTheOneTable(t *testing.T) {
 	if slices.Contains(kindsEndedBy(endedBySettle), schema) {
 		t.Fatalf("a settle's state alone ends %s", schema)
 	}
-	for _, proof := range []episodeEnder{endedByPush, endedBySchemaRead} {
-		if !slices.Contains(kindsEndedBy(proof), schema) {
-			t.Fatalf("proof %d does not end %s", proof, schema)
-		}
+	if slices.Contains(kindsEndedBy(endedByPush), schema) {
+		t.Fatalf("a landed push ends %s, though a push at the remote's own schema lands", schema)
+	}
+	if !slices.Contains(kindsEndedBy(endedBySchemaRead), schema) {
+		t.Fatalf("a read of the remote head within support does not end %s", schema)
 	}
 	if got := kindsEndedBy(settleProofs(storage.RemoteSchemaAhead{RemoteSchema: 9, BinarySupportedMax: 8})...); slices.Contains(got, schema) {
 		t.Fatalf("a settle that read the remote head ahead ends %s: %v", schema, got)
@@ -410,13 +411,15 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 
 // TestPushRefusedBySchemaPagesUnderItsClass pins that the push half pages a
 // schema refusal under the refusal's own kind, through the completion seam
-// every push attempt ends at: a push refused because the remote's schema is
-// ahead pages remote_schema_ahead, keyed to the remote and branch, and writes
-// no push_failed marker; the same refusal again is the same episode and pages
-// nothing; a landed push ends it, so the next refusal pages at once; and a
-// push the released ceiling refused pages schema_ceiling. The receive half
-// pages a remote schema ahead under the same kind, so a checkout that pushes
-// and receives against such a remote holds one marker for it.
+// every push attempt ends at: a push the released ceiling refused pages
+// schema_ceiling, keyed to the remote and branch, and writes no push_failed
+// marker; the same refusal again is the same episode and pages nothing; a
+// landed push ends it, so the next refusal pages at once. A remote whose
+// schema is ahead is the receive half's condition: the reconcile's refusal
+// pages remote_schema_ahead, a landed push leaves that episode standing (a
+// push at the remote's own schema lands, so it proves nothing about the
+// remote's schema), and a settle whose read found the remote head within
+// support ends it.
 func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
@@ -428,48 +431,54 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	complete := func(pushErr error) {
 		completePushAttempt(ctx, testStderr(t), runEnv(t), ws, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: pushErr}, nil)
 	}
-	ahead := &store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8}
+	ceiling := &store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9}
 
-	complete(ahead)
-	if payload, err := os.ReadFile(sink); err != nil || string(payload) != "remote_schema_ahead origin master\n" {
-		t.Fatalf("a push refused by the remote's schema did not page remote_schema_ahead exactly once: payload=%q err=%v", payload, err)
+	complete(ceiling)
+	if payload, err := os.ReadFile(sink); err != nil || string(payload) != "schema_ceiling origin master\n" {
+		t.Fatalf("a push refused by the ceiling did not page schema_ceiling exactly once: payload=%q err=%v", payload, err)
 	}
 	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a schema refusal left a push_failed marker (stat err=%v)", err)
 	}
-	marker := ownerNotifyMarkerPath(ws, ownerNotifyKind(syncFailureRemoteSchemaAhead))
-	if payload, err := os.ReadFile(marker); err != nil || string(payload) != "remote_schema_ahead origin/master\n" {
-		t.Fatalf("remote_schema_ahead marker = %q (err=%v), want the per-target fingerprint", payload, err)
+	marker := ownerNotifyMarkerPath(ws, ownerNotifyKind(syncFailureSchemaCeiling))
+	if payload, err := os.ReadFile(marker); err != nil || string(payload) != "schema_ceiling origin/master\n" {
+		t.Fatalf("schema_ceiling marker = %q (err=%v), want the per-target fingerprint", payload, err)
 	}
 
-	complete(ahead)
-	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "remote_schema_ahead") != 1 {
+	complete(ceiling)
+	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "schema_ceiling") != 1 {
 		t.Fatalf("the same refusal paged again inside its episode: %q", payload)
-	}
-	// The receive half detecting the same condition — the reconcile's replay
-	// refused by the same remote head — is the same episode, not a second page:
-	// one condition, one marker, whichever half saw it.
-	receiveSide, ok := remoteSchemaAheadFailure(ahead)
-	if !ok {
-		t.Fatal("the receive half did not classify the refusal it shares with the push half")
-	}
-	notifyOwnerForFailure(ctx, testStderr(t), runEnv(t), ws, receiveSide)
-	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "remote_schema_ahead") != 1 {
-		t.Fatalf("the receive half paged a condition the push half had already paged: %q", payload)
 	}
 
 	complete(nil)
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("a landed push did not end the remote_schema_ahead episode (stat err=%v)", err)
+		t.Fatalf("a landed push did not end the schema_ceiling episode (stat err=%v)", err)
 	}
-	complete(ahead)
-	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "remote_schema_ahead") != 2 {
+	complete(ceiling)
+	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "schema_ceiling") != 2 {
 		t.Fatalf("a refusal after a landed push did not page as a new episode: %q", payload)
 	}
 
-	complete(&store.SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 9})
-	if payload, _ := os.ReadFile(sink); !strings.HasSuffix(string(payload), "schema_ceiling origin master\n") {
-		t.Fatalf("a push refused by the ceiling did not page schema_ceiling: %q", payload)
+	// The receive half: the reconcile's replay refused by a remote head at a
+	// schema above this binary's pages remote_schema_ahead. A landed push
+	// leaves that episode standing; a settle that read the head within
+	// support ends it.
+	ahead, ok := remoteSchemaAheadFailure(&store.RemoteSchemaAheadError{Remote: "origin", Branch: "master", RemoteVersion: 9, BinarySupportedMax: 8})
+	if !ok {
+		t.Fatal("the receive half did not classify the reconcile's refusal")
+	}
+	notifyOwnerForFailure(ctx, testStderr(t), runEnv(t), ws, ahead)
+	if payload, _ := os.ReadFile(sink); !strings.HasSuffix(string(payload), "remote_schema_ahead origin master\n") {
+		t.Fatalf("the reconcile's refusal did not page remote_schema_ahead: %q", payload)
+	}
+	aheadMarker := ownerNotifyMarkerPath(ws, ownerNotifyKind(syncFailureRemoteSchemaAhead))
+	complete(nil)
+	if _, err := os.Stat(aheadMarker); err != nil {
+		t.Fatalf("a landed push ended the remote_schema_ahead episode, which a push at the remote's own schema does not prove gone: %v", err)
+	}
+	endSettleEndedEpisodes(testStderr(t), ws, storage.RemoteSchemaAhead{})
+	if _, err := os.Stat(aheadMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a settle that read the remote head within support did not end the remote_schema_ahead episode (stat err=%v)", err)
 	}
 
 	complete(errors.New("remote unreachable"))
@@ -481,28 +490,29 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	// panic after a refused push is recorded as the panic), and the page
 	// follows the record: the refusal beside it is not consulted.
 	complete(nil)
-	completePushAttempt(ctx, testStderr(t), runEnv(t), ws, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: ahead}, errors.New("sync push panicked: boom"))
+	completePushAttempt(ctx, testStderr(t), runEnv(t), ws, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: ceiling}, errors.New("sync push panicked: boom"))
 	payload, _ := os.ReadFile(sink)
-	if !strings.HasSuffix(string(payload), "push_failed  \n") || strings.Count(string(payload), "remote_schema_ahead") != 2 {
+	if !strings.HasSuffix(string(payload), "push_failed  \n") || strings.Count(string(payload), "schema_ceiling") != 2 {
 		t.Fatalf("an attempt error beside a refused push did not page as the record's failure: %q", payload)
 	}
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("an attempt error beside a refused push opened a remote_schema_ahead episode (stat err=%v)", err)
+		t.Fatalf("an attempt error beside a refused push opened a schema_ceiling episode (stat err=%v)", err)
 	}
 }
 
 // TestLandedPushEndsEveryPushEndedKind pins the group a landed push ends: a
 // live marker of every kind in it is gone after one landed push, and a marker
-// a settle alone ends still stands, since a landed push says nothing about a
-// lift the ceiling refused.
+// only a settle ends still stands, since a landed push says nothing about a
+// lift the ceiling refused, nor about the remote head's schema (a push at the
+// remote's own schema lands).
 func TestLandedPushEndsEveryPushEndedKind(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		t.Fatalf("mkdir storage dir: %v", err)
 	}
-	standing := ownerNotifyKind(syncFailureSchemaCeilingLift)
-	for _, kind := range append(kindsEndedBy(endedByPush), standing) {
+	standing := []ownerNotifyKind{ownerNotifyKind(syncFailureSchemaCeilingLift), ownerNotifyKind(syncFailureRemoteSchemaAhead)}
+	for _, kind := range append(kindsEndedBy(endedByPush), standing...) {
 		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte(string(kind)+" origin/master\n"), 0o644); err != nil {
 			t.Fatalf("plant %s marker: %v", kind, err)
 		}
@@ -513,8 +523,10 @@ func TestLandedPushEndsEveryPushEndedKind(t *testing.T) {
 			t.Fatalf("a landed push left the %s episode standing (stat err=%v)", kind, err)
 		}
 	}
-	if _, err := os.Stat(ownerNotifyMarkerPath(ws, standing)); err != nil {
-		t.Fatalf("a landed push ended the %s episode, which only a settle proves gone: %v", standing, err)
+	for _, kind := range standing {
+		if _, err := os.Stat(ownerNotifyMarkerPath(ws, kind)); err != nil {
+			t.Fatalf("a landed push ended the %s episode, which only a settle proves gone: %v", kind, err)
+		}
 	}
 }
 

@@ -458,7 +458,7 @@ func receiveBlockProvenance(path string, now time.Time) string {
 // gone. remote is the remote head's schema the settle read: a settle that
 // landed, or sat on, a head whose schema is ahead of this binary converged,
 // and proves nothing about the remote's schema, so that episode stands and
-// the next refused push is a repeat of it, not a new page.
+// the next refused reconcile is a repeat of it, not a new page.
 // [LAW:single-enforcer] one ending, whichever surface settled.
 func endSettleEndedEpisodes(stderr io.Writer, ws workspace.Info, remote storage.RemoteSchemaAhead) {
 	clearOwnerNotify(stderr, ws, kindsEndedBy(settleProofs(remote)...)...)

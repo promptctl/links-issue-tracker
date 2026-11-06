@@ -30,11 +30,14 @@ const (
 	// backend error (Cause populated) or the divergence has simply sat unresolved
 	// (doctor's view, Cause empty). Remedy: a foreground pull.
 	syncFailureDivergedUnresolved syncFailureClass = "diverged_unresolved"
-	// syncFailureRemoteSchemaAhead: the remote head is at a schema version this
-	// binary cannot produce, so no sync write may author a commit below it. Unlike
-	// a divergence, this never clears by retrying — it clears only by upgrading the
-	// binary. Remedy: `lit upgrade`, which installs the latest release, run when
-	// the user directs it: the refusal is model.SchemaAhead, like the local one.
+	// syncFailureRemoteSchemaAhead: the remote head is at a schema version
+	// above this binary's support, so the reconcile will not replay onto it:
+	// the replay re-creates every row it changes from this binary's columns
+	// and would reset the newer schema's fields. A push of a head at the
+	// remote's schema lands; only the reconcile refuses. Unlike a divergence,
+	// this never clears by retrying — it clears only by upgrading the binary.
+	// Remedy: `lit upgrade`, which installs the latest release, run when the
+	// user directs it: the refusal is model.SchemaAhead, like the local one.
 	syncFailureRemoteSchemaAhead syncFailureClass = "remote_schema_ahead"
 	// syncFailureUnrelatedHistories: the local backlog and the remote share no
 	// common ancestor (independently-created or re-inited stores), so there is no
@@ -240,8 +243,9 @@ type SyncFailure struct {
 // remoteSchemaAheadFailure builds the sync-failure contract for a store
 // *RemoteSchemaAheadError, or ok=false when err is not one. It is the ONE adapter
 // from the store's typed remote-ahead refusal to the CLI's one contract renderer,
-// so every surface that can hit it — an explicit push/pull/reconcile, the inline
-// auto-reconcile, the on-change mirror push — produces the identical block.
+// so every surface that can hit it — an explicit pull or reconcile, the inline
+// auto-reconcile — produces the identical block. A push never raises it: a
+// push at the remote's own schema lands.
 // [LAW:single-enforcer] [LAW:one-source-of-truth] the version fields come straight
 // off the typed error; no message text is parsed.
 func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
@@ -492,11 +496,13 @@ func releasedCeilingSteps(releaseCan string) []remedyStep {
 	}
 }
 
-// asSyncFailure converts a store *RemoteSchemaAheadError (exiting as the
-// schema-ahead refusal it unwraps to) or a storage.PushDivergedError (exiting
-// as the block) into the returnable sync-failure contract, so the command
-// prints the block, or returns err unchanged. The explicit sync commands route their store error
-// through this one adapter so none of them renders the raw refusal instead of the
+// asSyncFailure converts one of the store's schema refusals (a remote schema
+// ahead from a pull's reconcile, exiting as the schema-ahead refusal it
+// unwraps to; the ceiling, raise and lowering verdicts from a push) or a
+// storage.PushDivergedError (exiting as the block) into the returnable
+// sync-failure contract, so the command prints the block, or returns err
+// unchanged. The explicit sync commands route their store error through this
+// one adapter so none of them renders the raw refusal instead of the
 // contract. [LAW:single-enforcer]
 func asSyncFailure(err error) error {
 	if failure, ok := schemaRefusalFailure(err); ok {
@@ -676,7 +682,7 @@ func (f SyncFailure) headline() string {
 		syncFailureUnrelatedHistories, syncFailureIDCollision:
 		return "lit sync could not resolve a backlog divergence automatically and needs you."
 	case syncFailureRemoteSchemaAhead:
-		return "lit sync cannot write to the remote's backlog until this lit is upgraded, and needs you."
+		return "lit sync cannot reconcile with the remote's backlog until this lit is upgraded, and needs you."
 	case syncFailureReceiveUnsettled:
 		return "lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you."
 	case syncFailurePushDiverged:
@@ -722,7 +728,7 @@ func (f SyncFailure) whatLine() string {
 			ref, f.Ahead, f.Behind)
 	case syncFailureRemoteSchemaAhead:
 		return fmt.Sprintf(
-			"%s has advanced to schema version %d, but this lit binary supports only through version %d. Pushing or reconciling from here would author a commit BELOW the remote's schema — regressing the shared backlog and dropping every field the newer schema added — so this binary will not write to %s until it is upgraded.",
+			"%s has advanced to schema version %d, but this lit binary supports only through version %d. Reconciling from here would replay onto the remote's head by re-creating every row it changes from this binary's columns — resetting every field the newer schema added on those rows — so this binary will not reconcile with %s until it is upgraded. (A push of a head at the remote's own schema lands; only the reconcile is refused.)",
 			ref, f.RemoteAhead.RemoteVersion, f.RemoteAhead.BinarySupportedMax, ref)
 	case syncFailureUnrelatedHistories:
 		return fmt.Sprintf(
@@ -738,7 +744,7 @@ func (f SyncFailure) whatLine() string {
 			ref, f.StoppedAt.describe(), f.UnsettledSince.UTC().Format(time.RFC3339))
 	case syncFailureSchemaCeiling:
 		return fmt.Sprintf(
-			"the commit this push would send to %s is at schema version %d, and the schema ceiling for this push is %d (%s). A lit never sends a commit above the ceiling to a remote, so nothing was written to %s.",
+			"the commit this push would send to %s is at schema version %d, and the schema ceiling for this push is %d (%s). A lit never raises a remote to a schema above the ceiling, so nothing was written to %s.",
 			ref, f.AboveCeiling.CommitSchema, f.AboveCeiling.Ceiling.Max, f.AboveCeiling.Ceiling.Source, ref)
 	case syncFailureSchemaCeilingLift:
 		return fmt.Sprintf(
@@ -866,7 +872,7 @@ func (f SyncFailure) escalationLine() string {
 		// wait-and-retry the epic kills. The upgrade is gated on the user the
 		// way the local schema-ahead refusal gates it, because the passive
 		// surfaces print this block with no remediation line after it.
-		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose schema support reaches the remote's can write to it. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
+		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; only a lit whose schema support reaches the remote's can reconcile with it. " + installReplacesLit + ": run the upgrade above only when the user directs it, and until then surface this to the user as blocking."
 	case syncFailureUnrelatedHistories:
 		// There is no base and never will be one for this pair.
 		return "ESCALATION — BLOCKED: unrelated histories never merge automatically and will not clear by retrying. Resolving requires a deliberate choice — take one side's backlog wholesale, or union the two — which lit cannot make for you. Surface it to the user as blocking before continuing ticket work."

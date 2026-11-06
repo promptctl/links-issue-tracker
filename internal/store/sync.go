@@ -741,8 +741,8 @@ func (s *Store) strandedTables(ctx context.Context) (int, error) {
 // surface to infer it from the state: an up-to-date or ahead settle proves
 // nothing about the remote's schema by its state alone. The behind landing
 // adopts the head at that schema whatever it is; the landing writes no
-// commit, so the push's refusal has nothing to guard here, and the open is
-// the one place that decides what this binary may do with the store it
+// commit, so the reconcile's refusal has nothing to guard here, and the open
+// is the one place that decides what this binary may do with the store it
 // finds. [LAW:dataflow-not-control-flow] [LAW:nothing-unseen]
 func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReceiveResult, error) {
 	var result storage.SyncReceiveResult
@@ -1254,16 +1254,15 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 	if force {
 		return s.pushForcedWithinLock(ctx, remote, trimmedBranch, setUpstream)
 	}
-	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote
-	// whose head is at a schema this binary cannot produce — otherwise a plain
-	// push is rejected with a raw non-fast-forward string. R is the tracking
-	// ref's head as of the last fetch, read once for every verdict; Dolt's
-	// fast-forward check then refuses the push if the remote moved past it.
+	// R is the tracking ref's head as of the last fetch, read once for every
+	// verdict the push runs (refuseSchemaSend); Dolt's fast-forward check then
+	// refuses the push if the remote moved past it. A remote whose head is at
+	// a schema above this binary's is no refusal here: a head at or below R
+	// regresses nothing, and the open decided what this binary may write
+	// (design-docs/schema-reversibility.md, "A push at the remote's own
+	// schema lands"). [LAW:single-enforcer]
 	remoteHead, err := s.trackingHeadSchema(ctx, remote, trimmedBranch)
 	if err != nil {
-		return storage.SyncPushResult{}, err
-	}
-	if err := refuseSchemaAhead(remote, trimmedBranch, remoteHead); err != nil {
 		return storage.SyncPushResult{}, err
 	}
 	// HEAD is read BEFORE the push: the caller holds the commit lock, so HEAD
@@ -1309,7 +1308,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote storage.RemoteName, b
 // a branch this checkout holds no head of: with no R there is nothing a force
 // may replace, and a plain push creates a branch the remote lacks. A bare
 // `--force` would skip Dolt's fast-forward check and overwrite a head the
-// verdicts never read: a schema-ahead head regressed, a held one re-raised.
+// verdicts never read: an unheld lowering landed, a held head re-raised.
 // [LAW:single-enforcer] the one leased push, with its one stale classifier,
 // serves the history bound's re-root and `lit sync push --force` alike.
 func (s *Store) pushForcedWithinLock(ctx context.Context, remote storage.RemoteName, branch string, setUpstream bool) (storage.SyncPushResult, error) {
@@ -1331,14 +1330,16 @@ func (s *Store) pushForcedWithinLock(ctx context.Context, remote storage.RemoteN
 }
 
 // refuseSchemaSend is the three verdicts on the schema of the head a push
-// sends, H, against the remote head it read, R: a schema above the ceiling
+// sends, H, against the remote head it read, R: a raise above the ceiling
 // never leaves this store (refuseSchemaAboveCeiling), where the ceiling is
 // the lower of this lit's released-schema ceiling and the hold R carries; a
 // schema above R is a raise only a release makes (refuseSchemaRaise); and a
 // schema below R is a lowering only a held head makes
-// (refuseSchemaLowering). One read of H and of the hold H carries serves all
-// three. Every DOLT_PUSH runs it: the plain push here and the leased push in
-// push_lease.go. [LAW:single-enforcer] [LAW:one-source-of-truth]
+// (refuseSchemaLowering). A head at R passes all three: it is judged against
+// R alone, whatever this binary's own schema or ceiling. One read of H and of
+// the hold H carries serves all three. Every DOLT_PUSH runs it: the plain
+// push here and the leased push in push_lease.go. [LAW:single-enforcer]
+// [LAW:one-source-of-truth]
 func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName, branch string, remoteHead remoteSchema, commitHash string) error {
 	commitSchema, err := s.remoteHeadSchema(ctx, commitHash)
 	if err != nil {
@@ -1349,7 +1350,7 @@ func (s *Store) refuseSchemaSend(ctx context.Context, remote storage.RemoteName,
 		return err
 	}
 	ceiling := s.env.ReleasedSchema().Lower(remoteHead.hold)
-	if err := refuseSchemaAboveCeiling(remote, branch, commitSchema, ceiling); err != nil {
+	if err := refuseSchemaAboveCeiling(remote, branch, remoteHead, commitSchema, ceiling); err != nil {
 		return err
 	}
 	if err := refuseSchemaRaise(remote, branch, remoteHead, commitSchema, s.env.RaisePolicy()); err != nil {

@@ -417,9 +417,10 @@ lowering carries no hold), when the automatic receive has kept failing to
 bring fetched history into the checkout for 10 minutes, or when a push attempt
 fails for any other reason, it runs a shell command you configure — e.g. a
 push to an [ntfy](https://ntfy.sh) topic — at detection time. A schema
-refusal pages under its own kind whichever side detected it: a remote whose
-schema is ahead of this lit is refused by the push and by the reconcile, and
-pages as `remote_schema_ahead` from either.
+refusal pages under its own kind whichever side detected it. A remote whose
+schema is ahead of this lit is refused by the reconcile, whose replay would
+re-create rows without the newer schema's columns, and pages as
+`remote_schema_ahead`; a push of a head at the remote's own schema lands.
 
 ```toml
 [sync]
@@ -447,11 +448,13 @@ when the condition resolves, so the *next* occurrence notifies immediately
 again. A landed push ends `push_failed` and every schema refusal the push
 detects. A settle (a converged reconcile, a settle after an unsettled run or
 after a lifted hold) ends the divergence kinds and `schema_ceiling_lift`.
-`remote_schema_ahead`, which both halves detect, ends on the one fact both
-judge: a landed push, or a settle whose read of the remote head found its
-schema within this lit's support. Every settle reads the remote head's
-schema, whatever state it ends in; a settle that lands or sits on a head
-whose schema is ahead leaves that episode standing, so the next refused push
+`remote_schema_ahead` ends on the fact the reconcile's refusal judges: a
+settle whose read of the remote head found its schema within this lit's
+support, which the automatic receive at the start of every command makes
+once the lit is upgraded. A landed push does not end it, since a push at the
+remote's own schema lands. Every settle reads the remote head's schema,
+whatever state it ends in; a settle that lands or sits on a head whose
+schema is ahead leaves that episode standing, so the next refused reconcile
 is a repeat inside the cooldown rather than a new page. (A landing adopts the
 head at any schema; what this lit may then do with the store is the open's
 rule, and `lit upgrade` is the remedy either names.) A failed hook is loud on stderr,

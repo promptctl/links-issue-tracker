@@ -153,17 +153,56 @@ from the first release that does.
 
 A landing adopts the remote head at any schema. The receive's behind
 fast-forward and a take-remote with nothing to carry move the branch to the
-fetched head and author no commit, so the refusal that keeps a binary from
-writing below a newer remote's schema (`RemoteSchemaAheadError`) has nothing
-to guard there, and neither does the hold. What the binary may then do with
-the store it finds is the open's one rule: a held lower head migrates no
-further than its hold, and a head above the binary's schema is readable while
-its baseline shape is intact and writable while the binary supports the
+fetched head and author no commit, so the refusal that keeps a reconcile from
+replaying onto a newer remote's head (`RemoteSchemaAheadError`, below) has
+nothing to guard there, and neither does the hold. What the binary may then
+do with the store it finds is the open's one rule: a held lower head migrates
+no further than its hold, and a head above the binary's schema is readable
+while its baseline shape is intact and writable while the binary supports the
 store's minimum writer schema, refused otherwise with `lit upgrade` named.
 The same landing is what lets a lowered remote bring a client down. Every
 settle reads the remote head's schema against the binary and reports it, so
 the owner channel ends a remote-schema-ahead episode on that read, never on
 the state the settle ended in.
+
+A push at the remote's own schema lands. A push is judged against R alone
+unless it raises the remote: with H ≤ R, no verdict compares H or R to the
+binary that pushes. The open admitted the writes the head carries, under the
+store's minimum writer schema: the model's writes name this binary's
+columns, an update leaves the columns a newer schema added as it found them,
+and a write that re-creates one row (a new row, a single-valued relation
+edge) fills only the columns it knows, which is the case a migration whose
+column an older writer must fill declares the minimum writer schema for
+(`internal/store/migrations/README.md`); so a head at R carries what the
+open's rule admits, and pushing it regresses nothing that rule did not
+already allow. Whether a binary may write at a schema above its own is the
+open's judgement, made once; the push does not make it again under a
+stricter rule. The ceiling is
+the second condition on a raise, as rule 2 states it, and judges nothing
+else: a head at or below R sends no schema the remote does not already hold,
+since R reached the remote by a release's push and sits at or below its own
+hold. (A head a pre-hold binary re-raised past its hold is the one case
+where a push at R above the hold lands; the guarantee was already scoped to
+binaries that read the row.) An unheld head below R is the lowering verdict's
+to refuse.
+
+The open's admission covers the model's writes and no other. A write that
+re-creates rows wholesale from this binary's columns, a delete and an insert
+of every row it touches, resets the columns a newer schema added to their
+defaults on rows no one changed: a regression within R's schema that no
+comparison of H to R would see and no migration's declaration foresees, so
+it is refused where it writes, never at the push. The
+reconcile's replay is such a write, re-creating every row a folded commit
+changed, and the reconcile refuses a head whose schema is above this
+binary's (`RemoteSchemaAheadError`) before any write, on its captured read of
+R, with `lit upgrade` as the remedy; the owner channel's `remote_schema_ahead`
+episode ends on a settle's read of the remote head within the binary's
+support, never on a landed push. `lit import` and a snapshot restore rewrite
+whole tables the same way, and today the open admits them on a workspace
+ahead of the binary; what they may write there is theirs to decide, by the
+open's rule, and the push does not stand in for that decision. So across a
+release that raises the shared remote, a checkout on the previous release
+reads, writes, and pushes, and upgrades before it can reconcile a divergence.
 
 ## What rule 2 means, precisely
 
