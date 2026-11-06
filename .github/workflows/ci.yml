@@ -269,7 +269,7 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.8.0
+          version: v2.15.0
           verify: false
 
       # An io/fs name built with path/filepath fails every lookup on Windows,
