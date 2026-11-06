@@ -17,10 +17,12 @@ import (
 // that opened the store, with git's exit status and output, and the mirror's
 // marker leaves gc owed again within the hour, not a day on.
 //
-// Not parallel: the failing gc is a git shim put first on the process's PATH,
-// which every git the test starts, lit's or Dolt's, finds. It fails only
-// Dolt's `gc --prune=now`, not lit's orphan sweep, which adds --quiet.
+// The failing gc is a git shim put first on PATH. Dolt resolves git through
+// the process's PATH, so the push runs as a child of this binary, whose PATH
+// no other test reads. The shim fails only Dolt's `gc --prune=now`, not lit's
+// orphan sweep, which adds --quiet.
 func TestAStoreCloseWhoseGCFailedSaysSoOnItsEvent(t *testing.T) {
+	t.Parallel()
 	realGit, err := exec.LookPath("git")
 	if err != nil {
 		t.Skip("git not available")
@@ -32,7 +34,6 @@ exec '`+strings.ReplaceAll(realGit, `'`, `'\''`)+`' "$@"
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", shim+string(os.PathListSeparator)+os.Getenv("PATH"))
 	isolateEvents(t)
 
 	base := t.TempDir()
@@ -49,7 +50,17 @@ exec '`+strings.ReplaceAll(realGit, `'`, `'\''`)+`' "$@"
 	runGit(t, repo, "push", "origin", "HEAD")
 	runCLIInDir(t, repo, "init", "--skip-hooks")
 	newEpicInDir(t, repo, "gc-epic")
-	runCLIInDir(t, repo, "sync", "push", "--set-upstream")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := runEnv(t)
+	push := exec.Command(self, "sync", "push", "--set-upstream")
+	push.Dir = repo
+	push.Env = env.With("PATH="+shim+string(os.PathListSeparator)+env.Get("PATH")).With(testChildRunEnvVar + "=1").List()
+	if out, err := push.CombinedOutput(); err != nil {
+		t.Fatalf("lit sync push: %v\n%s", err, out)
+	}
 
 	ev := lastEvent(t)
 	if ev.Event != "lit sync push" {

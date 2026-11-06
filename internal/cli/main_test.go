@@ -39,6 +39,11 @@ const suiteStallDeadline = time.Minute
 // child's own and no other test reads it.
 const testMirrorPushDeadlineEnvVar = "LIT_TEST_MIRROR_PUSH_DEADLINE"
 
+// testChildRunEnvVar, set on a child of this binary, makes it run its
+// arguments as one lit command, so a test can give a command a process-level
+// value, such as the PATH Dolt resolves git through, that no other test reads.
+const testChildRunEnvVar = "LIT_TEST_CHILD_RUN"
+
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
 // would spawn the on-change push mirror (via os.Executable(), which under
@@ -51,7 +56,7 @@ func TestMain(m *testing.M) {
 	// A detached worker spawns os.Executable(), which here is this test binary.
 	// Run as that worker rather than as a second copy of the whole suite; the
 	// suite's tests call the receive body directly and never mean to spawn one.
-	if len(os.Args) > 1 && (os.Args[1] == backgroundReceiveSubcommand || os.Args[1] == backgroundMirrorSubcommand) {
+	if len(os.Args) > 1 && (os.Args[1] == backgroundReceiveSubcommand || os.Args[1] == backgroundMirrorSubcommand || os.Getenv(testChildRunEnvVar) == "1") {
 		if deadline, ok := os.LookupEnv(testMirrorPushDeadlineEnvVar); ok {
 			d, err := time.ParseDuration(deadline)
 			if err != nil {
