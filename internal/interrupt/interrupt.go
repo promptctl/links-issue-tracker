@@ -77,8 +77,8 @@ func Guard(parent context.Context, grace time.Duration) (context.Context, func(c
 		escalation(g, hardExitHookBudget, os.Exit))
 
 	return ctx, func(code int) {
-		decided := g.decision.claim(Decision{Code: code})
-		if decided.Hard() {
+		decided := Claim(ctx, code)
+		if decided.Hard {
 			// The hard exit holds the claim and is already ending the process.
 			select {}
 		}
@@ -104,15 +104,13 @@ func guardOf(ctx context.Context) (*guard, bool) {
 	return g, ok
 }
 
-// Decision is the process's exit: the code it exits with and, when the hard
-// exit decided it, the interrupt whose grace ran out.
+// Decision is the process's exit: the code it exits with, whether the hard
+// exit decided it, and if so the interrupt whose grace ran out.
 type Decision struct {
 	Code   int
+	Hard   bool
 	Signal string
 }
-
-// Hard reports whether the hard exit decided the process's exit.
-func (d Decision) Hard() bool { return d.Signal != "" }
 
 // exitDecision is the process's exit, decided once by whichever of the clean
 // path and the hard exit claims it first.
@@ -194,12 +192,15 @@ func (h *hardExitHooks) run(signal string, code int, budget time.Duration) {
 }
 
 // escalation is the guard's hard exit: claim the exit, run the registered
-// hooks within their budget, then exit with the claimed code — the
-// conventional code for the signal, or the clean end's when it claimed first.
+// hooks within their budget when the claim is the hard exit's, then exit with
+// the decided code — the conventional code for the signal, or the clean
+// end's when it claimed first.
 func escalation(g *guard, budget time.Duration, exit func(int)) func(os.Signal) {
 	return func(sig os.Signal) {
-		decided := g.decision.claim(Decision{Code: exitCode(sig), Signal: interruptSignals[sig]})
-		g.hooks.run(interruptSignals[sig], decided.Code, budget)
+		decided := g.decision.claim(Decision{Code: exitCode(sig), Signal: interruptSignals[sig], Hard: true})
+		if decided.Hard {
+			g.hooks.run(decided.Signal, decided.Code, budget)
+		}
 		exit(decided.Code)
 	}
 }

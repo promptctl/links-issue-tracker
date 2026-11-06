@@ -25,7 +25,7 @@ func main() {
 	// is printed under the interrupt and code the process is ending on.
 	fail := func(err error) {
 		decided := interrupt.Claim(ctx, cli.CommandExitCode(err))
-		if decided.Hard() {
+		if decided.Hard {
 			fmt.Fprintf(os.Stderr, "lit: hard-exited with %d after %s; the command then ended: %v\n", decided.Code, decided.Signal, err)
 		} else {
 			cli.WriteCommandError(os.Stderr, err)

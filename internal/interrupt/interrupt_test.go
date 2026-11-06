@@ -180,11 +180,12 @@ func TestAHardExitAfterACleanClaimExitsWithTheCleanCode(t *testing.T) {
 	if decided := Claim(ctx, 3); decided != (Decision{Code: 3}) {
 		t.Fatalf("a claim of 3 before any hard exit decided %+v", decided)
 	}
-	var hookCode, exited int
-	BeforeHardExit(ctx, func(_ string, code int) { hookCode = code })
+	var hooked bool
+	var exited int
+	BeforeHardExit(ctx, func(string, int) { hooked = true })
 	escalation(g, time.Hour, func(code int) { exited = code })(syscall.SIGTERM)
-	if exited != 3 || hookCode != 3 {
-		t.Errorf("hard exit after a clean claim of 3 exited %d (hooks told %d), want 3", exited, hookCode)
+	if exited != 3 || hooked {
+		t.Errorf("hard exit after a clean claim of 3 exited %d (hooks ran: %v), want 3 and no hooks", exited, hooked)
 	}
 }
 
@@ -194,7 +195,7 @@ func TestACleanClaimAfterTheHardExitLosesToIt(t *testing.T) {
 	g := &guard{}
 	ctx := context.WithValue(context.Background(), guardKey{}, g)
 	escalation(g, time.Hour, func(int) {})(syscall.SIGINT)
-	if decided := Claim(ctx, 1); decided != (Decision{Code: 130, Signal: "SIGINT"}) {
+	if decided := Claim(ctx, 1); decided != (Decision{Code: 130, Hard: true, Signal: "SIGINT"}) {
 		t.Errorf("Claim after the hard exit = %+v, want the hard exit SIGINT 130", decided)
 	}
 }

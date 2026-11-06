@@ -318,9 +318,11 @@ type invocationRecord struct {
 
 func (r *invocationRecord) close(end telemetry.End) {
 	r.once.Do(func() {
-		if decided := interrupt.Claim(r.ctx, end.ExitCode); decided.Hard() {
+		decided := interrupt.Claim(r.ctx, end.ExitCode)
+		if decided.Hard {
 			end = endedAfterHardExit(end, decided)
 		}
+		end.ExitCode = decided.Code
 		r.write(end)
 	})
 }

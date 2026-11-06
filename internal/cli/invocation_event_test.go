@@ -371,7 +371,7 @@ func TestACleanEndAfterTheHardExitKeepsWhatItEndedWith(t *testing.T) {
 		Facts:    map[string]any{"remote": "origin"},
 		Counts:   map[string]int{"commits": 2},
 	}
-	got := endedAfterHardExit(end, interrupt.Decision{Code: 143, Signal: "SIGTERM"})
+	got := endedAfterHardExit(end, interrupt.Decision{Code: 143, Hard: true, Signal: "SIGTERM"})
 	if got.Outcome != telemetry.OutcomeInterrupted || got.ExitCode != 143 {
 		t.Errorf("outcome, exit code = %v, %d; want interrupted, 143", got.Outcome, got.ExitCode)
 	}
