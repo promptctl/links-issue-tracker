@@ -3364,14 +3364,22 @@ func buildDatabaseOnce(ctx context.Context, env environ.Env, stderr io.Writer, r
 		return storage.Bootstrap{}, errors.Join(err, os.RemoveAll(staging))
 	}
 	// The set-aside waits for a finished build, so a failed build leaves the
-	// directory where the user put it, and asks again first: a .dolt restored
-	// while the build ran is the user's database, and the build yields to it.
-	if exists, err := doltDatabaseExists(root); err != nil || exists {
-		return storage.Bootstrap{}, errors.Join(err, os.RemoveAll(staging))
-	}
+	// directory where the user put it.
 	setAside, err := setAsideDatabaseWithoutDolt(root)
 	if err != nil {
 		return storage.Bootstrap{}, errors.Join(err, os.RemoveAll(staging))
+	}
+	// A .dolt restored while the build ran is the user's database, and the build
+	// yields to it. The rename took the directory whole, so asking the set-aside
+	// after the move leaves no window between the answer and the move.
+	if setAside != "" {
+		switch _, err := os.Lstat(filepath.Join(setAside, dbfactory.DoltDir)); {
+		case err == nil:
+			return storage.Bootstrap{}, errors.Join(restoreSetAside(root, setAside), os.RemoveAll(staging))
+		case !errors.Is(err, os.ErrNotExist):
+			err = fmt.Errorf("check a set-aside database directory for a .dolt restored during the build: %w", err)
+			return storage.Bootstrap{}, errors.Join(err, restoreSetAside(root, setAside), os.RemoveAll(staging))
+		}
 	}
 	if err := installDoltRoot(staging, root); err != nil {
 		if setAside != "" {
@@ -3411,7 +3419,16 @@ func discardDeadStaging(staging string) (bool, error) {
 // directory holds nothing to keep, so it is removed. [LAW:no-silent-failure] a
 // rename that fails stops the build rather than falling back to deleting.
 func setAsideDatabaseWithoutDolt(root string) (string, error) {
-	if err := os.Remove(filepath.Join(root, doltDatabaseName)); err == nil || errors.Is(err, os.ErrNotExist) {
+	database := filepath.Join(root, doltDatabaseName)
+	switch entries, err := os.ReadDir(database); {
+	case errors.Is(err, os.ErrNotExist):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("read a database directory with no .dolt before installing: %w", err)
+	case len(entries) == 0:
+		if err := os.Remove(database); err != nil {
+			return "", fmt.Errorf("remove an empty database directory before installing: %w", err)
+		}
 		return "", nil
 	}
 	setAside, err := displaceDatabaseDir(root, "bootstrap")
@@ -3421,9 +3438,10 @@ func setAsideDatabaseWithoutDolt(root string) (string, error) {
 	return setAside, nil
 }
 
-// restoreSetAside moves a set-aside directory back when the install it made
-// way for failed, so the failure leaves the user's directory where they put
-// it. A failed move back names where the directory still is.
+// restoreSetAside moves a set-aside directory back when the build yields or
+// its install fails, so the open leaves the user's directory where they put
+// it. A failed move back (an install that landed before failing occupies the
+// path) names where the directory still is.
 func restoreSetAside(root, setAside string) error {
 	if err := os.Rename(setAside, filepath.Join(root, doltDatabaseName)); err != nil {
 		return fmt.Errorf("move the database directory back from %s after a failed install (it is still there): %w", setAside, err)
@@ -3433,11 +3451,11 @@ func restoreSetAside(root, setAside string) error {
 
 // displaceDatabaseDir renames the database directory to a sibling of the Dolt
 // root, <root>.<kind>-displaced-<unixnano>, and reports that path, "" when the
-// rename failed. The sibling
-// sits outside the engine's server root, so it never surfaces as a phantom
-// database; eviction precedes the rename so no cached handle keyed by the
-// canonical path serves the displaced store. [LAW:one-source-of-truth] the one
-// placement rule for every displacement.
+// rename failed. The sibling sits outside the engine's server root, so it
+// never surfaces as a phantom database; eviction precedes the rename so no
+// cached handle keyed by the canonical path serves the displaced store.
+// [LAW:one-source-of-truth] the one placement rule for the bootstrap's and
+// adopt's displacements.
 func displaceDatabaseDir(root, kind string) (string, error) {
 	database := filepath.Join(root, doltDatabaseName)
 	evictSingleton(database)
