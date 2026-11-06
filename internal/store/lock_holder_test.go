@@ -394,8 +394,8 @@ func TestRecordingFailureLeavesTheLockUsable(t *testing.T) {
 	if len(records) != 1 || records[0].PublishErr == nil || records[0].Lock != "test.lock" || records[0].Path != lockPath {
 		t.Errorf("records = %+v, want one for test.lock carrying the publish failure", records)
 	}
-	if printed := notices.String(); strings.Contains(printed, "could not record this process") {
-		t.Errorf("the store printed %q, want the failure only on the record the CLI says", printed)
+	if printed := notices.String(); !strings.Contains(printed, "could not record this process") {
+		t.Errorf("stderr = %q, want the failure printed on the stderr the acquisition was handed", printed)
 	}
 }
 
@@ -790,8 +790,8 @@ func TestASweepThatFailsIsReportedAndTheLockStillGranted(t *testing.T) {
 	if len(records) != 1 || records[0].SweepErr == nil || !strings.Contains(records[0].SweepErr.Error(), "unprobeable") || records[0].PublishErr != nil {
 		t.Errorf("records = %+v, want one carrying the failed sweep, naming the record, and no publish failure", records)
 	}
-	if printed := notices.String(); strings.Contains(printed, "could not retire the records") {
-		t.Errorf("the store printed %q, want the failure only on the record the CLI says", printed)
+	if printed := notices.String(); !strings.Contains(printed, "could not retire the records") {
+		t.Errorf("stderr = %q, want the failure printed on the stderr the acquisition was handed", printed)
 	}
 	if named := fmt.Sprintf("pid %d ", os.Getpid()); !strings.Contains(account, named) {
 		t.Errorf("account = %q, want this holder named despite the failed sweep", account)

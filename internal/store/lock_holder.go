@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -211,8 +212,9 @@ type lockHolderRecord struct {
 // [LAW:dataflow-not-control-flow] The sweep runs on every acquisition; an
 // empty directory is simply a sweep with nothing to retire.
 //
-// Neither failure is printed here: both go to the observer on ctx as one
-// LockRecord, and the CLI that installed it says them. [LAW:effects-at-boundaries]
+// Both failures are printed to stderr, the writer this acquisition was handed
+// (which may be a lease the caller revokes), and go with the sweep's count to
+// the observer on ctx as one LockRecord, so the command's event carries them.
 //
 // That sweep is also what demotes a failed retirement at release, the way a
 // failed publish is demoted: a record this release could not remove has lost
@@ -222,6 +224,12 @@ type lockHolderRecord struct {
 func recordLockHolder(ctx context.Context, stderr io.Writer, storageDir, lockPath, privatePath, recordPath string, lockRelease func() error) func() error {
 	retired, sweepErr := retireDeadLockHolders(storageDir, lockPath)
 	releaseRecord, publishErr := publishLockHolder(ctx, storageDir, lockPath, privatePath, recordPath)
+	if sweepErr != nil {
+		fmt.Fprintf(stderr, "lit: could not retire the records of holders gone from %s (the lock is held; every acquisition retries, so this repeats until they can be retired): %v\n", lockPath, sweepErr)
+	}
+	if publishErr != nil {
+		fmt.Fprintf(stderr, "lit: could not record this process as the holder of %s (the lock is held; only the diagnostic naming this holder is missing): %v\n", lockPath, publishErr)
+	}
 	lockObserverFrom(ctx).Recorded(LockRecord{Lock: filepath.Base(lockPath), Path: lockPath, SweepRetired: retired, SweepErr: sweepErr, PublishErr: publishErr})
 	if publishErr != nil {
 		return lockRelease
@@ -568,6 +576,12 @@ func retireDeadLockHolders(storageDir, lockPath string) (retired int, err error)
 	}
 	errs := make([]error, 0, len(names))
 	for _, name := range names {
+		// A name gone since the listing was retired by someone else (its holder
+		// releasing, or a concurrent sweep); probing it would recreate it
+		// through filelock's O_CREATE and count it as a dead holder's.
+		if _, statErr := os.Lstat(filepath.Join(dir, name)); errors.Is(statErr, fs.ErrNotExist) {
+			continue
+		}
 		live, probeErr := probeLockHolder(filepath.Join(dir, name))
 		if !live && probeErr == nil {
 			retired++
