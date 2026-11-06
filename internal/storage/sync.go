@@ -145,6 +145,12 @@ type SyncFreshness struct {
 	// local commits below the fork are the remote's history before its cut, not
 	// local work. [LAW:one-source-of-truth] Ahead is the folded chain's length.
 	Base ReconcileBase `json:"-"`
+	// RemoteHead is the commit the tracking ref pointed at when Ahead, Behind
+	// and Base were read, "" when the branch never synced. What a settle then
+	// reads AS OF the remote head, it reads AS OF this commit, so a judgement
+	// of the branch and a judgement of its head are one resolution of the ref.
+	// [LAW:one-source-of-truth]
+	RemoteHead string `json:"-"`
 }
 
 // State derives the classification from the raw observations. Keeping it a

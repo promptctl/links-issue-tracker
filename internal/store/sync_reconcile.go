@@ -329,11 +329,11 @@ type reconcilePlan struct {
 	remoteHead string
 	base       storage.ReconcileBase
 	// remoteSchema is the remote head's schema and hold, read once, in every
-	// state, with the reader the push judges a remote head by
-	// (trackingHeadSchema): the replay's guard refuses on it and the result
-	// reports it. remoteHead is the commit it was read AS OF, so the head the
-	// replay lands on is the head the guard judged. [LAW:one-source-of-truth]
-	// one read of the head per reconcile.
+	// state, AS OF the head the freshness judged (freshnessHeadSchema), with
+	// the reader the push judges a remote head by (remoteHeadAt): the replay's
+	// guard refuses on it and the result reports it. remoteHead is the commit
+	// it was read AS OF, so the head the replay lands on is the head the guard
+	// judged. [LAW:one-source-of-truth] one read of the head per reconcile.
 	remoteSchema remoteSchema
 	// schemaAhead is remoteSchema judged against this binary's support.
 	schemaAhead storage.RemoteSchemaAhead
@@ -356,7 +356,7 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteN
 		return reconcilePlan{}, err
 	}
 	plan.ahead, plan.behind = fresh.Ahead, fresh.Behind
-	if plan.remoteSchema, err = s.trackingHeadSchema(ctx, remote, branch); err != nil {
+	if plan.remoteSchema, err = s.freshnessHeadSchema(ctx, fresh, remote, branch); err != nil {
 		return reconcilePlan{}, err
 	}
 	if plan.schemaAhead, err = judgeSchemaAhead(plan.remoteSchema); err != nil {
@@ -486,7 +486,7 @@ func (s *Store) reconcile(ctx context.Context, remote storage.RemoteName, branch
 // A lift the body refuses at the ceiling leaves as SchemaCeilingLiftError, named for this
 // remote and branch (nameLiftRefusal), as the schema-ahead refusal above is.
 // The fetched head's schema and hold were read with the plan, once, with the
-// reader the push judges a remote head by (trackingHeadSchema), so a refusal
+// reader the push judges a remote head by (remoteHeadAt), so a refusal
 // here and one at the push name the head the same way. The hold rides into
 // the body as the head's own value (fetchedHead): the first lift of that head
 // refuses under it, before any merge or prose hold asks the operator for work

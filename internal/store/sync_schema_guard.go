@@ -83,6 +83,20 @@ func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteNam
 	return s.remoteHeadAt(ctx, head, remote, branch)
 }
 
+// freshnessHeadSchema is the schema and schema hold of the head a freshness
+// judged (SyncFreshness.RemoteHead), or unknownRemoteSchema when the branch
+// never synced. A settle and a reconcile plan read the remote through it, so
+// the head whose freshness they report and the head whose schema they report
+// are one read of the tracking ref: a diverged plan's remote head is the
+// commit its schema was read AS OF, never a second resolution of the ref.
+// [LAW:one-source-of-truth] [LAW:no-ambient-temporal-coupling]
+func (s *Store) freshnessHeadSchema(ctx context.Context, fresh storage.SyncFreshness, remote storage.RemoteName, branch string) (remoteSchema, error) {
+	if !fresh.Synced {
+		return unknownRemoteSchema(), nil
+	}
+	return s.remoteHeadAt(ctx, fresh.RemoteHead, remote, branch)
+}
+
 // judgeSchemaAhead is the schema-ahead verdict on a remote head's schema the
 // caller read: the head's schema against this binary's schema support, zero
 // when the head is within it. A remote this store holds no head of is not

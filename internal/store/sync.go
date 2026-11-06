@@ -753,7 +753,7 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.Rem
 	result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
 	result.OldestDivergedUnix = fresh.OldestDivergedUnix
 	result.Base = fresh.Base.Source
-	remoteHead, err := s.trackingHeadSchema(ctx, remote, branch)
+	remoteHead, err := s.freshnessHeadSchema(ctx, fresh, remote, branch)
 	if err != nil {
 		return result, err
 	}
@@ -1512,6 +1512,7 @@ func (s *Store) SyncFreshness(ctx context.Context, remote storage.RemoteName, br
 	if err != nil {
 		return storage.SyncFreshness{}, err
 	}
+	freshness.RemoteHead = remoteHead
 	freshness.Base, err = s.reconcileBase(ctx, remote, trimmedBranch, localHead, remoteHead)
 	if err != nil {
 		return storage.SyncFreshness{}, err
