@@ -50,46 +50,104 @@ const DefaultGrace = gitcmd.CancelBound + time.Second
 var interruptSignals = map[os.Signal]string{syscall.SIGINT: "SIGINT", syscall.SIGTERM: "SIGTERM"}
 
 // Guard installs interrupt→cancel over parent and returns the derived context
-// plus a stop func the entrypoint defers for the normal (no-signal) exit path.
+// plus the exit func the entrypoint ends the process through, on every path.
 //
 // On the first interrupt it cancels the context so ctx-aware work abandons and
 // deferred cleanup runs, then arms escalation so a ctx-ignoring operation can
 // never leave the process terminable only by SIGKILL: the OS default disposition
 // is restored (a second interrupt terminates immediately) AND a grace timer
-// hard-exits with the conventional 128+signum code if the clean path has not
-// returned within grace, after running what the guarded work registered with
-// BeforeHardExit.
+// hard-exits if the clean path has not returned within grace, after running
+// what the guarded work registered with BeforeHardExit.
 //
-// stop() must be called on the normal exit path; it disarms the handler and
-// releases the internal goroutine. It is a no-op if an interrupt already fired.
-func Guard(parent context.Context, grace time.Duration) (context.Context, func()) {
+// The process's exit code is decided once, here: by Claim (or exit) on the
+// clean path, or by the hard exit with the conventional 128+signum code, which
+// ever comes first. A hard exit after a clean claim exits with the claimed
+// code; an exit after a hard claim waits for the hard exit to end the process.
+// A second interrupt is the one way out that skips the decision: the OS ends
+// the process by the signal.
+// [LAW:single-enforcer]
+func Guard(parent context.Context, grace time.Duration) (context.Context, func(code int)) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, slices.Collect(maps.Keys(interruptSignals))...)
-	hooks := &hardExitHooks{}
-	ctx, cancel := context.WithCancel(context.WithValue(parent, hardExitHooksKey{}, hooks))
+	g := &guard{}
+	ctx, cancel := context.WithCancel(context.WithValue(parent, guardKey{}, g))
 	done := make(chan struct{})
 
 	go watch(sigs, done, cancel, func() { signal.Stop(sigs) }, grace,
-		escalation(hooks, hardExitHookBudget, os.Exit))
+		escalation(g, hardExitHookBudget, os.Exit))
 
-	var stopped bool
-	return ctx, func() {
-		if stopped {
-			return
+	return ctx, func(code int) {
+		decided := Claim(ctx, code)
+		if decided.Hard {
+			// The hard exit holds the claim and is already ending the process.
+			select {}
 		}
-		stopped = true
 		signal.Stop(sigs)
 		cancel()
 		close(done)
+		os.Exit(decided.Code)
 	}
+}
+
+type guardKey struct{}
+
+// guard is what a Guard-derived context carries: the hooks its work
+// registered, and the process's exit decision. One value, so a context has
+// both or neither.
+type guard struct {
+	hooks    hardExitHooks
+	decision exitDecision
+}
+
+func guardOf(ctx context.Context) (*guard, bool) {
+	g, ok := ctx.Value(guardKey{}).(*guard)
+	return g, ok
+}
+
+// Decision is the process's exit: the code it exits with, whether the hard
+// exit decided it, and if so the interrupt whose grace ran out.
+type Decision struct {
+	Code   int
+	Hard   bool
+	Signal string
+}
+
+// exitDecision is the process's exit, decided once by whichever of the clean
+// path and the hard exit claims it first.
+type exitDecision struct {
+	mu      sync.Mutex
+	decided *Decision
+}
+
+// claim decides the exit as want unless it is already decided, and returns
+// the decision that stands.
+func (d *exitDecision) claim(want Decision) Decision {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.decided == nil {
+		d.decided = &want
+	}
+	return *d.decided
+}
+
+// Claim claims the process's exit with code for the clean end of the guarded
+// work, before that end is recorded or printed, so what is recorded and
+// printed is what the process exits with. It returns the decision that
+// stands: code, a clean claim made earlier, or — when the grace already ran
+// out — the hard exit's. A context no Guard derived is never hard-exited, and
+// its claim is code.
+func Claim(ctx context.Context, code int) Decision {
+	g, guarded := guardOf(ctx)
+	if !guarded {
+		return Decision{Code: code}
+	}
+	return g.decision.claim(Decision{Code: code})
 }
 
 // hardExitHookBudget bounds how long the hooks registered with BeforeHardExit
 // may run. The hard exit exists so the process ends, and a hook stuck on a
 // hung filesystem must not undo that: past the budget the exit goes ahead.
 const hardExitHookBudget = time.Second
-
-type hardExitHooksKey struct{}
 
 // hardExitHooks is what a guarded context's work asked to have done before a
 // hard exit, which skips every deferred call and so every ordinary way of
@@ -104,13 +162,13 @@ type hardExitHooks struct {
 // hard-exits the process. A context no Guard derived is never hard-exited, so
 // there is no exit for fn to precede and nothing is registered.
 func BeforeHardExit(ctx context.Context, fn func(signal string, code int)) {
-	hooks, guarded := ctx.Value(hardExitHooksKey{}).(*hardExitHooks)
+	g, guarded := guardOf(ctx)
 	if !guarded {
 		return
 	}
-	hooks.mu.Lock()
-	defer hooks.mu.Unlock()
-	hooks.fns = append(hooks.fns, fn)
+	g.hooks.mu.Lock()
+	defer g.hooks.mu.Unlock()
+	g.hooks.fns = append(g.hooks.fns, fn)
 }
 
 // run calls every registered hook in order, waiting at most budget for them.
@@ -133,13 +191,16 @@ func (h *hardExitHooks) run(signal string, code int, budget time.Duration) {
 	}
 }
 
-// escalation is the guard's hard exit: the registered hooks, within their
-// budget, then exit with the conventional code for the signal.
-func escalation(hooks *hardExitHooks, budget time.Duration, exit func(int)) func(os.Signal) {
+// escalation is the guard's hard exit: claim the exit, run the registered
+// hooks within their budget, then exit with the decided code — the
+// conventional code for the signal, or the clean end's when it claimed first.
+// The hooks run after a clean claim too: a clean end still writing what it
+// claimed for is finished through them, within their budget.
+func escalation(g *guard, budget time.Duration, exit func(int)) func(os.Signal) {
 	return func(sig os.Signal) {
-		code := exitCode(sig)
-		hooks.run(interruptSignals[sig], code, budget)
-		exit(code)
+		decided := g.decision.claim(Decision{Code: exitCode(sig), Signal: interruptSignals[sig], Hard: true})
+		g.hooks.run(interruptSignals[sig], decided.Code, budget)
+		exit(decided.Code)
 	}
 }
 

@@ -137,13 +137,13 @@ func TestWatchNormalExitDoesNotEscalate(t *testing.T) {
 // The hard exit runs what the guarded work registered, in order and with the
 // signal's name and the exit code, before the process exits.
 func TestEscalationRunsTheHooksBeforeExiting(t *testing.T) {
-	hooks := &hardExitHooks{}
-	ctx := context.WithValue(context.Background(), hardExitHooksKey{}, hooks)
+	g := &guard{}
+	ctx := context.WithValue(context.Background(), guardKey{}, g)
 	var calls []string
 	BeforeHardExit(ctx, func(signal string, code int) { calls = append(calls, fmt.Sprintf("first %s %d", signal, code)) })
 	BeforeHardExit(ctx, func(signal string, code int) { calls = append(calls, fmt.Sprintf("second %s %d", signal, code)) })
 
-	escalation(hooks, time.Hour, func(code int) { calls = append(calls, fmt.Sprintf("exit %d", code)) })(syscall.SIGTERM)
+	escalation(g, time.Hour, func(code int) { calls = append(calls, fmt.Sprintf("exit %d", code)) })(syscall.SIGTERM)
 
 	if got, want := strings.Join(calls, ", "), "first SIGTERM 143, second SIGTERM 143, exit 143"; got != want {
 		t.Errorf("escalation ran %q, want %q", got, want)
@@ -153,14 +153,14 @@ func TestEscalationRunsTheHooksBeforeExiting(t *testing.T) {
 // A hook that never returns cannot hold the process past its budget: the
 // exit goes ahead without it.
 func TestAStuckHookDoesNotStopTheHardExit(t *testing.T) {
-	hooks := &hardExitHooks{}
-	ctx := context.WithValue(context.Background(), hardExitHooksKey{}, hooks)
+	g := &guard{}
+	ctx := context.WithValue(context.Background(), guardKey{}, g)
 	stuck := make(chan struct{})
 	defer close(stuck)
 	BeforeHardExit(ctx, func(string, int) { <-stuck })
 
 	exited := make(chan int, 1)
-	go escalation(hooks, 10*time.Millisecond, func(code int) { exited <- code })(syscall.SIGINT)
+	go escalation(g, 10*time.Millisecond, func(code int) { exited <- code })(syscall.SIGINT)
 	select {
 	case code := <-exited:
 		if code != 130 {
@@ -168,6 +168,60 @@ func TestAStuckHookDoesNotStopTheHardExit(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("a stuck hook held the hard exit past its budget")
+	}
+}
+
+// A clean end that claimed the exit before the grace ran out keeps its code:
+// the hard exit still ends the process, but with the code the clean end
+// recorded, not 128+signum.
+func TestAHardExitAfterACleanClaimExitsWithTheCleanCode(t *testing.T) {
+	g := &guard{}
+	ctx := context.WithValue(context.Background(), guardKey{}, g)
+	if decided := Claim(ctx, 3); decided != (Decision{Code: 3}) {
+		t.Fatalf("a claim of 3 before any hard exit decided %+v", decided)
+	}
+	var hookCode int
+	var exited int
+	BeforeHardExit(ctx, func(_ string, code int) { hookCode = code })
+	escalation(g, time.Hour, func(code int) { exited = code })(syscall.SIGTERM)
+	if exited != 3 || hookCode != 3 {
+		t.Errorf("hard exit after a clean claim of 3 exited %d (hooks told %d), want 3", exited, hookCode)
+	}
+}
+
+// A clean end that arrives after the hard exit claimed loses, and is told the
+// interrupt and code the process exits with.
+func TestACleanClaimAfterTheHardExitLosesToIt(t *testing.T) {
+	g := &guard{}
+	ctx := context.WithValue(context.Background(), guardKey{}, g)
+	escalation(g, time.Hour, func(int) {})(syscall.SIGINT)
+	if decided := Claim(ctx, 1); decided != (Decision{Code: 130, Hard: true, Signal: "SIGINT"}) {
+		t.Errorf("Claim after the hard exit = %+v, want the hard exit SIGINT 130", decided)
+	}
+}
+
+// A clean end racing the hard exit: whichever claims first, the code the
+// clean end is told it lost to (or kept) is the code the process exits with.
+func TestACleanEndRacingTheHardExitAgreesWithIt(t *testing.T) {
+	for range 200 {
+		g := &guard{}
+		ctx := context.WithValue(context.Background(), guardKey{}, g)
+		recorded := make(chan int, 1)
+		go func() {
+			recorded <- Claim(ctx, 1).Code
+		}()
+		exited := make(chan int, 1)
+		go escalation(g, time.Hour, func(code int) { exited <- code })(syscall.SIGTERM)
+		if r, e := <-recorded, <-exited; r != e {
+			t.Fatalf("clean end recorded %d, process exited %d", r, e)
+		}
+	}
+}
+
+// A context no Guard derived is never hard-exited, so its claim always holds.
+func TestAnUnguardedClaimHolds(t *testing.T) {
+	if decided := Claim(context.Background(), 1); decided != (Decision{Code: 1}) {
+		t.Errorf("an unguarded claim of 1 decided %+v", decided)
 	}
 }
 
