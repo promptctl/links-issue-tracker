@@ -155,7 +155,7 @@ func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 
 	plantSettleEndedEpisodes(t, ws)
 	out.Reset()
-	if err := reportReconcileResult(underInvocation(context.Background()), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
+	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult: %v", err)
 	}
 	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged")
