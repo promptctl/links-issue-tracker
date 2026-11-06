@@ -21,7 +21,12 @@ func (t Text) Raw() string { return string(t) }
 // Format prints the text held to one row whatever the verb and width, so %s,
 // %v, %q and %-20s all hold it. [LAW:single-enforcer]
 func (t Text) Format(f fmt.State, verb rune) {
-	held := HoldRow(string(t))
+	formatHeld(f, verb, HoldRow(string(t)))
+}
+
+// formatHeld writes an already held value honouring %q and width, so every
+// type that prints held formats the same way.
+func formatHeld(f fmt.State, verb rune, held string) {
 	if verb == 'q' {
 		held = fmt.Sprintf("%q", held)
 	}
@@ -51,7 +56,7 @@ const (
 // is a line nothing holds.
 var LineBreakNormalizer = strings.NewReplacer(
 	"\r\n", "\n", "\r", "\n", "\v", "\n", "\f", "\n",
-	"\u0085", "\n", " ", "\n", " ", "\n",
+	"\u0085", "\n", "\u2028", "\n", "\u2029", "\n",
 )
 
 // TextLines splits text at every code point a reader may take for a line
@@ -64,6 +69,12 @@ func TextLines(text string) []string {
 		lines[i] = StripInvisibles(line)
 	}
 	return lines
+}
+
+// HasLineBreak reports whether text holds any code point TextLines splits
+// at: the one definition a write gate refuses and a printer holds.
+func HasLineBreak(text string) bool {
+	return strings.Contains(LineBreakNormalizer.Replace(text), "\n")
 }
 
 // HoldRow holds a value to the one row it is printed on: its printable lines
@@ -97,7 +108,7 @@ func StripInvisibles(line string) string {
 		if r == '\t' || !(unicode.IsControl(r) || unicode.Is(unicode.Cf, r)) {
 			return r
 		}
-		return '�'
+		return '\uFFFD'
 	}, line)
 }
 

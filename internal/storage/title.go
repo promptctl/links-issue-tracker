@@ -25,7 +25,7 @@ func ParseTitle(raw string) (Title, error) {
 	if text == "" {
 		return Title{}, errTitleRequired
 	}
-	if strings.ContainsAny(text, lineBreaks) {
+	if model.HasLineBreak(text) {
 		return Title{}, model.ValidationError{Message: "title cannot hold a line break"}
 	}
 	return Title{text: text}, nil
@@ -50,10 +50,6 @@ func (t Title) Text() (string, error) {
 	return t.text, nil
 }
 
-// lineBreaks is every character a terminal or renderer may break a line at,
-// not only \r and \n: a title or lane holding any of them prints as two rows.
-const lineBreaks = "\r\n\v\f\u0085\u2028\u2029"
-
 var errTitleRequired = model.ValidationError{Message: "title is required"}
 
 // Lane is an issue's lane as a write takes it: trimmed and on one line. The
@@ -69,7 +65,7 @@ type Lane struct {
 // a title's.
 func ParseLane(raw string) (Lane, error) {
 	text := strings.TrimSpace(raw)
-	if strings.ContainsAny(text, lineBreaks) {
+	if model.HasLineBreak(text) {
 		return Lane{}, model.ValidationError{Message: "lane cannot hold a line break"}
 	}
 	return Lane{text: text, made: true}, nil

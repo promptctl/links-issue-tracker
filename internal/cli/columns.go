@@ -104,7 +104,7 @@ var columnRegistry = []columnSpec{
 		return i.CreatedAt.Format(time.RFC3339)
 	}},
 	{name: "parent", source: sourceRelations, render: func(_ model.Issue, cells derivedColumns) string {
-		return emptyDash(cells.parentID)
+		return emptyDash(model.HoldRow(cells.parentID))
 	}},
 	// blocked is sourceReadiness, not sourceRelations: it means "the annotation
 	// registry says this cannot be pulled", which is a still-open dependency, an

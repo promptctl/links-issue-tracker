@@ -21,7 +21,7 @@ func NormalizeAssignee(assignee string) (string, error) {
 		return "", ValidationError{Message: fmt.Sprintf("assignee %q cannot contain commas: every assignee filter reads a comma as the separator between names", normalized)}
 	}
 	if HoldRow(normalized) != normalized {
-		return "", ValidationError{Message: fmt.Sprintf("assignee %q cannot contain a line break, tab or control character: an assignee prints on one row", normalized)}
+		return "", ValidationError{Message: fmt.Sprintf("assignee %q cannot contain a line break, tab, control or format character, or the %s token: an assignee prints on one row", normalized, QuotedBreak)}
 	}
 	return normalized, nil
 }

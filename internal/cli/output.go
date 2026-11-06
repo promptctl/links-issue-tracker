@@ -83,7 +83,7 @@ func printIDListLine(w io.Writer, indent, label string, ids []string) error {
 }
 
 func printIssueSummary(w io.Writer, issue model.Issue) error {
-	_, err := fmt.Fprintln(w, fmt.Sprintf("%s [%s/%s/%s/%s] %s%s", model.HoldRow(issue.ID), formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels)))
+	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", model.HoldRow(issue.ID), formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))
 	return err
 }
 
@@ -387,9 +387,9 @@ func sortedIssueFieldNames() []string {
 // agent can read a ticket's description (or any other single field) without
 // the full `lit show` dump. Fields are validated before anything prints, so
 // an unknown name in a multi-field request fails clean rather than emitting
-// a partial result. A single field prints its bare value with no label, so
-// the output round-trips directly into `lit update --description` and
-// similar; multiple fields print as "name: value" lines so a multi-line
+// a partial result. A single field prints its value with no label: a long
+// text bare, so it round-trips into `lit update --description` and similar,
+// and a one-row value held to its row, as every printer holds it; multiple fields print as "name: value" lines so a multi-line
 // value stays attributable to its field, each value but a long text held to
 // its row.
 func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) error {
@@ -650,7 +650,7 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 		// The standing marker is why the group is worth reading at all: the
 		// agent learns where each referenced issue stands inline, without a
 		// second 'lit show' per id.
-		if _, err := fmt.Fprintln(w, fmt.Sprintf("- %s [%s] %s", model.HoldRow(issue.ID), issueStanding(issue), issue.Title)); err != nil {
+		if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", model.HoldRow(issue.ID), issueStanding(issue), issue.Title); err != nil {
 			return err
 		}
 	}
@@ -908,5 +908,9 @@ func indentLines(s, prefix string) string {
 // Trailing newlines are stripped so callers that append their own "\n"
 // (e.g., via Fprintf) do not produce a stray prefix-only line at the end.
 func hangLines(s, prefix string) string {
-	return strings.Join(model.TextLines(strings.TrimRight(model.LineBreakNormalizer.Replace(s), "\n")), "\n"+prefix)
+	lines := model.TextLines(s)
+	for len(lines) > 1 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.Join(lines, "\n"+prefix)
 }
