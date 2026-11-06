@@ -198,6 +198,7 @@ func TestTheReceiveWaitsForALiveMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold the mirror beacon: %v", err)
 	}
+	release = endsWithTest(t, release)
 	if _, err := awaitNoLiveMirror(context.Background(), ws, 300*time.Millisecond); err == nil {
 		t.Fatalf("the receive stopped waiting while a mirror was still live")
 	}
