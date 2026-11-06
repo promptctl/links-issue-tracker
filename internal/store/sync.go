@@ -426,6 +426,7 @@ func (s *Store) SyncPull(ctx context.Context, remote storage.RemoteName, branch 
 		result.Ahead, result.Behind = recv.Ahead, recv.Behind
 		result.OldestDivergedUnix = recv.OldestDivergedUnix
 		result.Base = recv.Base
+		result.RemoteSchemaAhead = recv.RemoteSchemaAhead
 		switch recv.State {
 		case storage.SyncReceiveUpToDate:
 			result.State = storage.SyncPullUpToDate
@@ -734,6 +735,15 @@ func (s *Store) strandedTables(ctx context.Context) (int, error) {
 // SyncSettleReceived both run it, so a receive whose fetch ran here and one
 // whose fetch ran on a clone settle identically. [LAW:single-enforcer] The
 // caller holds the commit lock.
+//
+// The remote head's schema is read in every state and reported, so the
+// settle carries what it learned about the remote rather than leaving the
+// surface to infer it from the state: an up-to-date or ahead settle proves
+// nothing about the remote's schema by its state alone. The behind landing
+// adopts the head at that schema whatever it is; the landing writes no
+// commit, so the push's refusal has nothing to guard here, and the open is
+// the one place that decides what this binary may do with the store it
+// finds. [LAW:dataflow-not-control-flow] [LAW:nothing-unseen]
 func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReceiveResult, error) {
 	var result storage.SyncReceiveResult
 	fresh, err := s.freshnessOverEveryWrite(ctx, remote, branch)
@@ -743,6 +753,13 @@ func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.Rem
 	result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
 	result.OldestDivergedUnix = fresh.OldestDivergedUnix
 	result.Base = fresh.Base.Source
+	remoteHead, err := s.trackingHeadSchema(ctx, remote, branch)
+	if err != nil {
+		return result, err
+	}
+	if result.RemoteSchemaAhead, err = judgeSchemaAhead(remoteHead); err != nil {
+		return result, err
+	}
 	switch fresh.State() {
 	case storage.SyncBehind:
 		// A reset, not a --ff-only merge, because behind includes a fork-point

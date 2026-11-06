@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -161,7 +162,7 @@ func TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles(t *testing.T)
 	// `lit sync reconcile` — ends the episode the same way, so a block left
 	// before it is retired too.
 	surfaceReceiveOutcome(context.Background(), testStderr(t), runEnv(t), ws, unconverged, now)
-	endSettleEndedEpisodes(testStderr(t), ws)
+	endSettleEndedEpisodes(testStderr(t), ws, storage.RemoteSchemaAhead{})
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("a converged divergence left the receive's block pending (stat err = %v)", err)
 	}

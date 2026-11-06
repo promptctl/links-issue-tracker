@@ -226,7 +226,29 @@ type SyncReceiveResult struct {
 	Behind             int64
 	OldestDivergedUnix int64
 	Base               ReconcileBaseSource
+	// RemoteSchemaAhead is the remote head's schema against this binary, as
+	// the settle read it; zero when it is within this binary's support.
+	RemoteSchemaAhead RemoteSchemaAhead
 }
+
+// RemoteSchemaAhead is a remote head's schema newer than the binary that
+// read it: the schema the head records, and the highest this binary supports.
+// It is the remote mirror of SchemaAhead, and like it the zero value is a
+// head that was not ahead, a head this store has never fetched included. A
+// settle (receive, pull, reconcile) reads it off the remote-tracking head on
+// every run, whatever state the branch is in, so the value is a fact the
+// settle established, never one inferred from the state it ended in: a
+// landing adopts a head at any schema, and only this read says whether a
+// write to that remote would be refused. [LAW:parse-dont-validate] the
+// verdict the push's guard refuses on, carried as a value.
+type RemoteSchemaAhead struct {
+	RemoteSchema       int64
+	BinarySupportedMax int64
+}
+
+// Ahead reports whether the remote head's schema is above this binary's
+// support.
+func (a RemoteSchemaAhead) Ahead() bool { return a.RemoteSchema > a.BinarySupportedMax }
 
 // StrandedWritesCommit is one commit an engine landed over writes a failed
 // DOLT_COMMIT left in the working set, before anything that would discard
@@ -362,8 +384,11 @@ type SyncPullResult struct {
 	// Base is where the settle's base came from, carried from the receive as
 	// SyncReceiveResult carries it, so a pull that landed across a fork point
 	// reads apart from a fast-forward along shared history.
-	Base    ReconcileBaseSource  `json:"base"`
-	Pending []merge.ProsePending `json:"pending,omitempty"`
+	Base ReconcileBaseSource `json:"base"`
+	// RemoteSchemaAhead is carried from the receive that settled, as
+	// SyncReceiveResult carries it.
+	RemoteSchemaAhead RemoteSchemaAhead    `json:"remote_schema_ahead"`
+	Pending           []merge.ProsePending `json:"pending,omitempty"`
 	// OldestDivergedUnix dates the divergence this pull observed (Unix seconds),
 	// so a held-conflict surface can escalate by age. Zero unless the pull met a
 	// divergence. Carried from the receive that classified the freshness.
@@ -703,6 +728,10 @@ type SyncReconcileResult struct {
 	LocalHead  string
 	RemoteHead string
 	BaseCommit string
+	// RemoteSchemaAhead is the remote head's schema against this binary, read
+	// when the plan was captured, in every state: a not-diverged answer
+	// carries it as a replay does.
+	RemoteSchemaAhead RemoteSchemaAhead
 	// Pending carries the free-text fields that diverged on both sides, with
 	// base/ours/theirs, so the agent surface can merge intent instead of picking a
 	// side. Empty unless State is SyncReconcileProsePending.

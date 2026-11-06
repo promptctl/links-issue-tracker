@@ -334,7 +334,8 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 	// not just the stdout line; zero is honest data for outcomes that fold
 	// nothing. [LAW:dataflow-not-control-flow] recorded unconditionally.
 	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
-		"carried_purges": strconv.Itoa(result.CarriedPurges), "purged": strconv.Itoa(len(purgedIDs(result.Unrelated)))}
+		"carried_purges": strconv.Itoa(result.CarriedPurges), "purged": strconv.Itoa(len(purgedIDs(result.Unrelated))),
+		"remote_schema_ahead": strconv.FormatInt(result.RemoteSchemaAhead.RemoteSchema, 10)}
 	landingMetadata(metadata, result.Landing)
 	decision := string(result.State)
 	status := "ok"
@@ -360,7 +361,7 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 	ref := remote.String() + "/" + branch
 	switch result.State {
 	case storage.SyncReconcileTookRemote:
-		endSettleEndedEpisodes(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
 		state := "the local backlog now equals " + ref + " and sync is clean (no push needed)"
 		if result.CarriedPurges > 0 {
 			state = fmt.Sprintf("the local backlog now equals %s less what you purged, with %d purge record(s) carried onto it; run `lit sync push` (or let auto-sync) to deliver them", ref, result.CarriedPurges)
@@ -372,7 +373,7 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "the adopted backlog", result.Landing)
 	case storage.SyncReconcileTookLocal:
-		endSettleEndedEpisodes(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
 		if _, err := fmt.Fprintf(stdout,
 			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\nDROPPED the issue(s) a purge on either side names: %s\n",
 			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, storage.TakeLocal)), describeIDSet(purgedIDs(result.Unrelated))); err != nil {
@@ -380,11 +381,10 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		}
 		return writeLanding(stdout, "your backlog", result.Landing)
 	case storage.SyncReconcileNotDiverged:
-		// Not diverged ends every episode the receive half pages: the
-		// divergence classes by definition, and the two schema refusals
-		// because the store raises them only inside the replay of a diverged
-		// plan (replayUnderGuard), never from a checkout that is not diverged.
-		endSettleEndedEpisodes(stderr, ws)
+		// Not diverged is a settle: the divergence kinds end, and the remote
+		// schema kind ends on the plan's read of the remote head, which a
+		// not-diverged answer carries as a replay does.
+		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
@@ -446,7 +446,9 @@ func purgedIDs(inv *storage.UnrelatedInventory) []string {
 func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, session syncSession, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult, resolved bool) error {
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.
-	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
+	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
+		// The remote head's schema when ahead of this binary, 0 otherwise.
+		"remote_schema_ahead": strconv.FormatInt(result.RemoteSchemaAhead.RemoteSchema, 10)}
 	landingMetadata(metadata, result.Landing)
 	metadata["prose_recorded"] = strconv.Itoa(result.ProseRecorded)
 	switch result.State {
@@ -524,7 +526,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}
 	case storage.SyncReconcileLinearized:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endSettleEndedEpisodes(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
 		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
 			return err
 		}
@@ -537,7 +539,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileCombined:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		endSettleEndedEpisodes(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
 		// Report what the union KEPT from each side, so "nothing dropped" is evidenced, not
 		// asserted: the both-sides partition names the kept-local, kept-remote, and
 		// field-merged shared ids. A defensively-absent inventory reads as empty sides, which
@@ -566,9 +568,8 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
-		// Ends every receive-half episode; see reportTakeOutcome's arm for why
-		// the schema refusals end here too.
-		endSettleEndedEpisodes(stderr, ws)
+		// A settle; see reportTakeOutcome's not-diverged arm.
+		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:

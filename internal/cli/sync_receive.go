@@ -431,7 +431,7 @@ func surfaceReceiveOutcome(ctx context.Context, stderr io.Writer, env environ.En
 		return
 	}
 	if outcome.settledCleanly() {
-		endSettleEndedEpisodes(stderr, ws)
+		endSettleEndedEpisodes(stderr, ws, outcome.remoteSchemaAhead)
 	}
 }
 
@@ -452,12 +452,16 @@ func receiveBlockProvenance(path string, now time.Time) string {
 // endSettleEndedEpisodes is what every surface does when it has settled against
 // the remote or found nothing to settle — this receive, `lit sync pull`,
 // `lit sync reconcile` and its take and combine, their not-diverged answers
-// included: the owner-notify markers a settle ends reset, so the next
-// divergence or schema refusal is a new episode, and a sync-failure block still
-// waiting for a command is retired, since the condition it describes is gone.
+// included: the owner-notify markers the settle's proofs end reset, so the
+// next divergence or schema refusal is a new episode, and a sync-failure block
+// still waiting for a command is retired, since the condition it describes is
+// gone. remote is the remote head's schema the settle read: a settle that
+// landed, or sat on, a head whose schema is ahead of this binary converged,
+// and proves nothing about the remote's schema, so that episode stands and
+// the next refused push is a repeat of it, not a new page.
 // [LAW:single-enforcer] one ending, whichever surface settled.
-func endSettleEndedEpisodes(stderr io.Writer, ws workspace.Info) {
-	clearOwnerNotify(stderr, ws, ownerNotifySettleEndedKinds...)
+func endSettleEndedEpisodes(stderr io.Writer, ws workspace.Info, remote storage.RemoteSchemaAhead) {
+	clearOwnerNotify(stderr, ws, kindsEndedBy(settleProofs(remote)...)...)
 	if err := os.Remove(receiveBlockPendingPath(ws)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		fmt.Fprintf(stderr, "lit: stale sync-failure block not retired: %v\n", err)
 	}
@@ -624,7 +628,10 @@ type syncReceiveOutcome struct {
 	ahead              int64
 	behind             int64
 	oldestDivergedUnix int64 // Unix time the divergence began; 0 unless diverged
-	traceErr           error
+	// remoteSchemaAhead is the remote head's schema against this binary as the
+	// settle read it, in every state; zero when within support or not settled.
+	remoteSchemaAhead storage.RemoteSchemaAhead
+	traceErr          error
 	// landed is what the landing did to the tracking ref (store.LandFetchedHead),
 	// zero when the receive stopped before it.
 	landed store.FetchedHeadRecord
@@ -731,6 +738,7 @@ func performSyncReceive(ctx context.Context, stderr io.Writer, env environ.Env, 
 		ahead:              result.Ahead,
 		behind:             result.Behind,
 		oldestDivergedUnix: result.OldestDivergedUnix,
+		remoteSchemaAhead:  result.RemoteSchemaAhead,
 		landed:             landed.Record,
 		stopped:            stopped,
 		err:                stepErr,
@@ -748,9 +756,11 @@ func performSyncReceive(ctx context.Context, stderr io.Writer, env environ.Env, 
 		"ahead":       strconv.FormatInt(result.Ahead, 10),
 		"behind":      strconv.FormatInt(result.Behind, 10),
 		"base":        string(result.Base),
-		"landed":      landed.Record.String(),
-		"fork_point":  joinTrace(landed.ForkPoints, func(r storage.ForkPointRecord) string { return string(r.Outcome) }),
-		"land_held":   landed.Held.Round(time.Millisecond).String(),
+		// The remote head's schema when ahead of this binary, 0 otherwise.
+		"remote_schema_ahead": strconv.FormatInt(result.RemoteSchemaAhead.RemoteSchema, 10),
+		"landed":              landed.Record.String(),
+		"fork_point":          joinTrace(landed.ForkPoints, func(r storage.ForkPointRecord) string { return string(r.Outcome) }),
+		"land_held":           landed.Held.Round(time.Millisecond).String(),
 		// [LAW:nothing-unseen] what the landing deleted, by branch.
 		"landed_pruned":              joinTrace(landed.Pruned, func(p storage.PrunedRef) string { return p.Branch }),
 		"landed_fork_points_dropped": joinTrace(landed.ForkPointsDropped, func(d storage.ForkPointRecord) string { return d.Branch }),
@@ -790,6 +800,7 @@ func performSyncReceive(ctx context.Context, stderr io.Writer, env environ.Env, 
 		"receive.ahead":                   result.Ahead,
 		"receive.behind":                  result.Behind,
 		"receive.base":                    traceMetadata["base"],
+		"receive.remote_schema_ahead":     result.RemoteSchemaAhead.RemoteSchema,
 		"receive.landed":                  landed.Record.String(),
 		"receive.stopped":                 outcome.stopped.String(),
 		"receive.unsettled_since":         unixOrZero(run.since),

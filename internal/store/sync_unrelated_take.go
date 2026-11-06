@@ -121,6 +121,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote storage.RemoteN
 			return err
 		}
 		result.Ahead, result.Behind = plan.ahead, plan.behind
+		result.RemoteSchemaAhead = plan.schemaAhead
 		if !plan.diverged {
 			// Nothing to resolve — a re-run after the divergence already cleared lands
 			// here. [LAW:dataflow-not-control-flow] the freshness value selects the outcome.
@@ -191,7 +192,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 			// and stays the reset below, which adopts a head at any schema. The
 			// branch is the domain's own: a take that writes, or one that does not.
 			// [LAW:single-enforcer] the same replayUnderGuard every replay runs in.
-			return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+			return s.replayUnderGuard(ctx, remote, branch, plan, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
 				if err := s.takeRemoteCarryingPurges(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, head); err != nil {
 					return err
 				}
@@ -202,10 +203,11 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// With nothing to carry, take-remote adopts the remote head wholesale
 		// (resetHardToRef) — no scratch, no replay commit — so it takes only its own
 		// snapshot guard, NOT the full scratch envelope, and is exempt from the
-		// schema-ahead refusal: adopting an ahead head is a safe recovery (the stale
-		// binary gets the newer data), not a regression. A stale binary holding a
-		// purge the remote lacks is refused instead, since carrying it writes below
-		// the newer schema; upgrading lit is the way on.
+		// schema-ahead refusal, as the receive's behind landing is: adopting an
+		// ahead head writes no commit below its schema, and the open decides
+		// what this binary may do with the store it then finds. A stale binary
+		// holding a purge the remote lacks is refused instead, since carrying it
+		// writes below the newer schema; upgrading lit is the way on.
 		guard := newSnapshotGuard(s.stderr, s.doltRootDir, formatReconcileSnapshotLabel(time.Now()))
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
 		return retryTransientGCContention(ctx, s.stderr, func(ctx context.Context) error {
@@ -217,7 +219,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReco
 		// included: a replay below an ahead remote's schema would drop the newer fields and
 		// regress the shared remote on push.
 		// [LAW:single-enforcer] the same replayUnderGuard that wraps the three-way reconcile.
-		return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
+		return s.replayUnderGuard(ctx, remote, branch, plan, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch, head fetchedHead) error {
 			return s.takeLocalOntoRemoteHead(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, head)
 		})
 	default:
