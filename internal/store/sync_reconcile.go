@@ -920,6 +920,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	result.Pending = nil
 	result.Replayed = landing.replayed
 	result.Landing = landing.landing
+	result.SnapshotPruneErr = landing.pruneErr
 	result.ProseRecorded = settled.proseRecorded
 	return nil
 }
@@ -1061,13 +1062,11 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// to fail the reconcile — the replay already committed, and returning an error here
 	// would report a successful reconcile as failed (and a retry would find it already
 	// resolved). A leftover un-pruned snapshot is inert, exactly like the leftover
-	// scratch branch leaveScratch tolerates, so the failure is surfaced to
-	// stderr but not promoted. [LAW:no-silent-failure] loud, but not a false failure
-	// over a durable success.
-	if _, err := s.pruneAutomaticSnapshots(ctx); err != nil {
-		fmt.Fprintf(s.stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
-	}
-	return replayLanding{replayed: replayed, landing: landing}, nil
+	// scratch branch leaveScratch tolerates, so the failure rides on what the
+	// landing returns and the command reports it. [LAW:no-silent-failure] loud, but
+	// not a false failure over a durable success.
+	_, pruneErr := s.pruneAutomaticSnapshots(ctx)
+	return replayLanding{replayed: replayed, landing: landing, pruneErr: pruneErr}, nil
 }
 
 // unionUnlooped joins the cuts of several lifts and landings, each edge named
@@ -1092,6 +1091,9 @@ func unionUnlooped(sets ...[]storage.Unlooped) []storage.Unlooped {
 type replayLanding struct {
 	replayed int
 	landing  storage.Landing
+	// pruneErr is the recovery-snapshot prune that failed after the landing
+	// committed, or nil.
+	pruneErr error
 }
 
 // countCommitsInRange counts the commits reachable from head but not from

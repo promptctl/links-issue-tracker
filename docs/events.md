@@ -410,6 +410,17 @@ block it was, since every divergence class shares one reason.
 | --- | --- |
 | `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `schema_ceiling` (a push refused because the commit's schema is above the schema ceiling for that remote: this lit's released-schema ceiling or the hold the remote's head carries, whichever is lower), `schema_ceiling_lift` (a pull or reconcile refused because settling a commit it read means lifting it above the schema ceiling: this lit's released-schema ceiling or the hold the commit carries, whichever is lower), `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release), or `schema_lowering_requires_hold` (a push refused because it would lower the remote's schema with a head that carries no schema hold; a remote is lowered only by `lit downgrade --remote`). |
 
+## What a reconcile records
+
+A command that reconciles a diverged clone, whether `lit sync reconcile`, one of
+its `resolve`, `combine` or `take` verbs, or the reconcile an automatic receive
+runs, records what became of the older recovery snapshots once the outcome
+landed.
+
+| Key | Meaning |
+| --- | --- |
+| `reconcile.snapshot_prune_error` | Why lit's older recovery snapshots could not be removed after the reconcile landed, or `null` when they were or no prune ran. The command prints the failure to stderr and keeps what the reconcile landed. |
+
 ## What `lit init` records
 
 Init sets its key once the workspace has a database, so an init that stops

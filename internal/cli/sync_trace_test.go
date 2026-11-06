@@ -296,6 +296,47 @@ func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 	}
 }
 
+// disjointConsumer is a clone whose independently-inited backlog shares no
+// history with the one its remote holds, with auto-sync left to the caller.
+func disjointConsumer(t *testing.T) (consumer string, ws workspace.Info) {
+	t.Helper()
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+
+	producer := filepath.Join(base, "alpha")
+	runGit(t, base, "clone", remote, "alpha")
+	runGit(t, producer, "config", "user.email", "a@a.co")
+	runGit(t, producer, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, producer, "add", "-A")
+	runGit(t, producer, "commit", "-m", "seed")
+	runGit(t, producer, "push", "origin", "HEAD")
+	runCLIInDir(t, producer, "init", "--skip-hooks")
+	producerEpic := newEpicInDir(t, producer, "producer-epic")
+	runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic)
+
+	consumer = filepath.Join(base, "bravo")
+	runGit(t, base, "clone", remote, "bravo")
+	runGit(t, consumer, "config", "user.email", "b@b.co")
+	runGit(t, consumer, "config", "user.name", "bravo")
+	runCLIInDir(t, consumer, "init", "--skip-hooks")
+	consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
+	runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic)
+
+	// Producer publishes last, so the consumer's independently-inited
+	// history and the producer's are disjoint by the time consumer reconciles.
+	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
+
+	resolvedWs, err := workspace.Resolve(runEnv(t), consumer)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	return consumer, resolvedWs
+}
+
 // TestReconcileTakeAndCombineLeaveDurableTracesInteractively is the trace
 // counterpart to sync_unrelated_e2e_test.go's
 // TestReconcileCombineUnionsUnrelatedHistories: `lit sync reconcile take` and
@@ -311,47 +352,8 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
-	newDisjointConsumer := func(t *testing.T) (consumer string, ws workspace.Info) {
-		t.Helper()
-		base := t.TempDir()
-		runGit(t, base, "init", "--bare", "remote.git")
-		remote := filepath.Join(base, "remote.git")
-
-		producer := filepath.Join(base, "alpha")
-		runGit(t, base, "clone", remote, "alpha")
-		runGit(t, producer, "config", "user.email", "a@a.co")
-		runGit(t, producer, "config", "user.name", "alpha")
-		if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
-			t.Fatalf("write readme error = %v", err)
-		}
-		runGit(t, producer, "add", "-A")
-		runGit(t, producer, "commit", "-m", "seed")
-		runGit(t, producer, "push", "origin", "HEAD")
-		runCLIInDir(t, producer, "init", "--skip-hooks")
-		producerEpic := newEpicInDir(t, producer, "producer-epic")
-		runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task", "--parent", producerEpic)
-
-		consumer = filepath.Join(base, "bravo")
-		runGit(t, base, "clone", remote, "bravo")
-		runGit(t, consumer, "config", "user.email", "b@b.co")
-		runGit(t, consumer, "config", "user.name", "bravo")
-		runCLIInDir(t, consumer, "init", "--skip-hooks")
-		consumerEpic := newEpicInDir(t, consumer, "consumer-epic")
-		runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task", "--parent", consumerEpic)
-
-		// Producer publishes last, so the consumer's independently-inited
-		// history and the producer's are disjoint by the time consumer reconciles.
-		runCLIInDir(t, producer, "sync", "push", "--set-upstream")
-
-		resolvedWs, err := workspace.Resolve(runEnv(t), consumer)
-		if err != nil {
-			t.Fatalf("workspace.Resolve() error = %v", err)
-		}
-		return consumer, resolvedWs
-	}
-
 	t.Run("take remote", func(t *testing.T) {
-		consumer, ws := newDisjointConsumer(t)
+		consumer, ws := disjointConsumer(t)
 		before := len(readSyncTraceRecords(t, ws))
 
 		// The bare take is refused by the owner-approval gate and that
@@ -398,7 +400,7 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 	})
 
 	t.Run("combine", func(t *testing.T) {
-		consumer, ws := newDisjointConsumer(t)
+		consumer, ws := disjointConsumer(t)
 		before := len(readSyncTraceRecords(t, ws))
 
 		out, err := runCLIInDirErr(t, consumer, "sync", "reconcile", "combine")

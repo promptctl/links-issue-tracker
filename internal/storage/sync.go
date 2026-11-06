@@ -729,6 +729,10 @@ type SyncReconcileResult struct {
 	// differs from the provisional value the replay carried. Zero for every
 	// outcome the agent's text took no part in.
 	ProseRecorded int
+	// SnapshotPruneErr is why older recovery snapshots could not be removed
+	// after the outcome durably landed, or nil. It never fails the reconcile:
+	// what landed stays landed, and a leftover snapshot is inert.
+	SnapshotPruneErr error
 }
 
 // UnrelatedInventory partitions issue ids across the two sides of an

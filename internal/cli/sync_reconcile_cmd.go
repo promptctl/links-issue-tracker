@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -229,7 +230,7 @@ func syncReconcileTakeLeaf() syncLeaf {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, command, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
-		return reportTakeOutcome(inv.Stderr, inv.Env, inv.Stdout, ws, command, remote, branch, result)
+		return reportTakeOutcome(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, command, remote, branch, result)
 	}}
 }
 
@@ -329,13 +330,14 @@ func reconcileCommandReasonForState(state storage.SyncReconcileState) string {
 // It records the durable, unconditional trace for the take decision before
 // rendering — the one point every take outcome (success or bug) passes through.
 // [LAW:single-enforcer]
-func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult) error {
+func reportTakeOutcome(ctx context.Context, stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult) error {
 	// "replayed" makes the provenance-replay count part of the durable trace,
 	// not just the stdout line; zero is honest data for outcomes that fold
 	// nothing. [LAW:dataflow-not-control-flow] recorded unconditionally.
 	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
 		"carried_purges": strconv.Itoa(result.CarriedPurges), "purged": strconv.Itoa(len(purgedIDs(result.Unrelated)))}
 	landingMetadata(metadata, result.Landing)
+	reportSnapshotPrune(ctx, stderr, result)
 	decision := string(result.State)
 	status := "ok"
 	// [LAW:one-source-of-truth] a dedicated mapping, not reconcileReasonForState:
@@ -389,6 +391,17 @@ func reportTakeOutcome(stderr io.Writer, env environ.Env, stdout io.Writer, ws w
 		return err
 	default:
 		return fmt.Errorf("sync reconcile take: unexpected result state %q — this is a bug; please report it", result.State)
+	}
+}
+
+// reportSnapshotPrune puts a reconcile's recovery-snapshot prune on the
+// command's event, null when it succeeded or none ran, and prints a failed one.
+// The store returns the failure rather than printing it, so every reconcile
+// surface reports it here. [LAW:single-enforcer]
+func reportSnapshotPrune(ctx context.Context, stderr io.Writer, result storage.SyncReconcileResult) {
+	telemetry.Set(ctx, "reconcile.snapshot_prune_error", telemetry.ErrorText(result.SnapshotPruneErr))
+	if result.SnapshotPruneErr != nil {
+		fmt.Fprintf(stderr, "lit: could not prune old recovery snapshots (what the reconcile landed is kept): %v\n", result.SnapshotPruneErr)
 	}
 }
 
@@ -448,6 +461,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
 	landingMetadata(metadata, result.Landing)
+	reportSnapshotPrune(ctx, stderr, result)
 	metadata["prose_recorded"] = strconv.Itoa(result.ProseRecorded)
 	switch result.State {
 	case storage.SyncReconcileIDCollision:

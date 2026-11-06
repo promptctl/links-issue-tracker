@@ -842,6 +842,7 @@ func performInlineReconcile(ctx context.Context, stderr io.Writer, env environ.E
 		"replayed":    strconv.Itoa(result.Replayed),
 	}
 	landingMetadata(traceMetadata, result.Landing)
+	reportSnapshotPrune(ctx, stderr, result)
 	// The receive settles silently on success, so its moves go to the worker's
 	// own log as well as the trace: a ticket moved out of sight is still named.
 	if err := writeLanding(stderr, "the merged backlog", result.Landing); err != nil {
