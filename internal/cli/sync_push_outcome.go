@@ -119,19 +119,30 @@ func pushOutcomeMarkerPath(ws workspace.Info) string {
 // the generic error arms so the two failure-keyed consumers (banner, owner
 // page) can never see them as channel degradation, whichever stage of the
 // attempt they interrupted.
-func pushOutcomeOf(outcome syncPushOutcome, err error, observedBy string) pushOutcomeRecord {
-	rec := classifyPushOutcome(outcome, err)
+// The schema refusal beside the record is the one the record's failure IS:
+// set only when the arm that classified the attempt took the push's own error
+// as the failure, so an attempt error that outranks a refused push (a panic
+// after the push step) cannot leave the record saying one thing and the owner
+// page another. [LAW:one-source-of-truth] [LAW:parse-dont-validate]
+func pushOutcomeOf(outcome syncPushOutcome, err error, observedBy string) (pushOutcomeRecord, SyncFailure, bool) {
+	rec, pushFailure := classifyPushOutcome(outcome, err)
 	// [LAW:dataflow-not-control-flow] Every outcome is stamped, so an empty
 	// ObservedBy means only "no observer", never "not a failure".
 	rec.ObservedBy = observedBy
 	rec.ReceiveMerges = outcome.receiveMerges
 	rec.PushDeadlineCut = pushDeadlineCutOf(firstError(err, outcome.pushErr))
-	return rec
+	refusal, refused := schemaRefusalFailure(pushFailure)
+	return rec, refusal, refused
 }
 
 // classifyPushOutcome decides which decision an attempt's ending was, and the
-// remote, branch and reason that name it; pushOutcomeOf dates what it classifies.
-func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
+// remote, branch and reason that name it; pushOutcomeOf dates what it
+// classifies. pushFailure is the push step's own error when that is the
+// failure the record names, and nil otherwise (no failure, or an attempt
+// error that outranks it), so a consumer that reads the push error further
+// reads the one the record is about. [LAW:single-enforcer] the precedence
+// among an attempt's errors is decided here only.
+func classifyPushOutcome(outcome syncPushOutcome, err error) (rec pushOutcomeRecord, pushFailure error) {
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(outcome.pushErr, context.Canceled):
 		return pushOutcomeRecord{
@@ -139,16 +150,16 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 			Reason:   firstError(err, outcome.pushErr).Error(),
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}
+		}, nil
 	case errors.Is(err, store.ErrWorkspaceBusy) || errors.Is(outcome.pushErr, store.ErrWorkspaceBusy):
 		return pushOutcomeRecord{
 			Decision: pushDecisionWorkspaceBusy,
 			Reason:   firstError(err, outcome.pushErr).Error(),
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}
+		}, nil
 	case err != nil:
-		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}
+		return pushOutcomeRecord{Decision: pushDecisionError, Reason: err.Error()}, nil
 	case outcome.pushErr != nil:
 		decision, reason := pushFailureDecision(outcome.pushErr, outcome.remote, outcome.receiveMerges)
 		return pushOutcomeRecord{
@@ -156,15 +167,15 @@ func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 			Reason:   reason,
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}
+		}, outcome.pushErr
 	case outcome.skip != syncTargetReady:
-		return pushOutcomeRecord{Decision: string(outcome.skip), Remote: outcome.remote.String()}
+		return pushOutcomeRecord{Decision: string(outcome.skip), Remote: outcome.remote.String()}, nil
 	default:
 		return pushOutcomeRecord{
 			Decision: pushDecisionPushed,
 			Remote:   outcome.remote.String(),
 			Branch:   outcome.branch,
-		}
+		}, nil
 	}
 }
 
@@ -196,12 +207,16 @@ func pushFailureDecision(pushErr error, remote storage.RemoteName, receiveMerges
 // [LAW:single-enforcer] Callers construct nothing themselves: the record is
 // derived once, from the same two values, for every producer. The record also
 // lands on the invocation's event, one value per attempt on push.outcomes.
-// [LAW:nothing-unseen]
+// [LAW:nothing-unseen] The schema refusal the owner hears under its own class
+// comes out of the same derivation as the record, so the owner half reads a
+// typed result and never the raw error, and the record and the page cannot
+// name the attempt's failure differently. (The mirror's block print and the
+// foreground's returned contract parse the same error for their own surfaces.)
 func completePushAttempt(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
-	rec := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion(stderr))
+	rec, refusal, refused := pushOutcomeOf(outcome, attemptErr, runningBinaryVersion(stderr))
 	telemetry.Append(ctx, "push.outcomes", rec.eventValue())
 	recordPushOutcome(stderr, ws, rec)
-	observePushOutcomeForOwner(ctx, stderr, env, ws, rec)
+	observePushOutcomeForOwner(ctx, stderr, env, ws, rec, refusal, refused)
 }
 
 // eventValue is the record as one value of the event's push.outcomes list.

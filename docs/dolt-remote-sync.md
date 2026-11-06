@@ -410,12 +410,16 @@ agent. The party who can actually *lose work* when sync degrades is the OWNER,
 so lit also carries the event out of the terminal: when it detects a real
 divergence (no common ancestor, a reconcile it could not converge, a held
 prose conflict, an id naming two different tickets), when a schema refusal
-stops the checkout from settling against the remote (the remote's schema is
-ahead of this lit, or a schema hold refuses the reconcile's lift), when the
-automatic receive has kept failing to bring fetched history into the checkout
-for 10 minutes, or when a push attempt fails, it runs a shell command you
-configure — e.g. a push to an
-[ntfy](https://ntfy.sh) topic — at detection time:
+stops the checkout from settling against the remote or writing to it (the
+remote's schema is ahead of this lit, a schema hold refuses the reconcile's
+lift, the ceiling refuses the push's commit, a raise comes from no release, a
+lowering carries no hold), when the automatic receive has kept failing to
+bring fetched history into the checkout for 10 minutes, or when a push attempt
+fails for any other reason, it runs a shell command you configure — e.g. a
+push to an [ntfy](https://ntfy.sh) topic — at detection time. A schema
+refusal pages under its own kind whichever side detected it: a remote whose
+schema is ahead of this lit is refused by the push and by the reconcile, and
+pages as `remote_schema_ahead` from either.
 
 ```toml
 [sync]
@@ -430,7 +434,7 @@ event's facts in the environment:
 
 | variable             | value                                                            |
 | -------------------- | ---------------------------------------------------------------- |
-| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, `id_collision`, `remote_schema_ahead`, `schema_ceiling_lift`, `receive_unsettled`, or `push_failed` |
+| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, `id_collision`, `remote_schema_ahead`, `schema_ceiling_lift`, `schema_ceiling`, `schema_raise_requires_release`, `schema_lowering_requires_hold`, `receive_unsettled`, or `push_failed` |
 | `LIT_NOTIFY_SUMMARY` | the one-sentence domain description of what degraded             |
 | `LIT_NOTIFY_REMOTE`  | the sync remote concerned (may be empty for an unresolved push)  |
 | `LIT_NOTIFY_BRANCH`  | the sync branch concerned                                        |
@@ -439,8 +443,10 @@ event's facts in the environment:
 Notifications are de-duplicated **per episode**: the first detection of a
 condition fires immediately, re-detections of the same ongoing condition are
 suppressed (re-pinging at most daily while it persists), and the episode ends
-when the condition resolves — a landed push, a converged reconcile, a settle
-after an unsettled run or after a lifted hold or an upgrade — so the
+when the condition resolves — a landed push ends `push_failed` and every
+schema refusal the push detects, a settle (a converged reconcile, a settle
+after an unsettled run or after a lifted hold or an upgrade) ends the
+divergence kinds and every schema refusal the reconcile detects — so the
 *next* occurrence notifies immediately again. A failed hook is loud on stderr,
 recorded in the sync traces, and retried on the next detection. Empty (the
 default) configures no channel and runs nothing; `LIT_DISABLE_AUTO_SYNC=1`
