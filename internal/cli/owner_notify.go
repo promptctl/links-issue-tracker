@@ -78,30 +78,32 @@ const (
 	// lift, a take-remote with nothing to carry, hands the head to the open,
 	// which refuses it itself.
 	endedBySettle episodeEnder = iota
-	// endedByPush: a push landed, so it passed every guard the push runs.
+	// endedByPush: a push landed, so it passed every guard the push runs. A
+	// push at the remote head's own schema lands, so a landed push proves
+	// nothing about whether that schema is within this binary's support.
 	endedByPush
-	// endedBySchemaRead: an outcome read the remote head's schema and found
-	// it within this binary's support. Every settle carries that read
-	// (storage.RemoteSchemaAhead), whatever state it ended in, and a landed
-	// push made it on the way through its guard.
+	// endedBySchemaRead: a settle read the remote head's schema and found it
+	// within this binary's support. Every settle carries that read
+	// (storage.RemoteSchemaAhead), whatever state it ended in.
 	endedBySchemaRead
 )
 
 // ownerNotifyEnders is each paging kind's enders. A kind pages only if some
 // outcome ends its episode, and the mapping reads this table, so a class
 // cannot page and never clear, or clear and never page. A remote schema
-// ahead is detected by both halves (the push's guard, the reconcile's replay)
-// and ended by the one fact both judge: the remote head's schema is within
-// support. An unsettled receive is absent: its episode is its run of stops,
-// keyed by when the run began, and a settle ends the run itself.
-// [LAW:one-source-of-truth]
+// ahead is detected by the reconcile's replay, which refuses to re-create
+// rows onto a head at a schema above this binary's, and ended by the fact
+// that refusal judges: the remote head's schema is within support, which the
+// settle every command's automatic receive makes reads. An unsettled receive
+// is absent: its episode is its run of stops, keyed by when the run began,
+// and a settle ends the run itself. [LAW:one-source-of-truth]
 var ownerNotifyEnders = map[ownerNotifyKind][]episodeEnder{
 	ownerNotifyKind(syncFailureProseHeld):                  {endedBySettle},
 	ownerNotifyKind(syncFailureDivergedUnresolved):         {endedBySettle},
 	ownerNotifyKind(syncFailureUnrelatedHistories):         {endedBySettle},
 	ownerNotifyKind(syncFailureIDCollision):                {endedBySettle},
 	ownerNotifyKind(syncFailureSchemaCeilingLift):          {endedBySettle},
-	ownerNotifyKind(syncFailureRemoteSchemaAhead):          {endedByPush, endedBySchemaRead},
+	ownerNotifyKind(syncFailureRemoteSchemaAhead):          {endedBySchemaRead},
 	ownerNotifyPushFailed:                                  {endedByPush},
 	ownerNotifyKind(syncFailureSchemaCeiling):              {endedByPush},
 	ownerNotifyKind(syncFailureSchemaRaiseRequiresRelease): {endedByPush},
@@ -172,10 +174,11 @@ func (ev ownerNotifyEvent) fingerprint() string {
 // schema refusal notify — a checkout that cannot settle against the remote,
 // or write to it, is off the shared backlog, and only the owner, who wrote
 // the hold or cut the release, can clear that. The kind is the class,
-// whichever half of the channel detected it, so the one condition both halves
-// detect (a remote schema ahead of this binary: the push's guard and the
-// reconcile's replay each refuse it) pages under one kind with one marker.
-// [LAW:single-enforcer] one mapping from class to kind, for both halves.
+// whichever half of the channel detected it, so a condition pages under one
+// kind with one marker however it was detected (a remote schema ahead of
+// this binary is the reconcile's replay's refusal; a push at the remote's
+// own schema lands). [LAW:single-enforcer] one mapping from class to kind,
+// for both halves.
 // A push refused over a peer's commits and a lost forced-push lease are
 // ok=false: they are the push channel failing to deliver, not a condition
 // with its own remedy, and the push half pages them as push_failed.

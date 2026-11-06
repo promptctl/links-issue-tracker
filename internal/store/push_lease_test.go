@@ -116,11 +116,14 @@ func TestLeasedPushLandsOnlyOverTheHeadItNames(t *testing.T) {
 	}
 }
 
-// TestLeasedPushRefusesToReplaceASchemaAheadHead names, as the lease's
-// expected head, a remote head at a schema above this binary's, while the
-// pusher's tracking ref still lags at the older schema. The lease would hold,
-// so the push is refused before it is sent and the remote keeps its head.
-func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
+// TestLeasedPushBelowASchemaAheadHeadIsALowering names, as the lease's
+// expected head, a remote head at a schema above the pusher's own, while the
+// pusher's tracking ref still lags at the older schema. The lease would hold
+// and the unheld head below R would lower the remote, so the lowering
+// verdict refuses the push before it is sent and the remote keeps its head.
+// The remote's schema being above this binary's support is no refusal of its
+// own at a push (design-docs/schema-reversibility.md).
+func TestLeasedPushBelowASchemaAheadHeadIsALowering(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
@@ -173,8 +176,12 @@ func TestLeasedPushRefusesToReplaceASchemaAheadHead(t *testing.T) {
 		_, _, err := st.pushLeasedWithinLock(ctx, remoteName(t, "origin"), "master", "master", ahead, false)
 		return err
 	})
-	if !errors.As(err, new(*RemoteSchemaAheadError)) {
-		t.Fatalf("leased push over a schema-ahead head = %v, want *RemoteSchemaAheadError", err)
+	var lowering *SchemaLoweringRequiresHoldError
+	if !errors.As(err, &lowering) {
+		t.Fatalf("leased push below a schema-ahead head = %v, want *SchemaLoweringRequiresHoldError", err)
+	}
+	if lowering.RemoteSchema != registryMax+1 || lowering.CommitSchema != registryMax {
+		t.Fatalf("refusal = %+v, want the lowering from %d to %d", lowering, registryMax+1, registryMax)
 	}
 	if err := st.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatal(err)

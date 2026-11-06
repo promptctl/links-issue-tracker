@@ -17,7 +17,10 @@ import (
 // count as a raise. The policy enters at the composition root on environ.Env,
 // beside the released-schema ceiling, and refuseSchemaRaise below is its only
 // reader. [LAW:single-enforcer] How far a release may raise a remote is the
-// ceiling's refusal (refuseSchemaAboveCeiling), which every push runs first.
+// ceiling's refusal (refuseSchemaAboveCeiling), which runs first on every
+// raise. A push with H <= R is no raise: it is judged against R alone, never
+// against this binary (design-docs/schema-reversibility.md, "A push at the
+// remote's own schema lands").
 
 // remoteSchema is the schema of the remote head a push is judged against and
 // the schema hold that head carries, or the fact that this store has none to
@@ -46,6 +49,14 @@ func knownRemoteSchema(schema int64) remoteSchema {
 // unknownRemoteSchema is a remote this store holds no head of.
 func unknownRemoteSchema() remoteSchema {
 	return remoteSchema{hold: version.UnboundedSchemaCeiling()}
+}
+
+// raisedBy reports whether a push of a head at commitSchema raises this
+// remote: H > R, or R unknown, since a push that creates the remote raises it
+// from nothing. The ceiling's refusal and the raise policy's both judge a
+// raise by this one predicate. [LAW:one-source-of-truth]
+func (r remoteSchema) raisedBy(commitSchema int64) bool {
+	return !r.known || commitSchema > r.version
 }
 
 // remoteHeadAt is the remote head at commitHash as a push judges it: its
@@ -121,8 +132,7 @@ var _ model.RecordedError = (*SchemaRaiseRequiresReleaseError)(nil)
 // from any binary. [LAW:effects-at-boundaries] a pure verdict on the values
 // the caller read; both push sites run it.
 func refuseSchemaRaise(remote storage.RemoteName, branch string, remoteHead remoteSchema, commitSchema int64, policy version.RaisePolicy) error {
-	raises := !remoteHead.known || commitSchema > remoteHead.version
-	if !raises || policy.Release {
+	if !remoteHead.raisedBy(commitSchema) || policy.Release {
 		return nil
 	}
 	return &SchemaRaiseRequiresReleaseError{

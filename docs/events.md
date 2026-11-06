@@ -408,7 +408,8 @@ present exactly when the command ended in that refusal.
 | `counts.schema_ahead.snapshots_unreadable` | Those of them it could not read. |
 
 A sync command refused because the remote's schema is ahead, so this lit will
-not push to or reconcile with it, records the remote and both schema versions.
+not reconcile with it (a push of a head at the remote's own schema lands),
+records the remote and both schema versions.
 Every key is present exactly when the command ended in that refusal.
 
 | Key | Meaning |
@@ -426,7 +427,7 @@ block it was, since every divergence class shares one reason.
 
 | Key | Meaning |
 | --- | --- |
-| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `schema_ceiling` (a push refused because the commit's schema is above the schema ceiling for that remote: this lit's released-schema ceiling or the hold the remote's head carries, whichever is lower), `schema_ceiling_lift` (a pull or reconcile refused because settling a commit it read means lifting it above the schema ceiling: this lit's released-schema ceiling or the hold the commit carries, whichever is lower), `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release), or `schema_lowering_requires_hold` (a push refused because it would lower the remote's schema with a head that carries no schema hold; a remote is lowered only by `lit downgrade --remote`). |
+| `sync.failure_class` | The block's class: `prose_held`, `diverged_unresolved`, `remote_schema_ahead`, `unrelated_histories`, `id_collision`, `receive_unsettled`, `push_diverged` (`lit sync push` refused because a peer pushed first), `schema_ceiling` (a push refused because it would raise the remote to a commit whose schema is above the schema ceiling for that remote: this lit's released-schema ceiling or the hold the remote's head carries, whichever is lower), `schema_ceiling_lift` (a pull or reconcile refused because settling a commit it read means lifting it above the schema ceiling: this lit's released-schema ceiling or the hold the commit carries, whichever is lower), `schema_raise_requires_release` (a push refused because it would raise the remote's schema and this lit is not a release), or `schema_lowering_requires_hold` (a push refused because it would lower the remote's schema with a head that carries no schema hold; a remote is lowered only by `lit downgrade --remote`). |
 
 ## What a reconcile records
 

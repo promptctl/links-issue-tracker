@@ -13,16 +13,23 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
-// RemoteSchemaAheadError reports that the remote-tracking head records a schema
-// version this binary cannot produce — its applied version is above this binary's
-// schema support. Writing here (a push, or the reconcile's replay commit) would
-// author a commit BELOW the remote head's schema: this binary knows only its own
-// older columns, so it would regress the shared remote to a schema it understands
-// and drop every field the newer schema added. The lossless fix is a binary whose
-// schema support reaches the remote's version, so the error states that requirement
-// and routes to `lit upgrade`. It does not name the binary that authored the remote
-// head: a build identity can be unresolvable, and when the message is replayed
-// later it can be older than the binary the reader is already running.
+// RemoteSchemaAheadError reports that the remote head a reconcile would replay
+// onto records a schema version above this binary's schema support. The
+// replay re-creates every row a folded commit changed from this binary's own
+// columns (export_delta.go: a changed row is a delete and an insert, never an
+// UPDATE), so onto that head it would reset the columns the newer schema added
+// to their defaults on every row it touched: a regression within the remote's
+// schema, which no comparison of the sent head's schema to the remote's would
+// see. The open's admission of a write at that schema does not carry here,
+// because the write the open admits is the model's column-named UPDATE, which
+// leaves the columns it does not name as they were; a push of a head written
+// that way lands at the remote's schema and runs no such refusal
+// (design-docs/schema-reversibility.md, "A push at the remote's own schema
+// lands"). The lossless fix is a binary whose schema support reaches the
+// remote's version, so the error states that requirement and routes to `lit
+// upgrade`. It does not name the binary that authored the remote head: a
+// build identity can be unresolvable, and when the message is replayed later
+// it can be older than the binary the reader is already running.
 //
 // [LAW:types-are-the-program] The refusal is version arithmetic on data —
 // (RemoteVersion, BinarySupportedMax) — never inferred from a query happening to
@@ -41,14 +48,15 @@ type RemoteSchemaAheadError struct {
 func (e *RemoteSchemaAheadError) Error() string {
 	return fmt.Sprintf(
 		"remote %s/%s is at schema version %d but this binary supports only up to %d; "+
-			"refusing to write a commit below the remote head's schema — run `lit upgrade` "+
+			"refusing to reconcile onto its head, since the replay would re-create every row it changes "+
+			"from this binary's columns and reset the newer schema's fields — run `lit upgrade` "+
 			"to install a lit that supports schema version %d",
 		e.Remote, e.Branch, e.RemoteVersion, e.BinarySupportedMax, e.RemoteVersion,
 	)
 }
 
-// SchemaAheadOfBinary: no rerun of this binary writes to the remote; only a lit
-// whose schema support reaches the remote head's can.
+// SchemaAheadOfBinary: no rerun of this binary reconciles onto the remote
+// head; only a lit whose schema support reaches the remote head's can.
 func (*RemoteSchemaAheadError) SchemaAheadOfBinary() {}
 
 // EventRecord is the remote that refused and both schema versions, so an event
@@ -70,8 +78,8 @@ var (
 // trackingHeadSchema is the schema and schema hold of the head
 // `remotes/<remote>/<branch>` points at, or unknownRemoteSchema when that ref
 // does not exist yet (the branch was never fetched or pushed). It is the one
-// read of R a push makes: the schema-ahead refusal, the ceiling refusal and
-// the raise refusal all judge the value it returns. [LAW:one-source-of-truth]
+// read of R a push makes: the ceiling, raise and lowering refusals all judge
+// the value it returns. [LAW:one-source-of-truth]
 func (s *Store) trackingHeadSchema(ctx context.Context, remote storage.RemoteName, branch string) (remoteSchema, error) {
 	head, synced, err := s.trackingHeadHash(ctx, remote, branch)
 	if err != nil {
@@ -100,7 +108,7 @@ func (s *Store) freshnessHeadSchema(ctx context.Context, fresh storage.SyncFresh
 // judgeSchemaAhead is the schema-ahead verdict on a remote head's schema the
 // caller read: the head's schema against this binary's schema support, zero
 // when the head is within it. A remote this store holds no head of is not
-// ahead. Every settle reports it, and every write to a remote refuses on it
+// ahead. Every settle reports it, and the reconcile's replay refuses on it
 // (refuseSchemaAhead), so the owner channel ends the episode on the same
 // judgement the guard raised it from. [LAW:single-enforcer] the one judgement
 // of "remote schema ahead".
@@ -120,15 +128,17 @@ func judgeSchemaAhead(remoteHead remoteSchema) (storage.RemoteSchemaAhead, error
 	return storage.RemoteSchemaAhead{RemoteSchema: remoteHead.version, BinarySupportedMax: support.Max}, nil
 }
 
-// refuseSchemaAhead refuses a write to remote/branch whose head is at a
-// schema above this binary's support, so no push authors a commit below the
-// remote head's schema. The push runs it on the tracking head, the leased
-// push on the lease's expected commit, the reconcile on its captured plan's
-// read. A landing (the behind fast-forward, a take-remote with nothing to
-// carry) authors no commit and runs no refusal: it adopts the head at any
-// schema, and the open decides what this binary may do with the store it
-// finds. remote and branch are carried only to name the failure for the
-// sync-failure contract.
+// refuseSchemaAhead refuses a reconcile's replay onto remote/branch whose
+// head is at a schema above this binary's support, before any write
+// (replayUnderGuard: the three-way reconcile, combine, and take-local, which
+// all author replay commits on that head), on the plan's captured read of
+// it. It is the reconcile's refusal alone. A push runs none: a head at or
+// below R regresses nothing (the lowering verdict refuses an unheld head
+// below R), and the open decided what this binary may write. A landing (the
+// behind fast-forward, a take-remote with nothing to carry) authors no commit
+// and runs none either: it adopts the head at any schema, and the open
+// decides what this binary may do with the store it finds. remote and branch
+// are carried only to name the failure for the sync-failure contract.
 func refuseSchemaAhead(remote storage.RemoteName, branch string, remoteHead remoteSchema) error {
 	ahead, err := judgeSchemaAhead(remoteHead)
 	if err != nil || !ahead.Ahead() {

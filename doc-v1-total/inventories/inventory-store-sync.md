@@ -418,16 +418,13 @@ Test `TestSyncCompactRunsCleanlyAndPreservesData` (`sync_test.go`).
 Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `BinarySupportedMax int64`. It declares `SchemaAheadOfBinary()`, so it is a `model.SchemaAhead` (`sync_schema_guard.go`).
 
 `Error()` (`sync_schema_guard.go`) renders:
-``"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema — run `lit upgrade` to install a lit that supports schema version %d"`` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).
+``"remote %s/%s is at schema version %d but this binary supports only up to %d; refusing to reconcile onto its head, since the replay would re-create every row it changes from this binary's columns and reset the newer schema's fields — run `lit upgrade` to install a lit that supports schema version %d"`` (Remote, Branch, RemoteVersion, BinarySupportedMax, RemoteVersion).
 
 ### 4.2 Guard paths
 
-`guardRemoteSchemaAhead(ctx, remote, branch)` (`sync_schema_guard.go`) — the **push** entry:
-1. Both args required.
-2. `trackingHeadHash(remote, branch)`; `!synced` → **no-op, return nil** (a branch that never synced has no remote head to fall behind) (`sync_schema_guard.go`).
-3. else `guardCommitSchemaAhead(remote, branch, head)`.
+`refuseSchemaAhead(remote, branch, remoteHead)` (`sync_schema_guard.go`) is the **reconcile's** refusal alone, run by `replayUnderGuard` (`sync_reconcile.go`) on the plan's captured read of the remote head before any write. A push runs no schema-ahead refusal: `refuseSchemaSend` (`sync.go`) judges the head it sends against the remote head's schema (the ceiling on a raise, the raise rule, the lowering rule), so a head at the remote's own schema lands (`design-docs/schema-reversibility.md`). A never-synced branch has no remote head (`unknownRemoteSchema`), which is never ahead.
 
-`guardCommitSchemaAhead(ctx, remote, branch, commitHash)` (`sync_schema_guard.go`) — shared core, also called directly by the reconcile with its already-captured `remoteHead`:
+`judgeSchemaAhead(remoteHead)` (`sync_schema_guard.go`) — shared core, which every settle reports as `storage.RemoteSchemaAhead`:
 1. `version.CarriedSchemaSupport()` → `support`.
 2. `remoteHeadSchema(commitHash)` → `remoteVersion`.
 3. `remoteVersion <= support.Max` → nil.

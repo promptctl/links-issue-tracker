@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -667,12 +666,14 @@ func TestAReRootPushWithNoVerdictLeavesNoScratch(t *testing.T) {
 	}
 }
 
-// TestAReRootRefusedBeforeTheRemoteIsNotPushed has the bound's lease push
-// refused before it is sent: the head it would replace is at a schema above
-// this binary's. The re-root is written and never leaves the checkout, so the
-// bound says not pushed and reads nothing: alpha's tracking ref still lags
-// where its last fetch left it.
-func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
+// TestAReRootOfAHeadAtANewerSchemaPublishes has the bound re-root a remote
+// head at a schema above this binary's. The rewrite copies every kept
+// commit's root value, so the re-rooted head is at the remote's own schema
+// with its tables exactly as they were, and the lease push sends nothing the
+// remote does not hold: it lands, as a push at the remote's own schema does
+// (design-docs/schema-reversibility.md), and the remote's head is the
+// re-rooted one, still at the newer schema.
+func TestAReRootOfAHeadAtANewerSchemaPublishes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	remoteURL, _ := gitRemote(t)
@@ -720,22 +721,18 @@ func TestAReRootRefusedBeforeTheRemoteIsNotPushed(t *testing.T) {
 	if err := st.SyncFetch(ctx, remoteName(t, "mirror")); err != nil {
 		t.Fatal(err)
 	}
-	lagging, err := commitHashOfRef(ctx, st.db, "remotes/origin/master")
-	if err != nil {
-		t.Fatal(err)
-	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	b, _ := boundAt(t, ctx, alpha, ahead, windowOf(t, 4, 3))
-	if !errors.As(b.Err, new(*RemoteSchemaAheadError)) || b.ReRooted.Head == "" || b.Lease != "" || b.Publication != storage.ReRootNotPushed || b.RemoteGC.Outcome != "" {
-		t.Fatalf("the bound over a schema-ahead head = %+v; want a re-root written, refused before the remote, not pushed, and no remote GC", b)
+	if b.Err != nil || b.ReRooted.Head == "" || b.Lease != storage.LeaseHeld || b.Publication != storage.ReRootPublished {
+		t.Fatalf("the bound over a head at a newer schema = %+v; want its re-root published: the rewrite keeps every table, so the push sends a head at the remote's own schema", b)
 	}
 	st = openSyncOrFatal(t, ctx, alpha)
 	defer func() { _ = st.Close() }()
-	if got, err := commitHashOfRef(ctx, st.db, "remotes/origin/master"); err != nil || got != lagging {
-		t.Fatalf("remotes/origin/master after the refusal = %s (%v); want it left at %s, no fetch run", got, err, lagging)
+	if head := trackingSchema(t, ctx, st); head.head != b.ReRooted.Head || head.version != registryMax+1 {
+		t.Fatalf("remote head after the re-root = %+v; want the re-rooted head %s at schema %d", head, b.ReRooted.Head, registryMax+1)
 	}
 }
 

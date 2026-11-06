@@ -157,8 +157,10 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 	}
 }
 
-// refuseTrackingHeadAhead is the push's schema-ahead verdict on a branch's
-// tracking head, as pushWithinLock composes it.
+// refuseTrackingHeadAhead is the schema-ahead verdict on a branch's tracking
+// head: the reconcile's refusal (refuseSchemaAhead) judged off the read of R
+// a push makes, so the detection tests judge the one verdict on a fetched
+// head without driving a divergence.
 func (s *Store) refuseTrackingHeadAhead(ctx context.Context, remote storage.RemoteName, branch string) error {
 	remoteHead, err := s.trackingHeadSchema(ctx, remote, branch)
 	if err != nil {
@@ -167,11 +169,15 @@ func (s *Store) refuseTrackingHeadAhead(ctx context.Context, remote storage.Remo
 	return refuseSchemaAhead(remote, branch, remoteHead)
 }
 
-// TestSyncPushRefusesWhenRemoteSchemaAhead is the push-path acceptance: a clone at
-// max M pushing onto a remote whose head is at schema N>M is refused with the typed
-// error and ZERO commits reach the remote — a fresh clone still sees the pre-push
-// state, so no --force-style regression happened.
-func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
+// TestAPushAtTheRemotesOwnSchemaLands is the push-path acceptance of the
+// decision in design-docs/schema-reversibility.md ("A push at the remote's
+// own schema lands"): a checkout that adopted a remote head at a schema above
+// this binary's, and wrote under it as the open admits, pushes. A fresh clone
+// sees the edit, and the remote head's schema after the push is still the
+// ahead version: a commit at R is no regression. This binary's released
+// ceiling (testEnv: the registry max) is below R, so the landing also pins
+// that the ceiling judges a raise only.
+func TestAPushAtTheRemotesOwnSchemaLands(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
@@ -180,40 +186,38 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	rootC := filepath.Join(base, "c")
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	id, _ := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
+	id, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
-	// B edits locally — a would-be fast-forward push onto the remote.
+	// B's open admits the write: the store is ahead of the binary with its
+	// baseline intact and no minimum writer schema above the binary's.
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("from-b")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
-	_, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
-	var ahead *RemoteSchemaAheadError
-	if !errors.As(err, &ahead) {
-		t.Fatalf("SyncPush onto ahead remote = %v, want *RemoteSchemaAheadError", err)
+	pushed, err := syncB.SyncPush(ctx, remoteName(t, "origin"), "master", false, false)
+	if err != nil {
+		t.Fatalf("SyncPush at the remote's own schema = %v, want the push to land", err)
+	}
+	if head := trackingSchema(t, ctx, syncB); head.head != pushed.Head || head.version != future {
+		t.Fatalf("remote head after the push = %+v, want the pushed head %s at schema %d", head, pushed.Head, future)
 	}
 	// syncB is done with its work; close before opening rootC below and hold
-	// nothing open past this point. (rootB comes from unrelatedDoltDir with
-	// its own t.TempDir parent, so the two stores' workspace/commit lock
-	// paths are independent — the early close is hygiene, not a lock-sharing
-	// requirement.)
+	// nothing open past this point.
 	if err := syncB.Close(); err != nil {
 		t.Fatalf("syncB.Close(): %v", err)
 	}
 
-	// Property: zero commits reached the remote. A fresh clone still sees the seed
-	// state, without B's edit.
+	// A fresh clone sees B's edit.
 	adoptRemote(t, ctx, rootC, remoteURL)
 	stC, err := Open(ctx, testEnv(), testStderr(), rootC, "ws")
 	if err != nil {
 		t.Fatalf("Open(C): %v", err)
 	}
 	defer stC.Close()
-	got := getIssueOrFatal(t, ctx, stC, id)
-	if got.Lane == "from-b" {
-		t.Fatalf("B's edit reached the remote despite the schema-ahead refusal (lane=%q)", got.Lane)
+	if got := getIssueOrFatal(t, ctx, stC, id); got.Lane != "from-b" {
+		t.Fatalf("B's edit did not reach the remote (lane=%q, want %q)", got.Lane, "from-b")
 	}
 }
 

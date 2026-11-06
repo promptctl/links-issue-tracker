@@ -254,7 +254,7 @@ Printer (`printSyncPullOutcome`, `sync.go`):
 
 `syncPushLeaf` calls `clearMirrorPending(ws)` at **entry**, before `performSyncPush` runs, not on success (`sync.go`).
 The explicit push uses `session.syncer.SyncCompactAndPush` — compaction is atomic with the push (`sync.go`); the on-change mirror uses `SyncPushFromClone` (`sync_bg.go`).
-A could-not-attempt error is traced as `lit sync push`/`error` and returned (`sync.go`). A push error is passed through `asSyncFailure` (`sync.go`) — a remote-schema-ahead becomes the contract block, exit 3, reason `workspace_schema_ahead`.
+A could-not-attempt error is traced as `lit sync push`/`error` and returned (`sync.go`). A push error is passed through `asSyncFailure` (`sync.go`) — a schema refusal of the push (the ceiling, the raise rule, the lowering rule) becomes the contract block, exit 3; a remote whose schema is ahead is no push refusal, since a push at the remote's own schema lands.
 
 `performSyncPush` (`sync.go`), the shared orchestration for `lit sync push` and the mirror; clearing the mirror-pending marker is the caller's, never this function's:
 1. Deferred completion: on panic, records `sync push panicked: %v` through `completePushAttempt` and re-panics; otherwise records `completePushAttempt(completionCtx, ws, outcome, retErr)` on every return path (`sync.go`).
@@ -584,7 +584,7 @@ cause (backend detail, for diagnosis only — the steps above are the fix):
 </agent-instructions>
 ```
 The block has no trailing newline after `</agent-instructions>` (`sync_failure.go`).
-- `headline` (`sync_failure.go`), the block's first line: `lit sync could not resolve a backlog divergence automatically and needs you.` for `prose_held`, `diverged_unresolved`, `unrelated_histories` and `id_collision`; `lit sync cannot write to the remote's backlog until this lit is upgraded, and needs you.` for `remote_schema_ahead`; `lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you.` for `receive_unsettled`; an unknown-class arm reporting a bug.
+- `headline` (`sync_failure.go`), the block's first line: `lit sync could not resolve a backlog divergence automatically and needs you.` for `prose_held`, `diverged_unresolved`, `unrelated_histories` and `id_collision`; `lit sync cannot reconcile with the remote's backlog until this lit is upgraded, and needs you.` for `remote_schema_ahead`; `lit's automatic receive fetched the remote but could not bring it into this checkout, and needs you.` for `receive_unsettled`; an unknown-class arm reporting a bug.
 - The constant directive (`sync_failure.go`): "This is a blocking condition, not ambient noise or a routine quirk — retrying past it or routing around it will not resolve it. Resolve it now, or explicitly surface it to the user as blocking, before continuing ticket work."
 - `whatLine` per class (`sync_failure.go`), including an explicit unknown-class arm: `an unrecognized sync-failure class %q on <ref> — this is a bug; please report it.` The `id_collision` line names the colliding ids through `describeCollidedIDs` (`sync_failure.go`).
 - `resolutionSteps` (`sync_failure.go`):
@@ -1088,7 +1088,7 @@ All eight are also the payload of `lit quickstart --eject`, written to `<config.
 | `--output` before the command name; `--continue` | any command | `UnsupportedError`, exit 3 | `cli.go`, `flagset.go` |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat dump`, `lifeboat recover`, `upgrade`, `downgrade`, `sync reconcile`/`resolve`/`abort`/`combine` | `UsageError`, exit 2 | `init.go`, `version.go`, `hooks.go`, `snapshots.go`, `lifeboat.go`, `upgrade.go`, `downgrade.go`, `sync_reconcile_cmd.go` |
 | Adopt could not confirm workspace state | `init` | refuse to create a store, exit 1 | `init.go` |
-| Remote-schema-ahead | `sync push/pull/reconcile*`, automatic receive, mirror | `SyncFailureError` block, exit 3, reason `workspace_schema_ahead` (mirror: stderr only; automatic receive: printed by the next command) | `sync.go`, `sync_reconcile_cmd.go`, `sync_receive.go`, `sync_bg.go` |
+| Remote-schema-ahead | `sync pull/reconcile*`, automatic receive (the reconcile's replay; a push at the remote's own schema lands) | `SyncFailureError` block, exit 3, reason `workspace_schema_ahead` (automatic receive: printed by the next command) | `sync.go`, `sync_reconcile_cmd.go`, `sync_receive.go` |
 | Held prose conflict | `sync pull` | `SyncFailureError`, exit 5 | `sync.go` |
 | Held prose conflict | `sync reconcile`/`resolve`/`combine` | guidance printed + `MergeConflictError`, exit 5 | `sync_reconcile_cmd.go` |
 | Unrelated histories | `sync pull`, `sync reconcile*` | `SyncFailureError`, exit 5 | `sync.go`, `sync_reconcile_cmd.go` |

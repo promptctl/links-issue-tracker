@@ -153,17 +153,47 @@ from the first release that does.
 
 A landing adopts the remote head at any schema. The receive's behind
 fast-forward and a take-remote with nothing to carry move the branch to the
-fetched head and author no commit, so the refusal that keeps a binary from
-writing below a newer remote's schema (`RemoteSchemaAheadError`) has nothing
-to guard there, and neither does the hold. What the binary may then do with
-the store it finds is the open's one rule: a held lower head migrates no
-further than its hold, and a head above the binary's schema is readable while
-its baseline shape is intact and writable while the binary supports the
+fetched head and author no commit, so the refusal that keeps a reconcile from
+replaying onto a newer remote's head (`RemoteSchemaAheadError`, below) has
+nothing to guard there, and neither does the hold. What the binary may then
+do with the store it finds is the open's one rule: a held lower head migrates
+no further than its hold, and a head above the binary's schema is readable
+while its baseline shape is intact and writable while the binary supports the
 store's minimum writer schema, refused otherwise with `lit upgrade` named.
 The same landing is what lets a lowered remote bring a client down. Every
 settle reads the remote head's schema against the binary and reports it, so
 the owner channel ends a remote-schema-ahead episode on that read, never on
 the state the settle ended in.
+
+A push at the remote's own schema lands. A push is judged against R alone
+unless it raises the remote: with H ≤ R, no verdict compares H or R to the
+binary that pushes. The open admitted the writes the head carries, and the
+write it admits is the model's update of the columns this binary names,
+which leaves the columns a newer schema added as it found them; so a head at
+R carries R's columns intact, and pushing it regresses nothing. Whether a
+binary may write at a schema above its own is the open's judgement, made
+once; the push does not make it again under a stricter rule. The ceiling is
+the second condition on a raise, as rule 2 states it, and judges nothing
+else: a head at or below R sends no schema the remote does not already hold,
+since R reached the remote by a release's push and sits at or below its own
+hold. (A head a pre-hold binary re-raised past its hold is the one case
+where a push at R above the hold lands; the guarantee was already scoped to
+binaries that read the row.) An unheld head below R is the lowering verdict's
+to refuse.
+
+The reconcile is the one write the open's admission does not cover. Its
+replay re-creates every row a folded commit changed from this binary's
+columns, a delete and an insert and never an update, so onto a head whose
+schema is above this binary's it would reset the newer schema's columns to
+their defaults on every row it touched: a regression within R's schema that
+no comparison of H to R would see. The reconcile refuses such a head
+(`RemoteSchemaAheadError`) before any write, on its captured read of R, with
+`lit upgrade` as the remedy; the refusal is the reconcile's, not the push's,
+and the owner channel's `remote_schema_ahead` episode ends on a settle's
+read of the remote head within the binary's support, never on a landed push.
+So across a release that raises the shared remote, a checkout on the previous
+release reads, writes, and pushes, and upgrades before it can reconcile a
+divergence.
 
 ## What rule 2 means, precisely
 

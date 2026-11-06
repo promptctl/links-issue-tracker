@@ -18,7 +18,11 @@ import (
 // handed it down on the store's environ.Env; and the store's schema hold
 // (schema_hold.go), the meta row a remote downgrade writes. No existing
 // workspace is migrated past the ceiling, no fetched head is lifted past it,
-// and no commit above it is pushed to any remote. Creating a store is not
+// and no push raises a remote to a schema above it. A push at or below the
+// remote head's own schema is no raise and the ceiling does not judge it: the
+// remote already holds that schema, released by a release's push and at or
+// below its own hold, so the push sends nothing the remote lacks
+// (design-docs/schema-reversibility.md). Creating a store is not
 // bounded by it, so a scratch workspace can be made at any schema the binary
 // carries. [LAW:single-enforcer] the refusals below are the only readers of
 // the ceiling.
@@ -162,7 +166,7 @@ type SchemaCeilingPushError struct {
 func (e *SchemaCeilingPushError) Error() string {
 	return fmt.Sprintf(
 		"refusing to push to %s/%s: the commit is at schema version %d, and the schema ceiling for this push is %d (%s); "+
-			"this lit never sends a commit above that ceiling to a remote",
+			"this lit never raises a remote to a schema above that ceiling",
 		e.Remote, e.Branch, e.CommitSchema, e.Ceiling.Max, e.Ceiling.Source)
 }
 
@@ -277,19 +281,22 @@ func (s *Store) appliedVersions(ctx context.Context) (map[int64]bool, int64, err
 	return applied, highest, nil
 }
 
-// refuseSchemaAboveCeiling refuses a push of a head at schema when that
-// schema is above ceiling, the lower of the released-schema ceiling and the
-// hold at the remote head the push is judged against. The caller read the
-// schema at the head it sends; both push sites run this one verdict on it.
-// [LAW:effects-at-boundaries]
-func refuseSchemaAboveCeiling(remote storage.RemoteName, branch string, schema int64, ceiling version.SchemaCeiling) error {
-	if schema <= ceiling.Max {
+// refuseSchemaAboveCeiling refuses a push of a head at commitSchema to
+// remote/branch whose head is at remoteHead, when the push raises the remote
+// (remoteSchema.raisedBy) to a schema above ceiling, the lower of the
+// released-schema ceiling and the hold at that head. A push at or below the
+// remote's schema is no raise and lands under any ceiling. The caller read
+// the schema at the head it sends; both push sites run this one verdict on
+// it. [LAW:effects-at-boundaries] a pure verdict on the values the caller
+// read.
+func refuseSchemaAboveCeiling(remote storage.RemoteName, branch string, remoteHead remoteSchema, commitSchema int64, ceiling version.SchemaCeiling) error {
+	if !remoteHead.raisedBy(commitSchema) || commitSchema <= ceiling.Max {
 		return nil
 	}
 	return &SchemaCeilingPushError{
 		Remote:       remote.String(),
 		Branch:       branch,
-		CommitSchema: schema,
+		CommitSchema: commitSchema,
 		Ceiling:      ceiling,
 	}
 }
