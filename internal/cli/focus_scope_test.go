@@ -44,7 +44,7 @@ func (h readyTestHarness) runNextRowArgs(args ...string) annotation.AnnotatedIss
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
 	for _, row := range gathered.rows {
-		if strings.Contains(text, row.ID) {
+		if strings.Contains(text, row.ID.Raw()) {
 			return row
 		}
 	}
@@ -64,17 +64,17 @@ func TestFocusScopeHoldsExactly(t *testing.T) {
 	offPath := annotation.AnnotatedIssue{Annotations: []annotation.Annotation{{Kind: annotation.OpenDependency, Message: "dep"}}}
 	bare := annotation.AnnotatedIssue{}
 
-	laneIn := func(epic, key string) model.LaneID {
+	laneIn := func(epic model.ID, key string) model.LaneID {
 		parent := model.Issue{ID: epic, IssueType: model.TypeEpic}
 		return model.LaneOf(model.Issue{ID: "any-member", Lane: model.Text(key)}, &parent)
 	}
-	soloLane := func(id string) model.LaneID { return model.LaneOf(model.Issue{ID: id}, nil) }
+	soloLane := func(id model.ID) model.LaneID { return model.LaneOf(model.Issue{ID: id}, nil) }
 
-	focused := focusScope{goals: []string{"goal-1"}}
+	focused := focusScope{goals: []model.ID{"goal-1"}}
 	// This checkout holds lane "held" of epic E, and the solo lane S.
 	owned := focused.owning(ownWork{
 		lanes: map[model.LaneID]bool{laneIn("E", "held"): true, soloLane("S"): true},
-		epics: map[string]bool{"E": true},
+		epics: map[model.ID]bool{"E": true},
 	})
 	unrelated := laneIn("F", "x")
 
@@ -102,7 +102,7 @@ func TestFocusScopeHoldsExactly(t *testing.T) {
 		// Several goals is one scope, not one scope per goal: a row on ANY
 		// goal's path is in. The annotation names the goal that reached it, and
 		// membership must not start depending on WHICH.
-		{"two goals hold a row reached by either", focusScope{goals: []string{"goal-1", "goal-2"}}, onPath, unrelated, true},
+		{"two goals hold a row reached by either", focusScope{goals: []model.ID{"goal-1", "goal-2"}}, onPath, unrelated, true},
 
 		// Owning this checkout's work: its lanes and every lane of their epics
 		// are in wherever the path runs, and nothing else is added.
@@ -133,7 +133,7 @@ func TestFocusScopeHoldsExactly(t *testing.T) {
 // that dropped it would type-check and read fine.
 func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 	t.Parallel()
-	row := func(id string, path bool) annotation.AnnotatedIssue {
+	row := func(id model.ID, path bool) annotation.AnnotatedIssue {
 		out := annotation.AnnotatedIssue{}
 		out.ID = id
 		if path {
@@ -143,7 +143,7 @@ func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 	}
 	rows := []annotation.AnnotatedIssue{row("a", false), row("b", true), row("c", false), row("d", true)}
 
-	inScope, excluded := focusScope{goals: []string{"g"}}.partition(rows, nil)
+	inScope, excluded := focusScope{goals: []model.ID{"g"}}.partition(rows, nil)
 	if got := rowIDsJoined(inScope); got != "b,d" {
 		t.Fatalf("in-scope ids = %q, want %q", got, "b,d")
 	}
@@ -153,7 +153,7 @@ func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 
 	// --all resolves to the unfocused scope, so everything is in and the
 	// excluded half is empty — not "everything is excluded".
-	inScope, excluded = focusScope{goals: []string{"g"}}.scopeFor(true).partition(rows, nil)
+	inScope, excluded = focusScope{goals: []model.ID{"g"}}.scopeFor(true).partition(rows, nil)
 	if got := rowIDsJoined(inScope); got != "a,b,c,d" {
 		t.Fatalf("--all in-scope ids = %q, want %q", got, "a,b,c,d")
 	}
@@ -165,7 +165,7 @@ func TestFocusScopePartitionKeepsBothHalvesInOrder(t *testing.T) {
 func rowIDsJoined(rows []annotation.AnnotatedIssue) string {
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, row.ID)
+		out = append(out, row.ID.Raw())
 	}
 	return strings.Join(out, ",")
 }
@@ -195,11 +195,11 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 
 	// Ranked to the top of the view it is aimed at, and it lands there.
 	var stdout bytes.Buffer
-	if err := runRank(t, h.ctx, &stdout, h.ap, []string{late.ID, "--top"}); err != nil {
+	if err := runRank(t, h.ctx, &stdout, h.ap, []string{late.ID.Raw(), "--top"}); err != nil {
 		t.Fatalf("runRank(--top) error = %v", err)
 	}
 	text := h.runWorkableText()
-	if pos := rowPosition(t, text, late.ID); pos != 1 {
+	if pos := rowPosition(t, text, late.ID.Raw()); pos != 1 {
 		t.Fatalf("`lit rank --top` then `lit backlog`: %s at position %d, want 1\n%s", late.ID, pos, text)
 	}
 }
@@ -261,7 +261,7 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	h.setLabels(goal.ID, FocusLabel)
 	text = h.runWorkableText("--limit", "1")
 	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
-	if !strings.Contains(text, wantScope) {
+	if !strings.Contains(text, wantScope.Raw()) {
 		t.Fatalf("focused+trimmed backlog missing scope clause %q\n%s", wantScope, text)
 	}
 	if want := "--limit trimmed this run: 2 more workable row(s) are not shown."; !strings.Contains(text, want) {
@@ -341,7 +341,7 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 	if want := "Nothing is hidden: every workable item is listed."; !strings.Contains(text, want) {
 		t.Fatalf("unfocused backlog missing %q\n%s", want, text)
 	}
-	if !strings.Contains(text, off.ID) {
+	if !strings.Contains(text, off.ID.Raw()) {
 		t.Fatalf("unfocused backlog missing off-path row %s\n%s", off.ID, text)
 	}
 
@@ -349,24 +349,24 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 
 	// Focused: scoped, and it says exactly what it withheld and how to get it.
 	text = h.runWorkableText()
-	want := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
+	want := "Focused on " + goal.ID.Raw() + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
 	if !strings.Contains(text, want) {
 		t.Fatalf("focused backlog missing notice %q\n%s", want, text)
 	}
-	if strings.Contains(text, off.ID) {
+	if strings.Contains(text, off.ID.Raw()) {
 		t.Fatalf("focused backlog must not list off-path row %s\n%s", off.ID, text)
 	}
-	if !strings.Contains(text, prereq.ID) {
+	if !strings.Contains(text, prereq.ID.Raw()) {
 		t.Fatalf("focused backlog missing path row %s\n%s", prereq.ID, text)
 	}
 
 	// --all lifts the scope and says that it did, so a reader cannot mistake
 	// this run's whole queue for an unfocused workspace.
 	text = h.runWorkableText("--all")
-	if want := "Focus is on " + goal.ID + "; this run bypassed it and lists the whole queue."; !strings.Contains(text, want) {
+	if want := "Focus is on " + goal.ID.Raw() + "; this run bypassed it and lists the whole queue."; !strings.Contains(text, want) {
 		t.Fatalf("`--all` backlog missing notice %q\n%s", want, text)
 	}
-	if !strings.Contains(text, off.ID) {
+	if !strings.Contains(text, off.ID.Raw()) {
 		t.Fatalf("`--all` backlog missing off-path row %s\n%s", off.ID, text)
 	}
 }
@@ -448,7 +448,7 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	if want := "`lit next --all`"; !strings.Contains(got, want) {
 		t.Fatalf("NoWork.Error() = %q, must name the escape %q", got, want)
 	}
-	if !strings.Contains(got, off.ID) {
+	if !strings.Contains(got, off.ID.Raw()) {
 		t.Fatalf("NoWork.Error() = %q, must name the withheld row %s", got, off.ID)
 	}
 
@@ -537,13 +537,13 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 			t.Fatalf("NoWork.Error() = %q lists two populations but is missing the words one of them owns: %q", got, note)
 		}
 	}
-	if !strings.Contains(got, gate.ID) {
+	if !strings.Contains(got, gate.ID.Raw()) {
 		t.Fatalf("NoWork.Error() = %q must name the on-path gate %s — that is the row the agent has to act on", got, gate.ID)
 	}
 
 	// It still has to say the rows are there and how to reach them; refusing the
 	// unchecked claim must not cost the reader the honest half of the answer.
-	if !strings.Contains(got, off.ID) {
+	if !strings.Contains(got, off.ID.Raw()) {
 		t.Fatalf("NoWork.Error() = %q, must name the withheld row %s", got, off.ID)
 	}
 	if want := "`lit next --all`"; !strings.Contains(got, want) {
@@ -713,12 +713,12 @@ func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
 	}
 
 	focused := h.runNextText()
-	if want := "run `lit start " + prereq.ID + "` to claim lane prereq of epic " + goalEpic.ID + " (focused on " + goal.ID + ": picked from the focus path alone — `lit next --all` to route over the whole queue)\n"; !strings.Contains(focused, want) {
+	if want := "run `lit start " + prereq.ID.Raw() + "` to claim lane prereq of epic " + goalEpic.ID.Raw() + " (focused on " + goal.ID.Raw() + ": picked from the focus path alone — `lit next --all` to route over the whole queue)\n"; !strings.Contains(focused, want) {
 		t.Fatalf("focused `lit next` printed:\n%s\nwant the pick line %q", focused, want)
 	}
 
 	whole := h.runNextText("--all")
-	if want := "run `lit start " + off.ID + "` to claim lane off of epic " + noise.ID + "\n"; !strings.Contains(whole, want) {
+	if want := "run `lit start " + off.ID.Raw() + "` to claim lane off of epic " + noise.ID.Raw() + "\n"; !strings.Contains(whole, want) {
 		t.Fatalf("`lit next --all` printed:\n%s\nwant the pick line %q", whole, want)
 	}
 }
@@ -734,7 +734,7 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Pool pick"), Topic: "next", IssueType: "task", ParentID: epic.ID, Lane: storage.MustParseLane("pick")})
 	rows, details, _ := h.gather()
 	row := rowByID(t, rows, ticket.ID)
-	pick := poolPick{Row: row, Lane: laneOf(t, details, row), Scope: focusScope{goals: []string{"test-goal"}}}
+	pick := poolPick{Row: row, Lane: laneOf(t, details, row), Scope: focusScope{goals: []model.ID{"test-goal"}}}
 	const clause = " (focused on test-goal: picked from the focus path alone — `lit next --all` to route over the whole queue)"
 
 	for _, tc := range []struct {
@@ -747,17 +747,17 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 			// the second of two joined on one block and not the only line.
 			name: "past an exhausted scope",
 			outcome: ServedPastExhaustion{poolPick: pick, Exhaustion: Exhausted{
-				Epics:       []string{"test-held"},
+				Epics:       []model.ID{"test-held"},
 				Progress:    claims.Progress{Done: 0, Total: 1},
 				OwnProgress: claims.Progress{Done: 0, Total: 1},
 				Blocked:     []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
 			}},
-			route: "or move on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
+			route: "or move on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID.Raw() + "` to claim lane pick of epic " + epic.ID.Raw() + clause,
 		},
 		{
 			name:    "past a scope the filter narrowed",
 			outcome: ServedPastNarrowing{poolPick: pick, Narrowing: Narrowed{Hidden: rowFor("test-hidden")}},
-			route:   "or take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim lane pick of epic " + epic.ID + clause,
+			route:   "or take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID.Raw() + "` to claim lane pick of epic " + epic.ID.Raw() + clause,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -804,7 +804,7 @@ func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
 	})
 
 	err := h.runNextErr("--type", "bug")
-	want := "`lit next` without --type, --status, --labels or --assignee hands you " + prereq.ID + " (focused on " + goal.ID + ": picked from the focus path alone — `lit next --all` to route over the whole queue), which this run's filter leaves out"
+	want := "`lit next` without --type, --status, --labels or --assignee hands you " + prereq.ID.Raw() + " (focused on " + goal.ID.Raw() + ": picked from the focus path alone — `lit next --all` to route over the whole queue), which this run's filter leaves out"
 	if err == nil || err.Error() != want {
 		t.Fatalf("focused `lit next --type bug` = %v, want %q", err, want)
 	}

@@ -99,7 +99,7 @@ func (c IssueCriteria) Selects(issue model.Issue) bool {
 // matchesAny reports whether value is in criteria, treating an empty criteria
 // list as "do not constrain on this axis" — the zero value of every filter
 // slice, and why a listing needs no mode flags to say it wants everything.
-func matchesAny(value string, criteria []string) bool {
+func matchesAny[T comparable](value T, criteria []T) bool {
 	return len(criteria) == 0 || slices.Contains(criteria, value)
 }
 
@@ -166,10 +166,10 @@ func issueTypeNames(types []model.IssueType) []string {
 // nothing. A second copy of this rule is a second answer to that. The rule is
 // that there is no second site, whoever the readers are — naming them here is
 // what would go stale. [LAW:one-source-of-truth] [LAW:single-enforcer]
-func TrimmedNonEmpty(values []string) []string {
-	out := make([]string, 0, len(values))
+func TrimmedNonEmpty[T ~string](values []T) []T {
+	out := make([]T, 0, len(values))
 	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
+		if trimmed := T(strings.TrimSpace(string(value))); trimmed != "" {
 			out = append(out, trimmed)
 		}
 	}

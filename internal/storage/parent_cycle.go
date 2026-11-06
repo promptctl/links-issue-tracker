@@ -3,7 +3,6 @@ package storage
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -31,11 +30,11 @@ const ParentCycleRepair = "break it with 'lit parent set --child <one member> --
 // the child of the first. The CLI classifies it by its type, as corruption
 // whose repair the message carries. [LAW:types-are-the-program]
 type ParentCycleError struct {
-	Cycle []string
+	Cycle []model.ID
 }
 
 func (e ParentCycleError) Error() string {
-	return fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops, so no epic in it has a state to derive — %s)", strings.Join(e.Cycle, " -> "), ParentCycleRepair)
+	return fmt.Sprintf("parent cycle: %s (a hierarchy has no root once it loops, so no epic in it has a state to derive — %s)", model.JoinIDs(e.Cycle, " -> "), ParentCycleRepair)
 }
 
 // ParentCycle returns the members of one loop in the hierarchy, in walk order,
@@ -47,14 +46,14 @@ func (e ParentCycleError) Error() string {
 // loop can be named by its members rather than merely detected. A node still on
 // the current path is the loop; a node already settled reaches a root, and its
 // ancestry is never walked twice, which keeps the whole scan linear in edges.
-func ParentCycle(parentOf map[string][]string) []string {
+func ParentCycle(parentOf map[model.ID][]model.ID) []model.ID {
 	const (
 		unvisited = iota
 		onPath
 		settled
 	)
-	state := make(map[string]int, len(parentOf))
-	starts := make([]string, 0, len(parentOf))
+	state := make(map[model.ID]int, len(parentOf))
+	starts := make([]model.ID, 0, len(parentOf))
 	for child := range parentOf {
 		starts = append(starts, child)
 	}
@@ -67,7 +66,7 @@ func ParentCycle(parentOf map[string][]string) []string {
 		}
 		// path is the chain of nodes currently being descended; taken[i] counts
 		// how many of path[i]'s parents have been followed already.
-		path := []string{start}
+		path := []model.ID{start}
 		taken := []int{0}
 		state[start] = onPath
 		for len(path) > 0 {
@@ -84,7 +83,7 @@ func ParentCycle(parentOf map[string][]string) []string {
 			case onPath:
 				for i, id := range path {
 					if id == parent {
-						return append([]string{}, path[i:]...)
+						return append([]model.ID{}, path[i:]...)
 					}
 				}
 			case unvisited:
@@ -102,9 +101,9 @@ func ParentCycle(parentOf map[string][]string) []string {
 // order. The child keeps any other parent it holds; a leaf left with none is
 // moved into an epic by HomeStranded, which runs after.
 type Unlooped struct {
-	IssueID string   `json:"issue_id"`
-	Parent  string   `json:"parent"`
-	Cycle   []string `json:"cycle"`
+	IssueID model.ID   `json:"issue_id"`
+	Parent  model.ID   `json:"parent"`
+	Cycle   []model.ID `json:"cycle"`
 }
 
 // Unloop names the parent edges that cut every loop in the parent graph
@@ -117,8 +116,8 @@ type Unlooped struct {
 //
 // [LAW:one-source-of-truth] The landing (BreakParentCycles) and the store's
 // lift of a historical commit cut by this one rule.
-func Unloop(parentOf map[string][]string) []Unlooped {
-	remaining := make(map[string][]string, len(parentOf))
+func Unloop(parentOf map[model.ID][]model.ID) []Unlooped {
+	remaining := make(map[model.ID][]model.ID, len(parentOf))
 	for child, parents := range parentOf {
 		remaining[child] = slices.Clone(parents)
 	}
@@ -126,7 +125,7 @@ func Unloop(parentOf map[string][]string) []Unlooped {
 	for cycle := ParentCycle(remaining); len(cycle) > 0; cycle = ParentCycle(remaining) {
 		at := slices.Index(cycle, slices.Max(cycle))
 		cut := Unlooped{IssueID: cycle[at], Parent: cycle[(at+1)%len(cycle)], Cycle: cycle}
-		remaining[cut.IssueID] = slices.DeleteFunc(remaining[cut.IssueID], func(parent string) bool { return parent == cut.Parent })
+		remaining[cut.IssueID] = slices.DeleteFunc(remaining[cut.IssueID], func(parent model.ID) bool { return parent == cut.Parent })
 		unlooped = append(unlooped, cut)
 	}
 	return unlooped
@@ -138,7 +137,7 @@ func Unloop(parentOf map[string][]string) []Unlooped {
 //
 // It is pure. [LAW:effects-at-boundaries]
 func BreakParentCycles(export model.Export) (model.Export, []Unlooped) {
-	parentOf := map[string][]string{}
+	parentOf := map[model.ID][]model.ID{}
 	for _, relation := range export.Relations {
 		if relation.Type == model.RelParentChild {
 			parentOf[relation.SrcID] = append(parentOf[relation.SrcID], relation.DstID)

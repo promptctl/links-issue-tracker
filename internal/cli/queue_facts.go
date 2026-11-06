@@ -2,6 +2,7 @@ package cli
 
 import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -24,14 +25,14 @@ import (
 // command retains is its own view plus a few kilobytes.
 // [LAW:polishing-by-subtraction] carry the answer, never the set it came from.
 type queueFacts struct {
-	unblocks       map[string][]string
+	unblocks       map[model.ID][]model.ID
 	rankInversions int
 }
 
 // Unblocks is the ids closing this one would release — direct dependents and
 // the ones that inherit the dependency through their epic alike, because
 // DependencyIDs names both and closing the prerequisite releases both.
-func (f queueFacts) Unblocks(id string) []string { return f.unblocks[id] }
+func (f queueFacts) Unblocks(id model.ID) []model.ID { return f.unblocks[id] }
 
 // RankInversions is how many dependencies the queue ranks below their
 // dependents. It counts the queue rather than the view because the repair it
@@ -43,7 +44,7 @@ func (f queueFacts) RankInversions() int { return f.rankInversions }
 // which narrowing the caller went on to apply, because the answers are true
 // before any of them run.
 func deriveQueueFacts(queue []annotation.AnnotatedIssue) queueFacts {
-	facts := queueFacts{unblocks: make(map[string][]string, len(queue))}
+	facts := queueFacts{unblocks: make(map[model.ID][]model.ID, len(queue))}
 	for _, issue := range queue {
 		readiness := ClassifyReadiness(issue.Annotations)
 		for _, dep := range readiness.DependencyIDs() {
@@ -76,7 +77,7 @@ func (g workableGather) keepRows(criteria storage.IssueCriteria) workableGather 
 	// queue's length would leave a filter that keeps ten of 590 rows holding a
 	// 590-slot array, which is the queue this says it released.
 	var rows []annotation.AnnotatedIssue
-	details := map[string]storage.IssueRelations{}
+	details := map[model.ID]storage.IssueRelations{}
 	for _, row := range g.rows {
 		if criteria.Selects(row.Issue) {
 			rows = append(rows, row)

@@ -142,7 +142,7 @@ type Annotation struct {
 // the single most important context for an agent deciding which leaf to
 // claim.
 type ParentEpicRef struct {
-	ID    string     `json:"id"`
+	ID    model.ID   `json:"id"`
 	Title model.Text `json:"title"`
 }
 

@@ -44,7 +44,7 @@ type workableView struct {
 	name       string
 	hasLimit   bool
 	hasColumns bool
-	order      func(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, knobs workableKnobs)
+	order      func(rows []annotation.AnnotatedIssue, details map[model.ID]storage.IssueRelations, knobs workableKnobs)
 	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
 	// render receives the relationship cells already derived from the rows and
 	// the graph, so a view that lets its caller NAME a relation column cannot
@@ -60,7 +60,7 @@ type workableView struct {
 	// silently. They are separate TYPES because with the queue as a second
 	// []annotation.AnnotatedIssue, reading the wrong one would compile, run and
 	// print a shorter truth. [LAW:types-are-the-program]
-	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, facts queueFacts, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error
+	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, facts queueFacts, details map[model.ID]storage.IssueRelations, cells map[model.ID]derivedColumns, cc claimContext, notice focusNotice) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -95,8 +95,8 @@ func (v workableView) usage() string {
 // This is the ONLY producer of a blocked cell. `lit ls` runs the annotation
 // pipeline when `blocked` is projected and lands here too, which is why there
 // is one function rather than a shorter sibling.
-func readinessColumnsFor(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) map[string]derivedColumns {
-	out := make(map[string]derivedColumns, len(rows))
+func readinessColumnsFor(rows []annotation.AnnotatedIssue, details map[model.ID]storage.IssueRelations) map[model.ID]derivedColumns {
+	out := make(map[model.ID]derivedColumns, len(rows))
 	for _, row := range rows {
 		out[row.ID] = derivedColumns{
 			parentID: parentIDOf(details[row.ID]),
@@ -106,7 +106,8 @@ func readinessColumnsFor(rows []annotation.AnnotatedIssue, details map[string]st
 	return out
 }
 
-func orderCanonical([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, workableKnobs) {}
+func orderCanonical([]annotation.AnnotatedIssue, map[model.ID]storage.IssueRelations, workableKnobs) {
+}
 
 func keepAll(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue { return rows }
 

@@ -98,7 +98,7 @@ func nextLeaf() appLeaf {
 // `lit next` claims nothing and starts nothing — `lit start` does — so a line
 // in the perfect tense would be reporting a side effect this command does not
 // have.
-func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext, actingAs string, primaryClone bool) (workflows.Occasion, error) {
+func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]storage.IssueRelations, cc claimContext, actingAs string, primaryClone bool) (workflows.Occasion, error) {
 	// [LAW:single-enforcer] placeFor is the decision the event records too; it
 	// is pure, and the leaf hands both the one outcome and checkout kind.
 	place := placeFor(outcome, primaryClone)
@@ -204,9 +204,9 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 // names the assignee, says it is not you, and stops.
 func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 	if assignee := strings.TrimSpace(row.AssigneeValue().Raw()); assignee != "" && assignee != actingAs {
-		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", model.HoldRow(row.ID), model.Text(assignee))
+		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", row.ID, model.Text(assignee))
 	}
-	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", model.HoldRow(row.ID))
+	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
 }
 
 // dependencyReason says why step 1b or 2b handed this row over. A pick under an
@@ -259,9 +259,9 @@ func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID, place startPl
 	if !named {
 		object = "it"
 	}
-	advice := fmt.Sprintf("%srun `lit start %s` to claim %s", place.where(), model.HoldRow(row.ID), object)
+	advice := fmt.Sprintf("%srun `lit start %s` to claim %s", place.where(), row.ID, object)
 	if row.State() == model.StateInProgress {
-		return fmt.Sprintf("%s is in progress and nobody holds it — %s", model.HoldRow(row.ID), advice)
+		return fmt.Sprintf("%s is in progress and nobody holds it — %s", row.ID, advice)
 	}
 	return advice
 }

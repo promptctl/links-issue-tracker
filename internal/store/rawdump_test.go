@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -53,7 +54,7 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 	// Seed real application data through the normal write path, then capture
 	// the IDs the dump must later surface: the epic the subjects live in and
 	// the subjects themselves.
-	var ids []string
+	var ids []model.ID
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Title: storage.MustParseTitle("rescue epic"),
@@ -115,7 +116,7 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 		got[id] = true
 	}
 	for _, id := range ids {
-		if !got[id] {
+		if !got[id.Raw()] {
 			t.Errorf("dump missing issue id %q; got %v", id, got)
 		}
 	}
@@ -147,7 +148,7 @@ func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 
 	// The subject lives in an epic, so the dump holds two rows; the one
 	// inspected is the subject's, found by id.
-	var id string
+	var id model.ID
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Title: storage.MustParseTitle("fidelity epic"),
@@ -178,7 +179,7 @@ func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 	idCol := columnIndex(t, issues, "id")
 	var row []any
 	for _, candidate := range issues.Rows {
-		if got, ok := candidate[idCol].(string); ok && got == id {
+		if got, ok := candidate[idCol].(string); ok && model.ID(got) == id {
 			row = candidate
 		}
 	}
@@ -191,7 +192,7 @@ func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 		t.Errorf("title cell = %v (%T); want string %q", row[titleCol], row[titleCol], "fidelity subject")
 	}
 
-	if got, ok := row[idCol].(string); !ok || got != id {
+	if got, ok := row[idCol].(string); !ok || model.ID(got) != id {
 		t.Errorf("id cell = %v (%T); want string %q", row[idCol], row[idCol], id)
 	}
 

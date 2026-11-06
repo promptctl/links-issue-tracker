@@ -280,18 +280,19 @@ func bulkUpdatePatch(doc BulkIssueSpec) (UpdateIssueInput, error) {
 // what it states as read, so importing it after other writers moved the issue
 // writes only what the file was edited to say (MergeReadOut).
 func BulkUpdateDocument(rel IssueRelations) BulkIssueSpec {
-	doc := BulkIssueSpec{ID: rel.Issue.ID}
+	doc := BulkIssueSpec{ID: rel.Issue.ID.Raw()}
 	basis := Basis{Fields: map[string]string{}, BlockedBy: make([]string, len(rel.BlockedBy))}
 	for _, field := range issueFields {
 		field.toBulk(rel.Issue, &doc)
 		basis.Fields[field.name] = FieldValue(field.encode(rel.Issue)).digest()
 	}
 	if rel.Parent != nil {
-		doc.Parent = &rel.Parent.ID
-		basis.Parent = rel.Parent.ID
+		parent := rel.Parent.ID.Raw()
+		doc.Parent = &parent
+		basis.Parent = parent
 	}
 	for i, blocker := range rel.BlockedBy {
-		basis.BlockedBy[i] = blocker.ID
+		basis.BlockedBy[i] = blocker.ID.Raw()
 	}
 	blockedBy := slices.Clone(basis.BlockedBy)
 	doc.BlockedBy = &blockedBy

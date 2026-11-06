@@ -66,7 +66,7 @@ func (rt RelationType) SingleValuedFromSrc() bool {
 // related-to is undirected, so its endpoints are stored sorted to give each
 // pair exactly one representation; directed types pass through unchanged.
 // [LAW:one-source-of-truth] The undirected-edge normalization lives here only.
-func (rt RelationType) CanonicalEndpoints(src, dst string) (string, string) {
+func (rt RelationType) CanonicalEndpoints(src, dst ID) (ID, ID) {
 	if rt == RelRelatedTo && dst < src {
 		return dst, src
 	}

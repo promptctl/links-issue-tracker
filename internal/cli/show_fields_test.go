@@ -119,7 +119,7 @@ func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
 	_ = sibling
 
 	var buf bytes.Buffer
-	if err := runShow(t, context.Background(), &buf, f.ap, []string{focus.ID, "--field", "description"}); err != nil {
+	if err := runShow(t, context.Background(), &buf, f.ap, []string{focus.ID.Raw(), "--field", "description"}); err != nil {
 		t.Fatalf("runShow(--field description) error = %v", err)
 	}
 
@@ -145,7 +145,7 @@ func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err = runShow(t, context.Background(), &buf, ap, []string{issue.ID, "--field", "bogus"})
+	err = runShow(t, context.Background(), &buf, ap, []string{issue.ID.Raw(), "--field", "bogus"})
 	var usageErr UsageError
 	if !errors.As(err, &usageErr) {
 		t.Fatalf("runShow(--field bogus) error = %v, want UsageError", err)
@@ -161,7 +161,7 @@ func TestRunShowWithoutFieldFlagIsUnchanged(t *testing.T) {
 
 	out := showOutput(t, f.ap, focus)
 
-	if !strings.Contains(out, "Epic: "+f.epicID+" — Plan epic") {
+	if !strings.Contains(out, "Epic: "+f.epicID.Raw()+" — Plan epic") {
 		t.Errorf("default show should still append the epic block:\n%s", out)
 	}
 }

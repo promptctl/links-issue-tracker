@@ -17,7 +17,7 @@ import (
 // id and the two epics. A clone that then stores a loop over E and F holds what
 // an older lit, or a hand edit, could write; neither edge of that loop is in
 // the shared history, so a cut the lift makes is the only one any landing sees.
-func loopedSyncPair(t *testing.T, ctx context.Context) (rootA, rootB, seedID string, tree []model.Issue) {
+func loopedSyncPair(t *testing.T, ctx context.Context) (rootA, rootB string, seedID model.ID, tree []model.Issue) {
 	t.Helper()
 	rootA = migratedDoltDir(t)
 	rootB = unrelatedDoltDir(t)
@@ -102,9 +102,9 @@ func sameCuts(a, b []storage.Unlooped) bool {
 // The cut a loop gets is worked by hand from the rule: the member with the
 // greater id loses its edge onto the other, and the loop is named from the
 // lesser.
-func expectedCut(tree []model.Issue) (lo, hi string, want []storage.Unlooped) {
+func expectedCut(tree []model.Issue) (lo, hi model.ID, want []storage.Unlooped) {
 	lo, hi = min(tree[0].ID, tree[1].ID), max(tree[0].ID, tree[1].ID)
-	return lo, hi, []storage.Unlooped{{IssueID: hi, Parent: lo, Cycle: []string{lo, hi}}}
+	return lo, hi, []storage.Unlooped{{IssueID: hi, Parent: lo, Cycle: []model.ID{lo, hi}}}
 }
 
 // An older lit can push a loop. Every sync over that remote head reads it, and

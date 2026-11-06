@@ -7,7 +7,6 @@ import (
 	"maps"
 	"slices"
 	"sort"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
@@ -17,19 +16,19 @@ import (
 // rankedIssue is one row of the sequence the repair permutes: an issue id and
 // the rank string that currently places it.
 type rankedIssue struct {
-	id   string
+	id   model.ID
 	rank string
 }
 
 // compareRankedIssues is key order: rank, then id.
 func compareRankedIssues(a, b rankedIssue) int {
-	return cmp.Or(strings.Compare(a.rank, b.rank), strings.Compare(a.id, b.id))
+	return cmp.Or(cmp.Compare(a.rank, b.rank), cmp.Compare(a.id, b.id))
 }
 
 // rankRewrite names one issue whose rank must change, and the value to write.
 // A respaced one keeps its place in the order: it only gave a gap room.
 type rankRewrite struct {
-	id       string
+	id       model.ID
 	newRank  string
 	respaced bool
 }
@@ -37,10 +36,10 @@ type rankRewrite struct {
 // blocksCycleError reports a precedence constraint set that no rank order can
 // satisfy: placing every dependency above its dependent would require placing
 // each member of the cycle above itself.
-type blocksCycleError struct{ path []string }
+type blocksCycleError struct{ path []model.ID }
 
 func (e *blocksCycleError) Error() string {
-	return fmt.Sprintf("blocked-by dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(e.path, " -> "))
+	return fmt.Sprintf("blocked-by dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", model.JoinIDs(e.path, " -> "))
 }
 
 // repairRankOrder returns the rank writes that make every dependency outrank
@@ -72,7 +71,7 @@ func repairRankOrder(order, held []rankedIssue, constraints []storage.Dependency
 // live work, which every listing reads, and each issue a constraint names, a
 // container standing in for live work inside it — and the rest, which it
 // holds. Both keep order's key order.
-func splitRankOrder(order []rankedIssue, live map[string]struct{}, constraints []storage.DependencyEdge) (ordered, held []rankedIssue) {
+func splitRankOrder(order []rankedIssue, live map[model.ID]struct{}, constraints []storage.DependencyEdge) (ordered, held []rankedIssue) {
 	read := maps.Clone(live)
 	for _, c := range constraints {
 		read[c.Dependent] = struct{}{}
@@ -92,7 +91,7 @@ func splitRankOrder(order []rankedIssue, live map[string]struct{}, constraints [
 // edge with an endpoint outside live — closed, archived, or deleted work —
 // says nothing about where live work sits, and one edge counted twice would
 // leave its dependent blocked by a dependency that is only placed once.
-func liveEdges(edges []storage.DependencyEdge, live map[string]struct{}) []storage.DependencyEdge {
+func liveEdges(edges []storage.DependencyEdge, live map[model.ID]struct{}) []storage.DependencyEdge {
 	seen := make(map[storage.DependencyEdge]struct{}, len(edges))
 	out := make([]storage.DependencyEdge, 0, len(edges))
 	for _, e := range edges {
@@ -112,7 +111,7 @@ func liveEdges(edges []storage.DependencyEdge, live map[string]struct{}) []stora
 // between is in one and not the other. [LAW:parse-dont-validate] Settled
 // here, so everything downstream indexes the order directly: every edge it
 // sees is in range.
-func projectEdges(edges []storage.DependencyEdge, position map[string]int) []storage.DependencyEdge {
+func projectEdges(edges []storage.DependencyEdge, position map[model.ID]int) []storage.DependencyEdge {
 	out := make([]storage.DependencyEdge, 0, len(edges))
 	for _, e := range edges {
 		_, depInOrder := position[e.Dependency]
@@ -337,7 +336,7 @@ func holdKeys(sequence []placement, held []rankedIssue) []placement {
 // cannot disagree about what an inversion is; and repairRankOrder over
 // dependencies' constraints returns an order for which this set is empty.
 func invertedEdges(order []rankedIssue, dependencies storage.DependencyOrder, edges []storage.DependencyEdge) []storage.DependencyEdge {
-	issues := make(map[string]model.Issue, len(order))
+	issues := make(map[model.ID]model.Issue, len(order))
 	for _, item := range order {
 		issues[item.id] = model.Issue{ID: item.id, Rank: item.rank}
 	}
@@ -359,14 +358,14 @@ func invertedEdges(order []rankedIssue, dependencies storage.DependencyOrder, ed
 // [LAW:single-enforcer] Doctor reports a cycle precisely when FixRankInversions
 // refuses on one, because both ask this, and the refusal names the path Doctor
 // names.
-func blocksCycle(order []rankedIssue, edges []storage.DependencyEdge) []string {
+func blocksCycle(order []rankedIssue, edges []storage.DependencyEdge) []model.ID {
 	return findBlocksCycle(projectEdges(edges, positions(order)))
 }
 
 // positions maps each issue id in order to its index: the coordinate every
 // constraint over that order is compared in.
-func positions(order []rankedIssue) map[string]int {
-	position := make(map[string]int, len(order))
+func positions(order []rankedIssue) map[model.ID]int {
+	position := make(map[model.ID]int, len(order))
 	for at, item := range order {
 		position[item.id] = at
 	}

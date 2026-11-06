@@ -21,12 +21,12 @@ func TestIDChunksPartitionTheInput(t *testing.T) {
 	for _, size := range []int{0, 1, idChunkSize - 1, idChunkSize, idChunkSize + 1, 2*idChunkSize + 2} {
 		t.Run(fmt.Sprintf("%d", size), func(t *testing.T) {
 			t.Parallel()
-			ids := make([]string, size)
+			ids := make([]model.ID, size)
 			for i := range ids {
-				ids[i] = fmt.Sprintf("id-%03d", i)
+				ids[i] = model.ID(fmt.Sprintf("id-%03d", i))
 			}
 
-			var flat []string
+			var flat []model.ID
 			for _, chunk := range idChunks(ids) {
 				if len(chunk) == 0 {
 					t.Fatalf("idChunks(%d ids) produced an empty chunk, which would build `IN ()`", size)
@@ -53,15 +53,15 @@ func TestIDChunksPartitionTheInput(t *testing.T) {
 func TestIDChunksDropRepeatsAcrossChunkBoundaries(t *testing.T) {
 	t.Parallel()
 
-	ids := make([]string, 0, 2*idChunkSize)
+	ids := make([]model.ID, 0, 2*idChunkSize)
 	for i := range idChunkSize + 2 {
-		ids = append(ids, fmt.Sprintf("id-%03d", i))
+		ids = append(ids, model.ID(fmt.Sprintf("id-%03d", i)))
 	}
 	// Re-state the first and the last, far enough apart to fall in different
 	// chunks than their originals.
-	ids = append(ids, "id-000", fmt.Sprintf("id-%03d", idChunkSize+1))
+	ids = append(ids, "id-000", model.ID(fmt.Sprintf("id-%03d", idChunkSize+1)))
 
-	var flat []string
+	var flat []model.ID
 	for _, chunk := range idChunks(ids) {
 		flat = append(flat, chunk...)
 	}
@@ -89,7 +89,7 @@ func TestIDSetReadsAnswerEachRowOnceAndTheEmptySetWithNothing(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 
-	got, err := st.loadLabelsByIssueIDs(ctx, []string{issue.ID, issue.ID, issue.ID})
+	got, err := st.loadLabelsByIssueIDs(ctx, []model.ID{issue.ID, issue.ID, issue.ID})
 	if err != nil {
 		t.Fatalf("loadLabelsByIssueIDs(one id three times) error = %v", err)
 	}
@@ -226,7 +226,7 @@ func TestGetRelationsByIDsAnswersFromTheMomentItsStoreOpened(t *testing.T) {
 // whole edge set and answer for the other, and the first truncation aimed at
 // either would pass.
 type batchedRelationFixture struct {
-	subjects     []string
+	subjects     []model.ID
 	sink, source model.Issue
 }
 
@@ -237,7 +237,7 @@ func newBatchedRelationFixture(t *testing.T, ctx context.Context, st *Store) bat
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	const subjectCount = 34
-	subjects := make([]string, 0, subjectCount)
+	subjects := make([]model.ID, 0, subjectCount)
 	for i := range subjectCount {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("Subject %d", i)),

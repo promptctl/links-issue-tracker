@@ -19,6 +19,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -30,7 +31,7 @@ import (
 type reRootedRemote struct {
 	alpha, bravo string
 	remoteURL    string
-	ticket       string
+	ticket       model.ID
 	cut          string
 	// alphaReRoot is alpha's own re-root, so its Root is the remote's root.
 	alphaReRoot storage.ReRooted
@@ -619,7 +620,7 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(alpha) error = %v", err)
 	}
-	var ticket string
+	var ticket model.ID
 	for i := range 5 {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("t%d", i)), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic})
 		if err != nil {

@@ -54,10 +54,10 @@ Use 'lit next' to pick the top workable item to start.`
 // from path rows would take the epic they are in for part of the goal's chain.
 type focusNotice struct {
 	scope      focusScope
-	applied    bool     // false when --all asked for the whole queue anyway
-	offPath    []string // ids the scope excluded from this view
-	ownOffPath []string // ids the scope kept off the path, for this checkout's lanes and their epics
-	trimmed    int      // rows --limit cut AFTER the scope partition
+	applied    bool       // false when --all asked for the whole queue anyway
+	offPath    []model.ID // ids the scope excluded from this view
+	ownOffPath []model.ID // ids the scope kept off the path, for this checkout's lanes and their epics
+	trimmed    int        // rows --limit cut AFTER the scope partition
 	escape     string
 }
 
@@ -78,13 +78,13 @@ func (n focusNotice) line() string {
 // when nothing narrowed the run — an unfocused workspace, or --all.
 // [LAW:nothing-unseen] [LAW:one-source-of-truth]
 func (n focusNotice) record(ctx context.Context) {
-	goals := []string{}
+	goals := []model.ID{}
 	if n.applied {
 		goals = append(goals, n.scope.goals...)
 	}
-	telemetry.Set(ctx, "backlog.focus_goals", goals)
+	telemetry.Set(ctx, "backlog.focus_goals", model.RawIDs(goals))
 	telemetry.Set(ctx, "backlog.off_path", offPathFacts(n.offPath))
-	telemetry.Set(ctx, "backlog.own_off_path", append([]string{}, n.ownOffPath...))
+	telemetry.Set(ctx, "backlog.own_off_path", model.RawIDs(n.ownOffPath))
 	telemetry.Set(ctx, "backlog.trimmed", n.trimmed)
 }
 
@@ -116,7 +116,7 @@ func (n focusNotice) ownClause() string {
 	if len(n.ownOffPath) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" Off that path but in this checkout's lanes or their epics: %s.", strings.Join(n.ownOffPath, ", "))
+	return fmt.Sprintf(" Off that path but in this checkout's lanes or their epics: %s.", model.JoinIDs(n.ownOffPath, ", "))
 }
 
 // trimClause names the narrowing the scope cannot see. It is empty when --limit
@@ -160,7 +160,7 @@ func (n focusNotice) emptyLine() string {
 // here would read like a harmless shortcut past a loop with nothing to do, and
 // would in fact be a filter deciding whether a repo-wide warning is shown.
 // [LAW:dataflow-not-control-flow]
-func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, facts queueFacts, details map[string]storage.IssueRelations, cells map[string]derivedColumns, cc claimContext, notice focusNotice) error {
+func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, facts queueFacts, details map[model.ID]storage.IssueRelations, cells map[model.ID]derivedColumns, cc claimContext, notice focusNotice) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err
 	}
@@ -215,7 +215,7 @@ func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.A
 // that owns it, not as a second identity for the run, so a row can tell whether
 // staying silent would leave a claim standing that is not true of it.
 type backlogRun struct {
-	epicID string
+	epicID model.ID
 	lane   model.LaneID
 	claim  string
 }
@@ -328,7 +328,7 @@ func openingRun[T any, S comparable](value T, subject, above S) T {
 // "blocked: ..." surfaces non-dependency blockers, "blocked by: ..." names
 // open dependencies, "in_progress: ..." surfaces age/orphan status, and
 // "unblocks: ..." shows leverage.
-func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks []string, group backlogRowContext) error {
+func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocks []model.ID, group backlogRowContext) error {
 	readiness := ClassifyReadiness(entry.Annotations)
 	if err := printContextLine(w, contextIndent, group.epic); err != nil {
 		return err

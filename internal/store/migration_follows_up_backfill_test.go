@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // TestFollowsUpMigrationBackfill exercises 00006's Up backfill and Down
@@ -135,7 +137,7 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 		"t-f4":     "t-cyc-a",
 	}
 	for id, want := range wantFollowsUp {
-		if got := readFollowsUp(t, ctx, st, id); got != want {
+		if got := readFollowsUp(t, ctx, st, model.ID(id)); got != model.ID(want) {
 			t.Errorf("after Up: %s follows_up = %q, want %q", id, got, want)
 		}
 	}
@@ -153,7 +155,7 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 		"t-f4":     "",
 	}
 	for id, want := range wantParent {
-		if got := readParent(t, ctx, st, id); got != want {
+		if got := readParent(t, ctx, st, model.ID(id)); got != model.ID(want) {
 			t.Errorf("after Up: %s parent = %q, want %q", id, got, want)
 		}
 	}
@@ -178,7 +180,7 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 		"t-closed": "t-epic",
 	}
 	for id, want := range wantRestored {
-		if got := readParent(t, ctx, st, id); got != want {
+		if got := readParent(t, ctx, st, model.ID(id)); got != model.ID(want) {
 			t.Errorf("after Down: %s parent = %q, want %q", id, got, want)
 		}
 	}
@@ -191,19 +193,19 @@ func TestFollowsUpMigrationBackfill(t *testing.T) {
 	}
 }
 
-func readFollowsUp(t *testing.T, ctx context.Context, st *Store, id string) string {
+func readFollowsUp(t *testing.T, ctx context.Context, st *Store, id model.ID) model.ID {
 	t.Helper()
 	var target sql.NullString
 	if err := st.db.QueryRowContext(ctx, `SELECT follows_up FROM issues WHERE id = ?`, id).Scan(&target); err != nil {
 		t.Fatalf("read follows_up of %s: %v", id, err)
 	}
-	return target.String
+	return model.ID(target.String)
 }
 
 // readParent returns the single parent an issue's parent-child edge names, or
 // "" when it has none. Two edges would be a second fact the test did not seed
 // and is reported as such.
-func readParent(t *testing.T, ctx context.Context, st *Store, id string) string {
+func readParent(t *testing.T, ctx context.Context, st *Store, id model.ID) model.ID {
 	t.Helper()
 	rows, err := st.db.QueryContext(ctx, `SELECT dst_id FROM relations WHERE src_id = ? AND type = 'parent-child'`, id)
 	if err != nil {

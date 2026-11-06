@@ -52,7 +52,7 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 	mustRelate(t, ctx, st, downstream.ID, childA.ID, "blocked-by")
 	mustRelate(t, ctx, st, childA.ID, peer.ID, "related-to")
 
-	subjects := []string{epic.ID, childA.ID, childB.ID}
+	subjects := []model.ID{epic.ID, childA.ID, childB.ID}
 	rels, err := st.GetRelationsByIDs(ctx, append(subjects, "test-nonexistent"))
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs() error = %v", err)
@@ -74,9 +74,9 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 		if rel.Issue.ID != detail.Issue.ID {
 			t.Errorf("%s: Issue.ID = %q, want %q", id, rel.Issue.ID, detail.Issue.ID)
 		}
-		assertSameIDs(t, id+" Children", rel.Children, detail.Children)
-		assertSameIDs(t, id+" BlockedBy", rel.BlockedBy, detail.BlockedBy)
-		assertSameIDs(t, id+" Blocks", rel.Blocks, detail.Blocks)
+		assertSameIDs(t, id.Raw()+" Children", rel.Children, detail.Children)
+		assertSameIDs(t, id.Raw()+" BlockedBy", rel.BlockedBy, detail.BlockedBy)
+		assertSameIDs(t, id.Raw()+" Blocks", rel.Blocks, detail.Blocks)
 		if (rel.Parent == nil) != (detail.Parent == nil) {
 			t.Errorf("%s: Parent nil-ness differs (batch %v, detail %v)", id, rel.Parent, detail.Parent)
 		}
@@ -97,7 +97,7 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 	}
 }
 
-func mustRelate(t *testing.T, ctx context.Context, st *Store, src, dst string, relType model.RelationType) {
+func mustRelate(t *testing.T, ctx context.Context, st *Store, src, dst model.ID, relType model.RelationType) {
 	t.Helper()
 	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: src, DstID: dst, Type: relType, CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(%s %s->%s) error = %v", relType, src, dst, err)
@@ -119,8 +119,8 @@ func assertSameIDs(t *testing.T, label string, got, want []model.Issue) {
 	}
 }
 
-func ids(issues []model.Issue) []string {
-	out := make([]string, len(issues))
+func ids(issues []model.Issue) []model.ID {
+	out := make([]model.ID, len(issues))
 	for i, issue := range issues {
 		out[i] = issue.ID
 	}
@@ -134,7 +134,7 @@ func ids(issues []model.Issue) []string {
 func TestMergeRelationsDedupesAndOrders(t *testing.T) {
 	t.Parallel()
 	at := func(sec int) time.Time { return time.Date(2026, 8, 25, 0, 0, sec, 0, time.UTC) }
-	edge := func(src, dst string, relType model.RelationType, created time.Time) model.Relation {
+	edge := func(src, dst model.ID, relType model.RelationType, created time.Time) model.Relation {
 		return model.Relation{SrcID: src, DstID: dst, Type: relType, CreatedAt: created}
 	}
 	shared := edge("epic-1", "epic-1.2", model.RelParentChild, at(1))

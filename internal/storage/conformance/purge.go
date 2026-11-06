@@ -31,7 +31,7 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: storagetest.CommentBody(t, "secret"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
-	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: waiter.ID, Body: storagetest.CommentBody(t, "mentions "+doomed.ID), CreatedBy: "ada"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: waiter.ID, Body: storagetest.CommentBody(t, "mentions "+doomed.ID.Raw()), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 	for _, planned := range []model.Issue{doomed, waiter} {
@@ -48,7 +48,7 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 			t.Fatalf("AddRelation(%+v) error = %v", edge, err)
 		}
 	}
-	if _, err := st.Apply(ctx, duplicate.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: doomed.ID}}, Actor: "ada"}); err != nil {
+	if _, err := st.Apply(ctx, duplicate.ID, storage.Change{Action: model.Close{Outcome: model.Duplicate{Of: doomed.ID.Raw()}}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply close-as-duplicate error = %v", err)
 	}
 	history, err := st.ListEvents(ctx, doomed.ID)
@@ -92,7 +92,7 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 	if got := mustGet(t, ctx, st, followUp.ID).FollowsUp; got != doomed.ID {
 		t.Errorf("follow-up FollowsUp = %q, want the purged id %q kept", got, doomed.ID)
 	}
-	if target := mustGet(t, ctx, st, duplicate.ID).RedirectTargetValue(); target == nil || *target != doomed.ID {
+	if target := mustGet(t, ctx, st, duplicate.ID).RedirectTargetValue(); target == nil || *target != doomed.ID.Raw() {
 		t.Errorf("duplicate redirect target = %v, want the purged id %s kept", target, doomed.ID)
 	}
 }
@@ -112,7 +112,7 @@ func aPurgeRefusesAContainerThatHoldsTickets(t *testing.T, ctx context.Context, 
 
 	_, err := st.Purge(ctx, storage.PurgeInput{IssueID: epic.ID, Actor: "ada"})
 	assertRefused(t, err, "Purge(epic holding a deleted child)")
-	if err != nil && (!strings.Contains(err.Error(), child.ID) || strings.Contains(err.Error(), childEpic.ID)) {
+	if err != nil && (!strings.Contains(err.Error(), child.ID.Raw()) || strings.Contains(err.Error(), childEpic.ID.Raw())) {
 		t.Errorf("refusal = %q, want it to name the stranded leaf %s and not the child epic %s", err, child.ID, childEpic.ID)
 	}
 	mustGet(t, ctx, st, epic.ID)
@@ -184,7 +184,7 @@ func mustExport(t *testing.T, ctx context.Context, st storage.Store) model.Expor
 }
 
 // assertNoRowOf fails for any row of the export that belongs to id.
-func assertNoRowOf(t *testing.T, export model.Export, id string) {
+func assertNoRowOf(t *testing.T, export model.Export, id model.ID) {
 	t.Helper()
 	for _, issue := range export.Issues {
 		if issue.ID == id {
@@ -231,7 +231,7 @@ func assertSameRows(t *testing.T, want, got model.Export) {
 			len(got.Issues), len(got.Relations), len(got.Comments), len(got.Labels), len(got.Events), len(got.PlanReviews),
 			len(want.Issues), len(want.Relations), len(want.Comments), len(want.Labels), len(want.Events), len(want.PlanReviews))
 	}
-	gotByID := map[string]model.Issue{}
+	gotByID := map[model.ID]model.Issue{}
 	for _, issue := range got.Issues {
 		gotByID[issue.ID] = issue
 	}
@@ -245,7 +245,7 @@ func assertSameRows(t *testing.T, want, got model.Export) {
 			t.Errorf("issue %s changed: got %q/%q follows_up=%q, want %q/%q follows_up=%q", w.ID, g.Title, g.Description, g.FollowsUp, w.Title, w.Description, w.FollowsUp)
 		}
 	}
-	gotBodies := map[string]string{}
+	gotBodies := map[model.ID]string{}
 	for _, c := range got.Comments {
 		gotBodies[c.ID] = c.Body
 	}

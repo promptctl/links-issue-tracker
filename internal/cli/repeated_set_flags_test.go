@@ -67,7 +67,7 @@ func TestNextRepeatedSetFlagsWiden(t *testing.T) {
 		{"assignee", []string{"--assignee", "ann", "--assignee", "bob"}, bugA},
 	} {
 		t.Run(tc.flag, func(t *testing.T) {
-			if got := h.runNextRowArgs(tc.args...); got.ID != tc.want {
+			if got := h.runNextRowArgs(tc.args...); got.ID.Raw() != tc.want {
 				t.Fatalf("lit next %v served %q, want %q — a repeated flag kept only its last occurrence", tc.args, got.ID, tc.want)
 			}
 		})
@@ -118,7 +118,7 @@ func TestOrphanedRepeatedAssigneeWidens(t *testing.T) {
 			t.Fatalf("start %s: %v", issue.ID, err)
 		}
 		h.backdateUpdatedAt(issue.ID, 7*time.Hour)
-		stale = append(stale, issue.ID)
+		stale = append(stale, issue.ID.Raw())
 	}
 	got := strings.Join(runOrphanedIDs(t, h, "--assignee", "ann", "--assignee", "bob"), " ")
 	if !strings.Contains(got, stale[0]) || !strings.Contains(got, stale[1]) || strings.Contains(got, stale[2]) {
@@ -220,7 +220,7 @@ func TestNewRefusesARepeatedLabelsFlagBeforeWriting(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, IssueType: model.TypeEpic, Topic: "repeat"})
 	var out bytes.Buffer
-	err := runNew(t, h.ctx, &out, h.ap, []string{"--title", "repeat probe", "--topic", "repeat", "--type", "task", "--parent", epic.ID, "--labels", "a", "--labels", "b"})
+	err := runNew(t, h.ctx, &out, h.ap, []string{"--title", "repeat probe", "--topic", "repeat", "--type", "task", "--parent", epic.ID.Raw(), "--labels", "a", "--labels", "b"})
 	if got := ExitCode(err); got != ExitUsage {
 		t.Fatalf("lit new --labels a --labels b exit = %d (error %v), want %d", got, err, ExitUsage)
 	}

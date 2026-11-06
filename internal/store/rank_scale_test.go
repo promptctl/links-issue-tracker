@@ -46,23 +46,23 @@ const (
 	seedRelationsHead = `INSERT INTO relations(src_id,dst_id,type,created_at,created_by) VALUES `
 )
 
-func seedEpicRow(id, key string) string {
-	return fmt.Sprintf(`('%s','e','d',NULL,0,'epic','env','','%s','','%s','%s')`, id, key, seedStamp, seedStamp)
+func seedEpicRow(id model.ID, key string) string {
+	return fmt.Sprintf(`('%s','e','d',NULL,0,'epic','env','','%s','','%s','%s')`, id.Raw(), key, seedStamp, seedStamp)
 }
 
-func seedTaskRow(id, key string) string {
-	return fmt.Sprintf(`('%s','t','d','open',0,'task','env','','%s','','%s','%s')`, id, key, seedStamp, seedStamp)
+func seedTaskRow(id model.ID, key string) string {
+	return fmt.Sprintf(`('%s','t','d','open',0,'task','env','','%s','','%s','%s')`, id.Raw(), key, seedStamp, seedStamp)
 }
 
-func seedEdge(src, dst string, relation model.RelationType) string {
-	return fmt.Sprintf(`('%s','%s','%s','%s','seed')`, src, dst, relation, seedStamp)
+func seedEdge(src, dst model.ID, relation model.RelationType) string {
+	return fmt.Sprintf(`('%s','%s','%s','%s','seed')`, src.Raw(), dst.Raw(), relation, seedStamp)
 }
 
-func seededRow(i int) string {
+func seededRow(i int) model.ID {
 	if i%10 == 0 {
-		return fmt.Sprintf("test-e%06d", i)
+		return model.ID(fmt.Sprintf("test-e%06d", i))
 	}
-	return fmt.Sprintf("test-t%06d", i)
+	return model.ID(fmt.Sprintf("test-t%06d", i))
 }
 
 // seedRows adds rows from..to of perfbench's shape, an epic and its nine tasks,
@@ -89,12 +89,12 @@ func seedRows(t *testing.T, ctx context.Context, st *Store, from, to int, blocke
 
 // seedKeys adds a top-level epic holding each key, returning their ids in key
 // order.
-func seedKeys(t *testing.T, ctx context.Context, st *Store, keys []string) []string {
+func seedKeys(t *testing.T, ctx context.Context, st *Store, keys []string) []model.ID {
 	t.Helper()
-	ids := make([]string, len(keys))
+	ids := make([]model.ID, len(keys))
 	rows := make([]string, len(keys))
 	for i, key := range keys {
-		ids[i] = fmt.Sprintf("test-k%06d", i)
+		ids[i] = model.ID(fmt.Sprintf("test-k%06d", i))
 		rows[i] = seedEpicRow(ids[i], key)
 	}
 	seedInsert(t, ctx, st, seedIssuesHead, rows)
@@ -111,7 +111,7 @@ func liveKeys(t *testing.T) []string {
 	return strings.Fields(string(raw))
 }
 
-func storedKey(t *testing.T, ctx context.Context, st *Store, id string) string {
+func storedKey(t *testing.T, ctx context.Context, st *Store, id model.ID) string {
 	t.Helper()
 	var key string
 	if err := st.db.QueryRowContext(ctx, `SELECT item_rank FROM issues WHERE id = ?`, id).Scan(&key); err != nil {
@@ -297,8 +297,8 @@ func TestGraphReadsPlanAsLookups(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	seedRows(t, ctx, st, 0, 60, true)
 	frame, frameArgs := frameRowsQuery(storage.Frame(seededRow(0)))
-	climb, climbArg := rankClimbQuery([]string{seededRow(23), seededRow(53)})
-	children, childrenArg := childIDsQuery([]string{seededRow(0)})
+	climb, climbArg := rankClimbQuery([]model.ID{seededRow(23), seededRow(53)})
+	children, childrenArg := childIDsQuery([]model.ID{seededRow(0)})
 	family, familyArgs, err := st.laneFamilyEvents(ctx, "e.created_at", seededRow(23))
 	if err != nil {
 		t.Fatal(err)
@@ -331,7 +331,7 @@ func TestOneIssuesEdgesPlanAsPointLookups(t *testing.T) {
 	id := seededRow(23)
 	for _, from := range []string{relationsBySrc, relationsByDst} {
 		plan := planOf(t, ctx, st, `SELECT src_id, dst_id, type, created_at, created_by FROM `+from, id)
-		if !strings.Contains(plan, "filters: [{["+id+", "+id+"]") {
+		if !strings.Contains(plan, "filters: [{["+id.Raw()+", "+id.Raw()+"]") {
 			t.Errorf("%s plans as\n%s\nwant a point range on the leading column", from, plan)
 		}
 	}
@@ -358,7 +358,7 @@ func TestAParentRowThatIsGoneFramesNothing(t *testing.T) {
 
 // seedGoneParentEdge files childID under parentID, an issue with no row, which
 // the foreign key refuses to any write that leaves its checks on.
-func seedGoneParentEdge(t *testing.T, ctx context.Context, st *Store, childID, parentID string) {
+func seedGoneParentEdge(t *testing.T, ctx context.Context, st *Store, childID, parentID model.ID) {
 	t.Helper()
 	conn, err := st.db.Conn(ctx)
 	if err != nil {
@@ -401,7 +401,7 @@ func TestFrameColumnStaysLinear(t *testing.T) {
 	past := func(from, to int) {
 		var issues, edges []string
 		for i := from; i < to; i++ {
-			id := fmt.Sprintf("test-z%06d", i)
+			id := model.ID(fmt.Sprintf("test-z%06d", i))
 			issues = append(issues, seedTaskRow(id, fmt.Sprintf("Z%06d", i)))
 			edges = append(edges, seedEdge(id, seededRow(0), model.RelParentChild))
 		}
@@ -491,7 +491,7 @@ type chainStore struct {
 	t    *testing.T
 	ctx  context.Context
 	st   *Store
-	link func(int) string
+	link func(int) model.ID
 }
 
 // blockedChain seeds links 0..chain-1, each blocked by the one before, and a
@@ -501,7 +501,7 @@ func blockedChain(t *testing.T, chain int) chainStore {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	seedRows(t, ctx, st, 0, chain*5+10, false)
-	link := func(i int) string { return seededRow(i*5 + 1) }
+	link := func(i int) model.ID { return seededRow(i*5 + 1) }
 	edges := []string{seedEdge(link(chain+1), link(chain), model.RelBlockedBy)}
 	for i := 1; i < chain; i++ {
 		edges = append(edges, seedEdge(link(i), link(i-1), model.RelBlockedBy))
@@ -512,7 +512,7 @@ func blockedChain(t *testing.T, chain int) chainStore {
 }
 
 // check times rejectBlocksCycle in a transaction it rolls back.
-func (c chainStore) check(dependent, dependency string) (error, time.Duration) {
+func (c chainStore) check(dependent, dependency model.ID) (error, time.Duration) {
 	tx, err := c.st.db.BeginTx(c.ctx, nil)
 	if err != nil {
 		c.t.Fatal(err)
@@ -581,7 +581,7 @@ func TestATopCreateLeadsItsFrameOnAHotSpot(t *testing.T) {
 	base := context.Background()
 	st := openIssueStore(t, base)
 	ids := seedKeys(t, base, st, liveKeys(t))
-	for _, epic := range []string{ids[0], ids[625]} {
+	for _, epic := range []model.ID{ids[0], ids[625]} {
 		for i := range 300 {
 			child, err := st.CreateIssue(base, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("hot %d", i)), Lane: storage.SharedLane, Topic: "env", IssueType: "task", ParentID: epic, Placement: storage.RankTop})
 			if err != nil {
@@ -613,7 +613,7 @@ func TestARankToTheBottomPastChildRowsLeadsTheTopLevelsEnd(t *testing.T) {
 	seedRows(t, ctx, st, 0, 60, false)
 	var issues, edges []string
 	for i := range 30 {
-		id := fmt.Sprintf("test-z%06d", i)
+		id := model.ID(fmt.Sprintf("test-z%06d", i))
 		issues = append(issues, seedTaskRow(id, fmt.Sprintf("Z%06d", i)))
 		edges = append(edges, seedEdge(id, seededRow(0), model.RelParentChild))
 	}
@@ -626,7 +626,7 @@ func TestARankToTheBottomPastChildRowsLeadsTheTopLevelsEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := storedKey(t, ctx, st, moved)
-	for _, epic := range []string{seededRow(0), seededRow(10), seededRow(30), seededRow(50)} {
+	for _, epic := range []model.ID{seededRow(0), seededRow(10), seededRow(30), seededRow(50)} {
 		if other := storedKey(t, ctx, st, epic); other >= key {
 			t.Errorf("%s holds %q, at or past the %q of the epic sent to the bottom", epic, other, key)
 		}
@@ -657,7 +657,7 @@ func TestAChildTwoParentsClaimSitsInOneFrame(t *testing.T) {
 	if f != storage.Frame(lower) {
 		t.Errorf("frameOfTx(%s) = %q, want the lower parent %q", child.ID, f, lower)
 	}
-	for parent, wants := range map[string]bool{lower: true, upper: false} {
+	for parent, wants := range map[model.ID]bool{lower: true, upper: false} {
 		rows, args := frameRowsQuery(storage.Frame(parent))
 		slots, err := rankRows(ctx, tx, rows, args...)
 		if err != nil {
@@ -681,7 +681,7 @@ func TestAChildTwoParentsClaimSitsInOneFrame(t *testing.T) {
 	if onTop.Frame != storage.Frame(lower) || again.Moved {
 		t.Errorf("moving the top of its frame to the top = %+v after %+v, want no move in %q", again, onTop, lower)
 	}
-	set, err := st.RankSet(ctx, []string{sibling.ID, child.ID})
+	set, err := st.RankSet(ctx, []model.ID{sibling.ID, child.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -766,7 +766,7 @@ func TestAMoveOutOfADeepCornerFindsRoom(t *testing.T) {
 	if _, err := st.RankBelow(ctx, ids[2], ids[1]); err != nil {
 		t.Fatalf("RankBelow out of the corner: %v", err)
 	}
-	keys := map[string]string{}
+	keys := map[model.ID]string{}
 	rows, err := rankRows(ctx, st.db, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL`)
 	if err != nil {
 		t.Fatal(err)
@@ -798,7 +798,7 @@ func TestARepairSeparatesKeysTiedOnTheIndexPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	slices.SortFunc(stored, compareRankedIssues)
-	got := make([]string, len(stored))
+	got := make([]model.ID, len(stored))
 	repaired := make([]string, len(stored))
 	for i, row := range stored {
 		got[i], repaired[i] = row.id, row.rank
@@ -855,13 +855,13 @@ func TestRankRewritesWidenPastAGapWithNoRoom(t *testing.T) {
 	if !slices.Equal(rewrites, again) {
 		t.Fatalf("rankRewrites is not deterministic: %v then %v", rewrites, again)
 	}
-	written := map[string]string{}
+	written := map[model.ID]string{}
 	for _, r := range rewrites {
 		written[r.id] = r.newRank
 		if len(r.newRank) > rank.MaxLength {
 			t.Fatalf("%s rewritten to %d chars", r.id, len(r.newRank))
 		}
-		if mover := strings.HasPrefix(r.id, "m"); r.respaced == mover {
+		if mover := strings.HasPrefix(r.id.Raw(), "m"); r.respaced == mover {
 			t.Errorf("%s respaced: %t, want the bound the gap gave up to be the one respaced", r.id, r.respaced)
 		}
 	}

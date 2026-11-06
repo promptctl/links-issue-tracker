@@ -141,7 +141,7 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 		if !ok {
 			t.Fatalf("standing while the worker's checkout is alive = %#v, want Held", standing)
 		}
-		if held.By.Stream() != workerToken {
+		if held.By.Stream().Raw() != workerToken {
 			t.Fatalf("holder stream = %q, want the worker's %q", held.By.Stream(), workerToken)
 		}
 	})
@@ -170,7 +170,7 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 	if !ok {
 		t.Fatalf("standing on a second clone = %#v, want Held: it cannot see this filesystem and must age the claim out instead", remote)
 	}
-	if held.By.Stream() != workerToken {
+	if held.By.Stream().Raw() != workerToken {
 		t.Fatalf("second clone's holder stream = %q, want the worker's %q", held.By.Stream(), workerToken)
 	}
 }

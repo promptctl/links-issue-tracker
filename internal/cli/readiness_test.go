@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // TestClassifyReadinessPerKind is the contract test for the single
@@ -164,7 +165,7 @@ func TestClassifyReadinessComposite(t *testing.T) {
 	if got := len(r.BlockingReasons()); got != 3 {
 		t.Errorf("BlockingReasons() len = %d, want 3", got)
 	}
-	if got, want := r.DependencyIDs(), []string{"dep-1", "dep-2"}; !reflect.DeepEqual(got, want) {
+	if got, want := r.DependencyIDs(), []model.ID{"dep-1", "dep-2"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("DependencyIDs() = %v, want %v", got, want)
 	}
 	if !r.IsOrphaned() {

@@ -16,7 +16,7 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 	wrote := func(actor, from, to string) model.IssueEvent {
 		return model.IssueEvent{Action: "update", Actor: model.Text(actor), Changes: []model.FieldChange{{Field: "plan", From: from, To: to}}}
 	}
-	review := func(id, by, text string, verdict model.PlanVerdict, laws ...model.Law) model.PlanReview {
+	review := func(id model.ID, by, text string, verdict model.PlanVerdict, laws ...model.Law) model.PlanReview {
 		return model.PlanReview{ID: id, IssueID: "lit-1", PlanDigest: model.DigestPlan(text), Verdict: verdict, Laws: laws, CreatedBy: model.Text(by)}
 	}
 	v1 := storage.PlanVersion{Number: 1, Digest: model.DigestPlan(first)}
@@ -33,7 +33,7 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 		plan     string
 		events   []model.IssueEvent
 		reviews  []model.PlanReview
-		approved string
+		approved model.ID
 		gap      storage.PlanGap
 	}{
 		{name: "no plan", events: []model.IssueEvent{created}, gap: storage.PlanMissing{}},

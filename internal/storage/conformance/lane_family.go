@@ -31,7 +31,7 @@ func aLaneFamilyReadsWhatTheBacklogReads(t *testing.T, ctx context.Context, st s
 	alone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("other epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	outside := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("outside"), Lane: storage.SharedLane, Topic: "core", ParentID: alone.ID})
 
-	apply := func(checkout, id string, actions ...model.Action) {
+	apply := func(checkout string, id model.ID, actions ...model.Action) {
 		t.Helper()
 		st.AttributeTo(checkout)
 		for _, action := range actions {
@@ -84,12 +84,12 @@ func aLaneFamilyIsTheIssueAndWhatIsFiledBesideIt(t *testing.T, ctx context.Conte
 	if err != nil {
 		t.Fatalf("LaneFamily error = %v", err)
 	}
-	got := make([]string, 0, len(family.Issues))
+	got := make([]model.ID, 0, len(family.Issues))
 	for _, issue := range family.Issues {
 		got = append(got, issue.ID)
 	}
 	slices.Sort(got)
-	want := []string{subject.ID, sibling.ID, gone.ID}
+	want := []model.ID{subject.ID, sibling.ID, gone.ID}
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("family issues = %v, want %v", got, want)

@@ -40,7 +40,7 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("test support: %v", err)
 	}
-	plant := func(id, column, value string) {
+	plant := func(id model.ID, column, value string) {
 		t.Helper()
 		if err := raw.ExecRawForTest(h.ctx, "UPDATE issues SET "+column+" = ? WHERE id = ?", value, id); err != nil {
 			t.Fatalf("plant %s of %s: %v", column, id, err)
@@ -87,6 +87,13 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 		if strings.ContainsRune(printed, '\x1b') {
 			t.Errorf("%s printed a planted ESC raw:\n%q", name, printed)
 		}
+		// A planted id's tab, printed raw, would add a cell to its row. A quoted
+		// block of remote text ("  | " rows) is DATA, not cells, and keeps it.
+		for _, line := range strings.Split(printed, "\n") {
+			if !strings.HasPrefix(line, "  | ") && strings.Contains(line, forged+"\t") {
+				t.Errorf("%s printed a planted tab raw: %q\n%q", name, line, printed)
+			}
+		}
 		// Split at every break form a reader may take for one, not only \n.
 		for _, line := range strings.Split(model.LineBreakNormalizer.Replace(printed), "\n") {
 			if strings.HasPrefix(strings.TrimLeft(line, " |"), forged) {
@@ -104,6 +111,39 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	// same way, so show's header and assignee line are held as the listings are.
 	plant(stale.ID, "assignee", "tester\u2029"+forged+" assignee")
 	plant(open.ID, "topic", "demo\r"+forged+" topic")
+	// An id is minted by lit but carried by sync and import, so a stored one
+	// can hold a break and a tab too. The epic and a child under it are renamed
+	// in every row that names them, so the parent edge, the history and the
+	// epic context all reach the planted ids.
+	rename := func(issue *model.Issue, to model.ID) {
+		t.Helper()
+		for _, stmt := range []string{
+			"UPDATE issues SET id = ? WHERE id = ?",
+			"UPDATE relations SET src_id = ? WHERE src_id = ?",
+			"UPDATE relations SET dst_id = ? WHERE dst_id = ?",
+			"UPDATE issue_events SET issue_id = ? WHERE issue_id = ?",
+			"UPDATE comments SET issue_id = ? WHERE issue_id = ?",
+			"UPDATE labels SET issue_id = ? WHERE issue_id = ?",
+			"UPDATE plan_reviews SET issue_id = ? WHERE issue_id = ?",
+		} {
+			if err := raw.ExecRawForTest(h.ctx, stmt, to, issue.ID); err != nil {
+				t.Fatalf("rename %s to %q: %s: %v", issue.ID, to, stmt, err)
+			}
+		}
+		issue.ID = to
+	}
+	if err := raw.ExecRawForTest(h.ctx, "SET FOREIGN_KEY_CHECKS = 0"); err != nil {
+		t.Fatalf("foreign key checks off: %v", err)
+	}
+	rename(&epic, model.ID(epic.ID.Raw()+"\n"+forged+"\tepic-id"))
+	rename(&open, model.ID(open.ID.Raw()+" "+forged+"\topen-id"))
+	if err := raw.ExecRawForTest(h.ctx, "SET FOREIGN_KEY_CHECKS = 1"); err != nil {
+		t.Fatalf("foreign key checks on: %v", err)
+	}
+	// held, a planted id printed through its type: the break a token and the
+	// tab a space, so it neither starts a row nor adds a cell to one.
+	epicID := model.QuotedBreak + forged + " epic-id"
+	openID := model.QuotedBreak + forged + " open-id"
 	for _, listing := range []struct {
 		name  string
 		print func(io.Writer) error
@@ -113,21 +153,40 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 			return runListWithStore(t, h.ctx, w, h.ap.Store, policy, []string{"--format", "table"})
 		}},
 		{"backlog", func(w io.Writer) error { return runWorkable(t, h.ctx, w, h.ap, nil, backlogView) }},
-		{"children", command(runChildren, epic.ID)},
-		{"show (leaf)", command(runShow, stale.ID)},
-		{"show (lane)", command(runShow, open.ID)},
-		{"show (epic)", command(runShow, epic.ID)},
-		{"show --field title,lane", command(runShow, open.ID, "--field", "title,lane")},
+		{"children", command(runChildren, epic.ID.Raw())},
+		{"show (leaf)", command(runShow, stale.ID.Raw())},
+		{"show (lane)", command(runShow, open.ID.Raw())},
+		{"show (epic)", command(runShow, epic.ID.Raw())},
+		{"show --field title,lane", command(runShow, open.ID.Raw(), "--field", "title,lane")},
 		{"orphaned", command(runOrphaned)},
 		{"restore's removed list", func(w io.Writer) error {
 			return writeRemoved(w, []storage.Removed{{IssueID: open.ID, Title: held.Title}, {IssueID: epic.ID, Title: parent.Title}}, "/backups/x.json")
 		}},
 		{"contested lanes", func(w io.Writer) error { return printContestedLanes(w, contested, time.Now()) }},
 		// Last: the write's summary row reprints the stored title it left alone.
-		{"update's summary", command(runUpdate, open.ID, "--priority", "urgent")},
+		{"update's summary", command(runUpdate, open.ID.Raw(), "--priority", "urgent")},
 	} {
 		check(listing.name, listing.print)
 	}
-	check("show's assignee line", command(runShow, stale.ID), "tester"+model.QuotedBreak+forged+" assignee")
-	check("show's topic line", command(runShow, open.ID), "demo"+model.QuotedBreak+forged+" topic")
+	check("show's assignee line", command(runShow, stale.ID.Raw()), "tester"+model.QuotedBreak+forged+" assignee")
+	check("show's topic line", command(runShow, open.ID.Raw()), "demo"+model.QuotedBreak+forged+" topic")
+
+	// Each listing that names a planted id prints it held.
+	check("ls's ids", func(w io.Writer) error { return runListWithStore(t, h.ctx, w, h.ap.Store, policy, nil) }, epicID, openID)
+	check("ls --format table's ids", func(w io.Writer) error {
+		return runListWithStore(t, h.ctx, w, h.ap.Store, policy, []string{"--format", "table"})
+	}, epicID, openID)
+	check("ls --columns id,parent's ids", func(w io.Writer) error {
+		return runListWithStore(t, h.ctx, w, h.ap.Store, policy, []string{"--columns", "id,parent"})
+	}, epicID, openID)
+	check("backlog's ids", func(w io.Writer) error { return runWorkable(t, h.ctx, w, h.ap, nil, backlogView) }, openID)
+	check("children's ids", command(runChildren, epic.ID.Raw()), openID)
+	check("show (leaf)'s epic context", command(runShow, stale.ID.Raw()), epicID, openID)
+	check("show (lane)'s ids", command(runShow, open.ID.Raw()), openID, epicID)
+	check("show (epic)'s ids", command(runShow, epic.ID.Raw()), epicID, openID)
+	check("show --field id's id", command(runShow, open.ID.Raw(), "--field", "id"), openID)
+	check("history's id", command(runHistory, open.ID.Raw()), openID)
+	check("update's summary id", command(runUpdate, open.ID.Raw(), "--priority", "normal"), openID)
+	h.applyAction(open.ID, model.Start{Assignee: "tester"}, "")
+	check("next's in-progress advice", command(runNext), openID)
 }

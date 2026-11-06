@@ -335,7 +335,7 @@ func (s *Store) unaccountedRows(ctx context.Context, base, localHead, remoteHead
 
 // countUnaccounted is unaccountedRows' count over rows already read. The
 // events are keyed by event id, each naming its ticket's id.
-func countUnaccounted(base, remote map[string]model.Issue, baseEvents, remoteEvents map[string]string, purges []model.Purge) (tickets, events int) {
+func countUnaccounted(base, remote map[model.ID]model.Issue, baseEvents, remoteEvents map[model.ID]model.ID, purges []model.Purge) (tickets, events int) {
 	purged := func(ticket model.Issue) bool {
 		return slices.ContainsFunc(purges, func(p model.Purge) bool { return p.Names(ticket) })
 	}

@@ -48,7 +48,7 @@ func (s *Store) bulkApply(ctx context.Context, prefix, actor string, specs []sto
 		if err != nil {
 			return err
 		}
-		existingTypes, err := s.issueTypesByIDs(ctx, storage.BulkExistingRefs(merged))
+		existingTypes, err := s.issueTypesByIDs(ctx, model.IDsOf(storage.BulkExistingRefs(merged)))
 		if err != nil {
 			return fmt.Errorf("bulk: read the issues the file places: %w", err)
 		}
@@ -68,8 +68,8 @@ func (s *Store) bulkApply(ctx context.Context, prefix, actor string, specs []sto
 func (s *Store) writeBulkFile(ctx context.Context, prefix, actor string, file storage.BulkFile, kept []storage.Slot) (storage.BulkApplyResult, batchLanding, error) {
 	return withBatch(ctx, s, func(ctx context.Context, result *storage.BulkApplyResult) error {
 		result.Kept = kept
-		createdIDs := make([]string, 0, len(file.Creates))
-		localRealID := make(map[string]string, len(file.Creates))
+		createdIDs := make([]model.ID, 0, len(file.Creates))
+		localRealID := make(map[string]model.ID, len(file.Creates))
 		for _, create := range file.Creates {
 			issue, err := s.CreateIssue(ctx, create.Input(storage.ResolveRef(create.Parent, localRealID), prefix, actor))
 			if err != nil {
@@ -118,7 +118,7 @@ type edgeWriterTx struct {
 	now   time.Time
 }
 
-func (w edgeWriterTx) Edges(id string, relType model.RelationType) ([]model.Relation, error) {
+func (w edgeWriterTx) Edges(id model.ID, relType model.RelationType) ([]model.Relation, error) {
 	if err := requireIssueExistsTx(w.ctx, w.tx, id); err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (w edgeWriterTx) Edges(id string, relType model.RelationType) ([]model.Rela
 	return edges, nil
 }
 
-func (w edgeWriterTx) Add(id, target string, relType model.RelationType) error {
+func (w edgeWriterTx) Add(id, target model.ID, relType model.RelationType) error {
 	return addRelationTx(w.ctx, w.tx, model.Relation{SrcID: id, DstID: target, Type: relType, CreatedAt: w.now, CreatedBy: model.Text(storage.Actor(w.actor))})
 }
 

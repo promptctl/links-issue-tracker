@@ -23,8 +23,8 @@ func (s *Store) ImportTree(ctx context.Context, prefix, actor string, specs []st
 		return storage.ImportTreeResult{}, err
 	}
 	imported, _, err := withBatch(ctx, s, func(ctx context.Context, result *storage.ImportTreeResult) error {
-		idMap := make(map[string]string, len(creates))
-		createdIDs := make([]string, 0, len(creates))
+		idMap := make(map[string]model.ID, len(creates))
+		createdIDs := make([]model.ID, 0, len(creates))
 		for _, create := range creates {
 			issue, err := s.CreateIssue(ctx, create.Input(idMap[create.Parent], prefix, actor))
 			if err != nil {

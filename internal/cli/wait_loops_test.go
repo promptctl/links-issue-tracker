@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -54,9 +55,9 @@ func TestDoctorNamesAWaitLoop(t *testing.T) {
 
 	got, line := h.doctorWaitLoopLine()
 	for _, link := range []string{
-		b.ID + " waits on earlier sibling " + e1.ID,
-		e1.ID + " waits on its child " + c.ID,
-		c.ID + " is blocked by " + b.ID,
+		b.ID.Raw() + " waits on earlier sibling " + e1.ID.Raw(),
+		e1.ID.Raw() + " waits on its child " + c.ID.Raw(),
+		c.ID.Raw() + " is blocked by " + b.ID.Raw(),
 	} {
 		if !strings.Contains(line, link) {
 			t.Fatalf("the wait loop line should name %q; got:\n%s", link, got)
@@ -82,10 +83,10 @@ func TestDoctorNamesEveryLinkBetweenAPair(t *testing.T) {
 
 	got, line := h.doctorWaitLoopLine()
 	for _, link := range []string{
-		c.ID + " is blocked by " + b.ID + " and waits on earlier sibling " + b.ID,
-		b.ID + " is blocked by " + f.ID,
-		f.ID + " waits on its child " + x.ID,
-		x.ID + " is blocked by " + c.ID,
+		c.ID.Raw() + " is blocked by " + b.ID.Raw() + " and waits on earlier sibling " + b.ID.Raw(),
+		b.ID.Raw() + " is blocked by " + f.ID.Raw(),
+		f.ID.Raw() + " waits on its child " + x.ID.Raw(),
+		x.ID.Raw() + " is blocked by " + c.ID.Raw(),
 	} {
 		if !strings.Contains(line, link) {
 			t.Fatalf("the wait loop line should name %q; got:\n%s", link, got)
@@ -133,8 +134,8 @@ func TestDoctorWaitLoopsUncheckedOnAStoredParentCycle(t *testing.T) {
 // which that loop misses, gets c>a>b>c; nothing names a loop twice.
 func TestLoopsInNamesEveryIssueOnALoop(t *testing.T) {
 	t.Parallel()
-	graph := map[string][]waitHop{}
-	for _, pair := range [][2]string{
+	graph := map[model.ID][]waitHop{}
+	for _, pair := range [][2]model.ID{
 		{"a", "b"}, {"b", "a"}, {"b", "c"}, {"c", "a"},
 		{"tail", "a"}, {"a", "out"},
 		{"y", "x"}, {"x", "y"},
@@ -147,7 +148,7 @@ func TestLoopsInNamesEveryIssueOnALoop(t *testing.T) {
 	for _, loop := range loopsIn(graph) {
 		var hops []string
 		for _, hop := range loop {
-			hops = append(hops, hop.waiter+">"+hop.prereq)
+			hops = append(hops, hop.waiter.Raw()+">"+hop.prereq.Raw())
 		}
 		got = append(got, strings.Join(hops, " "))
 	}

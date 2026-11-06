@@ -14,7 +14,7 @@ import (
 // collided instead of reporting a count. Ours is local and Theirs remote — the only
 // provenance a reconcile has, since every export it reads carries its own workspace id.
 type Collision struct {
-	IssueID string      `json:"issue_id"`
+	IssueID model.ID    `json:"issue_id"`
 	Ours    model.Issue `json:"ours"`
 	Theirs  model.Issue `json:"theirs"`
 }

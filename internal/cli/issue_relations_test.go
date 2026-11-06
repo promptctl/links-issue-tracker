@@ -25,7 +25,7 @@ func TestParentSetRejectsBarePositionalArgs(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runAppFamily(t, parentFamily, ctx, &stdout, ap, []string{"set", child.ID, parent.ID})
+	err = runAppFamily(t, parentFamily, ctx, &stdout, ap, []string{"set", child.ID.Raw(), parent.ID.Raw()})
 	if _, ok := err.(UsageError); !ok {
 		t.Fatalf("parent set bare positional error = %v (%T), want UsageError", err, err)
 	}
@@ -50,13 +50,13 @@ func TestParentSetWithNamedFlags(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runAppFamily(t, parentFamily, ctx, &stdout, ap, []string{"set", "--child", child.ID, "--parent", parent.ID}); err != nil {
+	if err := runAppFamily(t, parentFamily, ctx, &stdout, ap, []string{"set", "--child", child.ID.Raw(), "--parent", parent.ID.Raw()}); err != nil {
 		t.Fatalf("parent set --child/--parent error = %v", err)
 	}
 	// `parent set` renders the parent-child edge through the same canonical
 	// projection `dep` uses, so the same edge reads the same way whichever
 	// command wrote it: child child of parent.
-	if !strings.Contains(stdout.String(), child.ID+" child of "+parent.ID) {
+	if !strings.Contains(stdout.String(), child.ID.Raw()+" child of "+parent.ID.Raw()) {
 		t.Fatalf("parent set output = %q, want child-of arrow", stdout.String())
 	}
 

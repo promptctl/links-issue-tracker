@@ -88,7 +88,7 @@ func TestCommandErrorReason(t *testing.T) {
 				Approval: store.OwnerApprovalRequiredError{
 					Choice: storage.TakeLocal, ApprovalToken: "deadbeef0123",
 					LocalHead: "aaaaaaaaaaaaaaaaaaaa", RemoteHead: "bbbbbbbbbbbbbbbbbbbb",
-					Inventory: &storage.UnrelatedInventory{OnlyLocal: []string{"proj-mine"}},
+					Inventory: &storage.UnrelatedInventory{OnlyLocal: []model.ID{"proj-mine"}},
 				},
 				Remote: "origin", Branch: "master",
 			},
@@ -191,7 +191,7 @@ func TestCommandErrorReason(t *testing.T) {
 		// The router's terminal answers are answers, not faults, and each names
 		// a different act — so each is its own reason rather than sharing one,
 		// and none may fall through to "command_failed".
-		{"router scope exhausted", Exhausted{Epics: []string{"links-epic-abcd"}}, "scope_exhausted"},
+		{"router scope exhausted", Exhausted{Epics: []model.ID{"links-epic-abcd"}}, "scope_exhausted"},
 		{"router scope narrowed", Narrowed{}, "scope_narrowed"},
 		{"router no ready work", NoWork{}, "no_ready_work"},
 		// A repository `lit init` has never run in is terminal: no rerun makes
@@ -255,8 +255,8 @@ func TestCommandErrorReason(t *testing.T) {
 		// A genuine fault reaching the same surface keeps its own reason: the
 		// arms above dispatch on their concrete types, so they shadow nothing.
 		{"genuine fault still classifies", CorruptionError{Message: "integrity_check failed"}, "corruption_detected"},
-		{"a read refuses a parent loop", storage.ParentCycleError{Cycle: []string{"lit-a", "lit-b"}}, "parent_cycle"},
-		{"doctor's corruption caused by a parent loop", CorruptionError{Message: "parent cycle: lit-a -> lit-b", Cause: storage.ParentCycleError{Cycle: []string{"lit-a", "lit-b"}}}, "parent_cycle"},
+		{"a read refuses a parent loop", storage.ParentCycleError{Cycle: []model.ID{"lit-a", "lit-b"}}, "parent_cycle"},
+		{"doctor's corruption caused by a parent loop", CorruptionError{Message: "parent cycle: lit-a -> lit-b", Cause: storage.ParentCycleError{Cycle: []model.ID{"lit-a", "lit-b"}}}, "parent_cycle"},
 		// A container action carries its own split: the request the children
 		// already satisfy needs nothing done, while the one they do not is a
 		// deterministic refusal joining the existing validation reason. Both

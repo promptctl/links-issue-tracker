@@ -23,7 +23,7 @@ const (
 // epicFixture builds an epic with childCount children and closes closedCount of
 // them, returning the epic's id. It drives the real store, so the epic's state
 // is the derived one production computes rather than a planted value.
-func (h readyTestHarness) epicFixture(childCount, closedCount int) string {
+func (h readyTestHarness) epicFixture(childCount, closedCount int) model.ID {
 	h.t.Helper()
 	epic := h.createIssue(storage.CreateIssueInput{
 		Prefix: "test", Title: storage.MustParseTitle("An epic"),
@@ -46,9 +46,9 @@ func (h readyTestHarness) epicFixture(childCount, closedCount int) string {
 // rather than calling commandErrorReason on a hand-built value is the point:
 // the error has to travel from the raise site through Apply to the sink, so a
 // raise site that goes back to an untyped fmt.Errorf fails these tests.
-func (h readyTestHarness) runTransitionErr(issueID string, spec transitionSpec, extraArgs ...string) error {
+func (h readyTestHarness) runTransitionErr(issueID model.ID, spec transitionSpec, extraArgs ...string) error {
 	h.t.Helper()
-	return runTransition(h.t, h.ctx, io.Discard, h.ap, append([]string{issueID}, extraArgs...), spec)
+	return runTransition(h.t, h.ctx, io.Discard, h.ap, append([]string{issueID.Raw()}, extraArgs...), spec)
 }
 
 // The flags an action needs at its own command boundary before the call can

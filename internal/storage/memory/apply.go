@@ -15,7 +15,7 @@ import (
 // value carries all the variability — a nil Action is no transition, an empty
 // patch is no field write — so the body below is one straight pipe with no
 // verb-shaped branches in it. [LAW:dataflow-not-control-flow]
-func (e *Engine) Apply(ctx context.Context, id string, plan storage.ChangePlan) (storage.Applied, error) {
+func (e *Engine) Apply(ctx context.Context, id model.ID, plan storage.ChangePlan) (storage.Applied, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	c, applied, err := e.apply(id, plan)
@@ -47,7 +47,7 @@ type heardChange struct {
 
 // apply writes the change plan decides and tells no observer; its caller
 // notifies, with the change it returns, once the change is sure to stand.
-func (e *Engine) apply(id string, plan storage.ChangePlan) (storage.Change, storage.Applied, error) {
+func (e *Engine) apply(id model.ID, plan storage.ChangePlan) (storage.Change, storage.Applied, error) {
 	rec, err := e.mustRecord(id)
 	if err != nil {
 		return storage.Change{}, storage.Applied{}, err
@@ -214,10 +214,10 @@ func (e *Engine) validateRedirectTarget(closing model.Issue) error {
 		}
 		return nil
 	}
-	if *target == closing.ID {
+	if model.ID(*target) == closing.ID {
 		return fmt.Errorf("cannot redirect %s to itself", closing.ID)
 	}
-	canonical, err := e.mustRecord(*target)
+	canonical, err := e.mustRecord(model.ID(*target))
 	if err != nil {
 		return err
 	}

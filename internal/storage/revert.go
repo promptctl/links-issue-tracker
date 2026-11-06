@@ -39,18 +39,18 @@ const (
 // Slot is one thing a write moved and a document can put back.
 type Slot struct {
 	Kind  SlotKind
-	Issue string
+	Issue model.ID
 	Name  string
 }
 
 func (s Slot) String() string {
 	switch s.Kind {
 	case FieldSlot:
-		return s.Issue + " " + s.Name
+		return fmt.Sprintf("%s %s", s.Issue, s.Name)
 	case ParentSlot:
-		return s.Issue + " parent"
+		return fmt.Sprintf("%s parent", s.Issue)
 	case BlockedBySlot:
-		return s.Issue + " blocked-by " + s.Name
+		return fmt.Sprintf("%s blocked-by %s", s.Issue, model.ID(s.Name))
 	}
 	panic(fmt.Sprintf("storage: slot kind %d", s.Kind))
 }
@@ -73,10 +73,10 @@ var removedValue = SlotValue{removed: true}
 func FieldValue(recorded string) SlotValue { return SlotValue{text: recorded} }
 
 // ParentsValue is a parent set. Order is not a set fact, so it is sorted.
-func ParentsValue(ids []string) SlotValue {
+func ParentsValue(ids []model.ID) SlotValue {
 	sorted := slices.Clone(ids)
 	slices.Sort(sorted)
-	return SlotValue{text: strings.Join(sorted, ",")}
+	return SlotValue{text: strings.Join(model.RawIDs(sorted), ",")}
 }
 
 // EdgeValue is whether an edge is there.
@@ -112,6 +112,8 @@ func (v SlotValue) Display(slot Slot) string {
 		return issueFieldText(slot.Name).Show(v.text)
 	case slot.Kind == ParentSlot && v.text == "":
 		return "none"
+	case slot.Kind == ParentSlot:
+		return model.HoldRow(v.text)
 	}
 	return v.text
 }
@@ -257,9 +259,9 @@ func actionWrite(event model.IssueEvent) (what, reverse string) {
 // issue through the field's own row, so it is spelled as a change row records
 // it, the spelling every comparison uses. [LAW:one-source-of-truth]
 type CurrentState struct {
-	Issues    map[string]model.Issue
-	Parents   map[string][]string
-	BlockedBy map[string][]string
+	Issues    map[model.ID]model.Issue
+	Parents   map[model.ID][]model.ID
+	BlockedBy map[model.ID][]model.ID
 }
 
 func (c CurrentState) value(slot Slot) SlotValue {
@@ -273,7 +275,7 @@ func (c CurrentState) value(slot Slot) SlotValue {
 	case ParentSlot:
 		return ParentsValue(c.Parents[slot.Issue])
 	case BlockedBySlot:
-		return EdgeValue(slices.Contains(c.BlockedBy[slot.Issue], slot.Name))
+		return EdgeValue(slices.Contains(c.BlockedBy[slot.Issue], model.ID(slot.Name)))
 	}
 	panic(fmt.Sprintf("storage: slot kind %d", slot.Kind))
 }
@@ -329,18 +331,18 @@ func (ReadOut) expected(Slot) string { return "it moved since the file was read"
 func (ReadOut) wayOn(conflicts []Conflict) string {
 	var ways []string
 	if moved := conflictIssues(conflicts, false); len(moved) > 0 {
-		ways = append(ways, fmt.Sprintf("Read these issues out again with `lit ls --ids %s --format yaml`, make the edits on that file, and import it.", strings.Join(moved, ",")))
+		ways = append(ways, fmt.Sprintf("Read these issues out again with `lit ls --ids %s --format yaml`, make the edits on that file, and import it.", model.JoinIDs(moved, ",")))
 	}
 	if removed := conflictIssues(conflicts, true); len(removed) > 0 {
-		ways = append(ways, fmt.Sprintf("Drop the documents of %s from the file: the store no longer holds them.", strings.Join(removed, ", ")))
+		ways = append(ways, fmt.Sprintf("Drop the documents of %s from the file: the store no longer holds them.", model.JoinIDs(removed, ", ")))
 	}
 	return strings.Join(ways, "\n")
 }
 
 // conflictIssues is the issues, in id order, of the conflicts whose issue the
 // store holds now (removed false) or no longer holds (removed true).
-func conflictIssues(conflicts []Conflict, removed bool) []string {
-	var issues []string
+func conflictIssues(conflicts []Conflict, removed bool) []model.ID {
+	var issues []model.ID
 	for _, c := range conflicts {
 		if c.Now.removed == removed {
 			issues = append(issues, c.Slot.Issue)
@@ -399,14 +401,14 @@ func Revert(deltas []WriteDelta, now CurrentState) (Reverted, []Conflict) {
 // stated only on a document that moves a field, since it annotates a field
 // change and the bulk gate refuses one beside nothing that moves.
 func documentsFor(moves []Move, now CurrentState, reason string) []BulkIssueSpec {
-	docs := map[string]*BulkIssueSpec{}
-	doc := func(issue string) *BulkIssueSpec {
+	docs := map[model.ID]*BulkIssueSpec{}
+	doc := func(issue model.ID) *BulkIssueSpec {
 		if docs[issue] == nil {
-			docs[issue] = &BulkIssueSpec{ID: issue}
+			docs[issue] = &BulkIssueSpec{ID: issue.Raw()}
 		}
 		return docs[issue]
 	}
-	blockedBy := map[string]map[string]bool{}
+	blockedBy := map[model.ID]map[string]bool{}
 	for _, move := range moves {
 		switch move.Slot.Kind {
 		case FieldSlot:
@@ -432,7 +434,7 @@ func documentsFor(moves []Move, now CurrentState, reason string) []BulkIssueSpec
 	for issue, edges := range blockedBy {
 		set := map[string]bool{}
 		for _, blocker := range now.BlockedBy[issue] {
-			set[blocker] = true
+			set[blocker.Raw()] = true
 		}
 		maps.Copy(set, edges)
 		var stated []string

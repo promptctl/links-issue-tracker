@@ -1,12 +1,12 @@
 package storage
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
@@ -30,8 +30,8 @@ import (
 // is not one and had no epic above it: it now stands at the top level, where an
 // epic may live.
 type Rehomed struct {
-	IssueID string `json:"issue_id"`
-	Epic    string `json:"epic"`
+	IssueID model.ID `json:"issue_id"`
+	Epic    model.ID `json:"epic"`
 }
 
 // The store's unfiled epic, as migration 00007 mints it. Every checkout mints
@@ -65,7 +65,7 @@ var unfiledTitle = MustParseTitle(UnfiledTitle)
 // store whose ids carry prefix, the first id in prefix's chain: rendered the
 // way `lit new` renders a top-level id, with the hash fixed to the first four
 // hex digits of SHA-256 over the prefix and the topic.
-func UnfiledEpicID(prefix string) string {
+func UnfiledEpicID(prefix string) model.ID {
 	return unfiledEpicIDOver(prefix, prefix+"-"+UnfiledTopic)
 }
 
@@ -74,9 +74,9 @@ func UnfiledEpicID(prefix string) string {
 // one before it: a purged id is never reoccupied, so when the unfiled epic is
 // purged the next one takes the next id, and every clone holding the same
 // purge records walks to the same one.
-func unfiledEpicIDOver(prefix, seed string) string {
+func unfiledEpicIDOver(prefix, seed string) model.ID {
 	sum := sha256.Sum256([]byte(seed))
-	return prefix + "-" + UnfiledTopic + "-" + hex.EncodeToString(sum[:])[:4]
+	return model.ID(prefix + "-" + UnfiledTopic + "-" + hex.EncodeToString(sum[:])[:4])
 }
 
 // HomeStranded returns export with every ticket inside an epic, and names each
@@ -94,7 +94,7 @@ func unfiledEpicIDOver(prefix, seed string) string {
 // moving the same tickets write the same rows. [LAW:effects-at-boundaries]
 func HomeStranded(export model.Export) (model.Export, []Rehomed) {
 	h := newHierarchy(export)
-	moves := map[string]string{}
+	moves := map[model.ID]model.ID{}
 	strandedLeaf := false
 	for _, issue := range export.Issues {
 		parents := h.parentsOf[issue.ID]
@@ -115,7 +115,7 @@ func HomeStranded(export model.Export) (model.Export, []Rehomed) {
 
 	out := export
 	out.Issues = slices.Clone(export.Issues)
-	unfiled := ""
+	var unfiled model.ID
 	if strandedLeaf {
 		var minted *model.Issue
 		unfiled, minted = h.unfiledEpic(export)
@@ -151,19 +151,19 @@ func HomeStranded(export model.Export) (model.Export, []Rehomed) {
 			out.Relations = append(out.Relations, model.Relation{SrcID: issue.ID, DstID: epic, Type: model.RelParentChild, CreatedAt: issue.CreatedAt, CreatedBy: rehomeEdgeAuthor})
 		}
 	}
-	slices.SortFunc(rehomed, func(a, b Rehomed) int { return strings.Compare(a.IssueID, b.IssueID) })
+	slices.SortFunc(rehomed, func(a, b Rehomed) int { return cmp.Compare(a.IssueID, b.IssueID) })
 	return out, rehomed
 }
 
 // hierarchy is the export's parent edges read once: each ticket's type, and
 // the parents each child names.
 type hierarchy struct {
-	typeOf    map[string]model.IssueType
-	parentsOf map[string][]string
+	typeOf    map[model.ID]model.IssueType
+	parentsOf map[model.ID][]model.ID
 }
 
 func newHierarchy(export model.Export) hierarchy {
-	h := hierarchy{typeOf: make(map[string]model.IssueType, len(export.Issues)), parentsOf: map[string][]string{}}
+	h := hierarchy{typeOf: make(map[model.ID]model.IssueType, len(export.Issues)), parentsOf: map[model.ID][]model.ID{}}
 	for _, issue := range export.Issues {
 		h.typeOf[issue.ID] = issue.IssueType
 	}
@@ -175,7 +175,7 @@ func newHierarchy(export model.Export) hierarchy {
 	return h
 }
 
-func (h hierarchy) isEpic(id string) bool {
+func (h hierarchy) isEpic(id model.ID) bool {
 	t, ok := h.typeOf[id]
 	return ok && t.IsContainer()
 }
@@ -188,11 +188,11 @@ func (h hierarchy) isEpic(id string) bool {
 // export does not hold, and at the depth cut. An epic in a loop through a
 // ticket that is not one can climb back to itself; when it is the nearest, it
 // has no epic above it and stands at the top level, as 00007 leaves it.
-func (h hierarchy) nearestEpicAbove(child string, parents []string) (string, bool) {
-	seen := map[string]bool{}
+func (h hierarchy) nearestEpicAbove(child model.ID, parents []model.ID) (model.ID, bool) {
+	seen := map[model.ID]bool{}
 	level := parents
 	for depth := 0; depth <= climbDepthCut && len(level) > 0; depth++ {
-		var epics, next []string
+		var epics, next []model.ID
 		for _, id := range level {
 			if seen[id] {
 				continue
@@ -222,13 +222,13 @@ func (h hierarchy) nearestEpicAbove(child string, parents []string) (string, boo
 // ticket loses all its edges and is named by its move. It walks the tickets,
 // not the edges: an edge whose child the export does not hold names no ticket
 // to move, and is left for the store's own write to refuse.
-func (h hierarchy) childrenOfNonEpics(issues []model.Issue, moves map[string]string) []string {
-	var out []string
+func (h hierarchy) childrenOfNonEpics(issues []model.Issue, moves map[model.ID]model.ID) []model.ID {
+	var out []model.ID
 	for _, issue := range issues {
 		if _, moved := moves[issue.ID]; moved {
 			continue
 		}
-		if slices.ContainsFunc(h.parentsOf[issue.ID], func(p string) bool { return !h.isEpic(p) }) {
+		if slices.ContainsFunc(h.parentsOf[issue.ID], func(p model.ID) bool { return !h.isEpic(p) }) {
 			out = append(out, issue.ID)
 		}
 	}
@@ -238,8 +238,8 @@ func (h hierarchy) childrenOfNonEpics(issues []model.Issue, moves map[string]str
 
 // epicParentOf is the lowest-id epic among child's parents; the caller asks it
 // only of a ticket it knows holds one.
-func (h hierarchy) epicParentOf(child string) string {
-	return slices.Min(slices.DeleteFunc(slices.Clone(h.parentsOf[child]), func(p string) bool { return !h.isEpic(p) }))
+func (h hierarchy) epicParentOf(child model.ID) model.ID {
+	return slices.Min(slices.DeleteFunc(slices.Clone(h.parentsOf[child]), func(p model.ID) bool { return !h.isEpic(p) }))
 }
 
 // unfiledEpic returns the id of the store's unfiled epic, and the row to add
@@ -255,9 +255,9 @@ func (h hierarchy) epicParentOf(child string) string {
 // walks past a purged one. The minted epic sits where the highest-ranked live
 // top-level leaf sits, one key after it, and is unranked when no such leaf has
 // a key — the placement 00007 gives it.
-func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
-	var titled []string
-	held := make(map[string]model.Issue, len(export.Issues))
+func (h hierarchy) unfiledEpic(export model.Export) (model.ID, *model.Issue) {
+	var titled []model.ID
+	held := make(map[model.ID]model.Issue, len(export.Issues))
 	counts := map[string]int{}
 	topRank := ""
 	for _, issue := range export.Issues {
@@ -265,7 +265,7 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 		if takesTickets(issue) && issue.Topic == UnfiledTopic && issue.Title == UnfiledTitle {
 			titled = append(titled, issue.ID)
 		}
-		if prefix, ok := issueid.PrefixOf(issue.ID, issue.Topic.Raw()); ok {
+		if prefix, ok := issueid.PrefixOf(issue.ID.Raw(), issue.Topic.Raw()); ok {
 			counts[prefix]++
 		}
 		_, deleted := issue.Retention().(model.Deleted)
@@ -276,7 +276,7 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 	if len(titled) > 0 {
 		return slices.Min(titled), nil
 	}
-	purged := make(map[string]bool, len(export.Purges))
+	purged := make(map[model.ID]bool, len(export.Purges))
 	for _, p := range export.Purges {
 		purged[p.IssueID] = true
 	}
@@ -310,7 +310,7 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 				UpdatedAt:   unfiledBorn,
 			}
 		}
-		id = unfiledEpicIDOver(prefix, id)
+		id = unfiledEpicIDOver(prefix, id.Raw())
 	}
 	panic(fmt.Sprintf("unfiled epic: the id chain under %q cycled through %d held or purged ids without a free one", prefix, len(held)+len(purged)))
 }

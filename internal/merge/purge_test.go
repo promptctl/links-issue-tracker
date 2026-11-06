@@ -16,7 +16,7 @@ import (
 // it travels on to the next store.
 func TestThreeWayAPurgeOutranksAConcurrentEdit(t *testing.T) {
 	now := time.Now().UTC()
-	mk := func(id, title string) model.Issue {
+	mk := func(id model.ID, title string) model.Issue {
 		return issueWithStatus(t, model.Issue{ID: id, Title: model.Text(title), IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
 	}
 	purge := model.Purge{IssueID: "doomed", IssueCreatedAt: now, PurgedAt: now, PurgedBy: "grace"}

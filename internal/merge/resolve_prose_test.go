@@ -108,7 +108,7 @@ func TestMatchProseResolutionsRejectsDuplicateField(t *testing.T) {
 // resolved.
 func TestMatchProseResolutionsTellsIdenticalConflictsApart(t *testing.T) {
 	now := time.Now().UTC()
-	issue := func(id string) model.Issue {
+	issue := func(id model.ID) model.Issue {
 		return issueWithStatus(t, model.Issue{ID: id, Title: "base-title", Description: "desc", Priority: 0, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
 	}
 	base := model.Export{Issues: []model.Issue{issue("i1"), issue("i2")}}
@@ -125,14 +125,14 @@ func TestMatchProseResolutionsTellsIdenticalConflictsApart(t *testing.T) {
 
 	resolutions := make([]ProseResolution, 0, len(result.Pending))
 	for _, p := range result.Pending {
-		resolutions = append(resolutions, ProseResolution{Fingerprint: p.Fingerprint(), Text: "merged for " + p.IssueID})
+		resolutions = append(resolutions, ProseResolution{Fingerprint: p.Fingerprint(), Text: "merged for " + p.IssueID.Raw()})
 	}
 	_, texts, ok := MatchProseResolutions(result, resolutions)
 	if !ok {
 		t.Fatalf("the same title conflict on two tickets could not be resolved apart")
 	}
-	for _, id := range []string{"i1", "i2"} {
-		if got := texts[id][ProseTitle]; got != "merged for "+id {
+	for _, id := range []model.ID{"i1", "i2"} {
+		if got := texts[id][ProseTitle]; got != "merged for "+id.Raw() {
 			t.Errorf("issue %s title text = %q, want its own merged text", id, got)
 		}
 	}

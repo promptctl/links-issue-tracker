@@ -26,7 +26,7 @@ import (
 // not this record's to remove; it meets the merge as an id collision would.
 // [LAW:one-source-of-truth] identity is the birth certificate, here as there.
 type Purge struct {
-	IssueID        string    `json:"issue_id"`
+	IssueID        ID        `json:"issue_id"`
 	IssueCreatedAt time.Time `json:"issue_created_at"`
 	PurgedAt       time.Time `json:"purged_at"`
 	PurgedBy       string    `json:"purged_by"`
@@ -37,7 +37,8 @@ type Purge struct {
 // store's primary key holds. [LAW:one-source-of-truth] every union, delta and
 // primary key compares records through Key.
 type PurgeKey struct {
-	IssueID, IssueCreatedAt string
+	IssueID        ID
+	IssueCreatedAt string
 }
 
 // Key is the record's PurgeKey.
@@ -73,7 +74,7 @@ func UnionPurges(sets ...[]Purge) []Purge {
 		out = append(out, p)
 	}
 	slices.SortFunc(out, func(a, b Purge) int {
-		if c := strings.Compare(a.IssueID, b.IssueID); c != 0 {
+		if c := strings.Compare(a.IssueID.Raw(), b.IssueID.Raw()); c != 0 {
 			return c
 		}
 		return a.IssueCreatedAt.Compare(b.IssueCreatedAt)
@@ -102,17 +103,17 @@ func purgeOrder(a, b Purge) int {
 // concurrent edit nor an old backup can bring a purged ticket back.
 // [LAW:single-enforcer]
 func (e Export) ApplyPurges(purges []Purge) Export {
-	recordsOf := make(map[string][]Purge, len(purges))
+	recordsOf := make(map[ID][]Purge, len(purges))
 	for _, p := range purges {
 		recordsOf[p.IssueID] = append(recordsOf[p.IssueID], p)
 	}
 	// Every other row hangs off an issue row of this same export, so the
 	// purged ids are read off the issues once and the rest key on the id.
-	purged := map[string]bool{}
+	purged := map[ID]bool{}
 	for _, issue := range e.Issues {
 		purged[issue.ID] = slices.ContainsFunc(recordsOf[issue.ID], func(p Purge) bool { return p.Names(issue) })
 	}
-	kept := func(id string) bool { return !purged[id] }
+	kept := func(id ID) bool { return !purged[id] }
 	out := e
 	out.Purges = purges
 	out.Issues = keepRows(e.Issues, func(i Issue) bool { return kept(i.ID) })

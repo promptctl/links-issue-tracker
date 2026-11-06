@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -45,7 +46,7 @@ var backlogCellGap = regexp.MustCompile(`\s{2,}`)
 // "blocked by:" in prose, so a substring match against the whole output is
 // satisfied by text no row ever printed. Scoping to one row's own block is what
 // makes an assertion about that row's context lines mean anything.
-func backlogRow(t *testing.T, out, id string) (cells, context []string) {
+func backlogRow(t *testing.T, out string, id model.ID) (cells, context []string) {
 	t.Helper()
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	for i, line := range lines {
@@ -53,7 +54,7 @@ func backlogRow(t *testing.T, out, id string) (cells, context []string) {
 			continue
 		}
 		cells = backlogCellGap.Split(backlogRowPrefix.ReplaceAllString(line, ""), -1)
-		if len(cells) == 0 || cells[0] != id {
+		if len(cells) == 0 || cells[0] != id.Raw() {
 			continue
 		}
 		for _, next := range lines[i+1:] {
@@ -69,7 +70,7 @@ func backlogRow(t *testing.T, out, id string) (cells, context []string) {
 }
 
 // backlogCells returns just the projection of the backlog row for id.
-func backlogCells(t *testing.T, out, id string) []string {
+func backlogCells(t *testing.T, out string, id model.ID) []string {
 	t.Helper()
 	cells, _ := backlogRow(t, out, id)
 	return cells
@@ -136,7 +137,7 @@ func TestBacklogAcceptsValidColumns(t *testing.T) {
 		t.Fatalf("backlog --columns id,rank,title: %v", err)
 	}
 	got := backlogCells(t, out, issue.ID)
-	want := []string{issue.ID, emptyDash(issue.Rank), "Projected row"}
+	want := []string{issue.ID.Raw(), emptyDash(issue.Rank), "Projected row"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("backlog --columns id,rank,title cells = %v, want %v\nfull output:\n%s", got, want, out)
 	}
@@ -165,7 +166,7 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 	}
 
 	got, context := backlogRow(t, out, child.ID)
-	want := []string{child.ID, epic.ID, "blocked"}
+	want := []string{child.ID.Raw(), epic.ID.Raw(), "blocked"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("blocked child cells = %v, want %v\nfull output:\n%s", got, want, out)
 	}
@@ -178,7 +179,7 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 	// into the reasons list would make both wrong with nothing to say so.
 	var explained bool
 	for _, line := range context {
-		explained = explained || line == "blocked by: "+blocker.ID
+		explained = explained || line == "blocked by: "+blocker.ID.Raw()
 		if strings.HasPrefix(line, "blocked:") {
 			t.Errorf("dependency-blocked row printed %q; this case is carried by the "+
 				"depends-on list, and the docs say so\ncontext: %q\nfull output:\n%s", line, context, out)
@@ -194,7 +195,7 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 	// cell is "-", so the assertion above is reading real per-row data rather
 	// than a map that happens to be populated the same way for everything.
 	gotBlocker := backlogCells(t, out, blocker.ID)
-	wantBlocker := []string{blocker.ID, otherEpic.ID, "-"}
+	wantBlocker := []string{blocker.ID.Raw(), otherEpic.ID.Raw(), "-"}
 	if strings.Join(gotBlocker, "|") != strings.Join(wantBlocker, "|") {
 		t.Errorf("blocker cells = %v, want %v\nfull output:\n%s", gotBlocker, wantBlocker, out)
 	}
@@ -224,15 +225,15 @@ func TestBacklogBlockedColumnAgreesWithTheContextLine(t *testing.T) {
 	}
 
 	// The gate has to actually be firing, or the agreement below is vacuous.
-	if !strings.Contains(out, "earlier sibling "+first.ID+" still open") {
+	if !strings.Contains(out, "earlier sibling "+first.ID.Raw()+" still open") {
 		t.Fatalf("sibling gate did not fire for %s, so this proves nothing:\n%s", second.ID, out)
 	}
 
-	if got := backlogCells(t, out, second.ID); strings.Join(got, "|") != second.ID+"|blocked" {
+	if got := backlogCells(t, out, second.ID); strings.Join(got, "|") != second.ID.Raw()+"|blocked" {
 		t.Errorf("sibling-gated row cells = %v, want [%s blocked] — the column and the "+
 			"context line beneath it disagree\nfull output:\n%s", got, second.ID, out)
 	}
-	if got := backlogCells(t, out, first.ID); strings.Join(got, "|") != first.ID+"|-" {
+	if got := backlogCells(t, out, first.ID); strings.Join(got, "|") != first.ID.Raw()+"|-" {
 		t.Errorf("ungated row cells = %v, want [%s -]\nfull output:\n%s", got, first.ID, out)
 	}
 }

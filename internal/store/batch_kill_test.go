@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -26,12 +27,13 @@ const batchKillEpicEnvVar = "LIT_STORE_BATCH_KILL_EPIC"
 
 // batchKillFile is the two-create file the helper imports and the parent
 // imports again after the kill.
-func batchKillFile(epic string) []storage.BulkIssueSpec {
+func batchKillFile(epic model.ID) []storage.BulkIssueSpec {
 	topic, taskType := "crash", "task"
 	first, second := "batch kill first", "batch kill second"
+	parent := epic.Raw()
 	return []storage.BulkIssueSpec{
-		{Title: &first, Topic: &topic, IssueType: &taskType, Parent: &epic},
-		{Title: &second, Topic: &topic, IssueType: &taskType, Parent: &epic},
+		{Title: &first, Topic: &topic, IssueType: &taskType, Parent: &parent},
+		{Title: &second, Topic: &topic, IssueType: &taskType, Parent: &parent},
 	}
 }
 
@@ -63,7 +65,7 @@ func TestHelperBlockMidBatch(t *testing.T) {
 		}
 		return nil
 	}
-	_, _ = st.BulkApply(ctx, "test", "ada", batchKillFile(os.Getenv(batchKillEpicEnvVar)))
+	_, _ = st.BulkApply(ctx, "test", "ada", batchKillFile(model.ID(os.Getenv(batchKillEpicEnvVar))))
 	t.Fatal("helper process was not killed inside its batch")
 }
 
@@ -95,7 +97,7 @@ func TestABatchKilledPartwayWritesNothing(t *testing.T) {
 
 	marker := filepath.Join(t.TempDir(), "mid-batch")
 	cmd := exec.Command(self, "-test.run=^TestHelperBlockMidBatch$")
-	cmd.Env = append(os.Environ(), killHelperDirEnvVar+"="+dir, batchKillMarkerEnvVar+"="+marker, batchKillEpicEnvVar+"="+epic.ID)
+	cmd.Env = append(os.Environ(), killHelperDirEnvVar+"="+dir, batchKillMarkerEnvVar+"="+marker, batchKillEpicEnvVar+"="+epic.ID.Raw())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {

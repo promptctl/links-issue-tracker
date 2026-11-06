@@ -26,7 +26,7 @@ import (
 type forkBelowTheCut struct {
 	alpha, delta string
 	remoteURL    string
-	epic, ticket string
+	epic, ticket model.ID
 	// adopted is the head delta adopted: the remote head delta last knew.
 	adopted string
 	// remoteHead is the remote's head once alpha's edit landed.
@@ -571,13 +571,13 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 // strandWrite edits the ticket's title on root below any mutation, so the write
 // stands in the working set with no commit over it, as one a store carries from
 // a commit that failed after it landed there.
-func strandWrite(t *testing.T, ctx context.Context, root, ticket string) {
+func strandWrite(t *testing.T, ctx context.Context, root string, ticket model.ID) {
 	t.Helper()
 	strandTitle(t, ctx, root, ticket, strandedTitle)
 }
 
 // strandTitle is strandWrite with the title to strand.
-func strandTitle(t *testing.T, ctx context.Context, root, ticket, title string) {
+func strandTitle(t *testing.T, ctx context.Context, root string, ticket model.ID, title string) {
 	t.Helper()
 	st := openSyncOrFatal(t, ctx, root)
 	if err := st.ExecRawForTest(ctx, `UPDATE issues SET title = ? WHERE id = ?`, title, ticket); err != nil {
@@ -601,9 +601,9 @@ func TestAStrandedWriteSurvivesAReceive(t *testing.T) {
 		name string
 		// setup returns the checkout holding the stranded write, the ticket,
 		// and the description the remote gave it.
-		setup func(t *testing.T, ctx context.Context) (root, ticket, remoteDescription string)
+		setup func(t *testing.T, ctx context.Context) (root string, ticket model.ID, remoteDescription string)
 	}{
-		{"shared base", func(t *testing.T, ctx context.Context) (string, string, string) {
+		{"shared base", func(t *testing.T, ctx context.Context) (string, model.ID, string) {
 			alpha, beta := migratedDoltDir(t), migratedDoltDir(t)
 			remoteURL := "file://" + filepath.Join(t.TempDir(), "remote")
 			ticket := createAndPush(t, ctx, alpha, seedReconcileRemote(t, ctx, alpha, remoteURL), "x")
@@ -612,7 +612,7 @@ func TestAStrandedWriteSurvivesAReceive(t *testing.T) {
 			strandWrite(t, ctx, beta, ticket)
 			return beta, ticket, "alpha-description"
 		}},
-		{"fork-point base", func(t *testing.T, ctx context.Context) (string, string, string) {
+		{"fork-point base", func(t *testing.T, ctx context.Context) (string, model.ID, string) {
 			f := newForkBelowTheCutAfter(t, ctx, func(f forkBelowTheCut) { strandWrite(t, ctx, f.delta, f.ticket) })
 			return f.delta, f.ticket, alphaPastCutDescribed
 		}},
@@ -709,9 +709,9 @@ func assertStrandedWritesVersioned(t *testing.T, ctx context.Context, st *Store)
 // merge against the base could revert, so the remote need not hold it.
 func TestAnEventOfNoBaseTicketIsNotCounted(t *testing.T) {
 	ticket := model.Issue{ID: "t", CreatedAt: time.Unix(1, 0)}
-	base := map[string]model.Issue{"t": ticket}
-	baseEvents := map[string]string{"e-t": "t", "e-orphan": "gone"}
-	tickets, events := countUnaccounted(base, base, baseEvents, map[string]string{}, nil)
+	base := map[model.ID]model.Issue{"t": ticket}
+	baseEvents := map[model.ID]model.ID{"e-t": "t", "e-orphan": "gone"}
+	tickets, events := countUnaccounted(base, base, baseEvents, map[model.ID]model.ID{}, nil)
 	if tickets != 0 || events != 1 {
 		t.Fatalf("countUnaccounted() = %d tickets, %d events; want 0 and 1: the ticket's event alone", tickets, events)
 	}
@@ -779,7 +779,7 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 
 // createAndPush files a ticket under epic at root and pushes it, returning
 // its id.
-func createAndPush(t *testing.T, ctx context.Context, root, epic, title string) string {
+func createAndPush(t *testing.T, ctx context.Context, root string, epic model.ID, title string) model.ID {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {

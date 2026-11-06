@@ -109,13 +109,13 @@ func wholeRow[R any](row R) any { return row }
 // exportDelta is the whole transition, one tableDelta per table, in the order
 // the foreign keys demand: issues exist before anything references them.
 type exportDelta struct {
-	issues      tableDelta[string, model.Issue]
+	issues      tableDelta[model.ID, model.Issue]
 	relations   tableDelta[relationKey, model.Relation]
-	comments    tableDelta[string, model.Comment]
+	comments    tableDelta[model.ID, model.Comment]
 	labels      tableDelta[labelKey, model.Label]
-	events      tableDelta[string, model.IssueEvent]
+	events      tableDelta[model.ID, model.IssueEvent]
 	purges      tableDelta[model.PurgeKey, model.Purge]
-	planReviews tableDelta[string, model.PlanReview]
+	planReviews tableDelta[model.ID, model.PlanReview]
 }
 
 // empty reports whether the two exports hold the same rows, so a caller can tell
@@ -145,7 +145,7 @@ func diffExports(prev, next model.Export) exportDelta {
 	// The issues diff is computed FIRST because the child diffs are derived from
 	// its answer, not from a second opinion about the same question.
 	issues := diffTable(prev.Issues, next.Issues,
-		func(i model.Issue) string { return i.ID },
+		func(i model.Issue) model.ID { return i.ID },
 		func(i model.Issue) any { return issueRowValues(i) })
 	survivors := cascadeSurvivors(prev.Issues, issues.remove)
 	return exportDelta{
@@ -160,7 +160,7 @@ func diffExports(prev, next model.Export) exportDelta {
 		comments: diffTable(
 			filterRows(prev.Comments, func(c model.Comment) bool { return survivors[c.IssueID] }),
 			next.Comments,
-			func(c model.Comment) string { return c.ID }, wholeRow),
+			func(c model.Comment) model.ID { return c.ID }, wholeRow),
 		labels: diffTable(
 			filterRows(prev.Labels, func(l model.Label) bool { return survivors[l.IssueID] }),
 			next.Labels,
@@ -168,14 +168,14 @@ func diffExports(prev, next model.Export) exportDelta {
 		events: diffTable(
 			filterRows(prev.Events, func(e model.IssueEvent) bool { return survivors[e.IssueID] }),
 			next.Events,
-			func(e model.IssueEvent) string { return e.ID }, wholeRow),
+			func(e model.IssueEvent) model.ID { return e.ID }, wholeRow),
 		// Purge records reference no issue row — the issue they name is gone —
 		// so nothing cascades into them and they diff against prev unfiltered.
 		purges: diffTable(prev.Purges, next.Purges, model.Purge.Key, wholeRow),
 		planReviews: diffTable(
 			filterRows(prev.PlanReviews, func(r model.PlanReview) bool { return survivors[r.IssueID] }),
 			next.PlanReviews,
-			func(r model.PlanReview) string { return r.ID }, wholeRow),
+			func(r model.PlanReview) model.ID { return r.ID }, wholeRow),
 	}
 }
 
@@ -195,12 +195,12 @@ func diffExports(prev, next model.Export) exportDelta {
 // mechanism would have to be mirrored, and nothing a test has to police.
 // [LAW:single-enforcer] [LAW:types-are-the-program] the disagreement is not
 // caught here, it is unrepresentable.
-func cascadeSurvivors(prev []model.Issue, removed []string) map[string]bool {
-	doomed := make(map[string]bool, len(removed))
+func cascadeSurvivors(prev []model.Issue, removed []model.ID) map[model.ID]bool {
+	doomed := make(map[model.ID]bool, len(removed))
 	for _, id := range removed {
 		doomed[id] = true
 	}
-	survivors := make(map[string]bool, len(prev))
+	survivors := make(map[model.ID]bool, len(prev))
 	for _, issue := range prev {
 		if !doomed[issue.ID] {
 			survivors[issue.ID] = true

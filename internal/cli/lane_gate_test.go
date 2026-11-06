@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -26,7 +27,7 @@ func (h readyTestHarness) runPullableAnnotated(rf workableFilter) []annotation.A
 	return pullable
 }
 
-func containsID(rows []annotation.AnnotatedIssue, id string) bool {
+func containsID(rows []annotation.AnnotatedIssue, id model.ID) bool {
 	for _, r := range rows {
 		if r.ID == id {
 			return true
@@ -69,7 +70,7 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	if !ok {
 		t.Fatalf("urgent later sibling missing EarlierSiblingPending annotation; annotations=%v", row.Annotations)
 	}
-	if ann.Message != first.ID {
+	if ann.Message != first.ID.Raw() {
 		t.Fatalf("EarlierSiblingPending message = %q, want earlier sibling id %q", ann.Message, first.ID)
 	}
 	if ClassifyReadiness(row.Annotations).IsReady() {
@@ -127,15 +128,15 @@ func TestLaneGateSeesSiblingsHiddenByAssigneeFilter(t *testing.T) {
 	}
 }
 
-func ids(rows []annotation.AnnotatedIssue) []string {
-	out := make([]string, len(rows))
+func ids(rows []annotation.AnnotatedIssue) []model.ID {
+	out := make([]model.ID, len(rows))
 	for i, r := range rows {
 		out[i] = r.ID
 	}
 	return out
 }
 
-func findRow(rows []annotation.AnnotatedIssue, id string) annotation.AnnotatedIssue {
+func findRow(rows []annotation.AnnotatedIssue, id model.ID) annotation.AnnotatedIssue {
 	for _, r := range rows {
 		if r.ID == id {
 			return r

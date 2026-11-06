@@ -37,7 +37,7 @@ const (
 // mapping from one place instead of restating it. Written twice, the two agree
 // only by coincidence, and a change to the distribution that missed one would
 // leave the test asserting its own bug. [LAW:one-source-of-truth]
-func scaleEditTarget(i int) string { return scaleIssueID(i % scaleEditedIssues) }
+func scaleEditTarget(i int) model.ID { return scaleIssueID(i % scaleEditedIssues) }
 
 // scaleHeapGrowthBudget bounds how much RETAINED heap the combine may add over
 // what the process already held before it started. This is the ticket's real
@@ -193,7 +193,7 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 	if err != nil {
 		t.Fatalf("export after combine: %v", err)
 	}
-	byID := make(map[string]model.Issue, len(export.Issues))
+	byID := make(map[model.ID]model.Issue, len(export.Issues))
 	for _, issue := range export.Issues {
 		byID[issue.ID] = issue
 	}
@@ -205,7 +205,7 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 	// edit to touch it is the lane that must survive the fold. Building the
 	// expectation by replaying the same mapping in the same order is what makes
 	// this an ordering assertion rather than a set-membership one.
-	wantLane := make(map[string]string, scaleEditedIssues)
+	wantLane := make(map[model.ID]string, scaleEditedIssues)
 	for i := 0; i < commits; i++ {
 		wantLane[scaleEditTarget(i)] = fmt.Sprintf("lane-%d", i)
 	}
@@ -221,7 +221,7 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 	}
 }
 
-func scaleIssueID(i int) string { return fmt.Sprintf("bench-%05d", i) }
+func scaleIssueID(i int) model.ID { return model.ID(fmt.Sprintf("bench-%05d", i)) }
 
 // scaleEpicID is the epic every planted issue lives in, fixed so both stores
 // plant the same epic rather than each minting its own.

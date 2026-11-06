@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -15,7 +16,7 @@ import (
 // and kept when dependent moves back. A reparent changes no rank, so every
 // rank a test set stands, and every view meets the edge as it would in a
 // workspace. The epic dependent waited in is purged, leaving nothing else.
-func StoreBlocksWithinEpic(t testing.TB, ctx context.Context, st storage.Store, prefix, dependent, dependency string) {
+func StoreBlocksWithinEpic(t testing.TB, ctx context.Context, st storage.Store, prefix string, dependent, dependency model.ID) {
 	t.Helper()
 	detail, err := st.GetIssueDetail(ctx, dependent)
 	if err != nil {

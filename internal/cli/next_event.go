@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
@@ -29,9 +30,9 @@ const (
 // diagnostic named, the gathered ticket its kind was read from (the id itself,
 // a ticket under it, or empty when the run could see none), and the kind.
 type reachFact struct {
-	ID     string `json:"id"`
-	Ticket string `json:"ticket"`
-	Reach  string `json:"reach"`
+	ID     model.ID `json:"id"`
+	Ticket model.ID `json:"ticket"`
+	Reach  string   `json:"reach"`
 }
 
 // progressFact is a stopped scope's progress as the event records it: the
@@ -59,7 +60,7 @@ func reachFacts(rows []rowReach) []reachFact {
 
 // offPathFacts records the rows a focus label withheld. Each is its own
 // gathered ticket.
-func offPathFacts(ids []string) []reachFact {
+func offPathFacts(ids []model.ID) []reachFact {
 	facts := make([]reachFact, len(ids))
 	for i, id := range ids {
 		facts[i] = reachFact{ID: id, Ticket: id, Reach: offFocusPathReach}
@@ -108,16 +109,16 @@ func blockerFacts(blockers []blockerReach) []blockerFact {
 type nextDecision struct {
 	Outcome          string
 	Picked           *string
-	PickedFocusGoals []string
-	DependencyPath   []string
+	PickedFocusGoals []model.ID
+	DependencyPath   []model.ID
 	Exhaustion       Exhausted
 	HiddenByFilter   *string
-	HiddenFocusGoals []string
+	HiddenFocusGoals []model.ID
 	NoWork           NoWork
 }
 
 func decideNextEvent(outcome NextOutcome) nextDecision {
-	picked := func(id string) *string { return &id }
+	picked := func(id model.ID) *string { raw := id.Raw(); return &raw }
 	switch o := outcome.(type) {
 	case ServedFromClaim:
 		return nextDecision{Outcome: "served_from_claim", Picked: picked(o.Row.ID)}
@@ -128,7 +129,7 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 	case ServedFromNewLane:
 		return nextDecision{Outcome: "served_from_new_lane", Picked: picked(o.Row.ID), PickedFocusGoals: o.Scope.goals}
 	case ServedFromDependency:
-		path := []string{o.Gates}
+		path := []model.ID{o.Gates}
 		for _, h := range o.Via {
 			path = append(path, h.ids()...)
 		}
@@ -170,9 +171,9 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int, pri
 	decision := decideNextEvent(outcome)
 	telemetry.Set(ctx, "next.outcome", decision.Outcome)
 	telemetry.Set(ctx, "next.picked", decision.Picked)
-	telemetry.Set(ctx, "next.picked_focus_goals", append([]string{}, decision.PickedFocusGoals...))
-	telemetry.Set(ctx, "next.dependency_path", append([]string{}, decision.DependencyPath...))
-	telemetry.Set(ctx, "next.exhausted_epics", append([]string{}, decision.Exhaustion.Epics...))
+	telemetry.Set(ctx, "next.picked_focus_goals", model.RawIDs(decision.PickedFocusGoals))
+	telemetry.Set(ctx, "next.dependency_path", model.RawIDs(decision.DependencyPath))
+	telemetry.Set(ctx, "next.exhausted_epics", model.RawIDs(decision.Exhaustion.Epics))
 	telemetry.Set(ctx, "next.exhausted_progress", progressFact(decision.Exhaustion.Progress))
 	telemetry.Set(ctx, "next.exhausted_own_progress", progressFact(decision.Exhaustion.OwnProgress))
 	telemetry.Set(ctx, "next.blocked", blockerFacts(decision.Exhaustion.Blocked))
@@ -181,7 +182,7 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int, pri
 	// fact on either, so they land on one key. [LAW:one-source-of-truth]
 	telemetry.Set(ctx, "next.off_path", offPathFacts(slices.Concat(decision.Exhaustion.OffPath, decision.NoWork.OffPath)))
 	telemetry.Set(ctx, "next.hidden_by_filter", decision.HiddenByFilter)
-	telemetry.Set(ctx, "next.hidden_focus_goals", append([]string{}, decision.HiddenFocusGoals...))
+	telemetry.Set(ctx, "next.hidden_focus_goals", model.RawIDs(decision.HiddenFocusGoals))
 	telemetry.Set(ctx, "next.unreachable", reachFacts(decision.NoWork.Unreachable))
 	telemetry.Set(ctx, "next.stay_offered", len(decision.Exhaustion.stay()) > 0)
 	telemetry.Set(ctx, "next.start_place", placeFor(outcome, primaryClone).eventName())

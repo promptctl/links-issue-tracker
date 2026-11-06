@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
@@ -790,10 +791,10 @@ type SyncReconcileResult struct {
 // is the "what each side holds" answer; the take-one/union resolutions later in the
 // epic read the same partition rather than re-querying both heads.
 type UnrelatedInventory struct {
-	OnlyLocal  []string `json:"only_local,omitempty"`
-	OnlyRemote []string `json:"only_remote,omitempty"`
-	OnBoth     []string `json:"on_both,omitempty"`
-	Purged     []string `json:"purged,omitempty"`
+	OnlyLocal  []model.ID `json:"only_local,omitempty"`
+	OnlyRemote []model.ID `json:"only_remote,omitempty"`
+	OnBoth     []model.ID `json:"on_both,omitempty"`
+	Purged     []model.ID `json:"purged,omitempty"`
 }
 
 // UnrelatedResolution is the whole-store choice that settles an unrelated-history

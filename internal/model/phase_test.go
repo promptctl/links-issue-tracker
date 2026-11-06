@@ -11,7 +11,7 @@ var phaseClock = time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 // at is the n-th instant of a history, so a case states its order by number.
 func at(n int) time.Time { return phaseClock.Add(time.Duration(n) * time.Minute) }
 
-func startEvent(id string, n int) IssueEvent {
+func startEvent(id ID, n int) IssueEvent {
 	return IssueEvent{ID: id, Action: string(ActionStart), CreatedAt: at(n), Changes: []FieldChange{
 		{Field: "assignee", From: "", To: "ada"},
 		{Field: "status", From: "open", To: "in_progress"},
@@ -19,13 +19,13 @@ func startEvent(id string, n int) IssueEvent {
 }
 
 // reclaimEvent is a same-state start: a new holder, no status move.
-func reclaimEvent(id string, n int) IssueEvent {
+func reclaimEvent(id ID, n int) IssueEvent {
 	return IssueEvent{ID: id, Action: string(ActionStart), CreatedAt: at(n), Changes: []FieldChange{
 		{Field: "assignee", From: "ada", To: "grace"},
 	}}
 }
 
-func phaseEvent(id string, n int, from, to Phase) IssueEvent {
+func phaseEvent(id ID, n int, from, to Phase) IssueEvent {
 	return IssueEvent{ID: id, Action: string(ActionPhase), CreatedAt: at(n), Changes: []FieldChange{
 		{Field: PhaseField, From: string(from), To: string(to)},
 	}}

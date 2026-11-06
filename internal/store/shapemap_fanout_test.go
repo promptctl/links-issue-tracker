@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 // on for the translation to be conserved. Timestamps are formatted to a canonical
 // string so two equal instants compare equal regardless of location.
 type normEvent struct {
-	IssueID   string
+	IssueID   model.ID
 	Action    string
 	Reason    string
 	Actor     string
@@ -24,8 +25,8 @@ type normEvent struct {
 	Changes   []model.FieldChange
 }
 
-func normalizeEvents(events []model.IssueEvent, keep func(id string) bool) map[string]normEvent {
-	out := map[string]normEvent{}
+func normalizeEvents(events []model.IssueEvent, keep func(id model.ID) bool) map[model.ID]normEvent {
+	out := map[model.ID]normEvent{}
 	for _, ev := range events {
 		if !keep(ev.ID) {
 			continue
@@ -123,7 +124,7 @@ func TestFanOutConservesIssueHistoryAgainstReconcile(t *testing.T) {
 		t.Fatalf("reference Export: %v", err)
 	}
 
-	isHistory := func(id string) bool { return len(id) >= 5 && id[:5] == "hist-" }
+	isHistory := func(id model.ID) bool { return strings.HasPrefix(id.Raw(), "hist-") }
 	want := normalizeEvents(refExport.Events, isHistory)
 	got := normalizeEvents(exportB.Events, isHistory)
 

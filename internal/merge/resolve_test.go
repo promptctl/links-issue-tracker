@@ -16,7 +16,7 @@ var (
 // leaf builds a hydrated leaf issue; mut tailors the scalar fields before the
 // lifecycle is attached so status/assignee/closed_at travel through the real
 // model API the resolver depends on.
-func leaf(t *testing.T, id string, view model.StatusView, mut func(*model.Issue)) model.Issue {
+func leaf(t *testing.T, id model.ID, view model.StatusView, mut func(*model.Issue)) model.Issue {
 	t.Helper()
 	iss := model.Issue{ID: id, IssueType: "task", CreatedAt: t0, UpdatedAt: t0}
 	if mut != nil {
@@ -29,7 +29,7 @@ func leaf(t *testing.T, id string, view model.StatusView, mut func(*model.Issue)
 	return hydrated
 }
 
-func open(t *testing.T, id string) model.Issue {
+func open(t *testing.T, id model.ID) model.Issue {
 	return leaf(t, id, model.StatusView{Value: model.StateOpen}, nil)
 }
 
@@ -244,7 +244,7 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 
 // closedLeaf builds a closed leaf carrying a close payload — resolution and
 // (optionally) its redirect target — through the real hydration boundary.
-func closedLeaf(t *testing.T, id string, resolution model.Resolution, target string) model.Issue {
+func closedLeaf(t *testing.T, id model.ID, resolution model.Resolution, target string) model.Issue {
 	t.Helper()
 	view := model.StatusView{Value: model.StateClosed, ClosedAt: &t1, Resolution: &resolution}
 	if target != "" {
@@ -650,7 +650,7 @@ func TestThreeWayUnionsConcurrentComments(t *testing.T) {
 		Comments:    []model.Comment{{ID: "c-theirs", IssueID: "i1", Body: "theirs", CreatedAt: t2}},
 	}
 	got := ThreeWay(base, local, remote)
-	ids := map[string]bool{}
+	ids := map[model.ID]bool{}
 	for _, comment := range provisional(t, got).Comments {
 		ids[comment.ID] = true
 	}

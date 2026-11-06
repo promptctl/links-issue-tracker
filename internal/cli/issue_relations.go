@@ -34,7 +34,7 @@ func labelAddLeaf() appLeaf {
 		if len(positional) != 2 {
 			return UsageError{Message: usageLine0}
 		}
-		issue, err := applyLabelEdit(ctx, ap, positional[0], storage.AddLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
+		issue, err := applyLabelEdit(ctx, ap, model.ID(positional[0]), storage.AddLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func labelRmLeaf() appLeaf {
 		if len(positional) != 2 {
 			return UsageError{Message: usageLine1}
 		}
-		issue, err := applyLabelEdit(ctx, ap, positional[0], storage.RemoveLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
+		issue, err := applyLabelEdit(ctx, ap, model.ID(positional[0]), storage.RemoveLabel{Name: positional[1], Actor: resolveActor(inv.Env)})
 		if err != nil {
 			return err
 		}
@@ -69,7 +69,7 @@ func labelRmLeaf() appLeaf {
 // labels field moved. A label added to an issue that already holds it lands
 // and records no history row, and label.changed is what tells that run from
 // an edit. [LAW:single-enforcer] [LAW:nothing-unseen]
-func applyLabelEdit(ctx context.Context, ap *app.App, issueID string, plan storage.ChangePlan) (model.Issue, error) {
+func applyLabelEdit(ctx context.Context, ap *app.App, issueID model.ID, plan storage.ChangePlan) (model.Issue, error) {
 	applied, err := ap.Store.Apply(ctx, issueID, plan)
 	if err != nil {
 		return model.Issue{}, err
@@ -89,8 +89,8 @@ func parentSetLeaf() appLeaf {
 			return UsageError{Message: usageLine2}
 		}
 		rel, err := ap.Store.SetParent(ctx, storage.SetParentInput{
-			ChildID:   *child,
-			ParentID:  *parent,
+			ChildID:   model.ID(*child),
+			ParentID:  model.ID(*parent),
 			CreatedBy: resolveActor(inv.Env),
 		})
 		if err != nil {
@@ -112,7 +112,7 @@ func parentClearLeaf() appLeaf {
 		if len(positional) != 1 {
 			return UsageError{Message: usageLine3}
 		}
-		if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
+		if err := ap.Store.ClearParent(ctx, model.ID(positional[0])); err != nil {
 			return err
 		}
 		if _, err := fmt.Fprintln(inv.Stdout, "ok"); err != nil {

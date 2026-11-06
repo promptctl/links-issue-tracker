@@ -33,14 +33,14 @@ import (
 // by key. [LAW:types-are-the-program] the key type is exactly the schema's
 // PRIMARY KEY (src_id, dst_id, type), so a partial key cannot be built.
 type relationKey struct {
-	srcID string
-	dstID string
+	srcID model.ID
+	dstID model.ID
 	kind  model.RelationType
 }
 
 // labelKey is a labels row's primary key (issue_id, label).
 type labelKey struct {
-	issueID string
+	issueID model.ID
 	name    string
 }
 
@@ -82,7 +82,7 @@ type labelKey struct {
 // Deleting an issue takes its relations, comments, labels, events and event
 // changes with it — the schema's ON DELETE CASCADE — which is exactly what
 // cascadeSurvivors accounts for.
-func deleteIssueTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+func deleteIssueTx(ctx context.Context, tx *sql.Tx, id model.ID) (int64, error) {
 	return execDelete(ctx, tx, `DELETE FROM issues WHERE id = ?`, fmt.Sprintf("issue %s", id), id)
 }
 
@@ -92,7 +92,7 @@ func deleteRelationRowTx(ctx context.Context, tx *sql.Tx, key relationKey) (int6
 		key.srcID, key.dstID, string(key.kind))
 }
 
-func deleteCommentTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+func deleteCommentTx(ctx context.Context, tx *sql.Tx, id model.ID) (int64, error) {
 	return execDelete(ctx, tx, `DELETE FROM comments WHERE id = ?`, fmt.Sprintf("comment %s", id), id)
 }
 
@@ -102,7 +102,7 @@ func deleteLabelTx(ctx context.Context, tx *sql.Tx, key labelKey) (int64, error)
 }
 
 // Deleting an event takes its issue_event_changes rows with it.
-func deleteEventTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+func deleteEventTx(ctx context.Context, tx *sql.Tx, id model.ID) (int64, error) {
 	return execDelete(ctx, tx, `DELETE FROM issue_events WHERE id = ?`, fmt.Sprintf("issue event %s", id), id)
 }
 

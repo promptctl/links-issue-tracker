@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -262,7 +263,7 @@ func idStabilityFindings(dump RawDump, m ShapeMapping, export model.Export) []Ve
 	}
 	rebuilt := map[string]bool{}
 	for _, issue := range export.Issues {
-		rebuilt[issue.ID] = true
+		rebuilt[issue.ID.Raw()] = true
 	}
 
 	missing := setDifference(source, rebuilt)
@@ -352,27 +353,27 @@ func sourceValuesFor(dump RawDump, m ShapeMapping, target TargetKey) ([]string, 
 }
 
 // setDifference returns the sorted members of a not present in b.
-func setDifference(a, b map[string]bool) []string {
-	var out []string
+func setDifference[K ~string](a, b map[K]bool) []K {
+	var out []K
 	for k := range a {
 		if !b[k] {
 			out = append(out, k)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }
 
 // setIntersection returns the sorted members present in both a and b. It is the
 // sibling of setDifference: together the two differences and this intersection
 // partition the union of two id sets into three disjoint, sorted slices.
-func setIntersection(a, b map[string]bool) []string {
-	var out []string
+func setIntersection[K ~string](a, b map[K]bool) []K {
+	var out []K
 	for k := range a {
 		if b[k] {
 			out = append(out, k)
 		}
 	}
-	sort.Strings(out)
+	slices.Sort(out)
 	return out
 }

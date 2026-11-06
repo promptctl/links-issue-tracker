@@ -66,12 +66,12 @@ func decodeJSON(t *testing.T, raw string) map[string]any {
 	return v
 }
 
-func rowFor(id string) annotation.AnnotatedIssue {
+func rowFor(id model.ID) annotation.AnnotatedIssue {
 	return annotation.AnnotatedIssue{Issue: model.Issue{ID: id}}
 }
 
 // readThrough is a dependency the run read through the gathered ticket under it.
-func readThrough(id, ticket string, kind reachKind) depReach {
+func readThrough(id, ticket model.ID, kind reachKind) depReach {
 	return depReach{ID: id, Best: &reading{Row: rowFor(ticket), Kind: kind}}
 }
 
@@ -91,7 +91,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 		{
 			name: "a blocker another checkout holds can be cleared from here",
 			outcome: Exhausted{
-				Epics:    []string{"test-epic"},
+				Epics:    []model.ID{"test-epic"},
 				Progress: claims.Progress{Done: 3, Total: 5},
 				Blocked: []blockerReach{
 					{depReach: readThrough("test-dep", "test-dep-leaf", reachHeldFresh), Clearable: true},
@@ -125,14 +125,14 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 		{
 			name: "a blocker out of view keeps its place in walk order, and a withheld row is off the focus path",
 			outcome: Exhausted{
-				Epics:    []string{"test-epic"},
+				Epics:    []model.ID{"test-epic"},
 				Progress: claims.Progress{Done: 1, Total: 4},
 				Blocked: []blockerReach{
 					{depReach: readThrough("test-dep", "test-dep", reachNotReady)},
 					{depReach: depReach{ID: "test-gone"}, Clearable: true},
 					{depReach: readThrough("test-held", "test-held.1", reachHeldFresh), Clearable: true},
 				},
-				OffPath: []string{"test-off"},
+				OffPath: []model.ID{"test-off"},
 			},
 			gathered: 4,
 			want: `{
@@ -161,7 +161,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 		{
 			name: "a blocker awaiting an outside event offers no stay",
 			outcome: Exhausted{
-				Epics:    []string{"test-epic"},
+				Epics:    []model.ID{"test-epic"},
 				Progress: claims.Progress{Done: 0, Total: 2},
 				Blocked:  []blockerReach{{depReach: readThrough("test-ext", "test-ext", reachAwaitingOutside)}},
 			},
@@ -188,7 +188,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 		{
 			name: "a pick served past the scope records how far the scope had come",
 			outcome: ServedPastExhaustion{poolPick: poolPick{Row: rowFor("test-bug")}, Exhaustion: Exhausted{
-				Epics:       []string{"test-epic"},
+				Epics:       []model.ID{"test-epic"},
 				Progress:    claims.Progress{Done: 8, Total: 9},
 				OwnProgress: claims.Progress{Done: 3, Total: 4},
 				Blocked:     []blockerReach{{depReach: readThrough("test-dep", "test-dep", reachHeldFresh), Clearable: true}},
@@ -237,7 +237,7 @@ func TestNextRecordsWhatAFocusedEmptyPoolNamed(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	outcome := NoWork{
 		Unreachable: []rowReach{{ID: "test-gate", reading: reading{Row: rowFor("test-gate"), Kind: reachNotReady}}},
-		OffPath:     []string{"test-off"},
+		OffPath:     []model.ID{"test-off"},
 	}
 	recordNextEvent(telemetry.With(context.Background(), recorder), outcome, 2, false)
 	want := decodeJSON(t, `{
@@ -362,21 +362,21 @@ func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
 		},
 		{
 			name:        "an exhausted scope whose pool the filter emptied",
-			outcome:     Exhausted{Epics: []string{"test-epic"}, Narrowing: &Narrowed{Hidden: rowFor("test-theirs")}},
+			outcome:     Exhausted{Epics: []model.ID{"test-epic"}, Narrowing: &Narrowed{Hidden: rowFor("test-theirs")}},
 			wantOutcome: "exhausted",
 			wantPicked:  nil,
 			wantHidden:  "test-theirs",
 		},
 		{
 			name:        "an exhausted scope with nothing ready anywhere",
-			outcome:     Exhausted{Epics: []string{"test-epic"}},
+			outcome:     Exhausted{Epics: []model.ID{"test-epic"}},
 			wantOutcome: "exhausted",
 			wantPicked:  nil,
 			wantHidden:  nil,
 		},
 		{
 			name:        "an exhausted scope hid nothing",
-			outcome:     ServedPastExhaustion{poolPick: poolPick{Row: rowFor("test-bug")}, Exhaustion: Exhausted{Epics: []string{"test-epic"}}},
+			outcome:     ServedPastExhaustion{poolPick: poolPick{Row: rowFor("test-bug")}, Exhaustion: Exhausted{Epics: []model.ID{"test-epic"}}},
 			wantOutcome: "served_past_exhaustion",
 			wantPicked:  "test-bug",
 			wantHidden:  nil,
@@ -466,7 +466,7 @@ func TestNextUnderAFilterNamesThePoolTicketItHid(t *testing.T) {
 // and a pool over the whole queue was narrowed by nothing.
 func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
 	t.Parallel()
-	focused := focusScope{goals: []string{"test-goal"}}
+	focused := focusScope{goals: []model.ID{"test-goal"}}
 	for _, tc := range []struct {
 		name    string
 		outcome NextOutcome
@@ -479,7 +479,7 @@ func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
 		},
 		{
 			name:    "a focused pool pick past an exhausted scope",
-			outcome: ServedPastExhaustion{poolPick: poolPick{Row: rowFor("test-path"), Scope: focused}, Exhaustion: Exhausted{Epics: []string{"test-epic"}}},
+			outcome: ServedPastExhaustion{poolPick: poolPick{Row: rowFor("test-path"), Scope: focused}, Exhaustion: Exhausted{Epics: []model.ID{"test-epic"}}},
 			want:    []any{"test-goal"},
 		},
 		{
@@ -513,7 +513,7 @@ func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
 // the held scope's next ticket, which no scope narrows.
 func TestNextRecordsTheFocusTheHiddenTicketWasDrawnUnder(t *testing.T) {
 	t.Parallel()
-	focused := focusScope{goals: []string{"test-goal"}}
+	focused := focusScope{goals: []model.ID{"test-goal"}}
 	for _, tc := range []struct {
 		name    string
 		outcome NextOutcome
@@ -526,7 +526,7 @@ func TestNextRecordsTheFocusTheHiddenTicketWasDrawnUnder(t *testing.T) {
 		},
 		{
 			name:    "the pool's ticket past an exhausted scope under a focus",
-			outcome: Exhausted{Epics: []string{"test-epic"}, Narrowing: &Narrowed{Hidden: rowFor("test-path"), Scope: focused}},
+			outcome: Exhausted{Epics: []model.ID{"test-epic"}, Narrowing: &Narrowed{Hidden: rowFor("test-path"), Scope: focused}},
 			want:    []any{"test-goal"},
 		},
 		{

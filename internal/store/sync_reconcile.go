@@ -202,7 +202,7 @@ func (s *Store) resolvedSettle(resolutions []merge.ProseResolution, actor string
 // landProse writes each issue's merged texts onto the provisional export and
 // appends the event recording the fields they moved. The export's issue and
 // event slices are copied, so the merge result it came from is not mutated.
-func (s *Store) landProse(export model.Export, texts map[string]merge.ProseTexts, actor string) (settlement, error) {
+func (s *Store) landProse(export model.Export, texts map[model.ID]merge.ProseTexts, actor string) (settlement, error) {
 	issues := append([]model.Issue(nil), export.Issues...)
 	events := append([]model.IssueEvent(nil), export.Events...)
 	recorded := 0

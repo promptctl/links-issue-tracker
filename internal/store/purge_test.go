@@ -83,7 +83,7 @@ func TestPurgingOneOfALeafsTwoParentsKeepsItInside(t *testing.T) {
 	}
 	_, err = st.Purge(ctx, storage.PurgeInput{IssueID: first.ID, Actor: "tester"})
 	var refused model.ValidationError
-	if !errors.As(err, &refused) || !strings.Contains(err.Error(), child.ID) {
+	if !errors.As(err, &refused) || !strings.Contains(err.Error(), child.ID.Raw()) {
 		t.Fatalf("Purge(%s) error = %v, want a refusal naming %s: it is the leaf's last epic", first.ID, err, child.ID)
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-func titleSlot(issue string) storage.Slot {
+func titleSlot(issue model.ID) storage.Slot {
 	return storage.Slot{Kind: storage.FieldSlot, Issue: issue, Name: "title"}
 }
 
@@ -28,11 +28,11 @@ func fieldWrite(t *testing.T, write string, slot storage.Slot, from, to string) 
 }
 
 // standingA is a store that still holds a, the issue every slot here names.
-var standingA = map[string]model.Issue{"a": {ID: "a"}}
+var standingA = map[model.ID]model.Issue{"a": {ID: "a"}}
 
 // titledA is a store that holds a, titled title.
-func titledA(title string) map[string]model.Issue {
-	return map[string]model.Issue{"a": {ID: "a", Title: model.Text(title)}}
+func titledA(title string) map[model.ID]model.Issue {
+	return map[model.ID]model.Issue{"a": {ID: "a", Title: model.Text(title)}}
 }
 
 func revertOK(t *testing.T, deltas []storage.WriteDelta, now storage.CurrentState) storage.Reverted {
@@ -153,14 +153,14 @@ func TestClassifyTakesARunOfEditsAsItsNetMove(t *testing.T) {
 // A reparent goes back to the parent before it, or to none, with no reason:
 // a parent is not a field and the gate refuses a reason beside no field.
 func TestRevertPutsAParentBack(t *testing.T) {
-	for _, before := range [][]string{{"epic-1"}, nil} {
+	for _, before := range [][]model.ID{{"epic-1"}, nil} {
 		slot := storage.Slot{Kind: storage.ParentSlot, Issue: "a"}
-		delta, refused := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue(before), To: storage.ParentsValue([]string{"epic-2"})}}})
+		delta, refused := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue(before), To: storage.ParentsValue([]model.ID{"epic-2"})}}})
 		if len(refused) > 0 {
 			t.Fatalf("Classify refused %v", refused)
 		}
-		reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, Parents: map[string][]string{"a": {"epic-2"}}})
-		want := strings.Join(before, "")
+		reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, Parents: map[model.ID][]model.ID{"a": {"epic-2"}}})
+		want := strings.Join(model.RawIDs(before), "")
 		if doc := reverted.Documents[0]; doc.Parent == nil || *doc.Parent != want || doc.Reason != "" {
 			t.Errorf("before %v: document = %+v, want parent %q and no reason", before, doc, want)
 		}
@@ -171,8 +171,8 @@ func TestRevertPutsAParentBack(t *testing.T) {
 // putting its old parent back is a conflict.
 func TestRevertRefusesAChildWithTwoParentsNow(t *testing.T) {
 	slot := storage.Slot{Kind: storage.ParentSlot, Issue: "a"}
-	delta, _ := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue([]string{"e1"}), To: storage.ParentsValue([]string{"e2"})}}})
-	if _, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, Parents: map[string][]string{"a": {"e2", "e3"}}}); len(conflicts) != 1 {
+	delta, _ := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue([]model.ID{"e1"}), To: storage.ParentsValue([]model.ID{"e2"})}}})
+	if _, conflicts := storage.Revert([]storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, Parents: map[model.ID][]model.ID{"a": {"e2", "e3"}}}); len(conflicts) != 1 {
 		t.Errorf("conflicts = %v, want one", conflicts)
 	}
 }
@@ -181,7 +181,7 @@ func TestRevertRefusesAChildWithTwoParentsNow(t *testing.T) {
 // which states one parent or none.
 func TestClassifyRefusesAWriteThatStartedFromTwoParents(t *testing.T) {
 	slot := storage.Slot{Kind: storage.ParentSlot, Issue: "a"}
-	_, refused := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue([]string{"e1", "e2"}), To: storage.ParentsValue([]string{"e3"})}}})
+	_, refused := storage.Classify(storage.WriteRows{Write: "w1", Parents: []storage.Move{{Slot: slot, From: storage.ParentsValue([]model.ID{"e1", "e2"}), To: storage.ParentsValue([]model.ID{"e3"})}}})
 	if len(refused) != 1 || !strings.Contains(refused[0].Reverse, "lit doctor") {
 		t.Errorf("refused = %v, want one naming lit doctor", refused)
 	}
@@ -191,7 +191,7 @@ func TestClassifyRefusesAWriteThatStartedFromTwoParents(t *testing.T) {
 func TestRevertKeepsAnEdgeALaterWriteAdded(t *testing.T) {
 	slot := storage.Slot{Kind: storage.BlockedBySlot, Issue: "a", Name: "x"}
 	delta, _ := storage.Classify(storage.WriteRows{Write: "w1", BlockedBy: []storage.Move{{Slot: slot, From: storage.EdgeValue(false), To: storage.EdgeValue(true)}}})
-	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, BlockedBy: map[string][]string{"a": {"x", "y"}}})
+	reverted := revertOK(t, []storage.WriteDelta{delta}, storage.CurrentState{Issues: standingA, BlockedBy: map[model.ID][]model.ID{"a": {"x", "y"}}})
 	if doc := reverted.Documents[0]; doc.BlockedBy == nil || !reflect.DeepEqual(*doc.BlockedBy, []string{"y"}) {
 		t.Errorf("document = %+v, want blocked_by [y]", doc)
 	}

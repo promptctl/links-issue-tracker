@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -20,12 +21,12 @@ func TestEachDamagedTicketGoesOnTheEventOnce(t *testing.T) {
 	met := newAncestryMet(telemetry.With(context.Background(), recorder))
 	shape := storage.AncestryShape{
 		Deepest:   3,
-		Conflicts: []storage.ParentConflict{{ChildID: "c", Parents: []string{"p1", "p2"}}},
-		Loops:     []string{"l1", "l2"},
+		Conflicts: []storage.ParentConflict{{ChildID: "c", Parents: []model.ID{"p1", "p2"}}},
+		Loops:     []model.ID{"l1", "l2"},
 	}
 	met.record(shape)
 	met.record(shape)
-	met.record(storage.AncestryShape{Loops: []string{"l3"}})
+	met.record(storage.AncestryShape{Loops: []model.ID{"l3"}})
 	ev := recorder.Finish(telemetry.End{})
 	if got := len(ev.Occurrences["rank.ancestry_conflicts"]); got != 1 {
 		t.Errorf("rank.ancestry_conflicts = %v, want c once", ev.Occurrences["rank.ancestry_conflicts"])

@@ -13,10 +13,10 @@ import (
 // refuses: a second parent and a parent cycle. Restored data can still carry
 // either, so what tree order does with them is pinned here, on the edges alone.
 
-func treeOrder(t *testing.T, ancestry RankAncestry, issues []model.Issue) []string {
+func treeOrder(t *testing.T, ancestry RankAncestry, issues []model.Issue) []model.ID {
 	t.Helper()
 	ancestry.Sort(issues)
-	ids := make([]string, 0, len(issues))
+	ids := make([]model.ID, 0, len(issues))
 	for _, issue := range issues {
 		ids = append(ids, issue.ID)
 	}
@@ -42,10 +42,10 @@ func TestAChildTwoParentsClaimListsUnderTheLowerID(t *testing.T) {
 		{ID: "c", Rank: "m"},
 		{ID: "p2", Rank: "a"},
 	})
-	if want := []string{"p2", "p1", "c", "c.g", "p1.x"}; !slices.Equal(got, want) {
+	if want := []model.ID{"p2", "p1", "c", "c.g", "p1.x"}; !slices.Equal(got, want) {
 		t.Errorf("tree order = %v, want %v", got, want)
 	}
-	want := []ParentConflict{{ChildID: "c", Parents: []string{"p1", "p2"}}}
+	want := []ParentConflict{{ChildID: "c", Parents: []model.ID{"p1", "p2"}}}
 	if got := ancestry.Conflicts(); !slices.EqualFunc(got, want, func(a, b ParentConflict) bool {
 		return a.ChildID == b.ChildID && slices.Equal(a.Parents, b.Parents)
 	}) {
@@ -91,7 +91,7 @@ func TestTreeOrderKeepsASubtreeWholeAcrossATiedKey(t *testing.T) {
 		{ID: "e1", Rank: "k"},
 	}
 	got := treeOrder(t, ancestry, issues)
-	want := []string{"e0", "e1", "e1.a", "e1.b", "e2", "e2.a", "e3"}
+	want := []model.ID{"e0", "e1", "e1.a", "e1.b", "e2", "e2.a", "e3"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("tree order = %v, want %v", got, want)
 	}
@@ -111,7 +111,7 @@ func TestInvertedReadsTreeOrder(t *testing.T) {
 		{ChildID: "e1.n.q", ParentID: "e1.n", ParentRank: "m"},
 		{ChildID: "e2.p", ParentID: "e2", ParentRank: "c"},
 	})
-	issue := map[string]model.Issue{}
+	issue := map[model.ID]model.Issue{}
 	for _, i := range []model.Issue{
 		{ID: "t", Rank: "a"}, {ID: "e1", Rank: "b"}, {ID: "e2", Rank: "c"}, {ID: "t2", Rank: "d"},
 		{ID: "e1.y", Rank: "a"}, {ID: "e1.n", Rank: "m"}, {ID: "e1.x", Rank: "z"},
@@ -120,7 +120,7 @@ func TestInvertedReadsTreeOrder(t *testing.T) {
 		issue[i.ID] = i
 	}
 	cases := []struct {
-		dependent, dependency string
+		dependent, dependency model.ID
 		rawSays, want         bool
 	}{
 		{"e1.y", "e1.x", true, true},     // frame-mates: their own keys decide
@@ -161,22 +161,22 @@ func TestFrameRepresentatives(t *testing.T) {
 	// keyspace.
 	cases := []struct {
 		name      string
-		chains    [][]string
-		want      []string
+		chains    [][]model.ID
+		want      []model.ID
 		wantFrame Frame
 		wantErr   bool
 	}{
-		{name: "all top-level", chains: [][]string{{"x"}, {"y"}, {"z"}}, want: []string{"x", "y", "z"}, wantFrame: TopLevel},
-		{name: "a lone top-level issue", chains: [][]string{{"x"}}, want: []string{"x"}, wantFrame: TopLevel},
-		{name: "a lone child is its own representative in its epic", chains: [][]string{{"g", "s", "e"}}, want: []string{"g"}, wantFrame: "s"},
-		{name: "siblings same epic", chains: [][]string{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []string{"c1", "c2", "c3"}, wantFrame: "e"},
-		{name: "children plus outsider resolve to roots", chains: [][]string{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []string{"e", "x", "e"}, wantFrame: TopLevel},
-		{name: "children of two epics under shared parent with outsider", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []string{"p", "p", "x"}, wantFrame: TopLevel},
-		{name: "children of two epics under shared parent", chains: [][]string{{"c1", "e1", "p"}, {"c2", "e2", "p"}}, want: []string{"e1", "e2"}, wantFrame: "p"},
-		{name: "grandchild vs child of shared epic", chains: [][]string{{"g", "s", "e"}, {"c", "e"}}, want: []string{"s", "c"}, wantFrame: "e"},
-		{name: "issue with its own container", chains: [][]string{{"c", "e"}, {"e"}}, wantErr: true},
-		{name: "container with deep descendant", chains: [][]string{{"e"}, {"g", "s", "e"}}, wantErr: true},
-		{name: "container alongside outsider and descendant", chains: [][]string{{"e"}, {"x"}, {"c", "e"}}, wantErr: true},
+		{name: "all top-level", chains: [][]model.ID{{"x"}, {"y"}, {"z"}}, want: []model.ID{"x", "y", "z"}, wantFrame: TopLevel},
+		{name: "a lone top-level issue", chains: [][]model.ID{{"x"}}, want: []model.ID{"x"}, wantFrame: TopLevel},
+		{name: "a lone child is its own representative in its epic", chains: [][]model.ID{{"g", "s", "e"}}, want: []model.ID{"g"}, wantFrame: "s"},
+		{name: "siblings same epic", chains: [][]model.ID{{"c1", "e"}, {"c2", "e"}, {"c3", "e"}}, want: []model.ID{"c1", "c2", "c3"}, wantFrame: "e"},
+		{name: "children plus outsider resolve to roots", chains: [][]model.ID{{"c1", "e"}, {"x"}, {"c2", "e"}}, want: []model.ID{"e", "x", "e"}, wantFrame: TopLevel},
+		{name: "children of two epics under shared parent with outsider", chains: [][]model.ID{{"c1", "e1", "p"}, {"c2", "e2", "p"}, {"x"}}, want: []model.ID{"p", "p", "x"}, wantFrame: TopLevel},
+		{name: "children of two epics under shared parent", chains: [][]model.ID{{"c1", "e1", "p"}, {"c2", "e2", "p"}}, want: []model.ID{"e1", "e2"}, wantFrame: "p"},
+		{name: "grandchild vs child of shared epic", chains: [][]model.ID{{"g", "s", "e"}, {"c", "e"}}, want: []model.ID{"s", "c"}, wantFrame: "e"},
+		{name: "issue with its own container", chains: [][]model.ID{{"c", "e"}, {"e"}}, wantErr: true},
+		{name: "container with deep descendant", chains: [][]model.ID{{"e"}, {"g", "s", "e"}}, wantErr: true},
+		{name: "container alongside outsider and descendant", chains: [][]model.ID{{"e"}, {"x"}, {"c", "e"}}, wantErr: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -268,7 +268,7 @@ func TestDependencyOrderGroupsInterleavedFrameMates(t *testing.T) {
 		{Dependent: "k.1", Dependency: "k.3"}, // ... and k.1 on another in k
 		{Dependent: "k.3", Dependency: "k.1"},
 	})
-	want := [][]string{{"a", "b"}, {"c.1", "c.2", "c.3"}, {"h", "k"}}
+	want := [][]model.ID{{"a", "b"}, {"c.1", "c.2", "c.3"}, {"h", "k"}}
 	if got := order.Interleaved(); !slices.EqualFunc(got, want, slices.Equal) {
 		t.Errorf("Interleaved() = %v, want %v", got, want)
 	}
@@ -280,7 +280,7 @@ func TestDependencyOrderGroupsInterleavedFrameMates(t *testing.T) {
 	if got := order.Constraints(); !slices.Equal(got, wantConstraints) {
 		t.Errorf("Constraints() = %v, want %v", got, wantConstraints)
 	}
-	issue := func(id, rank string) model.Issue { return model.Issue{ID: id, Rank: rank} }
+	issue := func(id model.ID, rank string) model.Issue { return model.Issue{ID: id, Rank: rank} }
 	// b lists after a, so a.1 waiting on b.1 would read inverted outside the group.
 	if order.Inverted(issue("a.1", "a"), issue("b.1", "a")) {
 		t.Errorf("Inverted(a.1 blocked by b.1) = true, want false: a and b are interleaved")
@@ -311,10 +311,10 @@ func TestAnAncestryShapeNamesWhatItPlacedPast(t *testing.T) {
 		{ChildID: "x", ParentID: "l1", ParentRank: "c"},
 		{ChildID: "y", ParentID: "x", ParentRank: "d"},
 	}).Shape()
-	if len(shape.Conflicts) != 1 || shape.Conflicts[0].ChildID != "c" || !slices.Equal(shape.Conflicts[0].Parents, []string{"p1", "p2"}) {
+	if len(shape.Conflicts) != 1 || shape.Conflicts[0].ChildID != "c" || !slices.Equal(shape.Conflicts[0].Parents, []model.ID{"p1", "p2"}) {
 		t.Errorf("conflicts = %+v, want c under p1 and p2", shape.Conflicts)
 	}
-	if !slices.Equal(shape.Loops, []string{"l1", "l2"}) {
+	if !slices.Equal(shape.Loops, []model.ID{"l1", "l2"}) {
 		t.Errorf("loops = %v, want [l1 l2]: x and y sit below the loop, not on it", shape.Loops)
 	}
 }

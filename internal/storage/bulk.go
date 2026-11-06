@@ -80,15 +80,15 @@ type Basis struct {
 // same sequence on every run instead of Go's randomized map iteration.
 type IDMapping struct {
 	Ref string
-	ID  string
+	ID  model.ID
 }
 
 // NewIDMapping applies the one ref rule: a create is nameable by the LocalID
 // it chose, or by its own new real ID when the file gave it none — so every
 // create is in the report either way. [LAW:one-source-of-truth]
-func NewIDMapping(localID, realID string) IDMapping {
+func NewIDMapping(localID string, realID model.ID) IDMapping {
 	if localID == "" {
-		return IDMapping{Ref: realID, ID: realID}
+		return IDMapping{Ref: realID.Raw(), ID: realID}
 	}
 	return IDMapping{Ref: localID, ID: realID}
 }
@@ -110,14 +110,14 @@ func NewIDMapping(localID, realID string) IDMapping {
 // nothing landed. [LAW:nothing-unseen]
 type BulkApplyResult struct {
 	Created       []IDMapping
-	Reparented    []string
-	ParentHeld    []string
-	BlockedBySet  []string
-	BlockedByHeld []string
+	Reparented    []model.ID
+	ParentHeld    []model.ID
+	BlockedBySet  []model.ID
+	BlockedByHeld []model.ID
 	EdgesAdded    int
 	EdgesRemoved  int
-	Updated       []string
-	FieldsHeld    []string
+	Updated       []model.ID
+	FieldsHeld    []model.ID
 	Ranked        RankSetResult
 	Kept          []Slot
 }
@@ -173,7 +173,7 @@ type BulkFile struct {
 // file or a real id, which only the write can resolve. An empty set is no
 // blockers.
 type FileBlockedBy struct {
-	ID        string
+	ID        model.ID
 	BlockedBy []string
 }
 
@@ -181,7 +181,7 @@ type FileBlockedBy struct {
 // the parent it moves it under, a local_id in the file or a real id, which only
 // the write can resolve. An empty Parent is no parent, as a create's is.
 type FileReparent struct {
-	ID     string
+	ID     model.ID
 	Parent string
 }
 
@@ -189,7 +189,7 @@ type FileReparent struct {
 // document's id, or a create document's position in the file, whose id only
 // the write mints.
 type FileRef struct {
-	id    string
+	id    model.ID
 	index int
 }
 
@@ -197,7 +197,7 @@ type FileRef struct {
 // create by its position.
 func (r FileRef) String() string {
 	if r.id != "" {
-		return strconv.Quote(r.id)
+		return strconv.Quote(r.id.Raw())
 	}
 	return fmt.Sprintf("doc %d", r.index)
 }
@@ -207,7 +207,7 @@ func (r FileRef) String() string {
 // Doc is the document that states the set.
 type EdgeSet struct {
 	Doc     FileRef
-	ID      string
+	ID      model.ID
 	Type    model.RelationType
 	Targets []EdgeTarget
 }
@@ -216,7 +216,8 @@ type EdgeSet struct {
 // local_id in the file or a real id, and ID, the real id it resolves to. A
 // refusal names the Ref, the one the author can find in the file.
 type EdgeTarget struct {
-	Ref, ID string
+	Ref string
+	ID  model.ID
 }
 
 // ResolveRef resolves a reference a file states against minted, the ids its
@@ -224,11 +225,11 @@ type EdgeTarget struct {
 // passes through unchanged as a real, pre-existing id, for the write that
 // receives it to judge. [LAW:dataflow-not-control-flow] one lookup with a
 // fallback, not a branch on "is this local".
-func ResolveRef(ref string, minted map[string]string) string {
+func ResolveRef(ref string, minted map[string]model.ID) model.ID {
 	if id, ok := minted[ref]; ok {
 		return id
 	}
-	return ref
+	return model.ID(ref)
 }
 
 // EdgeWriter is the relation write an engine runs a file's edge sets through,
@@ -241,8 +242,8 @@ func ResolveRef(ref string, minted map[string]string) string {
 type EdgeWriter interface {
 	// Edges lists the edges of relType id holds, and refuses an id that names
 	// no issue, so a set stated on a missing issue is never read as held.
-	Edges(id string, relType model.RelationType) ([]model.Relation, error)
-	Add(id, target string, relType model.RelationType) error
+	Edges(id model.ID, relType model.RelationType) ([]model.Relation, error)
+	Add(id, target model.ID, relType model.RelationType) error
 	Remove(edge model.Relation) error
 }
 
@@ -268,7 +269,7 @@ type EdgeStep struct {
 // [LAW:no-ambient-temporal-coupling] [LAW:single-enforcer]
 //
 // The first refusal ends the step, naming the document it refused.
-func (f BulkFile) WriteEdges(created []string, w EdgeWriter) (EdgeStep, error) {
+func (f BulkFile) WriteEdges(created []model.ID, w EdgeWriter) (EdgeStep, error) {
 	refuse := func(set EdgeSet, ref string, err error) (EdgeStep, error) {
 		return EdgeStep{}, fmt.Errorf("bulk: %s of %s -> %q: %w", fileKey(set.Type), set.Doc, ref, err)
 	}
@@ -280,13 +281,13 @@ func (f BulkFile) WriteEdges(created []string, w EdgeWriter) (EdgeStep, error) {
 		if err != nil {
 			return EdgeStep{}, fmt.Errorf("bulk: %s of %s: %w", fileKey(set.Type), set.Doc, err)
 		}
-		held := make(map[string]bool, len(prior))
+		held := make(map[model.ID]bool, len(prior))
 		removed := 0
 		for _, edge := range prior {
 			held[edge.DstID] = true
 			if !slices.ContainsFunc(set.Targets, func(t EdgeTarget) bool { return t.ID == edge.DstID }) {
 				if err := w.Remove(edge); err != nil {
-					return refuse(set, edge.DstID, err)
+					return refuse(set, edge.DstID.Raw(), err)
 				}
 				removed++
 			}
@@ -318,8 +319,8 @@ func (f BulkFile) WriteEdges(created []string, w EdgeWriter) (EdgeStep, error) {
 // were minted under, in the order they are written: the update documents'
 // parents, then the creates' blocked_by, then the update documents'
 // blocked_by. A create's parent is not among them; the create writes it.
-func (f BulkFile) edgeSets(created []string) []EdgeSet {
-	minted := make(map[string]string, len(f.Creates))
+func (f BulkFile) edgeSets(created []model.ID) []EdgeSet {
+	minted := make(map[string]model.ID, len(f.Creates))
 	for pos, c := range f.Creates {
 		if c.LocalID != "" {
 			minted[c.LocalID] = created[pos]
@@ -361,8 +362,8 @@ func fileKey(relType model.RelationType) string {
 
 // updatedIDs lists the ids of the sets of relType that update documents
 // state. The set a create states is part of its create, reported with it.
-func updatedIDs(sets []EdgeSet, relType model.RelationType) []string {
-	var ids []string
+func updatedIDs(sets []EdgeSet, relType model.RelationType) []model.ID {
+	var ids []model.ID
 	for _, set := range sets {
 		if set.Type == relType && set.Doc.id != "" {
 			ids = append(ids, set.ID)
@@ -374,12 +375,12 @@ func updatedIDs(sets []EdgeSet, relType model.RelationType) []string {
 // RankedIDs is the file's ordering as the issue ids an engine hands its
 // RankSet, given created: the id the write minted for each of f.Creates, in
 // that order. It is empty for a file that states no rank.
-func (f BulkFile) RankedIDs(created []string) []string {
-	byIndex := make(map[int]string, len(f.Creates))
+func (f BulkFile) RankedIDs(created []model.ID) []model.ID {
+	byIndex := make(map[int]model.ID, len(f.Creates))
 	for pos, create := range f.Creates {
 		byIndex[create.Index] = created[pos]
 	}
-	ids := make([]string, len(f.Ranked))
+	ids := make([]model.ID, len(f.Ranked))
 	for i, ref := range f.Ranked {
 		ids[i] = ref.id
 		if ref.id == "" {
@@ -392,7 +393,7 @@ func (f BulkFile) RankedIDs(created []string) []string {
 // BulkUpdate is one update document, parsed: the issue it names and the patch
 // of the fields it states.
 type BulkUpdate struct {
-	ID    string
+	ID    model.ID
 	Patch UpdateIssueInput
 }
 
@@ -413,7 +414,7 @@ type FileCreate struct {
 // workspace it lands in, and who is importing it. Taking them as arguments is
 // what keeps a write from landing with its parent unresolved or its author
 // unnamed. [LAW:types-are-the-program]
-func (c FileCreate) Input(parentID, prefix, actor string) CreateIssueInput {
+func (c FileCreate) Input(parentID model.ID, prefix, actor string) CreateIssueInput {
 	in := c.issue
 	in.ParentID = parentID
 	in.Prefix = prefix

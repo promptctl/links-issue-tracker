@@ -15,10 +15,10 @@ import (
 
 // showOutput runs `lit show <id>` text rendering and returns the captured
 // stdout, the integration surface the epic block is wired into.
-func showOutput(t *testing.T, ap *app.App, id string) string {
+func showOutput(t *testing.T, ap *app.App, id model.ID) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := runShow(t, context.Background(), &buf, ap, []string{id}); err != nil {
+	if err := runShow(t, context.Background(), &buf, ap, []string{id.Raw()}); err != nil {
 		t.Fatalf("runShow(%s) error = %v", id, err)
 	}
 	return buf.String()
@@ -37,7 +37,7 @@ func TestRunShowChildRendersEpicBlockWithFocus(t *testing.T) {
 	if !strings.Contains(out, "Focused child") {
 		t.Fatalf("show output missing the issue's own body:\n%s", out)
 	}
-	if !strings.Contains(out, "Epic: "+f.epicID+" — Plan epic") {
+	if !strings.Contains(out, "Epic: "+f.epicID.Raw()+" — Plan epic") {
 		t.Errorf("child show should append the epic block:\n%s", out)
 	}
 	if !strings.Contains(out, "Why: Why this exists") {
@@ -49,10 +49,10 @@ func TestRunShowChildRendersEpicBlockWithFocus(t *testing.T) {
 	// path — show → epic block → the readiness gate `lit next` routes on —
 	// answering with one verdict.
 	want := "  ▶ [blocked: earlier sibling " + sibling + " still open] " + focus + "  Focused child   (you are here)"
-	if !strings.Contains(out, want) {
+	if !strings.Contains(out, want.Raw()) {
 		t.Errorf("focused child should be marked you-are-here, want %q in:\n%s", want, out)
 	}
-	if !strings.Contains(out, "    [ready]       "+sibling+"  Sibling first") {
+	if !strings.Contains(out, "    [ready]       "+sibling.Raw()+"  Sibling first") {
 		t.Errorf("sibling should appear as an unfocused row:\n%s", out)
 	}
 }
@@ -66,14 +66,14 @@ func TestRunShowEpicRendersChildrenNoFocus(t *testing.T) {
 
 	out := showOutput(t, f.ap, f.epicID)
 
-	if !strings.Contains(out, "Epic: "+f.epicID+" — Top epic") {
+	if !strings.Contains(out, "Epic: "+f.epicID.Raw()+" — Top epic") {
 		t.Errorf("epic show should append the epic block:\n%s", out)
 	}
 	// One lane, so B waits on A — the epic-level view answers exactly as the
 	// leaf-level one above does.
 	for _, want := range []string{
-		"    [ready]       " + a + "  Child A",
-		"    [blocked: earlier sibling " + a + " still open] " + b + "  Child B",
+		"    [ready]       " + a.Raw() + "  Child A",
+		"    [blocked: earlier sibling " + a.Raw() + " still open] " + b.Raw() + "  Child B",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("epic show should list children, missing %q in:\n%s", want, out)
@@ -103,7 +103,7 @@ func TestRunShowTopLevelEpicRendersItsOwnBlock(t *testing.T) {
 	if !strings.Contains(out, "Free floating") {
 		t.Fatalf("show output missing the issue body:\n%s", out)
 	}
-	if !strings.Contains(out, "Epic: "+free.ID+" — Free floating") {
+	if !strings.Contains(out, "Epic: "+free.ID.Raw()+" — Free floating") {
 		t.Errorf("a top-level epic renders its own epic block:\n%s", out)
 	}
 	if strings.Contains(out, "▶") {
@@ -143,11 +143,11 @@ func TestRunShowTopLevelEpicFailsBeforeWritingBodyOnUnreadableConfig(t *testing.
 	writeUnrelatedlyBrokenConfig(t, ap)
 
 	var buf bytes.Buffer
-	err = runShow(t, context.Background(), &buf, ap, []string{free.ID})
+	err = runShow(t, context.Background(), &buf, ap, []string{free.ID.Raw()})
 	if err == nil {
 		t.Fatalf("show of a top-level epic under an unreadable config must fail, got nil; output:\n%s", buf.String())
 	}
-	for _, unwanted := range []string{free.ID, "Free floating", "Epic: "} {
+	for _, unwanted := range []string{free.ID.Raw(), "Free floating", "Epic: "} {
 		if strings.Contains(buf.String(), unwanted) {
 			t.Errorf("failed plan resolution must print neither body nor block, found %q in:\n%s", unwanted, buf.String())
 		}
@@ -167,11 +167,11 @@ func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T)
 	writeUnrelatedlyBrokenConfig(t, f.ap)
 
 	var buf bytes.Buffer
-	err := runShow(t, context.Background(), &buf, f.ap, []string{child})
+	err := runShow(t, context.Background(), &buf, f.ap, []string{child.Raw()})
 	if err == nil {
 		t.Fatalf("show of an epic member under an unreadable config must fail, got nil; output:\n%s", buf.String())
 	}
-	for _, unwanted := range []string{child, "A child", "Epic: "} {
+	for _, unwanted := range []string{child.Raw(), "A child", "Epic: "} {
 		if strings.Contains(buf.String(), unwanted) {
 			t.Errorf("failed plan resolution must print neither body nor block, found %q in:\n%s", unwanted, buf.String())
 		}
@@ -189,7 +189,7 @@ func TestRunShowInProgressChildRendersInProgressMarker(t *testing.T) {
 	out := showOutput(t, f.ap, working)
 
 	want := "  ▶ [in_progress] " + working + "  In flight   (you are here)"
-	if !strings.Contains(out, want) {
+	if !strings.Contains(out, want.Raw()) {
 		t.Errorf("in_progress child should render in_progress marker, want %q in:\n%s", want, out)
 	}
 }

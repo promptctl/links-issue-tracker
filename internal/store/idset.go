@@ -3,6 +3,8 @@ package store
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // idSet is a caller-supplied list of issue ids, deduplicated, rendered as one
@@ -60,8 +62,13 @@ type idSet struct {
 // An empty set is a legal value and needs no guard at any caller: a join
 // against no rows returns no rows, where `IN ()` was a syntax error.
 // [LAW:no-defensive-null-guards]
-func newIDSet(ids []string) idSet {
-	return idSet{ids: dedupeStrings(ids)}
+func newIDSet[T ~string](ids []T) idSet {
+	unique := dedupeStrings(ids)
+	raw := make([]string, len(unique))
+	for i, id := range unique {
+		raw[i] = string(id)
+	}
+	return idSet{ids: raw}
 }
 
 // rows renders the set as a FROM-clause row source named alias, with one
@@ -87,9 +94,9 @@ func (s idSet) rows(alias string) (string, any) {
 // than join a set: writeRanksTx's CASE update, because Dolt evaluates an
 // UPDATE ... JOIN's check constraints against the joined row and refuses valid
 // writes. Reads never chunk; they join an idSet.
-func idChunks(ids []string) [][]string {
+func idChunks(ids []model.ID) [][]model.ID {
 	unique := dedupeStrings(ids)
-	chunks := make([][]string, 0, (len(unique)+idChunkSize-1)/idChunkSize)
+	chunks := make([][]model.ID, 0, (len(unique)+idChunkSize-1)/idChunkSize)
 	for start := 0; start < len(unique); start += idChunkSize {
 		chunks = append(chunks, unique[start:min(start+idChunkSize, len(unique))])
 	}

@@ -17,13 +17,13 @@ type PlanReviewStore interface {
 	// ListPlanReviews is every review of the issue's plan, in
 	// PlanReviewOrdering: what PlanApproval decides on, without the rest of
 	// the issue's detail.
-	ListPlanReviews(ctx context.Context, issueID string) ([]model.PlanReview, error)
+	ListPlanReviews(ctx context.Context, issueID model.ID) ([]model.PlanReview, error)
 }
 
 // AddPlanReviewInput is a reviewer's verdict on the plan text they read, as
 // they gave it; PlanReviewOf parses it.
 type AddPlanReviewInput struct {
-	IssueID string
+	IssueID model.ID
 	// Plan is the digest of the text the review judged, as `lit show` prints
 	// it. It names the text rather than its version number because a sync
 	// that merges in an older edit renumbers the versions, and a number read
@@ -125,7 +125,7 @@ func TextVersions(issue model.Issue, events []model.IssueEvent, field LongTextFi
 // resolved — what is missing is the version, and the message says how many
 // there are and where the current text is. [LAW:one-type-per-behavior]
 type VersionNotFoundError struct {
-	IssueID string
+	IssueID model.ID
 	Field   string
 	Number  int
 	Held    int
@@ -141,7 +141,7 @@ func (e VersionNotFoundError) Error() string {
 // does, and the message differs: a digest names no number, and the current
 // plan's digest is in lit show, not in lit show --field.
 type PlanDigestNotFoundError struct {
-	IssueID string
+	IssueID model.ID
 	Digest  model.PlanDigest
 }
 
@@ -215,7 +215,7 @@ type PlanStanding interface {
 type PlanGap interface {
 	PlanStanding
 	// Describe says what is missing, naming the ticket.
-	Describe(issueID string) string
+	Describe(issueID model.ID) string
 }
 
 // PlanApproved is a current plan whose latest review passed it. Review is the
@@ -250,11 +250,11 @@ func (PlanMissing) planStanding()    {}
 func (PlanUnreviewed) planStanding() {}
 func (PlanFailed) planStanding()     {}
 
-func (PlanMissing) Describe(issueID string) string {
+func (PlanMissing) Describe(issueID model.ID) string {
 	return fmt.Sprintf("%s has no plan", issueID)
 }
 
-func (g PlanUnreviewed) Describe(issueID string) string {
+func (g PlanUnreviewed) Describe(issueID model.ID) string {
 	earlier := ""
 	if g.EarlierReviewed {
 		earlier = "; the reviews on record judged an earlier text"
@@ -262,6 +262,6 @@ func (g PlanUnreviewed) Describe(issueID string) string {
 	return fmt.Sprintf("%s's current plan (%s) has no review%s", issueID, g.Plan, earlier)
 }
 
-func (g PlanFailed) Describe(issueID string) string {
+func (g PlanFailed) Describe(issueID model.ID) string {
 	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s failed it citing %s", issueID, g.Plan, g.Fail.CreatedBy, model.JoinLaws(g.Fail.Laws))
 }

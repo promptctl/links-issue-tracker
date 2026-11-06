@@ -59,7 +59,7 @@ func TestPlaceForIsTotalOverTheSealedSum(t *testing.T) {
 func TestPlacePastExhaustionFollowsWhatTheCheckoutHasLeft(t *testing.T) {
 	t.Parallel()
 	past := func(scope, own claims.Progress) NextOutcome {
-		return ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []string{"test-epic-1"}, Progress: scope, OwnProgress: own}}
+		return ServedPastExhaustion{poolPick: poolPick{Row: sealedSumRow}, Exhaustion: Exhausted{Epics: []model.ID{"test-epic-1"}, Progress: scope, OwnProgress: own}}
 	}
 	unfinished, finished, epicOpen := claims.Progress{Done: 1, Total: 2}, claims.Progress{Done: 2, Total: 2}, claims.Progress{Done: 2, Total: 3}
 	for _, tc := range []struct {
@@ -93,10 +93,10 @@ func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
 		place startPlace
 		want  string
 	}{
-		{startNoPick, "run `lit start " + ticket.ID + "` to claim it"},
-		{startHere, "run `lit start " + ticket.ID + "` to claim it"},
-		{startOffPrimaryClone, "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start " + ticket.ID + "` to claim it"},
-		{startBesideHeldWork, "from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID + "` to claim it"},
+		{startNoPick, "run `lit start " + ticket.ID.Raw() + "` to claim it"},
+		{startHere, "run `lit start " + ticket.ID.Raw() + "` to claim it"},
+		{startOffPrimaryClone, "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start " + ticket.ID.Raw() + "` to claim it"},
+		{startBesideHeldWork, "from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID.Raw() + "` to claim it"},
 	} {
 		if got := startAdvice(row, model.LaneOf(row.Issue, nil), tc.place); got != tc.want {
 			t.Errorf("startAdvice(place %v) = %q, want %q", tc.place, got, tc.want)
@@ -108,7 +108,7 @@ func TestStartAdviceNamesTheWorktreeOnlyForAPickThatLeaves(t *testing.T) {
 // that served nothing records the place as null rather than leaving it out.
 func TestNextRecordsWhereItsPickStarts(t *testing.T) {
 	t.Parallel()
-	unfinished := Exhausted{Epics: []string{"test-epic-1"}, Progress: claims.Progress{Done: 1, Total: 2}, OwnProgress: claims.Progress{Done: 1, Total: 2}}
+	unfinished := Exhausted{Epics: []model.ID{"test-epic-1"}, Progress: claims.Progress{Done: 1, Total: 2}, OwnProgress: claims.Progress{Done: 1, Total: 2}}
 	for _, tc := range []struct {
 		name    string
 		outcome NextOutcome

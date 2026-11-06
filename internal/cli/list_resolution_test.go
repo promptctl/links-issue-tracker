@@ -30,8 +30,8 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 		want    string
 	}{
 		{title: "finished", actions: []model.Action{model.Done{}}, want: "closed"},
-		{title: "duplicated", actions: []model.Action{model.Close{Outcome: model.Duplicate{Of: canonical.ID}}}, want: "closed:duplicate"},
-		{title: "replaced", actions: []model.Action{model.Close{Outcome: model.Superseded{By: canonical.ID}}}, want: "closed:superseded"},
+		{title: "duplicated", actions: []model.Action{model.Close{Outcome: model.Duplicate{Of: canonical.ID.Raw()}}}, want: "closed:duplicate"},
+		{title: "replaced", actions: []model.Action{model.Close{Outcome: model.Superseded{By: canonical.ID.Raw()}}}, want: "closed:superseded"},
 		{title: "overtaken", actions: []model.Action{model.Close{Outcome: model.Obsolete{}}}, want: "closed:obsolete"},
 		{title: "declined", actions: []model.Action{model.Close{Outcome: model.Wontfix{}}}, want: "closed:wontfix"},
 		{title: "declined and shelved", actions: []model.Action{model.Close{Outcome: model.Wontfix{}}, model.Archive{}}, want: "closed:wontfix+archived"},
@@ -44,7 +44,7 @@ func TestListStateCellNamesTheCloseReason(t *testing.T) {
 				t.Fatalf("Apply(%s, %T) error = %v", tc.title, action, err)
 			}
 		}
-		rows[i] = issue.ID + " | " + tc.want + " | listing | " + tc.title
+		rows[i] = issue.ID.Raw() + " | " + tc.want + " | listing | " + tc.title
 	}
 
 	// Exact lines, so a "closed" expectation cannot be met by a
@@ -69,10 +69,10 @@ func TestCloseSummarySharesTheStateCell(t *testing.T) {
 	issue := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("declined"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "listing", ParentID: epic.ID})
 
 	var out bytes.Buffer
-	if err := runTransition(t, h.ctx, &out, h.ap, []string{issue.ID, "--resolution", "wontfix"}, closeSpec); err != nil {
+	if err := runTransition(t, h.ctx, &out, h.ap, []string{issue.ID.Raw(), "--resolution", "wontfix"}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close wontfix) error = %v", err)
 	}
-	want := issue.ID + " [closed:wontfix/task/listing/normal] declined"
+	want := issue.ID.Raw() + " [closed:wontfix/task/listing/normal] declined"
 	if !slices.Contains(strings.Split(out.String(), "\n"), want) {
 		t.Fatalf("lit close output missing summary %q; output:\n%s", want, out.String())
 	}

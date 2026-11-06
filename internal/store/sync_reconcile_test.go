@@ -439,7 +439,7 @@ func strptr(s string) *string { return &s }
 // returns the epic's id. An epic, because the collision tests file children
 // under it and only an epic contains tickets; every caller edits fields an
 // epic carries (title, lane, priority, labels).
-func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
+func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL string) model.ID {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
@@ -484,7 +484,7 @@ func adoptRemote(t *testing.T, ctx context.Context, root, remoteURL string) {
 }
 
 // updateLocal applies a field update to an issue and leaves it local (unpushed).
-func updateLocal(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
+func updateLocal(t *testing.T, ctx context.Context, root string, id model.ID, in storage.UpdateIssueInput) {
 	t.Helper()
 	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {
@@ -499,7 +499,7 @@ func updateLocal(t *testing.T, ctx context.Context, root, id string, in storage.
 }
 
 // updateAndPush applies a field update and pushes it to the remote.
-func updateAndPush(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
+func updateAndPush(t *testing.T, ctx context.Context, root string, id model.ID, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in)
 	sync := openSyncOrFatal(t, ctx, root)
@@ -549,7 +549,7 @@ func assertScratchBranchCleanedUp(t *testing.T, ctx context.Context, st *Store) 
 	}
 }
 
-func getIssueOrFatal(t *testing.T, ctx context.Context, st *Store, id string) model.Issue {
+func getIssueOrFatal(t *testing.T, ctx context.Context, st *Store, id model.ID) model.Issue {
 	t.Helper()
 	issue, err := st.GetIssue(ctx, id)
 	if err != nil {
@@ -669,7 +669,7 @@ func scanSpineEntries(t *testing.T, ctx context.Context, st *Store, revision str
 // commit — how the tests see a mid-chain state without moving any branch. The
 // commit hash comes from dolt_log (base32, trusted alphabet) and is
 // interpolated because the engine does not accept a bound placeholder for AS OF.
-func assertIssuePresentAsOf(t *testing.T, ctx context.Context, st *Store, commit, issueID string, want bool) {
+func assertIssuePresentAsOf(t *testing.T, ctx context.Context, st *Store, commit string, issueID model.ID, want bool) {
 	t.Helper()
 	var count int
 	query := fmt.Sprintf("SELECT COUNT(*) FROM issues AS OF '%s' WHERE id = ?", commit)

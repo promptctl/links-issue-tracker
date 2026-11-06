@@ -25,7 +25,7 @@ func TestExitCodeMappings(t *testing.T) {
 		{name: "plan digest not found", err: storage.PlanDigestNotFoundError{IssueID: "lit-1", Digest: model.DigestPlan("x")}, want: ExitNotFound},
 		{name: "merge conflict typed", err: MergeConflictError{Message: "sync conflict"}, want: ExitConflict},
 		{name: "corruption typed", err: CorruptionError{Message: "integrity_check failed"}, want: ExitCorruption},
-		{name: "parent cycle", err: storage.ParentCycleError{Cycle: []string{"a", "b"}}, want: ExitCorruption},
+		{name: "parent cycle", err: storage.ParentCycleError{Cycle: []model.ID{"a", "b"}}, want: ExitCorruption},
 		{name: "usage message", err: UsageError{Message: "usage: lit foo"}, want: ExitUsage},
 		{name: "validation required", err: model.ValidationError{Message: "--title is required"}, want: ExitValidation},
 		{name: "validation unknown command", err: UnknownCommandError{Command: "abc"}, want: ExitValidation},
@@ -71,7 +71,7 @@ func TestExitCodeMappings(t *testing.T) {
 		// correctly and simply has no ticket to hand back. Sharing one code is
 		// deliberate — the caller's question is binary, and which emptiness it
 		// was is carried by the reason and the message (links-cli-cpou).
-		{name: "router scope exhausted", err: Exhausted{Epics: []string{"links-epic-abcd"}}, want: ExitNoWork},
+		{name: "router scope exhausted", err: Exhausted{Epics: []model.ID{"links-epic-abcd"}}, want: ExitNoWork},
 		{name: "router no ready work", err: NoWork{}, want: ExitNoWork},
 		// A container action splits on whether the children already establish
 		// the state that was asked for: a satisfied request changed nothing and

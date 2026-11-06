@@ -16,7 +16,7 @@ import (
 // added the label and when. A write rewrites only the rows of the names it
 // adds or removes, so it never re-authors a label it did not touch, and two
 // writers adding different labels write disjoint rows.
-func writeLabelsTx(ctx context.Context, tx *sql.Tx, issueID string, before, after []string, author string, at time.Time) error {
+func writeLabelsTx(ctx context.Context, tx *sql.Tx, issueID model.ID, before, after []string, author string, at time.Time) error {
 	for _, name := range before {
 		if slices.Contains(after, name) {
 			continue

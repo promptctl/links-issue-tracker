@@ -28,12 +28,12 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 		Description: "first line\n\nsecond paragraph", Prompt: "a prompt", Plan: "a plan",
 		Assignee: "ada", Lane: storage.MustParseLane("a-lane"), Labels: []string{"alpha", "beta"},
 	})
-	for _, edge := range [][2]string{{full.ID, blocker.ID}, {elsewhere.ID, full.ID}} {
+	for _, edge := range [][2]model.ID{{full.ID, blocker.ID}, {elsewhere.ID, full.ID}} {
 		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge[0], DstID: edge[1], Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
 			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge[0], edge[1], err)
 		}
 	}
-	ids := []string{epic.ID, elsewhere.ID, blocker.ID, full.ID}
+	ids := []model.ID{epic.ID, elsewhere.ID, blocker.ID, full.ID}
 	// A write the round trip makes would stamp this instant, so an updated_at
 	// it bumped reads as different from the one the setup left.
 	clk.Pin(laterInstant)
@@ -47,13 +47,13 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 	assertStrings(t, "updated", result.Updated, nil)
 	assertStrings(t, "fields held", result.FieldsHeld, ids)
 	// The two epics sit at the top level, so their documents state no parent.
-	assertStrings(t, "parent held", result.ParentHeld, []string{blocker.ID, full.ID})
+	assertStrings(t, "parent held", result.ParentHeld, []model.ID{blocker.ID, full.ID})
 	assertStrings(t, "blocked_by held", result.BlockedByHeld, ids)
 	if result.EdgesAdded+result.EdgesRemoved != 0 {
 		t.Errorf("edges added %d, removed %d, want none", result.EdgesAdded, result.EdgesRemoved)
 	}
 	for id, was := range before {
-		if now := stateOf(t, ctx, st, []string{id})[id]; now.updatedAt != was.updatedAt || now.events != was.events {
+		if now := stateOf(t, ctx, st, []model.ID{id})[id]; now.updatedAt != was.updatedAt || now.events != was.events {
 			t.Errorf("%s after the unedited round trip: updated_at %s, %d events; before it: %s, %d events", id, now.updatedAt, now.events, was.updatedAt, was.events)
 		}
 	}
@@ -64,7 +64,7 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 	if err != nil {
 		t.Fatalf("BulkApply(one title edited) error = %v", err)
 	}
-	assertStrings(t, "updated", result.Updated, []string{full.ID})
+	assertStrings(t, "updated", result.Updated, []model.ID{full.ID})
 	assertStrings(t, "fields held", result.FieldsHeld, ids[:len(ids)-1])
 	events, err := st.ListEvents(ctx, full.ID)
 	if err != nil {
@@ -77,7 +77,7 @@ func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Conte
 		t.Errorf("the edit's event records %+v, want %+v", got, want)
 	}
 	for _, id := range ids[:len(ids)-1] {
-		if now := stateOf(t, ctx, st, []string{id})[id]; now != before[id] {
+		if now := stateOf(t, ctx, st, []model.ID{id})[id]; now != before[id] {
 			t.Errorf("%s moved when only %s's title was edited: %+v, before %+v", id, full.ID, now, before[id])
 		}
 	}
@@ -90,9 +90,9 @@ type issueState struct {
 	events    int
 }
 
-func stateOf(t *testing.T, ctx context.Context, st storage.Store, ids []string) map[string]issueState {
+func stateOf(t *testing.T, ctx context.Context, st storage.Store, ids []model.ID) map[model.ID]issueState {
 	t.Helper()
-	out := make(map[string]issueState, len(ids))
+	out := make(map[model.ID]issueState, len(ids))
 	for _, id := range ids {
 		issue, err := st.GetIssue(ctx, id)
 		if err != nil {
@@ -109,7 +109,7 @@ func stateOf(t *testing.T, ctx context.Context, st storage.Store, ids []string) 
 
 // documentsOf reads the update documents stating each issue's editable state,
 // in the order ids names them, as `lit ls --format yaml` does.
-func documentsOf(t *testing.T, ctx context.Context, st storage.Store, ids []string) []storage.BulkIssueSpec {
+func documentsOf(t *testing.T, ctx context.Context, st storage.Store, ids []model.ID) []storage.BulkIssueSpec {
 	t.Helper()
 	relations, err := st.GetRelationsByIDs(ctx, ids)
 	if err != nil {
@@ -135,7 +135,7 @@ func aReadOutFileKeepsWhatOtherWritersChanged(t *testing.T, ctx context.Context,
 	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("elsewhere"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("blocker"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("issue"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
-	docs := documentsOf(t, ctx, st, []string{issue.ID})
+	docs := documentsOf(t, ctx, st, []model.ID{issue.ID})
 
 	clk.Pin(laterInstant)
 	urgent, theirs := model.PriorityUrgent, "their-lane"
@@ -163,13 +163,13 @@ func aReadOutFileKeepsWhatOtherWritersChanged(t *testing.T, ctx context.Context,
 	if err != nil {
 		t.Fatalf("BulkApply(a title edit beside another writer's changes) error = %v", err)
 	}
-	assertStrings(t, "updated", result.Updated, []string{issue.ID})
+	assertStrings(t, "updated", result.Updated, []model.ID{issue.ID})
 	kept := make([]string, len(result.Kept))
 	for i, slot := range result.Kept {
 		kept[i] = slot.String()
 	}
-	assertStrings(t, "kept", kept, []string{issue.ID + " priority", issue.ID + " lane", issue.ID + " blocked-by " + blocker.ID})
-	relations, err := st.GetRelationsByIDs(ctx, []string{issue.ID})
+	assertStrings(t, "kept", kept, []string{issue.ID.Raw() + " priority", issue.ID.Raw() + " lane", issue.ID.Raw() + " blocked-by " + blocker.ID.Raw()})
+	relations, err := st.GetRelationsByIDs(ctx, []model.ID{issue.ID})
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs error = %v", err)
 	}

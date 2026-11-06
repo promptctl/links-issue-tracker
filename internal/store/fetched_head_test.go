@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -30,12 +31,12 @@ type landFixture struct {
 	// epics is the epic every ticket commit() files into, by store root; a
 	// copy of a root shares its epic, a store of unrelated history seeds its
 	// own. Seeding it is its own commit, so each commit() is exactly one.
-	epics map[string]string
+	epics map[string]model.ID
 }
 
 func newLandFixture(t *testing.T) *landFixture {
 	t.Helper()
-	f := &landFixture{t: t, ctx: context.Background(), base: t.TempDir(), live: migratedDoltDir(t), epics: map[string]string{}}
+	f := &landFixture{t: t, ctx: context.Background(), base: t.TempDir(), live: migratedDoltDir(t), epics: map[string]model.ID{}}
 	f.remoteURL = "file://" + filepath.Join(f.base, "remote")
 	f.seedEpic(f.live)
 	f.commit(f.live, "c1")

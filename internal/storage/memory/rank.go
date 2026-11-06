@@ -17,13 +17,13 @@ import (
 // the whole implementation. That is the point of a second engine: the intent
 // vocabulary is the contract, and fractional indexing is one way to serve it.
 
-func (e *Engine) RankAbove(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
+func (e *Engine) RankAbove(ctx context.Context, issueID, targetID model.ID) (storage.RankMove, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.rankRelative(issueID, targetID, above)
 }
 
-func (e *Engine) RankBelow(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
+func (e *Engine) RankBelow(ctx context.Context, issueID, targetID model.ID) (storage.RankMove, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.rankRelative(issueID, targetID, below)
@@ -39,7 +39,7 @@ const (
 	below side = 1
 )
 
-func (e *Engine) rankRelative(issueID, targetID string, at side) (storage.RankMove, error) {
+func (e *Engine) rankRelative(issueID, targetID model.ID, at side) (storage.RankMove, error) {
 	move, err := e.resolveRankPair(issueID, targetID)
 	if err != nil {
 		return storage.RankMove{}, err
@@ -51,14 +51,14 @@ func (e *Engine) rankRelative(issueID, targetID string, at side) (storage.RankMo
 }
 
 // RankToTop moves an issue to the top of its own frame.
-func (e *Engine) RankToTop(ctx context.Context, issueID string) (storage.RankEnd, error) {
+func (e *Engine) RankToTop(ctx context.Context, issueID model.ID) (storage.RankEnd, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.rankToEdge(issueID, storage.RankTop)
 }
 
 // RankToBottom moves an issue to the bottom of its own frame.
-func (e *Engine) RankToBottom(ctx context.Context, issueID string) (storage.RankEnd, error) {
+func (e *Engine) RankToBottom(ctx context.Context, issueID model.ID) (storage.RankEnd, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.rankToEdge(issueID, storage.RankBottom)
@@ -72,7 +72,7 @@ func (e *Engine) RankToBottom(ctx context.Context, issueID string) (storage.Rank
 // while every issue outside its frame stays exactly where it was. Index zero
 // would instead read as leading the whole backlog, which is a position the
 // child's rank never claims.
-func (e *Engine) rankToEdge(issueID string, placement storage.RankPlacement) (storage.RankEnd, error) {
+func (e *Engine) rankToEdge(issueID model.ID, placement storage.RankPlacement) (storage.RankEnd, error) {
 	if err := e.mustRankable(issueID); err != nil {
 		return storage.RankEnd{}, err
 	}
@@ -116,7 +116,7 @@ type orderEdge struct {
 	// this end. The two ends genuinely ask different populations — see place —
 	// so the population rides on the edge the dispatch already returns rather
 	// than being chosen by a second test on the placement.
-	filingPositions func(e *Engine, f storage.Frame, id string) []int
+	filingPositions func(e *Engine, f storage.Frame, id model.ID) []int
 }
 
 // positionIn is where an id lands at this end of a population.
@@ -175,7 +175,7 @@ func orderEdgeFor(p storage.RankPlacement) (orderEdge, error) {
 // order. Filing at the bottom must land the new issue after everything that
 // already exists, which is what keeps an authored batch — an import, a create
 // loop — in the order its file states.
-func everyPosition(e *Engine, _ storage.Frame, _ string) []int {
+func everyPosition(e *Engine, _ storage.Frame, _ model.ID) []int {
 	positions := make([]int, len(e.order))
 	for index := range e.order {
 		positions[index] = index
@@ -188,7 +188,7 @@ func everyPosition(e *Engine, _ storage.Frame, _ string) []int {
 // child named under one is filed at the top level — the rule parentOf applies
 // once the parent edge exists, asked here of a parent id because placement
 // runs before that edge is recorded. [LAW:one-source-of-truth]
-func (e *Engine) filingFrame(parentID string) storage.Frame {
+func (e *Engine) filingFrame(parentID model.ID) storage.Frame {
 	if parentID == "" || !e.live(parentID) {
 		return storage.TopLevel
 	}
@@ -205,7 +205,7 @@ func (e *Engine) filingFrame(parentID string) storage.Frame {
 // place, a live sibling dropped out of the order to make room for it. Refusing
 // here is what makes both unrepresentable rather than handled.
 // [LAW:single-enforcer] [LAW:parse-dont-validate]
-func (e *Engine) mustRankable(id string) error {
+func (e *Engine) mustRankable(id model.ID) error {
 	if _, err := e.mustRecord(id); err != nil {
 		return err
 	}
@@ -219,7 +219,7 @@ func (e *Engine) mustRankable(id string) error {
 // only flips its retention — it keeps its slot in e.order forever — so every
 // lookup here that mirrors a SQL query carrying `deleted_at IS NULL` has to ask
 // this rather than trust the slice. [LAW:one-source-of-truth]
-func (e *Engine) live(id string) bool {
+func (e *Engine) live(id model.ID) bool {
 	rec, ok := e.issues[id]
 	if !ok {
 		return false
@@ -233,7 +233,7 @@ func (e *Engine) live(id string) bool {
 // the SQL engine's matching lookup carries `deleted_at IS NULL`, and an engine
 // that anchored against a deleted mate would report moving past a row nobody
 // can see. [LAW:one-source-of-truth]
-func (e *Engine) frameMateIndexes(f storage.Frame, exclude string) []int {
+func (e *Engine) frameMateIndexes(f storage.Frame, exclude model.ID) []int {
 	var indexes []int
 	for index, id := range e.order {
 		if id == exclude || !e.live(id) || e.frameOf(id) != f {
@@ -247,7 +247,7 @@ func (e *Engine) frameMateIndexes(f storage.Frame, exclude string) []int {
 // frameOf names the frame an issue's position is read within: its container,
 // or the top level. Built on parentOf, the one place here that knows what
 // contains what. [LAW:one-source-of-truth]
-func (e *Engine) frameOf(id string) storage.Frame {
+func (e *Engine) frameOf(id model.ID) storage.Frame {
 	parent, ok := e.parentOf(id)
 	if !ok {
 		return storage.TopLevel
@@ -259,7 +259,7 @@ func (e *Engine) frameOf(id string) storage.Frame {
 // the top of the representatives' own frame in the order named, and reports
 // which representative each name resolved to. The anchor is that frame's top,
 // never the whole order's.
-func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResult, error) {
+func (e *Engine) RankSet(ctx context.Context, ids []model.ID) (storage.RankSetResult, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.rankSet(ids)
@@ -267,7 +267,7 @@ func (e *Engine) RankSet(ctx context.Context, ids []string) (storage.RankSetResu
 
 // rankSet is RankSet under a lock its caller holds: the verb itself, and a
 // bulk file's ordering, which BulkApply writes inside its own hold.
-func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
+func (e *Engine) rankSet(ids []model.ID) (storage.RankSetResult, error) {
 	if err := storage.ValidateRankSetIDs(ids); err != nil {
 		return storage.RankSetResult{}, err
 	}
@@ -281,7 +281,7 @@ func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
 			return storage.RankSetResult{}, err
 		}
 	}
-	chains := make([][]string, len(ids))
+	chains := make([][]model.ID, len(ids))
 	for i, id := range ids {
 		chain, err := e.ancestorChain(id)
 		if err != nil {
@@ -310,7 +310,7 @@ func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
 	// even when the representatives are all of it.
 	f := e.frameOf(reps[0])
 	slots := e.frameMateIndexes(f, "")
-	occupants := make([]string, len(slots))
+	occupants := make([]model.ID, len(slots))
 	for i, slot := range slots {
 		occupants[i] = e.order[slot]
 	}
@@ -334,8 +334,8 @@ func (e *Engine) rankSet(ids []string) (storage.RankSetResult, error) {
 // unranked, or outside the frame — would make the result longer than the frame,
 // and writing the part that fits would drop a live sibling from the order, so
 // the whole request is refused instead. [LAW:no-silent-failure]
-func rankSetOrder(f storage.Frame, occupants, reps []string) ([]string, error) {
-	named := make(map[string]struct{}, len(reps))
+func rankSetOrder(f storage.Frame, occupants, reps []model.ID) ([]model.ID, error) {
+	named := make(map[model.ID]struct{}, len(reps))
 	for _, rep := range reps {
 		named[rep] = struct{}{}
 	}
@@ -355,15 +355,15 @@ func rankSetOrder(f storage.Frame, occupants, reps []string) ([]string, error) {
 // intact. Every rank verb is a detach followed by a placement, which is what
 // makes "the order after the move" a fact about the slice rather than a
 // consequence of arithmetic on keys.
-func (e *Engine) detach(id string) {
-	e.order = slices.DeleteFunc(e.order, func(existing string) bool { return existing == id })
+func (e *Engine) detach(id model.ID) {
+	e.order = slices.DeleteFunc(e.order, func(existing model.ID) bool { return existing == id })
 }
 
 // insertAt puts an id at a position. It clamps nothing: every caller derives
 // the index from a population it has already read, so the position is in range
 // by construction, and a clamp would turn a resolution bug into a silent
 // placement at the top of the backlog. [LAW:no-defensive-null-guards]
-func (e *Engine) insertAt(index int, id string) {
+func (e *Engine) insertAt(index int, id model.ID) {
 	e.order = slices.Insert(e.order, index, id)
 }
 
@@ -373,7 +373,7 @@ func (e *Engine) insertAt(index int, id string) {
 // frame-comparable pair the request is actually about.
 // [LAW:single-enforcer] Both relative verbs route through this one resolution,
 // so cross-frame semantics cannot drift between above and below.
-func (e *Engine) resolveRankPair(issueID, targetID string) (storage.RankMove, error) {
+func (e *Engine) resolveRankPair(issueID, targetID model.ID) (storage.RankMove, error) {
 	if issueID == targetID {
 		return storage.RankMove{}, model.ValidationError{Message: "cannot rank an issue relative to itself"}
 	}
@@ -391,7 +391,7 @@ func (e *Engine) resolveRankPair(issueID, targetID string) (storage.RankMove, er
 	if err != nil {
 		return storage.RankMove{}, err
 	}
-	reps, _, err := storage.FrameRepresentatives([][]string{issueChain, targetChain})
+	reps, _, err := storage.FrameRepresentatives([][]model.ID{issueChain, targetChain})
 	if err != nil {
 		return storage.RankMove{}, err
 	}
@@ -401,12 +401,12 @@ func (e *Engine) resolveRankPair(issueID, targetID string) (storage.RankMove, er
 // ancestorChain returns an issue's parentage, self first and root last,
 // following only parents that are still there. A parent cycle is corrupt data
 // and fails loudly rather than looping. [LAW:no-silent-failure]
-func (e *Engine) ancestorChain(id string) ([]string, error) {
+func (e *Engine) ancestorChain(id model.ID) ([]model.ID, error) {
 	if _, err := e.mustRecord(id); err != nil {
 		return nil, err
 	}
-	chain := []string{id}
-	seen := map[string]struct{}{id: {}}
+	chain := []model.ID{id}
+	seen := map[model.ID]struct{}{id: {}}
 	for current := id; ; {
 		parent, ok := e.parentOf(current)
 		if !ok {
@@ -430,8 +430,9 @@ func (e *Engine) ancestorChain(id string) ([]string, error) {
 //
 // A child restored data gives two parents is framed by the lower parent id,
 // the rule storage.RankAncestry lists it by. [LAW:one-source-of-truth]
-func (e *Engine) parentOf(childID string) (string, bool) {
-	parent, found := "", false
+func (e *Engine) parentOf(childID model.ID) (model.ID, bool) {
+	var parent model.ID
+	found := false
 	for _, rel := range e.relations {
 		if rel.SrcID == childID && e.frames(rel) && (!found || rel.DstID < parent) {
 			parent, found = rel.DstID, true

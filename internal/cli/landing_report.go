@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -36,7 +37,7 @@ func writeUnlooped(w io.Writer, backlog string, unlooped []storage.Unlooped) err
 	if _, err := fmt.Fprintf(w, "cut %d parent edge(s) %s held in a loop, which has no root; `lit parent set --child <id> --parent <epic-id>` moves a child where it belongs:\n", len(unlooped), backlog); err != nil {
 		return err
 	}
-	for _, cut := range describeCuts(unlooped, func(id string) string { return quoteRemote(id).inline() }) {
+	for _, cut := range describeCuts(unlooped, func(id model.ID) string { return quoteRemote(id.Raw()).inline() }) {
 		if _, err := fmt.Fprintf(w, "  %s\n", cut); err != nil {
 			return err
 		}
@@ -57,7 +58,7 @@ func writeRehomed(w io.Writer, backlog string, rehomed []storage.Rehomed) error 
 	if _, err := fmt.Fprintf(w, "moved %d ticket(s) %s held outside an epic; `lit parent set --child <id> --parent <epic-id>` files one where it belongs:\n", len(rehomed), backlog); err != nil {
 		return err
 	}
-	for _, move := range describeMoves(rehomed, func(id string) string { return quoteRemote(id).inline() }) {
+	for _, move := range describeMoves(rehomed, func(id model.ID) string { return quoteRemote(id.Raw()).inline() }) {
 		if _, err := fmt.Fprintf(w, "  %s\n", move); err != nil {
 			return err
 		}
@@ -72,7 +73,7 @@ func writeRekeyed(w io.Writer, backlog string, rekeyed []storage.Rekeyed) error 
 	if len(rekeyed) == 0 {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "gave %d ticket(s) in %s a new rank key so that no two share one; every listing keeps its order: %s\n", len(rekeyed), backlog, strings.Join(rekeyedIDs(rekeyed, func(id string) string { return quoteRemote(id).inline() }), ", "))
+	_, err := fmt.Fprintf(w, "gave %d ticket(s) in %s a new rank key so that no two share one; every listing keeps its order: %s\n", len(rekeyed), backlog, strings.Join(rekeyedIDs(rekeyed, func(id model.ID) string { return quoteRemote(id.Raw()).inline() }), ", "))
 	return err
 }
 
@@ -80,7 +81,7 @@ func writeRekeyed(w io.Writer, backlog string, rekeyed []storage.Rekeyed) error 
 // zero included, and each change. [LAW:nothing-unseen] zero changes and an
 // unrecorded write read differently.
 func landingMetadata(metadata map[string]string, landing storage.Landing) {
-	identity := func(id string) string { return id }
+	identity := func(id model.ID) string { return id.Raw() }
 	metadata["unlooped"] = strconv.Itoa(len(landing.Unlooped))
 	metadata["unlooped_cuts"] = strings.Join(describeCuts(landing.Unlooped, identity), ", ")
 	metadata["rehomed"] = strconv.Itoa(len(landing.Rehomed))
@@ -90,7 +91,7 @@ func landingMetadata(metadata map[string]string, landing storage.Landing) {
 }
 
 // rekeyedIDs renders the id of each ticket a landing gave a key of its own.
-func rekeyedIDs(rekeyed []storage.Rekeyed, render func(string) string) []string {
+func rekeyedIDs(rekeyed []storage.Rekeyed, render func(model.ID) string) []string {
 	ids := make([]string, len(rekeyed))
 	for i, r := range rekeyed {
 		ids[i] = render(r.IssueID)
@@ -103,14 +104,14 @@ func rekeyedIDs(rekeyed []storage.Rekeyed, render func(string) string) []string 
 func describeRekeys(rekeyed []storage.Rekeyed) []string {
 	described := make([]string, len(rekeyed))
 	for i, r := range rekeyed {
-		described[i] = fmt.Sprintf("%s %q -> %q", r.IssueID, r.From, r.Rank)
+		described[i] = fmt.Sprintf("%s %q -> %q", r.IssueID.Raw(), r.From, r.Rank)
 	}
 	return described
 }
 
 // describeMoves renders each move as "<ticket> into <epic>", or "<epic> to the
 // top level" for an epic that had no epic above it.
-func describeMoves(rehomed []storage.Rehomed, render func(string) string) []string {
+func describeMoves(rehomed []storage.Rehomed, render func(model.ID) string) []string {
 	moves := make([]string, 0, len(rehomed))
 	for _, r := range rehomed {
 		if r.Epic == "" {
@@ -124,7 +125,7 @@ func describeMoves(rehomed []storage.Rehomed, render func(string) string) []stri
 
 // describeCuts renders each cut as "<child> no longer under <parent> (loop
 // <a> -> <b>)".
-func describeCuts(unlooped []storage.Unlooped, render func(string) string) []string {
+func describeCuts(unlooped []storage.Unlooped, render func(model.ID) string) []string {
 	cuts := make([]string, len(unlooped))
 	for i, cut := range unlooped {
 		loop := make([]string, len(cut.Cycle))

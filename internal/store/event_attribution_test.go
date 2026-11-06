@@ -16,7 +16,7 @@ import (
 // the empty string — is exactly the one model.Attribution erases on the way out.
 // A test that only read through Export could not tell a store that stamps
 // nothing from one that stamps two empty strings into every row.
-func rawAttribution(t *testing.T, ctx context.Context, st *Store, eventID string) (stream, workspace sql.NullString) {
+func rawAttribution(t *testing.T, ctx context.Context, st *Store, eventID model.ID) (stream, workspace sql.NullString) {
 	t.Helper()
 	if err := st.db.QueryRowContext(ctx,
 		`SELECT stream_id, workspace_id FROM issue_events WHERE id = ?`, eventID).Scan(&stream, &workspace); err != nil {

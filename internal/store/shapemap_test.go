@@ -304,8 +304,8 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "src")
 	const ws = "test-workspace-id"
 
-	wantIDs := map[string]bool{}
-	var purgedID, soloID, reviewID string
+	wantIDs := map[model.ID]bool{}
+	var purgedID, soloID, reviewID model.ID
 	withStore(t, ctx, src, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, IssueType: "epic", Topic: "recovery", Prefix: "links"})
 		if err != nil {
@@ -342,7 +342,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 			t.Fatalf("purge: %v", err)
 		}
 		purgedID = purged.ID
-		for _, id := range []string{epic.ID, child.ID, solo.ID} {
+		for _, id := range []model.ID{epic.ID, child.ID, solo.ID} {
 			wantIDs[id] = true
 		}
 	})
@@ -363,8 +363,8 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 
-	gotIDs := map[string]bool{}
-	var epicID string
+	gotIDs := map[model.ID]bool{}
+	var epicID model.ID
 	for _, issue := range export.Issues {
 		gotIDs[issue.ID] = true
 		if issue.IssueType == "epic" {

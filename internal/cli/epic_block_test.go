@@ -14,7 +14,7 @@ import (
 
 // requireInheritedDependency fails unless the gathered row for id carries
 // exactly one dependency annotation naming dep, of the inherited kind.
-func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, id, dep string) {
+func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, id, dep model.ID) {
 	t.Helper()
 	row := findRow(rows, id)
 	var got []annotation.Annotation
@@ -23,7 +23,7 @@ func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, 
 			got = append(got, ann)
 		}
 	}
-	if len(got) != 1 || got[0].Kind != annotation.InheritedDependency || got[0].Message != dep {
+	if len(got) != 1 || got[0].Kind != annotation.InheritedDependency || got[0].Message != dep.Raw() {
 		t.Fatalf("%s dependency annotations = %v, want exactly one inherited_dependency on %s", id, got, dep)
 	}
 }
@@ -56,7 +56,7 @@ func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 	}
 
 	text := h.runWorkableText()
-	if want := "blocked by: " + gate.ID + " (via epic)"; strings.Count(text, want) != 2 {
+	if want := "blocked by: " + gate.ID + " (via epic)"; strings.Count(text, want.Raw()) != 2 {
 		t.Fatalf("backlog should name the inherited gate once under each child as %q; got:\n%s", want, text)
 	}
 	if !unblocksLineNames(text, laneA.ID) || !unblocksLineNames(text, laneB.ID) {
@@ -94,7 +94,7 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 	requireInheritedDependency(t, workable, deep.ID, gate.ID)
 	row := findRow(workable, direct.ID)
 	deps := ClassifyReadiness(row.Annotations).BlockingReasons()
-	if len(deps) != 1 || deps[0].Kind != annotation.OpenDependency || deps[0].Detail != gate.ID {
+	if len(deps) != 1 || deps[0].Kind != annotation.OpenDependency || deps[0].Detail != gate.ID.Raw() {
 		t.Fatalf("%s blocking reasons = %v, want only its own edge on %s", direct.ID, deps, gate.ID)
 	}
 }
@@ -103,7 +103,7 @@ func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 // the one way it still can be reached: the store refuses that edge outright,
 // so childID is detached from parentID while the edge is written and put back
 // after. Readiness has to stay correct over the shape a reparent leaves.
-func (h readyTestHarness) dependThenReparent(dependentID, dependencyID, childID, parentID string) {
+func (h readyTestHarness) dependThenReparent(dependentID, dependencyID, childID, parentID model.ID) {
 	h.t.Helper()
 	if err := h.ap.Store.ClearParent(h.ctx, childID); err != nil {
 		h.t.Fatalf("ClearParent(%s) error = %v", childID, err)
@@ -127,14 +127,14 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 	// held is checked over every row, and again over the rows labeled view
 	// when it is set, so a blocker no row's epic names is settled too.
 	type expectation struct {
-		held     map[string]string
-		pullable []string
+		held     map[model.ID]model.ID
+		pullable []model.ID
 		view     string
 	}
-	task := func(h readyTestHarness, title, parent, lane string) model.Issue {
+	task := func(h readyTestHarness, title string, parent model.ID, lane string) model.Issue {
 		return h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle(title), Topic: "epic-block", IssueType: "task", ParentID: parent, Lane: storage.MustParseLane(lane)})
 	}
-	epic := func(h readyTestHarness, title, parent string) model.Issue {
+	epic := func(h readyTestHarness, title string, parent model.ID) model.Issue {
 		return h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic", ParentID: parent})
 	}
 	// outer holds inner, whose first and second share lane a, and other in its
@@ -154,23 +154,23 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 		{"a leaf blocks its outer epic behind a lane-mate", func(h readyTestHarness) expectation {
 			outer, inner, first, second, other := nested(h)
 			h.dependThenReparent(outer.ID, second.ID, inner.ID, outer.ID)
-			return expectation{held: map[string]string{other.ID: second.ID}, pullable: []string{first.ID}}
+			return expectation{held: map[model.ID]model.ID{other.ID: second.ID}, pullable: []model.ID{first.ID}}
 		}},
 		{"that leaf also depends on another child of the epic", func(h readyTestHarness) expectation {
 			outer, inner, first, second, other := nested(h)
 			h.dependThenReparent(outer.ID, second.ID, inner.ID, outer.ID)
 			h.addDependency(second.ID, other.ID)
-			return expectation{pullable: []string{first.ID, other.ID}}
+			return expectation{pullable: []model.ID{first.ID, other.ID}}
 		}},
 		{"a nested epic blocks its outer epic", func(h readyTestHarness) expectation {
 			outer, inner, first, _, other := nested(h)
 			h.dependThenReparent(outer.ID, inner.ID, inner.ID, outer.ID)
-			return expectation{held: map[string]string{other.ID: inner.ID}, pullable: []string{first.ID}}
+			return expectation{held: map[model.ID]model.ID{other.ID: inner.ID}, pullable: []model.ID{first.ID}}
 		}},
 		{"the outer epic blocks a nested epic", func(h readyTestHarness) expectation {
 			outer, inner, first, _, other := nested(h)
 			h.dependThenReparent(inner.ID, outer.ID, inner.ID, outer.ID)
-			return expectation{pullable: []string{first.ID, other.ID}}
+			return expectation{pullable: []model.ID{first.ID, other.ID}}
 		}},
 		{"a gate that depends on a child of the epic it blocks", func(h readyTestHarness) expectation {
 			e := epic(h, "E", "")
@@ -179,7 +179,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			g := task(h, "gate", epic(h, "G", "").ID, "")
 			h.addDependency(e.ID, g.ID)
 			h.addDependency(g.ID, c1.ID)
-			return expectation{held: map[string]string{c2.ID: g.ID}, pullable: []string{c1.ID}}
+			return expectation{held: map[model.ID]model.ID{c2.ID: g.ID}, pullable: []model.ID{c1.ID}}
 		}},
 		{"a leaf blocks the nested epic ahead of it in its lane", func(h readyTestHarness) expectation {
 			e0 := epic(h, "E0", "")
@@ -187,7 +187,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			c := task(h, "c", e1.ID, "")
 			b := task(h, "b", e0.ID, "")
 			h.addDependency(e1.ID, b.ID)
-			return expectation{pullable: []string{c.ID}}
+			return expectation{pullable: []model.ID{c.ID}}
 		}},
 		{"two epics each blocked by a child of the other", func(h readyTestHarness) expectation {
 			e := epic(h, "E", "")
@@ -196,7 +196,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			c2 := task(h, "c2", e2.ID, "")
 			h.addDependency(e.ID, c2.ID)
 			h.addDependency(e2.ID, c.ID)
-			return expectation{pullable: []string{c.ID, c2.ID}}
+			return expectation{pullable: []model.ID{c.ID, c2.ID}}
 		}},
 		// g waits on x, and x's own gate h is dropped because h waits on x, so
 		// the dropped link never carries g on to s: g holds s back, also in a
@@ -215,7 +215,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			h.addDependency(gh.ID, x.ID)
 			h.addDependency(gh.ID, s.ID)
 			h.setLabels(s.ID, "shown")
-			return expectation{held: map[string]string{s.ID: g.ID}, pullable: []string{x.ID}, view: "shown"}
+			return expectation{held: map[model.ID]model.ID{s.ID: g.ID}, pullable: []model.ID{x.ID}, view: "shown"}
 		}},
 		// z waits on epic k, and k stands behind l in their lane, but k's child
 		// never waits on l, so neither does z: l depending on c is no loop.
@@ -230,7 +230,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			h.addDependency(z.ID, k.ID)
 			h.addDependency(l.ID, c.ID)
 			h.addDependency(e1.ID, z.ID)
-			return expectation{held: map[string]string{c.ID: z.ID}}
+			return expectation{held: map[model.ID]model.ID{c.ID: z.ID}}
 		}},
 	}
 	for _, tc := range cases {
@@ -250,7 +250,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 				}
 				var wantGates []string
 				if gate, held := want.held[row.ID]; held {
-					wantGates = []string{gate}
+					wantGates = []string{gate.Raw()}
 				}
 				if !slices.Equal(got, wantGates) {
 					t.Fatalf("%s inherits %v, want %v", row.ID, got, wantGates)
@@ -267,7 +267,7 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 			}
 			for _, row := range annotated.rows {
 				for _, ann := range row.Annotations {
-					if ann.Kind == annotation.InheritedDependency && ann.Message == row.ID {
+					if ann.Kind == annotation.InheritedDependency && ann.Message == row.ID.Raw() {
 						t.Fatalf("%s inherits itself", row.ID)
 					}
 				}
@@ -422,11 +422,11 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 				t.Fatalf("with %s's lane held elsewhere, routeNext did not serve past the exhausted epic", a1.ID)
 			}
 			exhausted := past.Exhaustion
-			blockers := make([]string, len(exhausted.Blocked))
+			blockers := make([]model.ID, len(exhausted.Blocked))
 			for i, b := range exhausted.Blocked {
 				blockers[i] = b.ID
 			}
-			if !slices.Equal(exhausted.Epics, []string{epicB.ID}) || !slices.Equal(blockers, []string{epicA.ID}) {
+			if !slices.Equal(exhausted.Epics, []model.ID{epicB.ID}) || !slices.Equal(blockers, []model.ID{epicA.ID}) {
 				t.Fatalf("Exhausted = epics %v blocked on %v, want epic %s blocked on %s", exhausted.Epics, blockers, epicB.ID, epicA.ID)
 			}
 			// The epic is read through the work under it: its one ticket is held

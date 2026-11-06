@@ -64,14 +64,14 @@ type Engine struct {
 // one value so the copy a batch restores on refusal is taken where the fields
 // are declared, and a field added here is a field clone must copy, beside it.
 type state struct {
-	issues map[string]*record
+	issues map[model.ID]*record
 
 	// order is THE total rank order, top first. Issue.Rank is rendered from a
 	// position in this slice at read time and stored nowhere, so a rank value
 	// that contradicts the order it claims to encode is unrepresentable —
 	// which is also why nothing here needs the inversion repair the Dolt
 	// engine offers as a capability. [LAW:one-source-of-truth]
-	order []string
+	order []model.ID
 
 	// The edge tables, each in the order it was written; a read orders them
 	// by storage.RelationOrdering and storage.CommentOrdering. Write order is
@@ -84,12 +84,12 @@ type state struct {
 	// order it was written. One issue's history is the read the status path
 	// makes on every transition, so it costs that issue's events, as the Dolt
 	// engine's indexed query does, rather than a scan of the whole store's.
-	events map[string][]model.IssueEvent
+	events map[model.ID][]model.IssueEvent
 
 	// labels are keyed by issue and kept sorted by name, because the sorted
 	// set is what every label read returns and re-sorting on each read would
 	// be deriving the same fact twice.
-	labels map[string][]model.Label
+	labels map[model.ID][]model.Label
 
 	// planReviews are the law reviews of every issue's plan, in the order they
 	// were recorded; a read orders them by storage.PlanReviewOrdering.
@@ -104,7 +104,7 @@ type state struct {
 // s, so writes to either never reach the other. A batch restores it on
 // refusal, which is what makes a refused batch write nothing.
 func (s state) clone() state {
-	issues := make(map[string]*record, len(s.issues))
+	issues := make(map[model.ID]*record, len(s.issues))
 	for id, rec := range s.issues {
 		copied := *rec
 		issues[id] = &copied
@@ -122,8 +122,8 @@ func (s state) clone() state {
 }
 
 // cloneRuns copies a map of per-issue runs, each run its own slice.
-func cloneRuns[T any](runs map[string][]T) map[string][]T {
-	copied := make(map[string][]T, len(runs))
+func cloneRuns[T any](runs map[model.ID][]T) map[model.ID][]T {
+	copied := make(map[model.ID][]T, len(runs))
 	for id, run := range runs {
 		copied[id] = slices.Clone(run)
 	}
@@ -162,7 +162,7 @@ func withBatch[R any](e *Engine, fn func(result *R) error) (R, error) {
 // divergence the Dolt engine's FixRankInversions exists to repair.
 // [LAW:one-source-of-truth]
 type record struct {
-	id          string
+	id          model.ID
 	title       string
 	description string
 	prompt      string
@@ -174,7 +174,7 @@ type record struct {
 	priority    model.Priority
 	// followsUp is the ticket this one was filed as a follow-up of, or "". A
 	// birth fact: createIssue writes it and writeIssue never touches it.
-	followsUp string
+	followsUp model.ID
 	createdAt time.Time
 	updatedAt time.Time
 
@@ -209,9 +209,9 @@ func New(workspaceID string, clock storage.Clock) (*Engine, error) {
 		workspaceID: id,
 		clock:       clock,
 		state: state{
-			issues: map[string]*record{},
-			labels: map[string][]model.Label{},
-			events: map[string][]model.IssueEvent{},
+			issues: map[model.ID]*record{},
+			labels: map[model.ID][]model.Label{},
+			events: map[model.ID][]model.IssueEvent{},
 		},
 	}, nil
 }
@@ -244,7 +244,7 @@ func (e *Engine) ScratchDeletes() ([]storage.ScratchDelete, bool) {
 }
 
 // stamp is the instant a write planned against family's history takes.
-func (e *Engine) stamp(family map[string]bool) time.Time {
+func (e *Engine) stamp(family map[model.ID]bool) time.Time {
 	var seen []model.IssueEvent
 	for id := range family {
 		seen = append(seen, e.events[id]...)
@@ -271,7 +271,7 @@ func (e *Engine) Close() error { return nil }
 // mustRecord returns the stored issue or the contract's absence error. It is
 // the one place "you named an issue that isn't here" is decided, so no caller
 // below re-checks the map. [LAW:single-enforcer]
-func (e *Engine) mustRecord(id string) (*record, error) {
+func (e *Engine) mustRecord(id model.ID) (*record, error) {
 	rec, ok := e.issues[id]
 	if !ok {
 		return nil, storage.NotFoundError{Entity: "issue", ID: id}
@@ -284,8 +284,8 @@ func (e *Engine) mustRecord(id string) (*record, error) {
 // It is derived on every read rather than maintained beside the slice: a
 // cached index is a second representation of the order that every mutation
 // site would have to remember to keep true. [LAW:one-source-of-truth]
-func (e *Engine) positions() map[string]int {
-	pos := make(map[string]int, len(e.order))
+func (e *Engine) positions() map[model.ID]int {
+	pos := make(map[model.ID]int, len(e.order))
 	for i, id := range e.order {
 		pos[id] = i
 	}
@@ -305,7 +305,7 @@ func rankAt(index int) string { return fmt.Sprintf("%09d", index) }
 // derived fact — rank, labels, a container's state — is computed here and
 // stored nowhere, so a read is the record plus its derivations and never a
 // snapshot that could have gone stale.
-func (e *Engine) hydrate(rec *record, pos map[string]int) (model.Issue, error) {
+func (e *Engine) hydrate(rec *record, pos map[model.ID]int) (model.Issue, error) {
 	issue := model.Issue{
 		ID:          rec.id,
 		Title:       model.Text(rec.title),
@@ -333,7 +333,7 @@ func (e *Engine) hydrate(rec *record, pos map[string]int) (model.Issue, error) {
 
 // hydrateAll composes the issues for a list of records, preserving input
 // order.
-func (e *Engine) hydrateAll(recs []*record, pos map[string]int) ([]model.Issue, error) {
+func (e *Engine) hydrateAll(recs []*record, pos map[model.ID]int) ([]model.Issue, error) {
 	out := make([]model.Issue, 0, len(recs))
 	for _, rec := range recs {
 		issue, err := e.hydrate(rec, pos)
@@ -349,7 +349,7 @@ func (e *Engine) hydrateAll(recs []*record, pos map[string]int) ([]model.Issue, 
 // container's state, rank-ordered. A leaf has none — its state is its own
 // primitive — so it always returns an empty set rather than a case that skips
 // the call. [LAW:dataflow-not-control-flow]
-func (e *Engine) lifecycleChildren(rec *record, pos map[string]int) ([]model.Issue, error) {
+func (e *Engine) lifecycleChildren(rec *record, pos map[model.ID]int) ([]model.Issue, error) {
 	if !rec.issueType.IsContainer() {
 		return nil, nil
 	}
@@ -372,7 +372,7 @@ func visibleUnder(parent, child model.Retention) bool {
 }
 
 // childRecords returns the parent-child children of parentID in rank order.
-func (e *Engine) childRecords(parentID string, pos map[string]int) []*record {
+func (e *Engine) childRecords(parentID model.ID, pos map[model.ID]int) []*record {
 	out := make([]*record, 0)
 	for _, rel := range e.relations {
 		if rel.Type != model.RelParentChild || rel.DstID != parentID {
@@ -387,7 +387,7 @@ func (e *Engine) childRecords(parentID string, pos map[string]int) []*record {
 }
 
 // labelNames returns an issue's label set, sorted by name.
-func (e *Engine) labelNames(issueID string) []string {
+func (e *Engine) labelNames(issueID model.ID) []string {
 	rows := e.labels[issueID]
 	names := make([]string, 0, len(rows))
 	for _, row := range rows {
@@ -415,10 +415,10 @@ type eventSpec struct {
 // work mutation carries its checkout's attribution pair" is a property of this
 // write path and not an obligation on every call site that could be forgotten
 // at one of them. [LAW:single-enforcer]
-func (e *Engine) recordEvent(issueID string, spec eventSpec, now time.Time) {
+func (e *Engine) recordEvent(issueID model.ID, spec eventSpec, now time.Time) {
 	actor := storage.Actor(spec.actor)
 	e.events[issueID] = append(e.events[issueID], model.IssueEvent{
-		ID:          "evt-" + uuid.NewString(),
+		ID:          model.ID("evt-" + uuid.NewString()),
 		IssueID:     issueID,
 		Action:      strings.TrimSpace(spec.action),
 		Reason:      model.Text(strings.TrimSpace(spec.reason)),
@@ -432,7 +432,7 @@ func (e *Engine) recordEvent(issueID string, spec eventSpec, now time.Time) {
 // recordEvents writes every event a mutation owed, in the order it owed them.
 // A mutation that moved nothing owes none, which is how a pure no-op leaves
 // the history untouched without anybody testing for it.
-func (e *Engine) recordEvents(issueID string, specs []eventSpec, now time.Time) {
+func (e *Engine) recordEvents(issueID model.ID, specs []eventSpec, now time.Time) {
 	for _, spec := range specs {
 		e.recordEvent(issueID, spec, now)
 	}

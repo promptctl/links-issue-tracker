@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -406,7 +407,7 @@ func describeReplayed(count int) string {
 // discardedIDs is the side the take drops: taking remote discards the local-only
 // issues, taking local discards the remote-only issues. A nil inventory (defensively)
 // yields no ids, which describeIDSet renders as an explicit "(0)".
-func discardedIDs(inv *storage.UnrelatedInventory, choice storage.UnrelatedResolution) []string {
+func discardedIDs(inv *storage.UnrelatedInventory, choice storage.UnrelatedResolution) []model.ID {
 	if inv == nil {
 		return nil
 	}
@@ -422,7 +423,7 @@ func discardedIDs(inv *storage.UnrelatedInventory, choice storage.UnrelatedResol
 
 // purgedIDs is the issues a purge record on either side names, which every
 // resolution drops. A nil inventory yields none, as in discardedIDs.
-func purgedIDs(inv *storage.UnrelatedInventory) []string {
+func purgedIDs(inv *storage.UnrelatedInventory) []model.ID {
 	if inv == nil {
 		return nil
 	}

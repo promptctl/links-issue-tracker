@@ -44,19 +44,19 @@ func TestListClosedOnlyFilterIsNotSilentlyEmptied(t *testing.T) {
 
 	// The closed-only filter must surface the wontfix-closed issue.
 	got := runLs(t, ap, "--query", "resolution:wontfix")
-	if !strings.Contains(got, wontfixBug.ID) {
+	if !strings.Contains(got, wontfixBug.ID.Raw()) {
 		t.Fatalf("ls --query resolution:wontfix omitted the wontfix issue %q; output:\n%s", wontfixBug.ID, got)
 	}
-	if strings.Contains(got, openBug.ID) {
+	if strings.Contains(got, openBug.ID.Raw()) {
 		t.Fatalf("ls --query resolution:wontfix leaked the open issue %q; output:\n%s", openBug.ID, got)
 	}
 
 	// A bare `lit ls` still shows only active work — the wontfix issue is hidden.
 	bare := runLs(t, ap)
-	if !strings.Contains(bare, openBug.ID) {
+	if !strings.Contains(bare, openBug.ID.Raw()) {
 		t.Fatalf("bare ls omitted the open issue %q; output:\n%s", openBug.ID, bare)
 	}
-	if strings.Contains(bare, wontfixBug.ID) {
+	if strings.Contains(bare, wontfixBug.ID.Raw()) {
 		t.Fatalf("bare ls leaked the closed wontfix issue %q; the active-work default must still hide it; output:\n%s", wontfixBug.ID, bare)
 	}
 }

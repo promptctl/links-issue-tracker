@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"fmt"
 	"slices"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // This file is the annotation→policy boundary. Each annotation kind declares
@@ -27,6 +29,9 @@ type BlockingReason struct {
 	Detail string
 }
 
+// ticket is Detail read as the id it names, for a reason about other work.
+func (r BlockingReason) ticket() model.ID { return model.ID(r.Detail) }
+
 // Phrase renders one blocking reason as the words a reader sees. Every surface
 // that names a blocker reads this one vocabulary: the backlog's "blocked:"
 // line (minus open dependencies, which it gives their own line) and the epic
@@ -48,7 +53,7 @@ func (r BlockingReason) Phrase() string {
 	case annotation.MissingField:
 		return "missing " + r.Detail
 	case annotation.EarlierSiblingPending:
-		return "earlier sibling " + r.Detail + " still open"
+		return fmt.Sprintf("earlier sibling %s still open", r.ticket())
 	default:
 		panic("BlockingReason.Phrase: blocking kind with no phrasing: " + r.Kind.String())
 	}
@@ -92,20 +97,20 @@ func (r IssueReadiness) RankInversions() []string { return r.rankInversions }
 func (r BlockingReason) dependency() (label string, ok bool) {
 	switch r.Kind {
 	case annotation.OpenDependency:
-		return r.Detail, true
+		return fmt.Sprint(r.ticket()), true
 	case annotation.InheritedDependency:
-		return r.Detail + " (via epic)", true
+		return fmt.Sprintf("%s (via epic)", r.ticket()), true
 	}
 	return "", false
 }
 
 // DependencyIDs returns the ids of the dependencies among the blocking reasons,
 // direct and inherited alike: the ids whose closing unblocks this issue.
-func (r IssueReadiness) DependencyIDs() []string {
-	var ids []string
+func (r IssueReadiness) DependencyIDs() []model.ID {
+	var ids []model.ID
 	for _, reason := range r.blocking {
 		if _, ok := reason.dependency(); ok {
-			ids = append(ids, reason.Detail)
+			ids = append(ids, reason.ticket())
 		}
 	}
 	return ids

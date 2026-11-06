@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/docclaims"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // nextSkillPath is the shipped /next skill, relative to the repository root.
@@ -99,7 +100,7 @@ func TestNextSkillQuotesEveryEmptyHandedLead(t *testing.T) {
 func TestNextSkillQuotesBothScopeForms(t *testing.T) {
 	t.Parallel()
 	spans := nextSkillSpans(t, mustRepoRoot(t))
-	for _, form := range []string{Exhausted{}.scope(), Exhausted{Epics: []string{"<ids>"}}.scope()} {
+	for _, form := range []string{Exhausted{}.scope(), Exhausted{Epics: []model.ID{"<ids>"}}.scope()} {
 		if !slices.Contains(spans, form) {
 			t.Errorf("%s does not quote `%s`, a scope lit next's scoped answer names", nextSkillPath, form)
 		}

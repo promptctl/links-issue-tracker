@@ -26,7 +26,7 @@ const (
 	acmeUnfiledNext = "acme-unfiled-3a40"
 )
 
-func leaf(t *testing.T, id, rank string) model.Issue {
+func leaf(t *testing.T, id model.ID, rank string) model.Issue {
 	t.Helper()
 	issue, err := model.HydrateStatus(model.Issue{ID: id, Title: model.Text(id), IssueType: model.TypeTask, Topic: "core", Rank: rank, CreatedAt: born, UpdatedAt: born}, model.StatusView{Value: model.StateOpen})
 	if err != nil {
@@ -35,17 +35,17 @@ func leaf(t *testing.T, id, rank string) model.Issue {
 	return issue
 }
 
-func epic(id string) model.Issue {
+func epic(id model.ID) model.Issue {
 	return model.Issue{ID: id, Title: model.Text(id), IssueType: model.TypeEpic, Topic: "core", CreatedAt: born, UpdatedAt: born}
 }
 
-func under(child, parent string) model.Relation {
+func under(child, parent model.ID) model.Relation {
 	return model.Relation{SrcID: child, DstID: parent, Type: model.RelParentChild, CreatedAt: born, CreatedBy: "seed"}
 }
 
 // parents is every parent-child edge as child -> sorted parents.
-func parents(export model.Export) map[string][]string {
-	out := map[string][]string{}
+func parents(export model.Export) map[model.ID][]model.ID {
+	out := map[model.ID][]model.ID{}
 	for _, r := range export.Relations {
 		if r.Type == model.RelParentChild {
 			out[r.SrcID] = append(out[r.SrcID], r.DstID)
@@ -57,7 +57,7 @@ func parents(export model.Export) map[string][]string {
 	return out
 }
 
-func issueOf(t *testing.T, export model.Export, id string) model.Issue {
+func issueOf(t *testing.T, export model.Export, id model.ID) model.Issue {
 	t.Helper()
 	for _, issue := range export.Issues {
 		if issue.ID == id {
@@ -72,7 +72,7 @@ func issueOf(t *testing.T, export model.Export, id string) model.Issue {
 // edge, and every parent edge lands on an epic.
 func assertContained(t *testing.T, export model.Export) {
 	t.Helper()
-	typeOf := map[string]model.IssueType{}
+	typeOf := map[model.ID]model.IssueType{}
 	for _, issue := range export.Issues {
 		typeOf[issue.ID] = issue.IssueType
 	}
@@ -142,8 +142,8 @@ func TestHomeStrandedFilesALooseLeafUnderAMintedUnfiledEpic(t *testing.T) {
 	if minted.Rank != "K0" {
 		t.Errorf("minted epic rank = %q, want %q", minted.Rank, "K0")
 	}
-	for _, id := range []string{"acme-core-bb22", "acme-core-cc33", "acme-core-dd44"} {
-		if got := issueOf(t, out, id).Lane; got.Raw() != id {
+	for _, id := range []model.ID{"acme-core-bb22", "acme-core-cc33", "acme-core-dd44"} {
+		if got := issueOf(t, out, id).Lane; got.Raw() != id.Raw() {
 			t.Errorf("%s lane = %q, want its own id", id, got)
 		}
 	}
@@ -260,7 +260,7 @@ func TestHomeStrandedSendsAnEpicInALoopThroughALeafToTheTopLevel(t *testing.T) {
 		t.Errorf("rehomed = %+v, want %+v", rehomed, want)
 	}
 	got := parents(out)
-	if len(got["acme-core-e01"]) != 0 || !reflect.DeepEqual(got["acme-core-l01"], []string{"acme-core-e01"}) {
+	if len(got["acme-core-e01"]) != 0 || !reflect.DeepEqual(got["acme-core-l01"], []model.ID{"acme-core-e01"}) {
 		t.Errorf("parents = %v, want the epic at the top level and the leaf under it", got)
 	}
 }
@@ -308,7 +308,7 @@ func TestHomeStrandedClimbsToTheNearestEpic(t *testing.T) {
 	}
 	assertContained(t, out)
 	got := parents(out)
-	for child, want := range map[string][]string{"low": {"acme-core-e01"}, "fork": {"acme-core-e01"}, "home": {"acme-core-e03"}, "mid": {"acme-core-e01"}} {
+	for child, want := range map[model.ID][]model.ID{"low": {"acme-core-e01"}, "fork": {"acme-core-e01"}, "home": {"acme-core-e03"}, "mid": {"acme-core-e01"}} {
 		if !reflect.DeepEqual(got[child], want) {
 			t.Errorf("%s parents = %v, want %v", child, got[child], want)
 		}

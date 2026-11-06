@@ -3,7 +3,6 @@ package storage
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -36,7 +35,7 @@ import (
 // new`, `lit followup`, a tree file, a bulk file — and each spells the parent
 // and the type its own way, so the message names the two ways on in the
 // domain's words rather than one path's flags.
-func RejectLeafWithoutParent(issueType model.IssueType, parentID string) error {
+func RejectLeafWithoutParent(issueType model.IssueType, parentID model.ID) error {
 	if issueType.IsContainer() || parentID != "" {
 		return nil
 	}
@@ -46,7 +45,7 @@ func RejectLeafWithoutParent(issueType model.IssueType, parentID string) error {
 // RejectParentThatIsNotAContainer refuses parentID as a parent when its type
 // is not a container, whichever write names it: a create, a reparent, or a
 // parent-child edge written through `lit dep add`.
-func RejectParentThatIsNotAContainer(parentID string, parentType model.IssueType) error {
+func RejectParentThatIsNotAContainer(parentID model.ID, parentType model.IssueType) error {
 	if parentType.IsContainer() {
 		return nil
 	}
@@ -58,7 +57,7 @@ func RejectParentThatIsNotAContainer(parentID string, parentType model.IssueType
 // engines prove the edge's dst exists by reading its type, and hand that type
 // here, so the rule is one function rather than one per engine.
 // [LAW:dataflow-not-control-flow] The one branch here is the domain's own enum.
-func RejectNonContainerParentEdge(relType model.RelationType, parentID string, parentType model.IssueType) error {
+func RejectNonContainerParentEdge(relType model.RelationType, parentID model.ID, parentType model.IssueType) error {
 	if relType != model.RelParentChild {
 		return nil
 	}
@@ -70,7 +69,7 @@ func RejectNonContainerParentEdge(relType model.RelationType, parentID string, p
 // parent edges the child holds once the detach is done, so removing one of two
 // edges restored data left on a leaf passes, since the leaf is still inside an
 // epic. Moving a leaf is `lit parent set`, which replaces the parent in one act.
-func RejectDetachingALeaf(childID string, childType model.IssueType, parentsLeft int) error {
+func RejectDetachingALeaf(childID model.ID, childType model.IssueType, parentsLeft int) error {
 	if !leftOutsideAnyEpic(childType, parentsLeft) {
 		return nil
 	}
@@ -92,7 +91,7 @@ func leftOutsideAnyEpic(childType model.IssueType, parentsLeft int) bool {
 // rather than one per engine, as on the add side (RejectNonContainerParentEdge).
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] The one branch here is
 // the domain's own enum.
-func RejectDetachingParentEdge(relType model.RelationType, childID string, readChild func() (childType model.IssueType, parentsLeft int, err error)) error {
+func RejectDetachingParentEdge(relType model.RelationType, childID model.ID, readChild func() (childType model.IssueType, parentsLeft int, err error)) error {
 	if relType != model.RelParentChild {
 		return nil
 	}
@@ -107,7 +106,7 @@ func RejectDetachingParentEdge(relType model.RelationType, childID string, readC
 // would leave it: the purge takes every edge to the issue with it, so the
 // child keeps only its other parent edges.
 type DetachedChild struct {
-	ID          string
+	ID          model.ID
 	Type        model.IssueType
 	ParentsLeft int
 }
@@ -118,8 +117,8 @@ type DetachedChild struct {
 // is legal, and passes. The way on is to move the named children or purge them
 // first — both deliberate acts the caller names, never a cascade the purge
 // decides on its own.
-func RejectPurgeOfOccupiedContainer(issueID string, children []DetachedChild) error {
-	var stranded []string
+func RejectPurgeOfOccupiedContainer(issueID model.ID, children []DetachedChild) error {
+	var stranded []model.ID
 	for _, child := range children {
 		if leftOutsideAnyEpic(child.Type, child.ParentsLeft) {
 			stranded = append(stranded, child.ID)
@@ -129,5 +128,5 @@ func RejectPurgeOfOccupiedContainer(issueID string, children []DetachedChild) er
 		return nil
 	}
 	slices.Sort(stranded)
-	return model.ValidationError{Message: fmt.Sprintf("cannot purge %s: it would leave %s outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", issueID, strings.Join(stranded, ", "))}
+	return model.ValidationError{Message: fmt.Sprintf("cannot purge %s: it would leave %s outside any epic; move them with lit parent set --child <id> --parent <epic-id>, or purge them first", issueID, model.JoinIDs(stranded, ", "))}
 }

@@ -84,7 +84,7 @@ const (
 // because each entry declares its own source; a new column cannot be added and
 // then served less data than its cell needs.
 var columnRegistry = []columnSpec{
-	{name: "id", render: func(i model.Issue, _ derivedColumns) string { return model.HoldRow(i.ID) }},
+	{name: "id", render: func(i model.Issue, _ derivedColumns) string { return fmt.Sprint(i.ID) }},
 	{name: "state", render: func(i model.Issue, _ derivedColumns) string { return formatIssueState(i) }},
 	{name: "type", render: func(i model.Issue, _ derivedColumns) string { return string(i.IssueType) }},
 	{name: "topic", render: func(i model.Issue, _ derivedColumns) string { return fmt.Sprint(i.Topic) }},
@@ -104,7 +104,7 @@ var columnRegistry = []columnSpec{
 		return i.CreatedAt.Format(time.RFC3339)
 	}},
 	{name: "parent", source: sourceRelations, render: func(_ model.Issue, cells derivedColumns) string {
-		return emptyDash(model.HoldRow(cells.parentID))
+		return emptyDash(fmt.Sprint(cells.parentID))
 	}},
 	// blocked is sourceReadiness, not sourceRelations: it means "the annotation
 	// registry says this cannot be pulled", which is a still-open dependency, an

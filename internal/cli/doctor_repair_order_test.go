@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -51,7 +52,7 @@ func (r *cycleRepairer) FixRankInversions(context.Context) (int, error) { return
 func TestDoctorSkipsEveryRepairOnALoopedHierarchy(t *testing.T) {
 	t.Parallel()
 	repairer := &cycleRepairer{report: storage.HealthReport{
-		ParentCycle: []string{"E", "S"},
+		ParentCycle: []model.ID{"E", "S"},
 		Errors:      []string{"parent cycle: E -> S"},
 	}}
 	climbed := false
@@ -136,7 +137,7 @@ func TestDoctorStillRunsRepairsOnACleanHierarchy(t *testing.T) {
 func TestDoctorStatusLineSaysUncheckedRatherThanZero(t *testing.T) {
 	t.Parallel()
 	looped := storage.HealthReport{
-		ParentCycle: []string{"E", "S"},
+		ParentCycle: []model.ID{"E", "S"},
 		Unchecked:   []string{storage.CheckRankInversions, storage.CheckDependencyCycle},
 	}
 	if got := doctorFieldValue(looped, storage.CheckRankInversions, "0"); got != "unchecked" {

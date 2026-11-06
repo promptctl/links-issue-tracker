@@ -25,7 +25,7 @@ const (
 // back for the calling agent's semantic merge. The three versions let the agent
 // preserve BOTH intents instead of discarding one.
 type ProsePending struct {
-	IssueID string     `json:"issue_id"`
+	IssueID model.ID   `json:"issue_id"`
 	Field   ProseField `json:"field"`
 	Base    string     `json:"base"`
 	Ours    string     `json:"ours"`
@@ -116,7 +116,7 @@ func ResolveIssue(in SameEntity) IssueResolution {
 	merged.Labels = mergeLabelNames(r.hasBase, r.base.Labels, ours.Labels, theirs.Labels)
 	// A birth fact, so both sides normally agree; the two-tier rule covers the
 	// one way they differ, a side that predates the column and carries "".
-	merged.FollowsUp = twoTier(r.hasBase, r.base.FollowsUp, ours.FollowsUp, theirs.FollowsUp, r.tiebreak)
+	merged.FollowsUp = twoTier(r.hasBase, r.base.FollowsUp, ours.FollowsUp, theirs.FollowsUp, typedTiebreak[model.ID](&r))
 
 	// [LAW:one-source-of-truth] id/created_at are immutable; the archive/delete
 	// timestamps are DERIVED, slaved to the resolved archive/delete state, never
@@ -154,7 +154,7 @@ func ResolveIssue(in SameEntity) IssueResolution {
 }
 
 type resolver struct {
-	id               string
+	id               model.ID
 	base             model.Issue
 	ours             model.Issue
 	theirs           model.Issue

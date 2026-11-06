@@ -144,14 +144,14 @@ func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 		if err != nil {
 			return err
 		}
-		filter.IDs = append(filter.IDs, ids...)
+		filter.IDs = append(filter.IDs, model.IDsOf(ids)...)
 		return nil
 	case strings.HasPrefix(term, "parent:"):
 		ids, err := storage.ParseNames("parent: needs an issue id in every slot, e.g. parent:<epic-id>", strings.TrimPrefix(term, "parent:"))
 		if err != nil {
 			return err
 		}
-		filter.ParentIDs = append(filter.ParentIDs, ids...)
+		filter.ParentIDs = append(filter.ParentIDs, model.IDsOf(ids)...)
 		return nil
 	case strings.HasPrefix(term, "label:"):
 		labels, err := storage.ParseNames("label: needs a label in every slot, e.g. label:<label>", strings.TrimPrefix(term, "label:"))

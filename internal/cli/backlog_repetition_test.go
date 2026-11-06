@@ -23,7 +23,7 @@ func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
 	t.Parallel()
 	h := newBacklogTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "seq", IssueType: "epic", Priority: 1})
-	var children []string
+	var children []model.ID
 	for _, title := range []string{"First", "Second", "Third", "Fourth"} {
 		children = append(children, h.createIssue(storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(title),
@@ -44,11 +44,11 @@ func TestBacklogNamesOnlyTheNearestPendingLaneMate(t *testing.T) {
 			t.Errorf("%s has no blocked line; it sits behind %s in a sequential lane", children[i], children[i-1])
 			continue
 		}
-		if want := "earlier sibling " + children[i-1] + " still open"; !strings.Contains(line, want) {
+		if want := "earlier sibling " + children[i-1].Raw() + " still open"; !strings.Contains(line, want) {
 			t.Errorf("%s blocked line = %q, want it to name %q", children[i], line, want)
 		}
 		for _, other := range children[:i-1] {
-			if strings.Contains(line, other) {
+			if strings.Contains(line, other.Raw()) {
 				t.Errorf("%s blocked line = %q; it names %s, a predecessor the rank order above it already showed", children[i], line, other)
 			}
 		}
@@ -69,7 +69,7 @@ func TestBacklogNamesAnEpicOncePerRun(t *testing.T) {
 	}
 
 	text := h.runBacklogText()
-	if got := strings.Count(text, "epic: "+epic+" "); got != 1 {
+	if got := strings.Count(text, "epic: "+epic.Raw()+" "); got != 1 {
 		t.Fatalf("epic line for %s appears %d times, want 1 — its three children share one epic:\n%s", epic, got, text)
 	}
 }
@@ -152,10 +152,10 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 	}
 	text := out.String()
 
-	if got := strings.Count(text, "epic: "+epicA+" "); got != 2 {
+	if got := strings.Count(text, "epic: "+epicA.Raw()+" "); got != 2 {
 		t.Errorf("epic line for %s appears %d times, want 2 — its run is broken by %s and resumes:\n%s", epicA, got, b1, text)
 	}
-	if got := strings.Count(text, "epic: "+epicB+" "); got != 1 {
+	if got := strings.Count(text, "epic: "+epicB.Raw()+" "); got != 1 {
 		t.Errorf("epic line for %s appears %d times, want 1 — it is one row:\n%s", epicB, got, text)
 	}
 	claimed := 0
@@ -187,7 +187,7 @@ func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
 		t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
 	rows, details := gathered.rows, gathered.details
-	wantLine := "epic: " + epicB + "  Epic B"
+	wantLine := "epic: " + epicB.Raw() + "  Epic B"
 
 	// The one-row run directly below epic A's run must not read as part of it.
 	after := []annotation.AnnotatedIssue{rowByID(t, rows, a1), rowByID(t, rows, b1)}
@@ -236,7 +236,7 @@ func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
 		t.Fatalf("fixture is wrong: the two lanes must spell the same, got %q and %q", laneOne, laneTwo)
 	}
 
-	details := map[string]storage.IssueRelations{
+	details := map[model.ID]storage.IssueRelations{
 		rowOne.ID: {Parent: &epicOne},
 		rowTwo.ID: {Parent: &epicTwo},
 	}
@@ -277,7 +277,7 @@ func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
 	epic := model.Issue{ID: "E", IssueType: model.TypeEpic, Title: "Two lanes"}
 	held := openLeaf(t, "held", "In the claimed lane", "one")
 	free := openLeaf(t, "free", "In the unclaimed lane", "two")
-	details := map[string]storage.IssueRelations{held.ID: {Parent: &epic}, free.ID: {Parent: &epic}}
+	details := map[model.ID]storage.IssueRelations{held.ID: {Parent: &epic}, free.ID: {Parent: &epic}}
 	epicRef := &annotation.ParentEpicRef{ID: epic.ID, Title: epic.Title}
 	rows := []annotation.AnnotatedIssue{
 		{Issue: held, ParentEpic: epicRef},
@@ -312,7 +312,7 @@ func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
 // openLeaf builds an open task in the named lane, hydrated so it can report its
 // own state — the store is not involved, so the fixture can spell ids and lanes
 // the store would never mint.
-func openLeaf(t *testing.T, id, title, lane string) model.Issue {
+func openLeaf(t *testing.T, id model.ID, title, lane string) model.Issue {
 	t.Helper()
 	issue, err := model.HydrateStatus(
 		model.Issue{ID: id, Title: model.Text(title), Lane: model.Text(lane), IssueType: model.TypeTask},
@@ -326,12 +326,12 @@ func openLeaf(t *testing.T, id, title, lane string) model.Issue {
 
 // blockedOrEpicLines returns the context lines rendered under one row, joined,
 // for assertions about what that row states.
-func blockedOrEpicLines(text, id string) string {
+func blockedOrEpicLines(text string, id model.ID) string {
 	lines := strings.Split(text, "\n")
 	var context []string
 	found := false
 	for _, line := range lines {
-		if _, ok := rowHeadingID(line, []string{id}); ok {
+		if _, ok := rowHeadingID(line, []model.ID{id}); ok {
 			found = true
 			continue
 		}
@@ -349,11 +349,11 @@ func blockedOrEpicLines(text, id string) string {
 // blockedLinesByRow maps each id to the "blocked:" line rendered under its row,
 // omitting ids whose row carries none. It reads the rendered text rather than
 // the annotations so the assertions above are about what the reader sees.
-func blockedLinesByRow(t *testing.T, text string, ids []string) map[string]string {
+func blockedLinesByRow(t *testing.T, text string, ids []model.ID) map[model.ID]string {
 	t.Helper()
 	lines := strings.Split(text, "\n")
-	blocked := make(map[string]string)
-	row := ""
+	blocked := make(map[model.ID]string)
+	var row model.ID
 	for _, line := range lines {
 		if id, ok := rowHeadingID(line, ids); ok {
 			row = id
@@ -372,13 +372,13 @@ func blockedLinesByRow(t *testing.T, text string, ids []string) map[string]strin
 var backlogRowHeading = regexp.MustCompile(`^\s*\d+\.\s+(\S+)`)
 
 // rowHeadingID reports which of ids heads this line, if any.
-func rowHeadingID(line string, ids []string) (string, bool) {
+func rowHeadingID(line string, ids []model.ID) (model.ID, bool) {
 	match := backlogRowHeading.FindStringSubmatch(line)
 	if match == nil {
 		return "", false
 	}
 	for _, id := range ids {
-		if match[1] == id {
+		if match[1] == id.Raw() {
 			return id, true
 		}
 	}

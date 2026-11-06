@@ -59,7 +59,7 @@ func TestListReadsReadyPolicyOnlyWhenProjected(t *testing.T) {
 			}
 			// Erroring is not the only way to fail this: a path that swallowed
 			// the config error and printed nothing would pass on err alone.
-			if !strings.Contains(out, issue.ID) {
+			if !strings.Contains(out, issue.ID.Raw()) {
 				t.Errorf("lit ls %v exited clean but did not list %s; output:\n%s",
 					tc.args, issue.ID, out)
 			}

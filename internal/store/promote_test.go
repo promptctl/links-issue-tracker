@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -92,7 +93,7 @@ func seedRealWorkspace(t *testing.T, ctx context.Context, doltRoot string, title
 // in the same test can return STALE rows; copying to a fresh path and opening that
 // reflects committed disk state. Production reopens are fresh processes, so this is
 // a test-only concern, but it is load-bearing for asserting a swap actually landed.
-func freshExportIDs(t *testing.T, ctx context.Context, src string) map[string]bool {
+func freshExportIDs(t *testing.T, ctx context.Context, src string) map[model.ID]bool {
 	t.Helper()
 	dst := filepath.Join(t.TempDir(), "freshread")
 	copyTree(t, src, dst)
@@ -105,7 +106,7 @@ func freshExportIDs(t *testing.T, ctx context.Context, src string) map[string]bo
 	if err != nil {
 		t.Fatalf("export fresh copy of %q: %v", src, err)
 	}
-	ids := map[string]bool{}
+	ids := map[model.ID]bool{}
 	for _, is := range export.Issues {
 		ids[is.ID] = true
 	}
@@ -234,7 +235,7 @@ func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 
 	// A concurrent committer advances the live workspace in place, past the head
 	// the candidate was rebuilt from.
-	var concurrentID string
+	var concurrentID model.ID
 	withStore(t, ctx, canonical, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Title: storage.MustParseTitle("landed during recovery epic"),
@@ -391,7 +392,7 @@ func TestPromoteCandidateRefusesDumpWithoutProvenance(t *testing.T) {
 	storageDir := t.TempDir()
 	canonical := migratedDoltDir(t)
 
-	originalIDs := func() map[string]bool {
+	originalIDs := func() map[model.ID]bool {
 		seedRealWorkspace(t, ctx, canonical, "live subject")
 		return freshExportIDs(t, ctx, canonical)
 	}()

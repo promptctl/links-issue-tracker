@@ -24,7 +24,7 @@ func assertBatchLeftNoScratch(t *testing.T, ctx context.Context, st *Store) {
 }
 
 // createTwo is a batch body making two tasks under epic, each its own write.
-func createTwo(st *Store, epic string) func(ctx context.Context, result *storage.BulkApplyResult) error {
+func createTwo(st *Store, epic model.ID) func(ctx context.Context, result *storage.BulkApplyResult) error {
 	return func(ctx context.Context, result *storage.BulkApplyResult) error {
 		for _, title := range []string{"first", "second"} {
 			issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic})
@@ -174,7 +174,7 @@ func TestABatchThatCannotLandWritesNothing(t *testing.T) {
 	ctx := context.Background()
 	st, epic := openBatchStore(t, ctx)
 	head := headCommit(t, ctx, st)
-	var heard []string
+	var heard []model.ID
 	st.ObserveChanges(func(_ storage.Change, issue model.Issue) { heard = append(heard, issue.ID) })
 	st.landHookForTest = func() error { return errors.New("injected: cannot land") }
 	result, landing, err := withBatch(ctx, st, createTwo(st, epic))

@@ -88,12 +88,12 @@ func readIDPrefixCensus(ctx context.Context, st storage.IssueReader) (idPrefixCe
 func censusOf(issues []storage.IssueIdentity) idPrefixCensus {
 	topicOf := make(map[string]string, len(issues))
 	for _, issue := range issues {
-		topicOf[issue.ID] = issue.Topic
+		topicOf[issue.ID.Raw()] = issue.Topic
 	}
 	byPrefix := map[string]int{}
 	var census idPrefixCensus
 	for _, issue := range issues {
-		root, _, _ := strings.Cut(issue.ID, ".")
+		root, _, _ := strings.Cut(issue.ID.Raw(), ".")
 		topic, known := topicOf[root]
 		prefix, ok := issueid.PrefixOf(root, topic)
 		if !known || !ok {

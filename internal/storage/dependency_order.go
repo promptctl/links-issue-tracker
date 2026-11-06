@@ -1,9 +1,9 @@
 package storage
 
 import (
+	"cmp"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -16,8 +16,8 @@ import (
 // unsatisfiable constraint set — no assignment can place every dependency
 // above its dependent once the dependencies form a loop.
 type DependencyEdge struct {
-	Dependent  string // src — ranked below
-	Dependency string // dst — ranked above
+	Dependent  model.ID // src — ranked below
+	Dependency model.ID // dst — ranked above
 }
 
 // DependencyOrder is tree order's reading of the blocked-by edges between live
@@ -44,14 +44,14 @@ type DependencyOrder struct {
 	ancestry    RankAncestry
 	edges       map[DependencyEdge]struct{}
 	constraints []DependencyEdge
-	interleaved [][]string
-	group       map[string]int
+	interleaved [][]model.ID
+	group       map[model.ID]int
 }
 
 // NewDependencyOrder reads edges, the blocked-by edges between live issues, in
 // tree order.
 func NewDependencyOrder(ancestry RankAncestry, edges []DependencyEdge) DependencyOrder {
-	order := DependencyOrder{ancestry: ancestry, edges: make(map[DependencyEdge]struct{}, len(edges)), group: map[string]int{}}
+	order := DependencyOrder{ancestry: ancestry, edges: make(map[DependencyEdge]struct{}, len(edges)), group: map[model.ID]int{}}
 	liftedFrom := make(map[DependencyEdge]DependencyEdge, len(edges))
 	seen := make(map[DependencyEdge]struct{}, len(edges))
 	lifted := make([]DependencyEdge, 0, len(edges))
@@ -77,7 +77,7 @@ func NewDependencyOrder(ancestry RankAncestry, edges []DependencyEdge) Dependenc
 	// An edge on a loop of the issues' own edges joins two members of one
 	// strongly connected set of them; the group it lifts into is that loop
 	// seen from above, not an interleaving.
-	loop := map[string]int{}
+	loop := map[model.ID]int{}
 	for i, members := range stronglyConnected(edges) {
 		for _, id := range members {
 			loop[id] = i
@@ -127,11 +127,11 @@ func (o DependencyOrder) Constraints() []DependencyEdge {
 // Interleaved lists the interleaved groups, each by member id, in order of
 // their first members: every group of frame-mates whose lifted edges loop,
 // less those a loop of the issues' own edges runs through.
-func (o DependencyOrder) Interleaved() [][]string {
+func (o DependencyOrder) Interleaved() [][]model.ID {
 	return o.interleaved
 }
 
-func (o DependencyOrder) together(x, y string) bool {
+func (o DependencyOrder) together(x, y model.ID) bool {
 	gx, inX := o.group[x]
 	gy, inY := o.group[y]
 	return inX && inY && gx == gy
@@ -140,19 +140,19 @@ func (o DependencyOrder) together(x, y string) bool {
 // stronglyConnected returns every strongly connected set of more than one node
 // among edges (Tarjan's algorithm), each sorted by id and the sets by their
 // first member, so the same edges name the same groups on every run.
-func stronglyConnected(edges []DependencyEdge) [][]string {
-	next := map[string][]string{}
+func stronglyConnected(edges []DependencyEdge) [][]model.ID {
+	next := map[model.ID][]model.ID{}
 	for _, e := range edges {
 		next[e.Dependent] = append(next[e.Dependent], e.Dependency)
 	}
 	nodes := slices.Sorted(maps.Keys(next))
-	index := map[string]int{}
-	low := map[string]int{}
-	onStack := map[string]bool{}
-	var stack []string
-	var groups [][]string
-	var visit func(v string)
-	visit = func(v string) {
+	index := map[model.ID]int{}
+	low := map[model.ID]int{}
+	onStack := map[model.ID]bool{}
+	var stack []model.ID
+	var groups [][]model.ID
+	var visit func(v model.ID)
+	visit = func(v model.ID) {
 		index[v] = len(index)
 		low[v] = index[v]
 		stack = append(stack, v)
@@ -168,7 +168,7 @@ func stronglyConnected(edges []DependencyEdge) [][]string {
 		if low[v] != index[v] {
 			return
 		}
-		var group []string
+		var group []model.ID
 		for {
 			w := stack[len(stack)-1]
 			stack = stack[:len(stack)-1]
@@ -188,6 +188,6 @@ func stronglyConnected(edges []DependencyEdge) [][]string {
 			visit(v)
 		}
 	}
-	slices.SortFunc(groups, func(a, b []string) int { return strings.Compare(a[0], b[0]) })
+	slices.SortFunc(groups, func(a, b []model.ID) int { return cmp.Compare(a[0], b[0]) })
 	return groups
 }

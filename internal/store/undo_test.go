@@ -44,9 +44,9 @@ func headWrite(t *testing.T, st *Store) string {
 	return head
 }
 
-func parentsNow(t *testing.T, st *Store, child string) []string {
+func parentsNow(t *testing.T, st *Store, child model.ID) []model.ID {
 	t.Helper()
-	parents, err := st.edgeTargetsAt(context.Background(), liveRevision, model.RelParentChild, []string{child})
+	parents, err := st.edgeTargetsAt(context.Background(), liveRevision, model.RelParentChild, []model.ID{child})
 	if err != nil {
 		t.Fatalf("read parent of %s: %v", child, err)
 	}
@@ -62,7 +62,8 @@ func TestRevertWritesPutsARunOfReparentsBack(t *testing.T) {
 	st, _ := newUndoStore(t)
 	from := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("from"), Lane: storage.SharedLane, IssueType: "epic"})
 	to := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("to"), Lane: storage.SharedLane, IssueType: "epic"})
-	var tasks, run []string
+	var tasks []model.ID
+	var run []string
 	for _, title := range []string{"one", "two", "three"} {
 		tasks = append(tasks, mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, ParentID: from.ID}).ID)
 	}
@@ -92,7 +93,7 @@ func TestRevertWritesPutsARunOfReparentsBack(t *testing.T) {
 		t.Fatalf("RevertWrites() error = %v", err)
 	}
 	for _, task := range tasks {
-		if got := parentsNow(t, st, task); !slices.Equal(got, []string{from.ID}) {
+		if got := parentsNow(t, st, task); !slices.Equal(got, []model.ID{from.ID}) {
 			t.Errorf("%s parent = %v, want %s back", task, got, from.ID)
 		}
 	}
@@ -111,7 +112,7 @@ func TestRevertWritesPutsARunOfReparentsBack(t *testing.T) {
 		t.Fatalf("RevertWrites(the undo's own writes) error = %v", err)
 	}
 	for _, task := range tasks {
-		if got := parentsNow(t, st, task); !slices.Equal(got, []string{to.ID}) {
+		if got := parentsNow(t, st, task); !slices.Equal(got, []model.ID{to.ID}) {
 			t.Errorf("after undoing the undo, %s parent = %v, want %s", task, got, to.ID)
 		}
 	}
@@ -261,7 +262,7 @@ func TestListWritesNamesAMadeOrRemovedTicketOnce(t *testing.T) {
 		t.Fatalf("ListWrites() error = %v", err)
 	}
 	// A purge also writes its own record, which is a fact of its own.
-	want := map[string][]string{purged: {doomed.ID + " removed", "the purges table changed"}, created: {doomed.ID + " created"}}
+	want := map[string][]string{purged: {doomed.ID.Raw() + " removed", "the purges table changed"}, created: {doomed.ID.Raw() + " created"}}
 	for _, w := range listed {
 		if want[w.ID] == nil {
 			continue
@@ -311,12 +312,12 @@ func TestListWritesNamesARankWriteOnce(t *testing.T) {
 	ctx := context.Background()
 	st, _ := newUndoStore(t)
 	epic := mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, IssueType: "epic"})
-	var tasks []string
+	var tasks []model.ID
 	for _, title := range []string{"one", "two", "three"} {
 		tasks = append(tasks, mustCreate(t, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, ParentID: epic.ID}).ID)
 	}
 	// Reversed, the first and last swap keys and the middle keeps its own.
-	if _, err := st.RankSet(ctx, []string{tasks[2], tasks[1], tasks[0]}); err != nil {
+	if _, err := st.RankSet(ctx, []model.ID{tasks[2], tasks[1], tasks[0]}); err != nil {
 		t.Fatalf("RankSet() error = %v", err)
 	}
 	listed, err := st.ListWrites(ctx, 1)
@@ -350,7 +351,7 @@ func TestRevertWritesRefusesWhatALaterWriteMovedAgain(t *testing.T) {
 	if !errors.As(err, &conflict) || len(conflict.Conflicts) != 1 {
 		t.Fatalf("RevertWrites(first) = %v, want one conflict", err)
 	}
-	if headWrite(t, st) != head || !slices.Equal(parentsNow(t, st, task.ID), []string{c.ID}) {
+	if headWrite(t, st) != head || !slices.Equal(parentsNow(t, st, task.ID), []model.ID{c.ID}) {
 		t.Errorf("a conflicted undo wrote: parent %v", parentsNow(t, st, task.ID))
 	}
 }
@@ -483,7 +484,7 @@ func TestListWritesNamesARowMoveBesideARankMove(t *testing.T) {
 	for _, u := range listed[0].Unrevertable {
 		what = append(what, u.What)
 	}
-	if want := []string{epic.ID + ": its row moved outside its editable fields", "ranks moved, tickets re-keyed: 1"}; !slices.Equal(what, want) {
+	if want := []string{epic.ID.Raw() + ": its row moved outside its editable fields", "ranks moved, tickets re-keyed: 1"}; !slices.Equal(what, want) {
 		t.Errorf("unrevertable = %q, want %q", what, want)
 	}
 }

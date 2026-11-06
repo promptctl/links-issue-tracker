@@ -406,7 +406,7 @@ func newLeaf() appLeaf {
 			return err
 		}
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: titleValue, Description: description.value(), Prompt: prompt.value(), Plan: plan.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: laneValue,
+			Title: titleValue, Description: description.value(), Prompt: prompt.value(), Plan: plan.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: model.ID(*parentID), Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: laneValue,
 			Placement: rankPlacement(*top),
 			Prefix:    prefix.Value(),
 			Actor:     resolveActor(inv.Env),
@@ -461,7 +461,7 @@ func followupLeaf() appLeaf {
 	// written inside it. [LAW:one-source-of-truth]
 	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top] [--by <name>]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
-		onID := strings.TrimSpace(*on)
+		onID := model.ID(*on).Trim()
 		if onID == "" || strings.TrimSpace(*title) == "" {
 			return UsageError{Message: usage}
 		}
@@ -480,7 +480,7 @@ func followupLeaf() appLeaf {
 		// being the value a top-level create carries. The store judges the
 		// parent against the follow-up's type as it judges every create.
 		// [LAW:dataflow-not-control-flow] [LAW:single-enforcer]
-		parentID, parentSource := strings.TrimSpace(*parent), "flag"
+		parentID, parentSource := model.ID(*parent).Trim(), "flag"
 		switch {
 		case parentID != "":
 		case origin.Parent != nil:
@@ -495,7 +495,7 @@ func followupLeaf() appLeaf {
 		}
 		resolvedDescription := strings.TrimSpace(description.value())
 		if resolvedDescription == "" {
-			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID, origin.Issue.Title.Raw())
+			resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", origin.Issue.ID.Raw(), origin.Issue.Title.Raw())
 		}
 		issueTypeValue, err := model.ParseIssueType(*issueType)
 		if err != nil {
@@ -736,7 +736,8 @@ func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
 		}
 		// Parent ids are read before the surface's positional joins the set:
 		// `--parent ""` names no parent whichever command carries it.
-		parentIDs, err := storage.ParseNames("--parent needs an issue id in every slot, e.g. --parent <epic-id>", *parent...)
+		parentNames, err := storage.ParseNames("--parent needs an issue id in every slot, e.g. --parent <epic-id>", *parent...)
+		parentIDs := model.IDsOf(parentNames)
 		if err != nil {
 			return err
 		}
@@ -746,7 +747,7 @@ func listLeaf(surface listSurface) (leaf[listScope], *pathFlag) {
 		}
 		// A surface's positionals are parent ids too, so `children <id>` and
 		// `ls --parent <id>` build the same filter. [LAW:one-source-of-truth]
-		parentIDs = append(parentIDs, positional...)
+		parentIDs = append(parentIDs, model.IDsOf(positional)...)
 		limitValue, err := query.ParseLimit(*limit)
 		if err != nil {
 			return fmt.Errorf("parse --limit: %w", err)
@@ -837,8 +838,9 @@ func parseIssueTypeSet(raw []string) ([]model.IssueType, error) {
 	return types, nil
 }
 
-func parseIDSet(raw []string) ([]string, error) {
-	return storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", raw...)
+func parseIDSet(raw []string) ([]model.ID, error) {
+	ids, err := storage.ParseNames("--ids needs an issue id in every slot, e.g. --ids <issue-id>", raw...)
+	return model.IDsOf(ids), err
 }
 
 func parseWriteSet(raw []string) ([]string, error) {
@@ -891,7 +893,7 @@ func parseSearchTerms(raw []string) ([]string, error) {
 // [LAW:no-silent-failure] the default arm panics rather than returning nil: a
 // fourth rung added without a loader would otherwise render "-" in a column it
 // could not compute, and "-" is shaped exactly like a true answer.
-func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolicy, columns []columnSpec, issues []model.Issue) (map[string]derivedColumns, error) {
+func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolicy, columns []columnSpec, issues []model.Issue) (map[model.ID]derivedColumns, error) {
 	switch source := columnSourceFor(columns); source {
 	case sourceIssue:
 		return nil, nil
@@ -924,8 +926,8 @@ func listDerivedColumns(ctx context.Context, st storage.Store, policy readyPolic
 // can answer. It cannot set blocked, and that is the point: a `blocked` derived
 // from dependency edges alone is the shorter list, so no function in the
 // package is able to produce one.
-func parentColumnsFor(relations map[string]storage.IssueRelations) map[string]derivedColumns {
-	out := make(map[string]derivedColumns, len(relations))
+func parentColumnsFor(relations map[model.ID]storage.IssueRelations) map[model.ID]derivedColumns {
+	out := make(map[model.ID]derivedColumns, len(relations))
 	for id, rel := range relations {
 		out[id] = derivedColumns{parentID: parentIDOf(rel)}
 	}
@@ -935,7 +937,7 @@ func parentColumnsFor(relations map[string]storage.IssueRelations) map[string]de
 // parentIDOf reads an issue's parent/epic id off the canonical graph, "" for a
 // top-level issue. One reading of that edge, shared by both producers of
 // derivedColumns.parentID.
-func parentIDOf(rel storage.IssueRelations) string {
+func parentIDOf(rel storage.IssueRelations) model.ID {
 	if rel.Parent == nil {
 		return ""
 	}
@@ -1165,7 +1167,7 @@ func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []st
 // seeds donate relations the caller already holds — the epic plan has its epic
 // — so the ancestry climb reuses them rather than fetching them again. The
 // subjects themselves are always read fresh, below.
-func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue, seeds ...map[string]storage.IssueRelations) (annotatedRows, error) {
+func annotateIssues(ctx context.Context, st storage.Store, requiredFields []string, issues []model.Issue, seeds ...map[model.ID]storage.IssueRelations) (annotatedRows, error) {
 	fieldAnnotator, err := newFieldAnnotator(requiredFields)
 	if err != nil {
 		return annotatedRows{}, err
@@ -1192,7 +1194,7 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 	// earlier sibling or an epic's blocker hidden by those filters still gates.
 	// details goes in last so the fresh read of a subject wins over any seeded
 	// copy of it.
-	memo, loaded := memoizeRelations(st.GetRelationsByIDs, slices.Concat(seeds, []map[string]storage.IssueRelations{details})...)
+	memo, loaded := memoizeRelations(st.GetRelationsByIDs, slices.Concat(seeds, []map[model.ID]storage.IssueRelations{details})...)
 	held, err := fetchHeldAncestry(ctx, memo, details)
 	if err != nil {
 		return annotatedRows{}, err
@@ -1223,14 +1225,14 @@ func annotateIssues(ctx context.Context, st storage.Store, requiredFields []stri
 // [LAW:types-are-the-program]
 type annotatedRows struct {
 	rows    []annotation.AnnotatedIssue
-	details map[string]storage.IssueRelations
+	details map[model.ID]storage.IssueRelations
 	// epics is the relations of every epic above a row, keyed by epic id — the
 	// chain epicsAbove climbs.
-	epics map[string]storage.IssueRelations
+	epics map[model.ID]storage.IssueRelations
 	// loaded is every relation the pass read — the subjects, the epics above
 	// them, and the blockers' wait walks — the seed a later walk over the same
 	// graph reuses rather than re-reading.
-	loaded map[string]storage.IssueRelations
+	loaded map[model.ID]storage.IssueRelations
 }
 
 // runOrphaned lists in_progress issues whose last update is older than
@@ -1321,7 +1323,7 @@ func showLeaf() appLeaf {
 				return err
 			}
 		}
-		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
+		detail, err := ap.Store.GetIssueDetail(ctx, model.ID(positional[0]))
 		if err != nil {
 			return err
 		}
@@ -1375,7 +1377,7 @@ func historyLeaf() appLeaf {
 			telemetry.Set(ctx, "history.version_field", ref.field.Name)
 			telemetry.Set(ctx, "history.version_number", ref.number)
 		}
-		detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
+		detail, err := ap.Store.GetIssueDetail(ctx, model.ID(positional[0]))
 		if err != nil {
 			return err
 		}
@@ -1508,7 +1510,7 @@ func updateLeaf() appLeaf {
 		if in.IsEmpty() {
 			return UsageError{Message: "lit update requires at least one field flag; " + usage}
 		}
-		applied, err := ap.Store.Apply(ctx, positional[0], in)
+		applied, err := ap.Store.Apply(ctx, model.ID(positional[0]), in)
 		if err != nil {
 			return err
 		}
@@ -1584,7 +1586,7 @@ func rankLeaf() appLeaf {
 		if modeCount != 1 {
 			return model.ValidationError{Message: "exactly one of --top, --bottom, --above, --below is required"}
 		}
-		issueID := positional[0]
+		issueID := model.ID(positional[0])
 		// Relative ops resolve cross-frame requests to the comparable pair (a
 		// child's stand-in is its epic); the move record carries what actually
 		// happened so the substitution is reported, never silent.
@@ -1604,9 +1606,9 @@ func rankLeaf() appLeaf {
 			edgeWord = "bottom"
 			end, err = ap.Store.RankToBottom(ctx, issueID)
 		case visited["above"]:
-			move, err = ap.Store.RankAbove(ctx, issueID, *above)
+			move, err = ap.Store.RankAbove(ctx, issueID, model.ID(*above))
 		case visited["below"]:
-			move, err = ap.Store.RankBelow(ctx, issueID, *below)
+			move, err = ap.Store.RankBelow(ctx, issueID, model.ID(*below))
 		}
 		if err != nil {
 			return err
@@ -1639,7 +1641,7 @@ func rankLeaf() appLeaf {
 				}
 			}
 		}
-		namedAnchor := *above + *below // exactly one mode is set; empty for --top/--bottom
+		namedAnchor := model.ID(*above + *below) // exactly one mode is set; empty for --top/--bottom
 		// A relative op against an issue inside an epic ranks the epic as its
 		// stand-in; report the substitution so it is never silent. [LAW:no-silent-failure]
 		if move.MovedID != issueID {
@@ -1679,7 +1681,7 @@ func rankSetLeaf() appLeaf {
 		if len(positional) < 2 {
 			return UsageError{Message: usage}
 		}
-		result, err := ap.Store.RankSet(ctx, positional)
+		result, err := ap.Store.RankSet(ctx, model.IDsOf(positional))
 		if err != nil {
 			return err
 		}
@@ -1695,7 +1697,7 @@ func rankSetLeaf() appLeaf {
 // `rank: top` documents write the same RankSet, so they report it in the same
 // words. [LAW:one-source-of-truth]
 func printRankSet(stdout io.Writer, result storage.RankSetResult) error {
-	ranked := make([]string, len(result.Resolutions))
+	ranked := make([]model.ID, len(result.Resolutions))
 	for i, r := range result.Resolutions {
 		ranked[i] = r.RankedID
 	}
@@ -1714,7 +1716,7 @@ func printRankSet(stdout io.Writer, result storage.RankSetResult) error {
 	if len(ranked) == 1 {
 		noun = "issue"
 	}
-	_, err := fmt.Fprintf(stdout, "ranked %d %s at the top of %s in order: %s\n", len(ranked), noun, frameLabel(result.Frame), strings.Join(ranked, ", "))
+	_, err := fmt.Fprintf(stdout, "ranked %d %s at the top of %s in order: %s\n", len(ranked), noun, frameLabel(result.Frame), model.JoinIDs(ranked, ", "))
 	return err
 }
 
@@ -1837,7 +1839,7 @@ type transitionSpec struct {
 
 // authorizeFunc is a transition's gate ahead of Apply, run with the invocation
 // so a gate that asks can read the answer from its stdin.
-type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error)
+type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (afterApply, error)
 
 // afterApply is what a transition owes once Apply has written the issue: the
 // line it prints and the facts it tells the statusline file. The authorize hook
@@ -1852,7 +1854,7 @@ type afterApply func(written ticketState, handover *claims.Handover) (notice str
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
 func noAuthorize(*cobraFlagSet) authorizeFunc {
-	return func(context.Context, Invocation, *app.App, string, ticketState, model.Action) (afterApply, error) {
+	return func(context.Context, Invocation, *app.App, model.ID, ticketState, model.Action) (afterApply, error) {
 		return func(ticketState, *claims.Handover) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
@@ -1880,7 +1882,7 @@ var (
 		},
 		authorize: func(fs *cobraFlagSet) authorizeFunc {
 			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
-			return func(ctx context.Context, inv Invocation, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+			return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (afterApply, error) {
 				// registerFlags above builds every action this hook sees, so a
 				// different variant is a wiring error, not a caller's mistake.
 				// [LAW:no-silent-failure]
@@ -1947,7 +1949,7 @@ var (
 // The phase left is the one transitionLeaf read before Apply on the same write
 // Store the move is planned on, whose engine holds Dolt's LOCK for the whole
 // command, so both reads answer from one history. [LAW:nothing-unseen]
-func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ string, prior ticketState, action model.Action) (afterApply, error) {
+func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ model.ID, prior ticketState, action model.Action) (afterApply, error) {
 	set, ok := action.(model.SetPhase)
 	if !ok {
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
@@ -1970,7 +1972,7 @@ func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ string, pri
 // adds the plan and the review it rested on; a done that found the ticket
 // already closed finished nothing, so its event says that instead.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
-func authorizeDone(ctx context.Context, _ Invocation, ap *app.App, issueID string, prior ticketState, action model.Action) (afterApply, error) {
+func authorizeDone(ctx context.Context, _ Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (afterApply, error) {
 	reviews, err := ap.Store.ListPlanReviews(ctx, issueID)
 	if err != nil {
 		return nil, err
@@ -1985,7 +1987,7 @@ func authorizeDone(ctx context.Context, _ Invocation, ap *app.App, issueID strin
 	case storage.PlanApproved:
 		record = func() {
 			telemetry.Set(ctx, "done.plan_digest", string(standing.Review.PlanDigest))
-			telemetry.Set(ctx, "done.plan_review", standing.Review.ID)
+			telemetry.Set(ctx, "done.plan_review", standing.Review.ID.Raw())
 		}
 	case storage.PlanGap:
 		warning = "warning: finished without an approved plan: " + standing.Describe(issueID) + "\n"
@@ -2087,7 +2089,7 @@ type transitionDone struct {
 // statusline facts recorded. `lit <verb>` and `lit bulk <verb>` both run it,
 // so a transition one refuses the other refuses with the same error.
 // [LAW:single-enforcer]
-func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID string, action model.Action, actor, reason string, authorize authorizeFunc) (transitionDone, error) {
+func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, action model.Action, actor, reason string, authorize authorizeFunc) (transitionDone, error) {
 	// The pre-transition read is the state `authorize` gates on and the
 	// before-half of the caller's workflow occasion: the row, and the phase
 	// the ticket's history puts it in.
@@ -2151,7 +2153,7 @@ func transitionLeaf(spec transitionSpec) appLeaf {
 			return UsageError{Message: usage}
 		}
 
-		issueID := positional[0]
+		issueID := model.ID(positional[0])
 
 		// [LAW:single-enforcer] One resolution serves the action and the event:
 		// the agent's session wins, else --by. History must record who actually
@@ -2247,7 +2249,7 @@ func commentAddLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		comment, issue, err := addComment(ctx, ap, positional[0], commentBody, resolveActor(inv.Env))
+		comment, issue, err := addComment(ctx, ap, model.ID(positional[0]), commentBody, resolveActor(inv.Env))
 		if err != nil {
 			return err
 		}
@@ -2264,12 +2266,12 @@ func commentAddLeaf() appLeaf {
 // every bulk verb leaves its single command's guidance unprinted.
 // The author resolves through the same identity rule as every other actor.
 // [LAW:single-enforcer] [LAW:one-type-per-behavior]
-func addComment(ctx context.Context, ap *app.App, issueID string, body model.CommentBody, actor string) (model.Comment, model.Issue, error) {
+func addComment(ctx context.Context, ap *app.App, issueID model.ID, body model.CommentBody, actor string) (model.Comment, model.Issue, error) {
 	comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: issueID, Body: body, CreatedBy: actor})
 	if err != nil {
 		return model.Comment{}, model.Issue{}, err
 	}
-	telemetry.Set(ctx, "comment.id", comment.ID)
+	telemetry.Set(ctx, "comment.id", comment.ID.Raw())
 	return comment, issue, nil
 }
 
@@ -2280,7 +2282,7 @@ func commentRmLeaf() appLeaf {
 		if len(positional) != 1 {
 			return UsageError{Message: usage}
 		}
-		comment, err := ap.Store.DeleteComment(ctx, positional[0])
+		comment, err := ap.Store.DeleteComment(ctx, model.ID(positional[0]))
 		if err != nil {
 			return err
 		}
@@ -2296,7 +2298,7 @@ func printComment(w io.Writer, c model.Comment) error {
 // commentLine is the line a comment command prints for a comment: the issue
 // it is on, then its own id.
 func commentLine(c model.Comment) string {
-	return c.IssueID + " " + c.ID + "\n"
+	return fmt.Sprintf("%s %s\n", c.IssueID, c.ID)
 }
 
 func exportLeaf() appLeaf {
@@ -2374,7 +2376,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 		return err
 	}
 	for _, m := range result.Created {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", model.HoldRow(m.Ref), m.ID); err != nil {
 			return err
 		}
 	}
@@ -2450,7 +2452,7 @@ func printBulkApplied(stdout io.Writer, result storage.BulkApplyResult) error {
 		return err
 	}
 	for _, m := range result.Created {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", model.HoldRow(m.Ref), m.ID); err != nil {
 			return err
 		}
 	}
@@ -2483,10 +2485,7 @@ func printBulkApplied(stdout io.Writer, result storage.BulkApplyResult) error {
 	// A slot a read-out file left as read and another writer moved since kept
 	// that writer's value; a file with none has nothing to report.
 	if len(result.Kept) > 0 {
-		kept := make([]string, len(result.Kept))
-		for i, slot := range result.Kept {
-			kept[i] = slot.String()
-		}
+		kept := result.Kept
 		if err := printIDs(stdout, fmt.Sprintf("kept %d values other writers changed since the file was read", len(kept)), kept); err != nil {
 			return err
 		}
@@ -2499,12 +2498,12 @@ func printBulkApplied(stdout io.Writer, result storage.BulkApplyResult) error {
 }
 
 // printIDs writes a heading line and one indented id per line beneath it.
-func printIDs(stdout io.Writer, heading string, ids []string) error {
+func printIDs[T any](stdout io.Writer, heading string, ids []T) error {
 	if _, err := fmt.Fprintln(stdout, heading); err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if _, err := fmt.Fprintf(stdout, "  %s\n", id); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %v\n", id); err != nil {
 			return err
 		}
 	}

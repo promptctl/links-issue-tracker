@@ -21,14 +21,68 @@ func (t Text) Raw() string { return string(t) }
 // Format prints the text held to one row whatever the verb and width, so %s,
 // %v, %q and %-20s all hold it. [LAW:single-enforcer]
 func (t Text) Format(f fmt.State, verb rune) {
-	formatHeld(f, verb, HoldRow(string(t)))
+	formatHeld(f, verb, string(t))
 }
 
-// formatHeld writes an already held value honouring %q and width, so every
-// type that prints held formats the same way.
-func formatHeld(f fmt.State, verb rune, held string) {
+// ID names a ticket, comment or event: minted by lit, but stored and carried
+// by sync and import, so nothing guarantees it holds no break. Any fmt verb
+// prints it held to its row, as Text does; it is its own type so a title
+// cannot be passed where an id is wanted. [LAW:types-are-the-program]
+type ID string
+
+// Raw is the id exactly as stored, for storage, matching and comparison.
+func (id ID) Raw() string { return string(id) }
+
+// Trim is the id with surrounding whitespace removed, as a caller typed it.
+func (id ID) Trim() ID { return ID(strings.TrimSpace(string(id))) }
+
+// Format prints the id held to one row whatever the verb and width.
+func (id ID) Format(f fmt.State, verb rune) {
+	formatHeld(f, verb, string(id))
+}
+
+// JoinIDs prints ids joined by sep, each held to its row as %s holds it, so a
+// sentence naming several ids holds every one of them.
+func JoinIDs(ids []ID, sep string) string {
+	held := make([]string, len(ids))
+	for i, id := range ids {
+		held[i] = fmt.Sprint(id)
+	}
+	return strings.Join(held, sep)
+}
+
+// IDsOf is raw, as a caller typed or a file spelled them, as ids.
+func IDsOf(raw []string) []ID {
+	ids := make([]ID, len(raw))
+	for i, s := range raw {
+		ids[i] = ID(s)
+	}
+	return ids
+}
+
+// RawIDs is ids exactly as stored, for a key or a string API.
+func RawIDs(ids []ID) []string {
+	raw := make([]string, len(ids))
+	for i, id := range ids {
+		raw[i] = id.Raw()
+	}
+	return raw
+}
+
+// formatHeld writes a value honouring %q and width, so every type that prints
+// held formats the same way: held to its row under every verb but %q, which
+// Go-quotes the raw value, since its escapes already keep it to one row and
+// show exactly which break, tab or invisible the value carries.
+func formatHeld(f fmt.State, verb rune, raw string) {
+	held := HoldRow(raw)
 	if verb == 'q' {
-		held = fmt.Sprintf("%q", held)
+		flags := ""
+		for _, flag := range "+#" {
+			if f.Flag(int(flag)) {
+				flags += string(flag)
+			}
+		}
+		held = fmt.Sprintf("%"+flags+"q", raw)
 	}
 	if width, ok := f.Width(); ok {
 		if pad := width - utf8.RuneCountInString(held); pad > 0 {
@@ -80,9 +134,8 @@ func HasLineBreak(text string) bool {
 // HoldRow holds a value to the one row it is printed on: its printable lines
 // joined by QuotedBreak, each line's own QuotedBreak defused first so the
 // token means only a break, and a tab turned to a space so the value cannot
-// add a cell to a tab-separated row. Text.Format is built on it; a renderer
-// calls it directly only for a value that is not a Text — an id, or a row it
-// composed.
+// add a cell to a tab-separated row. Text.Format and ID.Format are built on it; a
+// renderer calls it directly only for a value that is neither.
 func HoldRow(s string) string {
 	lines := TextLines(s)
 	for i, line := range lines {

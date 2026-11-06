@@ -202,9 +202,9 @@ func TestABulkUpdateDocumentRoundTripsItsIssue(t *testing.T) {
 		t.Fatalf("ParseBulkSpecs(the document) = %v; the document:\n%s", err, text)
 	}
 	asRead := storage.CurrentState{
-		Issues:    map[string]model.Issue{issue.ID: issue},
-		Parents:   map[string][]string{issue.ID: {epic.ID}},
-		BlockedBy: map[string][]string{issue.ID: {blocker.ID}},
+		Issues:    map[model.ID]model.Issue{issue.ID: issue},
+		Parents:   map[model.ID][]model.ID{issue.ID: {epic.ID}},
+		BlockedBy: map[model.ID][]model.ID{issue.ID: {blocker.ID}},
 	}
 	merged, err := storage.MergeReadOut(specs, asRead)
 	if err != nil {
@@ -213,7 +213,7 @@ func TestABulkUpdateDocumentRoundTripsItsIssue(t *testing.T) {
 	if len(merged.Kept) != 0 {
 		t.Errorf("the issue as read kept %v, want nothing moved since the read", merged.Kept)
 	}
-	file, err := storage.ParseBulkFile(merged, map[string]model.IssueType{issue.ID: issue.IssueType, epic.ID: epic.IssueType, blocker.ID: blocker.IssueType})
+	file, err := storage.ParseBulkFile(merged, map[model.ID]model.IssueType{issue.ID: issue.IssueType, epic.ID: epic.IssueType, blocker.ID: blocker.IssueType})
 	if err != nil {
 		t.Fatalf("ParseBulkFile(the document) = %v; the document:\n%s", err, text)
 	}
@@ -237,10 +237,10 @@ func TestABulkUpdateDocumentRoundTripsItsIssue(t *testing.T) {
 	if len(changes) != 0 || !reflect.DeepEqual(after, issue) {
 		t.Errorf("the issue's own document moved %+v; after = %+v", changes, after)
 	}
-	if want := []storage.FileReparent{{ID: issue.ID, Parent: epic.ID}}; !slices.Equal(file.Reparents, want) {
+	if want := []storage.FileReparent{{ID: issue.ID, Parent: epic.ID.Raw()}}; !slices.Equal(file.Reparents, want) {
 		t.Errorf("reparents = %+v, want %+v", file.Reparents, want)
 	}
-	if len(file.BlockedBy) != 1 || !slices.Equal(file.BlockedBy[0].BlockedBy, []string{blocker.ID}) {
+	if len(file.BlockedBy) != 1 || !slices.Equal(file.BlockedBy[0].BlockedBy, []string{blocker.ID.Raw()}) {
 		t.Errorf("blocked_by = %+v, want %s's set [%s]", file.BlockedBy, issue.ID, blocker.ID)
 	}
 }
@@ -286,11 +286,11 @@ func TestTheDocumentOfAnIssueWithNoParentStatesNone(t *testing.T) {
 	if doc.Parent != nil {
 		t.Fatalf("the document states parent %q, want none", *doc.Parent)
 	}
-	merged, err := storage.MergeReadOut([]storage.BulkIssueSpec{doc}, storage.CurrentState{Issues: map[string]model.Issue{leaf.ID: leaf}})
+	merged, err := storage.MergeReadOut([]storage.BulkIssueSpec{doc}, storage.CurrentState{Issues: map[model.ID]model.Issue{leaf.ID: leaf}})
 	if err != nil {
 		t.Fatalf("MergeReadOut(the loose leaf's own document) error = %v", err)
 	}
-	if _, err := storage.ParseBulkFile(merged, map[string]model.IssueType{leaf.ID: model.TypeTask}); err != nil {
+	if _, err := storage.ParseBulkFile(merged, map[model.ID]model.IssueType{leaf.ID: model.TypeTask}); err != nil {
 		t.Errorf("ParseBulkFile(the loose leaf's own document) error = %v", err)
 	}
 }
@@ -316,7 +316,7 @@ func TestEveryFieldRestoresTheValueHistoryRecorded(t *testing.T) {
 	values := storage.IssueFieldValues(recorded)
 	for _, name := range storage.IssueFieldNames() {
 		t.Run(name, func(t *testing.T) {
-			doc := storage.BulkIssueSpec{ID: recorded.ID}
+			doc := storage.BulkIssueSpec{ID: recorded.ID.Raw()}
 			if err := storage.RestoreIssueField(&doc, name, values[name]); err != nil {
 				t.Fatalf("RestoreIssueField(%s, %q) = %v", name, values[name], err)
 			}
@@ -328,7 +328,7 @@ func TestEveryFieldRestoresTheValueHistoryRecorded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseBulkSpecs = %v; the document:\n%s", err, text)
 			}
-			file, err := gated(map[string]model.IssueType{recorded.ID: base.IssueType}, specs...)
+			file, err := gated(map[model.ID]model.IssueType{recorded.ID: base.IssueType}, specs...)
 			if err != nil {
 				t.Fatalf("the engine's verdict = %v; the document:\n%s", err, text)
 			}
@@ -373,7 +373,7 @@ func TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse(t *testing.T) {
 
 // gated is an engine's verdict on a file of documents that carry no basis:
 // merged first, which for these reads nothing and moves nothing, then gated.
-func gated(existingTypes map[string]model.IssueType, specs ...storage.BulkIssueSpec) (storage.BulkFile, error) {
+func gated(existingTypes map[model.ID]model.IssueType, specs ...storage.BulkIssueSpec) (storage.BulkFile, error) {
 	merged, err := storage.MergeReadOut(specs, storage.CurrentState{})
 	if err != nil {
 		return storage.BulkFile{}, err

@@ -31,7 +31,7 @@ func (s *Store) AddPlanReview(ctx context.Context, in storage.AddPlanReviewInput
 	}
 	// Read outside the mutation: the review depends only on the history
 	// holding the named text, and a history only gains texts.
-	review.ID = "rvw-" + uuid.NewString()
+	review.ID = model.ID("rvw-" + uuid.NewString())
 	review.CreatedAt = s.clock.Now()
 	if err := s.withMutation(ctx, "add plan review", func(ctx context.Context, tx *sql.Tx) error {
 		return insertPlanReviewTx(ctx, tx, review)
@@ -43,7 +43,7 @@ func (s *Store) AddPlanReview(ctx context.Context, in storage.AddPlanReviewInput
 
 // ListPlanReviews is every review of issueID's plan, in
 // storage.PlanReviewOrdering.
-func (s *Store) ListPlanReviews(ctx context.Context, issueID string) ([]model.PlanReview, error) {
+func (s *Store) ListPlanReviews(ctx context.Context, issueID model.ID) ([]model.PlanReview, error) {
 	return queryPlanReviews(ctx, s.db, "WHERE issue_id = ?", issueID)
 }
 
@@ -57,7 +57,7 @@ func insertPlanReviewTx(ctx context.Context, tx *sql.Tx, review model.PlanReview
 	return nil
 }
 
-func deletePlanReviewTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+func deletePlanReviewTx(ctx context.Context, tx *sql.Tx, id model.ID) (int64, error) {
 	return execDelete(ctx, tx, `DELETE FROM plan_reviews WHERE id = ?`, fmt.Sprintf("plan review %s", id), id)
 }
 

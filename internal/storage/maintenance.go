@@ -1,6 +1,10 @@
 package storage
 
-import "time"
+import (
+	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+)
 
 // This file is the vocabulary the checkpoint and repair capabilities speak:
 // an interface every engine can implement cannot name a type only one engine
@@ -59,14 +63,14 @@ type HealthReport struct {
 	// TiedRankKeys counts the pairs of rank keys that tie on the index prefix, so
 	// reads return the pair in the wrong order with no error. It is computed from
 	// the same rank order as DuplicateRanks, so it is unchecked with it.
-	TiedRankKeys    int      `json:"tied_rank_keys"`
-	DependencyCycle []string `json:"dependency_cycle"`
+	TiedRankKeys    int        `json:"tied_rank_keys"`
+	DependencyCycle []model.ID `json:"dependency_cycle"`
 	// Interleaved names the groups of frame-mates whose issues wait on one
 	// another both ways through no loop of their own edges
 	// ([DependencyOrder.Interleaved]): no rank order lists
 	// every dependency among them first, so their edges are not counted in
 	// RankInversions and the repair does not reorder them for those edges.
-	Interleaved [][]string `json:"interleaved"`
+	Interleaved [][]model.ID `json:"interleaved"`
 	// OutsideEpic counts the tickets that are not an epic and have no parent;
 	// UnderNonEpic counts the parent links from a ticket to a parent that is not
 	// an epic, the entries the warning line names. Containment is
@@ -84,7 +88,7 @@ type HealthReport struct {
 	// than repaired because which edge to cut is a judgment about what the
 	// hierarchy meant, and every walk up the parent chain fails to terminate
 	// until someone makes it.
-	ParentCycle []string `json:"parent_cycle"`
+	ParentCycle []model.ID `json:"parent_cycle"`
 	// Unchecked names the checks this report did not run, by the field they
 	// would have filled. Without it a zero is ambiguous: a check that found
 	// nothing and a check that never happened write the same 0, and a reader —

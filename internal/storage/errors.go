@@ -16,7 +16,7 @@ import (
 // message text a second engine would have to spell identically.
 type NotFoundError struct {
 	Entity string
-	ID     string
+	ID     model.ID
 }
 
 func (e NotFoundError) Error() string {
@@ -31,8 +31,8 @@ func (e NotFoundError) Error() string {
 // the answer by its type and never by an engine's message or SQL error code.
 // [LAW:types-are-the-program] [LAW:one-source-of-truth]
 type RelationExistsError struct {
-	SrcID string
-	DstID string
+	SrcID model.ID
+	DstID model.ID
 	Type  model.RelationType
 }
 
@@ -52,7 +52,7 @@ func (RelationExistsError) Satisfied() bool { return true }
 // `parent: ""` both answer with it, so the two say one thing about one state.
 // [LAW:one-source-of-truth]
 type RelationAbsentError struct {
-	SrcID string
+	SrcID model.ID
 	Type  model.RelationType
 }
 

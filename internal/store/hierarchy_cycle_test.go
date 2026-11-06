@@ -37,9 +37,9 @@ func parentChain(t *testing.T, ctx context.Context, st *Store, titles ...string)
 // parentOf reads the stored parent id of each issue, so a refused write can be
 // checked against the tree it claimed to leave alone. An issue with no parent
 // maps to "".
-func parentOf(t *testing.T, ctx context.Context, st *Store, issues []model.Issue) map[string]string {
+func parentOf(t *testing.T, ctx context.Context, st *Store, issues []model.Issue) map[model.ID]model.ID {
 	t.Helper()
-	out := make(map[string]string, len(issues))
+	out := make(map[model.ID]model.ID, len(issues))
 	for _, issue := range issues {
 		rels, err := st.ListRelationsForIssue(ctx, issue.ID, model.RelParentChild)
 		if err != nil {
@@ -55,7 +55,7 @@ func parentOf(t *testing.T, ctx context.Context, st *Store, issues []model.Issue
 	return out
 }
 
-func sameParents(a, b map[string]string) bool {
+func sameParents(a, b map[model.ID]model.ID) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -184,7 +184,7 @@ func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 	if len(report.ParentCycle) == 0 {
 		t.Fatal("Doctor().ParentCycle is empty, want the members of the loop")
 	}
-	for _, want := range []string{chain[0].ID, chain[1].ID} {
+	for _, want := range []model.ID{chain[0].ID, chain[1].ID} {
 		if !slices.Contains(report.ParentCycle, want) {
 			t.Errorf("Doctor().ParentCycle = %v, want it to name %s", report.ParentCycle, want)
 		}
@@ -222,29 +222,29 @@ func TestDoctorNamesAStoredParentCycle(t *testing.T) {
 func TestParentCycleFindsOnlyTheLoop(t *testing.T) {
 	cases := []struct {
 		name     string
-		parentOf map[string][]string
-		want     []string
+		parentOf map[model.ID][]model.ID
+		want     []model.ID
 	}{
-		{name: "a forest has no cycle", parentOf: map[string][]string{"c": {"b"}, "b": {"a"}, "x": {"a"}}, want: nil},
-		{name: "empty", parentOf: map[string][]string{}, want: nil},
-		{name: "a two-node loop", parentOf: map[string][]string{"a": {"b"}, "b": {"a"}}, want: []string{"a", "b"}},
-		{name: "a self parent", parentOf: map[string][]string{"a": {"a"}}, want: []string{"a"}},
+		{name: "a forest has no cycle", parentOf: map[model.ID][]model.ID{"c": {"b"}, "b": {"a"}, "x": {"a"}}, want: nil},
+		{name: "empty", parentOf: map[model.ID][]model.ID{}, want: nil},
+		{name: "a two-node loop", parentOf: map[model.ID][]model.ID{"a": {"b"}, "b": {"a"}}, want: []model.ID{"a", "b"}},
+		{name: "a self parent", parentOf: map[model.ID][]model.ID{"a": {"a"}}, want: []model.ID{"a"}},
 		// "tail" hangs off the loop b->c->d->b. A walk from tail enters the
 		// loop, so a detector that reported its whole path would name tail as a
 		// member of a loop it is not in.
-		{name: "a tail leading into a loop", parentOf: map[string][]string{"tail": {"b"}, "b": {"c"}, "c": {"d"}, "d": {"b"}}, want: []string{"b", "c", "d"}},
+		{name: "a tail leading into a loop", parentOf: map[model.ID][]model.ID{"tail": {"b"}, "b": {"c"}, "c": {"d"}, "d": {"b"}}, want: []model.ID{"b", "c", "d"}},
 		// Restored data can hold two parent edges for one child, because the
 		// reconcile replay writes relation rows verbatim. A detector keeping one
 		// parent per child follows whichever edge it kept and reports a clean
 		// hierarchy while hydration, which joins every matching row, still
 		// recurses through the other one.
-		{name: "a loop reachable only through a second parent edge", parentOf: map[string][]string{"a": {"root", "b"}, "b": {"a"}}, want: []string{"a", "b"}},
+		{name: "a loop reachable only through a second parent edge", parentOf: map[model.ID][]model.ID{"a": {"root", "b"}, "b": {"a"}}, want: []model.ID{"a", "b"}},
 		// The same shape with the loop on the first edge, so the case cannot
 		// pass by always taking the last edge either.
-		{name: "a loop on the first of two parent edges", parentOf: map[string][]string{"a": {"b", "root"}, "b": {"a"}}, want: []string{"a", "b"}},
+		{name: "a loop on the first of two parent edges", parentOf: map[model.ID][]model.ID{"a": {"b", "root"}, "b": {"a"}}, want: []model.ID{"a", "b"}},
 		// A node with two parents that both reach roots is still a forest: more
 		// than one parent is not by itself a loop.
-		{name: "two parents, both acyclic", parentOf: map[string][]string{"a": {"p", "q"}, "p": {"root"}, "q": {"root"}}, want: nil},
+		{name: "two parents, both acyclic", parentOf: map[model.ID][]model.ID{"a": {"p", "q"}, "p": {"root"}, "q": {"root"}}, want: nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -285,7 +285,7 @@ func TestSetParentStillAcceptsANonCyclicMove(t *testing.T) {
 // seedParentEdge closes a parent edge directly, simulating data that entered
 // through a path the write boundary does not gate — the reconcile replay, or a
 // workspace written before the guard existed.
-func seedParentEdge(t *testing.T, ctx context.Context, st *Store, childID, parentID string) {
+func seedParentEdge(t *testing.T, ctx context.Context, st *Store, childID, parentID model.ID) {
 	t.Helper()
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, 'import')`,
@@ -416,8 +416,8 @@ func TestDoctorNamesTicketsOutsideAnEpic(t *testing.T) {
 		t.Fatalf("Doctor() error = %v", err)
 	}
 	wantLines := []string{
-		"tickets outside an epic: " + loose.ID + " (task)",
-		"tickets under a parent that is not an epic: " + under.ID + " under " + host.ID + " (task)",
+		"tickets outside an epic: " + loose.ID.Raw() + " (task)",
+		"tickets under a parent that is not an epic: " + under.ID.Raw() + " under " + host.ID.Raw() + " (task)",
 	}
 	if len(report.Errors) != 0 {
 		t.Errorf("Doctor().Errors = %v, want none: every read still answers over a ticket outside an epic", report.Errors)
@@ -583,7 +583,7 @@ func TestRestoreCutsALoopTheExportHolds(t *testing.T) {
 		t.Fatalf("ReplaceFromExport() of an export holding a loop error = %v, want it landed", err)
 	}
 	landing := replacement.Landing
-	want := []storage.Unlooped{{IssueID: hi, Parent: lo, Cycle: []string{lo, hi}}}
+	want := []storage.Unlooped{{IssueID: hi, Parent: lo, Cycle: []model.ID{lo, hi}}}
 	if !slices.EqualFunc(landing.Unlooped, want, func(a, b storage.Unlooped) bool {
 		return a.IssueID == b.IssueID && a.Parent == b.Parent && slices.Equal(a.Cycle, b.Cycle)
 	}) {
@@ -604,7 +604,7 @@ func TestRestoreCutsALoopTheExportHolds(t *testing.T) {
 func TestALaneFamilyPlacesAChildWithTwoParentsByTheLowerOne(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	epics := []string{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
+	epics := []model.ID{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
 	lower, higher := min(epics[0], epics[1]), max(epics[0], epics[1])
 	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "hier", ParentID: lower})
 	if err != nil {
@@ -638,7 +638,7 @@ func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
 		t.Run(fmt.Sprintf("newest under parent %d", newest), func(t *testing.T) {
 			ctx := context.Background()
 			st := openIssueStore(t, ctx)
-			parents := []string{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
+			parents := []model.ID{parentChain(t, ctx, st, "E1")[0].ID, parentChain(t, ctx, st, "E2")[0].ID}
 			child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "hier", ParentID: parents[0]})
 			if err != nil {
 				t.Fatalf("CreateIssue(child) error = %v", err)
@@ -648,7 +648,7 @@ func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
 			ahead := time.Now().UTC().Add(time.Hour)
 			instants := []time.Time{ahead, ahead}
 			instants[newest] = ahead.Add(time.Hour)
-			var siblings []string
+			var siblings []model.ID
 			for i, parent := range parents {
 				st.clock = func() time.Time { return instants[i] }
 				sibling, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "hier", ParentID: parent})
@@ -690,7 +690,7 @@ func TestAChildWithTwoParentsIsStampedPastBothFamilies(t *testing.T) {
 func TestAParentRowThatIsGoneStillMakesAFamily(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	ids := []string{parentChain(t, ctx, st, "held back")[0].ID, parentChain(t, ctx, st, "ahead")[0].ID}
+	ids := []model.ID{parentChain(t, ctx, st, "held back")[0].ID, parentChain(t, ctx, st, "ahead")[0].ID}
 	for _, id := range ids {
 		seedGoneParentEdge(t, ctx, st, id, "test-ghost")
 	}
@@ -770,7 +770,7 @@ func TestAChildWithTwoParentsIsReportedAndRepairable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Doctor() error = %v, want a report naming the child", err)
 	}
-	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], child.ID+" has 2 parents") || !strings.Contains(report.Errors[0], "lit parent set --child "+child.ID) {
+	if len(report.Errors) != 1 || !strings.Contains(report.Errors[0], child.ID.Raw()+" has 2 parents") || !strings.Contains(report.Errors[0], "lit parent set --child "+child.ID.Raw()) {
 		t.Errorf("Doctor().Errors = %v, want one error naming %s's parents and the repair", report.Errors, child.ID)
 	}
 	if len(report.Unchecked) != 0 {
@@ -834,7 +834,7 @@ func TestBulkParentClearBreaksAStoredCycle(t *testing.T) {
 	}
 
 	clear := ""
-	if _, err := st.BulkApply(ctx, "test", "agent", []storage.BulkIssueSpec{{ID: chain[0].ID, Parent: &clear}}); err != nil {
+	if _, err := st.BulkApply(ctx, "test", "agent", []storage.BulkIssueSpec{{ID: chain[0].ID.Raw(), Parent: &clear}}); err != nil {
 		t.Fatalf("BulkApply(%s parent: \"\") on a looped hierarchy error = %v, want the loop broken", chain[0].ID, err)
 	}
 	after, err := st.Doctor(ctx)
@@ -897,7 +897,7 @@ func TestARankRefusesAStoredLoopThroughALeafByName(t *testing.T) {
 	if !errors.As(err, &refusal) {
 		t.Fatalf("RankAbove(%s, %s) over a loop error = %v, want a ParentCycleError", leaf.ID, epic.ID, err)
 	}
-	if want := []string{leaf.ID, epic.ID}; !slices.Equal(refusal.Cycle, want) {
+	if want := []model.ID{leaf.ID, epic.ID}; !slices.Equal(refusal.Cycle, want) {
 		t.Errorf("ParentCycleError.Cycle = %v, want %v: walked up from the leaf, each the child of the next", refusal.Cycle, want)
 	}
 }

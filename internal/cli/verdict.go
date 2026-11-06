@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
@@ -25,7 +26,7 @@ func verdictLeaf() appLeaf {
 			return UsageError{Message: usage}
 		}
 		review, err := ap.Store.AddPlanReview(ctx, storage.AddPlanReviewInput{
-			IssueID:   positional[0],
+			IssueID:   model.ID(positional[0]),
 			Plan:      *plan,
 			Verdict:   positional[1],
 			Laws:      *laws,

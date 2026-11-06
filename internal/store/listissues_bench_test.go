@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -18,7 +19,7 @@ import (
 // SQUARE of the list — which is why the interesting axis here is the number of
 // ids and not the number of rows they select.
 
-func benchIssueIDs(b *testing.B, rows int) (*Store, context.Context, []string) {
+func benchIssueIDs(b *testing.B, rows int) (*Store, context.Context, []model.ID) {
 	b.Helper()
 	ctx := context.Background()
 	st := openIssueStore(b, ctx)
@@ -26,7 +27,7 @@ func benchIssueIDs(b *testing.B, rows int) (*Store, context.Context, []string) {
 	if err != nil {
 		b.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	ids := make([]string, 0, rows)
+	ids := make([]model.ID, 0, rows)
 	for i := range rows {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("row %d", i)),
@@ -64,7 +65,7 @@ func BenchmarkListByIDs118(b *testing.B) { benchListByIDs(b, 118) }
 func benchListByParents(b *testing.B, parents int) {
 	ctx := context.Background()
 	st := openIssueStore(b, ctx)
-	parentIDs := make([]string, 0, parents)
+	parentIDs := make([]model.ID, 0, parents)
 	for i := range parents {
 		parent, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("parent %d", i)),

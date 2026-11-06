@@ -29,22 +29,22 @@ func TestRunShowListsSiblingsExcludingSelfOnce(t *testing.T) {
 	// focus is the shown ticket itself, so its id legitimately appears twice
 	// (the show header, then its own row in the epic block) — that is
 	// self-identification, not sibling duplication.
-	for _, id := range []string{first, third} {
+	for _, id := range []string{first.Raw(), third.Raw()} {
 		if n := strings.Count(out, id); n != 1 {
 			t.Errorf("expected sibling %s to appear exactly once in show output, got %d in:\n%s", id, n, out)
 		}
 	}
-	if !strings.Contains(out, first+" ") || !strings.Contains(out, "First sibling") {
+	if !strings.Contains(out, first.Raw()+" ") || !strings.Contains(out, "First sibling") {
 		t.Errorf("epic Children block missing first sibling in:\n%s", out)
 	}
-	if !strings.Contains(out, third+" ") || !strings.Contains(out, "Third sibling") {
+	if !strings.Contains(out, third.Raw()+" ") || !strings.Contains(out, "Third sibling") {
 		t.Errorf("epic Children block missing third sibling in:\n%s", out)
 	}
-	if !strings.Contains(out, focus+" ") || !strings.Contains(out, "(you are here)") {
+	if !strings.Contains(out, focus.Raw()+" ") || !strings.Contains(out, "(you are here)") {
 		t.Errorf("epic Children block must mark the focal ticket's position, got:\n%s", out)
 	}
 	// Rank order: First (created first) precedes Third (created last).
-	if strings.Index(out, first) > strings.Index(out, third) {
+	if strings.Index(out, first.Raw()) > strings.Index(out, third.Raw()) {
 		t.Errorf("siblings should be rank-ordered, got:\n%s", out)
 	}
 }
@@ -62,10 +62,10 @@ func TestRunShowOnlyChildRendersNoSiblingsGroup(t *testing.T) {
 	if strings.Contains(out, "\nsiblings:\n") {
 		t.Errorf("an only child must render no siblings group, got:\n%s", out)
 	}
-	if !strings.Contains(out, "Epic: "+f.epicID) {
+	if !strings.Contains(out, "Epic: "+f.epicID.Raw()) {
 		t.Errorf("an only child must still identify its parent epic, got:\n%s", out)
 	}
-	if !strings.Contains(out, only+" ") || !strings.Contains(out, "(you are here)") {
+	if !strings.Contains(out, only.Raw()+" ") || !strings.Contains(out, "(you are here)") {
 		t.Errorf("an only child must still show its own position, got:\n%s", out)
 	}
 }

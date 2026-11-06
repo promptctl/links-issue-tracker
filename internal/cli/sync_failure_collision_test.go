@@ -13,7 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-func collidingIssue(t *testing.T, id, title, description string, born time.Time) model.Issue {
+func collidingIssue(t *testing.T, id model.ID, title, description string, born time.Time) model.Issue {
 	t.Helper()
 	issue := model.Issue{ID: id, IssueType: "task", Title: model.Text(title), Description: description, CreatedAt: born, UpdatedAt: born}
 	hydrated, err := model.HydrateStatus(issue, model.StatusView{Value: model.StateOpen})

@@ -65,7 +65,7 @@ func TestParentByChildTakesTheLowerOfTwoParents(t *testing.T) {
 		t.Fatalf("CreateIssue(E2) error = %v", err)
 	}
 	higher, lower := max(first.ID, second.ID), min(first.ID, second.ID)
-	for _, order := range [][2]string{{higher, lower}, {lower, higher}} {
+	for _, order := range [][2]model.ID{{higher, lower}, {lower, higher}} {
 		child, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", ParentID: order[0]})
 		if err != nil {
 			t.Fatalf("CreateIssue(C under %s) error = %v", order[0], err)
@@ -114,7 +114,7 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 	later := mustIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("later"), Lane: storage.SharedLane, ParentID: upper.ID})
 	e.relations = append(e.relations, model.Relation{SrcID: child.ID, DstID: upper.ID, Type: model.RelParentChild})
 
-	relations, err := e.GetRelationsByIDs(ctx, []string{upper.ID})
+	relations, err := e.GetRelationsByIDs(ctx, []model.ID{upper.ID})
 	if err != nil {
 		t.Fatalf("GetRelationsByIDs(%s) error = %v", upper.ID, err)
 	}

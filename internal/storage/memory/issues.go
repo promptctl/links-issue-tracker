@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -53,7 +54,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if issueType == "" {
 		issueType = model.TypeTask
 	}
-	parentID := strings.TrimSpace(in.ParentID)
+	parentID := in.ParentID.Trim()
 	// Containment: a leaf is never created outside an epic, and the parent it
 	// names is one. The parent's record answers both its presence and its
 	// type in one lookup. [LAW:single-enforcer]
@@ -72,7 +73,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	// The followed-up ticket must exist when the link is written, as the
 	// parent must; a dangling follows_up is refused here, never stored.
 	// Retained records pass. [LAW:single-enforcer] [LAW:no-silent-failure]
-	followsUp := strings.TrimSpace(in.FollowsUp)
+	followsUp := in.FollowsUp.Trim()
 	if followsUp != "" {
 		if _, err := e.mustRecord(followsUp); err != nil {
 			return model.Issue{}, err
@@ -82,7 +83,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("normalize issue prefix: %w", err)
 	}
-	now := e.stamp(model.FiledUnder([]string{parentID}, e.relations))
+	now := e.stamp(model.FiledUnder([]model.ID{parentID}, e.relations))
 	actor := storage.Actor(in.Actor)
 	id, err := e.mintID(prefix, topic, title, strings.TrimSpace(in.Description), actor, now, parentID)
 	if err != nil {
@@ -131,7 +132,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	// A follow-up's origin is a birth fact no later event can record, so the
 	// create event carries it, as the Dolt engine's does. [LAW:nothing-unseen]
 	if rec.followsUp != "" {
-		changes = append(changes, model.FieldChange{Field: "follows_up", From: "", To: rec.followsUp})
+		changes = append(changes, model.FieldChange{Field: "follows_up", From: "", To: rec.followsUp.Raw()})
 	}
 	e.recordEvent(id, eventSpec{action: model.ActionCreated, reason: "issue created", actor: actor, changes: changes}, now)
 
@@ -152,7 +153,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 // epic. Each edge carries its own population, so the choice is made once, in
 // orderEdgeFor, rather than tested again here.
 // [LAW:dataflow-not-control-flow]
-func (e *Engine) place(id string, f storage.Frame, placement storage.RankPlacement) error {
+func (e *Engine) place(id model.ID, f storage.Frame, placement storage.RankPlacement) error {
 	// The placement is dispatched before the population is even built, so an
 	// unrecognized one is refused the same way whether the workspace is empty or
 	// full. [LAW:dataflow-not-control-flow]
@@ -197,7 +198,7 @@ func (e *Engine) slotInsideContainer(f storage.Frame) (int, error) {
 	if f == storage.TopLevel {
 		return 0, nil
 	}
-	container := slices.Index(e.order, string(f))
+	container := slices.Index(e.order, model.ID(f))
 	// A frame names a live issue — filingFrame returns a container only when
 	// e.live says so — and every live issue holds a position. A frame missing
 	// from the order is those two facts having come apart, which is a
@@ -216,7 +217,7 @@ func (e *Engine) slotInsideContainer(f storage.Frame) (int, error) {
 // the minting rule itself is one function in issueid, reached the same way
 // from both, so this engine and the Dolt store cannot drift apart on what an
 // id is. [LAW:one-type-per-behavior]
-func (e *Engine) mintID(prefix, topic, title, description, creator string, createdAt time.Time, parentID string) (string, error) {
+func (e *Engine) mintID(prefix, topic, title, description, creator string, createdAt time.Time, parentID model.ID) (model.ID, error) {
 	content := issueid.Content{
 		Topic:       topic,
 		Title:       title,
@@ -228,11 +229,12 @@ func (e *Engine) mintID(prefix, topic, title, description, creator string, creat
 	// A purged id is taken for good: other tickets' text, follow-ups and
 	// redirects still name it, and a new ticket wearing it would answer for
 	// the purged one.
-	return issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
-		_, live := e.issues[candidate]
-		purged := slices.ContainsFunc(e.purges, func(p model.Purge) bool { return p.IssueID == candidate })
+	minted, err := issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
+		_, live := e.issues[model.ID(candidate)]
+		purged := slices.ContainsFunc(e.purges, func(p model.Purge) bool { return p.IssueID.Raw() == candidate })
 		return live || purged, nil
 	})
+	return model.ID(minted), err
 }
 
 // idSpace resolves which id-space a new issue is minted into and how populated
@@ -240,17 +242,17 @@ func (e *Engine) mintID(prefix, topic, title, description, creator string, creat
 // position: an id derived from a count over the LOCAL rows is a claim about
 // every row that exists anywhere, and two disconnected stores holding the same
 // rows make that claim identically. [LAW:one-source-of-truth]
-func (e *Engine) idSpace(prefix, topic, parentID string) (issueid.Namespace, int) {
+func (e *Engine) idSpace(prefix, topic string, parentID model.ID) (issueid.Namespace, int) {
 	if parentID == "" {
 		return issueid.TopLevelNamespace(prefix, topic), e.topLevelCount()
 	}
-	return issueid.ChildNamespace(parentID), e.childCount(parentID)
+	return issueid.ChildNamespace(parentID.Raw()), e.childCount(parentID)
 }
 
 func (e *Engine) topLevelCount() int {
 	count := 0
 	for id := range e.issues {
-		if !strings.Contains(id, ".") {
+		if !strings.Contains(id.Raw(), ".") {
 			count++
 		}
 	}
@@ -261,7 +263,7 @@ func (e *Engine) topLevelCount() int {
 // Parentage is read from the relation edges, the only place it lives — an id
 // prefix scan would also sweep up grandchildren and would take the id shape as
 // evidence of structure it does not own. [LAW:one-source-of-truth]
-func (e *Engine) childCount(parentID string) int {
+func (e *Engine) childCount(parentID model.ID) int {
 	count := 0
 	for _, rel := range e.relations {
 		if rel.Type == model.RelParentChild && rel.DstID == parentID {
@@ -271,13 +273,13 @@ func (e *Engine) childCount(parentID string) int {
 	return count
 }
 
-func (e *Engine) GetIssue(ctx context.Context, id string) (model.Issue, error) {
+func (e *Engine) GetIssue(ctx context.Context, id model.ID) (model.Issue, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.getIssue(id)
 }
 
-func (e *Engine) getIssue(id string) (model.Issue, error) {
+func (e *Engine) getIssue(id model.ID) (model.Issue, error) {
 	rec, err := e.mustRecord(id)
 	if err != nil {
 		return model.Issue{}, err
@@ -285,7 +287,7 @@ func (e *Engine) getIssue(id string) (model.Issue, error) {
 	return e.hydrate(rec, e.positions())
 }
 
-func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDetail, error) {
+func (e *Engine) GetIssueDetail(ctx context.Context, id model.ID) (model.IssueDetail, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -309,13 +311,13 @@ func (e *Engine) GetIssueDetail(ctx context.Context, id string) (model.IssueDeta
 	return adjacency.Detail(e.commentsFor(id), e.eventsFor(id), e.planReviewsFor(id), followUps), nil
 }
 
-func (e *Engine) GetIssueAdjacency(ctx context.Context, id string) (storage.IssueAdjacency, error) {
+func (e *Engine) GetIssueAdjacency(ctx context.Context, id model.ID) (storage.IssueAdjacency, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.adjacency(id)
 }
 
-func (e *Engine) adjacency(id string) (storage.IssueAdjacency, error) {
+func (e *Engine) adjacency(id model.ID) (storage.IssueAdjacency, error) {
 	issue, err := e.getIssue(id)
 	if err != nil {
 		return storage.IssueAdjacency{}, err
@@ -352,7 +354,7 @@ func (e *Engine) adjacency(id string) (storage.IssueAdjacency, error) {
 	// (a manual peer link), so the two render as two facts.
 	var redirectTarget *model.Issue
 	if target := issue.RedirectTargetValue(); target != nil {
-		if rec, ok := e.issues[*target]; ok {
+		if rec, ok := e.issues[model.ID(*target)]; ok {
 			hydrated, err := e.hydrate(rec, pos)
 			if err != nil {
 				return storage.IssueAdjacency{}, err
@@ -428,7 +430,7 @@ func (e *Engine) allEvents() []model.IssueEvent {
 
 // ListEvents is eventsFor behind the lock, for callers outside the engine.
 // Callers already holding e.mu — the apply path — use eventsFor directly.
-func (e *Engine) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+func (e *Engine) ListEvents(ctx context.Context, issueID model.ID) ([]model.IssueEvent, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.eventsFor(issueID), nil
@@ -452,7 +454,7 @@ func (e *Engine) ListIssueIdentities(ctx context.Context) ([]storage.IssueIdenti
 	for _, rec := range e.issues {
 		identities = append(identities, storage.IssueIdentity{ID: rec.id, Topic: rec.topic})
 	}
-	slices.SortFunc(identities, func(a, b storage.IssueIdentity) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(identities, func(a, b storage.IssueIdentity) int { return cmp.Compare(a.ID, b.ID) })
 	return identities, nil
 }
 
@@ -464,6 +466,6 @@ func (e *Engine) LocalIssueCount(ctx context.Context) (int64, error) {
 	return int64(len(e.issues)), nil
 }
 
-func (e *Engine) eventsFor(issueID string) []model.IssueEvent {
+func (e *Engine) eventsFor(issueID model.ID) []model.IssueEvent {
 	return sortEvents(cloneEvents(e.events[issueID]))
 }

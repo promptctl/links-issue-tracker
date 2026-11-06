@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
@@ -679,8 +680,8 @@ func TestOwnerApprovalRefusalBlock(t *testing.T) {
 			LocalHead:     "aaaaaaaaaaaaaaaaaaaa",
 			RemoteHead:    "bbbbbbbbbbbbbbbbbbbb",
 			Inventory: &storage.UnrelatedInventory{
-				OnlyLocal:  []string{"proj-mine"},
-				OnlyRemote: []string{"proj-theirs"},
+				OnlyLocal:  []model.ID{"proj-mine"},
+				OnlyRemote: []model.ID{"proj-theirs"},
 			},
 		},
 		Remote: "origin",

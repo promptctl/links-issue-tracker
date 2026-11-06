@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -39,7 +38,7 @@ const (
 // IssueIdentity is an issue's id with the topic it was created under — the two
 // values its id is rendered from, and what ListIssueIdentities returns.
 type IssueIdentity struct {
-	ID    string
+	ID    model.ID
 	Topic string
 }
 
@@ -55,7 +54,7 @@ type CreateIssueInput struct {
 	// [LAW:types-are-the-program]
 	IssueType model.IssueType
 	Topic     string
-	ParentID  string
+	ParentID  model.ID
 	// Priority is already-parsed domain vocabulary, never a raw flag int —
 	// trust boundaries route through model.ParsePriority (or the
 	// model.CanonicalPriority salvage coercion) before constructing the input.
@@ -68,7 +67,7 @@ type CreateIssueInput struct {
 	// empty for an ordinary create. It is the only way the field is ever
 	// written: UpdateIssueInput does not carry it, so a follow-up's origin is
 	// fixed at birth. [LAW:types-are-the-program]
-	FollowsUp string
+	FollowsUp model.ID
 	// Placement decides where the new issue lands in the rank order. Zero value
 	// (RankBottom) appends, so an authored batch keeps its order for free;
 	// callers filing a ticket ahead of the issues it will be ordered against —
@@ -147,7 +146,7 @@ type Applied struct {
 
 // PurgeInput names the issue to purge and who is purging it.
 type PurgeInput struct {
-	IssueID string
+	IssueID model.ID
 	Actor   string
 }
 
@@ -218,7 +217,7 @@ func (r RemoveLabel) PlanChange(current model.Issue) (Change, error) {
 	}
 	kept := slices.DeleteFunc(model.RawTexts(current.Labels), func(label string) bool { return label == name })
 	if len(kept) == len(current.Labels) {
-		return Change{}, NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", current.ID, name)}
+		return Change{}, NotFoundError{Entity: "label", ID: current.ID + "/" + model.ID(name)}
 	}
 	return labelsEdit(kept, r.Actor), nil
 }
@@ -256,8 +255,8 @@ type ListIssuesFilter struct {
 	ExcludeIssueTypes []model.IssueType
 	Assignees         []string
 	SearchTerms       []string
-	IDs               []string
-	ParentIDs         []string
+	IDs               []model.ID
+	ParentIDs         []model.ID
 	HasComments       *bool
 	LabelsAll         []string
 	UpdatedAfter      *time.Time

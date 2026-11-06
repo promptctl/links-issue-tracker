@@ -33,7 +33,7 @@ import (
 // placed in its lane, and every event placed in the lane of the issue it
 // touched. "Complete" is the whole point of the type — see NewEvidence.
 type Evidence struct {
-	lanes   map[string]model.LaneID
+	lanes   map[model.ID]model.LaneID
 	members map[model.LaneID][]model.Issue
 	events  map[model.LaneID][]model.IssueEvent
 }
@@ -60,8 +60,8 @@ type Lane struct {
 // a parent costs its whole subtree.
 type Family struct {
 	Issues        []model.Issue
-	ParentByChild map[string]string
-	ParentTypes   map[string]model.IssueType
+	ParentByChild map[model.ID]model.ID
+	ParentTypes   map[model.ID]model.IssueType
 	Events        []model.IssueEvent
 }
 
@@ -86,8 +86,8 @@ type Family struct {
 // comes out. Derive takes only Evidence, so it cannot run on a partial read, and
 // nothing inland re-checks. The one other way to a standing is a Lane, which
 // NewLane proves whole for its one lane.
-func NewEvidence(issues []model.Issue, parentByChild map[string]string, events []model.IssueEvent) (Evidence, error) {
-	parentTypes := make(map[string]model.IssueType, len(issues))
+func NewEvidence(issues []model.Issue, parentByChild map[model.ID]model.ID, events []model.IssueEvent) (Evidence, error) {
+	parentTypes := make(map[model.ID]model.IssueType, len(issues))
 	for _, issue := range issues {
 		parentTypes[issue.ID] = issue.IssueType
 	}
@@ -108,7 +108,7 @@ func NewEvidence(issues []model.Issue, parentByChild map[string]string, events [
 // one statement of the family's parents, so the refusal cannot see that read
 // fall short; the conformance case holding every lane to the whole-store Derive
 // does.
-func NewLane(issueID string, family Family) (Lane, error) {
+func NewLane(issueID model.ID, family Family) (Lane, error) {
 	placed, err := newPartition(family.Issues, family.ParentByChild, family.ParentTypes, family.Events)
 	if err != nil {
 		return Lane{}, err
@@ -128,8 +128,8 @@ type partition Evidence
 // newPartition places every issue in its lane and every event in the lane of
 // the issue it touched. A parent is its id and type here and nothing else,
 // because model.LaneOf reads no lifecycle.
-func newPartition(issues []model.Issue, parentByChild map[string]string, parentTypes map[string]model.IssueType, events []model.IssueEvent) (partition, error) {
-	lanes := make(map[string]model.LaneID, len(issues))
+func newPartition(issues []model.Issue, parentByChild map[model.ID]model.ID, parentTypes map[model.ID]model.IssueType, events []model.IssueEvent) (partition, error) {
+	lanes := make(map[model.ID]model.LaneID, len(issues))
 	placed := partition{
 		lanes:   lanes,
 		members: make(map[model.LaneID][]model.Issue),
@@ -258,7 +258,7 @@ func (l Lane) ProgressWith(written model.Issue) LaneProgress {
 
 // IssueEvents is every event of the issue with id, oldest first: the issue's
 // whole history, since the evidence holds every event of every issue.
-func (e Evidence) IssueEvents(id string) []model.IssueEvent {
+func (e Evidence) IssueEvents(id model.ID) []model.IssueEvent {
 	return slices.DeleteFunc(slices.Clone(e.events[e.lanes[id]]), func(event model.IssueEvent) bool { return event.IssueID != id })
 }
 

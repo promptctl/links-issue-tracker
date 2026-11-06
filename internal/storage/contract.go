@@ -17,7 +17,7 @@ type IssueReader interface {
 	// GetIssue returns one issue's record. A missing id is NotFoundError, never
 	// a zero Issue — absence is information, and an answer-shaped zero value
 	// would destroy it. [LAW:parse-dont-validate]
-	GetIssue(ctx context.Context, id string) (model.Issue, error)
+	GetIssue(ctx context.Context, id model.ID) (model.Issue, error)
 
 	// GetIssueDetail returns the issue together with its comments, history, and
 	// structural edges — the single-issue view, paid for in full, which includes
@@ -27,12 +27,12 @@ type IssueReader interface {
 	// instead, and one that needs the neighbours of one uses GetIssueAdjacency.
 	// Its relations come in [RelationOrdering] and its comments in
 	// [CommentOrdering].
-	GetIssueDetail(ctx context.Context, id string) (model.IssueDetail, error)
+	GetIssueDetail(ctx context.Context, id model.ID) (model.IssueDetail, error)
 
 	// GetIssueAdjacency returns what GetIssueDetail holds that the issue's own
 	// row and edges name, at the cost of that neighbourhood and not the store's
 	// size. A missing id is NotFoundError.
-	GetIssueAdjacency(ctx context.Context, id string) (IssueAdjacency, error)
+	GetIssueAdjacency(ctx context.Context, id model.ID) (IssueAdjacency, error)
 
 	// ListIssues returns the issues the filter selects, ordered by SortBy and
 	// then — always, as the last key — by id ascending. With no SortBy the
@@ -93,7 +93,7 @@ type IssueReader interface {
 	// that carries one issue's history is GetIssueDetail — the single-issue
 	// view paid for in full, hydrating relations, comments and children a
 	// caller after the claimant never looks at.
-	ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error)
+	ListEvents(ctx context.Context, issueID model.ID) ([]model.IssueEvent, error)
 
 	// LocalIssueCount reports how many issues this store holds. It is the
 	// adopt-safety signal for `lit init`: a store with zero issues has no work
@@ -117,7 +117,7 @@ type IssueWriter interface {
 	// actual mutations — and an illegal transition is refused rather than
 	// silently ignored. [LAW:dataflow-not-control-flow]
 	// [LAW:no-ambient-temporal-coupling]
-	Apply(ctx context.Context, id string, plan ChangePlan) (Applied, error)
+	Apply(ctx context.Context, id model.ID, plan ChangePlan) (Applied, error)
 
 	// Purge permanently removes an issue: its row, comments, labels, history,
 	// and every edge to or from it, in one write, leaving a model.Purge record
@@ -143,7 +143,7 @@ type CommentStore interface {
 
 	// DeleteComment removes one comment and returns what was removed, so the
 	// deletion is reportable without a prior read.
-	DeleteComment(ctx context.Context, commentID string) (model.Comment, error)
+	DeleteComment(ctx context.Context, commentID model.ID) (model.Comment, error)
 }
 
 // RelationStore reads and writes the structural edges between issues,
@@ -154,17 +154,17 @@ type CommentStore interface {
 // SetParent is where replacing an existing one happens as a single act.
 type RelationStore interface {
 	AddRelation(ctx context.Context, in AddRelationInput) (model.Relation, error)
-	RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error
+	RemoveRelation(ctx context.Context, srcID, dstID model.ID, relType model.RelationType) error
 
 	// ListRelationsForIssue returns every edge incident to the issue in either
 	// direction, in [RelationOrdering], optionally narrowed to the named types.
-	ListRelationsForIssue(ctx context.Context, issueID string, types ...model.RelationType) ([]model.Relation, error)
+	ListRelationsForIssue(ctx context.Context, issueID model.ID, types ...model.RelationType) ([]model.Relation, error)
 
 	// GetRelationsByIDs is the batch neighborhood read: one call for many
 	// issues, counterparts hydrated. It exists so the ready pipeline and the
 	// epic view do not pay GetIssueDetail's per-issue comment and history cost
 	// for edges they could read together.
-	GetRelationsByIDs(ctx context.Context, ids []string) (map[string]IssueRelations, error)
+	GetRelationsByIDs(ctx context.Context, ids []model.ID) (map[model.ID]IssueRelations, error)
 
 	// ParentByChild maps every issue that sits under a parent to that parent's
 	// id, archived and deleted issues included at either end; a parentless
@@ -177,7 +177,7 @@ type RelationStore interface {
 	// parent id, deleted or not. That is not always the parent [RankAncestry]
 	// frames it by, since a deleted parent frames nothing; doctor reports the
 	// two-parent child either way.
-	ParentByChild(ctx context.Context) (map[string]string, error)
+	ParentByChild(ctx context.Context) (map[model.ID]model.ID, error)
 
 	// LaneFamily reads what one issue's lane is decided by, at the cost of the
 	// family model.LaneFamily names and the live subtree of any epic in it,
@@ -197,7 +197,7 @@ type RelationStore interface {
 	// between the two is an issue with no events yet rather than an event with
 	// no issue. The reads share no snapshot, so a sibling reparented or purged
 	// between them can draw that refusal, which the next read does not.
-	LaneFamily(ctx context.Context, issueID string) (claims.Family, error)
+	LaneFamily(ctx context.Context, issueID model.ID) (claims.Family, error)
 
 	// DependencyOrder reads the blocked-by edges between live issues in tree
 	// order: the one answer to which of them are rank inversions.
@@ -214,7 +214,7 @@ type RelationStore interface {
 	// is RelationAbsentError: the state asked for already holds, so the request
 	// is satisfied, and a bare nil would report the removal of an edge that was
 	// never there. [LAW:no-silent-failure]
-	ClearParent(ctx context.Context, childID string) error
+	ClearParent(ctx context.Context, childID model.ID) error
 }
 
 // Ranker moves issues within lit's one total order, and does it only through
@@ -236,10 +236,10 @@ type RelationStore interface {
 // Both substitutions are returned rather than assumed, so a caller can surface
 // them. [LAW:no-silent-failure]
 type Ranker interface {
-	RankAbove(ctx context.Context, issueID, targetID string) (RankMove, error)
-	RankBelow(ctx context.Context, issueID, targetID string) (RankMove, error)
-	RankToTop(ctx context.Context, issueID string) (RankEnd, error)
-	RankToBottom(ctx context.Context, issueID string) (RankEnd, error)
+	RankAbove(ctx context.Context, issueID, targetID model.ID) (RankMove, error)
+	RankBelow(ctx context.Context, issueID, targetID model.ID) (RankMove, error)
+	RankToTop(ctx context.Context, issueID model.ID) (RankEnd, error)
+	RankToBottom(ctx context.Context, issueID model.ID) (RankEnd, error)
 
 	// RankSet imposes a total order on the named issues at once, returning
 	// which representative each name resolved to. It leaves their frame with
@@ -247,7 +247,7 @@ type Ranker interface {
 	// in the order it held; nothing outside the frame moves, and a repeat of an
 	// order that has arrived changes nothing. The conformance suite is what
 	// holds both engines to this.
-	RankSet(ctx context.Context, ids []string) (RankSetResult, error)
+	RankSet(ctx context.Context, ids []model.ID) (RankSetResult, error)
 }
 
 // BulkWriter applies a batch of authored issue documents in one call,

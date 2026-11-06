@@ -108,7 +108,7 @@ func (h readyTestHarness) createIssue(input storage.CreateIssueInput) model.Issu
 // command left behind rather than what it printed. Reading through the store —
 // not through a gathered row a command handed back — is the point: a read-only
 // command's whole contract is about the store, and only the store can settle it.
-func (h readyTestHarness) issueDetail(issueID string) model.Issue {
+func (h readyTestHarness) issueDetail(issueID model.ID) model.Issue {
 	h.t.Helper()
 	detail, err := h.ap.Store.GetIssueDetail(h.ctx, issueID)
 	if err != nil {
@@ -117,21 +117,21 @@ func (h readyTestHarness) issueDetail(issueID string) model.Issue {
 	return detail.Issue
 }
 
-func (h readyTestHarness) closeIssue(issueID, reason string) {
+func (h readyTestHarness) closeIssue(issueID model.ID, reason string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: model.Done{}, Actor: "tester", Reason: reason}); err != nil {
 		h.t.Fatalf("Apply(close) error = %v", err)
 	}
 }
 
-func (h readyTestHarness) applyAction(issueID string, action model.Action, reason string) {
+func (h readyTestHarness) applyAction(issueID model.ID, action model.Action, reason string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: action, Actor: "tester", Reason: reason}); err != nil {
 		h.t.Fatalf("Apply(%T, %q) error = %v", action, issueID, err)
 	}
 }
 
-func (h readyTestHarness) backdateUpdatedAt(issueID string, age time.Duration) {
+func (h readyTestHarness) backdateUpdatedAt(issueID model.ID, age time.Duration) {
 	h.t.Helper()
 	backdated := time.Now().UTC().Add(-age).Format(time.RFC3339Nano)
 	// Backdating plants a state the contract cannot express, which is what the
@@ -149,7 +149,7 @@ func (h readyTestHarness) backdateUpdatedAt(issueID string, age time.Duration) {
 
 // addDependency creates a blocked-by relation: dependent is blocked by dependency.
 // In the relation table: SrcID=dependent, DstID=dependency.
-func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
+func (h readyTestHarness) addDependency(dependentID, dependencyID model.ID) {
 	h.t.Helper()
 	if _, err := h.ap.Store.AddRelation(h.ctx, storage.AddRelationInput{
 		SrcID:     dependentID,
@@ -163,7 +163,7 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 
 // addDependencyWithinEpic is addDependency for two leaves of one epic, an
 // edge only a reparent leaves behind (see storeBlocksWithinEpic).
-func (h readyTestHarness) addDependencyWithinEpic(dependentID, dependencyID string) {
+func (h readyTestHarness) addDependencyWithinEpic(dependentID, dependencyID model.ID) {
 	h.t.Helper()
 	prefix, err := h.ap.Workspace.IssuePrefix.Mintable()
 	if err != nil {
@@ -254,7 +254,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
 	}
-	byID := map[string]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
+	byID := map[model.ID]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
 	if !ClassifyReadiness(byID[openA.ID].Annotations).IsReady() {
 		t.Fatalf("openA should not be blocked, annotations=%#v", byID[openA.ID].Annotations)
 	}
@@ -265,7 +265,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	if !ok {
 		t.Fatalf("openB missing open_dependency annotation: %#v", byID[openB.ID].Annotations)
 	}
-	if blocker.Message != openA.ID {
+	if blocker.Message != openA.ID.Raw() {
 		t.Fatalf("open_dependency message = %q, want %q", blocker.Message, openA.ID)
 	}
 }
@@ -380,7 +380,7 @@ func TestRunReadyMarksReservedBlockingLabelsAsBlocked(t *testing.T) {
 				t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
 			}
 
-			byID := map[string]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
+			byID := map[model.ID]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
 			if !ClassifyReadiness(byID[plain.ID].Annotations).IsReady() {
 				t.Fatalf("plain issue should not be blocked, annotations=%#v", byID[plain.ID].Annotations)
 			}
@@ -612,7 +612,7 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 	if !ok {
 		t.Fatalf("first issue missing rank_inversion annotation: %#v", firstEntry.Annotations)
 	}
-	if !strings.Contains(inv.Message, second.ID) {
+	if !strings.Contains(inv.Message, second.ID.Raw()) {
 		t.Fatalf("rank_inversion message = %q, want to contain %q", inv.Message, second.ID)
 	}
 }
@@ -702,8 +702,8 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 	})
 
 	text := h.runWorkableText()
-	aIdx := strings.Index(text, a.ID)
-	bIdx := strings.Index(text, b.ID)
+	aIdx := strings.Index(text, a.ID.Raw())
+	bIdx := strings.Index(text, b.ID.Raw())
 	if aIdx < 0 || bIdx < 0 {
 		t.Fatalf("expected both issue IDs in output, got: %s", text)
 	}
@@ -751,7 +751,7 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
-	gotIDs := make(map[string]bool, len(got))
+	gotIDs := make(map[model.ID]bool, len(got))
 	for _, entry := range got {
 		gotIDs[entry.ID] = true
 		if entry.IssueType == "epic" {
@@ -764,7 +764,7 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 	if !gotIDs[bugUnderOtherEpic.ID] {
 		t.Errorf("ready missing bug %q; got=%v", bugUnderOtherEpic.ID, gotIDs)
 	}
-	for _, id := range []string{epic.ID, otherEpic.ID} {
+	for _, id := range []model.ID{epic.ID, otherEpic.ID} {
 		if gotIDs[id] {
 			t.Errorf("ready included epic %q; want excluded", id)
 		}
@@ -823,7 +823,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
-	byID := make(map[string]annotation.AnnotatedIssue, len(got))
+	byID := make(map[model.ID]annotation.AnnotatedIssue, len(got))
 	for _, entry := range got {
 		byID[entry.ID] = entry
 	}
@@ -855,7 +855,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 	}
 
 	text := h.runWorkableText()
-	if !strings.Contains(text, "epic: "+epic.ID+"  "+fmt.Sprint(epic.Title)) {
+	if !strings.Contains(text, "epic: "+epic.ID.Raw()+"  "+fmt.Sprint(epic.Title)) {
 		t.Errorf("text output missing 'epic: %s  %s' line; output:\n%s", epic.ID, epic.Title, text)
 	}
 }
@@ -909,11 +909,11 @@ func TestRunReadyOrdersLeavesInTreeOrder(t *testing.T) {
 
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
-	gotIDs := make([]string, len(got))
+	gotIDs := make([]model.ID, len(got))
 	for i, entry := range got {
 		gotIDs[i] = entry.ID
 	}
-	want := []string{leafA1.ID, leafA2.ID, leafB1.ID}
+	want := []model.ID{leafA1.ID, leafA2.ID, leafB1.ID}
 	if len(gotIDs) != len(want) {
 		t.Fatalf("ready returned %d rows, want %d; ids=%v", len(gotIDs), len(want), gotIDs)
 	}
@@ -940,7 +940,7 @@ func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 
 // setLabels replaces an issue's full label set — the store-level equivalent of
 // `lit label add/rm` for fixture setup.
-func (h readyTestHarness) setLabels(issueID string, labels ...string) {
+func (h readyTestHarness) setLabels(issueID model.ID, labels ...string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Fields: storage.UpdateIssueInput{Labels: &labels}}); err != nil {
 		h.t.Fatalf("Apply(labels) error = %v", err)
@@ -985,16 +985,16 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	// Every path member carries the focus_path fact pointing at the goal; the
 	// unrelated urgent item does not; and focus never unblocks a gated member.
 	got := h.runWorkableAnnotated(workableFilter{}, 0)
-	byID := map[string]annotation.AnnotatedIssue{}
+	byID := map[model.ID]annotation.AnnotatedIssue{}
 	for _, row := range got {
 		byID[row.ID] = row
 	}
-	for _, id := range []string{c1.ID, c2.ID, c3.ID} {
+	for _, id := range []model.ID{c1.ID, c2.ID, c3.ID} {
 		a, ok := findAnnotation(byID[id].Annotations, annotation.FocusPath)
 		if !ok {
 			t.Fatalf("%s missing focus_path annotation: %#v", id, byID[id].Annotations)
 		}
-		if a.Message != c3.ID {
+		if a.Message != c3.ID.Raw() {
 			t.Fatalf("focus_path message = %q, want goal %q", a.Message, c3.ID)
 		}
 	}
