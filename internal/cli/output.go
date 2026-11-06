@@ -412,7 +412,9 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 	}
 	// A long text keeps its authored lines, as in show's detail view, each
 	// after the first indented under its "name:" line so none reads as another
-	// field; every other getter already holds its value to the row.
+	// field.
+	// Every value but a long text prints as its getter returns it, so a getter
+	// for free text returns it held: printing holds a stored value exactly once.
 	long := map[string]bool{}
 	for _, field := range storage.LongTextFields() {
 		long[field.Name] = true
@@ -443,7 +445,7 @@ func printIssueFields(w io.Writer, detail model.IssueDetail, fields []string) er
 // ways; [LAW:decomposition] carved at the event/detail joint, ready for any
 // future surface that needs the same trail.
 //
-// Every value on a row goes through singleLine, so each event is one row and
+// Every free-text value on a row prints held, so each event is one row and
 // each change one row beneath it, whatever text the event carries.
 func printHistoryTrail(w io.Writer, events []model.IssueEvent, reviews []model.PlanReview, versions map[string][]string) error {
 	// One timed row per event and per review, sorted stably by time: on a tie
