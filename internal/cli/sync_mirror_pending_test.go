@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,34 +44,37 @@ func mirrorPendingSet(t *testing.T, ws workspace.Info) bool {
 // claimHeld claims the workspace's mirror-pending marker at now, as a command
 // would, and returns the claim with its answering-hold release. A claimant
 // leaves that hold to its own process exit, and in a test the process outlives
-// the test, so the hold would keep the beacon and its holder record open.
-// POSIX lets t.TempDir remove open files, and Windows does not, so the release
-// also runs when the test ends: after a test that released it itself, a
-// no-op; after one that failed or dropped it, the release it never reached.
+// the test, so the hold would keep the beacon and its holder record open until
+// endsWithTest ends it.
 func claimHeld(t *testing.T, ws workspace.Info, now time.Time) (mirrorPendingClaim, func()) {
 	t.Helper()
 	claim, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, now)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	release := sync.OnceFunc(releaseAnswer)
-	t.Cleanup(release)
-	return claim, release
+	// The answering hold's release reports its own failure on stderr.
+	release := endsWithTest(t, func() error { releaseAnswer(); return nil })
+	return claim, func() { _ = release() }
 }
 
 // endsWithTest makes a hold's release safe to call early and runs it when the
 // test ends if the test never reached it, so a t.Fatal between taking a hold
 // and releasing it cannot leave the hold's files open for t.TempDir's removal,
-// which Windows refuses.
+// which Windows refuses. A release the test made returns its error to the
+// test, so the cleanup reports only the release it made itself.
 func endsWithTest(t *testing.T, release func() error) func() error {
 	t.Helper()
 	once := sync.OnceValue(release)
+	var calledByTest atomic.Bool
 	t.Cleanup(func() {
-		if err := once(); err != nil {
-			t.Errorf("release hold at test end: %v", err)
+		if err := once(); err != nil && !calledByTest.Load() {
+			t.Errorf("release hold the test never released: %v", err)
 		}
 	})
-	return once
+	return func() error {
+		calledByTest.Store(true)
+		return once()
+	}
 }
 
 // filesystemNow reads the clock that actually stamps files in dir, by
@@ -477,11 +481,7 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("squat on beacon: acquired=%v err=%v", acquired, err)
 	}
-	defer func() {
-		if err := releaseSquat(); err != nil {
-			t.Fatalf("release squat: %v", err)
-		}
-	}()
+	endsWithTest(t, releaseSquat)
 
 	if err := runBackgroundMirror(t, context.Background(), testStderr(t), ws, nil); err != nil {
 		t.Fatalf("runBackgroundMirror must be best-effort nil, got %v", err)
