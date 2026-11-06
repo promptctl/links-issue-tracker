@@ -84,6 +84,9 @@ func TestALockAcquisitionPutsItsHolderRecordUpkeepOnTheEvent(t *testing.T) {
 
 	t.Run("a dead holder's record retired", func(t *testing.T) {
 		// A record no process holds: what a SIGKILLed holder leaves.
+		if err := os.MkdirAll(holders, 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if err := os.WriteFile(filepath.Join(holders, "holder-424242-1"), []byte(`{"pid":424242}`), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -105,7 +108,7 @@ func TestALockAcquisitionPutsItsHolderRecordUpkeepOnTheEvent(t *testing.T) {
 			t.Fatalf("records = %+v, want the sweep's failure, naming the record, and the publish standing", records)
 		}
 		if !strings.Contains(stderr, "could not retire the records of holders gone from "+lockPath) {
-			t.Errorf("stderr = %q, want the CLI's notice of the failed sweep, naming the lock", stderr)
+			t.Errorf("stderr = %q, want the notice of the failed sweep, naming the lock", stderr)
 		}
 	})
 
@@ -123,7 +126,7 @@ func TestALockAcquisitionPutsItsHolderRecordUpkeepOnTheEvent(t *testing.T) {
 			t.Fatalf("records = %+v, want the publish's failure", records)
 		}
 		if !strings.Contains(stderr, "could not record this process as the holder of "+lockPath) {
-			t.Errorf("stderr = %q, want the CLI's notice of the failed publish, naming the lock", stderr)
+			t.Errorf("stderr = %q, want the notice of the failed publish, naming the lock", stderr)
 		}
 	})
 }

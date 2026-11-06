@@ -99,16 +99,16 @@ type LockHold struct {
 // failure, and the failure to publish this process's own record. A nil error
 // is a step that succeeded. Either failure leaves the lock held; only a
 // diagnostic is short (recordLockHolder). Lock is the file name, as on every
-// lock report; Path is the whole path, which a notice names.
+// lock report.
 type LockRecord struct {
 	Lock         string
-	Path         string
 	SweepRetired int
 	SweepErr     error
 	PublishErr   error
 }
 
-// LockObserver is told about each lock wait and each LOCK hold of the work
+// LockObserver is told about each lock wait, each LOCK hold, and each
+// acquisition's holder-record upkeep (LockRecord) of the work
 // run under the context that carries it. The store reports these as values
 // and never records them itself: the command's event is the CLI's, which
 // installs one observer per invocation (invocationContext), as it does for

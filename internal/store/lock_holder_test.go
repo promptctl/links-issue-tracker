@@ -391,7 +391,7 @@ func TestRecordingFailureLeavesTheLockUsable(t *testing.T) {
 		t.Fatalf("release: %v", err)
 	}
 	records := reports.recordsSnapshot()
-	if len(records) != 1 || records[0].PublishErr == nil || records[0].Lock != "test.lock" || records[0].Path != lockPath {
+	if len(records) != 1 || records[0].PublishErr == nil || records[0].Lock != "test.lock" {
 		t.Errorf("records = %+v, want one for test.lock carrying the publish failure", records)
 	}
 	if printed := notices.String(); !strings.Contains(printed, "could not record this process") {
@@ -668,6 +668,11 @@ func TestEveryAcquisitionRetiresTheRecordsOfDepartedHolders(t *testing.T) {
 	}
 	for i := range 20 {
 		strandDeadRecord(t, dir, fmt.Sprintf("424242-%d", i))
+	}
+	// An empty name is what a probe leaves when the record it listed was
+	// retired before it opened it: retired, but no gone holder's, so not counted.
+	if err := os.WriteFile(filepath.Join(dir, lockHolderRecordPrefix+"recreated"), nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	for round := range 5 {
