@@ -58,6 +58,21 @@ func claimHeld(t *testing.T, ws workspace.Info, now time.Time) (mirrorPendingCla
 	return claim, release
 }
 
+// endsWithTest makes a hold's release safe to call early and runs it when the
+// test ends if the test never reached it, so a t.Fatal between taking a hold
+// and releasing it cannot leave the hold's files open for t.TempDir's removal,
+// which Windows refuses.
+func endsWithTest(t *testing.T, release func() error) func() error {
+	t.Helper()
+	once := sync.OnceValue(release)
+	t.Cleanup(func() {
+		if err := once(); err != nil {
+			t.Errorf("release hold at test end: %v", err)
+		}
+	})
+	return once
+}
+
 // filesystemNow reads the clock that actually stamps files in dir, by
 // stamping one and reading it back. Linux fills inode times from
 // ktime_get_coarse_real_ts64, which advances once per timer tick (1-4ms at
@@ -130,6 +145,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold mirror beacon as the live answerer: %v", err)
 	}
+	releaseBeacon = endsWithTest(t, releaseBeacon)
 	claim, _ = claimHeld(t, ws, now.Add(time.Second))
 	if claim != pendingCovered {
 		t.Fatal("a marker with a live beacon holder must cover — that answerer's chain is still ahead")
@@ -168,6 +184,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("take exclusive squat: acquired=%v err=%v", acquired, err)
 	}
+	releaseSquat = endsWithTest(t, releaseSquat)
 	claim, releaseAnswer = claimHeld(t, ws, now.Add(3*time.Second))
 	if claim != pendingClaimed {
 		t.Fatal("an exclusively obstructed beacon must re-claim, never cover — a squatter would otherwise stop pushes silently")
