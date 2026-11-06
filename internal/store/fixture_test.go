@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"io"
 	"os"
 	"testing"
@@ -12,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // The package's migrated-store templates: each built once per test binary by
@@ -102,14 +101,9 @@ func withTestMirrorRoot(run func() int) int {
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the store it opens runs.
-// Its released-schema ceiling is this tree's own highest migration, so the
-// suite exercises every migration the tree carries.
+// The rest of the Env is suiteenv.Of's.
 func testEnv() environ.Env {
-	max, err := migrations.MaxVersion()
-	if err != nil {
-		panic("read the migration registry: " + err.Error())
-	}
-	return environ.Of(append(os.Environ(), MirrorRootEnvVar+"="+testMirrorRoot)).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
+	return suiteenv.Of(append(os.Environ(), MirrorRootEnvVar+"="+testMirrorRoot))
 }
 
 // testStderr is where a store a test opens prints its notices: the test

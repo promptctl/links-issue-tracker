@@ -14,7 +14,7 @@ import (
 
 // ceilingAt is a released-schema ceiling of max, as a test sets one.
 func ceilingAt(max int64) version.SchemaCeiling {
-	return version.SchemaCeiling{Max: max, Source: "set by the test"}
+	return version.SchemaCeiling{Max: max, Bound: version.BoundReleased, Source: "set by the test"}
 }
 
 // registryMax is the highest migration this tree carries.
@@ -229,7 +229,7 @@ func TestAStepIntoAnOutOfOrderGapAboveTheCeilingIsRefused(t *testing.T) {
 // unstamped build gets wrong.
 func TestARefusalNamesTheCeilingAndItsSource(t *testing.T) {
 	t.Parallel()
-	ceiling := version.SchemaCeiling{Max: 4, Source: "the checkout this lit was built from had no release tag"}
+	ceiling := version.SchemaCeiling{Max: 4, Bound: version.BoundReleased, Source: "the checkout this lit was built from had no release tag"}
 	for _, err := range []error{
 		&SchemaCeilingError{WorkspaceVersion: 3, TargetVersion: 5, Ceiling: ceiling},
 		&SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: 5, Ceiling: ceiling},

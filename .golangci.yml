@@ -27,6 +27,15 @@ linters:
   settings:
     depguard:
       rules:
+        # The suite Env lifts the released-schema ceiling and raises as a
+        # release would; a non-test importer would ship that to users.
+        suiteenv-tests-only:
+          list-mode: lax
+          files:
+            - "!$test"
+          deny:
+            - pkg: "github.com/promptctl/links-issue-tracker/internal/suiteenv"
+              desc: "suiteenv is the test suites' Env; production reads the stamped ceiling"
         # [LAW:single-enforcer] lifecycle internals are enforced at the model package boundary instead of by caller convention.
         lifecycle-boundary:
           list-mode: lax

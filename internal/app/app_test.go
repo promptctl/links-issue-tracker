@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -244,14 +243,9 @@ func resolvedWorkspace(t *testing.T, dir string) workspace.Info {
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the run starts.
-// Its released-schema ceiling is this tree's own highest migration, so the
-// suite exercises every migration the tree carries.
+// The rest of the Env is suiteenv.Of's.
 func testEnv() environ.Env {
-	max, err := migrations.MaxVersion()
-	if err != nil {
-		panic("read the migration registry: " + err.Error())
-	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
+	return suiteenv.Of(os.Environ())
 }
 
 // Writes is the mutation marker the staleness banner, the on-change mirror
