@@ -17,22 +17,26 @@ import (
 // that opened the store, with git's exit status and output, and the mirror's
 // marker leaves gc owed again within the hour, not a day on.
 //
-// The failing gc is a git shim put first on PATH. Dolt resolves git through
-// the process's PATH, so the push runs as a child of this binary, whose PATH
-// no other test reads. The shim fails only Dolt's `gc --prune=now`, not lit's
-// orphan sweep, which adds --quiet.
+// Dolt finds git through the process PATH, which no run's Env reaches, so the
+// git that fails gc goes on the PATH of a child of this test binary that runs
+// only this test; no other test sees it. The shim fails only Dolt's
+// `gc --prune=now`, not lit's orphan sweep, which adds --quiet.
 func TestAStoreCloseWhoseGCFailedSaysSoOnItsEvent(t *testing.T) {
-	t.Parallel()
-	realGit, err := exec.LookPath("git")
-	if err != nil {
-		t.Skip("git not available")
-	}
-	shim := t.TempDir()
-	if err := os.WriteFile(filepath.Join(shim, "git"), []byte(`#!/bin/sh
+	if os.Getenv(shimmedChildEnvVar) == "" {
+		t.Parallel()
+		realGit, err := exec.LookPath("git")
+		if err != nil {
+			t.Skip("git not available")
+		}
+		shim := t.TempDir()
+		if err := os.WriteFile(filepath.Join(shim, "git"), []byte(`#!/bin/sh
 case " $* " in *" gc --prune=now "*) case " $* " in *" --quiet "*) ;; *) echo "gc refused" >&2; exit 3;; esac;; esac
 exec '`+strings.ReplaceAll(realGit, `'`, `'\''`)+`' "$@"
 `), 0o755); err != nil {
-		t.Fatal(err)
+			t.Fatal(err)
+		}
+		runShimmedChild(t, shim)
+		return
 	}
 	isolateEvents(t)
 
@@ -50,17 +54,7 @@ exec '`+strings.ReplaceAll(realGit, `'`, `'\''`)+`' "$@"
 	runGit(t, repo, "push", "origin", "HEAD")
 	runCLIInDir(t, repo, "init", "--skip-hooks")
 	newEpicInDir(t, repo, "gc-epic")
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	env := runEnv(t)
-	push := exec.Command(self, "sync", "push", "--set-upstream")
-	push.Dir = repo
-	push.Env = env.With("PATH="+shim+string(os.PathListSeparator)+env.Get("PATH")).With(testChildRunEnvVar + "=1").List()
-	if out, err := push.CombinedOutput(); err != nil {
-		t.Fatalf("lit sync push: %v\n%s", err, out)
-	}
+	runCLIInDir(t, repo, "sync", "push", "--set-upstream")
 
 	ev := lastEvent(t)
 	if ev.Event != "lit sync push" {
