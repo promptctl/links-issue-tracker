@@ -866,7 +866,7 @@ Pipeline is fixed and every stage always runs: **hydrate → select → order �
 - **Archived stays legal**, because "duplicate of something already done" is the most common real redirect.
 
 **`planFields`** (`internal/storage/memory/apply.go`) — a pure function of (baseline, patch, actor, now); no clock beyond the stamp handed in, no store, no writes. It applies the patch through `storage.ApplyIssueFields` (`internal/storage/fields.go`), which carries the per-field rules below.
-- `Title`, `Description`, `Prompt`, `Plan`, `Assignee`, `Lane` set → `strings.TrimSpace` (`ProjectIssueFields`, which refuses no title or lane).
+- `Title`, `Description`, `Prompt`, `Plan`, `Assignee`, `Lane` set → `strings.TrimSpace` (the projection inside `ApplyIssueFields`, which refuses no title or lane).
 - A `title` or `lane` change row — projected text the issue does not already hold — is admitted by `storage.ParseTitle` / `storage.ParseLane`: `"title is required"`, `"title cannot hold a line break"`, `"lane cannot hold a line break"`. Restating the stored text makes no change row, so nothing parses it.
 - `IssueType` set → **refused if it would cross the container/leaf line**: `model.ValidationError{Message: fmt.Sprintf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())}`.
 - `Priority` set → assigned as-is.
