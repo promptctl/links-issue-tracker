@@ -125,7 +125,7 @@ func TestAPushOfAStoreAboveTheReleasedSchemaSendsNothing(t *testing.T) {
 	if want := (SchemaCeilingPushError{Remote: "origin", Branch: "master", CommitSchema: max, Ceiling: ceilingAt(max - 1)}); *refused != want {
 		t.Errorf("refusal = %+v, want %+v", *refused, want)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "refused-clone"), "ws", origin, remoteURL, "master"); err == nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "refused-clone"), "ws", origin, remoteURL, "master"); err == nil {
 		t.Fatal("the remote holds master after the refused push, want no ref written")
 	}
 
@@ -138,7 +138,7 @@ func TestAPushOfAStoreAboveTheReleasedSchemaSendsNothing(t *testing.T) {
 	if err := released.Close(); err != nil {
 		t.Fatalf("Close(released sync) = %v", err)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the released push = %v", err)
 	}
 }

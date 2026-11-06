@@ -25,7 +25,7 @@ func TestASnapshotLeavesOutTheRemoteCacheAndStillSyncsOnceRestored(t *testing.T)
 	if err := live.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	cache := filepath.Join(root, doltDatabaseName, ".dolt", dbsnapshot.RemoteCacheDirName)
+	cache := MirrorBase(testMirrorRoot, root)
 	if _, err := os.Stat(cache); err != nil {
 		t.Fatalf("the pushed store holds no remote cache to leave out: %v", err)
 	}

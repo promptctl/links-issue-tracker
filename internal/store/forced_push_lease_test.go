@@ -66,7 +66,7 @@ func TestAForcedPushOverARemoteThatMovedSinceTheFetchIsRefused(t *testing.T) {
 	if errors.As(err, new(pushRefusedError)) || errors.Is(err, storage.ErrPushDiverged) {
 		t.Errorf("the lost lease is judged as a refusal on history: %v", err)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused force = %v", err)
 	}
 	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != heldHead {
@@ -110,7 +110,7 @@ func TestAForcedPushWithNoTrackingRefSendsNothing(t *testing.T) {
 	if want := (storage.ForcedPushLeaseError{Remote: origin, Branch: "master"}); lost != want {
 		t.Errorf("refusal = %+v, want %+v", lost, want)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused force = %v", err)
 	}
 	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != remoteHead {

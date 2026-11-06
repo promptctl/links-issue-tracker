@@ -14,6 +14,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/dbfactory"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -98,12 +99,13 @@ func TestRemoteCacheKeyMatchesDoltLayout(t *testing.T) {
 func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	env := isolatedMirrorEnv(t)
 	base := t.TempDir()
 
 	remote := seedBareGitRemote(t, base)
 	doltRoot := migratedDoltDir(t)
 
-	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	st, err := Open(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -112,7 +114,7 @@ func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -317,9 +319,15 @@ func gitInDir(t *testing.T, dir string, args ...string) {
 // branch.
 func pushedSyncStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
+	return pushedSyncStoreIn(t, ctx, testEnv())
+}
+
+// pushedSyncStoreIn is pushedSyncStore with its stores opened in env.
+func pushedSyncStoreIn(t *testing.T, ctx context.Context, env environ.Env) *Store {
+	t.Helper()
 	remote := seedBareGitRemote(t, t.TempDir())
 	doltRoot := migratedDoltDir(t)
-	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	st, err := Open(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -327,7 +335,7 @@ func pushedSyncStore(t *testing.T, ctx context.Context) *Store {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	sync, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "ws")
+	sync, err := OpenSync(ctx, env, testStderr(), doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
@@ -388,7 +396,7 @@ func TestReadAbandonedMirrorsFollowsTheRemotesNotASnapshot(t *testing.T) {
 func TestPruneRemoteCacheCollectsBesideANeverOpenedRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	sync := pushedSyncStore(t, ctx)
+	sync := pushedSyncStoreIn(t, ctx, isolatedMirrorEnv(t))
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "backup"), GitBackedRemoteURL(seedBareGitRemote(t, t.TempDir()))); err != nil {
 		t.Fatalf("SyncAddRemote(backup) error = %v", err)
 	}
@@ -486,7 +494,7 @@ func TestPruneRemoteCacheKeepsTheMirrorOfARemoteWithItsOwnRef(t *testing.T) {
 func TestSyncCompactAndPushPrunesWhenThePushFails(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	sync := pushedSyncStore(t, ctx)
+	sync := pushedSyncStoreIn(t, ctx, isolatedMirrorEnv(t))
 	empty := t.TempDir()
 	gitInDir(t, empty, "init", "--bare", "remote.git")
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "backup"), GitBackedRemoteURL(filepath.Join(empty, "remote.git"))); err != nil {
@@ -635,4 +643,12 @@ func TestDecodeRemoteParamsGivesAMapToOpenWith(t *testing.T) {
 		}
 		params[dbfactory.GitRemoteNameParam] = "origin"
 	}
+}
+
+// isolatedMirrorEnv is testEnv with a mirror root of the test's own: a test
+// that counts what the remote-cache prune removes must not see the bases other
+// tests left in the suite's shared root, which the prune's sweep of deleted
+// repositories collects.
+func isolatedMirrorEnv(t *testing.T) environ.Env {
+	return testEnv().With(MirrorRootEnvVar + "=" + t.TempDir())
 }

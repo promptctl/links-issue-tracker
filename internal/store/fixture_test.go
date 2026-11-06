@@ -81,7 +81,23 @@ func TestMain(m *testing.M) {
 	// minute still cuts a hung hold inside the test that met it. A test about a
 	// deadline installs its own figure. [LAW:no-ambient-temporal-coupling]
 	MirrorHoldBudget, ReceiveDeadline = time.Minute, time.Minute
-	os.Exit(dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate))
+	os.Exit(withTestMirrorRoot(func() int { return dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate) }))
+}
+
+// testMirrorRoot is the git mirror root of every store this package's tests
+// open (testEnv), made by TestMain and removed after the run, so no test
+// writes a mirror into the user's cache directory.
+var testMirrorRoot string
+
+// withTestMirrorRoot runs run with testMirrorRoot made, and removes it after.
+func withTestMirrorRoot(run func() int) int {
+	dir, err := os.MkdirTemp("", "lit-mirrors-")
+	if err != nil {
+		panic("make the test mirror root: " + err.Error())
+	}
+	defer os.RemoveAll(dir)
+	testMirrorRoot = dir
+	return run()
 }
 
 // testEnv is the test process's environment, read when it is called, so a
@@ -93,7 +109,7 @@ func testEnv() environ.Env {
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
-	return environ.Of(os.Environ()).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
+	return environ.Of(append(os.Environ(), MirrorRootEnvVar+"="+testMirrorRoot)).WithReleasedSchema(version.SchemaCeiling{Max: max, Source: "the test suite runs every migration this tree carries"}).WithRaisePolicy(version.RaisePolicy{Release: true})
 }
 
 // testStderr is where a store a test opens prints its notices: the test

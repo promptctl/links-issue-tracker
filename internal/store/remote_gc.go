@@ -307,6 +307,7 @@ func (s *Store) openRemoteDB(ctx context.Context, remote storage.RemoteName) (*d
 	}
 	params[dbfactory.GitRemoteNameParam] = remote
 	params[dbfactory.GitCacheRootParam] = s.gitCacheRoot()
+	params[dbfactory.GitCacheBaseParam] = s.remoteCacheBase()
 	params[dbfactory.DisableSingletonCacheParam] = struct{}{}
 	remoteDB, err := doltdb.LoadDoltDBWithParams(ctx, types.Format_Default, remoteURL, filesys.LocalFS, params)
 	if err != nil {

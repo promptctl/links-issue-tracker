@@ -478,6 +478,16 @@ type liveClone struct {
 	// it: what a landing of its fetch requires the live store to still hold
 	// (store.LandFetchedHead).
 	taken store.TakenClone
+	// mirrorRoot is where the clone's git mirror base lives
+	// (store.MirrorBase), outside dir.
+	mirrorRoot string
+}
+
+// remove discards the clone: its tree and its git mirror base, together, so
+// no mirror outlives the clone that made it. [LAW:single-enforcer] every
+// ending of a clone removes it here.
+func (c liveClone) remove() error {
+	return errors.Join(store.RemoveCloneMirrors(c.mirrorRoot, c.databasePath), os.RemoveAll(c.dir))
 }
 
 // cloneLiveStore sweeps base, then clones the live store into a fresh
@@ -498,7 +508,16 @@ type liveClone struct {
 // before anything runs on it; a clone that will not open for that read fails
 // the take, since the session the caller opens on it next would not open
 // either.
-func cloneLiveStore(ctx context.Context, stderr io.Writer, ws workspace.Info, base string, underHold func()) (clone liveClone, cut bool, err error) {
+func cloneLiveStore(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, base string, underHold func()) (clone liveClone, cut bool, err error) {
+	mirrorRoot, err := store.MirrorRootOf(env)
+	if err != nil {
+		return liveClone{}, false, err
+	}
+	// A dead holder's clone keeps its git mirror base outside base, so the
+	// base goes first, by the same sweep, on the same schedule.
+	if err := store.SweepMirrorBasesUnder(mirrorRoot, base); err != nil {
+		return liveClone{}, false, fmt.Errorf("collect a dead holder's clone mirrors under %s: %w", base, err)
+	}
 	if err := os.RemoveAll(base); err != nil {
 		return liveClone{}, false, fmt.Errorf("collect a dead holder's clone under %s: %w", base, err)
 	}
@@ -506,13 +525,17 @@ func cloneLiveStore(ctx context.Context, stderr io.Writer, ws workspace.Info, ba
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return liveClone{}, false, fmt.Errorf("create clone dir: %w", err)
 	}
-	clone = liveClone{dir: dir, databasePath: filepath.Join(dir, "dolt")}
+	clone = liveClone{dir: dir, databasePath: filepath.Join(dir, "dolt"), mirrorRoot: mirrorRoot}
 	var holdStart time.Time
 	err = withDoltDirectoryHeld(ctx, stderr, ws, func() error {
 		holdStart = time.Now()
 		holdCtx, cancel := context.WithTimeout(ctx, store.MirrorHoldBudget)
 		defer cancel()
 		if err := dbsnapshot.CloneTree(holdCtx, ws.DatabasePath, clone.databasePath); err != nil {
+			cut = holdCtx.Err() != nil && ctx.Err() == nil
+			return fmt.Errorf("clone the store: %w", err)
+		}
+		if err := store.SeedCloneMirrors(holdCtx, mirrorRoot, ws.DatabasePath, clone.databasePath); err != nil {
 			cut = holdCtx.Err() != nil && ctx.Err() == nil
 			return fmt.Errorf("clone the store: %w", err)
 		}
@@ -530,7 +553,7 @@ func cloneLiveStore(ctx context.Context, stderr io.Writer, ws workspace.Info, ba
 		// that fails here travels with the failure — the next take's sweep
 		// collects the tree, but a sweep that keeps failing the same way
 		// would otherwise fill the disk with no trail. [LAW:no-silent-failure]
-		if rmErr := os.RemoveAll(dir); rmErr != nil {
+		if rmErr := clone.remove(); rmErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove the failed take's clone %s: %w", dir, rmErr))
 		}
 		// The hold's cost travels with the failure: a cut hold reported as
@@ -573,8 +596,8 @@ func cloneLiveStore(ctx context.Context, stderr io.Writer, ws workspace.Info, ba
 // copy, it is a stalled one, and the cut is reported as such through the
 // could-not-attempt seam — the hold explanation names the step so the reader
 // does not go looking for a network fault.
-func takeMirrorClone(ctx context.Context, stderr io.Writer, ws workspace.Info) (mirrorClone, error) {
-	clone, cut, err := cloneLiveStore(ctx, stderr, ws, mirrorCloneBase(ws), func() { clearMirrorPending(stderr, ws) })
+func takeMirrorClone(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) (mirrorClone, error) {
+	clone, cut, err := cloneLiveStore(ctx, stderr, env, ws, mirrorCloneBase(ws), func() { clearMirrorPending(stderr, ws) })
 	if err != nil {
 		err = fmt.Errorf("take the push's clone: %w", err)
 		if cut {
@@ -590,7 +613,7 @@ func takeMirrorClone(ctx context.Context, stderr io.Writer, ws workspace.Info) (
 // never served one), and a tree left behind is collected by the next cycle's
 // sweep. [LAW:no-silent-failure]
 func (c mirrorClone) remove(log io.Writer) {
-	if err := os.RemoveAll(c.dir); err != nil {
+	if err := c.liveClone.remove(); err != nil {
 		fmt.Fprintf(log, "%s mirror clone not removed (%v); the next cycle's sweep collects it\n", time.Now().UTC().Format(time.RFC3339), err)
 	}
 }
@@ -712,7 +735,7 @@ func (p pushedHead) liveStoreStep() liveStoreStep {
 func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
 	start := time.Now()
 	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s, push deadline %s)\n", start.UTC().Format(time.RFC3339), store.MirrorHoldBudget, store.MirrorPushDeadline)
-	clone, err := takeMirrorClone(ctx, stderr, ws)
+	clone, err := takeMirrorClone(ctx, stderr, env, ws)
 	if err != nil {
 		_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, err, stopAnswering)
 		fmt.Fprintf(log, "%s mirror cycle end attempted=false push_deadline_cut=false hold=%s elapsed=%s\n",

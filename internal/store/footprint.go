@@ -111,7 +111,7 @@ type sizedSnapshot struct {
 // reads the filesystem only, with no engine and no lock of its own. It walks
 // every file, so it is never on the push path: it runs in the backstop, in
 // doctor, and after a snapshot take, which has just copied the whole store.
-func measureFootprint(doltRootDir string) (footprint, error) {
+func measureFootprint(doltRootDir, mirrorBase string) (footprint, error) {
 	var f footprint
 	var err error
 	if f.chunkStore, err = ChunkStoreBytes(doltRootDir); err != nil {
@@ -120,9 +120,16 @@ func measureFootprint(doltRootDir string) (footprint, error) {
 	if f.tempTableFiles, err = bytesUnder(TempTableFilesDir(doltRootDir)); err != nil {
 		return footprint{}, fmt.Errorf("measure temp table files: %w", err)
 	}
-	if f.remoteCache, err = bytesUnder(remoteCacheBaseFor(doltRootDir)); err != nil {
+	if f.remoteCache, err = bytesUnder(mirrorBase); err != nil {
 		return footprint{}, fmt.Errorf("measure the remote cache: %w", err)
 	}
+	// Until the prune removes it, an older lit's in-repository cache is still
+	// on disk and still this store's.
+	legacy, err := bytesUnder(legacyRemoteCacheBase(doltRootDir))
+	if err != nil {
+		return footprint{}, fmt.Errorf("measure the legacy remote cache: %w", err)
+	}
+	f.remoteCache += legacy
 	if f.automatic, f.otherSnapshots, err = measureSnapshots(doltRootDir); err != nil {
 		return footprint{}, err
 	}
@@ -258,7 +265,7 @@ type ceilingHold struct {
 // The footprint it returns is measured once, before the removals, less what
 // was removed — the store as the prune left it, without a second walk.
 func (s *Store) pruneAutomaticSnapshots(ctx context.Context) (ceilingHold, error) {
-	f, err := measureFootprint(s.doltRootDir)
+	f, err := measureFootprint(s.doltRootDir, s.mirrorBase)
 	if err != nil {
 		return ceilingHold{}, fmt.Errorf("measure store footprint: %w", err)
 	}
@@ -290,7 +297,7 @@ func (s *Store) pruneAutomaticSnapshots(ctx context.Context) (ceilingHold, error
 
 // footprint measures the store this handle is open on, under its ceiling.
 func (s *Store) footprint() (storage.Footprint, error) {
-	f, err := measureFootprint(s.doltRootDir)
+	f, err := measureFootprint(s.doltRootDir, s.mirrorBase)
 	if err != nil {
 		return storage.Footprint{}, fmt.Errorf("measure store footprint: %w", err)
 	}

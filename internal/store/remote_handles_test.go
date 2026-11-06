@@ -27,7 +27,7 @@ func TestPushAndCloneLeaveNothingOfTheirRemoteOpen(t *testing.T) {
 	seedReconcileRemote(t, ctx, filepath.Join(base, "producer"), remoteURL)
 	assertNoOpenFileUnder(t, "after the push's store closed", remoteDir)
 
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "consumer"), "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "consumer"), "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
 		t.Fatalf("AdoptRemoteByClone: %v", err)
 	}
 	assertNoOpenFileUnder(t, "after the clone returned", base)
@@ -62,7 +62,7 @@ func TestAFailedAdoptLeavesNothingOfItsPartialDatabaseOpen(t *testing.T) {
 	seedReconcileRemote(t, ctx, filepath.Join(base, "producer"), remoteURL)
 
 	consumer := filepath.Join(base, "consumer")
-	if err := AdoptRemoteByClone(ctx, testStderr(), consumer, "ws", remoteName(t, "origin"), remoteURL, "branch-the-remote-does-not-have"); err == nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), consumer, "ws", remoteName(t, "origin"), remoteURL, "branch-the-remote-does-not-have"); err == nil {
 		t.Fatal("AdoptRemoteByClone(bad branch) = nil, want error")
 	}
 	assertNoOpenFileUnder(t, "after the failed clone returned", consumer)

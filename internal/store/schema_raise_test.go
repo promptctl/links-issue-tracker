@@ -166,7 +166,7 @@ func TestASourceBuildNeverRaisesARemote(t *testing.T) {
 	if head := trackingSchema(t, ctx, st); head.version != max-1 {
 		t.Fatalf("remote after the refused push = %+v, want schema %d", head, max-1)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
 		t.Fatalf("clone after the refused push = %v", err)
 	}
 	if got := headAt(t, ctx, filepath.Join(base, "clone")); got != olderHead {
@@ -210,7 +210,7 @@ func TestASourceBuildRefusesToPushWithNoRemoteHead(t *testing.T) {
 	if refused.RemoteKnown {
 		t.Fatalf("refusal = %+v, want the remote's schema unknown", *refused)
 	}
-	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err == nil {
+	if err := AdoptRemoteByClone(ctx, testEnv(), testStderr(), filepath.Join(base, "clone"), "ws", origin, remoteURL, "master"); err == nil {
 		t.Fatal("the remote holds master after the refused push, want no ref written")
 	}
 }

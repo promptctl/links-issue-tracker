@@ -191,7 +191,11 @@ func LandFetchedHead(ctx context.Context, env environ.Env, stderr io.Writer, dol
 	// instance republished on close, and the plan going stale there costs
 	// nothing: the copy sets the ref to the clone's value, the same
 	// last-writer-wins rule every close follows.
-	cachePlan := planRemoteCacheLanding(ctx, env, remoteCacheBaseAt(root), remoteCacheBaseAt(clone.root), remote)
+	mirrorRoot, err := MirrorRootOf(env)
+	if err != nil {
+		return LandedFetch{}, err
+	}
+	cachePlan := planRemoteCacheLanding(ctx, env, MirrorBase(mirrorRoot, root), MirrorBase(mirrorRoot, clone.root), remote)
 
 	releaseWorkspace, err := acquireLiveStoreHold(ctx, stderr, root)
 	if err != nil {
@@ -579,12 +583,6 @@ func openCloneChunkStore(ctx context.Context, cloneRoot string) (*doltdb.DoltDB,
 		return nil, fmt.Errorf("open the clone's chunk store at %s: %w", nomsDir, err)
 	}
 	return ddb, nil
-}
-
-// remoteCacheBaseAt is the git-remote-cache directory of the Dolt root at
-// root — Store.remoteCacheBase for a root with no Store open on it.
-func remoteCacheBaseAt(root string) string {
-	return filepath.Join(root, doltDatabaseName, dbfactory.DoltDir, dbsnapshot.RemoteCacheDirName)
 }
 
 // remoteCacheLanding is what a fetch on the clone changed in its mirrors of the

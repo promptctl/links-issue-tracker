@@ -81,7 +81,7 @@ func TestDoltTransferKeepsStdoutClean(t *testing.T) {
 
 	// DOLT_CLONE — the confirmed heavy emitter (init adopt bootstraps by clone).
 	cloneOut := captureStdout(t, func() error {
-		return AdoptRemoteByClone(ctx, testStderr(), consumer, "ws", remoteName(t, "origin"), remoteURL, "master")
+		return AdoptRemoteByClone(ctx, testEnv(), testStderr(), consumer, "ws", remoteName(t, "origin"), remoteURL, "master")
 	})
 	if len(cloneOut) != 0 {
 		t.Fatalf("adopt-by-clone wrote %d bytes to stdout, want 0: %q", len(cloneOut), cloneOut)

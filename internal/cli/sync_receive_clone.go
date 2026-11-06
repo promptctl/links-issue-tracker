@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -41,8 +40,8 @@ type receiveFetch struct {
 // dead receive's clone safe. The live store is held for the copy alone: the
 // fetch — seconds on the network — runs from the clone with none of the live
 // store's locks held.
-func takeReceiveClone(ctx context.Context, stderr io.Writer, ws workspace.Info) (liveClone, error) {
-	clone, cut, err := cloneLiveStore(ctx, stderr, ws, receiveCloneBase(ws), func() {})
+func takeReceiveClone(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) (liveClone, error) {
+	clone, cut, err := cloneLiveStore(ctx, stderr, env, ws, receiveCloneBase(ws), func() {})
 	if err != nil {
 		// The hold's cost travels with the failure, as the mirror's does: a
 		// cut read without it cannot tell a stalled copy from a slow one.
@@ -59,7 +58,7 @@ func takeReceiveClone(ctx context.Context, stderr io.Writer, ws workspace.Info) 
 // fatal: the receive it served is over, and the next receive's sweep collects
 // the tree. [LAW:no-silent-failure]
 func removeReceiveClone(stderr io.Writer, clone liveClone) {
-	if err := os.RemoveAll(clone.dir); err != nil {
+	if err := clone.remove(); err != nil {
 		fmt.Fprintf(stderr, "lit: automatic receive clone not removed (%v); the next receive collects it\n", err)
 	}
 }
