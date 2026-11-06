@@ -338,8 +338,8 @@ func assertOpens(t *testing.T, root string) {
 	}
 }
 
-// Only a database's confirmed absence licenses discarding what stands in its
-// place, so a thing at its path that is neither nothing nor a real directory
+// Only a database's confirmed absence licenses setting aside what stands in
+// its place, so a thing at its path that is neither nothing nor a real directory
 // stays where it is, whether a symlink points anywhere or not, and whoever
 // found it fails naming it rather than deep inside the engine.
 func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {

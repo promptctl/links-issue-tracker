@@ -275,9 +275,7 @@ func AdoptRemoteByClone(ctx context.Context, env environ.Env, stderr io.Writer, 
 	// re-cloned) store stale. ENOENT means nothing to displace; any other
 	// rename failure aborts with the marker in place. [LAW:no-silent-failure]
 	dbDir := filepath.Join(cleanRoot, doltDatabaseName)
-	evictSingleton(dbDir)
-	displaced := fmt.Sprintf("%s.adopt-displaced-%d", cleanRoot, time.Now().UTC().UnixNano())
-	if err := os.Rename(dbDir, displaced); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := displaceDatabaseDir(cleanRoot, "adopt"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("set aside database before adopt: %w", err)
 	}
 
