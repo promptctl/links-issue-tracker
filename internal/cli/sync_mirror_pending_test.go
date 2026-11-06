@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,19 +40,22 @@ func mirrorPendingSet(t *testing.T, ws workspace.Info) bool {
 	return owed
 }
 
-// claimHeld claims the workspace's mirror-pending marker as a command would,
-// and ends the claimant's answering hold when the test ends. A claimant leaves
-// that hold to its own process exit, and in a test the process outlives the
-// test, so the hold would keep the beacon and its holder record open. POSIX
-// lets t.TempDir remove open files, and Windows does not.
-func claimHeld(t *testing.T, ws workspace.Info) mirrorPendingClaim {
+// claimHeld claims the workspace's mirror-pending marker at now, as a command
+// would, and returns the claim with its answering-hold release. A claimant
+// leaves that hold to its own process exit, and in a test the process outlives
+// the test, so the hold would keep the beacon and its holder record open.
+// POSIX lets t.TempDir remove open files, and Windows does not, so the release
+// also runs when the test ends: after a test that released it itself, a
+// no-op; after one that failed or dropped it, the release it never reached.
+func claimHeld(t *testing.T, ws workspace.Info, now time.Time) (mirrorPendingClaim, func()) {
 	t.Helper()
-	claim, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
+	claim, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, now)
 	if err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	t.Cleanup(releaseAnswer)
-	return claim
+	release := sync.OnceFunc(releaseAnswer)
+	t.Cleanup(release)
+	return claim, release
 }
 
 // filesystemNow reads the clock that actually stamps files in dir, by
@@ -102,10 +106,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	claim, releaseAnswer, err := claimMirrorPending(ctx, testStderr(t), ws, now)
-	if err != nil {
-		t.Fatalf("claimMirrorPending on absent marker: %v", err)
-	}
+	claim, releaseAnswer := claimHeld(t, ws, now)
 	if claim != pendingClaimed {
 		t.Fatal("an absent marker must be claimed — the claimant owes the spawn")
 	}
@@ -129,10 +130,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold mirror beacon as the live answerer: %v", err)
 	}
-	claim, _, err = claimMirrorPending(ctx, testStderr(t), ws, now.Add(time.Second))
-	if err != nil {
-		t.Fatalf("claimMirrorPending under a live holder: %v", err)
-	}
+	claim, _ = claimHeld(t, ws, now.Add(time.Second))
 	if claim != pendingCovered {
 		t.Fatal("a marker with a live beacon holder must cover — that answerer's chain is still ahead")
 	}
@@ -147,10 +145,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 		t.Fatalf("stat backdated marker: %v", err)
 	}
 	backdatedAt := info.ModTime()
-	claim, _, err = claimMirrorPending(ctx, testStderr(t), ws, now.Add(2*time.Second))
-	if err != nil {
-		t.Fatalf("claimMirrorPending on backdated marker under a live holder: %v", err)
-	}
+	claim, _ = claimHeld(t, ws, now.Add(2*time.Second))
 	if claim != pendingCovered {
 		t.Fatal("a live holder must cover however old the marker is; liveness is the kernel's verdict, not the clock's")
 	}
@@ -173,10 +168,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	if err != nil || !acquired {
 		t.Fatalf("take exclusive squat: acquired=%v err=%v", acquired, err)
 	}
-	claim, releaseAnswer, err = claimMirrorPending(ctx, testStderr(t), ws, now.Add(3*time.Second))
-	if err != nil {
-		t.Fatalf("claimMirrorPending under exclusive squatter: %v", err)
-	}
+	claim, releaseAnswer = claimHeld(t, ws, now.Add(3*time.Second))
 	if claim != pendingClaimed {
 		t.Fatal("an exclusively obstructed beacon must re-claim, never cover — a squatter would otherwise stop pushes silently")
 	}
@@ -186,14 +178,10 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	}
 
 	reclaimNow := now.Add(4 * time.Second)
-	claim, releaseAnswer, err = claimMirrorPending(ctx, testStderr(t), ws, reclaimNow)
-	if err != nil {
-		t.Fatalf("claimMirrorPending on residue: %v", err)
-	}
+	claim, _ = claimHeld(t, ws, reclaimNow)
 	if claim != pendingClaimed {
 		t.Fatal("a marker with no live beacon holder is residue and must be re-claimed the moment it is observed")
 	}
-	defer releaseAnswer()
 	info, err = os.Stat(mirrorPendingMarkerPath(ws))
 	if err != nil {
 		t.Fatalf("stat after residue re-claim: %v", err)
@@ -213,7 +201,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 func TestClearMirrorPendingIdempotent(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
-	claimHeld(t, ws)
+	claimHeld(t, ws, time.Now())
 	clearMirrorPending(testStderr(t), ws)
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("clear left the marker in place")
@@ -260,7 +248,7 @@ func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("an absent marker read as set")
 	}
-	claimHeld(t, ws)
+	claimHeld(t, ws, time.Now())
 	if !mirrorPendingSet(t, ws) {
 		t.Fatal("a just-claimed marker read as unset")
 	}
@@ -283,7 +271,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 
-	claimHeld(t, ws)
+	claimHeld(t, ws, time.Now())
 
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
 	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
@@ -344,7 +332,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
-	claimHeld(t, ws)
+	claimHeld(t, ws, time.Now())
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
 	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
@@ -406,17 +394,14 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
-	_, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	_, releaseAnswer := claimHeld(t, ws, time.Now())
 	// The claimant dies: its answering hold evaporates with it.
 	releaseAnswer()
 	future := time.Now().Add(90 * time.Second)
 	if err := os.Chtimes(mirrorPendingMarkerPath(ws), future, future); err != nil {
 		t.Fatalf("future-date marker: %v", err)
 	}
-	if claim := claimHeld(t, ws); claim != pendingClaimed {
+	if claim, _ := claimHeld(t, ws, time.Now()); claim != pendingClaimed {
 		t.Fatal("a future-stamped marker with no live holder read as covered; it must be re-claimed")
 	}
 }
@@ -438,7 +423,7 @@ func TestRecheckMirrorPending(t *testing.T) {
 		t.Fatalf("absent marker: (again=%v err=%v), want clean done", again, err)
 	}
 
-	claimHeld(t, ws)
+	claimHeld(t, ws, time.Now())
 	again, err = recheckMirrorPending(ws, cycleStart)
 	if err != nil || !again {
 		t.Fatalf("post-cycle claim: (again=%v err=%v), want another cycle", again, err)
@@ -467,10 +452,7 @@ func TestRecheckMirrorPending(t *testing.T) {
 func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	_, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
-	if err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	_, releaseAnswer := claimHeld(t, ws, time.Now())
 	// The claimant dies before its mirror comes up; its answering hold
 	// evaporates, leaving the squat free to take the beacon exclusively.
 	releaseAnswer()
@@ -508,7 +490,7 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 func TestRunBackgroundMirrorTeardownReleasesClaim(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	claimHeld(t, ws)
+	claimHeld(t, ws, time.Now())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
