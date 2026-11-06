@@ -81,9 +81,9 @@ var doltWorkspaceMachinery = map[string][]string{
 	// warning tests reach DoltJournalLockPath for the noms directory it sits
 	// in, to damage the journal there with no engine open, and because each
 	// warning names that directory. WithLockObserver hands the command's event
-	// each wait on these locks, each hold of Dolt's LOCK and each holder
-	// record's sweep and publish (LockObserver, LockWait, LockHold,
-	// LockRecord); it rides the invocation's context, installed before any
+	// each wait on these locks, each hold of Dolt's LOCK and each
+	// acquisition's holder-record sweep and publish (LockObserver, LockWait,
+	// LockHold, LockRecord); it rides the invocation's context, installed before any
 	// engine exists, as nbs.WithJournalWarningObserver does.
 	"workspace and commit locks": {
 		"CommitLockPath", "LockCommitPath", "SettleCommitLockRelease",
