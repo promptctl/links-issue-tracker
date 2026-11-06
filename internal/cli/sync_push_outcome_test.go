@@ -144,7 +144,7 @@ func TestPushOutcomeOf(t *testing.T) {
 			// failing ones — a stamp present on some decisions only would make
 			// an empty ObservedBy mean two different things to a later reader.
 			tc.want.ObservedBy = "v1.2.3"
-			got := pushOutcomeOf(tc.outcome, tc.err, "v1.2.3")
+			got, _, _ := pushOutcomeOf(tc.outcome, tc.err, "v1.2.3")
 			if got != tc.want {
 				t.Fatalf("pushOutcomeOf() = %+v, want %+v", got, tc.want)
 			}
@@ -447,10 +447,11 @@ func TestDoctorPushHealthDatesTheReplayedVerdict(t *testing.T) {
 func TestRecordedPushFailureIsNotALatch(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
-	recordPushOutcome(testStderr(t), ws, pushOutcomeOf(syncPushOutcome{
+	failed, _, _ := pushOutcomeOf(syncPushOutcome{
 		remote: remoteName(t, "origin"), branch: "master",
 		pushErr: errors.New("remote origin/master is at schema version 5 but this binary supports only up to 4"),
-	}, nil, "0.7.0"))
+	}, nil, "0.7.0")
+	recordPushOutcome(testStderr(t), ws, failed)
 
 	rec, age, known := lastPushOutcome(testStderr(t), ws, time.Now())
 	if lines := syncPushFailureLines(rec, age, known, "0.9.0"); len(lines) != 1 {
@@ -458,9 +459,10 @@ func TestRecordedPushFailureIsNotALatch(t *testing.T) {
 	}
 
 	// The condition clears and the next attempt lands.
-	recordPushOutcome(testStderr(t), ws, pushOutcomeOf(syncPushOutcome{
+	landed, _, _ := pushOutcomeOf(syncPushOutcome{
 		remote: remoteName(t, "origin"), branch: "master", skip: syncTargetReady,
-	}, nil, "0.9.0"))
+	}, nil, "0.9.0")
+	recordPushOutcome(testStderr(t), ws, landed)
 
 	rec, age, known = lastPushOutcome(testStderr(t), ws, time.Now())
 	if rec.Decision != pushDecisionPushed {

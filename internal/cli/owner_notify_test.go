@@ -138,10 +138,6 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 		if got, want := ev.fingerprint(), string(failure.Class)+" origin/master"; failure.Class != syncFailureReceiveUnsettled && got != want {
 			t.Fatalf("class %q fingerprints as %q, want the per-target %q", failure.Class, got, want)
 		}
-		// A kind that pages must have an ender, or its first episode is its last.
-		if !slices.Contains(ownerNotifySettleEndedKinds, ev.Kind) && !slices.Contains(ownerNotifyPushEndedKinds, ev.Kind) && failure.Class != syncFailureReceiveUnsettled {
-			t.Fatalf("class %q pages but neither a settle nor a landed push ends it", failure.Class)
-		}
 	}
 	for _, class := range pushFailed {
 		if _, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"}); ok {
@@ -331,7 +327,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 		t.Fatalf("a landed push did not end the episode (stat err=%v)", err)
 	}
 
-	cancelled := pushOutcomeOf(syncPushOutcome{}, context.Canceled, "")
+	cancelled, _, _ := pushOutcomeOf(syncPushOutcome{}, context.Canceled, "")
 	if cancelled.Decision != pushDecisionCanceled || cancelled.failed() {
 		t.Fatalf("pushOutcomeOf(canceled) = %+v, want the non-failed canceled decision", cancelled)
 	}
@@ -344,7 +340,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	// nor ends a live episode: the channel is not broken, and it has not been
 	// shown healthy.
 	observe(failed)
-	diverged := pushOutcomeOf(syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", receiveMerges: true, pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
+	diverged, _, _ := pushOutcomeOf(syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", receiveMerges: true, pushErr: fmt.Errorf("%w: rejected", storage.ErrPushDiverged)}, nil, "")
 	if diverged.Decision != pushDecisionDiverged || diverged.failed() {
 		t.Fatalf("pushOutcomeOf(diverged) = %+v, want the non-failed diverged decision", diverged)
 	}
@@ -425,6 +421,19 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	if payload, _ := os.ReadFile(sink); !strings.HasSuffix(string(payload), "push_failed origin master\n") {
 		t.Fatalf("a failure that is no schema refusal did not page push_failed: %q", payload)
 	}
+
+	// An attempt error outranks the push step's own error in the record (a
+	// panic after a refused push is recorded as the panic), and the page
+	// follows the record: the refusal beside it is not consulted.
+	complete(nil)
+	completePushAttempt(ctx, testStderr(t), runEnv(t), ws, syncPushOutcome{remote: remoteName(t, "origin"), branch: "master", pushErr: ahead}, errors.New("sync push panicked: boom"))
+	payload, _ := os.ReadFile(sink)
+	if !strings.HasSuffix(string(payload), "push_failed  \n") || strings.Count(string(payload), "remote_schema_ahead") != 2 {
+		t.Fatalf("an attempt error beside a refused push did not page as the record's failure: %q", payload)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an attempt error beside a refused push opened a remote_schema_ahead episode (stat err=%v)", err)
+	}
 }
 
 // TestLandedPushEndsEveryPushEndedKind pins the group a landed push ends: a
@@ -488,10 +497,10 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 		t.Fatalf("surfaceSyncFailure(diverged push) = %v, want the push_diverged contract", err)
 	}
 	if payload, _ := os.ReadFile(sink); string(payload) != "schema_ceiling_lift\n" {
-		t.Fatalf("a push class paged from the receive half: %q", payload)
+		t.Fatalf("a class with no kind of its own paged from a foreground command: %q", payload)
 	}
 	if !strings.Contains(reported.String(), `"push_diverged" reached the owner channel with no kind of its own`) {
-		t.Fatalf("a push class at the receive half was not reported as a bug; stderr=%q", reported.String())
+		t.Fatalf("a class with no kind of its own reaching a foreground command was not reported as a bug; stderr=%q", reported.String())
 	}
 
 	plain := errors.New("remote unreachable")

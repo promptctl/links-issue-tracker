@@ -19,11 +19,11 @@ import (
 
 // This file is the owner's out-of-band channel: when sync detects a real
 // divergence, a schema refusal (on either half of the channel), or a push that
-// failed with no class of its own, the
-// OWNER — the human whose work the backlog carries — hears about it the day it
-// happens, through a hook they configured (sync.owner_notify_cmd), not days
-// later through an agent's archaeology. The agent-facing blocks stay the
-// in-band surface; this is the copy that leaves the terminal.
+// failed with no class of its own, the OWNER — the human whose work the
+// backlog carries — hears about it the day it happens, through a hook they
+// configured (sync.owner_notify_cmd), not days later through an agent's
+// archaeology. The agent-facing blocks stay the in-band surface; this is the
+// copy that leaves the terminal.
 
 const (
 	// ownerNotifyHookTimeout bounds the hook run so a hung notifier (an
@@ -325,9 +325,9 @@ func clearOwnerNotify(stderr io.Writer, ws workspace.Info, kinds ...ownerNotifyK
 
 // observePushOutcomeForOwner is the push half of the owner channel, fed by the
 // same completion record the push-outcome marker persists so the two can never
-// disagree about how the attempt ended, and by the schema refusal the attempt's
-// push error classifies as, parsed once at the completion seam (refused is
-// whether it was one). [LAW:one-source-of-truth] A landed push ends every
+// disagree about how the attempt ended, and by the schema refusal that
+// record's failure is, out of the same derivation (refused is whether it was
+// one). [LAW:one-source-of-truth] A landed push ends every
 // push-ended episode; a failed attempt notifies — under the refusal's own
 // class when the schema refused the push, since that condition has its own
 // remedy and the receive half pages it under the same kind, else as
