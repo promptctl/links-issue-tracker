@@ -242,8 +242,8 @@ type SyncReceiveResult struct {
 // write to that remote would be refused. [LAW:parse-dont-validate] the
 // verdict the push's guard refuses on, carried as a value.
 type RemoteSchemaAhead struct {
-	RemoteSchema       int64
-	BinarySupportedMax int64
+	RemoteSchema       int64 `json:"remote_schema"`
+	BinarySupportedMax int64 `json:"binary_supported_max"`
 }
 
 // Ahead reports whether the remote head's schema is above this binary's

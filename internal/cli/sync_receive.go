@@ -851,6 +851,8 @@ func performInlineReconcile(ctx context.Context, stderr io.Writer, env environ.E
 		"sync_branch": branch,
 		"state":       string(result.State),
 		"replayed":    strconv.Itoa(result.Replayed),
+		// The remote head's schema when ahead of this binary, 0 otherwise.
+		"remote_schema_ahead": strconv.FormatInt(result.RemoteSchemaAhead.RemoteSchema, 10),
 	}
 	landingMetadata(traceMetadata, result.Landing)
 	// The receive settles silently on success, so its moves go to the worker's

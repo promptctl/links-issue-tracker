@@ -163,7 +163,7 @@ func TestASourceBuildNeverRaisesARemote(t *testing.T) {
 	if *refused != want {
 		t.Fatalf("refusal = %+v, want %+v", *refused, want)
 	}
-	if head := trackingSchema(t, ctx, st); head != knownRemoteSchema(max-1) {
+	if head := trackingSchema(t, ctx, st); head.version != max-1 {
 		t.Fatalf("remote after the refused push = %+v, want schema %d", head, max-1)
 	}
 	if err := AdoptRemoteByClone(ctx, testStderr(), filepath.Join(base, "clone"), "ws", remoteName(t, "origin"), remoteURL, "master"); err != nil {
@@ -177,7 +177,7 @@ func TestASourceBuildNeverRaisesARemote(t *testing.T) {
 	if _, err := st.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush from a release = %v", err)
 	}
-	if head := trackingSchema(t, ctx, st); head != knownRemoteSchema(max) {
+	if head := trackingSchema(t, ctx, st); head.version != max {
 		t.Fatalf("remote after the release's push = %+v, want schema %d", head, max)
 	}
 }
@@ -248,7 +248,7 @@ func TestASourceBuildPushesAtTheRemotesSchema(t *testing.T) {
 	if _, err := st.SyncPush(ctx, remoteName(t, "origin"), "master", false, false); err != nil {
 		t.Fatalf("SyncPush at the remote's schema from a source build = %v", err)
 	}
-	if head := trackingSchema(t, ctx, st); head != knownRemoteSchema(registryMax(t)) {
+	if head := trackingSchema(t, ctx, st); head.version != registryMax(t) {
 		t.Fatalf("remote after the push = %+v, want schema %d", head, registryMax(t))
 	}
 }
@@ -289,7 +289,7 @@ func TestALeasedPushFromASourceBuildNeverRaisesARemote(t *testing.T) {
 	if *refused != want {
 		t.Fatalf("refusal = %+v, want %+v", *refused, want)
 	}
-	if head := trackingSchema(t, ctx, st); head != knownRemoteSchema(max-1) {
+	if head := trackingSchema(t, ctx, st); head.version != max-1 {
 		t.Fatalf("remote after the refused lease = %+v, want schema %d", head, max-1)
 	}
 }

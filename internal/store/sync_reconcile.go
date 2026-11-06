@@ -331,7 +331,9 @@ type reconcilePlan struct {
 	// remoteSchema is the remote head's schema and hold, read once, in every
 	// state, with the reader the push judges a remote head by
 	// (trackingHeadSchema): the replay's guard refuses on it and the result
-	// reports it. [LAW:one-source-of-truth] one read of the head per reconcile.
+	// reports it. remoteHead is the commit it was read AS OF, so the head the
+	// replay lands on is the head the guard judged. [LAW:one-source-of-truth]
+	// one read of the head per reconcile.
 	remoteSchema remoteSchema
 	// schemaAhead is remoteSchema judged against this binary's support.
 	schemaAhead storage.RemoteSchemaAhead
@@ -367,7 +369,7 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteN
 		return plan, nil
 	}
 	plan.diverged = true
-	trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
+	plan.remoteHead = plan.remoteSchema.head
 	plan.dataBranch, err = activeBranch(ctx, s.db)
 	if err != nil {
 		return reconcilePlan{}, err
@@ -375,10 +377,6 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote storage.RemoteN
 	plan.localHead, err = readDoltHead(ctx, s.db)
 	if err != nil {
 		return reconcilePlan{}, fmt.Errorf("read local head: %w", err)
-	}
-	plan.remoteHead, err = commitHashOfRef(ctx, s.db, trackingRef)
-	if err != nil {
-		return reconcilePlan{}, err
 	}
 	plan.base = fresh.Base
 	s.reconcileBases = append(s.reconcileBases, plan.base)
