@@ -74,7 +74,7 @@ func (f *landFixture) seedEpic(root string) {
 		f.t.Fatalf("Open(epic) error = %v", err)
 	}
 	defer f.close(st)
-	epic, err := st.CreateIssue(f.ctx, storage.CreateIssueInput{Prefix: "test", Title: "epic", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(f.ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		f.t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -93,7 +93,7 @@ func (f *landFixture) commit(root, title string) string {
 		f.t.Fatalf("Open(%q) error = %v", title, err)
 	}
 	defer f.close(st)
-	if _, err := st.CreateIssue(f.ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic}); err != nil {
+	if _, err := st.CreateIssue(f.ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic}); err != nil {
 		f.t.Fatalf("CreateIssue(%q) error = %v", title, err)
 	}
 	var head string

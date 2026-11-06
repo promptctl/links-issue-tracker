@@ -24,10 +24,10 @@ func (h readyTestHarness) comments(issueID string) []model.Comment {
 
 func (h readyTestHarness) bulkTickets(n int) []string {
 	h.t.Helper()
-	epic := h.createIssue(storage.CreateIssueInput{Title: "epic", Topic: "bulk", IssueType: "epic"})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "epic"})
 	ids := make([]string, n)
 	for i := range ids {
-		ids[i] = h.createIssue(storage.CreateIssueInput{Title: "ticket", Topic: "bulk", IssueType: "task", ParentID: epic.ID}).ID
+		ids[i] = h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("ticket"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic.ID}).ID
 	}
 	return ids
 }

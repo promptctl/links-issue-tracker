@@ -52,7 +52,7 @@ func compactPush(t *testing.T, ctx context.Context, root, epic, title string, bo
 	if err != nil {
 		t.Fatalf("Open(%s) error = %v", root, err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 		t.Fatalf("CreateIssue(%s) error = %v", title, err)
 	}
 	if err := st.Close(); err != nil {
@@ -263,7 +263,7 @@ func TestABoundKeptOnTheMirrorsCloneCollectsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "past", Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("past"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 		t.Fatal(err)
 	}
 	seeded := heightOf(t, ctx, st, "HEAD")

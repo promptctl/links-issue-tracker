@@ -13,10 +13,10 @@ import (
 func statusSetFixture(t *testing.T) (h readyTestHarness, openID, inProgressID, closedID string) {
 	t.Helper()
 	h = newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "filtering", IssueType: model.TypeEpic, Topic: "filtering"})
-	open := h.createIssue(storage.CreateIssueInput{Title: "still open", IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
-	started := h.createIssue(storage.CreateIssueInput{Title: "being worked", IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
-	closed := h.createIssue(storage.CreateIssueInput{Title: "finished", IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("filtering"), Lane: storage.SharedLane, IssueType: model.TypeEpic, Topic: "filtering"})
+	open := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("still open"), Lane: storage.SharedLane, IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
+	started := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("being worked"), Lane: storage.SharedLane, IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
+	closed := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("finished"), Lane: storage.SharedLane, IssueType: model.TypeBug, Topic: "filtering", ParentID: epic.ID})
 	if _, err := h.ap.Store.Apply(h.ctx, started.ID, storage.Change{
 		Action: model.Start{}, Actor: "tester", Reason: "picking it up",
 	}); err != nil {

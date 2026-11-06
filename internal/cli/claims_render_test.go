@@ -214,8 +214,8 @@ func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
 func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "claims", IssueType: "epic"})
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unattributed hold", Topic: "claims", IssueType: "task", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "claims", IssueType: "epic"})
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("unattributed hold"), Lane: storage.SharedLane, Topic: "claims", IssueType: "task", ParentID: epic.ID})
 	h.asCheckout("")
 	h.transition(issue.ID, model.Start{})
 

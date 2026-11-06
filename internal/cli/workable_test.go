@@ -39,8 +39,8 @@ func (h readyTestHarness) runViewErr(view workableView, args ...string) error {
 func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "status", IssueType: "epic", Priority: 1})
-	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "status", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Open leaf"), Lane: storage.SharedLane, Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	for _, cmd := range workableCmds {
 		for _, value := range []string{"weird", "closed", "CLOSED", "done"} {
@@ -65,8 +65,8 @@ func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 func TestWorkableStatusAcceptsLegalValues(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home epic", Topic: "status", IssueType: "epic", Priority: 1})
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "status", IssueType: "epic", Priority: 1})
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Open leaf"), Lane: storage.SharedLane, Topic: "status", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	text := h.runWorkableText("--status", "open")
 	if !strings.Contains(text, issue.ID) {

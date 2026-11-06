@@ -178,16 +178,16 @@ func TestTopRankReachesTheTopOfTheFocusedView(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	early := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Path step one", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "early",
+		Title: storage.MustParseTitle("Path step one"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("early"),
 	})
 	late := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Path step two", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "late",
+		Title: storage.MustParseTitle("Path step two"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("late"),
 	})
 	h.addDependencyWithinEpic(goal.ID, early.ID)
 	h.addDependencyWithinEpic(goal.ID, late.ID)
@@ -215,22 +215,22 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	prereqA := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq A", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "a",
+		Title: storage.MustParseTitle("Prereq A"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("a"),
 	})
 	prereqB := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq B", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "b",
+		Title: storage.MustParseTitle("Prereq B"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("b"),
 	})
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.addDependencyWithinEpic(goal.ID, prereqA.ID)
 	h.addDependencyWithinEpic(goal.ID, prereqB.ID)
@@ -285,11 +285,11 @@ func TestBacklogTrimCountNamesOnlyTheLimitNarrowing(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	for _, title := range []string{"Alpha", "Beta", "Gamma", "Delta"} {
 		_ = h.createIssue(storage.CreateIssueInput{Prefix: "test",
-			Title: title, Topic: "noise", IssueType: "task", ParentID: noise.ID,
+			Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", ParentID: noise.ID,
 		})
 	}
 
@@ -320,19 +320,19 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	prereq := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "prereq",
+		Title: storage.MustParseTitle("Prereq"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("prereq"),
 	})
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.addDependencyWithinEpic(goal.ID, prereq.ID)
 
@@ -379,16 +379,16 @@ func TestFocusedBacklogSaysWhichEmptinessThisIs(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "bug", ParentID: goalEpic.ID,
+		Title: storage.MustParseTitle("Goal"), Lane: storage.SharedLane, Topic: "goal", IssueType: "bug", ParentID: goalEpic.ID,
 	})
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated", Topic: "noise", IssueType: "task", ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.setLabels(goal.ID, FocusLabel)
 
@@ -411,22 +411,22 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "prereq",
+		Title: storage.MustParseTitle("Prereq"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("prereq"),
 	})
 	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Design gate", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "gate",
+		Title: storage.MustParseTitle("Design gate"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("gate"),
 	})
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Unrelated ready work", Topic: "noise", IssueType: "task", ParentID: noise.ID,
+		Title: storage.MustParseTitle("Unrelated ready work"), Lane: storage.SharedLane, Topic: "noise", IssueType: "task", ParentID: noise.ID,
 	})
 	h.addDependencyWithinEpic(goal.ID, blocked.ID)
 	h.addDependencyWithinEpic(blocked.ID, gate.ID)
@@ -478,13 +478,13 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Design gate", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "gate",
+		Title: storage.MustParseTitle("Design gate"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("gate"),
 	})
 	h.addDependencyWithinEpic(goal.ID, gate.ID)
 	h.setLabels(gate.ID, NeedsDesignLabel)
@@ -493,13 +493,13 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	// Off the path, and not startable either: blocked by its own open
 	// prerequisite, which is likewise off the path and likewise gated.
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Off-path, blocked", Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: "off",
+		Title: storage.MustParseTitle("Off-path, blocked"), Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: storage.MustParseLane("off"),
 	})
 	offGate := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Off-path blocker", Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: "off-gate",
+		Title: storage.MustParseTitle("Off-path blocker"), Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: storage.MustParseLane("off-gate"),
 	})
 	h.addDependencyWithinEpic(off.ID, offGate.ID)
 	h.setLabels(offGate.ID, NeedsDesignLabel)
@@ -561,19 +561,19 @@ func TestFocusScopeNeverHidesThisCheckoutsOwnWork(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	onPath := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Path work", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "path",
+		Title: storage.MustParseTitle("Path work"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("path"),
 	})
 	elsewhere := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Elsewhere epic", Topic: "elsewhere", IssueType: "epic",
+		Title: storage.MustParseTitle("Elsewhere epic"), Lane: storage.SharedLane, Topic: "elsewhere", IssueType: "epic",
 	})
 	mine := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "My in-flight work", Topic: "elsewhere", IssueType: "task", ParentID: elsewhere.ID,
+		Title: storage.MustParseTitle("My in-flight work"), Lane: storage.SharedLane, Topic: "elsewhere", IssueType: "task", ParentID: elsewhere.ID,
 	})
 	h.addDependencyWithinEpic(goal.ID, onPath.ID)
 
@@ -690,21 +690,21 @@ func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	prereq := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "prereq",
+		Title: storage.MustParseTitle("Prereq"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("prereq"),
 	})
 	h.addDependencyWithinEpic(goal.ID, prereq.ID)
 	h.setLabels(goal.ID, FocusLabel)
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	off := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Ready, off the focus path", Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: "off",
+		Title: storage.MustParseTitle("Ready, off the focus path"), Topic: "noise", IssueType: "task", ParentID: noise.ID, Lane: storage.MustParseLane("off"),
 	})
 	// Ranked above every path row: the `--all` run serving it is what shows the
 	// focused run passed over a higher-ranked ticket.
@@ -730,8 +730,8 @@ func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
 func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "next", IssueType: "epic"})
-	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Pool pick", Topic: "next", IssueType: "task", ParentID: epic.ID, Lane: "pick"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic"})
+	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Pool pick"), Topic: "next", IssueType: "task", ParentID: epic.ID, Lane: storage.MustParseLane("pick")})
 	rows, details, _ := h.gather()
 	row := rowByID(t, rows, ticket.ID)
 	pick := poolPick{Row: row, Lane: laneOf(t, details, row), Scope: focusScope{goals: []string{"test-goal"}}}
@@ -786,21 +786,21 @@ func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+		Title: storage.MustParseTitle("Goal epic"), Lane: storage.SharedLane, Topic: "goal", IssueType: "epic",
 	})
 	goal := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "goal",
+		Title: storage.MustParseTitle("Goal"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("goal"),
 	})
 	prereq := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Prereq", Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: "prereq",
+		Title: storage.MustParseTitle("Prereq"), Topic: "goal", IssueType: "task", ParentID: goalEpic.ID, Lane: storage.MustParseLane("prereq"),
 	})
 	h.addDependencyWithinEpic(goal.ID, prereq.ID)
 	h.setLabels(goal.ID, FocusLabel)
 	noise := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Noise epic", Topic: "noise", IssueType: "epic",
+		Title: storage.MustParseTitle("Noise epic"), Lane: storage.SharedLane, Topic: "noise", IssueType: "epic",
 	})
 	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test",
-		Title: "Ready bug, off the focus path", Topic: "noise", IssueType: "bug", ParentID: noise.ID, Lane: "off",
+		Title: storage.MustParseTitle("Ready bug, off the focus path"), Topic: "noise", IssueType: "bug", ParentID: noise.ID, Lane: storage.MustParseLane("off"),
 	})
 
 	err := h.runNextErr("--type", "bug")

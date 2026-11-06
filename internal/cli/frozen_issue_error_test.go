@@ -27,8 +27,8 @@ func TestStatusCommandOnFrozenTicketRefusesNamingTheThaw(t *testing.T) {
 		for _, spec := range []transitionSpec{startSpec, doneSpec, closeSpec, openSpec} {
 			t.Run(freeze.state+"/"+spec.name, func(t *testing.T) {
 				h := newReadyTestHarness(t)
-				epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Home", Topic: "frozen", IssueType: "epic"})
-				ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Frozen", Topic: "frozen", IssueType: "task", ParentID: epic.ID})
+				epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home"), Lane: storage.SharedLane, Topic: "frozen", IssueType: "epic"})
+				ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Frozen"), Lane: storage.SharedLane, Topic: "frozen", IssueType: "task", ParentID: epic.ID})
 				h.applyAction(ticket.ID, freeze.action, "")
 
 				err := h.runTransitionErr(ticket.ID, spec, actionFlags[spec.name]...)
@@ -64,10 +64,10 @@ func TestStatusCommandOnFrozenTicketRefusesNamingTheThaw(t *testing.T) {
 func TestStartRefusesAFrozenTicketBeforeTheTakeoverGate(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Held", Topic: "frozen", IssueType: "epic"})
-	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "frozen", IssueType: "task", ParentID: epic.ID})
-	sibling := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Live sibling", Topic: "frozen", IssueType: "task", ParentID: epic.ID})
-	archived := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Archived", Topic: "frozen", IssueType: "task", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Held"), Lane: storage.SharedLane, Topic: "frozen", IssueType: "epic"})
+	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Theirs"), Lane: storage.SharedLane, Topic: "frozen", IssueType: "task", ParentID: epic.ID})
+	sibling := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Live sibling"), Lane: storage.SharedLane, Topic: "frozen", IssueType: "task", ParentID: epic.ID})
+	archived := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Archived"), Lane: storage.SharedLane, Topic: "frozen", IssueType: "task", ParentID: epic.ID})
 	h.applyAction(archived.ID, model.Archive{}, "")
 	h.asCheckout("otherstream01")
 	h.applyAction(theirs.ID, model.Start{Assignee: "tester"}, "")

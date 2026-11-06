@@ -50,7 +50,8 @@ func TestRunImportOfAnExportNamesBackupRestore(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Exported", Topic: "import", IssueType: "task",
+		Prefix: "test", Title: storage.MustParseTitle("Exported"),
+		Lane: storage.SharedLane, Topic: "import", IssueType: "task",
 		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -91,7 +92,7 @@ func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
 	for _, tc := range []struct {
 		name, file, content, want string
 	}{
-		{"tree spec missing a title", "x.json", `[{"local_id":"a","type":"task","topic":"demo"}]`, `import: spec "a" missing title`},
+		{"tree spec missing a title", "x.json", `[{"local_id":"a","type":"task","topic":"demo"}]`, `import: spec "a": title is required`},
 		{"tree spec missing a topic", "x.json", `[{"local_id":"a","title":"x","type":"epic"}]`, `import: spec "a": topic is required`},
 		{"tree spec with a topic too short to be one", "x.json", `[{"local_id":"a","title":"x","type":"epic","topic":"x"}]`, `import: spec "a": topic must be at least 3 characters`},
 		{"tree spec of null", "x.json", `null`, "import: no issues in input"},
@@ -105,7 +106,8 @@ func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
 			{"local_id":"b","title":"b","type":"task","topic":"demo","parent":"e","blocked_by":["a"]}
 		]`, `import: spec "b" blocked_by "a": ` + storage.SameEpicBlocksRejectionMessage},
 		{"bulk file missing a topic", "x.yaml", "title: x\ntype: task\n", "bulk: doc 0 missing topic"},
-		{"bulk update that empties a title", "x.yaml", "id: demo-1\ntitle: \" \"\n", `bulk: doc 0 (id "demo-1") sets an empty title`},
+		{"bulk create whose title holds a line break", "x.yaml", "title: \"a\\nb\"\ntype: epic\ntopic: demo\n", "bulk: doc 0: title cannot hold a line break"},
+		{"bulk create whose lane holds a line break", "x.yaml", "title: a\ntype: epic\ntopic: demo\nlane: \"a\\rb\"\n", "bulk: doc 0: lane cannot hold a line break"},
 		{"bulk file with a cycle", "x.yaml", "local_id: a\ntitle: a\ntype: epic\ntopic: demo\nblocked_by: [b]\n---\nlocal_id: b\ntitle: b\ntype: epic\ntopic: demo\nblocked_by: [a]\n", "bulk: cycle detected involving"},
 		{"bulk file ordering two leaves of one epic", "x.yaml", "local_id: e\ntitle: e\ntype: epic\ntopic: demo\n---\nlocal_id: a\ntitle: a\ntype: task\ntopic: demo\nparent: e\n---\ntitle: b\ntype: bug\ntopic: demo\nparent: e\nblocked_by: [a]\n", `bulk: doc 2 blocked_by "a": ` + storage.SameEpicBlocksRejectionMessage},
 	} {
@@ -279,7 +281,8 @@ func TestRunImportYAMLUpdatesByID(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Before", Topic: "import", IssueType: "task",
+		Prefix: "test", Title: storage.MustParseTitle("Before"),
+		Lane: storage.SharedLane, Topic: "import", IssueType: "task",
 		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	})
 	if err != nil {
@@ -316,7 +319,8 @@ func TestRunImportYAMLMixedFileIsLegal(t *testing.T) {
 	ap := newTestCLIApp(t)
 	epic := seedEpicRaw(t, ctx, ap, "Import", "import")
 	existing, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Old", Topic: "import", IssueType: "task", ParentID: epic,
+		Prefix: "test", Title: storage.MustParseTitle("Old"),
+		Lane: storage.SharedLane, Topic: "import", IssueType: "task", ParentID: epic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -400,7 +404,8 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Before", Topic: "import", IssueType: "task",
+		Prefix: "test", Title: storage.MustParseTitle("Before"),
+		Lane: storage.SharedLane, Topic: "import", IssueType: "task",
 		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	})
 	if err != nil {
@@ -483,7 +488,8 @@ func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Reason trim", Topic: "import", IssueType: "task",
+		Prefix: "test", Title: storage.MustParseTitle("Reason trim"),
+		Lane: storage.SharedLane, Topic: "import", IssueType: "task",
 		ParentID: seedEpicRaw(t, ctx, ap, "Import", "import"),
 	})
 	if err != nil {

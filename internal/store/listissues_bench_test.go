@@ -22,14 +22,15 @@ func benchIssueIDs(b *testing.B, rows int) (*Store, context.Context, []string) {
 	b.Helper()
 	ctx := context.Background()
 	st := openIssueStore(b, ctx)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "env epic", Topic: "env", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("env epic"), Lane: storage.SharedLane, Topic: "env", IssueType: "epic"})
 	if err != nil {
 		b.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	ids := make([]string, 0, rows)
 	for i := range rows {
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("row %d", i), Topic: "env",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("row %d", i)),
+			Lane: storage.SharedLane, Topic: "env",
 			IssueType: "task", Placement: storage.RankBottom, ParentID: epic.ID,
 		})
 		if err != nil {
@@ -66,14 +67,16 @@ func benchListByParents(b *testing.B, parents int) {
 	parentIDs := make([]string, 0, parents)
 	for i := range parents {
 		parent, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("parent %d", i), Topic: "env",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("parent %d", i)),
+			Lane: storage.SharedLane, Topic: "env",
 			IssueType: "epic", Placement: storage.RankBottom,
 		})
 		if err != nil {
 			b.Fatalf("CreateIssue(parent %d) error = %v", i, err)
 		}
 		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("child %d", i), Topic: "env",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("child %d", i)),
+			Lane: storage.SharedLane, Topic: "env",
 			IssueType: "task", Placement: storage.RankBottom, ParentID: parent.ID,
 		}); err != nil {
 			b.Fatalf("CreateIssue(child %d) error = %v", i, err)

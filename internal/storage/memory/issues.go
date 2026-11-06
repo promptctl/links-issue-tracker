@@ -26,9 +26,13 @@ func (e *Engine) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (
 // not there reports the missing issue rather than whatever the caller left out
 // of a call it was never going to complete.
 func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
-	title := strings.TrimSpace(in.Title)
-	if title == "" {
-		return model.Issue{}, model.ValidationError{Message: "title is required"}
+	title, err := in.Title.Text()
+	if err != nil {
+		return model.Issue{}, err
+	}
+	lane, err := in.Lane.Text()
+	if err != nil {
+		return model.Issue{}, err
 	}
 	labels, err := canonicalLabels(in.Labels)
 	if err != nil {
@@ -94,7 +98,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 		issueType:   issueType,
 		topic:       topic,
 		assignee:    assignee,
-		lane:        strings.TrimSpace(in.Lane),
+		lane:        lane,
 		priority:    in.Priority,
 		followsUp:   followsUp,
 		createdAt:   now,

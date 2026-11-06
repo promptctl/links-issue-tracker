@@ -23,13 +23,13 @@ import (
 func benchListEvents(b *testing.B, rows int) {
 	engine := newEngine(b, storage.SystemClock)
 	ctx := context.Background()
-	epic, err := engine.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "bench", Title: "env epic", Topic: "env", IssueType: model.TypeEpic})
+	epic, err := engine.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "bench", Title: storage.MustParseTitle("env epic"), Lane: storage.SharedLane, Topic: "env", IssueType: model.TypeEpic})
 	if err != nil {
 		b.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	ids := make([]string, 0, rows)
 	for i := range rows {
-		issue, err := engine.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "bench", Title: fmt.Sprintf("row %d", i), Topic: "env", ParentID: epic.ID})
+		issue, err := engine.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "bench", Title: storage.MustParseTitle(fmt.Sprintf("row %d", i)), Lane: storage.SharedLane, Topic: "env", ParentID: epic.ID})
 		if err != nil {
 			b.Fatalf("CreateIssue(%d) error = %v", i, err)
 		}

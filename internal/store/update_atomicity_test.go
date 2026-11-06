@@ -28,13 +28,14 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Atomicity epic", Topic: "atomicity", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Atomicity epic"), Lane: storage.SharedLane, Topic: "atomicity", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Original",
+		Title:     storage.MustParseTitle("Original"),
+		Lane:      storage.SharedLane,
 		Topic:     "atomicity",
 		IssueType: "task",
 		Priority:  model.PriorityNormal,
@@ -84,13 +85,14 @@ func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Atomicity epic", Topic: "atomicity", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Atomicity epic"), Lane: storage.SharedLane, Topic: "atomicity", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Original",
+		Title:     storage.MustParseTitle("Original"),
+		Lane:      storage.SharedLane,
 		Topic:     "atomicity",
 		IssueType: "task",
 		Priority:  model.PriorityNormal,

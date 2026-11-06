@@ -20,13 +20,13 @@ func TestRunFollowupFilesBesideTheClosedTicket(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Renderer", Topic: "renderer", IssueType: model.TypeEpic,
+		Title: storage.MustParseTitle("Renderer"), Lane: storage.SharedLane, Topic: "renderer", IssueType: model.TypeEpic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	closed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Renderer cache invalidation",
+		Title: storage.MustParseTitle("Renderer cache invalidation"), Lane: storage.SharedLane,
 		Topic:     "renderer",
 		IssueType: "task",
 		Priority:  0,
@@ -103,7 +103,7 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	closed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Loose end", Topic: "sync", IssueType: model.TypeEpic, Priority: 0,
+		Title: storage.MustParseTitle("Loose end"), Lane: storage.SharedLane, Topic: "sync", IssueType: model.TypeEpic, Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue error = %v", err)
@@ -135,7 +135,7 @@ func TestRunFollowupOnATopLevelTicketIsTopLevel(t *testing.T) {
 	}
 
 	home, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Where the work goes", Topic: "sync", IssueType: model.TypeEpic,
+		Title: storage.MustParseTitle("Where the work goes"), Lane: storage.SharedLane, Topic: "sync", IssueType: model.TypeEpic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(home epic) error = %v", err)
@@ -194,7 +194,7 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 
 	epic := seedEpicRaw(t, ctx, ap, "Sync", "sync")
 	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Sync flow tightening",
+		Title: storage.MustParseTitle("Sync flow tightening"), Lane: storage.SharedLane,
 		Topic:     "sync",
 		IssueType: "task",
 		Priority:  0,
@@ -278,7 +278,7 @@ func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Closed work", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Title: storage.MustParseTitle("Closed work"), Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Lifecycle", "lifecycle"),
 	})
 	if err != nil {
@@ -308,7 +308,7 @@ func TestFollowupEventSaysWhereItsParentCameFrom(t *testing.T) {
 	epic := seedEpicRaw(t, ctx, ap, "Renderer", "renderer")
 	other := seedEpicRaw(t, ctx, ap, "Cache", "cache")
 	leaf, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Renderer work", Topic: "renderer", IssueType: model.TypeTask, ParentID: epic,
+		Title: storage.MustParseTitle("Renderer work"), Lane: storage.SharedLane, Topic: "renderer", IssueType: model.TypeTask, ParentID: epic,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)

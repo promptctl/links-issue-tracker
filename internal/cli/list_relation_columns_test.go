@@ -38,11 +38,11 @@ func TestListRelationColumns(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Epic", Topic: "rel", IssueType: "epic", Priority: 1})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "rel", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic): %v", err)
 	}
-	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Child", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Child"), Lane: storage.SharedLane, Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(child): %v", err)
 	}
@@ -51,27 +51,27 @@ func TestListRelationColumns(t *testing.T) {
 	// a sibling ranked ahead in a shared lane. The blockers sit in an epic
 	// apart from what they block: between two leaves of one epic a
 	// blocked-by edge is refused.
-	other, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Other epic", Topic: "rel", IssueType: "epic", Priority: 1})
+	other, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Other epic"), Lane: storage.SharedLane, Topic: "rel", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(other): %v", err)
 	}
-	upstream, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Upstream epic", Topic: "rel", IssueType: "epic", Priority: 1})
+	upstream, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Upstream epic"), Lane: storage.SharedLane, Topic: "rel", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(upstream): %v", err)
 	}
-	openBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Open blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: upstream.ID, Lane: "open-blocker"})
+	openBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Open blocker"), Topic: "rel", IssueType: "task", Priority: 0, ParentID: upstream.ID, Lane: storage.MustParseLane("open-blocker")})
 	if err != nil {
 		t.Fatalf("CreateIssue(openBlocker): %v", err)
 	}
-	blockedByOpen, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by open", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "blocked-by-open"})
+	blockedByOpen, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Blocked by open"), Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: storage.MustParseLane("blocked-by-open")})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedByOpen): %v", err)
 	}
-	closedBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Closed blocker", Topic: "rel", IssueType: "task", Priority: 0, ParentID: upstream.ID, Lane: "closed-blocker"})
+	closedBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Closed blocker"), Topic: "rel", IssueType: "task", Priority: 0, ParentID: upstream.ID, Lane: storage.MustParseLane("closed-blocker")})
 	if err != nil {
 		t.Fatalf("CreateIssue(closedBlocker): %v", err)
 	}
-	blockedByClosed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by closed", Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: "blocked-by-closed"})
+	blockedByClosed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: storage.MustParseTitle("Blocked by closed"), Topic: "rel", IssueType: "task", Priority: 0, ParentID: other.ID, Lane: storage.MustParseLane("blocked-by-closed")})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedByClosed): %v", err)
 	}
@@ -186,11 +186,11 @@ func TestListDerivedColumnsLoadsOnlyWhatIsProjected(t *testing.T) {
 	// The blocker sits in an epic of its own: between two leaves of one epic a
 	// blocked-by edge is refused.
 	upstream := seedEpicRaw(t, ctx, ap, "Upstream", "gate")
-	blocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "Blocker", Topic: "gate", IssueType: "task", Priority: 0, ParentID: upstream, Lane: "blocker"})
+	blocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: storage.MustParseTitle("Blocker"), Topic: "gate", IssueType: "task", Priority: 0, ParentID: upstream, Lane: storage.MustParseLane("blocker")})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker): %v", err)
 	}
-	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "X", Topic: "gate", IssueType: "task", Priority: 0, ParentID: epic, Lane: "x"})
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: storage.MustParseTitle("X"), Topic: "gate", IssueType: "task", Priority: 0, ParentID: epic, Lane: storage.MustParseLane("x")})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}

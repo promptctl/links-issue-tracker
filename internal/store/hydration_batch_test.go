@@ -43,13 +43,15 @@ func TestHydrationReadsCoverEveryID(t *testing.T) {
 	epics := make([]string, 0, epicCount)
 	for i := range epicCount {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("Epic %d", i), Topic: "hydrate", IssueType: "epic",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("Epic %d", i)),
+			Lane: storage.SharedLane, Topic: "hydrate", IssueType: "epic",
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue(epic %d) error = %v", i, err)
 		}
 		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Prefix: "test", Title: fmt.Sprintf("Child %d", i), Topic: "hydrate", IssueType: "task",
+			Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("Child %d", i)),
+			Lane: storage.SharedLane, Topic: "hydrate", IssueType: "task",
 			ParentID: epic.ID, Placement: storage.RankBottom,
 		})
 		if err != nil {
@@ -65,7 +67,8 @@ func TestHydrationReadsCoverEveryID(t *testing.T) {
 	}
 
 	childless, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Childless", Topic: "hydrate", IssueType: "epic",
+		Prefix: "test", Title: storage.MustParseTitle("Childless"),
+		Lane: storage.SharedLane, Topic: "hydrate", IssueType: "epic",
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(childless) error = %v", err)

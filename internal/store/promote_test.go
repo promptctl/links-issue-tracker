@@ -64,14 +64,16 @@ func seedRealWorkspace(t *testing.T, ctx context.Context, doltRoot string, title
 	t.Helper()
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: "recovery epic", IssueType: "epic", Topic: "recovery", Prefix: "links",
+			Title: storage.MustParseTitle("recovery epic"),
+			Lane:  storage.SharedLane, IssueType: "epic", Topic: "recovery", Prefix: "links",
 		})
 		if err != nil {
 			t.Fatalf("seed epic: %v", err)
 		}
 		for _, title := range titles {
 			if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
+				Title: storage.MustParseTitle(title),
+				Lane:  storage.SharedLane, IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
 			}); err != nil {
 				t.Fatalf("seed issue %q: %v", title, err)
 			}
@@ -235,13 +237,15 @@ func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 	var concurrentID string
 	withStore(t, ctx, canonical, func(st *Store) {
 		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: "landed during recovery epic", IssueType: "epic", Topic: "recovery", Prefix: "links",
+			Title: storage.MustParseTitle("landed during recovery epic"),
+			Lane:  storage.SharedLane, IssueType: "epic", Topic: "recovery", Prefix: "links",
 		})
 		if err != nil {
 			t.Fatalf("concurrent commit (epic): %v", err)
 		}
 		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: "landed during recovery", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
+			Title: storage.MustParseTitle("landed during recovery"),
+			Lane:  storage.SharedLane, IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID,
 		})
 		if err != nil {
 			t.Fatalf("concurrent commit: %v", err)

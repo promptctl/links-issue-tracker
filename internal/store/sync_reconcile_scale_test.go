@@ -285,11 +285,11 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 // consistent, so the export is one the store could have produced on its own.
 func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int) {
 	t.Helper()
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "scale epic", Topic: "scale", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("scale epic"), Lane: storage.SharedLane, Topic: "scale", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic): %v", err)
 	}
-	seedIssue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "scale", IssueType: "task", ParentID: epic.ID})
+	seedIssue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("seed"), Lane: storage.SharedLane, Topic: "scale", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}

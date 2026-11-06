@@ -21,12 +21,12 @@ func TestListQuerySupersetMatchesDiscreteFlags(t *testing.T) {
 	// Three plainly-visible issues plus one archived and one deleted, so every
 	// dimension has an observable effect: sort orders them, limit truncates,
 	// and the visibility flags decide whether the last two appear at all.
-	epic := h.createIssue(storage.CreateIssueInput{Title: "sup", IssueType: model.TypeEpic, Topic: "sup"})
-	a := h.createIssue(storage.CreateIssueInput{Title: "alpha", IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
-	b := h.createIssue(storage.CreateIssueInput{Title: "bravo", IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
-	c := h.createIssue(storage.CreateIssueInput{Title: "charlie", IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
-	arch := h.createIssue(storage.CreateIssueInput{Title: "archived one", IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
-	del := h.createIssue(storage.CreateIssueInput{Title: "deleted one", IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("sup"), Lane: storage.SharedLane, IssueType: model.TypeEpic, Topic: "sup"})
+	a := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("alpha"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
+	b := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("bravo"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
+	c := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("charlie"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
+	arch := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("archived one"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
+	del := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("deleted one"), Lane: storage.SharedLane, IssueType: model.TypeTask, Topic: "sup", ParentID: epic.ID})
 	if _, err := h.ap.Store.Apply(h.ctx, arch.ID, storage.Change{Action: model.Archive{}, Actor: "tester", Reason: "shelve"}); err != nil {
 		t.Fatalf("Apply(archive) error = %v", err)
 	}

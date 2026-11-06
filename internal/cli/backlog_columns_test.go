@@ -91,8 +91,8 @@ func TestBacklogRejectsUnknownColumn(t *testing.T) {
 	} {
 		t.Run(tc.expr, func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
-			h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Row one", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
+			epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "cols", IssueType: "epic", Priority: 1})
+			h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Row one"), Lane: storage.SharedLane, Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
 			out, err := runBacklogColumns(h, tc.expr)
 			if err == nil {
@@ -128,8 +128,8 @@ func TestBacklogRejectsUnknownColumn(t *testing.T) {
 func TestBacklogAcceptsValidColumns(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
-	issue := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Projected row", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "cols", IssueType: "epic", Priority: 1})
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Projected row"), Lane: storage.SharedLane, Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
 	out, err := runBacklogColumns(h, "id,rank,title")
 	if err != nil {
@@ -153,10 +153,10 @@ func TestBacklogAcceptsValidColumns(t *testing.T) {
 func TestBacklogRendersRelationColumns(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
-	child := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Child", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Other epic", Topic: "cols", IssueType: "epic", Priority: 1})
-	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Blocker", Topic: "cols", IssueType: "task", Priority: 0, ParentID: otherEpic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "cols", IssueType: "epic", Priority: 1})
+	child := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Child"), Lane: storage.SharedLane, Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	otherEpic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Other epic"), Lane: storage.SharedLane, Topic: "cols", IssueType: "epic", Priority: 1})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Blocker"), Lane: storage.SharedLane, Topic: "cols", IssueType: "task", Priority: 0, ParentID: otherEpic.ID})
 	h.addDependency(child.ID, blocker.ID)
 
 	out, err := runBacklogColumns(h, "id,parent,blocked")
@@ -214,9 +214,9 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 func TestBacklogBlockedColumnAgreesWithTheContextLine(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
-	first := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "First", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	second := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Second", Topic: "cols", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "cols", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("First"), Lane: storage.SharedLane, Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	second := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: storage.MustParseTitle("Second"), Lane: storage.SharedLane, Topic: "cols", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	out, err := runBacklogColumns(h, "id,blocked")
 	if err != nil {

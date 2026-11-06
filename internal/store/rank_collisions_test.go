@@ -214,11 +214,11 @@ func TestDoctorCountsSharedRankKeysAndTheRepairSeparatesThemInOrder(t *testing.T
 	st := openIssueStore(t, ctx)
 	var epics []model.Issue
 	for _, title := range []string{"one", "two", "three", "four"} {
-		epics = append(epics, createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "epic"}))
+		epics = append(epics, createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"}))
 	}
 	// Filed under the epic outside the pair, since an epic whose only child is
 	// closed is closed with it.
-	done := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "done", Topic: "topic", IssueType: "task", ParentID: epics[3].ID})
+	done := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("done"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epics[3].ID})
 	if _, err := st.Apply(ctx, done.ID, storage.Change{Action: model.Close{Outcome: model.Obsolete{}}, Actor: "tester"}); err != nil {
 		t.Fatalf("close %s: %v", done.ID, err)
 	}
@@ -264,7 +264,7 @@ func TestRestoreSeparatesASharedRankKey(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	for _, title := range []string{"one", "two", "three"} {
-		createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "epic"})
+		createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	}
 	backup, err := st.Export(ctx)
 	if err != nil {

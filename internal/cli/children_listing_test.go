@@ -26,7 +26,8 @@ func TestChildrenIsLsWithAParent(t *testing.T) {
 	second := f.addEpicChild("Second child")
 	f.transition(first, model.Done{})
 	grandchild, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Grandchild", Topic: "epic-view", IssueType: "task", ParentID: second,
+		Prefix: "test", Title: storage.MustParseTitle("Grandchild"),
+		Lane: storage.SharedLane, Topic: "epic-view", IssueType: "task", ParentID: second,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(grandchild) error = %v", err)
@@ -173,7 +174,8 @@ func TestLsRepeatedParentIsAUnion(t *testing.T) {
 	first := f.addChild("First child")
 	second := f.addEpicChild("Second child")
 	grandchild, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Grandchild", Topic: "epic-view", IssueType: "task", ParentID: second,
+		Prefix: "test", Title: storage.MustParseTitle("Grandchild"),
+		Lane: storage.SharedLane, Topic: "epic-view", IssueType: "task", ParentID: second,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(grandchild) error = %v", err)

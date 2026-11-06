@@ -28,16 +28,16 @@ func benchGather(b *testing.B, rows int, rf workableFilter) {
 	// — every invocation would leak a dolt directory and an open store, and a
 	// setup Fatalf would Goexit without failing the benchmark.
 	h := newBacklogTestHarness(b)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "env", IssueType: "epic"})
-	gates := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Gates", Topic: "env", IssueType: "epic"})
-	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Gate", Topic: "env", IssueType: "task", ParentID: gates})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "env", IssueType: "epic"})
+	gates := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Gates"), Lane: storage.SharedLane, Topic: "env", IssueType: "epic"})
+	gate := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Gate"), Lane: storage.SharedLane, Topic: "env", IssueType: "task", ParentID: gates})
 	h.addDependency(epic, gate)
 	for i := 0; i < rows; i++ {
 		kind := model.IssueType("task")
 		if i%3 == 0 {
 			kind = model.IssueType("bug")
 		}
-		h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: fmt.Sprintf("row %d", i), Topic: "env", IssueType: kind, ParentID: epic})
+		h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(fmt.Sprintf("row %d", i)), Lane: storage.SharedLane, Topic: "env", IssueType: kind, ParentID: epic})
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

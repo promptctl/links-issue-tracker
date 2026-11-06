@@ -430,7 +430,8 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// The epic every leaf below lives in: a leaf is never created outside one.
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Seed epic",
+		Title:     storage.MustParseTitle("Seed epic"),
+		Lane:      storage.SharedLane,
 		Topic:     "seed",
 		IssueType: "epic",
 	})
@@ -441,7 +442,8 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// Issue A: feature, urgent priority, labels, transitions to in_progress with assignee.
 	issueA, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Alpha feature",
+		Title:     storage.MustParseTitle("Alpha feature"),
+		Lane:      storage.SharedLane,
 		Topic:     "feature",
 		IssueType: "feature",
 		Priority:  model.PriorityUrgent,
@@ -460,7 +462,8 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// refused.
 	upstream, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Upstream epic",
+		Title:     storage.MustParseTitle("Upstream epic"),
+		Lane:      storage.SharedLane,
 		Topic:     "seed",
 		IssueType: "epic",
 	})
@@ -469,7 +472,8 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 	issueB, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Beta task",
+		Title:     storage.MustParseTitle("Beta task"),
+		Lane:      storage.SharedLane,
 		Topic:     "backend",
 		IssueType: "task",
 		Priority:  model.PriorityNormal,
@@ -489,7 +493,8 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// Issue C: chore with label.
 	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Gamma chore",
+		Title:     storage.MustParseTitle("Gamma chore"),
+		Lane:      storage.SharedLane,
 		Topic:     "infra",
 		IssueType: "chore",
 		Priority:  model.PriorityNormal,
@@ -581,7 +586,8 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	// Step 7: Assert the restored workspace is writable.
 	if _, err := restored.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Post-restore write check",
+		Title:     storage.MustParseTitle("Post-restore write check"),
+		Lane:      storage.SharedLane,
 		Topic:     "verify",
 		IssueType: "task",
 		ParentID:  epic.ID,

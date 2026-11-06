@@ -110,10 +110,10 @@ func TestWorkableSetFlagsRejectABadMemberLoudly(t *testing.T) {
 func TestOrphanedRepeatedAssigneeWidens(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "orphans", IssueType: model.TypeEpic, Topic: "orphans"})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("orphans"), Lane: storage.SharedLane, IssueType: model.TypeEpic, Topic: "orphans"})
 	var stale []string
 	for _, holder := range []string{"ann", "bob", "cy"} {
-		issue := h.createIssue(storage.CreateIssueInput{Title: holder + "'s work", IssueType: model.TypeTask, Topic: "orphans", ParentID: epic.ID, Lane: holder})
+		issue := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle(holder + "'s work"), IssueType: model.TypeTask, Topic: "orphans", ParentID: epic.ID, Lane: storage.MustParseLane(holder)})
 		if _, err := h.ap.Store.Apply(h.ctx, issue.ID, storage.Change{Action: model.Start{Assignee: holder}, Actor: holder}); err != nil {
 			t.Fatalf("start %s: %v", issue.ID, err)
 		}
@@ -218,7 +218,7 @@ func TestSingleValueFlagRefusesARepeat(t *testing.T) {
 func TestNewRefusesARepeatedLabelsFlagBeforeWriting(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "home", IssueType: model.TypeEpic, Topic: "repeat"})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, IssueType: model.TypeEpic, Topic: "repeat"})
 	var out bytes.Buffer
 	err := runNew(t, h.ctx, &out, h.ap, []string{"--title", "repeat probe", "--topic", "repeat", "--type", "task", "--parent", epic.ID, "--labels", "a", "--labels", "b"})
 	if got := ExitCode(err); got != ExitUsage {

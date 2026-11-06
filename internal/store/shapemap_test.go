@@ -307,15 +307,15 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 	wantIDs := map[string]bool{}
 	var purgedID, soloID, reviewID string
 	withStore(t, ctx, src, func(st *Store) {
-		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Epic", IssueType: "epic", Topic: "recovery", Prefix: "links"})
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, IssueType: "epic", Topic: "recovery", Prefix: "links"})
 		if err != nil {
 			t.Fatalf("create epic: %v", err)
 		}
-		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Child task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID})
+		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("Child task"), Lane: storage.SharedLane, IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID})
 		if err != nil {
 			t.Fatalf("create child: %v", err)
 		}
-		solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Solo task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID, Lane: "solo", Plan: "solo plan"})
+		solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("Solo task"), IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID, Lane: storage.MustParseLane("solo"), Plan: "solo plan"})
 		if err != nil {
 			t.Fatalf("create solo: %v", err)
 		}
@@ -334,7 +334,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if _, err := st.Apply(ctx, solo.ID, storage.Change{Action: model.Start{Assignee: "claude"}, Actor: "claude", Reason: "begin"}); err != nil {
 			t.Fatalf("start solo: %v", err)
 		}
-		purged, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Purged task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID})
+		purged, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("Purged task"), Lane: storage.SharedLane, IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID})
 		if err != nil {
 			t.Fatalf("create purged: %v", err)
 		}

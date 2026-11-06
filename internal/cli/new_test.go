@@ -35,7 +35,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Renderer cleanup",
+		Title: storage.MustParseTitle("Renderer cleanup"), Lane: storage.SharedLane,
 		Topic:     "renderer",
 		IssueType: "epic",
 		Priority:  1,

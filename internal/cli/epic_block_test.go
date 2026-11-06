@@ -37,11 +37,11 @@ func requireInheritedDependency(t *testing.T, rows []annotation.AnnotatedIssue, 
 func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
-	laneA := h.createIssue(storage.CreateIssueInput{Title: "lane a", Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: "a"})
-	laneB := h.createIssue(storage.CreateIssueInput{Title: "lane b", Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: "b"})
-	gates := h.createIssue(storage.CreateIssueInput{Title: "Gates", Topic: "gate", IssueType: "epic"})
-	gate := h.createIssue(storage.CreateIssueInput{Title: "gate", Topic: "gate", IssueType: "task", ParentID: gates.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic"})
+	laneA := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("lane a"), Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: storage.MustParseLane("a")})
+	laneB := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("lane b"), Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: storage.MustParseLane("b")})
+	gates := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Gates"), Lane: storage.SharedLane, Topic: "gate", IssueType: "epic"})
+	gate := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("gate"), Lane: storage.SharedLane, Topic: "gate", IssueType: "task", ParentID: gates.ID})
 	h.addDependency(epic.ID, gate.ID)
 
 	pullable := h.runPullableAnnotated(workableFilter{})
@@ -80,12 +80,12 @@ func TestBlockedEpicGatesEveryLaneOfItsChildren(t *testing.T) {
 func TestBlockedEpicGatesNestedEpicsAndNamesADirectEdgeOnce(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	outer := h.createIssue(storage.CreateIssueInput{Title: "Outer", Topic: "epic-block", IssueType: "epic"})
-	inner := h.createIssue(storage.CreateIssueInput{Title: "Inner", Topic: "epic-block", IssueType: "epic", ParentID: outer.ID})
-	deep := h.createIssue(storage.CreateIssueInput{Title: "deep", Topic: "epic-block", IssueType: "task", ParentID: inner.ID, Lane: "a"})
-	direct := h.createIssue(storage.CreateIssueInput{Title: "direct", Topic: "epic-block", IssueType: "task", ParentID: inner.ID, Lane: "b"})
-	gates := h.createIssue(storage.CreateIssueInput{Title: "Gates", Topic: "gate", IssueType: "epic"})
-	gate := h.createIssue(storage.CreateIssueInput{Title: "gate", Topic: "gate", IssueType: "task", ParentID: gates.ID})
+	outer := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Outer"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic"})
+	inner := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Inner"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic", ParentID: outer.ID})
+	deep := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("deep"), Topic: "epic-block", IssueType: "task", ParentID: inner.ID, Lane: storage.MustParseLane("a")})
+	direct := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("direct"), Topic: "epic-block", IssueType: "task", ParentID: inner.ID, Lane: storage.MustParseLane("b")})
+	gates := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Gates"), Lane: storage.SharedLane, Topic: "gate", IssueType: "epic"})
+	gate := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("gate"), Lane: storage.SharedLane, Topic: "gate", IssueType: "task", ParentID: gates.ID})
 	h.addDependency(outer.ID, gate.ID)
 	h.addDependency(inner.ID, gate.ID)
 	h.addDependency(direct.ID, gate.ID)
@@ -132,10 +132,10 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 		view     string
 	}
 	task := func(h readyTestHarness, title, parent, lane string) model.Issue {
-		return h.createIssue(storage.CreateIssueInput{Title: title, Topic: "epic-block", IssueType: "task", ParentID: parent, Lane: lane})
+		return h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle(title), Topic: "epic-block", IssueType: "task", ParentID: parent, Lane: storage.MustParseLane(lane)})
 	}
 	epic := func(h readyTestHarness, title, parent string) model.Issue {
-		return h.createIssue(storage.CreateIssueInput{Title: title, Topic: "epic-block", IssueType: "epic", ParentID: parent})
+		return h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic", ParentID: parent})
 	}
 	// outer holds inner, whose first and second share lane a, and other in its
 	// own lane.
@@ -296,12 +296,12 @@ func TestAnEpicsBlockerHoldsBackNothingItWaitsOn(t *testing.T) {
 func TestFocusOnAChildOfABlockedEpicReachesTheGate(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
-	goal := h.createIssue(storage.CreateIssueInput{Title: "goal", Topic: "epic-block", IssueType: "task", ParentID: epic.ID})
-	other := h.createIssue(storage.CreateIssueInput{Title: "Other", Topic: "other", IssueType: "epic"})
-	_ = h.createIssue(storage.CreateIssueInput{Title: "elsewhere", Topic: "other", IssueType: "task", ParentID: other.ID})
-	gates := h.createIssue(storage.CreateIssueInput{Title: "Gates", Topic: "gate", IssueType: "epic"})
-	gate := h.createIssue(storage.CreateIssueInput{Title: "gate", Topic: "gate", IssueType: "task", ParentID: gates.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic"})
+	goal := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("goal"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "task", ParentID: epic.ID})
+	other := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Other"), Lane: storage.SharedLane, Topic: "other", IssueType: "epic"})
+	_ = h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("elsewhere"), Lane: storage.SharedLane, Topic: "other", IssueType: "task", ParentID: other.ID})
+	gates := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Gates"), Lane: storage.SharedLane, Topic: "gate", IssueType: "epic"})
+	gate := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("gate"), Lane: storage.SharedLane, Topic: "gate", IssueType: "task", ParentID: gates.ID})
 	h.addDependency(epic.ID, gate.ID)
 	h.setLabels(goal.ID, FocusLabel)
 
@@ -326,15 +326,15 @@ func TestFocusOnAChildOfABlockedEpicReachesTheGate(t *testing.T) {
 func TestRouteNextTreatsAnEpicsGateAsOnPath(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "Epic", Topic: "epic-block", IssueType: "epic"})
-	done := h.createIssue(storage.CreateIssueInput{Title: "done", Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: "done"})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic"})
+	done := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("done"), Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: storage.MustParseLane("done")})
 	h.transition(done.ID, model.Start{Assignee: "tester"})
 	h.transition(done.ID, model.Done{})
-	gated := h.createIssue(storage.CreateIssueInput{Title: "gated", Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: "gated"})
-	other := h.createIssue(storage.CreateIssueInput{Title: "Other", Topic: "other", IssueType: "epic"})
-	_ = h.createIssue(storage.CreateIssueInput{Title: "unrelated", Topic: "other", IssueType: "task", ParentID: other.ID})
-	gates := h.createIssue(storage.CreateIssueInput{Title: "Gates", Topic: "gate", IssueType: "epic"})
-	gate := h.createIssue(storage.CreateIssueInput{Title: "gate", Topic: "gate", IssueType: "task", ParentID: gates.ID})
+	gated := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("gated"), Topic: "epic-block", IssueType: "task", ParentID: epic.ID, Lane: storage.MustParseLane("gated")})
+	other := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Other"), Lane: storage.SharedLane, Topic: "other", IssueType: "epic"})
+	_ = h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("unrelated"), Lane: storage.SharedLane, Topic: "other", IssueType: "task", ParentID: other.ID})
+	gates := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Gates"), Lane: storage.SharedLane, Topic: "gate", IssueType: "epic"})
+	gate := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("gate"), Lane: storage.SharedLane, Topic: "gate", IssueType: "task", ParentID: gates.ID})
 	h.addDependency(epic.ID, gate.ID)
 	rows, details, epics := h.gather()
 	doneLane := model.LaneOf(done, &epic)
@@ -381,19 +381,19 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 	for depth := 1; depth <= 2; depth++ {
 		t.Run(fmt.Sprintf("the ready ticket %d epic(s) down", depth), func(t *testing.T) {
 			h := newReadyTestHarness(t)
-			other := h.createIssue(storage.CreateIssueInput{Title: "Other", Topic: "other", IssueType: "epic"})
-			_ = h.createIssue(storage.CreateIssueInput{Title: "unrelated", Topic: "other", IssueType: "task", ParentID: other.ID})
-			epicB := h.createIssue(storage.CreateIssueInput{Title: "B", Topic: "epic-block", IssueType: "epic"})
-			b1 := h.createIssue(storage.CreateIssueInput{Title: "b1", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: "b1"})
+			other := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("Other"), Lane: storage.SharedLane, Topic: "other", IssueType: "epic"})
+			_ = h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("unrelated"), Lane: storage.SharedLane, Topic: "other", IssueType: "task", ParentID: other.ID})
+			epicB := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("B"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic"})
+			b1 := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("b1"), Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: storage.MustParseLane("b1")})
 			h.transition(b1.ID, model.Start{Assignee: "tester"})
 			h.transition(b1.ID, model.Done{})
-			b2 := h.createIssue(storage.CreateIssueInput{Title: "b2", Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: "b2"})
-			epicA := h.createIssue(storage.CreateIssueInput{Title: "A", Topic: "epic-block", IssueType: "epic"})
+			b2 := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("b2"), Topic: "epic-block", IssueType: "task", ParentID: epicB.ID, Lane: storage.MustParseLane("b2")})
+			epicA := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("A"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic"})
 			parent := epicA.ID
 			for level := 1; level < depth; level++ {
-				parent = h.createIssue(storage.CreateIssueInput{Title: "nested", Topic: "epic-block", IssueType: "epic", ParentID: parent}).ID
+				parent = h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("nested"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "epic", ParentID: parent}).ID
 			}
-			a1 := h.createIssue(storage.CreateIssueInput{Title: "a1", Topic: "epic-block", IssueType: "task", ParentID: parent})
+			a1 := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("a1"), Lane: storage.SharedLane, Topic: "epic-block", IssueType: "task", ParentID: parent})
 			h.addDependency(epicB.ID, epicA.ID)
 
 			rows, details, epics := h.gather()

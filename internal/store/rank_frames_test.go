@@ -14,10 +14,10 @@ import (
 // with one task, and returns the four issues.
 func twoEpics(t *testing.T, ctx context.Context, st *Store) (first, firstTask, second, secondTask model.Issue) {
 	t.Helper()
-	first = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "first", Topic: "rank", IssueType: "epic"})
-	second = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "second", Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
-	firstTask = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "first task", Topic: "rank", IssueType: "task", ParentID: first.ID})
-	secondTask = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "second task", Topic: "rank", IssueType: "task", ParentID: second.ID})
+	first = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
+	second = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+	firstTask = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("first task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: first.ID})
+	secondTask = createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("second task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: second.ID})
 	return first, firstTask, second, secondTask
 }
 
@@ -155,8 +155,8 @@ func TestAnEdgeToAnIssuesOwnContainerIsNoRankInversion(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	outer, _, _, _ := twoEpics(t, ctx, st)
-	inner := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "inner", Topic: "rank", IssueType: "epic", ParentID: outer.ID})
-	createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "inner task", Topic: "rank", IssueType: "task", ParentID: inner.ID})
+	inner := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("inner"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", ParentID: outer.ID})
+	createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("inner task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: inner.ID})
 	if err := st.ClearParent(ctx, inner.ID); err != nil {
 		t.Fatalf("ClearParent: %v", err)
 	}
@@ -189,14 +189,14 @@ func TestEpicsWhoseTasksWaitOnEachOtherAreInterleaved(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	first, firstTask, second, secondTask := twoEpics(t, ctx, st)
-	firstOther := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "first other", Topic: "rank", IssueType: "task", ParentID: first.ID})
-	secondOther := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "second other", Topic: "rank", IssueType: "task", ParentID: second.ID})
+	firstOther := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("first other"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: first.ID})
+	secondOther := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("second other"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: second.ID})
 	blockOrFatal(t, ctx, st, firstTask.ID, secondTask.ID)
 	blockOrFatal(t, ctx, st, secondOther.ID, firstOther.ID)
-	third := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "third", Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
-	fourth := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "fourth", Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
-	thirdTask := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "third task", Topic: "rank", IssueType: "task", ParentID: third.ID})
-	fourthTask := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "fourth task", Topic: "rank", IssueType: "task", ParentID: fourth.ID})
+	third := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("third"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+	fourth := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("fourth"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+	thirdTask := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("third task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: third.ID})
+	fourthTask := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("fourth task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: fourth.ID})
 	blockOrFatal(t, ctx, st, thirdTask.ID, fourthTask.ID)
 	before := storedRanks(t, ctx, st)
 	interleaved := []string{first.ID, second.ID}
@@ -252,7 +252,7 @@ func TestADependencyCycleThroughAContainerIsReported(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, task, _, _ := twoEpics(t, ctx, st)
-	sibling := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "sibling", Topic: "rank", IssueType: "task", ParentID: epic.ID})
+	sibling := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: epic.ID})
 	for _, edge := range [][2]string{{task.ID, sibling.ID}, {epic.ID, task.ID}, {sibling.ID, epic.ID}} {
 		if _, err := st.db.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocked-by', ?, 'import')`, edge[0], edge[1], "2026-01-01T00:00:00Z"); err != nil {
 			t.Fatalf("plant %s blocked by %s: %v", edge[0], edge[1], err)
@@ -282,12 +282,12 @@ func TestTheRankRepairWritesNoKeyAClosedIssueHolds(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic := func(title string) model.Issue {
-		e := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
-		createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title + " task", Topic: "rank", IssueType: "task", ParentID: e.ID})
+		e := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+		createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title + " task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: e.ID})
 		return e
 	}
 	p, q, r, holder := epic("p"), epic("q"), epic("r"), epic("holder")
-	closed := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "closed", Topic: "rank", IssueType: "task", ParentID: holder.ID})
+	closed := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("closed"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: holder.ID})
 	if _, err := st.Apply(ctx, closed.ID, storage.Change{Action: model.Close{Outcome: model.Obsolete{}}, Actor: "tester"}); err != nil {
 		t.Fatalf("close %s: %v", closed.ID, err)
 	}
@@ -334,13 +334,13 @@ func TestTheRankRepairLeavesAClosedIssueItNeedNotMove(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	keys := map[string]string{}
 	epic := func(title, key string) model.Issue {
-		e := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
-		task := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title + " task", Topic: "rank", IssueType: "task", ParentID: e.ID})
+		e := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic", Placement: storage.RankBottom})
+		task := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title + " task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: e.ID})
 		keys[e.ID], keys[task.ID] = key, "Z"+key
 		return e
 	}
 	a, c, b, holder := epic("a", "Ma"), epic("c", "Mc"), epic("b", "Md"), epic("holder", "Mz")
-	closed := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "closed", Topic: "rank", IssueType: "task", ParentID: holder.ID})
+	closed := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("closed"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: holder.ID})
 	keys[closed.ID] = "Mb"
 	for id, key := range keys {
 		plantRank(t, ctx, st, id, key)

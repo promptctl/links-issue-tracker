@@ -763,8 +763,13 @@ func (s *Store) replaceConnection(ctx context.Context) error {
 }
 
 func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (model.Issue, error) {
-	if strings.TrimSpace(in.Title) == "" {
-		return model.Issue{}, model.ValidationError{Message: "title is required"}
+	title, err := in.Title.Text()
+	if err != nil {
+		return model.Issue{}, err
+	}
+	lane, err := in.Lane.Text()
+	if err != nil {
+		return model.Issue{}, err
 	}
 	// [LAW:dataflow-not-control-flow] The zero value is data meaning
 	// "unspecified"; resolving it to the task default here keeps every caller's
@@ -811,14 +816,14 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		}
 		now := s.stamps.Stamp(s.clock, filed)
 		issue = model.Issue{
-			Title:       strings.TrimSpace(in.Title),
+			Title:       title,
 			Description: strings.TrimSpace(in.Description),
 			Prompt:      strings.TrimSpace(in.Prompt),
 			Plan:        strings.TrimSpace(in.Plan),
 			Priority:    in.Priority,
 			IssueType:   issueType,
 			Topic:       topic,
-			Lane:        strings.TrimSpace(in.Lane),
+			Lane:        lane,
 			Labels:      labels,
 			Assignee:    assignee,
 			FollowsUp:   strings.TrimSpace(in.FollowsUp),

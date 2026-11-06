@@ -157,7 +157,7 @@ func TestSyncReconcileHomesAChildOfAnEpicPurgedOnTheOtherSide(t *testing.T) {
 	purgeAndPush(t, ctx, rootA, doomed)
 
 	stB := openOrFatal(t, ctx, rootB)
-	child, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "filed late", Topic: "topic", IssueType: "task", ParentID: doomed})
+	child, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("filed late"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: doomed})
 	if err != nil {
 		t.Fatalf("CreateIssue(child of %s): %v", doomed, err)
 	}
@@ -206,9 +206,9 @@ func TestRestoreHomesWhatTheBackupLeavesOutsideAnEpic(t *testing.T) {
 	t.Run("parent purged since the backup", func(t *testing.T) {
 		t.Parallel()
 		st := openIssueStore(t, ctx)
-		gone := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "Gone", Topic: "topic", IssueType: "epic"})
-		kept := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "Kept", Topic: "topic", IssueType: "epic"})
-		child := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "topic", IssueType: "task", ParentID: gone.ID})
+		gone := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Gone"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
+		kept := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Kept"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
+		child := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: gone.ID})
 		backup, err := st.Export(ctx)
 		if err != nil {
 			t.Fatalf("Export: %v", err)
@@ -234,8 +234,8 @@ func TestRestoreHomesWhatTheBackupLeavesOutsideAnEpic(t *testing.T) {
 	t.Run("backup from before containment", func(t *testing.T) {
 		t.Parallel()
 		st := openIssueStore(t, ctx)
-		home := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "Home", Topic: "topic", IssueType: "epic"})
-		loose := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: "Loose", Topic: "topic", IssueType: "task", ParentID: home.ID})
+		home := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
+		loose := createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Loose"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: home.ID})
 		backup, err := st.Export(ctx)
 		if err != nil {
 			t.Fatalf("Export: %v", err)
@@ -266,7 +266,7 @@ func createOrFatal(t *testing.T, ctx context.Context, st *Store, in storage.Crea
 func createEpicAndPush(t *testing.T, ctx context.Context, root, title string) {
 	t.Helper()
 	st := openOrFatal(t, ctx, root)
-	createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "epic"})
+	createOrFatal(t, ctx, st, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close(%s): %v", root, err)
 	}

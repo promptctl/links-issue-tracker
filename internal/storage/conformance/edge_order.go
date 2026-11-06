@@ -29,11 +29,11 @@ func relationsAndCommentsAreTotallyOrdered(t *testing.T, ctx context.Context, st
 	// The creates are inside the later group, not before it: an unpinned create
 	// would stamp the real instant, later than either pinned one.
 	clk.Pin(laterInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("subject"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	peers := make([]model.Issue, 0, 6)
 	for _, title := range []string{"one", "two", "three", "four", "five", "six"} {
-		peers = append(peers, mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title, Topic: "core", ParentID: epic.ID}))
+		peers = append(peers, mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}))
 	}
 	slices.SortFunc(peers, func(a, b model.Issue) int { return strings.Compare(b.ID, a.ID) })
 	for _, group := range []struct {

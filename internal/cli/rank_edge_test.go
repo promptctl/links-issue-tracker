@@ -22,20 +22,20 @@ func TestRankToEdgeReportsItsFrame(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	first, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	first, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("First"), Lane: storage.SharedLane, Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(first) error = %v", err)
 	}
-	second, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	second, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Second"), Lane: storage.SharedLane, Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(second) error = %v", err)
 	}
 	// Top-level, so an epic: the backlog frame holds epics and nothing else.
-	standalone, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
+	standalone, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Standalone"), Lane: storage.SharedLane, Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}
@@ -131,15 +131,15 @@ func TestRankToBottomReportsItsFrame(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "edge", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	first, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	first, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("First"), Lane: storage.SharedLane, Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(first) error = %v", err)
 	}
-	last, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Last", Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
+	last, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Last"), Lane: storage.SharedLane, Topic: "edge", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(last) error = %v", err)
 	}

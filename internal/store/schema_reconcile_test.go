@@ -51,7 +51,7 @@ import (
 // already homed.
 func reconcileSeedEpic(t *testing.T, ctx context.Context, st *Store, topic string) string {
 	t.Helper()
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Seed epic", Topic: topic, IssueType: "epic", Priority: 0})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Seed epic"), Lane: storage.SharedLane, Topic: topic, IssueType: "epic", Priority: 0})
 	if err != nil {
 		_ = st.Close()
 		t.Fatalf("seed CreateIssue(epic) error = %v", err)
@@ -161,7 +161,7 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 	}
 	// Seed real data so the migration's data-preservation contract is
 	// observable.
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Real issue", Topic: "real", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "real")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Real issue"), Lane: storage.SharedLane, Topic: "real", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "real")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -212,7 +212,7 @@ func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has prompt", Topic: "prompt", IssueType: "task", Priority: 0, Prompt: "the historical prompt body", ParentID: reconcileSeedEpic(t, ctx, first, "prompt")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Has prompt"), Lane: storage.SharedLane, Topic: "prompt", IssueType: "task", Priority: 0, Prompt: "the historical prompt body", ParentID: reconcileSeedEpic(t, ctx, first, "prompt")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -310,7 +310,7 @@ func TestReconcileNullsEpicStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "An epic", Topic: "container", IssueType: "epic", Priority: 1})
+	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("An epic"), Lane: storage.SharedLane, Topic: "container", IssueType: "epic", Priority: 1})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("CreateIssue(epic) error = %v", err)
@@ -455,7 +455,7 @@ func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives history drop", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Survives history drop"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -673,7 +673,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Has history"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -871,7 +871,7 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Existing", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Existing"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -924,7 +924,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has legacy events", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Has legacy events"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1006,7 +1006,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idem", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Idem"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1124,7 +1124,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives fabricated-goose recovery", Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Survives fabricated-goose recovery"), Lane: storage.SharedLane, Topic: "history", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "history")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1218,7 +1218,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idempotent", Topic: "idem", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "idem")})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Idempotent"), Lane: storage.SharedLane, Topic: "idem", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "idem")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1379,7 +1379,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 	// mixed state where ensureIssueRanks must coexist with existing
 	// rank values. Capture the first issue's actual rank so we can
 	// assert no duplication.
-	ranked, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Already ranked", Topic: "rank", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "rank")})
+	ranked, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Already ranked"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", Priority: 0, ParentID: reconcileSeedEpic(t, ctx, first, "rank")})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed ranked CreateIssue error = %v", err)

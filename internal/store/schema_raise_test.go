@@ -231,7 +231,7 @@ func TestASourceBuildPushesAtTheRemotesSchema(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(consumer) = %v", err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "from source", Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("from source"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic}); err != nil {
 			t.Fatalf("CreateIssue = %v", err)
 		}
 		if err := st.Close(); err != nil {

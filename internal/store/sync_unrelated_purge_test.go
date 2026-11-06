@@ -256,7 +256,7 @@ func TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote(t *testing.T) {
 func seedPrePurgeRemote(t *testing.T, ctx context.Context, root, remoteURL string) string {
 	t.Helper()
 	st := openOrFatal(t, ctx, root)
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("seed"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}

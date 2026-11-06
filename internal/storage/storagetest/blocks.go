@@ -24,7 +24,7 @@ func StoreBlocksWithinEpic(t testing.TB, ctx context.Context, st storage.Store, 
 	if detail.Parent == nil {
 		t.Fatalf("%s has no epic to keep the edge inside", dependent)
 	}
-	holder, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: prefix, Title: "Holder", Topic: "holder", IssueType: "epic"})
+	holder, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: prefix, Title: storage.MustParseTitle("Holder"), Lane: storage.SharedLane, Topic: "holder", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(holder) error = %v", err)
 	}

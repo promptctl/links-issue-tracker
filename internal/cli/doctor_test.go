@@ -182,16 +182,16 @@ func TestRunDoctorSurfacesUnresolvedFreshness(t *testing.T) {
 func TestDoctorPrintsEachWarningItsHealthCheckFinds(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "hier", IssueType: "epic"})
-	loose := h.createIssue(storage.CreateIssueInput{Title: "loose", Topic: "hier", IssueType: "task", ParentID: epic.ID})
-	host := h.createIssue(storage.CreateIssueInput{Title: "host", Topic: "hier", IssueType: "task", ParentID: epic.ID})
-	under := h.createIssue(storage.CreateIssueInput{Title: "under", Topic: "hier", IssueType: "task", ParentID: epic.ID})
-	cycleEpic := h.createIssue(storage.CreateIssueInput{Title: "C", Topic: "dep", IssueType: "epic"})
-	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "dep", IssueType: "task", ParentID: cycleEpic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("E"), Lane: storage.SharedLane, Topic: "hier", IssueType: "epic"})
+	loose := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("loose"), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: epic.ID})
+	host := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("host"), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: epic.ID})
+	under := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("under"), Lane: storage.SharedLane, Topic: "hier", IssueType: "task", ParentID: epic.ID})
+	cycleEpic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic"})
+	first := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "dep", IssueType: "task", ParentID: cycleEpic.ID})
 	// The cycle runs between two epics so that it is the one finding it plants: an
 	// edge between two leaves of one epic is also a refused blocked-by edge.
-	cycleEpicB := h.createIssue(storage.CreateIssueInput{Title: "D", Topic: "dep", IssueType: "epic"})
-	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "dep", IssueType: "task", ParentID: cycleEpicB.ID})
+	cycleEpicB := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("D"), Lane: storage.SharedLane, Topic: "dep", IssueType: "epic"})
+	second := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "dep", IssueType: "task", ParentID: cycleEpicB.ID})
 
 	var clean bytes.Buffer
 	if err := runDoctor(t, h.ctx, &clean, h.ap, nil); err != nil {
@@ -323,9 +323,9 @@ func runDoctorEvent(t *testing.T, h readyTestHarness, args ...string) (telemetry
 func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "rank", IssueType: "epic"})
-	h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "rank", IssueType: "epic"})
-	third := h.createIssue(storage.CreateIssueInput{Title: "third", Topic: "rank", IssueType: "epic"})
+	first := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
+	h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
+	third := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("third"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
 	raw, err := storage.TestSupport.Of(h.ap.Store)
 	if err != nil {
 		t.Fatalf("TestSupport: %v", err)
@@ -365,10 +365,10 @@ func TestDoctorReportsASharedRankKeyAndFixSeparatesIt(t *testing.T) {
 func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	early := h.createIssue(storage.CreateIssueInput{Title: "early", Topic: "rank", IssueType: "epic"})
-	late := h.createIssue(storage.CreateIssueInput{Title: "late", Topic: "rank", IssueType: "epic"})
-	lateTask := h.createIssue(storage.CreateIssueInput{Title: "late task", Topic: "rank", IssueType: "task", ParentID: late.ID})
-	earlyTask := h.createIssue(storage.CreateIssueInput{Title: "early task", Topic: "rank", IssueType: "task", ParentID: early.ID})
+	early := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("early"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
+	late := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("late"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
+	lateTask := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("late task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: late.ID})
+	earlyTask := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("early task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: early.ID})
 	if _, err := h.ap.Store.RankToTop(h.ctx, late.ID); err != nil {
 		t.Fatalf("RankToTop: %v", err)
 	}
@@ -410,12 +410,12 @@ func TestARankInversionAcrossEpicsIsFlaggedRepairedAndRecorded(t *testing.T) {
 func TestDoctorRecordsInterleavedEpicsAndNoCycle(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "rank", IssueType: "epic"})
-	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "rank", IssueType: "epic"})
-	firstTask := h.createIssue(storage.CreateIssueInput{Title: "first task", Topic: "rank", IssueType: "task", ParentID: first.ID})
-	firstOther := h.createIssue(storage.CreateIssueInput{Title: "first other", Topic: "rank", IssueType: "task", ParentID: first.ID})
-	secondTask := h.createIssue(storage.CreateIssueInput{Title: "second task", Topic: "rank", IssueType: "task", ParentID: second.ID})
-	secondOther := h.createIssue(storage.CreateIssueInput{Title: "second other", Topic: "rank", IssueType: "task", ParentID: second.ID})
+	first := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
+	second := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "rank", IssueType: "epic"})
+	firstTask := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("first task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: first.ID})
+	firstOther := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("first other"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: first.ID})
+	secondTask := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("second task"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: second.ID})
+	secondOther := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("second other"), Lane: storage.SharedLane, Topic: "rank", IssueType: "task", ParentID: second.ID})
 	h.addDependency(firstTask.ID, secondTask.ID)
 	h.addDependency(secondOther.ID, firstOther.ID)
 
@@ -443,7 +443,7 @@ func sortedIDs(ids ...string) []string {
 func TestDoctorReportsTheFootprint(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	h.createIssue(storage.CreateIssueInput{Title: "sized", Topic: "footprint", IssueType: "epic"})
+	h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("sized"), Lane: storage.SharedLane, Topic: "footprint", IssueType: "epic"})
 
 	facts, out := runDoctorRecorded(t, h)
 	if !strings.Contains(out, "\nfootprint: ") || !strings.Contains(out, "chunk store ") || !strings.Contains(out, "remote cache 0 B (outside the ceiling)") {
@@ -502,9 +502,9 @@ func TestPrintFootprintAndOverCeilingPart(t *testing.T) {
 func TestDoctorNamesABlockedByEdgeBetweenTwoLeavesOfOneEpic(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "blocks", IssueType: "epic"})
-	first := h.createIssue(storage.CreateIssueInput{Title: "first", Topic: "blocks", IssueType: "task", ParentID: epic.ID})
-	second := h.createIssue(storage.CreateIssueInput{Title: "second", Topic: "blocks", IssueType: "task", ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("E"), Lane: storage.SharedLane, Topic: "blocks", IssueType: "epic"})
+	first := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("first"), Lane: storage.SharedLane, Topic: "blocks", IssueType: "task", ParentID: epic.ID})
+	second := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("second"), Lane: storage.SharedLane, Topic: "blocks", IssueType: "task", ParentID: epic.ID})
 
 	facts, out := runDoctorRecorded(t, h)
 	if got := fmt.Sprint(facts["doctor.refused_blocks"]); got != "0" {
@@ -553,8 +553,8 @@ func assertWarningFacts(t *testing.T, ev telemetry.Event, wantLines int, want ma
 func TestDoctorEventSaysTiedKeysUncheckedOnAStoredParentCycle(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	top := h.createIssue(storage.CreateIssueInput{Title: "E", Topic: "loop", IssueType: "epic"})
-	sub := h.createIssue(storage.CreateIssueInput{Title: "S", Topic: "loop", IssueType: "epic", ParentID: top.ID})
+	top := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("E"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic"})
+	sub := h.createIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("S"), Lane: storage.SharedLane, Topic: "loop", IssueType: "epic", ParentID: top.ID})
 	raw, err := storage.TestSupport.Of(h.ap.Store)
 	if err != nil {
 		t.Fatalf("TestSupport: %v", err)

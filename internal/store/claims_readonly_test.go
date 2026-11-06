@@ -110,13 +110,14 @@ func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
 	st.AttributeTo(token)
 
 	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Claims epic", Topic: "claims", IssueType: "epic",
+		Prefix: "test", Title: storage.MustParseTitle("Claims epic"),
+		Lane: storage.SharedLane, Topic: "claims", IssueType: "epic",
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Claimable work", Topic: "claims", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "solo",
+		Prefix: "test", Title: storage.MustParseTitle("Claimable work"), Topic: "claims", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("solo"),
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

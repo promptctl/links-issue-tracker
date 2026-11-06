@@ -15,11 +15,11 @@ func TestParentSetRejectsBarePositionalArgs(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	// The child starts inside another epic; `parent set` moves it.
-	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Former home", "parent")})
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child"), Lane: storage.SharedLane, Topic: "parent", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Former home", "parent")})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "parent", IssueType: "epic", Priority: 1})
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Parent"), Lane: storage.SharedLane, Topic: "parent", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
@@ -40,11 +40,11 @@ func TestParentSetWithNamedFlags(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	// The child starts inside another epic; `parent set` moves it.
-	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Former home", "parent")})
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child"), Lane: storage.SharedLane, Topic: "parent", IssueType: "task", Priority: 0, ParentID: seedEpicRaw(t, ctx, ap, "Former home", "parent")})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "parent", IssueType: "epic", Priority: 1})
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Parent"), Lane: storage.SharedLane, Topic: "parent", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}

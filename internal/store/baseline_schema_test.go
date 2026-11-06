@@ -70,12 +70,12 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 		t.Fatalf("Open(first) error = %v", err)
 	}
 	// Seed a real issue so the forward migration must preserve it.
-	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Pre-migration epic", Topic: "fwd", IssueType: "epic"})
+	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Pre-migration epic"), Lane: storage.SharedLane, Topic: "fwd", IssueType: "epic"})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue(epic) error = %v", err)
 	}
-	if _, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Pre-migration issue", Topic: "fwd", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+	if _, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Pre-migration issue"), Lane: storage.SharedLane, Topic: "fwd", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
 	}

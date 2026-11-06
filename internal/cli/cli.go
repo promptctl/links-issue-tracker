@@ -393,12 +393,20 @@ func newLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
+		titleValue, err := storage.ParseTitle(*title)
+		if err != nil {
+			return err
+		}
+		laneValue, err := storage.ParseLane(*lane)
+		if err != nil {
+			return err
+		}
 		prefix, err := mintablePrefix(ctx, ap.Workspace.IssuePrefix)
 		if err != nil {
 			return err
 		}
 		issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-			Title: *title, Description: description.value(), Prompt: prompt.value(), Plan: plan.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+			Title: titleValue, Description: description.value(), Prompt: prompt.value(), Plan: plan.value(), IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: laneValue,
 			Placement: rankPlacement(*top),
 			Prefix:    prefix.Value(),
 			Actor:     resolveActor(inv.Env),
@@ -454,9 +462,12 @@ func followupLeaf() appLeaf {
 	usage := "usage: lit followup --on <id> --title <text> [--description <text> | --description-file <path|->] [--prompt <text> | --prompt-file <path|->] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--parent <epic-id>] [--priority <" + priorityChoices() + ">] [--assignee <user>] [--labels <csv>] [--top] [--by <name>]"
 	return appLeaf{fs: fs, positionals: 0, usage: usage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		onID := strings.TrimSpace(*on)
-		titleValue := strings.TrimSpace(*title)
-		if onID == "" || titleValue == "" {
+		if onID == "" {
 			return UsageError{Message: usage}
+		}
+		titleValue, err := storage.ParseTitle(*title)
+		if err != nil {
+			return err
 		}
 		// The relations, not the bare issue: the follow-up's parent is the
 		// followed-up ticket's parent, which only the hierarchy knows.
@@ -508,6 +519,7 @@ func followupLeaf() appLeaf {
 			FollowsUp:   origin.Issue.ID,
 			Priority:    priorityValue,
 			Assignee:    strings.TrimSpace(*assignee),
+			Lane:        storage.SharedLane,
 			Labels:      splitCSV(*labels),
 			Placement:   rankPlacement(*top),
 			Prefix:      prefix.Value(),

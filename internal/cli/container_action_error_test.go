@@ -26,11 +26,13 @@ const (
 func (h readyTestHarness) epicFixture(childCount, closedCount int) string {
 	h.t.Helper()
 	epic := h.createIssue(storage.CreateIssueInput{
-		Prefix: "test", Title: "An epic", Topic: "epics", IssueType: "epic",
+		Prefix: "test", Title: storage.MustParseTitle("An epic"),
+		Lane: storage.SharedLane, Topic: "epics", IssueType: "epic",
 	})
 	for i := 0; i < childCount; i++ {
 		child := h.createIssue(storage.CreateIssueInput{
-			Prefix: "test", Title: "A child", Topic: "epics", IssueType: "task", ParentID: epic.ID,
+			Prefix: "test", Title: storage.MustParseTitle("A child"),
+			Lane: storage.SharedLane, Topic: "epics", IssueType: "task", ParentID: epic.ID,
 		})
 		if i < closedCount {
 			h.applyAction(child.ID, model.Done{}, "")

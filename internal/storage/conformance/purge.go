@@ -18,15 +18,15 @@ import (
 // redirect target, the way a pasted sha outlives a rewritten commit. What is
 // left of the purged issue is its purge record and nothing else.
 func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	doomed := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "doomed", Topic: "core", ParentID: epic.ID, Labels: []string{"leak"}, Plan: "a doomed plan"})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	doomed := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("doomed"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Labels: []string{"leak"}, Plan: "a doomed plan"})
 	// The blocked-by neighbors live in another epic: between two leaves of one
 	// epic, rank orders the work and the edge is refused.
-	neighbors := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "neighbors", Topic: "core", IssueType: model.TypeEpic})
-	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: neighbors.ID})
-	waiter := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "waiter", Topic: "core", ParentID: neighbors.ID, Plan: "a waiting plan"})
-	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "follow-up", Topic: "core", ParentID: epic.ID, FollowsUp: doomed.ID})
-	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core", ParentID: epic.ID})
+	neighbors := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("neighbors"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("blocker"), Lane: storage.SharedLane, Topic: "core", ParentID: neighbors.ID})
+	waiter := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("waiter"), Lane: storage.SharedLane, Topic: "core", ParentID: neighbors.ID, Plan: "a waiting plan"})
+	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("follow-up"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, FollowsUp: doomed.ID})
+	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("duplicate"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: doomed.ID, Body: storagetest.CommentBody(t, "secret"), CreatedBy: "ada"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
@@ -103,9 +103,9 @@ func aPurgeRemovesTheIssueAndEverythingItOwns(t *testing.T, ctx context.Context,
 // no reason to refuse — it becomes top-level, which is legal — so once only
 // the child epic is left the purge goes through and leaves it top-level.
 func aPurgeRefusesAContainerThatHoldsTickets(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
-	childEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child epic", Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	childEpic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("child epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: epic.ID})
 	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Delete{}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply delete error = %v", err)
 	}
@@ -145,7 +145,7 @@ func aPurgeOfAMissingIssueIsNotFound(t *testing.T, ctx context.Context, st stora
 	_, err := st.Purge(ctx, storage.PurgeInput{IssueID: "no-such-issue", Actor: "ada"})
 	assertNotFound(t, err, "issue", "Purge(missing)")
 
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: epic.ID, Actor: "ada"}); err != nil {
 		t.Fatalf("Purge error = %v", err)
 	}
@@ -163,7 +163,7 @@ func aPurgeOfAMissingIssueIsNotFound(t *testing.T, ctx context.Context, st stora
 // mention of the purged ticket elsewhere would then name the new one.
 func aPurgedIDIsNeverMintedAgain(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
-	in := storage.CreateIssueInput{Title: "same content", Topic: "core", IssueType: model.TypeEpic}
+	in := storage.CreateIssueInput{Title: storage.MustParseTitle("same content"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic}
 	first := mustCreate(t, ctx, st, in)
 	if _, err := st.Purge(ctx, storage.PurgeInput{IssueID: first.ID, Actor: "ada"}); err != nil {
 		t.Fatalf("Purge error = %v", err)

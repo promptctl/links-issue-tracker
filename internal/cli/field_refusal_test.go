@@ -24,17 +24,17 @@ func TestFieldRefusalsAreDeterministicRefusals(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "an epic", Topic: "fields", IssueType: "epic"})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("an epic"), Lane: storage.SharedLane, Topic: "fields", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	task, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "a task", Topic: "fields", IssueType: "task", ParentID: epic.ID})
+	task, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("a task"), Lane: storage.SharedLane, Topic: "fields", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(task) error = %v", err)
 	}
 	// In an epic of its own: a blocked-by edge between siblings is refused, and the
 	// edge below is the fixture for the cycle case, not a refusal under test.
-	blocked, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "blocked by the task", Topic: "fields", IssueType: "task", ParentID: seedEpicRaw(t, ctx, ap, "another epic", "fields")})
+	blocked, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("blocked by the task"), Lane: storage.SharedLane, Topic: "fields", IssueType: "task", ParentID: seedEpicRaw(t, ctx, ap, "another epic", "fields")})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocked) error = %v", err)
 	}

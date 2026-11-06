@@ -41,7 +41,7 @@ func TestHelperKillMidCommit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("helper Open() error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "kill target epic", Topic: "crash", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("kill target epic"), Lane: storage.SharedLane, Topic: "crash", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("helper CreateIssue(epic) error = %v", err)
 	}
@@ -51,7 +51,8 @@ func TestHelperKillMidCommit(t *testing.T) {
 	}
 	_, _ = st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "mid-mutation kill target",
+		Title:     storage.MustParseTitle("mid-mutation kill target"),
+		Lane:      storage.SharedLane,
 		Topic:     "crash",
 		IssueType: "task",
 		Priority:  0,
@@ -109,11 +110,11 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 
 	// A fresh mutation must succeed — proves the store is not wedged behind
 	// a lock the dead holder failed to release.
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-kill epic", Topic: "crash", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("post-kill epic"), Lane: storage.SharedLane, Topic: "crash", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) after mid-commit kill error = %v", err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-kill issue", Topic: "crash", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("post-kill issue"), Lane: storage.SharedLane, Topic: "crash", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() after mid-commit kill error = %v", err)
 	}
@@ -202,11 +203,11 @@ func TestMidMigrationStepProcessKillRecovers(t *testing.T) {
 	// The schema must be fully usable: CreateIssue depends on the complete,
 	// current schema, so its success is the proof no partially-applied
 	// migration left the working set in a broken shape.
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-migration-kill epic", Topic: "crash", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("post-migration-kill epic"), Lane: storage.SharedLane, Topic: "crash", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) after mid-migration-step kill error = %v", err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-migration-kill issue", Topic: "crash", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("post-migration-kill issue"), Lane: storage.SharedLane, Topic: "crash", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() after mid-migration-step kill error = %v", err)
 	}

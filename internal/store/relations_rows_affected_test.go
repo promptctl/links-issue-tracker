@@ -25,11 +25,11 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	parent, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "rows", IssueType: "epic", Priority: 1})
+	parent, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Parent"), Lane: storage.SharedLane, Topic: "rows", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
-	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "rows", IssueType: "epic", Priority: 0, ParentID: parent.ID, Placement: storage.RankBottom})
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Child"), Lane: storage.SharedLane, Topic: "rows", IssueType: "epic", Priority: 0, ParentID: parent.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}

@@ -25,7 +25,8 @@ func newAttributionIssue(t *testing.T, ap *app.App, title string) string {
 	t.Helper()
 	ctx := context.Background()
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Topic: "attribution", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle(title),
+		Lane: storage.SharedLane, Topic: "attribution", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, title+" (epic)", "attribution"),
 	})
 	if err != nil {

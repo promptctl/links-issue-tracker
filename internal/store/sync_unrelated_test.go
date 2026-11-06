@@ -490,15 +490,15 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
-	remoteEpic, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-epic", Topic: "topic", IssueType: "epic"})
+	remoteEpic, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("remote-epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(A remote-epic): %v", err)
 	}
-	remoteOnly, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-only", Topic: "topic", IssueType: "task", ParentID: remoteEpic.ID})
+	remoteOnly, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("remote-only"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: remoteEpic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(A remote-only): %v", err)
 	}
-	shared, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "shared", Topic: "topic", IssueType: "task", ParentID: remoteEpic.ID})
+	shared, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("shared"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: remoteEpic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(A shared): %v", err)
 	}
@@ -524,11 +524,11 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	if err != nil {
 		t.Fatalf("Open(B): %v", err)
 	}
-	localEpic, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "local-epic", Topic: "topic", IssueType: "epic"})
+	localEpic, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("local-epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(B local-epic): %v", err)
 	}
-	localOnly, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "local-only", Topic: "topic", IssueType: "task", ParentID: localEpic.ID})
+	localOnly, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("local-only"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: localEpic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(B local-only): %v", err)
 	}
@@ -944,7 +944,7 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 	if err := st.rebuildFromExport(ctx, export, commitStamp{Message: forkEpicCommitMessage}); err != nil {
 		t.Fatalf("rebuildFromExport(fork epic): %v", err)
 	}
-	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "fork-local", Topic: "topic", IssueType: "task", ParentID: epic.ID})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("fork-local"), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(fork): %v", err)
 	}

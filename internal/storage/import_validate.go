@@ -356,8 +356,9 @@ func parseImportTreeSpecs(specs []ImportTreeSpec) (map[int]FileCreate, error) {
 		if spec.LocalID != strings.TrimSpace(spec.LocalID) {
 			return nil, model.ValidationError{Message: fmt.Sprintf("import: spec %d local_id %q has surrounding whitespace", i, spec.LocalID)}
 		}
-		if strings.TrimSpace(spec.Title) == "" {
-			return nil, model.ValidationError{Message: fmt.Sprintf("import: spec %q missing title", spec.LocalID)}
+		title, err := ParseTitle(spec.Title)
+		if err != nil {
+			return nil, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
 		// Topic, labels, and assignee parse by the parsers the create runs,
 		// so a file the create would refuse is refused here, before anything
@@ -389,7 +390,7 @@ func parseImportTreeSpecs(specs []ImportTreeSpec) (map[int]FileCreate, error) {
 		}
 		types[spec.LocalID] = issueType
 		creates[i] = FileCreate{Index: i, LocalID: spec.LocalID, Parent: spec.Parent, BlockedBy: spec.BlockedBy, issue: CreateIssueInput{
-			Title:       spec.Title,
+			Title:       title,
 			Description: spec.Description,
 			Prompt:      spec.Prompt,
 			Plan:        spec.Plan,
@@ -397,6 +398,7 @@ func parseImportTreeSpecs(specs []ImportTreeSpec) (map[int]FileCreate, error) {
 			Topic:       spec.Topic,
 			Priority:    priority,
 			Assignee:    spec.Assignee,
+			Lane:        SharedLane,
 			Labels:      spec.Labels,
 		}}
 	}
@@ -564,8 +566,13 @@ func parseBulkSpecs(specs []BulkIssueSpec) (BulkFile, map[int]FileCreate, error)
 // writes. A field the document leaves out is the create's zero value, and an
 // unstated priority is normal.
 func parseBulkCreateDoc(i int, spec BulkIssueSpec) (FileCreate, error) {
-	if spec.Title == nil || strings.TrimSpace(*spec.Title) == "" {
-		return FileCreate{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d missing title", i)}
+	title, err := ParseTitle(valueOr(spec.Title, ""))
+	if err != nil {
+		return FileCreate{}, fmt.Errorf("bulk: doc %d: %w", i, err)
+	}
+	lane, err := ParseLane(valueOr(spec.Lane, ""))
+	if err != nil {
+		return FileCreate{}, fmt.Errorf("bulk: doc %d: %w", i, err)
 	}
 	if spec.Topic == nil {
 		return FileCreate{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d missing topic", i)}
@@ -590,7 +597,7 @@ func parseBulkCreateDoc(i int, spec BulkIssueSpec) (FileCreate, error) {
 		return FileCreate{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d sets reason without id (reason only applies to updates)", i)}
 	}
 	return FileCreate{Index: i, LocalID: spec.LocalID, Parent: valueOr(spec.Parent, ""), BlockedBy: valueOr(spec.BlockedBy, nil), issue: CreateIssueInput{
-		Title:       strings.TrimSpace(*spec.Title),
+		Title:       title,
 		Description: valueOr(spec.Description, ""),
 		Prompt:      valueOr(spec.Prompt, ""),
 		Plan:        valueOr(spec.Plan, ""),
@@ -598,7 +605,7 @@ func parseBulkCreateDoc(i int, spec BulkIssueSpec) (FileCreate, error) {
 		Topic:       strings.TrimSpace(*spec.Topic),
 		Priority:    priority,
 		Assignee:    valueOr(spec.Assignee, ""),
-		Lane:        valueOr(spec.Lane, ""),
+		Lane:        lane,
 		Labels:      valueOr(spec.Labels, nil),
 		// Placement stays at its zero value, RankBottom, as a tree import's
 		// does: both are `lit import --path <file>`, so a batch keeps its
@@ -652,9 +659,6 @@ func parseBulkUpdateDoc(i int, spec BulkIssueSpec) (UpdateIssueInput, error) {
 	}
 	if spec.Topic != nil {
 		return UpdateIssueInput{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it", i, spec.ID)}
-	}
-	if spec.Title != nil && strings.TrimSpace(*spec.Title) == "" {
-		return UpdateIssueInput{}, model.ValidationError{Message: fmt.Sprintf("bulk: doc %d (id %q) sets an empty title", i, spec.ID)}
 	}
 	patch, err := bulkUpdatePatch(spec)
 	if err != nil {

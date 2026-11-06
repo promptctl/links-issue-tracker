@@ -77,7 +77,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 	}
 
 	// Every leaf cell is filed inside this epic; an epic cell is top-level.
-	home, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Matrix epic", Topic: "update-matrix", IssueType: "epic"})
+	home, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Matrix epic"), Lane: storage.SharedLane, Topic: "update-matrix", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(home epic) error = %v", err)
 	}
@@ -91,7 +91,8 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				}
 				created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 					Prefix:      "test",
-					Title:       initialTitle,
+					Title:       storage.MustParseTitle(initialTitle),
+					Lane:        storage.SharedLane,
 					Description: initialDescription,
 					Topic:       "update-matrix",
 					IssueType:   issueType,

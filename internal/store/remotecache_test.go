@@ -30,11 +30,11 @@ import (
 // filed under it, since a task lives inside an epic.
 func commitPayload(t *testing.T, ctx context.Context, st *Store, title string) {
 	t.Helper()
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title + " epic", Topic: "topic", IssueType: "epic", Priority: 0})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title + " epic"), Lane: storage.SharedLane, Topic: "topic", IssueType: "epic", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(%q epic) error = %v", title, err)
 	}
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "topic", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue(%q) error = %v", title, err)
 	}
 }

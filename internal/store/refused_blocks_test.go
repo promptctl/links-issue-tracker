@@ -19,7 +19,7 @@ func TestDoctorNamesABlockedByEdgeAReparentLeftInsideOneEpic(t *testing.T) {
 	st := openIssueStore(t, ctx)
 	create := func(title, issueType, parentID string) model.Issue {
 		t.Helper()
-		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "blocks", IssueType: model.IssueType(issueType), ParentID: parentID, Placement: storage.RankBottom})
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "blocks", IssueType: model.IssueType(issueType), ParentID: parentID, Placement: storage.RankBottom})
 		if err != nil {
 			t.Fatalf("CreateIssue(%s) error = %v", title, err)
 		}

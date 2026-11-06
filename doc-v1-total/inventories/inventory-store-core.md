@@ -390,7 +390,7 @@ Test evidence:
 #### 4.1 `CreateIssue(ctx, in storage.CreateIssueInput) (model.Issue, error)`
 
 `store.go`. Pre-transaction (pure/validation) phase:
-1. `strings.TrimSpace(in.Title) == ""` → `model.ValidationError{Message: "title is required"}` (`store.go`).
+1. `in.Title.Text()` and `in.Lane.Text()` — the parsed `storage.Title` / `storage.Lane` (`internal/storage/title.go`); a zero `Title` → `model.ValidationError{Message: "title is required"}`, a `Lane` no parser made → an error (`store.go`).
 2. `issueType := in.IssueType`; if `""` → `model.TypeTask` (`store.go`).
 3. `now := time.Now().UTC()` (`store.go`).
 4. `canonicalizeLabels(in.Labels)` (`store.go`; `internal/store/labels.go`) — error propagated.
@@ -766,7 +766,7 @@ Evidence: a hard-deleted endpoint makes both `AddRelation` and `SetParent` fail 
 `fieldWrite` (`store.go`): `issue model.Issue; replaceLabels bool; actor, reason string; changes []model.FieldChange`.
 
 `planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor string) (fieldWrite, error)` (`store.go`) — pure, no clock, no IO:
-- `Title != nil` → `strings.TrimSpace(*in.Title)`; empty result → `model.ValidationError{Message: "title cannot be empty"}` (`store.go`);
+- `Title != nil` → `strings.TrimSpace(*in.Title)`; a title or lane that moves to text the issue does not hold is admitted by `storage.ParseTitle` / `storage.ParseLane` (`internal/storage/fields.go`);
 - `Description != nil` → trimmed (`store.go`);
 - `Prompt != nil` → trimmed (`store.go`);
 - `Plan != nil` → trimmed (`internal/storage/fields.go`);
@@ -3699,7 +3699,7 @@ Defaults for absent fields: every field is a non-pointer, so an absent key is th
 | `len(specs) == 0` | `import: no issues in input` |
 | `strings.TrimSpace(LocalID) == ""` | `import: spec %d missing local_id` |
 | `LocalID != TrimSpace(LocalID)` | `import: spec %d local_id %q has surrounding whitespace` |
-| `strings.TrimSpace(Title) == ""` | `import: spec %q missing title` (local id) |
+| `storage.ParseTitle(Title)` fails | `import: spec %q: %w` (local id) |
 | `issueid.NormalizeTopicForCreate(Topic)` fails | `import: spec %q: %w` (local id) |
 | `model.CanonicalizeLabels(Labels)` fails | `import: spec %q: %w` (local id) |
 | `ParseIssueType` fails | `import: spec %q: %w` around `invalidValue` (`has invalid %s %#v: %w`) |
@@ -3825,7 +3825,6 @@ Update-document checks (`parseBulkUpdateDoc`, `import_validate.go`, which return
 |---|---|
 | `LocalID != ""` | `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets` |
 | `Topic != nil` | `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it` |
-| `Title` set and trims to `""` | `bulk: doc %d (id %q) sets an empty title` |
 | `IssueType` set and unparseable | `bulk: doc %d (id %q): has invalid type "<value>": issue type must be …` |
 | `Priority` set and unparseable | `bulk: doc %d (id %q): has invalid priority <value>: priority must be …` |
 | `storage.bulkUpdatePatch(spec).IsEmpty()`, no `parent`, no `blocked_by` and no `rank` | `bulk: doc %d (id %q) has no fields to update, no parent, no blocked_by and no rank` |
@@ -3839,7 +3838,7 @@ Create-document checks (`parseBulkCreateDoc`, `import_validate.go`, which return
 
 | condition | error |
 |---|---|
-| `Title == nil` or trims to `""` | `bulk: doc %d missing title` |
+| `storage.ParseTitle(Title)` or `storage.ParseLane(Lane)` fails | `bulk: doc %d: %w` |
 | `Topic == nil` | `bulk: doc %d missing topic` |
 | `issueid.NormalizeTopicForCreate(*Topic)` fails | `bulk: doc %d: %w` |
 | `IssueType == nil` | `bulk: doc %d missing type` |
@@ -3966,11 +3965,11 @@ When the file states a parent on an update, `reparented %d issues` and `%d issue
 
 `import_export.go`: `verify constraints: %w`, `count foreign key issues: %w`, `count invalid related rows: %w`, `count orphan event rows: %w`, `rank ancestry: %w`, `rank checks: %w`, `parent cycle check: %w`, `constraint violations: the store holds rows that break a declared constraint`, `foreign key violations: %d`, `invalid related-to ordering rows: %d`, `orphan issue event rows: %d`, `rank inversions: %d (dependencies ranked below dependents)`, `interleaved: %s — work in each waits on work in another, so no rank order lists every dependency among them first; 'lit doctor --fix=rank' does not reorder them for those edges`, `blocked-by dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)`, `repair orphan events: %w`, `repair self related rows: %w`, `repair related ordering: %w`, `clear %s: %w`, `restore issue %s: %w`, `restore comment %s: %w`, `insert label %s:%s: %w`, `insert issue event %s: %w`, `issue event %s: field name cannot be empty`, `insert issue event change %s.%s: %w`.
 
-`import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: spec %q missing title`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
+`import_validate.go` (tree gate): `import: no issues in input`, `import: spec %d missing local_id`, `import: spec %d local_id %q has surrounding whitespace`, `import: duplicate local_id %q`, `import: spec %q parent %q has surrounding whitespace`, `import: spec %q references missing parent %q`, `import: spec %q blocked_by entry %q has surrounding whitespace`, `import: spec %q references missing blocked_by %q`, `import: spec %q cannot depend on itself`, `import: spec %q: %w`, and from `writeOrder` `%s: cycle detected involving %q` (`import` or `bulk`).
 
 `import_tree.go`: `import: create %q: %w`, `import: blocked_by %q -> %q: %w`.
 
-`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by has an empty entry`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (%q) cannot depend on itself`, `blocked_by names %q twice`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing title`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) sets an empty title`, `bulk: doc %d (id %q) has no fields to update, no parent, no blocked_by and no rank`, `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent, blocked_by and rank write none`, `bulk: doc %d: %w` (among them `rank %q is not a placement; …`), `bulk: rank: %w`, `bulk: %s of %s -> %q: %w`, `bulk: %s of %s: %w`, `bulk: update %q: %w`, `bulk: create doc %d: %w`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
+`import_bulk.go`: `bulk: no issues in input`, `bulk: doc %d id %q has surrounding whitespace`, `bulk: doc %d local_id %q has surrounding whitespace`, `bulk: doc %d parent %q has surrounding whitespace`, `bulk: doc %d blocked_by has an empty entry`, `bulk: doc %d blocked_by entry %q has surrounding whitespace`, `bulk: doc %d (%q) cannot depend on itself`, `blocked_by names %q twice`, `bulk: duplicate id %q`, `bulk: duplicate local_id %q`, `bulk: doc %d missing topic`, `bulk: doc %d missing type`, `bulk: doc %d sets reason without id (reason only applies to updates)`, `bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets`, `bulk: doc %d (id %q) sets topic; topic is immutable and update cannot change it`, `bulk: doc %d (id %q): %w`, `bulk: doc %d (id %q) has no fields to update, no parent, no blocked_by and no rank`, `bulk: doc %d (id %q) sets reason but changes no field; reason annotates a field change, and parent, blocked_by and rank write none`, `bulk: doc %d: %w` (among them `rank %q is not a placement; …`), `bulk: rank: %w`, `bulk: %s of %s -> %q: %w`, `bulk: %s of %s: %w`, `bulk: update %q: %w`, `bulk: create doc %d: %w`; and from `invalidValue` (`internal/storage/fields.go`) `has invalid %s %#v: %w`.
 
 Parsers (`internal/storage/specs.go`): `bulk: parse spec: %w`, `import: parse spec: %w`, `import: unexpected trailing data after spec array`.
 

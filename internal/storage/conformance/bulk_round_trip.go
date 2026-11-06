@@ -19,14 +19,14 @@ import (
 // which the store keeps and restating it writes nothing, so it is no refusal.
 func aBulkFileReadOutOfTheStoreGoesBackInAsANoOp(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
 	// blocked_by never joins two issues of one epic, so the blocker has its own.
-	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "elsewhere", Topic: "core", IssueType: model.TypeEpic})
-	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: elsewhere.ID})
+	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("elsewhere"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("blocker"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
 	full := mustCreate(t, ctx, st, storage.CreateIssueInput{
-		Title: "full", Topic: "core", ParentID: epic.ID, Priority: model.PriorityUrgent,
+		Title: storage.MustParseTitle("full"), Topic: "core", ParentID: epic.ID, Priority: model.PriorityUrgent,
 		Description: "first line\n\nsecond paragraph", Prompt: "a prompt", Plan: "a plan",
-		Assignee: "ada", Lane: "a-lane", Labels: []string{"alpha", "beta"},
+		Assignee: "ada", Lane: storage.MustParseLane("a-lane"), Labels: []string{"alpha", "beta"},
 	})
 	for _, edge := range [][2]string{{full.ID, blocker.ID}, {elsewhere.ID, full.ID}} {
 		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge[0], DstID: edge[1], Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
@@ -131,10 +131,10 @@ func documentsOf(t *testing.T, ctx context.Context, st storage.Store, ids []stri
 // landing it would erase the other writer's lane.
 func aReadOutFileKeepsWhatOtherWritersChanged(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	clk.Pin(earlierInstant)
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "elsewhere", Topic: "core", IssueType: model.TypeEpic})
-	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: elsewhere.ID})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "issue", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("elsewhere"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("blocker"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("issue"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	docs := documentsOf(t, ctx, st, []string{issue.ID})
 
 	clk.Pin(laterInstant)

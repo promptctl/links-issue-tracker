@@ -163,7 +163,7 @@ func TestATransientCommitFailureRerunsTheMutationOnce(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Sync epic", Topic: "sync", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Sync epic"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestATransientCommitFailureRerunsTheMutationOnce(t *testing.T) {
 		return nil
 	}
 
-	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a commit retry", Topic: "sync", ParentID: epic.ID})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("survives a commit retry"), Lane: storage.SharedLane, Topic: "sync", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -206,7 +206,7 @@ func TestADoltCommitThatFailsLeavesNothing(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("before"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -235,7 +235,7 @@ func TestADoltCommitThatFailsLeavesNothing(t *testing.T) {
 		t.Fatalf("dolt_status holds %d row(s) after a refused commit, want a clean working set", dirty)
 	}
 
-	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "next write", Topic: "sync", IssueType: "epic"}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("next write"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"}); err != nil {
 		t.Fatalf("CreateIssue() after a refused commit error = %v", err)
 	}
 }
@@ -248,7 +248,7 @@ func TestACancelDuringACommitIsNotAFailure(t *testing.T) {
 	t.Parallel()
 	st := openIssueStore(t, context.Background())
 
-	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	epic, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("before"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -298,7 +298,7 @@ func TestAWriteLeavesTheManifestAlone(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open() error = %v", err)
 		}
-		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "sync", IssueType: "epic"}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"}); err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
 		if err := st.Close(); err != nil {
@@ -331,7 +331,7 @@ func TestAMutationLeavesItsConnectionInAutocommit(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "before", Topic: "sync", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("before"), Lane: storage.SharedLane, Topic: "sync", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}

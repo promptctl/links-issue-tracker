@@ -19,8 +19,8 @@ func tasksInEpicsOfTheirOwn(t *testing.T, ctx context.Context, st storage.Store,
 	t.Helper()
 	ids := make([]string, n)
 	for i := range n {
-		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: fmt.Sprintf("epic %d", i), Topic: "core", IssueType: model.TypeEpic})
-		ids[i] = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: fmt.Sprintf("task %d", i), Topic: "core", ParentID: epic.ID}).ID
+		epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(fmt.Sprintf("epic %d", i)), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+		ids[i] = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(fmt.Sprintf("task %d", i)), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID}).ID
 	}
 	return ids
 }
@@ -189,8 +189,8 @@ func aBulkFileStatingBlockedByOnAMissingIssueIsRefused(t *testing.T, ctx context
 // the edge, since the update document states no parent, and the write refuses
 // it: the create and x are leaves of one epic.
 func aBulkFileRefusalNamesTheTargetAsTheFileStatesIt(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "x", Topic: "core", ParentID: epic.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("x"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 	title := "c"
 
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
@@ -216,10 +216,10 @@ func aBulkFileRefusalNamesTheTargetAsTheFileStatesIt(t *testing.T, ctx context.C
 func aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	for _, reversed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("reversed=%t", reversed), func(t *testing.T) {
-			home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "home", Topic: "core", IssueType: model.TypeEpic})
-			away := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "away", Topic: "core", IssueType: model.TypeEpic})
-			x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "x", Topic: "core", ParentID: home.ID})
-			y := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "y", Topic: "core", ParentID: home.ID})
+			home := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("home"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+			away := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("away"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+			x := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("x"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
+			y := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("y"), Lane: storage.SharedLane, Topic: "core", ParentID: home.ID})
 			specs := []storage.BulkIssueSpec{
 				{ID: x.ID, BlockedBy: blockedBy(y.ID)},
 				{ID: y.ID, Parent: ptr(away.ID)},
@@ -234,7 +234,7 @@ func aBulkFileJudgesAnUpdatesBlockedByOnTheHierarchyItEndsWith(t *testing.T, ctx
 			assertStrings(t, "x's blockers", blockersOf(t, ctx, st, x.ID), []string{y.ID})
 			assertStrings(t, "y's parents", parentsOf(t, ctx, st, y.ID), []string{away.ID})
 
-			z := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "z", Topic: "core", ParentID: away.ID})
+			z := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("z"), Lane: storage.SharedLane, Topic: "core", ParentID: away.ID})
 			into := []storage.BulkIssueSpec{
 				{ID: x.ID, BlockedBy: blockedBy(y.ID, z.ID)},
 				{ID: z.ID, Parent: ptr(home.ID)},

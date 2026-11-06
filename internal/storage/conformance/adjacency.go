@@ -15,15 +15,15 @@ import (
 // unchanged. A missing id is the detail's NotFound and not an empty
 // neighbourhood.
 func adjacencyHoldsWhatItsEdgesName(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
-	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
-	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "elsewhere", Topic: "core", IssueType: model.TypeEpic})
-	origin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "origin", Topic: "core", ParentID: epic.ID})
-	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: epic.ID, FollowsUp: origin.ID})
-	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a follow-up of the subject", Topic: "core", ParentID: epic.ID, FollowsUp: subject.ID})
-	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "canonical", Topic: "core", ParentID: elsewhere.ID})
-	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "blocker", Topic: "core", ParentID: elsewhere.ID})
-	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core", ParentID: elsewhere.ID})
-	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "peer", Topic: "core", ParentID: elsewhere.ID})
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	elsewhere := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("elsewhere"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	origin := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("origin"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("subject"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, FollowsUp: origin.ID})
+	followUp := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("a follow-up of the subject"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, FollowsUp: subject.ID})
+	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("canonical"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
+	blocker := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("blocker"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
+	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("dependent"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
+	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("peer"), Lane: storage.SharedLane, Topic: "core", ParentID: elsewhere.ID})
 	for _, edge := range []storage.AddRelationInput{
 		{SrcID: subject.ID, DstID: blocker.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},
 		{SrcID: dependent.ID, DstID: subject.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},
@@ -113,9 +113,9 @@ func adjacencyHoldsWhatItsEdgesName(t *testing.T, ctx context.Context, st storag
 // single ticket's neighbours make.
 func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, st storage.Store, _ *clock) {
 	subtree := func(title string) (outer, middle, leaf model.Issue) {
-		outer = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title, Topic: "core", IssueType: model.TypeEpic})
-		middle = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title + " middle", Topic: "core", IssueType: model.TypeEpic, ParentID: outer.ID})
-		leaf = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: title + " leaf", Topic: "core", ParentID: middle.ID})
+		outer = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+		middle = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title + " middle"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic, ParentID: outer.ID})
+		leaf = mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle(title + " leaf"), Lane: storage.SharedLane, Topic: "core", ParentID: middle.ID})
 		return outer, middle, leaf
 	}
 	firstOuter, firstMiddle, firstLeaf := subtree("first")
@@ -132,8 +132,8 @@ func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, 
 		assertIssueIDs(t, "a listing bound to the ids", mustList(t, ctx, st, storage.ListIssuesFilter{IDs: []string{firstLeaf.ID, secondLeaf.ID}}), want)
 	}
 
-	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "third", Topic: "core", IssueType: model.TypeEpic})
-	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core", ParentID: third.ID})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("third"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("subject"), Lane: storage.SharedLane, Topic: "core", ParentID: third.ID})
 	for _, leaf := range []model.Issue{firstLeaf, secondLeaf} {
 		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: subject.ID, DstID: leaf.ID, Type: model.RelBlockedBy, CreatedBy: "ada"}); err != nil {
 			t.Fatalf("AddRelation: %v", err)
@@ -145,7 +145,7 @@ func treeOrderReadsContainersARowDoesNotShow(t *testing.T, ctx context.Context, 
 	}
 	assertIssueIDs(t, "a ticket's blockers", relations[subject.ID].BlockedBy, []string{secondLeaf.ID, firstLeaf.ID})
 
-	hub := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "hub", Topic: "core", ParentID: third.ID})
+	hub := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("hub"), Lane: storage.SharedLane, Topic: "core", ParentID: third.ID})
 	for _, leaf := range []model.Issue{firstLeaf, secondLeaf} {
 		for _, edge := range []storage.AddRelationInput{
 			{SrcID: leaf.ID, DstID: hub.ID, Type: model.RelBlockedBy, CreatedBy: "ada"},

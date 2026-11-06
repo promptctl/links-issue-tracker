@@ -115,7 +115,8 @@ func (m *documentMerge) merge(i int, doc *BulkIssueSpec) error {
 // field is the one its write would store: the document's patch applied to the
 // issue as it stands, through the rows every write applies, so a value the
 // write canonicalizes (labels sorted, text trimmed) compares as it would land.
-// [LAW:single-enforcer]
+// It is projected, never admitted: the merge weighs a value, and the merged
+// document's write is what admits whatever it moves. [LAW:single-enforcer]
 func (m *documentMerge) fields(i int, doc *BulkIssueSpec, basis map[string]string) error {
 	for _, name := range slices.Sorted(maps.Keys(basis)) {
 		if !slices.ContainsFunc(issueFields, func(field issueField) bool { return field.name == name }) {
@@ -129,7 +130,7 @@ func (m *documentMerge) fields(i int, doc *BulkIssueSpec, basis map[string]strin
 	issue, standing := m.now.Issues[doc.ID]
 	var file map[string]string
 	if standing {
-		applied, _, err := ApplyIssueFields(issue, patch)
+		applied, _, err := ProjectIssueFields(issue, patch)
 		if err != nil {
 			return fmt.Errorf("bulk: doc %d (id %q): %w", i, doc.ID, err)
 		}

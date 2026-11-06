@@ -28,7 +28,7 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title: "Done guidance test", Topic: "guidance", IssueType: "task", Priority: 0,
+		Title: storage.MustParseTitle("Done guidance test"), Lane: storage.SharedLane, Topic: "guidance", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
@@ -87,7 +87,8 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				t.Parallel()
 				ap := newTestCLIApp(t)
 				issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-					Prefix: "test", Title: "matrix " + verb.spec.name, Topic: "lifecycle", IssueType: "task", Priority: 0,
+					Prefix: "test", Title: storage.MustParseTitle("matrix " + verb.spec.name),
+					Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 					ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 				})
 				if err != nil {
@@ -161,13 +162,15 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Matrix epic", Topic: "lifecycle", IssueType: "epic", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Matrix epic"),
+		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "epic", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Open child", Topic: "lifecycle", IssueType: "task", Priority: 0, ParentID: epic.ID,
+		Prefix: "test", Title: storage.MustParseTitle("Open child"),
+		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
@@ -206,7 +209,8 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Contested claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Contested claim"),
+		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
@@ -238,7 +242,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Epic container",
+		Title: storage.MustParseTitle("Epic container"), Lane: storage.SharedLane,
 		Topic:     "lifecycle",
 		IssueType: "epic",
 		Priority:  1,
@@ -247,7 +251,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	leaf, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Leaf work",
+		Title: storage.MustParseTitle("Leaf work"), Lane: storage.SharedLane,
 		Topic:     "lifecycle",
 		IssueType: "task",
 		Priority:  0,
@@ -286,7 +290,7 @@ func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "No status via update",
+		Title: storage.MustParseTitle("No status via update"), Lane: storage.SharedLane,
 		Topic:     "status",
 		IssueType: "task",
 		Priority:  0,
@@ -335,7 +339,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Update fields",
+		Title: storage.MustParseTitle("Update fields"), Lane: storage.SharedLane,
 		Topic:     "fields",
 		IssueType: "task",
 		Priority:  0,
@@ -409,7 +413,7 @@ func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Validation",
+		Title: storage.MustParseTitle("Validation"), Lane: storage.SharedLane,
 		Topic:     "validation",
 		IssueType: "task",
 		Priority:  0,
@@ -435,7 +439,8 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 
 	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
-		Title:     "Original epic title",
+		Title:     storage.MustParseTitle("Original epic title"),
+		Lane:      storage.SharedLane,
 		Topic:     "container-update",
 		IssueType: "epic",
 		Priority:  1,
@@ -483,7 +488,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Empty status",
+		Title: storage.MustParseTitle("Empty status"), Lane: storage.SharedLane,
 		Topic:     "status",
 		IssueType: "task",
 		Priority:  0,
@@ -539,7 +544,8 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "No assignee start", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("No assignee start"),
+		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
@@ -567,7 +573,8 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Env-stamped start", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Env-stamped start"),
+		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
@@ -617,7 +624,8 @@ func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Actor from session", Topic: "attribution", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Actor from session"),
+		Lane: storage.SharedLane, Topic: "attribution", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
@@ -641,7 +649,8 @@ func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Actor from by flag", Topic: "attribution", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Actor from by flag"),
+		Lane: storage.SharedLane, Topic: "attribution", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {
@@ -663,7 +672,8 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Stale claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Stale claim"),
+		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		Assignee: "claude_abandoned-session",
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
@@ -692,7 +702,8 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Hand off", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Hand off"),
+		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
 	if err != nil {

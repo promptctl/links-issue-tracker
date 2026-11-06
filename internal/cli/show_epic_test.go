@@ -91,7 +91,8 @@ func TestRunShowTopLevelEpicRendersItsOwnBlock(t *testing.T) {
 	t.Parallel()
 	ap := newTestCLIApp(t)
 	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
-		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "epic", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Free floating"),
+		Lane: storage.SharedLane, Topic: "misc", IssueType: "epic", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(free) error = %v", err)
@@ -133,7 +134,8 @@ func TestRunShowTopLevelEpicFailsBeforeWritingBodyOnUnreadableConfig(t *testing.
 	t.Parallel()
 	ap := newTestCLIApp(t)
 	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
-		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "epic", Priority: 0,
+		Prefix: "test", Title: storage.MustParseTitle("Free floating"),
+		Lane: storage.SharedLane, Topic: "misc", IssueType: "epic", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(free) error = %v", err)

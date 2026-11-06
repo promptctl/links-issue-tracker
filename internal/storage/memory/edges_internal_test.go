@@ -19,15 +19,15 @@ func TestRemovingOneOfTwoParentEdgesKeepsALeafInside(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	first, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "E1", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
+	first, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("E1"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
 	if err != nil {
 		t.Fatalf("CreateIssue(E1) error = %v", err)
 	}
-	second, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "E2", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
+	second, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("E2"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
 	if err != nil {
 		t.Fatalf("CreateIssue(E2) error = %v", err)
 	}
-	child, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "C", Topic: "core", Prefix: "conf", ParentID: first.ID})
+	child, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", ParentID: first.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(C) error = %v", err)
 	}
@@ -56,17 +56,17 @@ func TestParentByChildTakesTheLowerOfTwoParents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-	first, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "E1", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
+	first, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("E1"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
 	if err != nil {
 		t.Fatalf("CreateIssue(E1) error = %v", err)
 	}
-	second, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "E2", Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
+	second, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("E2"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
 	if err != nil {
 		t.Fatalf("CreateIssue(E2) error = %v", err)
 	}
 	higher, lower := max(first.ID, second.ID), min(first.ID, second.ID)
 	for _, order := range [][2]string{{higher, lower}, {lower, higher}} {
-		child, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: "C", Topic: "core", Prefix: "conf", ParentID: order[0]})
+		child, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("C"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", ParentID: order[0]})
 		if err != nil {
 			t.Fatalf("CreateIssue(C under %s) error = %v", order[0], err)
 		}
@@ -101,17 +101,17 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 		}
 		return issue
 	}
-	lower := mustIssue(storage.CreateIssueInput{Title: "one", IssueType: model.TypeEpic})
-	upper := mustIssue(storage.CreateIssueInput{Title: "two", IssueType: model.TypeEpic})
+	lower := mustIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("one"), Lane: storage.SharedLane, IssueType: model.TypeEpic})
+	upper := mustIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("two"), Lane: storage.SharedLane, IssueType: model.TypeEpic})
 	if upper.ID < lower.ID {
 		lower, upper = upper, lower
 	}
 	if _, err := e.RankToTop(ctx, upper.ID); err != nil {
 		t.Fatalf("RankToTop(%s) error = %v", upper.ID, err)
 	}
-	child := mustIssue(storage.CreateIssueInput{Title: "held", ParentID: lower.ID})
-	kept := mustIssue(storage.CreateIssueInput{Title: "kept", ParentID: upper.ID})
-	later := mustIssue(storage.CreateIssueInput{Title: "later", ParentID: upper.ID})
+	child := mustIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("held"), Lane: storage.SharedLane, ParentID: lower.ID})
+	kept := mustIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("kept"), Lane: storage.SharedLane, ParentID: upper.ID})
+	later := mustIssue(storage.CreateIssueInput{Title: storage.MustParseTitle("later"), Lane: storage.SharedLane, ParentID: upper.ID})
 	e.relations = append(e.relations, model.Relation{SrcID: child.ID, DstID: upper.ID, Type: model.RelParentChild})
 
 	relations, err := e.GetRelationsByIDs(ctx, []string{upper.ID})
@@ -129,5 +129,37 @@ func TestChildrenCompareOnTheirOwnKeys(t *testing.T) {
 	siblings := adjacency.Siblings
 	if len(siblings) != 2 || siblings[0].ID != child.ID || siblings[1].ID != later.ID {
 		t.Errorf("Siblings of %s = %+v, want %s before %s", kept.ID, siblings, child.ID, later.ID)
+	}
+}
+
+// A title no parser admits reaches this engine only by being written into it
+// directly, as restored data would hold one. A write of another field beside
+// it lands, restating it is no change, and moving it to a new break is refused.
+func TestAWriteBesideAStoredBreakTitleLands(t *testing.T) {
+	ctx := context.Background()
+	e, err := New("ws", storage.SystemClock)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	epic, err := e.CreateIssue(ctx, storage.CreateIssueInput{Title: storage.MustParseTitle("E"), Lane: storage.SharedLane, Topic: "core", Prefix: "conf", IssueType: model.TypeEpic})
+	if err != nil {
+		t.Fatalf("CreateIssue(E) error = %v", err)
+	}
+	rec, err := e.mustRecord(epic.ID)
+	if err != nil {
+		t.Fatalf("mustRecord error = %v", err)
+	}
+	rec.title = "two\nlines"
+	description, restated, moved := "described", rec.title, "other\nlines"
+	if _, err := e.Apply(ctx, epic.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Description: &description, Title: &restated}}); err != nil {
+		t.Fatalf("Apply(description, the stored title restated) error = %v", err)
+	}
+	_, err = e.Apply(ctx, epic.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Title: &moved}})
+	var refused model.ValidationError
+	if !errors.As(err, &refused) {
+		t.Errorf("Apply(title moved to another break) error = %v, want a ValidationError", err)
+	}
+	if got, _ := e.GetIssue(ctx, epic.ID); got.Title != "two\nlines" || got.Description != "described" {
+		t.Errorf("title %q, description %q; want the stored title and the description", got.Title, got.Description)
 	}
 }

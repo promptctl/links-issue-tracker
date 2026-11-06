@@ -26,7 +26,8 @@ func createChildLocally(t *testing.T, ctx context.Context, root, workspace, pare
 		}
 	}()
 	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: title, Description: description, Topic: "collide",
+		Prefix: "test", Title: storage.MustParseTitle(title),
+		Lane: storage.SharedLane, Description: description, Topic: "collide",
 		IssueType: "task", ParentID: parentID, Placement: storage.RankBottom,
 	})
 	if err != nil {
@@ -292,12 +293,13 @@ func seedUnrelatedCollision(t *testing.T, ctx context.Context, rootA, rootB, rem
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
-	epic, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Release", Topic: "collide", IssueType: "epic"})
+	epic, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Release"), Lane: storage.SharedLane, Topic: "collide", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(A epic): %v", err)
 	}
 	theirs, err := stA.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: "Wire the release watchdog", Topic: "collide", IssueType: "task", ParentID: epic.ID,
+		Prefix: "test", Title: storage.MustParseTitle("Wire the release watchdog"),
+		Lane: storage.SharedLane, Topic: "collide", IssueType: "task", ParentID: epic.ID,
 		Description: "alarm when a pending release sits past its window",
 	})
 	if err != nil {

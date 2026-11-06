@@ -357,14 +357,12 @@ func TestRestoringAFieldNoRowCarriesIsRefused(t *testing.T) {
 
 // TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse: what is left
 // different after carrying one issue's fields onto another is what differs
-// outside the editable set.
+// outside the editable set. A carried value is not parsed, so a title stored
+// with a line break carries as stored.
 func TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse(t *testing.T) {
-	src := model.Issue{ID: "links-x-1", Title: "new", IssueType: model.TypeTask, Lane: "l", Labels: []string{"a"}, Rank: "b"}
+	src := model.Issue{ID: "links-x-1", Title: "new\nline", IssueType: model.TypeTask, Lane: "l\r\nx", Labels: []string{"a"}, Rank: "b"}
 	dst := model.Issue{ID: "links-x-1", Title: "old", IssueType: model.TypeTask, Labels: []string{}, Rank: "a"}
-	got, err := storage.WithIssueFieldsOf(dst, src)
-	if err != nil {
-		t.Fatalf("WithIssueFieldsOf = %v", err)
-	}
+	got := storage.WithIssueFieldsOf(dst, src)
 	if !maps.Equal(storage.IssueFieldValues(got), storage.IssueFieldValues(src)) {
 		t.Errorf("fields = %v, want src's %v", storage.IssueFieldValues(got), storage.IssueFieldValues(src))
 	}
