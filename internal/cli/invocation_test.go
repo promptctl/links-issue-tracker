@@ -76,9 +76,8 @@ func runEnv(t testing.TB) environ.Env {
 	return testEnv().With(set...)
 }
 
-// testEnv is the test process's environment. Its released-schema ceiling is
-// this tree's own highest migration, so the suite exercises every migration
-// the tree carries. A test that sets entries of its own reads runEnv instead.
+// testEnv is the test process's environment; the rest of the Env is
+// suiteenv.Of's. A test that sets entries of its own reads runEnv instead.
 func testEnv() environ.Env {
 	return suiteenv.Of(os.Environ())
 }

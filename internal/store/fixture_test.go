@@ -101,8 +101,7 @@ func withTestMirrorRoot(run func() int) int {
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git the store it opens runs.
-// Its released-schema ceiling is this tree's own highest migration, so the
-// suite exercises every migration the tree carries.
+// The rest of the Env is suiteenv.Of's.
 func testEnv() environ.Env {
 	return suiteenv.Of(append(os.Environ(), MirrorRootEnvVar+"="+testMirrorRoot))
 }

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
-	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // The plan is only a plan if lit carries it out: every generation step must
@@ -106,7 +106,7 @@ func runLitIn(t *testing.T, dir string, env []string, budget time.Duration, args
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	inv := cli.Invocation{Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: environ.Of(env), Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr}
+	inv := cli.Invocation{Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: suiteenv.Of(env), Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr}
 	if err := cli.Run(ctx, inv); err != nil {
 		return cli.WriteCommandError(&stderr, err), stdout.String(), stderr.String()
 	}
