@@ -246,10 +246,8 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcil
 	}
 	// Prune runs AFTER the durable reset, so a prune failure must not fail a completed
 	// take (a retry would find nothing to do). A leftover snapshot is inert.
-	// [LAW:no-silent-failure] surfaced, not promoted.
-	if _, err := s.pruneAutomaticSnapshots(ctx); err != nil {
-		fmt.Fprintf(s.stderr, "lit: take-remote could not prune old recovery snapshots (reset already done): %v\n", err)
-	}
+	// [LAW:no-silent-failure] reported, not promoted.
+	s.pruneAfterLanding(ctx)
 	result.State = storage.SyncReconcileTookRemote
 	return nil
 }

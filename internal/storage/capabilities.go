@@ -206,6 +206,10 @@ type Syncer interface {
 	// decided on, and where it came from, oldest first.
 	ReconcileBases() []ReconcileBase
 
+	// SnapshotPrunes is every prune of older recovery snapshots a reconcile
+	// ran after its outcome landed since the engine opened, oldest first.
+	SnapshotPrunes() []SnapshotPrune
+
 	// SettledLastWrites is every settle's write of its settled.last record
 	// since the engine opened, oldest first.
 	SettledLastWrites() []SettledLastWrite

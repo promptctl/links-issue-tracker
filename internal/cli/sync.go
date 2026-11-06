@@ -76,6 +76,7 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, stderr io.Writer, d
 		reportEventValues(ctx, "fetch.pruned", syncer.PrunedRefs())
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
 		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
+		reportSnapshotPrunes(ctx, stderr, syncer)
 		reportStrandedWrites(ctx, st)
 		reportScratchDeletes(ctx, st)
 		reportEventValues(ctx, "settled_last.writes", syncer.SettledLastWrites())
@@ -111,6 +112,21 @@ func openSyncEngineAt(ctx context.Context, env environ.Env, stderr io.Writer, mo
 // where a slow clock is most likely corrected. [LAW:nothing-unseen]
 func reportStampCorrections(ctx context.Context, st storage.StampReporter) {
 	telemetry.Append(ctx, "store.stamp_corrections", st.StampCorrections().EventValue())
+}
+
+// reportSnapshotPrunes prints every recovery-snapshot prune a reconcile landing
+// could not finish and puts every prune on the event, one occurrence per
+// landing. The store records them and prints nothing, as downgrade's store
+// does. [LAW:single-enforcer] the one place a reconcile's prune is reported.
+// [LAW:nothing-unseen]
+func reportSnapshotPrunes(ctx context.Context, stderr io.Writer, syncer storage.Syncer) {
+	prunes := syncer.SnapshotPrunes()
+	for _, prune := range prunes {
+		if prune.Err != nil {
+			fmt.Fprintf(stderr, "lit: could not prune old recovery snapshots (what the reconcile landed is kept): %v\n", prune.Err)
+		}
+	}
+	reportEventValues(ctx, "reconcile.snapshot_prunes", prunes)
 }
 
 // reportCompactionPasses puts syncer's compaction passes on the event when it

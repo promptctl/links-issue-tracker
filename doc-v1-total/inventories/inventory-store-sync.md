@@ -646,7 +646,7 @@ Errors: `"read folded chain of %s excluding %v: %w"`, `"scan folded chain commit
 10. **Snapshot-first**: `guard.ensure(ctx)`; failure → `"snapshot before reconcile: %w"`, aborting **before** the data branch moves (`sync_reconcile.go`).
 11. `s.checkout(dataBranch)`; error `"return to data branch %q: %w"`.
 12. `CALL DOLT_RESET('--hard', replayedCommit)` — **the single atomic advance of the data branch**; error `"advance %q to replayed commit: %w"` (`sync_reconcile.go`).
-13. `s.pruneAutomaticSnapshots(ctx)` (§3.8). A failure prints `"lit: reconcile could not prune old recovery snapshots (replay already committed): %v"` to stderr and is **not** promoted — the replay already committed (`sync_reconcile.go`).
+13. `s.pruneAfterLanding(ctx)`: `s.pruneAutomaticSnapshots(ctx)` (§3.8), recorded on `SnapshotPrunes`; a failure is **not** promoted — the replay already committed — and the sync session's close prints it and puts it on `reconcile.snapshot_prunes` (`sync_reconcile.go`, `internal/cli/sync.go`).
 14. Return `replayLanding{replayed, landing}`.
 
 Invariant: the data branch is at its pre-reconcile head before step 12 and at the complete replayed spine after — never in between.
@@ -739,7 +739,7 @@ Test `TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide` (`sync_unrelated_te
 `takeRemoteHead(ctx, result, guard, trackingRef)` (`sync_unrelated_take.go`):
 1. `guard.ensure(ctx)`; failure → `"snapshot before take-remote: %w"`.
 2. `resetHardToRef(ctx, s.db, trackingRef)`.
-3. `s.pruneAutomaticSnapshots(ctx)` (§3.8); failure prints `"lit: take-remote could not prune old recovery snapshots (reset already done): %v"` to stderr, **not** promoted.
+3. `s.pruneAfterLanding(ctx)` (step 13 of the reconcile landing); a failure is **not** promoted.
 4. `result.State = SyncReconcileTookRemote`.
 Idempotent under retry (cached snapshot, fixed ref). The session's working set is left at the adopted head's own schema; the next `Open` lifts it. Tests `TestSyncResolveUnrelatedTakeRemote` (`sync_unrelated_test.go`), `TestSyncResolveUnrelatedTakeRemoteAdoptsAPrePurgeRemote` "nothing to carry" (`sync_unrelated_purge_test.go`).
 
