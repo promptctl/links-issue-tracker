@@ -741,8 +741,8 @@ func (s *Store) strandedTables(ctx context.Context) (int, error) {
 // surface to infer it from the state: an up-to-date or ahead settle proves
 // nothing about the remote's schema by its state alone. The behind landing
 // adopts the head at that schema whatever it is; the landing writes no
-// commit, so the push's refusal has nothing to guard here, and the open is
-// the one place that decides what this binary may do with the store it
+// commit, so the reconcile's refusal has nothing to guard here, and the open
+// is the one place that decides what this binary may do with the store it
 // finds. [LAW:dataflow-not-control-flow] [LAW:nothing-unseen]
 func (s *Store) settleReceivedWithinLock(ctx context.Context, remote storage.RemoteName, branch string) (storage.SyncReceiveResult, error) {
 	var result storage.SyncReceiveResult

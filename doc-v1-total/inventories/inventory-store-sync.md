@@ -447,7 +447,7 @@ Fields (`sync_schema_guard.go`): `Remote`, `Branch`, `RemoteVersion int64`, `Bin
 
 ### 4.3 Who is and is not guarded
 
-- Every push (`pushWithinLock`, which requires its branch): guarded (`sync.go`). Test `TestSyncPushRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`).
+- A push (`pushWithinLock`, which requires its branch): not guarded (`sync.go`). A push at the remote's own schema lands; the ceiling, raise and lowering verdicts are the push's only schema refusals. Test `TestAPushAtTheRemotesOwnSchemaLands` (`sync_schema_guard_test.go`).
 - Every reconcile that replays (three-way, combine, take-local, and take-remote carrying purge records): guarded inside `replayUnderGuard` before any write (`sync_reconcile.go`, `sync_unrelated_take.go`). Tests `TestSyncReconcileRefusesWhenRemoteSchemaAhead` (`sync_schema_guard_test.go`), `TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote` (`sync_unrelated_test.go`).
 - **take-remote with no purge records to carry is exempt** — it authors no commit and adopting an ahead head is a safe recovery (`sync_unrelated_take.go`).
 - Other tests: `TestRemoteHeadSchemaReadsVersion` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaAheadDetects` (`sync_schema_guard_test.go`), `TestGuardRemoteSchemaNotAheadAtOrBelowMax` (`sync_schema_guard_test.go`).

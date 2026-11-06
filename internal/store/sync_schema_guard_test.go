@@ -11,13 +11,23 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
+// futureColumn is the column the future schema added to issues, and
+// futureColumnValue the value the seeded issue holds in it: a field this
+// binary's model does not name, so a write that keeps it is the model's
+// column-named update and a write that resets it re-created the row.
+const (
+	futureColumn      = "future_note"
+	futureColumnValue = "kept by the newer schema"
+)
+
 // seedFutureSchemaRemote seeds a remote whose head records a goose schema version
 // ABOVE this binary's registry max — the shape a NEWER binary leaves behind after
-// advancing the shared remote. It stamps a synthetic future goose_db_version row
-// and pushes; the first push is to an empty remote, so the schema guard is a no-op
-// and the bump lands. Returns the seeded issue id and the future version. This
-// binary cannot itself produce that version — which is exactly the state the
-// schema guard must refuse to write over.
+// advancing the shared remote. It adds futureColumn to issues, sets the seeded
+// issue's value in it, stamps a synthetic future goose_db_version row and
+// pushes; the first push is to an empty remote, so it creates the branch and
+// lands. Returns the seeded issue id and the future version. This binary
+// cannot itself produce that version: the state the reconcile refuses to
+// replay onto, and a push of a head at that version lands.
 func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) (string, int64) {
 	t.Helper()
 	registryMax, err := migrations.MaxVersion()
@@ -37,6 +47,14 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL s
 	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`ALTER TABLE issues ADD COLUMN `+futureColumn+` text NOT NULL DEFAULT ''`); err != nil {
+		t.Fatalf("add the future schema's column: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx,
+		`UPDATE issues SET `+futureColumn+` = ? WHERE id = ?`, futureColumnValue, issue.ID); err != nil {
+		t.Fatalf("set the future schema's column: %v", err)
 	}
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, future); err != nil {
@@ -173,10 +191,12 @@ func (s *Store) refuseTrackingHeadAhead(ctx context.Context, remote storage.Remo
 // decision in design-docs/schema-reversibility.md ("A push at the remote's
 // own schema lands"): a checkout that adopted a remote head at a schema above
 // this binary's, and wrote under it as the open admits, pushes. A fresh clone
-// sees the edit, and the remote head's schema after the push is still the
-// ahead version: a commit at R is no regression. This binary's released
-// ceiling (testEnv: the registry max) is below R, so the landing also pins
-// that the ceiling judges a raise only.
+// sees the edit, the remote head's schema after the push is still the ahead
+// version, and the column the newer schema added still holds its value on the
+// edited row: the write was the model's column-named update and the push
+// carried the row as written, so a commit at R is no regression. This
+// binary's released ceiling (testEnv: the registry max) is below R, so the
+// landing also pins that the ceiling judges a raise only.
 func TestAPushAtTheRemotesOwnSchemaLands(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -218,6 +238,15 @@ func TestAPushAtTheRemotesOwnSchemaLands(t *testing.T) {
 	defer stC.Close()
 	if got := getIssueOrFatal(t, ctx, stC, id); got.Lane != "from-b" {
 		t.Fatalf("B's edit did not reach the remote (lane=%q, want %q)", got.Lane, "from-b")
+	}
+	// The newer schema's column survived B's write and the push on the row B
+	// edited: the write B's open admitted named only this binary's columns.
+	var note string
+	if err := stC.db.QueryRowContext(ctx, `SELECT `+futureColumn+` FROM issues WHERE id = ?`, id).Scan(&note); err != nil {
+		t.Fatalf("read the future schema's column at C: %v", err)
+	}
+	if note != futureColumnValue {
+		t.Fatalf("the future schema's column on the edited row = %q, want %q: B's write or push reset a column this binary does not know", note, futureColumnValue)
 	}
 }
 

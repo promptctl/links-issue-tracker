@@ -243,8 +243,9 @@ type SyncFailure struct {
 // remoteSchemaAheadFailure builds the sync-failure contract for a store
 // *RemoteSchemaAheadError, or ok=false when err is not one. It is the ONE adapter
 // from the store's typed remote-ahead refusal to the CLI's one contract renderer,
-// so every surface that can hit it — an explicit push/pull/reconcile, the inline
-// auto-reconcile, the on-change mirror push — produces the identical block.
+// so every surface that can hit it — an explicit pull or reconcile, the inline
+// auto-reconcile — produces the identical block. A push never raises it: a
+// push at the remote's own schema lands.
 // [LAW:single-enforcer] [LAW:one-source-of-truth] the version fields come straight
 // off the typed error; no message text is parsed.
 func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {

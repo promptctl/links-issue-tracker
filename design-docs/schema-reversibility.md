@@ -181,19 +181,22 @@ where a push at R above the hold lands; the guarantee was already scoped to
 binaries that read the row.) An unheld head below R is the lowering verdict's
 to refuse.
 
-The reconcile is the one write the open's admission does not cover. Its
-replay re-creates every row a folded commit changed from this binary's
-columns, a delete and an insert and never an update, so onto a head whose
-schema is above this binary's it would reset the newer schema's columns to
-their defaults on every row it touched: a regression within R's schema that
-no comparison of H to R would see. The reconcile refuses such a head
-(`RemoteSchemaAheadError`) before any write, on its captured read of R, with
-`lit upgrade` as the remedy; the refusal is the reconcile's, not the push's,
-and the owner channel's `remote_schema_ahead` episode ends on a settle's
-read of the remote head within the binary's support, never on a landed push.
-So across a release that raises the shared remote, a checkout on the previous
-release reads, writes, and pushes, and upgrades before it can reconcile a
-divergence.
+The open's admission covers the model's write and no other. A write that
+re-creates rows from this binary's columns, a delete and an insert and never
+an update, resets the columns a newer schema added to their defaults on every
+row it touches: a regression within R's schema that no comparison of H to R
+would see, so it is refused where it writes, never at the push. The
+reconcile's replay is such a write, re-creating every row a folded commit
+changed, and the reconcile refuses a head whose schema is above this
+binary's (`RemoteSchemaAheadError`) before any write, on its captured read of
+R, with `lit upgrade` as the remedy; the owner channel's `remote_schema_ahead`
+episode ends on a settle's read of the remote head within the binary's
+support, never on a landed push. `lit import` and a snapshot restore rewrite
+whole tables the same way, and today the open admits them on a workspace
+ahead of the binary; what they may write there is theirs to decide, by the
+open's rule, and the push does not stand in for that decision. So across a
+release that raises the shared remote, a checkout on the previous release
+reads, writes, and pushes, and upgrades before it can reconcile a divergence.
 
 ## What rule 2 means, precisely
 
