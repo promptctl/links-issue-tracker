@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,7 +10,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
-	"golang.org/x/term"
 )
 
 // runWorkflowsEdit is `lit workflows edit <id-or-point>`'s whole job:
@@ -125,8 +123,8 @@ func writeWorkflowScaffold(path string, subject string, content []byte) error {
 }
 
 // openOrPrintWorkflowFile always names the scaffolded/target path — cheap,
-// and useful whether or not an editor also opens — then, only when stdout is
-// a real terminal and $EDITOR is set, hands the file to it interactively. A
+// and useful whether or not an editor also opens — then, only when stdin and
+// stdout are both real terminals and $EDITOR is set, hands the file to it interactively. A
 // non-interactive caller (an agent, a script, a pipe, or a test harness
 // capturing output into a buffer) or a terminal with no $EDITOR configured
 // gets just the path: enough to open the file themselves.
@@ -142,7 +140,7 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 		return nil
 	}
 	// The editor runs where lit ran, on the invocation's own streams: the
-	// stdout isTerminal just found to be a terminal is the one it draws on.
+	// terminals interactive just found are the ones it reads and draws on.
 	dir, err := inv.Dir.Path()
 	if err != nil {
 		return fmt.Errorf("open %s in $EDITOR: %w", path, err)
@@ -153,22 +151,6 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, inv.Env.Get("EDITOR"), err)
 	}
 	return nil
-}
-
-// interactive reports whether a person can both see what lit writes and answer
-// it: stdin and stdout are each a real terminal, not a pipe, a file redirect,
-// /dev/null (a character device but no terminal), or an in-memory buffer (what
-// tests and any non-*os.File caller pass). Every prompt and the editor launch
-// gate on it, judged on the invocation's own streams rather than the process
-// globals, so a test capturing output never blocks on a read or opens an
-// editor. [LAW:single-enforcer]
-func interactive(stdin io.Reader, stdout io.Writer) bool {
-	return isTerminal(stdin) && isTerminal(stdout)
-}
-
-func isTerminal(stream any) bool {
-	file, ok := stream.(*os.File)
-	return ok && term.IsTerminal(int(file.Fd()))
 }
 
 // unsafeScaffoldFilenameChars is everything a fresh scaffold's filename

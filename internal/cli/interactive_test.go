@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // TestGatesRefuseWhenTheStreamsAreTheNullDevice pins that the null device is no
@@ -32,5 +34,11 @@ func TestGatesRefuseWhenTheStreamsAreTheNullDevice(t *testing.T) {
 	var purge purgeUnconfirmedError
 	if !errors.As(err, &purge) || !strings.Contains(purge.Message, "pass --yes") {
 		t.Errorf("confirmPurge over %s = %v, want the --yes refusal", os.DevNull, err)
+	}
+
+	// An editor launched here would fail to start and return an error.
+	inv := Invocation{Dir: WorkingDirOf(t.TempDir(), nil), Env: environ.Of([]string{"EDITOR=/nonexistent/editor"}), Stdin: null, Stdout: null, Stderr: null}
+	if err := openOrPrintWorkflowFile(inv, "point.md"); err != nil {
+		t.Errorf("openOrPrintWorkflowFile over %s with $EDITOR set = %v, want the path printed and no editor", os.DevNull, err)
 	}
 }
