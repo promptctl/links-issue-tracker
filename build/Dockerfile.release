@@ -59,7 +59,7 @@
 # version and its SHA256 are a pair: bump them together, or the verify step
 # fails loudly. [LAW:one-source-of-truth] the digest is the authoritative
 # identity of the bytes; the version string is just a convenience label.
-ARG GO_VERSION=1.25.7
+ARG GO_VERSION=1.26.10
 ARG GORELEASER_VERSION=v2.16.0
 ARG GORELEASER_SHA256=eaae05b5eba07533bd0f06846b68c808399504784df00c62eb219541fc04e5e2
 ARG ZIG_VERSION=0.14.0

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -85,6 +86,22 @@ func TestList_IgnoresUnrecognizedNames(t *testing.T) {
 	}
 	if len(list) != 0 {
 		t.Fatalf("want 0 recognized snapshots, got %d", len(list))
+	}
+}
+
+func TestList_RefusesFileAtSnapshotsDir(t *testing.T) {
+	t.Parallel()
+	db := filepath.Join(t.TempDir(), "db")
+	snapshotsDir := DirFor(db)
+	if err := os.MkdirAll(filepath.Dir(snapshotsDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(snapshotsDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(db)
+	if !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("List with a file at the snapshots dir = %d snapshots, %v; want ENOTDIR", len(list), err)
 	}
 }
 

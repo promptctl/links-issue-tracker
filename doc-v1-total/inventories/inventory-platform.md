@@ -9,7 +9,7 @@ to `/Users/bmf/code/links-issue-tracker`.
 ## 1. Module identity and dependencies
 
 - Module path: `github.com/promptctl/links-issue-tracker` (`go.mod`).
-- Go language/toolchain version: `go 1.25.7` (`go.mod`). CI derives its Go version from this
+- Go language/toolchain version: `go 1.26.10` (`go.mod`). CI derives its Go version from this
   file (`go-version-file: go.mod`, e.g. `.github/workflows/ci.yml`).
 - Direct requirements (`go.mod`):
   - `github.com/CycloneDX/cyclonedx-go v0.11.0` (`go.mod`)
@@ -933,9 +933,9 @@ Justfile or any workflow in `.github/workflows/`.
   3. **`verify`**: `go mod tidy` then `git diff --exit-code go.mod go.sum`, failing
      with `::error::go.mod/go.sum are not tidy…`; `grep -q -- "-buildvcs=false" scripts/install.sh`
 ; `bash scripts/install.sh`.
-  4. **`lint`**: `golangci/golangci-lint-action@v8` pinned to `version: v2.8.0` with `verify: false`;
-     then, under `if: ${{ !cancelled() }}`, `golangci-lint version --short` → `golangci-lint config verify --schema`
-     against the committed `.github/golangci.v<major>.<minor>.jsonschema.json` (no network).
+  4. **`lint`**: `golangci/golangci-lint-action@v8` pinned to `version: v2.15.0` with `install-mode: goinstall` and `verify: false`;
+     then, under `if: ${{ !cancelled() }}`, `golangci-lint config verify` against the binary's
+     embedded schema (no network).
   5. **`docs`**: setup-python@v5 `3.x`; `pip install mkdocs==1.6.1 mkdocs-material==9.7.6`;
      `mkdocs build --strict`.
   6. **`candybar`**: checkout@v4 → setup-go@v5 → setup-node@v4 (`node-version: '22'`) →
@@ -1182,7 +1182,7 @@ Pinned ARGs (`build/Dockerfile.release`):
 
 | ARG | Value |
 |---|---|
-| `GO_VERSION` | `1.25.7` |
+| `GO_VERSION` | `1.26.10` |
 | `GORELEASER_VERSION` | `v2.16.0` |
 | `GORELEASER_SHA256` | `eaae05b5eba07533bd0f06846b68c808399504784df00c62eb219541fc04e5e2` |
 | `ZIG_VERSION` | `0.14.0` |

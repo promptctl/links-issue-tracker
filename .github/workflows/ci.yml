@@ -266,10 +266,14 @@ jobs:
       # schema through a 2-second client timeout with no retry, ahead of
       # linting, so a slow golangci-lint.run would fail the job with nothing
       # linted. The step after this one is the schema check instead, offline.
+      # install-mode goinstall builds the linter with go.mod's toolchain: a
+      # prebuilt release carries the gofmt of whatever Go built it, which can
+      # format differently from the gofmt developers run.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.8.0
+          version: v2.15.0
+          install-mode: goinstall
           verify: false
 
       # An io/fs name built with path/filepath fails every lookup on Windows,
@@ -281,19 +285,13 @@ jobs:
 
       # [LAW:single-enforcer] the one place .golangci.yml is checked against
       # its schema, so a misspelled key cannot silently switch a rule off.
-      # The schema is golangci-lint.run's golangci.v<minor>.jsonschema.json,
-      # committed beside this workflow so the gate needs no network and cannot
-      # change under an unchanged tree. [LAW:one-source-of-truth] its file is
-      # looked up by the minor of the binary the action installed (it puts it
-      # on PATH), so bumping the pin above without committing that minor's
-      # schema fails here with "no such file or directory". It runs whether or not linting
+      # [LAW:one-source-of-truth] the schema is the one built into the pinned
+      # binary the action installed (it puts it on PATH), so the gate needs no
+      # network and moves only with the pin. It runs whether or not linting
       # passed, so every run reports the config's verdict.
       - name: .golangci.yml matches golangci-lint's schema
         if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          minor="$(golangci-lint version --short | cut -d. -f1,2)"
-          golangci-lint config verify --schema ".github/golangci.v${minor}.jsonschema.json"
+        run: golangci-lint config verify
 
   # lit's cc-candybar plugin rendered by cc-candybar itself. The plugin's
   # segments are Go templates only cc-candybar evaluates, so a broken one
