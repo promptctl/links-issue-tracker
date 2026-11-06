@@ -69,21 +69,62 @@ func mirrorBaseIdentity(doltRootDir string) string {
 	return filepath.Clean(gitCacheRootFor(doltRootDir))
 }
 
+// mirrorBaseOf is the base of the store rooted at doltRootDir, under
+// mirrorRoot, with the database its root file names.
+func mirrorBaseOf(mirrorRoot, doltRootDir string) mirrorBaseEntry {
+	return mirrorBaseEntry{dir: MirrorBase(mirrorRoot, doltRootDir), database: mirrorBaseIdentity(doltRootDir)}
+}
+
 // ensureMirrorBase creates the base of the store rooted at doltRootDir, with
 // its root file, before anything can write a mirror into it.
 func ensureMirrorBase(mirrorRoot, doltRootDir string) (string, error) {
-	base := MirrorBase(mirrorRoot, doltRootDir)
-	identity := mirrorBaseIdentity(doltRootDir)
-	if recorded, err := os.ReadFile(filepath.Join(base, rootFileName)); err == nil && string(recorded) == identity {
-		return base, nil
+	base := mirrorBaseOf(mirrorRoot, doltRootDir)
+	return base.dir, base.ensure()
+}
+
+// ensure creates the base with its root file. [LAW:single-enforcer] every
+// producer of a base creates it here, so no base exists without the root file
+// both collectors read: a base without one is never collected.
+func (b mirrorBaseEntry) ensure() error {
+	root := filepath.Join(b.dir, rootFileName)
+	if recorded, err := os.ReadFile(root); err == nil && string(recorded) == b.database {
+		return nil
 	}
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return "", fmt.Errorf("create git mirror base %s: %w", base, err)
+	if err := os.MkdirAll(b.dir, 0o755); err != nil {
+		return fmt.Errorf("create git mirror base %s: %w", b.dir, err)
 	}
-	if err := os.WriteFile(filepath.Join(base, rootFileName), []byte(identity), 0o644); err != nil {
-		return "", fmt.Errorf("record the database a git mirror base serves (%s): %w", base, err)
+	if err := os.WriteFile(root, []byte(b.database), 0o644); err != nil {
+		return fmt.Errorf("record the database a git mirror base serves (%s): %w", b.dir, err)
 	}
-	return base, nil
+	return nil
+}
+
+// removeCounting removes the base, its root file last, so a removal that
+// fails partway leaves a base the next collection still finds and retries.
+func (b mirrorBaseEntry) removeCounting() (freed int64, removed bool, err error) {
+	entries, err := os.ReadDir(b.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	var failed []error
+	for _, entry := range entries {
+		if entry.Name() == rootFileName {
+			continue
+		}
+		n, _, err := removeTreeCounting(filepath.Join(b.dir, entry.Name()))
+		freed += n
+		if err != nil {
+			failed = append(failed, err)
+		}
+	}
+	if len(failed) > 0 {
+		return freed, false, errors.Join(failed...)
+	}
+	n, removed, err := removeTreeCounting(b.dir)
+	return freed + n, removed, err
 }
 
 // mirrorBaseOpenedBy is the base Dolt opens a git remote of the store rooted
@@ -99,34 +140,44 @@ func mirrorBaseOpenedBy(mirrorRoot, doltRootDir string) string {
 	return base
 }
 
-// SeedCloneMirrors copies the mirror base of the live store rooted at
-// liveRoot to the clone rooted at cloneRoot, and records the clone as the
-// copy's database. A clone takes it beside its copy of the Dolt directory,
-// under the same hold, so the clone fetches only what the live mirrors lack,
-// as it did when the mirrors lived inside the copied tree. A live store that
-// has opened no git remote has no base, and the clone starts with none.
+// SeedCloneMirrors copies the mirrors in the base of the live store rooted at
+// liveRoot into the base of the clone rooted at cloneRoot. A clone takes it
+// beside its copy of the Dolt directory, under the same hold, so the clone
+// fetches only what the live mirrors lack, as it did when the mirrors lived
+// inside the copied tree. The clone's base is created with its own root file
+// before any mirror is copied into it, so a copy cut short is collected with
+// the clone. A live store that has opened no git remote has no base, and the
+// clone starts with none.
 func SeedCloneMirrors(ctx context.Context, mirrorRoot, liveRoot, cloneRoot string) error {
 	live := MirrorBase(mirrorRoot, liveRoot)
-	if _, err := os.Stat(live); errors.Is(err, fs.ErrNotExist) {
+	entries, err := os.ReadDir(live)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		return fmt.Errorf("read the live git mirror base %s: %w", live, err)
 	}
-	clone := MirrorBase(mirrorRoot, cloneRoot)
-	if err := dbsnapshot.CloneTree(ctx, live, clone); err != nil {
-		return fmt.Errorf("copy the live git mirrors to the clone's base %s: %w", clone, err)
+	clone, err := ensureMirrorBase(mirrorRoot, cloneRoot)
+	if err != nil {
+		return err
 	}
-	_, err := ensureMirrorBase(mirrorRoot, cloneRoot)
-	return err
+	for _, entry := range entries {
+		if entry.Name() == rootFileName {
+			continue
+		}
+		if err := dbsnapshot.CloneTree(ctx, filepath.Join(live, entry.Name()), filepath.Join(clone, entry.Name())); err != nil {
+			return fmt.Errorf("copy the live git mirror %s to the clone's base %s: %w", entry.Name(), clone, err)
+		}
+	}
+	return nil
 }
 
 // RemoveCloneMirrors removes the mirror base of the clone rooted at
 // cloneRoot. A clone's removal calls it with the removal of the clone's tree,
 // so no mirror outlives the clone that made it.
 func RemoveCloneMirrors(mirrorRoot, cloneRoot string) error {
-	base := MirrorBase(mirrorRoot, cloneRoot)
-	if err := os.RemoveAll(base); err != nil {
-		return fmt.Errorf("remove the clone's git mirror base %s: %w", base, err)
+	base := mirrorBaseOf(mirrorRoot, cloneRoot)
+	if _, _, err := base.removeCounting(); err != nil {
+		return fmt.Errorf("remove the clone's git mirror base %s: %w", base.dir, err)
 	}
 	return nil
 }
@@ -187,7 +238,7 @@ func SweepMirrorBasesUnder(mirrorRoot, dir string) error {
 		if !isUnder(base.database, dir) {
 			continue
 		}
-		if err := os.RemoveAll(base.dir); err != nil {
+		if _, _, err := base.removeCounting(); err != nil {
 			failed = append(failed, fmt.Errorf("remove git mirror base %s of %s: %w", base.dir, base.database, err))
 		}
 	}
@@ -212,7 +263,7 @@ func sweepOrphanedMirrorBases(mirrorRoot string) remoteCachePruneOutcome {
 		if _, err := os.Stat(filepath.Dir(base.database)); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
-		freed, removed, err := removeTreeCounting(base.dir)
+		freed, removed, err := base.removeCounting()
 		outcome.Reclaimed += freed
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("remove git mirror base %s of deleted %s: %v", base.dir, base.database, err))

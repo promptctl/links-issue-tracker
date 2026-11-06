@@ -184,6 +184,26 @@ func TestACloneIsSeededWithTheLiveMirrorsAndRemovesOnlyItsOwn(t *testing.T) {
 	}
 }
 
+// A seed cut short leaves a clone base that names the clone, so the take's
+// sweep of the clone base collects it, never one that names the live store.
+func TestASeedCutShortLeavesABaseNamingTheClone(t *testing.T) {
+	t.Parallel()
+	mirrorRoot := t.TempDir()
+	liveRoot := filepath.Join(t.TempDir(), "dolt")
+	cloneRoot := filepath.Join(t.TempDir(), "clone", "dolt")
+	writeBase(t, mirrorRoot, liveRoot)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := SeedCloneMirrors(ctx, mirrorRoot, liveRoot, cloneRoot); err == nil {
+		t.Fatal("SeedCloneMirrors() with a cancelled context succeeded")
+	}
+	recorded, err := os.ReadFile(filepath.Join(MirrorBase(mirrorRoot, cloneRoot), rootFileName))
+	if err != nil || string(recorded) != mirrorBaseIdentity(cloneRoot) {
+		t.Fatalf("the cut-short clone base records %q (%v), want %q", recorded, err, mirrorBaseIdentity(cloneRoot))
+	}
+}
+
 // A live store that has opened no git remote has no base, and its clone
 // starts with none.
 func TestACloneOfAStoreWithNoMirrorsStartsWithNone(t *testing.T) {
