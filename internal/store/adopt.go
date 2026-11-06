@@ -267,17 +267,11 @@ func AdoptRemoteByClone(ctx context.Context, env environ.Env, stderr io.Writer, 
 	// answer trusts an invariant a stale pre-marker binary on someone's PATH
 	// could have violated by minting tickets over the residue — displacement
 	// costs a rename and makes the wrong-answer case recoverable instead of
-	// destroyed. The target is a sibling of the dolt root, outside the
-	// engine's server root (a second database dir inside it would surface as
-	// a phantom database), and DOLT_CLONE — which refuses an existing target
-	// — gets the vacated path. Eviction precedes the rename so no cached
-	// handle keyed by the canonical path ever serves the displaced (or the
-	// re-cloned) store stale. ENOENT means nothing to displace; any other
+	// destroyed. displaceDatabaseDir places it, and DOLT_CLONE — which refuses
+	// an existing target — gets the vacated path. ENOENT means nothing to displace; any other
 	// rename failure aborts with the marker in place. [LAW:no-silent-failure]
 	dbDir := filepath.Join(cleanRoot, doltDatabaseName)
-	evictSingleton(dbDir)
-	displaced := fmt.Sprintf("%s.adopt-displaced-%d", cleanRoot, time.Now().UTC().UnixNano())
-	if err := os.Rename(dbDir, displaced); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if _, err := displaceDatabaseDir(cleanRoot, "adopt"); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("set aside database before adopt: %w", err)
 	}
 

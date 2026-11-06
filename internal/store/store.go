@@ -460,11 +460,11 @@ func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
 // bootstrap, owned at the entry points that hold it.
 func EnsureDatabase(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, workspaceID string) (_ storage.Bootstrap, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
-		return storage.BootstrapNone, err
+		return storage.Bootstrap{}, err
 	}
 	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
 	if err != nil {
-		return storage.BootstrapNone, err
+		return storage.Bootstrap{}, err
 	}
 	defer func() {
 		if relErr := release(); relErr != nil {
@@ -475,7 +475,7 @@ func EnsureDatabase(ctx context.Context, env environ.Env, stderr io.Writer, dolt
 	// adopt's residue — CREATE DATABASE IF NOT EXISTS would bless it as a
 	// fresh store. [LAW:no-ambient-temporal-coupling]
 	if err := requireNoPendingAdopt(doltRootDir); err != nil {
-		return storage.BootstrapNone, err
+		return storage.Bootstrap{}, err
 	}
 	return ensureDoltDatabase(ctx, env, stderr, doltRootDir, workspaceID)
 }
@@ -3293,8 +3293,8 @@ func nullableStringPtr(value *string) any {
 // A database found here needs no bootstrap lock, so an open of an existing
 // store never queues on the one that guards building. Finding it cannot go
 // stale: every caller holds the workspace lock shared, which keeps out every
-// rotator of the directory, and a builder removes only a database directory
-// with no .dolt (discardDeadBuilds). Finding none can, so that answer is
+// rotator of the directory, and a builder sets aside only a database directory
+// with no .dolt (setAsideDatabaseWithoutDolt). Finding none can, so that answer is
 // decided under the bootstrap lock (buildDatabaseOnce).
 // [LAW:no-ambient-temporal-coupling] An existing database needs nothing more:
 // branch normalization runs on each write open's own engine (Open/OpenSync
@@ -3307,15 +3307,15 @@ func ensureDoltDatabase(ctx context.Context, env environ.Env, stderr io.Writer, 
 	root := filepath.Clean(doltRootDir)
 	exists, err := doltDatabaseExists(root)
 	if err != nil || exists {
-		return storage.BootstrapNone, err
+		return storage.Bootstrap{}, err
 	}
 	return buildDatabaseOnce(ctx, env, stderr, root, workspaceID)
 }
 
 // doltDatabaseExists answers "is there a database": a real .dolt directory in a
-// real database directory. [LAW:one-source-of-truth] "No" is what licenses
-// discarding the database directory (discardDeadBuilds), so it is said only
-// where nothing stands on that path, and Lstat reads what stands there, never
+// real database directory. [LAW:one-source-of-truth] "No" is said where nothing
+// stands on that path, or where a real database directory holds no .dolt: the
+// case a build sets aside (setAsideDatabaseWithoutDolt). Lstat reads what stands there, never
 // what a symlink points at, which can leave with a volume. Whatever else stands
 // there fails, naming it. [LAW:no-silent-failure] One Lstat per step also keeps
 // the unlocked read true while a builder's rename lands beside it.
@@ -3344,7 +3344,7 @@ func doltDatabaseExists(root string) (bool, error) {
 func buildDatabaseOnce(ctx context.Context, env environ.Env, stderr io.Writer, root string, workspaceID string) (_ storage.Bootstrap, err error) {
 	release, err := acquireBootstrapLock(ctx, stderr, root)
 	if err != nil {
-		return storage.BootstrapNone, err
+		return storage.Bootstrap{}, err
 	}
 	defer func() {
 		if relErr := release(); relErr != nil {
@@ -3353,44 +3353,117 @@ func buildDatabaseOnce(ctx context.Context, env environ.Env, stderr io.Writer, r
 	}()
 	exists, err := doltDatabaseExists(root)
 	if err != nil || exists {
-		return storage.BootstrapNone, err
+		return storage.Bootstrap{}, err
 	}
 	staging := bootstrapStagingPath(root)
-	bootstrap, err := discardDeadBuilds(staging, filepath.Join(root, doltDatabaseName))
+	discarded, err := discardDeadStaging(staging)
 	if err != nil {
-		return storage.BootstrapNone, err
+		return storage.Bootstrap{}, err
 	}
 	if err := buildDoltRoot(ctx, env, stderr, staging, workspaceID); err != nil {
-		return storage.BootstrapNone, errors.Join(err, os.RemoveAll(staging))
+		return storage.Bootstrap{}, errors.Join(err, os.RemoveAll(staging))
 	}
-	if err := installDoltRoot(staging, root); err != nil {
-		return storage.BootstrapNone, errors.Join(err, os.RemoveAll(staging))
+	// The set-aside waits for a finished build, so a failed build leaves the
+	// directory where the user put it.
+	setAside, err := setAsideDatabaseWithoutDolt(root)
+	if err != nil {
+		return storage.Bootstrap{}, errors.Join(err, os.RemoveAll(staging))
 	}
-	return bootstrap, nil
-}
-
-// discardDeadBuilds clears the paths a build writes of what a builder that
-// died mid-build left there: the staging root, and a database directory with
-// no .dolt in it, which is what a lit from before staged builds left when it
-// died laying a database down in place. The caller holds the bootstrap lock
-// and found no database, so no builder that takes the lock owns either path,
-// and with both cleared the build and its install write onto nothing. The
-// "is there a database" check and the install's rename then agree on what
-// the database is. Reports whether there was anything to discard.
-func discardDeadBuilds(paths ...string) (storage.Bootstrap, error) {
-	bootstrap := storage.BootstrapBuilt
-	for _, path := range paths {
-		switch _, err := os.Lstat(path); {
+	// A .dolt restored while the build ran is the user's database, and the build
+	// yields to it. The rename took the directory whole, so asking the set-aside
+	// after the move leaves no window between the answer and the move.
+	if setAside != "" {
+		switch _, err := os.Lstat(filepath.Join(setAside, dbfactory.DoltDir)); {
 		case err == nil:
-			bootstrap = storage.BootstrapBuiltOverDeadBuild
-			if err := os.RemoveAll(path); err != nil {
-				return storage.BootstrapNone, fmt.Errorf("remove a dead build's leftover: %w", err)
-			}
+			return storage.Bootstrap{}, errors.Join(restoreSetAside(root, setAside), os.RemoveAll(staging))
 		case !errors.Is(err, os.ErrNotExist):
-			return storage.BootstrapNone, fmt.Errorf("stat a build's path for a dead build's leftover: %w", err)
+			err = fmt.Errorf("check a set-aside database directory for a .dolt restored during the build: %w", err)
+			return storage.Bootstrap{}, errors.Join(err, restoreSetAside(root, setAside), os.RemoveAll(staging))
 		}
 	}
-	return bootstrap, nil
+	if err := installDoltRoot(staging, root); err != nil {
+		if setAside != "" {
+			err = errors.Join(err, restoreSetAside(root, setAside))
+		}
+		return storage.Bootstrap{}, errors.Join(err, os.RemoveAll(staging))
+	}
+	if setAside != "" {
+		fmt.Fprintf(stderr, "warning: %s held no .dolt, so lit built a new database; what it held was moved to %s\n", filepath.Join(root, doltDatabaseName), setAside)
+	}
+	return storage.BuiltDatabase(discarded, setAside), nil
+}
+
+// discardDeadStaging removes what a builder that died mid-build left at the
+// staging root. The path is lit's own, written only by a holder of the
+// bootstrap lock; the caller holds that lock and found no database, so
+// whatever stands there is positively a dead build. Reports whether there was
+// anything to discard.
+func discardDeadStaging(staging string) (bool, error) {
+	switch _, err := os.Lstat(staging); {
+	case errors.Is(err, os.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("stat a build's path for a dead build's leftover: %w", err)
+	}
+	if err := os.RemoveAll(staging); err != nil {
+		return false, fmt.Errorf("remove a dead build's leftover: %w", err)
+	}
+	return true, nil
+}
+
+// setAsideDatabaseWithoutDolt moves a database directory that holds no .dolt
+// out of the install's way, and never deletes it: "no .dolt" says no database
+// is there, not that nothing worth keeping is (a recovery's `mv .dolt
+// .dolt.bak` leaves the only copy inside). Reports the path it moved the
+// directory to, or "" when none stood there or it was empty: an empty
+// directory holds nothing to keep, so it is removed. [LAW:no-silent-failure] a
+// rename that fails stops the build rather than falling back to deleting.
+func setAsideDatabaseWithoutDolt(root string) (string, error) {
+	database := filepath.Join(root, doltDatabaseName)
+	switch entries, err := os.ReadDir(database); {
+	case errors.Is(err, os.ErrNotExist):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("read a database directory with no .dolt before installing: %w", err)
+	case len(entries) == 0:
+		if err := os.Remove(database); err != nil {
+			return "", fmt.Errorf("remove an empty database directory before installing: %w", err)
+		}
+		return "", nil
+	}
+	setAside, err := displaceDatabaseDir(root, "bootstrap")
+	if err != nil {
+		return "", fmt.Errorf("set aside a database directory with no .dolt before building: %w", err)
+	}
+	return setAside, nil
+}
+
+// restoreSetAside moves a set-aside directory back when the build yields or
+// its install fails, so the open leaves the user's directory where they put
+// it. A failed move back (an install that landed before failing occupies the
+// path) names where the directory still is.
+func restoreSetAside(root, setAside string) error {
+	if err := os.Rename(setAside, filepath.Join(root, doltDatabaseName)); err != nil {
+		return fmt.Errorf("move the database directory back from %s after a failed install (it is still there): %w", setAside, err)
+	}
+	return nil
+}
+
+// displaceDatabaseDir renames the database directory to a sibling of the Dolt
+// root, <root>.<kind>-displaced-<unixnano>, and reports that path, "" when the
+// rename failed. The sibling sits outside the engine's server root, so it
+// never surfaces as a phantom database; eviction precedes the rename so no
+// cached handle keyed by the canonical path serves the displaced store.
+// [LAW:one-source-of-truth] the one placement rule for the bootstrap's and
+// adopt's displacements.
+func displaceDatabaseDir(root, kind string) (string, error) {
+	database := filepath.Join(root, doltDatabaseName)
+	evictSingleton(database)
+	displaced := fmt.Sprintf("%s.%s-displaced-%d", root, kind, time.Now().UTC().UnixNano())
+	if err := os.Rename(database, displaced); err != nil {
+		return "", err
+	}
+	return displaced, nil
 }
 
 // buildDoltRoot lays a fresh Dolt root down at staging, which the caller has

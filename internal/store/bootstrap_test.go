@@ -235,8 +235,8 @@ func TestAnExistingStoresOpensPassABootstrapLockHolder(t *testing.T) {
 	for name, open := range map[string]func(context.Context) error{
 		"EnsureDatabase": func(ctx context.Context) error {
 			bootstrap, err := EnsureDatabase(ctx, testEnv(), testStderr(), root, "test-workspace-id")
-			if err == nil && bootstrap != storage.BootstrapNone {
-				return fmt.Errorf("bootstrap = %v, want %v", bootstrap, storage.BootstrapNone)
+			if err == nil && bootstrap.Built() {
+				return fmt.Errorf("bootstrap = %v, want none", bootstrap)
 			}
 			return err
 		},
@@ -268,42 +268,97 @@ func TestAnExistingStoresOpensPassABootstrapLockHolder(t *testing.T) {
 	}
 }
 
-// A builder that died mid-build leaves its partial work behind: a staging
-// root, or, from a lit that built in place, a database directory with no
-// .dolt in it. The next bootstrap holds the lock that proves no builder owns
-// either, so it discards the leftover, builds, says it built over a dead
-// build, and leaves nothing at the staging path.
-func TestBootstrapDiscardsADeadBuildsLeftover(t *testing.T) {
+// A builder that died mid-build leaves its partial work at the staging root,
+// a path only a bootstrap-lock holder writes. The next bootstrap holds that
+// lock, so it discards the leftover, builds, says it built over a dead build,
+// and leaves nothing at the staging path.
+func TestBootstrapDiscardsADeadBuildsStaging(t *testing.T) {
 	t.Parallel()
-	for _, leftover := range []func(root string) string{
-		func(root string) string { return filepath.Join(bootstrapStagingPath(root), doltDatabaseName, ".dolt") },
-		func(root string) string { return filepath.Join(root, doltDatabaseName, "partial") },
-	} {
-		root := filepath.Join(t.TempDir(), "dolt")
-		dir := leftover(root)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("MkdirAll() = %v", err)
+	root := filepath.Join(t.TempDir(), "dolt")
+	dir := filepath.Join(bootstrapStagingPath(root), doltDatabaseName, ".dolt")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "repo_state.json"), []byte("half-written"), 0o644); err != nil {
+		t.Fatalf("WriteFile() = %v", err)
+	}
+	bootstrap, err := EnsureDatabase(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
+	if want := storage.BuiltDatabase(true, ""); err != nil || bootstrap != want {
+		t.Fatalf("EnsureDatabase() over %s = %v, %v; want %v", dir, bootstrap, err, want)
+	}
+	assertNoBootstrapStaging(t, root)
+	assertOpens(t, root)
+}
+
+// "No .dolt" says no database is there, not that nothing worth keeping is: a
+// recovery that moved .dolt to .dolt.bak left the only copy inside. A build
+// moves that directory aside, whole, says where on stderr and in its event,
+// and builds a database that opens.
+func TestBootstrapSetsAsideADatabaseDirectoryWithNoDolt(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "dolt")
+	backup := filepath.Join(root, doltDatabaseName, ".dolt.bak")
+	if err := os.MkdirAll(backup, 0o755); err != nil {
+		t.Fatalf("MkdirAll() = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(backup, "repo_state.json"), []byte("the only copy"), 0o644); err != nil {
+		t.Fatalf("WriteFile() = %v", err)
+	}
+	var stderr strings.Builder
+	bootstrap, err := EnsureDatabase(context.Background(), testEnv(), &stderr, root, "test-workspace-id")
+	if err != nil || !bootstrap.Built() || bootstrap.SetAside() == "" {
+		t.Fatalf("EnsureDatabase() over %s = %v (set aside %q), %v; want a build that set it aside", backup, bootstrap, bootstrap.SetAside(), err)
+	}
+	setAside := bootstrap.SetAside()
+	if got := bootstrap.EventRecord(); got["bootstrap"] != "built" || got["bootstrap.set_aside"] != setAside {
+		t.Fatalf("EventRecord() = %v; want bootstrap=built and bootstrap.set_aside=%s", got, setAside)
+	}
+	if got, err := os.ReadFile(filepath.Join(setAside, ".dolt.bak", "repo_state.json")); err != nil || string(got) != "the only copy" {
+		t.Fatalf("the set-aside backup = %q, %v; want it intact", got, err)
+	}
+	if filepath.Dir(setAside) != filepath.Dir(root) {
+		t.Fatalf("set aside at %s; want it beside the Dolt root %s, outside the engine's server root", setAside, root)
+	}
+	for _, path := range []string{filepath.Join(root, doltDatabaseName), setAside} {
+		if !strings.Contains(stderr.String(), path) {
+			t.Fatalf("stderr = %q; want it to name %s", stderr.String(), path)
 		}
-		if err := os.WriteFile(filepath.Join(dir, "repo_state.json"), []byte("half-written"), 0o644); err != nil {
-			t.Fatalf("WriteFile() = %v", err)
-		}
-		bootstrap, err := EnsureDatabase(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
-		if err != nil || bootstrap != storage.BootstrapBuiltOverDeadBuild {
-			t.Fatalf("EnsureDatabase() over %s = %v, %v; want %v", dir, bootstrap, err, storage.BootstrapBuiltOverDeadBuild)
-		}
-		assertNoBootstrapStaging(t, root)
-		st, err := Open(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
-		if err != nil {
-			t.Fatalf("Open() after building over %s = %v", dir, err)
-		}
-		if err := st.Close(); err != nil {
-			t.Fatalf("Close() = %v", err)
-		}
+	}
+	assertOpens(t, root)
+}
+
+// An empty database directory holds nothing to keep: a build removes it
+// rather than setting it aside, and has nothing to warn about.
+func TestBootstrapRemovesAnEmptyDatabaseDirectory(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(filepath.Join(root, doltDatabaseName), 0o755); err != nil {
+		t.Fatalf("MkdirAll() = %v", err)
+	}
+	var stderr strings.Builder
+	bootstrap, err := EnsureDatabase(context.Background(), testEnv(), &stderr, root, "test-workspace-id")
+	if want := storage.BuiltDatabase(false, ""); err != nil || bootstrap != want {
+		t.Fatalf("EnsureDatabase() over an empty database directory = %v, %v; want %v", bootstrap, err, want)
+	}
+	if strings.Contains(stderr.String(), "displaced") {
+		t.Fatalf("stderr = %q; want no set-aside warning", stderr.String())
+	}
+	assertOpens(t, root)
+}
+
+func assertOpens(t *testing.T, root string) {
+	t.Helper()
+	st, err := Open(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() after the build = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
 	}
 }
 
-// Only a database's confirmed absence licenses discarding what stands in its
-// place, so a thing at its path that is neither nothing nor a real directory
+// Only a database's confirmed absence licenses setting aside what stands in
+// its place, so a thing at its path that is neither nothing nor a real directory
 // stays where it is, whether a symlink points anywhere or not, and whoever
 // found it fails naming it rather than deep inside the engine.
 func TestAnOpenRefusesWhatStandsWhereADatabaseShouldBe(t *testing.T) {
@@ -395,8 +450,8 @@ func TestBootstrapBuildsIntoARootThatHoldsNoDatabase(t *testing.T) {
 			}
 		}
 		bootstrap, err := EnsureDatabase(ctx, testEnv(), testStderr(), root, "test-workspace-id")
-		if err != nil || bootstrap != storage.BootstrapBuilt {
-			t.Fatalf("EnsureDatabase(root holding %q) = %v, %v; want %v", stray, bootstrap, err, storage.BootstrapBuilt)
+		if err != nil || bootstrap != storage.BuiltDatabase(false, "") {
+			t.Fatalf("EnsureDatabase(root holding %q) = %v, %v; want %v", stray, bootstrap, err, storage.BuiltDatabase(false, ""))
 		}
 		if stray != "" {
 			if got, err := os.ReadFile(filepath.Join(root, stray)); err != nil || string(got) != "lit's own" {
@@ -422,7 +477,7 @@ func TestBootstrapForgetsReceivedRefsOnlyWhenItBuilds(t *testing.T) {
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 	record := []byte("refs of a database that is gone")
-	for _, want := range []storage.Bootstrap{storage.BootstrapBuilt, storage.BootstrapNone} {
+	for _, want := range []storage.Bootstrap{storage.BuiltDatabase(false, ""), {}} {
 		if err := WriteReceivedRefs(root, record); err != nil {
 			t.Fatalf("WriteReceivedRefs() = %v", err)
 		}
