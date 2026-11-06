@@ -18,8 +18,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
-
-	"github.com/promptctl/links-issue-tracker/internal/dirlist"
 )
 
 // This file answers the one question an flock cannot: WHO is holding it. The
@@ -888,17 +886,19 @@ func (w *holdWait) holderNames() ([]string, bool) {
 // liveness is probeLockHolder's business. A directory that does not exist yet
 // has no holders.
 // [LAW:one-source-of-truth] The one listing the account, the sweep and the
-// wait all read. A file squatting on the holder dir is an error, not an empty
-// listing, on every platform (dirlist.Read).
-func holderRecordNames(dir string) (names []string, err error) {
-	entries, err := dirlist.Read(dir)
+// wait all read. A file squatting on the holder dir is ENOTDIR, not an empty
+// listing, on every platform: since Go 1.26 os.ReadDir opens with
+// O_DIRECTORY on Windows too.
+func holderRecordNames(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	// Entries arrive sorted by name: the account renders holders in this order.
+	// Sorted, as os.ReadDir sorts: the account renders holders in this order.
+	var names []string
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), lockHolderRecordPrefix) {
 			names = append(names, entry.Name())

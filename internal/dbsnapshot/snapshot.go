@@ -47,8 +47,6 @@ import (
 	"time"
 
 	"github.com/promptctl/primitives/filelock"
-
-	"github.com/promptctl/links-issue-tracker/internal/dirlist"
 )
 
 // Snapshot is a frozen copy of a Dolt storage directory.
@@ -303,7 +301,7 @@ func pathFree(p string) (bool, error) {
 // code parses or constructs snapshot directory names.
 func List(databaseDir string) ([]Snapshot, error) {
 	snapshotsDir := DirFor(databaseDir)
-	entries, err := dirlist.Read(snapshotsDir)
+	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return []Snapshot{}, nil

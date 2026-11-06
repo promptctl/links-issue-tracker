@@ -62,16 +62,6 @@ linters:
             - "!$test"
           allow:
             - $gostd
-        # [LAW:one-way-deps] every package that lists a directory it owns
-        # shares this one reader, store and dbsnapshot alike, so it sits below
-        # all of them and imports only the standard library.
-        dirlist-stdlib-only:
-          list-mode: strict
-          files:
-            - "**/internal/dirlist/**"
-            - "!$test"
-          allow:
-            - $gostd
         # [LAW:one-way-deps] any package may add a fact to the invocation's
         # event, the store and the workspace code included, so the package that
         # holds the event sits below all of them and imports only the standard

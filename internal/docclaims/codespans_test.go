@@ -75,7 +75,7 @@ func TestCodeSpansRefusesWhatDoesNotRenderAsWritten(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			spans, err := CodeSpans(tc.doc)
 			if err == nil {
-				t.Fatalf("accepted a document that does not render as written; read %q", spans)
+				t.Fatalf("accepted a document that does not render as written; read %+v", spans)
 			}
 			if !strings.Contains(err.Error(), tc.line) {
 				t.Errorf("error %q does not name %q", err, tc.line)

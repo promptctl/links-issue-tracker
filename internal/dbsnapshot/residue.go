@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/promptctl/primitives/filelock"
-
-	"github.com/promptctl/links-issue-tracker/internal/dirlist"
 )
 
 // collectOrphanedResidue reclaims producer artifacts (.tmp copies, .reserve
@@ -97,7 +95,7 @@ func collectOrphanedResidue(snapshotsDir string) error {
 // leftover from an earlier interrupted collection — collection stays
 // self-healing even if a producer reuses the exact original stamp.
 func condemnResidue(snapshotsDir string) ([]string, error) {
-	entries, err := dirlist.Read(snapshotsDir)
+	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		return nil, fmt.Errorf("read snapshots dir: %w", err)
 	}
