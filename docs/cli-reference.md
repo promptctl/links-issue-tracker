@@ -1334,7 +1334,7 @@ active at each point and their source layer; `show <id>` resolves one definition
 fully. `edit <id-or-point>` scaffolds a project-layer override (an existing
 definition's id) or a fresh definition (an event name, a state name optionally
 suffixed `:enter`/`:exit`, or — falling through — a label), always prints its path,
-and additionally opens it in `$EDITOR` when stdout is a terminal and `$EDITOR` is set.
+and additionally opens it in `$EDITOR` when stdin and stdout are both terminals and `$EDITOR` is set.
 `dry-run` explains a hypothetical occasion built from flags: which definitions would
 fire, why, and the body each would inject — without anything actually firing.
 `--enter` and `--exit` repeat, because one transition can enter several states:

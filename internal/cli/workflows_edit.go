@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -124,16 +123,16 @@ func writeWorkflowScaffold(path string, subject string, content []byte) error {
 }
 
 // openOrPrintWorkflowFile always names the scaffolded/target path — cheap,
-// and useful whether or not an editor also opens — then, only when stdout is
-// a real terminal and $EDITOR is set, hands the file to it interactively. A
-// non-interactive caller (an agent, a script, a pipe, or a test harness
-// capturing output into a buffer) or a terminal with no $EDITOR configured
-// gets just the path: enough to open the file themselves.
+// and useful whether or not an editor also opens — then, only when stdin and
+// stdout are both real terminals and $EDITOR is set, hands the file to it
+// interactively. A non-interactive caller (an agent, a script, a pipe, or a
+// test harness capturing output into a buffer) or a terminal with no $EDITOR
+// configured gets just the path: enough to open the file themselves.
 func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	if _, err := fmt.Fprintln(inv.Stdout, path); err != nil {
 		return err
 	}
-	if !isTerminal(inv.Stdout) {
+	if !interactive(inv.Stdin, inv.Stdout) {
 		return nil
 	}
 	editorCmd := strings.Fields(inv.Env.Get("EDITOR"))
@@ -141,7 +140,7 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 		return nil
 	}
 	// The editor runs where lit ran, on the invocation's own streams: the
-	// stdout isTerminal just found to be a terminal is the one it draws on.
+	// terminals interactive just found are the ones it reads and draws on.
 	dir, err := inv.Dir.Path()
 	if err != nil {
 		return fmt.Errorf("open %s in $EDITOR: %w", path, err)
@@ -152,26 +151,6 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, inv.Env.Get("EDITOR"), err)
 	}
 	return nil
-}
-
-// isTerminal reports whether w is a real terminal rather than a pipe, file
-// redirect, or an in-memory buffer (what tests and any non-*os.File caller
-// pass) — exactly the distinction `lit workflows edit` needs to decide
-// whether opening $EDITOR makes sense. Checking against the actual stream
-// the command is writing to (rather than the process-global os.Stdout) means
-// a test capturing output into a bytes.Buffer never accidentally launches an
-// editor. Needs no new dependency (golang.org/x/term is not already a direct
-// one) — the character-device check is the standard no-dependency approach.
-func isTerminal(w io.Writer) bool {
-	file, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
 }
 
 // unsafeScaffoldFilenameChars is everything a fresh scaffold's filename

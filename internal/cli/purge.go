@@ -57,7 +57,7 @@ func confirmPurge(stdin io.Reader, stdout io.Writer, id model.ID, yes bool) erro
 	if yes {
 		return nil
 	}
-	if !isTerminal(stdout) {
+	if !interactive(stdin, stdout) {
 		return purgeUnconfirmedError{Message: fmt.Sprintf("purging %s cannot be undone; pass --yes to confirm it", id)}
 	}
 	confirmed, err := askYesNo(stdin, stdout, fmt.Sprintf("%s: a purge removes it, its comments, labels, history and edges for good, here and in every store it syncs to\npurge it?", id))

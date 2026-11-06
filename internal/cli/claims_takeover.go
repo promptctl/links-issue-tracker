@@ -134,9 +134,8 @@ func authorizeStart(ctx context.Context, inv Invocation, ap *app.App, issueID mo
 // line: "an agent without a TTY can take over a fresh-claimed lane only by
 // passing the explicit flag." --take is read before the terminal is, so the flag
 // the refusal names works at a terminal too.
-// isTerminal(stdout) is the same interactivity signal openOrPrintWorkflowFile
-// already uses, so a captured-stdout test never blocks on a stdin read it did
-// not ask for.
+// interactive is the same signal openOrPrintWorkflowFile uses, so a
+// captured-stdout test never blocks on a stdin read it did not ask for.
 //
 // line is the dossier claimLineOf builds for every claim-aware surface
 // (`next`, `backlog`), reused rather than re-derived.
@@ -144,7 +143,7 @@ func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, line string, take b
 	if take {
 		return line + " — taking over (--take)\n", nil
 	}
-	if !isTerminal(stdout) {
+	if !interactive(stdin, stdout) {
 		return "", takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}
 	}
 	confirmed, err := askYesNo(stdin, stdout, line+"\ntake over this lane?")
