@@ -148,7 +148,7 @@ func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 
 	plantSettleEndedEpisodes(t, ws)
 	var out strings.Builder
-	if err := reportTakeOutcome(underInvocation(context.Background()), testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", notDiverged); err != nil {
+	if err := reportTakeOutcome(testStderr(t), runEnv(t), &out, ws, "lit sync reconcile take remote", remoteName(t, "origin"), "master", notDiverged); err != nil {
 		t.Fatalf("reportTakeOutcome: %v", err)
 	}
 	requireSettleEndedEpisodesEnded(t, ws, "take not-diverged")

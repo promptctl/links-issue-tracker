@@ -76,6 +76,7 @@ func openSyncSessionAt(ctx context.Context, env environ.Env, stderr io.Writer, d
 		reportEventValues(ctx, "fetch.pruned", syncer.PrunedRefs())
 		reportEventValues(ctx, "remote.removals", syncer.RemoteRemovals())
 		reportEventValues(ctx, "reconcile.bases", syncer.ReconcileBases())
+		reportEventValues(ctx, "reconcile.snapshot_prunes", syncer.SnapshotPrunes())
 		reportStrandedWrites(ctx, st)
 		reportScratchDeletes(ctx, st)
 		reportEventValues(ctx, "settled_last.writes", syncer.SettledLastWrites())

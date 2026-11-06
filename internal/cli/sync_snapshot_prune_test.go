@@ -45,7 +45,11 @@ func requirePruneFailureReported(t *testing.T, command, stderr string, err error
 	if !strings.Contains(stderr, snapshotPruneWarning) {
 		t.Errorf("%s stderr = %q, want the prune failure %q", command, stderr, snapshotPruneWarning)
 	}
-	got, _ := lastEvent(t).Facts["reconcile.snapshot_prune_error"].(string)
+	prunes := lastEvent(t).Occurrences["reconcile.snapshot_prunes"]
+	if len(prunes) != 1 {
+		t.Fatalf("reconcile.snapshot_prunes = %v, want the one prune the landing ran", prunes)
+	}
+	got, _ := prunes[0].(map[string]any)["reconcile.snapshot_prune_error"].(string)
 	if got == "" || !strings.Contains(stderr, snapshotPruneWarning+got) {
 		t.Errorf("reconcile.snapshot_prune_error = %q, want the failure stderr printed", got)
 	}

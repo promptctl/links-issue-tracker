@@ -414,12 +414,13 @@ block it was, since every divergence class shares one reason.
 
 A command that reconciles a diverged clone, whether `lit sync reconcile`, one of
 its `resolve`, `combine` or `take` verbs, or the reconcile an automatic receive
-runs, records what became of the older recovery snapshots once the outcome
-landed.
+runs, records what became of the older recovery snapshots each time an
+outcome landed. `reconcile.snapshot_prunes` is an occurrence list with one value
+per landing, oldest first; a sync command that landed nothing leaves it empty.
 
 | Key | Meaning |
 | --- | --- |
-| `reconcile.snapshot_prune_error` | Why lit's older recovery snapshots could not be removed after the reconcile landed, or `null` when they were or no prune ran. The command prints the failure to stderr and keeps what the reconcile landed. |
+| `reconcile.snapshot_prune_error` | Why lit's older recovery snapshots could not be removed after that landing, or `null` when they were. lit prints the failure to stderr as it happens and keeps what the reconcile landed. |
 
 ## What `lit init` records
 

@@ -153,6 +153,9 @@ type Store struct {
 	// reconcileBases is the base every reconcile plan since the store opened
 	// decided on (captureReconcilePlan); ReconcileBases is its one reader.
 	reconcileBases []storage.ReconcileBase
+	// snapshotPrunes is every prune a reconcile ran after its outcome landed
+	// (pruneAfterLanding); SnapshotPrunes is its one reader.
+	snapshotPrunes []storage.SnapshotPrune
 	// strandedWritesCommits is every commit commitStrandedWrites landed since
 	// the store opened, and strandedWritesLooked whether it ran;
 	// StrandedWritesCommits is their one reader.

@@ -281,6 +281,19 @@ type ScratchDeleteReporter interface {
 	ScratchDeletes() (deletes []ScratchDelete, looked bool)
 }
 
+// SnapshotPrune is one prune of older recovery snapshots after a reconcile's
+// outcome landed: Err is why they could not be removed, or nil. It never fails
+// the reconcile: what landed stays landed, and a leftover snapshot is inert.
+type SnapshotPrune struct {
+	Err error
+}
+
+// EventValue is the prune as one value of the event's reconcile.snapshot_prunes
+// list.
+func (p SnapshotPrune) EventValue() map[string]any {
+	return map[string]any{"reconcile.snapshot_prune_error": telemetry.ErrorText(p.Err)}
+}
+
 // EventValue is the delete as one value of the event's scratch.deletes list.
 func (d ScratchDelete) EventValue() map[string]any {
 	return map[string]any{"scratch.branch": d.Branch, "scratch.cause": string(d.Cause), "scratch.error": telemetry.ErrorText(d.Err)}
@@ -729,10 +742,6 @@ type SyncReconcileResult struct {
 	// differs from the provisional value the replay carried. Zero for every
 	// outcome the agent's text took no part in.
 	ProseRecorded int
-	// SnapshotPruneErr is why older recovery snapshots could not be removed
-	// after the outcome durably landed, or nil. It never fails the reconcile:
-	// what landed stays landed, and a leftover snapshot is inert.
-	SnapshotPruneErr error
 }
 
 // UnrelatedInventory partitions issue ids across the two sides of an

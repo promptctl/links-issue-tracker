@@ -920,7 +920,6 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	result.Pending = nil
 	result.Replayed = landing.replayed
 	result.Landing = landing.landing
-	result.SnapshotPruneErr = landing.pruneErr
 	result.ProseRecorded = settled.proseRecorded
 	return nil
 }
@@ -1062,11 +1061,31 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// to fail the reconcile — the replay already committed, and returning an error here
 	// would report a successful reconcile as failed (and a retry would find it already
 	// resolved). A leftover un-pruned snapshot is inert, exactly like the leftover
-	// scratch branch leaveScratch tolerates, so the failure rides on what the
-	// landing returns and the command reports it. [LAW:no-silent-failure] loud, but
-	// not a false failure over a durable success.
-	_, pruneErr := s.pruneAutomaticSnapshots(ctx)
-	return replayLanding{replayed: replayed, landing: landing, pruneErr: pruneErr}, nil
+	// scratch branch leaveScratch tolerates, so pruneAfterLanding reports it and
+	// returns nothing. [LAW:no-silent-failure] loud, but not a false failure over a
+	// durable success.
+	s.pruneAfterLanding(ctx)
+	return replayLanding{replayed: replayed, landing: landing}, nil
+}
+
+// pruneAfterLanding rolls the recovery snapshots off once a reconcile's outcome
+// has durably landed, prints a failure where it happens, and records the prune
+// for the event's reconcile.snapshot_prunes, one occurrence per prune: an
+// invocation can reconcile more than once, and a reconcile can fail after its
+// landing, and neither loses a prune. Every reconcile landing prunes through
+// it. [LAW:single-enforcer] [LAW:nothing-unseen]
+func (s *Store) pruneAfterLanding(ctx context.Context) {
+	_, err := s.pruneAutomaticSnapshots(ctx)
+	if err != nil {
+		fmt.Fprintf(s.stderr, "lit: could not prune old recovery snapshots (what the reconcile landed is kept): %v\n", err)
+	}
+	s.snapshotPrunes = append(s.snapshotPrunes, storage.SnapshotPrune{Err: err})
+}
+
+// SnapshotPrunes is every prune a reconcile ran after its outcome landed since
+// the store opened, oldest first.
+func (s *Store) SnapshotPrunes() []storage.SnapshotPrune {
+	return slices.Clone(s.snapshotPrunes)
 }
 
 // unionUnlooped joins the cuts of several lifts and landings, each edge named
@@ -1091,9 +1110,6 @@ func unionUnlooped(sets ...[]storage.Unlooped) []storage.Unlooped {
 type replayLanding struct {
 	replayed int
 	landing  storage.Landing
-	// pruneErr is the recovery-snapshot prune that failed after the landing
-	// committed, or nil.
-	pruneErr error
 }
 
 // countCommitsInRange counts the commits reachable from head but not from
