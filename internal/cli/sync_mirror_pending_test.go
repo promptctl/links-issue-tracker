@@ -39,6 +39,21 @@ func mirrorPendingSet(t *testing.T, ws workspace.Info) bool {
 	return owed
 }
 
+// claimHeld claims the workspace's mirror-pending marker as a command would,
+// and ends the claimant's answering hold when the test ends. A claimant leaves
+// that hold to its own process exit, and in a test the process outlives the
+// test, so the hold would keep the beacon and its holder record open. POSIX
+// lets t.TempDir remove open files, and Windows does not.
+func claimHeld(t *testing.T, ws workspace.Info) mirrorPendingClaim {
+	t.Helper()
+	claim, releaseAnswer, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	t.Cleanup(releaseAnswer)
+	return claim
+}
+
 // filesystemNow reads the clock that actually stamps files in dir, by
 // stamping one and reading it back. Linux fills inode times from
 // ktime_get_coarse_real_ts64, which advances once per timer tick (1-4ms at
@@ -198,9 +213,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 func TestClearMirrorPendingIdempotent(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
-	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	claimHeld(t, ws)
 	clearMirrorPending(testStderr(t), ws)
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("clear left the marker in place")
@@ -247,9 +260,7 @@ func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 	if mirrorPendingSet(t, ws) {
 		t.Fatal("an absent marker read as set")
 	}
-	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	claimHeld(t, ws)
 	if !mirrorPendingSet(t, ws) {
 		t.Fatal("a just-claimed marker read as unset")
 	}
@@ -272,9 +283,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 
-	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	claimHeld(t, ws)
 
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
 	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
@@ -335,9 +344,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
-	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	claimHeld(t, ws)
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
 	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
@@ -409,11 +416,7 @@ func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 	if err := os.Chtimes(mirrorPendingMarkerPath(ws), future, future); err != nil {
 		t.Fatalf("future-date marker: %v", err)
 	}
-	claim, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now())
-	if err != nil {
-		t.Fatalf("claimMirrorPending on future marker: %v", err)
-	}
-	if claim != pendingClaimed {
+	if claim := claimHeld(t, ws); claim != pendingClaimed {
 		t.Fatal("a future-stamped marker with no live holder read as covered; it must be re-claimed")
 	}
 }
@@ -435,9 +438,7 @@ func TestRecheckMirrorPending(t *testing.T) {
 		t.Fatalf("absent marker: (again=%v err=%v), want clean done", again, err)
 	}
 
-	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	claimHeld(t, ws)
 	again, err = recheckMirrorPending(ws, cycleStart)
 	if err != nil || !again {
 		t.Fatalf("post-cycle claim: (again=%v err=%v), want another cycle", again, err)
@@ -507,9 +508,7 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 func TestRunBackgroundMirrorTeardownReleasesClaim(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	if _, _, err := claimMirrorPending(context.Background(), testStderr(t), ws, time.Now()); err != nil {
-		t.Fatalf("claim: %v", err)
-	}
+	claimHeld(t, ws)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

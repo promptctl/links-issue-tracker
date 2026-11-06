@@ -7,10 +7,3 @@
 # <ticket> <package> <top-level test, or * for a package whose tests do not
 # compile on Windows>
 
-links-windows-qr8l.nca internal/cli TestClaimMirrorPendingClockStepIrrelevant
-links-windows-qr8l.nca internal/cli TestClearMirrorPendingIdempotent
-links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttempt
-links-windows-qr8l.nca internal/cli TestCompleteMirrorWithoutAttemptBusySkipsOwner
-links-windows-qr8l.nca internal/cli TestMirrorOwedIgnoresLiveness
-links-windows-qr8l.nca internal/cli TestRecheckMirrorPending
-links-windows-qr8l.nca internal/cli TestRunBackgroundMirrorTeardownReleasesClaim
