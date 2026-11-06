@@ -279,11 +279,12 @@ func interruptedEnd(at time.Time, signal string, code int) telemetry.End {
 
 // endedAfterHardExit is a clean end that arrived after the hard exit claimed
 // the process's exit: it keeps what the command ended with — its error,
-// reason, facts and counts — and is recorded as the interruption the process
-// exits with. [LAW:nothing-unseen]
+// facts and counts — and is recorded as the interruption the process exits
+// with. Its reason goes, since a reason is published with its own code.
+// [LAW:nothing-unseen]
 func endedAfterHardExit(end telemetry.End, hard interrupt.Decision) telemetry.End {
 	lost := interruptedEnd(end.At, hard.Signal, hard.Code)
-	end.Outcome, end.ExitCode = lost.Outcome, lost.ExitCode
+	end.Outcome, end.ExitCode, end.Reason = lost.Outcome, lost.ExitCode, lost.Reason
 	if end.Error == "" {
 		end.Error = lost.Error
 	} else {

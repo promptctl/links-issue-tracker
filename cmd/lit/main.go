@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
@@ -20,12 +21,13 @@ func main() {
 	// code the invocation's event records.
 	ctx, exit := interrupt.Guard(context.Background(), interrupt.DefaultGrace)
 	// A failure claims the exit before it is printed, so the code on stderr is
-	// the code the process exits with. One the hard exit already decided is
-	// not printed: the process is ending on the interrupt, and the invocation's
-	// event records what the command ended with.
+	// the code the process exits with. A failure after the hard exit decided
+	// is printed under the interrupt and code the process is ending on.
 	fail := func(err error) {
 		decided := interrupt.Claim(ctx, cli.CommandExitCode(err))
-		if !decided.Hard() {
+		if decided.Hard() {
+			fmt.Fprintf(os.Stderr, "lit: hard-exited with %d after %s; the command then ended: %v\n", decided.Code, decided.Signal, err)
+		} else {
 			cli.WriteCommandError(os.Stderr, err)
 		}
 		exit(decided.Code)

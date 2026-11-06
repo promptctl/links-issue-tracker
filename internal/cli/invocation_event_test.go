@@ -375,8 +375,8 @@ func TestACleanEndAfterTheHardExitKeepsWhatItEndedWith(t *testing.T) {
 	if got.Outcome != telemetry.OutcomeInterrupted || got.ExitCode != 143 {
 		t.Errorf("outcome, exit code = %v, %d; want interrupted, 143", got.Outcome, got.ExitCode)
 	}
-	if got.Reason != end.Reason || got.Facts["remote"] != "origin" || got.Counts["commits"] != 2 {
-		t.Errorf("end = %+v, want the command's reason, facts and counts kept", got)
+	if got.Reason != "" || got.Facts["remote"] != "origin" || got.Counts["commits"] != 2 {
+		t.Errorf("end = %+v, want the command's facts and counts kept, and no reason published with another code", got)
 	}
 	if !strings.Contains(got.Error, "SIGTERM") || !strings.HasSuffix(got.Error, "sync push: refused") {
 		t.Errorf("error = %q, want the interruption and then the command's own error", got.Error)

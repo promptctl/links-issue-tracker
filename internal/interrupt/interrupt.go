@@ -63,6 +63,8 @@ var interruptSignals = map[os.Signal]string{syscall.SIGINT: "SIGINT", syscall.SI
 // clean path, or by the hard exit with the conventional 128+signum code, which
 // ever comes first. A hard exit after a clean claim exits with the claimed
 // code; an exit after a hard claim waits for the hard exit to end the process.
+// A second interrupt is the one way out that skips the decision: the OS ends
+// the process by the signal.
 // [LAW:single-enforcer]
 func Guard(parent context.Context, grace time.Duration) (context.Context, func(code int)) {
 	sigs := make(chan os.Signal, 1)
