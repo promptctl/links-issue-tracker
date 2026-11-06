@@ -14,7 +14,7 @@ import (
 
 // ceilingAt is a released-schema ceiling of max, as a test sets one.
 func ceilingAt(max int64) version.SchemaCeiling {
-	return version.SchemaCeiling{Max: max, Source: "set by the test"}
+	return version.SchemaCeiling{Max: max, Bound: version.BoundReleased, Source: "set by the test"}
 }
 
 // registryMax is the highest migration this tree carries.
