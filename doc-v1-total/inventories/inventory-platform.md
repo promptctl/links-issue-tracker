@@ -9,7 +9,7 @@ to `/Users/bmf/code/links-issue-tracker`.
 ## 1. Module identity and dependencies
 
 - Module path: `github.com/promptctl/links-issue-tracker` (`go.mod`).
-- Go language/toolchain version: `go 1.25.7` (`go.mod`). CI derives its Go version from this
+- Go language/toolchain version: `go 1.26.10` (`go.mod`). CI derives its Go version from this
   file (`go-version-file: go.mod`, e.g. `.github/workflows/ci.yml`).
 - Direct requirements (`go.mod`):
   - `github.com/CycloneDX/cyclonedx-go v0.11.0` (`go.mod`)
@@ -1182,7 +1182,7 @@ Pinned ARGs (`build/Dockerfile.release`):
 
 | ARG | Value |
 |---|---|
-| `GO_VERSION` | `1.25.7` |
+| `GO_VERSION` | `1.26.10` |
 | `GORELEASER_VERSION` | `v2.16.0` |
 | `GORELEASER_SHA256` | `eaae05b5eba07533bd0f06846b68c808399504784df00c62eb219541fc04e5e2` |
 | `ZIG_VERSION` | `0.14.0` |
