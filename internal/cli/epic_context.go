@@ -376,7 +376,7 @@ func (x crossEpicEdges) empty() bool {
 // are here)".
 func renderEpicContext(ec EpicContext) string {
 	var b strings.Builder
-	fmt.Fprintln(&b, fmt.Sprintf("Epic: %s — %s", model.HoldRow(ec.Epic.ID), ec.Epic.Title))
+	fmt.Fprintf(&b, "Epic: %s — %s\n", model.HoldRow(ec.Epic.ID), ec.Epic.Title)
 	fmt.Fprintf(&b, "Why: %s\n", firstLine(ec.Epic.Description))
 	b.WriteString("\nChildren:\n")
 	b.WriteString(renderChildren(ec.Children, ec.Focused))

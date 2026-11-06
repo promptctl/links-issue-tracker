@@ -1958,7 +1958,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// this plan is deciding whether to write.
 	prior := claims.ClaimantOf(issue, history)
 	post := prior.After(action, s.attribution)
-	updated.Assignee = model.Text(post.Assignee)
+	updated.Assignee = post.Assignee
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
 	// [LAW:one-source-of-truth] History records actual mutations only. A call

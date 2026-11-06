@@ -204,9 +204,9 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 // names the assignee, says it is not you, and stops.
 func resumeAdvice(row annotation.AnnotatedIssue, actingAs string) string {
 	if assignee := strings.TrimSpace(row.AssigneeValue().Raw()); assignee != "" && assignee != actingAs {
-		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", row.ID, model.Text(assignee))
+		return fmt.Sprintf("%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`", model.HoldRow(row.ID), model.Text(assignee))
 	}
-	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
+	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", model.HoldRow(row.ID))
 }
 
 // dependencyReason says why step 1b or 2b handed this row over. A pick under an
@@ -261,7 +261,7 @@ func startAdvice(row annotation.AnnotatedIssue, lane model.LaneID, place startPl
 	}
 	advice := fmt.Sprintf("%srun `lit start %s` to claim %s", place.where(), model.HoldRow(row.ID), object)
 	if row.State() == model.StateInProgress {
-		return fmt.Sprintf("%s is in progress and nobody holds it — %s", row.ID, advice)
+		return fmt.Sprintf("%s is in progress and nobody holds it — %s", model.HoldRow(row.ID), advice)
 	}
 	return advice
 }

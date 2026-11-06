@@ -57,7 +57,7 @@ func printContestedLanes(stdout io.Writer, cc claimContext, now time.Time) error
 			// rather than report it. [LAW:no-silent-failure]
 			return fmt.Errorf("contested lane %s reported no claim line — standings and rendering disagree", lane)
 		}
-		if _, err := fmt.Fprintln(stdout, fmt.Sprintf("  %s: %s", lane, line)); err != nil {
+		if _, err := fmt.Fprintf(stdout, "  %s: %s\n", lane, line); err != nil {
 			return err
 		}
 	}
