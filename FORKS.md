@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261102211209-8ab989891933` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20261106021455-1464ec54eaa6` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -651,6 +651,40 @@ a cached database belongs to the cache.
 **Retire it when** upstream closes the destination of a clone that fails, and
 the `require` line moves past that change. Dropping it without that brings back
 every failed adopt holding its partial database open.
+
+#### Patch 20 — a failed Close-time gc reaches its opener and leaves gc owed
+
+`go/store/blobstore/git_blobstore.go`, plus a test in
+`go/store/blobstore/git_blobstore_close_ctx_test.go`.
+
+`GitBlobstore.Close` runs `git gc --prune=now` on its mirror at most once a
+day, gated by a `.dolt-gc-last` marker. Upstream discarded the gc's result and
+wrote the marker whether or not the gc completed, so a gc that failed left no
+trace and the next one was skipped for a day, and a mirror whose gc kept failing
+grew without pruning.
+
+- `blobstore.WithGCFailureObserver(ctx, observe)` puts an observer on a
+  context, the way `nbs.WithJournalWarningObserver` (Patch 16) does. A gc that
+  fails, its timeout included, is handed to the observer on the opener's
+  context (which `Close` runs on, Patch 13) as a `blobstore.GCFailure`: the
+  mirror's git dir, git's exit status and output (capped as `CmdError` prints
+  it), and why the run ended. So is a gc lock `Close` could not take for a
+  reason other than its being held, and a gc marker it could not write. A context without an observer drops the
+  failure, as upstream did.
+- `.dolt-gc-last`'s mtime plus a day is when gc is next owed. A gc that
+  completed, or that its timeout ended, sets it to now, so a gc too slow to
+  finish costs a `Close` its timeout once a day, as upstream did. One that
+  failed otherwise backdates it, so a `Close` an hour later tries again.
+
+lit installs the observer in `invocationContext` (`internal/cli/invocation_event.go`),
+which records each failure as a `git.gc_failures` occurrence (`docs/events.md`).
+`TestAStoreCloseWhoseGCFailedSaysSoOnItsEvent` in `internal/cli` fails without
+the patch.
+
+**Retire it when** upstream reports a failed gc to its caller and writes the
+marker only for a gc that completed, and the `require` line moves past that
+change. Dropping it without that hides a failing gc again and skips the next
+one for a day.
 
 ### promptctl/go-mysql-server
 
