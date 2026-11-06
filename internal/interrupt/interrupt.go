@@ -192,15 +192,14 @@ func (h *hardExitHooks) run(signal string, code int, budget time.Duration) {
 }
 
 // escalation is the guard's hard exit: claim the exit, run the registered
-// hooks within their budget when the claim is the hard exit's, then exit with
-// the decided code — the conventional code for the signal, or the clean
-// end's when it claimed first.
+// hooks within their budget, then exit with the decided code — the
+// conventional code for the signal, or the clean end's when it claimed first.
+// The hooks run after a clean claim too: a clean end still writing what it
+// claimed for is finished through them, within their budget.
 func escalation(g *guard, budget time.Duration, exit func(int)) func(os.Signal) {
 	return func(sig os.Signal) {
 		decided := g.decision.claim(Decision{Code: exitCode(sig), Signal: interruptSignals[sig], Hard: true})
-		if decided.Hard {
-			g.hooks.run(decided.Signal, decided.Code, budget)
-		}
+		g.hooks.run(interruptSignals[sig], decided.Code, budget)
 		exit(decided.Code)
 	}
 }
