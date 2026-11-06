@@ -496,11 +496,13 @@ func releasedCeilingSteps(releaseCan string) []remedyStep {
 	}
 }
 
-// asSyncFailure converts a store *RemoteSchemaAheadError (exiting as the
-// schema-ahead refusal it unwraps to) or a storage.PushDivergedError (exiting
-// as the block) into the returnable sync-failure contract, so the command
-// prints the block, or returns err unchanged. The explicit sync commands route their store error
-// through this one adapter so none of them renders the raw refusal instead of the
+// asSyncFailure converts one of the store's schema refusals (a remote schema
+// ahead from a pull's reconcile, exiting as the schema-ahead refusal it
+// unwraps to; the ceiling, raise and lowering verdicts from a push) or a
+// storage.PushDivergedError (exiting as the block) into the returnable
+// sync-failure contract, so the command prints the block, or returns err
+// unchanged. The explicit sync commands route their store error through this
+// one adapter so none of them renders the raw refusal instead of the
 // contract. [LAW:single-enforcer]
 func asSyncFailure(err error) error {
 	if failure, ok := schemaRefusalFailure(err); ok {

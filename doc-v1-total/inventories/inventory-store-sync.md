@@ -193,7 +193,7 @@ That is `compactAndPush`; `SyncCompactAndPush` then runs `keepHistoryBoundAfter`
 
 `pushWithinLock` (`sync.go`):
 1. `requireSyncArg("remote", remote)`, then `requireSyncArg("branch", branch)` (`sync.go`).
-2. `s.guardRemoteSchemaAhead(ctx, remote, branch)` runs first (`sync.go`).
+2. `s.trackingHeadSchema(ctx, remote, branch)` reads R once, and `refuseSchemaSend` runs the ceiling, raise and lowering verdicts on it before the push; a remote whose schema is ahead of this binary is no refusal here, since a push at the remote's own schema lands (`sync.go`).
 3. Args built in order: `"--set-upstream"` if `setUpstream`, `"--force"` if `force`, then the remote, then `fmt.Sprintf("HEAD:%s", branch)` (`sync.go`).
 4. `head` = `headCommitWithinLock` (`SELECT commit_hash FROM dolt_log() LIMIT 1`, trimmed; error `"read head commit: %w"`), read before the push so a failed read fails an attempt that has sent nothing (`sync.go`).
 5. `CALL DOLT_PUSH(...)` scanned into `(result.Status int64, message sql.NullString)` (`sync.go`). The error goes through `classifyPushFailure`: a `RemoteUnreachableError` is wrapped `"push remote %q: %w"` by its type; otherwise an error that wraps one of `pushRefusals` — `doltdb.ErrIsAhead`, `actions.ErrCantFF`, `datas.ErrMergeNeeded` (the target rejections Dolt reports as non-fast-forward) or `doltdb.ErrNoCommonAncestor` — is the remote's refusal, `pushRefusedError{remote, cause}`; any other (a stale lease, one that never opened, a write the remote's storage failed, an ended context) is wrapped `"push remote %q: %w"`, with the same text. Every refusal comes from the fast-forward check a forced push skips. Test: `TestOnlyARefusedPushIsFollowedAndRetried` (`sync_push_refusal_test.go`).

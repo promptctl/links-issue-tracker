@@ -93,8 +93,8 @@ const (
 // cannot page and never clear, or clear and never page. A remote schema
 // ahead is detected by the reconcile's replay, which refuses to re-create
 // rows onto a head at a schema above this binary's, and ended by the fact
-// that refusal judges: the remote head's schema is within support, which the
-// settle every command's automatic receive makes reads. An unsettled receive
+// that refusal judges: the remote head's schema is within support, which
+// every settle reads (storage.RemoteSchemaAhead). An unsettled receive
 // is absent: its episode is its run of stops, keyed by when the run began,
 // and a settle ends the run itself. [LAW:one-source-of-truth]
 var ownerNotifyEnders = map[ownerNotifyKind][]episodeEnder{

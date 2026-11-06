@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
@@ -247,6 +248,63 @@ func TestAPushAtTheRemotesOwnSchemaLands(t *testing.T) {
 	}
 	if note != futureColumnValue {
 		t.Fatalf("the future schema's column on the edited row = %q, want %q: B's write or push reset a column this binary does not know", note, futureColumnValue)
+	}
+}
+
+// TestAReconcileOntoARemoteWhoseSchemaIsAheadIsRefusedBeforeAnyWrite drives
+// the one refusal the schema-ahead verdict still makes, at its site: a
+// checkout that adopted a remote head at a schema above this binary's, and
+// diverged from it, runs the three-way reconcile, and replayUnderGuard
+// refuses before any write (design-docs/schema-reversibility.md). The typed
+// error carries both versions, the checkout's head has not moved, no scratch
+// branch is left behind, and the remote still holds the newer schema's column
+// value on the row both sides edited. A's second push, at the remote's own
+// schema from this binary, is the push that lands.
+func TestAReconcileOntoARemoteWhoseSchemaIsAheadIsRefusedBeforeAnyWrite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	id, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
+	registryMax, _ := migrations.MaxVersion()
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	// A edits LANE and pushes; B edits PRIORITY locally, so B is diverged
+	// from a remote head at the future schema.
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("alpha")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer syncB.Close()
+	if err := syncB.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+	_, err := syncB.SyncReconcile(ctx, remoteName(t, "origin"), "master")
+	var ahead *RemoteSchemaAheadError
+	if !errors.As(err, &ahead) {
+		t.Fatalf("SyncReconcile onto a remote at a newer schema = %v, want *RemoteSchemaAheadError", err)
+	}
+	if ahead.RemoteVersion != future || ahead.BinarySupportedMax != registryMax {
+		t.Fatalf("refusal = %+v, want RemoteVersion=%d BinarySupportedMax=%d", ahead, future, registryMax)
+	}
+	if got := headCommit(t, ctx, syncB); got != headBefore {
+		t.Fatalf("the refused reconcile moved B's head: %s -> %s", headBefore, got)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	if head := trackingSchema(t, ctx, syncB); head.version != future {
+		t.Fatalf("remote head after the refusal = %+v, want it still at schema %d", head, future)
+	}
+	var note string
+	if err := syncB.db.QueryRowContext(ctx,
+		`SELECT `+futureColumn+` FROM issues AS OF 'remotes/origin/master' WHERE id = ?`, id).Scan(&note); err != nil {
+		t.Fatalf("read the future schema's column at the remote head: %v", err)
+	}
+	if note != futureColumnValue {
+		t.Fatalf("the future schema's column at the remote head = %q, want %q", note, futureColumnValue)
 	}
 }
 
