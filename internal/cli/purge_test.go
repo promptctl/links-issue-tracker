@@ -77,7 +77,7 @@ func TestRunPurgeRefusesWithoutConfirmationAndPurgesWithIt(t *testing.T) {
 	if stdout.String() != want {
 		t.Errorf("output = %q, want %q", stdout.String(), want)
 	}
-	if strings.Contains(stdout.String(), doomed.Title) {
+	if strings.Contains(stdout.String(), doomed.Title.Raw()) {
 		t.Errorf("output %q echoes the purged ticket's title", stdout.String())
 	}
 	_, err = ap.Store.GetIssue(ctx, doomed.ID)

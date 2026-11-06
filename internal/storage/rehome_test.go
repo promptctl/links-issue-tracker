@@ -28,7 +28,7 @@ const (
 
 func leaf(t *testing.T, id, rank string) model.Issue {
 	t.Helper()
-	issue, err := model.HydrateStatus(model.Issue{ID: id, Title: id, IssueType: model.TypeTask, Topic: "core", Rank: rank, CreatedAt: born, UpdatedAt: born}, model.StatusView{Value: model.StateOpen})
+	issue, err := model.HydrateStatus(model.Issue{ID: id, Title: model.Text(id), IssueType: model.TypeTask, Topic: "core", Rank: rank, CreatedAt: born, UpdatedAt: born}, model.StatusView{Value: model.StateOpen})
 	if err != nil {
 		t.Fatalf("HydrateStatus(%s): %v", id, err)
 	}
@@ -36,7 +36,7 @@ func leaf(t *testing.T, id, rank string) model.Issue {
 }
 
 func epic(id string) model.Issue {
-	return model.Issue{ID: id, Title: id, IssueType: model.TypeEpic, Topic: "core", CreatedAt: born, UpdatedAt: born}
+	return model.Issue{ID: id, Title: model.Text(id), IssueType: model.TypeEpic, Topic: "core", CreatedAt: born, UpdatedAt: born}
 }
 
 func under(child, parent string) model.Relation {
@@ -143,7 +143,7 @@ func TestHomeStrandedFilesALooseLeafUnderAMintedUnfiledEpic(t *testing.T) {
 		t.Errorf("minted epic rank = %q, want %q", minted.Rank, "K0")
 	}
 	for _, id := range []string{"acme-core-bb22", "acme-core-cc33", "acme-core-dd44"} {
-		if got := issueOf(t, out, id).Lane; got != id {
+		if got := issueOf(t, out, id).Lane; got.Raw() != id {
 			t.Errorf("%s lane = %q, want its own id", id, got)
 		}
 	}

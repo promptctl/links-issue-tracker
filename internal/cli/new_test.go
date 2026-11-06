@@ -221,7 +221,7 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if got, want := created.AssigneeValue(), "alice"; got != want {
+	if got, want := created.AssigneeValue(), "alice"; got.Raw() != want {
 		t.Fatalf("created.AssigneeValue() = %q, want %q: explicit assignee must not be rewritten to the caller", got, want)
 	}
 }

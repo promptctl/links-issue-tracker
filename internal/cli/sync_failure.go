@@ -995,7 +995,7 @@ func describeCollisionSide(label string, issue model.Issue) []string {
 	}
 	lines := []string{fmt.Sprintf("    %s (created %s):",
 		label, issue.CreatedAt.UTC().Format(time.RFC3339Nano))}
-	return append(lines, quoteRemote(issue.Title+"\n"+body).fenced("      ")...)
+	return append(lines, quoteRemote(issue.Title.Raw()+"\n"+body).fenced("      ")...)
 }
 
 // describeIDSet renders one partition slice as its count and members, so an empty

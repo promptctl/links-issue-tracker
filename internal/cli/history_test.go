@@ -278,10 +278,10 @@ func TestHistoryHoldsEachEventToItsRows(t *testing.T) {
 	if err := printIssueHistory(&stdout, detail, historyVersions(detail)); err != nil {
 		t.Fatalf("printIssueHistory() error = %v", err)
 	}
-	stamp, br := formatHistoryTimestamp(time.Time{}), quotedBreak
+	stamp, br := formatHistoryTimestamp(time.Time{}), model.QuotedBreak
 	want := "test\uFFFDb-1\nT" + br + "history:\n\nhistory:\n" +
 		"- [alice @ " + stamp + "] close" + br + "x why" + br + "second" + br + "third\n" +
-		"    title: first" + defusedBreak + " → line one" + br + "- [forged @ now] update\n" +
+		"    title: first" + model.DefusedBreak + " → line one" + br + "- [forged @ now] update\n" +
 		"- [bob" + br + "eve @ " + stamp + "] update \n" +
 		"    lane" + br + "z: a" + br + "b → c" + br + "d" + br + "e\uFFFDE- [forged @ now] close\n"
 	if got := stdout.String(); got != want {

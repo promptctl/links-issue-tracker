@@ -66,7 +66,7 @@ func TestFocusScopeHoldsExactly(t *testing.T) {
 
 	laneIn := func(epic, key string) model.LaneID {
 		parent := model.Issue{ID: epic, IssueType: model.TypeEpic}
-		return model.LaneOf(model.Issue{ID: "any-member", Lane: key}, &parent)
+		return model.LaneOf(model.Issue{ID: "any-member", Lane: model.Text(key)}, &parent)
 	}
 	soloLane := func(id string) model.LaneID { return model.LaneOf(model.Issue{ID: id}, nil) }
 

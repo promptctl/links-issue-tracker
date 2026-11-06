@@ -67,7 +67,7 @@ func TestParseLane(t *testing.T) {
 // moving it onto a new break of any kind is refused.
 func TestApplyIssueFieldsAdmitsOnlyAMovingTitleOrLane(t *testing.T) {
 	stored := model.Issue{ID: "lit-x-1", Title: "two\nlines", Lane: "a\rlane", IssueType: model.TypeTask}
-	restated, lane, description := stored.Title, stored.Lane, "described"
+	restated, lane, description := stored.Title.Raw(), stored.Lane.Raw(), "described"
 	if _, changes, err := storage.ApplyIssueFields(stored, storage.UpdateIssueInput{Title: &restated, Lane: &lane, Description: &description}); err != nil || len(changes) != 1 {
 		t.Errorf("ApplyIssueFields(restated, description) = %v, %v; want the one description change", changes, err)
 	}
@@ -91,7 +91,7 @@ func textOf(s string) *string { return &s }
 // carried in, and one onto new text holding a break is refused.
 func TestAProseResolutionIsAdmittedOnlyWhenItMovesTheTitle(t *testing.T) {
 	provisional := model.Issue{ID: "i1", Title: "remote\ntitle"}
-	if _, changes, err := storage.ApplyProseFields(provisional, merge.ProseTexts{merge.ProseTitle: provisional.Title}); err != nil || len(changes) != 0 {
+	if _, changes, err := storage.ApplyProseFields(provisional, merge.ProseTexts{merge.ProseTitle: provisional.Title.Raw()}); err != nil || len(changes) != 0 {
 		t.Errorf("ApplyProseFields(the provisional text) = %v, %v; want no change", changes, err)
 	}
 	_, _, err := storage.ApplyProseFields(provisional, merge.ProseTexts{merge.ProseTitle: "merged\ntitle"})

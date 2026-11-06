@@ -123,7 +123,7 @@ func TestClassifySharedRowsAcrossUnrelatedHistories(t *testing.T) {
 	born := time.Date(2026, 5, 4, 12, 0, 0, 0, time.UTC)
 	mk := func(status model.State, title string) model.Issue {
 		return leaf(t, "epic.7", model.StatusView{Value: status}, func(i *model.Issue) {
-			i.Title = title
+			i.Title = model.Text(title)
 			i.CreatedAt = born
 		})
 	}
@@ -243,7 +243,7 @@ func TestThreeWayDoesNotFuseCollidingChildRows(t *testing.T) {
 	born := func(hour int) time.Time { return time.Date(2026, 8, 27, hour, 0, 0, 0, time.UTC) }
 	sixteen := func(hour int, title string) model.Issue {
 		return leaf(t, "epic.16", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
-			i.Title = title
+			i.Title = model.Text(title)
 			i.CreatedAt = born(hour)
 		})
 	}
@@ -255,7 +255,7 @@ func TestThreeWayDoesNotFuseCollidingChildRows(t *testing.T) {
 			Relations:   []model.Relation{{SrcID: "epic.16", DstID: endpoint, Type: model.RelBlockedBy, CreatedAt: born(hour)}},
 			Comments:    []model.Comment{{ID: "c-" + suffix, IssueID: "epic.16", Body: suffix, CreatedAt: born(hour)}},
 			Labels:      []model.Label{{IssueID: "epic.16", Name: suffix, CreatedAt: born(hour)}},
-			Events:      []model.IssueEvent{{ID: "e-" + suffix, IssueID: "epic.16", Reason: suffix, CreatedAt: born(hour)}},
+			Events:      []model.IssueEvent{{ID: "e-" + suffix, IssueID: "epic.16", Reason: model.Text(suffix), CreatedAt: born(hour)}},
 		}
 	}
 	local := side("wsA", 9, "Wire the release watchdog", "ours", "epic.a")

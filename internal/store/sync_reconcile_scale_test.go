@@ -215,7 +215,7 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 			t.Errorf("issue %s missing from the combined backlog", id)
 			continue
 		}
-		if issue.Lane != lane {
+		if issue.Lane.Raw() != lane {
 			t.Errorf("issue %s lane = %q, want %q: the folded chain's edit did not survive the replay", id, issue.Lane, lane)
 		}
 	}
@@ -322,7 +322,7 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 	for i := 0; i < issues; i++ {
 		issue := seed
 		issue.ID = scaleIssueID(i)
-		issue.Title = fmt.Sprintf("scale issue %05d", i)
+		issue.Title = model.Text(fmt.Sprintf("scale issue %05d", i))
 		issue.Rank = fmt.Sprintf("r%05d", i)
 		// Both stores plant this same backlog, and the pair is meant to hold ONE
 		// backlog reached by two histories — the shape a clone or a seeded init

@@ -46,7 +46,9 @@ func TestPrintIssueFieldsMultipleFieldsPrintsLabeledLines(t *testing.T) {
 }
 
 // Among several --field names, every long text the storage table declares
-// keeps its authored lines while a title holding a break is held to its row.
+// keeps its authored lines, each after the first indented under its "name:"
+// line so a stored "lane: forged" line cannot read as the lane field, while a
+// title holding a break is held to its row.
 // The long texts are asked for by the storage table's own names, so a field
 // that one vocabulary renames and the other does not fails here rather than
 // printing flattened.
@@ -64,11 +66,11 @@ func TestPrintIssueFieldsKeepsLongTextLinesAndHoldsTheRestToTheirRow(t *testing.
 	}
 
 	printed := buf.String()
-	if !strings.Contains(printed, "title: A"+quotedBreak+"lane: forged\n") {
+	if !strings.Contains(printed, "title: A"+model.QuotedBreak+"lane: forged\n") {
 		t.Errorf("title not held to its row:\n%s", printed)
 	}
 	for _, field := range storage.LongTextFields() {
-		if value := field.Current(issue); !strings.Contains(printed, field.Name+": "+value+"\n") {
+		if value := field.Current(issue); !strings.Contains(printed, field.Name+": "+strings.ReplaceAll(value, "\n", "\n  ")+"\n") {
 			t.Errorf("%s did not keep its lines (want %q):\n%s", field.Name, value, printed)
 		}
 	}

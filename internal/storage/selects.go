@@ -71,7 +71,7 @@ func (c IssueCriteria) Selects(issue model.Issue) bool {
 	if len(c.filter.ExcludeIssueTypes) > 0 && matchesAny(string(issue.IssueType), issueTypeNames(c.filter.ExcludeIssueTypes)) {
 		return false
 	}
-	if !matchesAny(issue.Assignee, TrimmedNonEmpty(c.filter.Assignees)) {
+	if !matchesAny(issue.Assignee.Raw(), TrimmedNonEmpty(c.filter.Assignees)) {
 		return false
 	}
 	if !matchesAny(issue.ID, TrimmedNonEmpty(c.filter.IDs)) {
@@ -84,7 +84,7 @@ func (c IssueCriteria) Selects(issue model.Issue) bool {
 		return false
 	}
 	for _, label := range c.labels {
-		if !slices.Contains(issue.Labels, label) {
+		if !slices.Contains(issue.Labels, model.Text(label)) {
 			return false
 		}
 	}
@@ -140,7 +140,7 @@ func matchesSearch(issue model.Issue, term string) bool {
 	if needle == "" {
 		return true
 	}
-	for _, haystack := range []string{issue.Title, issue.Description, issue.Prompt, issue.Plan, issue.Topic} {
+	for _, haystack := range []string{issue.Title.Raw(), issue.Description, issue.Prompt, issue.Plan, issue.Topic.Raw()} {
 		if strings.Contains(strings.ToLower(haystack), needle) {
 			return true
 		}

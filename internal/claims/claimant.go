@@ -30,7 +30,7 @@ type Claimant struct {
 	// therefore reads "assignee set by `lit new --assignee`, never started" as
 	// a hold, or a genuine pre-attribution hold as nobody.
 	Established bool
-	Assignee    string
+	Assignee    model.Text
 	Checkout    model.Attribution
 }
 
@@ -79,7 +79,7 @@ func (c Claimant) After(action model.StatusAction, taker model.Attribution) Clai
 	if !ok {
 		return c
 	}
-	return Claimant{Established: true, Assignee: strings.TrimSpace(start.Assignee), Checkout: taker}
+	return Claimant{Established: true, Assignee: model.Text(strings.TrimSpace(start.Assignee)), Checkout: taker}
 }
 
 // Handover is a ticket's claim passing from one holder to another: the

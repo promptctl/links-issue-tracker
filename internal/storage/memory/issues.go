@@ -119,7 +119,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	e.setLabels(id, labels, now, actor)
 	if parentID != "" {
 		e.relations = append(e.relations, model.Relation{
-			SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: actor,
+			SrcID: id, DstID: parentID, Type: model.RelParentChild, CreatedAt: now, CreatedBy: model.Text(actor),
 		})
 	}
 	// The create event records the initial status as one field-change row. A

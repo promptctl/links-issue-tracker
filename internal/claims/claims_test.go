@@ -55,7 +55,7 @@ func ago(d time.Duration) time.Time { return now.Add(-d) }
 func leaf(t *testing.T, id, lane string, state model.State) model.Issue {
 	t.Helper()
 	issue, err := model.HydrateStatus(
-		model.Issue{ID: id, Lane: lane, IssueType: model.TypeTask},
+		model.Issue{ID: id, Lane: model.Text(lane), IssueType: model.TypeTask},
 		model.StatusView{Value: state},
 	)
 	if err != nil {
@@ -79,7 +79,7 @@ func container(t *testing.T, id string, children ...model.Issue) model.Issue {
 // lifecycle at all.
 func laneIn(epic, key string) model.LaneID {
 	parent := model.Issue{ID: epic, IssueType: model.TypeEpic}
-	return model.LaneOf(model.Issue{ID: "any-member", Lane: key}, &parent)
+	return model.LaneOf(model.Issue{ID: "any-member", Lane: model.Text(key)}, &parent)
 }
 
 func soloLane(id string) model.LaneID {

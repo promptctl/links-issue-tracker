@@ -38,7 +38,7 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 		IssueID:   in.IssueID,
 		Body:      body,
 		CreatedAt: e.clock.Now(),
-		CreatedBy: storage.Actor(in.CreatedBy),
+		CreatedBy: model.Text(storage.Actor(in.CreatedBy)),
 	}
 	e.comments = append(e.comments, comment)
 	return comment, issue, nil
@@ -98,7 +98,7 @@ func (e *Engine) setLabels(issueID string, names []string, now time.Time, create
 			rows = append(rows, held[index])
 			continue
 		}
-		rows = append(rows, model.Label{IssueID: issueID, Name: name, CreatedAt: now, CreatedBy: author})
+		rows = append(rows, model.Label{IssueID: issueID, Name: name, CreatedAt: now, CreatedBy: model.Text(author)})
 	}
 	e.labels[issueID] = rows
 }
@@ -143,7 +143,7 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 	if err := e.rejectCycle(in.Type, srcID, dstID); err != nil {
 		return model.Relation{}, err
 	}
-	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: e.clock.Now(), CreatedBy: storage.Actor(in.CreatedBy)}
+	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: e.clock.Now(), CreatedBy: model.Text(storage.Actor(in.CreatedBy))}
 	// A single-valued type's src holds at most one such edge, so writing one
 	// replaces any it already had. The cardinality is read off the type, not
 	// off which method the caller reached for. [LAW:dataflow-not-control-flow]

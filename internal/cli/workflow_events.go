@@ -24,7 +24,7 @@ func showTicketOccasion(issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
 		Event:   workflows.EventShowTicket,
 		IssueID: issue.ID,
-		Labels:  issue.Labels,
+		Labels:  model.RawTexts(issue.Labels),
 	}
 }
 
@@ -42,7 +42,7 @@ func nextPulledOccasion(issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
 		Event:   workflows.EventNextPulled,
 		IssueID: issue.ID,
-		Labels:  issue.Labels,
+		Labels:  model.RawTexts(issue.Labels),
 	}
 }
 
@@ -52,7 +52,7 @@ func ticketCreatedOccasion(issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
 		Event:   workflows.EventTicketCreated,
 		IssueID: issue.ID,
-		Labels:  issue.Labels,
+		Labels:  model.RawTexts(issue.Labels),
 	}
 }
 
@@ -63,7 +63,7 @@ func ticketUpdatedOccasion(issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
 		Event:   workflows.EventTicketUpdated,
 		IssueID: issue.ID,
-		Labels:  issue.Labels,
+		Labels:  model.RawTexts(issue.Labels),
 	}
 }
 
@@ -73,7 +73,7 @@ func commentAddedOccasion(issue model.Issue) workflows.Occasion {
 	return workflows.Occasion{
 		Event:   workflows.EventCommentAdded,
 		IssueID: issue.ID,
-		Labels:  issue.Labels,
+		Labels:  model.RawTexts(issue.Labels),
 	}
 }
 
@@ -143,7 +143,7 @@ func transitionOccasion(action model.Action, before, after ticketState) (occasio
 	return workflows.Occasion{
 		Event:   event,
 		IssueID: after.issue.ID,
-		Labels:  after.issue.Labels,
+		Labels:  model.RawTexts(after.issue.Labels),
 		Exited:  difference(before.states(), after.states()),
 		Entered: difference(after.states(), before.states()),
 	}, true

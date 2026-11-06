@@ -174,7 +174,7 @@ func aReadOutFileKeepsWhatOtherWritersChanged(t *testing.T, ctx context.Context,
 		t.Fatalf("GetRelationsByIDs error = %v", err)
 	}
 	now := relations[issue.ID]
-	if now.Issue.Title != retitled || now.Issue.Priority != urgent || now.Issue.Lane != theirs {
+	if now.Issue.Title.Raw() != retitled || now.Issue.Priority != urgent || now.Issue.Lane.Raw() != theirs {
 		t.Errorf("after the import: title %q, priority %v, lane %q; want %q and the other writer's %v and %q", now.Issue.Title, now.Issue.Priority, now.Issue.Lane, retitled, urgent, theirs)
 	}
 	if len(now.BlockedBy) != 1 || now.BlockedBy[0].ID != blocker.ID {

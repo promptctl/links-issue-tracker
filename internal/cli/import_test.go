@@ -513,7 +513,7 @@ reason: "  padded reason  "
 		if e.Reason == "padded reason" {
 			found = true
 		}
-		if strings.Contains(e.Reason, "  ") {
+		if strings.Contains(e.Reason.Raw(), "  ") {
 			t.Fatalf("event.Reason = %q, want trimmed (no padding)", e.Reason)
 		}
 	}

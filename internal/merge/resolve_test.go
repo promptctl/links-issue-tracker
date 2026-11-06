@@ -137,7 +137,7 @@ func TestResolveIssueProseTier2EmitsPendingNeverAutoPicks(t *testing.T) {
 func TestResolveIssueTiebreakSymmetry(t *testing.T) {
 	// Topic diverged on both sides: a single-valued field with no semantic winner.
 	mk := func(topic string) func(*model.Issue) {
-		return func(i *model.Issue) { i.Topic = topic }
+		return func(i *model.Issue) { i.Topic = model.Text(topic) }
 	}
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, mk("root"))
 	alice := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, mk("alice"))
@@ -161,7 +161,7 @@ func TestResolveIssueAssigneeTiebreakSymmetry(t *testing.T) {
 	// Assignee is an issue-level field, set via the mutator rather than the
 	// status view.
 	mk := func(assignee string) func(*model.Issue) {
-		return func(i *model.Issue) { i.Assignee = assignee }
+		return func(i *model.Issue) { i.Assignee = model.Text(assignee) }
 	}
 	inProgress := model.StatusView{Value: model.StateInProgress}
 	base := leaf(t, "i1", inProgress, mk("root"))
@@ -466,16 +466,16 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 }
 
 func TestResolveIssueLabelsUnion(t *testing.T) {
-	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep"} })
-	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "ours"} })
-	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "theirs"} })
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = model.Texts([]string{"keep"}) })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = model.Texts([]string{"keep", "ours"}) })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = model.Texts([]string{"keep", "theirs"}) })
 	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	want := []string{"keep", "ours", "theirs"}
 	if len(got.Provisional().Labels) != len(want) {
 		t.Fatalf("labels = %#v, want union %#v", got.Provisional().Labels, want)
 	}
 	for idx, label := range want {
-		if got.Provisional().Labels[idx] != label {
+		if got.Provisional().Labels[idx].Raw() != label {
 			t.Fatalf("labels = %#v, want sorted union %#v", got.Provisional().Labels, want)
 		}
 	}
@@ -484,9 +484,9 @@ func TestResolveIssueLabelsUnion(t *testing.T) {
 func TestResolveIssueLabelRemovalNotResurrected(t *testing.T) {
 	// base=[a,b]; ours removed b; theirs left both -> b stays removed (Tier 1),
 	// a survives. A naive union would resurrect b.
-	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a", "b"} })
-	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a"} })
-	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a", "b"} })
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = model.Texts([]string{"a", "b"}) })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = model.Texts([]string{"a"}) })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = model.Texts([]string{"a", "b"}) })
 	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB")).Provisional()
 	if len(got.Labels) != 1 || got.Labels[0] != "a" {
 		t.Fatalf("labels = %#v, want [a] (b removed by ours must not be resurrected)", got.Labels)
@@ -569,7 +569,7 @@ func TestResolveIssueNoMergeBaseTreatsEveryFieldAsChanged(t *testing.T) {
 func TestMergeResultSettledGatesOnPending(t *testing.T) {
 	mk := func(title string) model.Export {
 		return model.Export{WorkspaceID: "ws", Issues: []model.Issue{
-			leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = title }),
+			leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = model.Text(title) }),
 		}}
 	}
 	// Concurrent title rewrite -> export carries provisional prose -> Settled refuses.

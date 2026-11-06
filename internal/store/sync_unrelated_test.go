@@ -538,7 +538,7 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	}
 	sharedIssue := issueByID(t, exportA, shared.ID)
 	if sharedTitleOnB != "" {
-		sharedIssue.Title = sharedTitleOnB
+		sharedIssue.Title = model.Text(sharedTitleOnB)
 	}
 	combined := exportB
 	combined.Issues = append(combined.Issues, sharedIssue)

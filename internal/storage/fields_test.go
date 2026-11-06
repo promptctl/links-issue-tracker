@@ -191,7 +191,7 @@ func TestABulkUpdateDocumentRoundTripsItsIssue(t *testing.T) {
 		Priority:    model.PriorityUrgent,
 		Assignee:    "ada",
 		Lane:        "a-lane",
-		Labels:      []string{"alpha", "beta"},
+		Labels:      model.Texts([]string{"alpha", "beta"}),
 	}
 	text, err := yaml.Marshal(storage.BulkUpdateDocument(storage.IssueRelations{Issue: issue, Parent: &epic, BlockedBy: []model.Issue{blocker}}))
 	if err != nil {
@@ -310,9 +310,9 @@ func TestEveryFieldRestoresTheValueHistoryRecorded(t *testing.T) {
 		Priority:    model.PriorityUrgent,
 		Assignee:    "ada",
 		Lane:        "a-lane",
-		Labels:      []string{"alpha", "beta"},
+		Labels:      model.Texts([]string{"alpha", "beta"}),
 	}
-	base := model.Issue{ID: recorded.ID, Title: "other", IssueType: model.TypeBug, Priority: model.PriorityNormal, Labels: []string{"gamma"}}
+	base := model.Issue{ID: recorded.ID, Title: "other", IssueType: model.TypeBug, Priority: model.PriorityNormal, Labels: model.Texts([]string{"gamma"})}
 	values := storage.IssueFieldValues(recorded)
 	for _, name := range storage.IssueFieldNames() {
 		t.Run(name, func(t *testing.T) {
@@ -360,8 +360,8 @@ func TestRestoringAFieldNoRowCarriesIsRefused(t *testing.T) {
 // outside the editable set. A carried value is not parsed, so a title stored
 // with a line break carries as stored.
 func TestWithIssueFieldsOfCarriesTheEditableFieldsAndNothingElse(t *testing.T) {
-	src := model.Issue{ID: "links-x-1", Title: "new\nline", IssueType: model.TypeTask, Lane: "l\r\nx", Labels: []string{"a"}, Rank: "b"}
-	dst := model.Issue{ID: "links-x-1", Title: "old", IssueType: model.TypeTask, Labels: []string{}, Rank: "a"}
+	src := model.Issue{ID: "links-x-1", Title: "new\nline", IssueType: model.TypeTask, Lane: "l\r\nx", Labels: model.Texts([]string{"a"}), Rank: "b"}
+	dst := model.Issue{ID: "links-x-1", Title: "old", IssueType: model.TypeTask, Labels: model.Texts([]string{}), Rank: "a"}
 	got := storage.WithIssueFieldsOf(dst, src)
 	if !maps.Equal(storage.IssueFieldValues(got), storage.IssueFieldValues(src)) {
 		t.Errorf("fields = %v, want src's %v", storage.IssueFieldValues(got), storage.IssueFieldValues(src))

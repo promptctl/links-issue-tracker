@@ -588,7 +588,7 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if got, want := started.AssigneeValue(), "claude_sess-abc"; got != want {
+	if got, want := started.AssigneeValue(), "claude_sess-abc"; got.Raw() != want {
 		t.Fatalf("started.AssigneeValue() = %q, want %q", got, want)
 	}
 }
@@ -605,7 +605,7 @@ func lastEventActorForAction(t *testing.T, ap *app.App, ctx context.Context, id,
 	found := false
 	for _, e := range detail.Events {
 		if e.Action == action {
-			actor = e.Actor
+			actor = e.Actor.Raw()
 			found = true
 		}
 	}
@@ -717,7 +717,7 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if got, want := updated.AssigneeValue(), "claude_other-session"; got != want {
+	if got, want := updated.AssigneeValue(), "claude_other-session"; got.Raw() != want {
 		t.Fatalf("updated.AssigneeValue() = %q, want %q: update must not rewrite an explicit assignee to the caller", got, want)
 	}
 }

@@ -24,7 +24,7 @@ const forged = "FORGED"
 // any write gate is: each title and the lane hold a different break form, or
 // an ESC a terminal can turn into one, followed by forged text. A listing that
 // printed one raw would start a line with that text, or hand the terminal its
-// ESC; held to its row, a break prints as quotedBreak in front of it and the
+// ESC; held to its row, a break prints as model.QuotedBreak in front of it and the
 // ESC as U+FFFD. [LAW:behavior-not-structure]
 func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	t.Parallel()
@@ -70,7 +70,7 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	check := func(name string, print func(io.Writer) error, held ...string) {
 		t.Helper()
 		if len(held) == 0 {
-			held = []string{quotedBreak + forged}
+			held = []string{model.QuotedBreak + forged}
 		}
 		var out bytes.Buffer
 		if err := print(&out); err != nil {
@@ -88,7 +88,7 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 			t.Errorf("%s printed a planted ESC raw:\n%q", name, printed)
 		}
 		// Split at every break form a reader may take for one, not only \n.
-		for _, line := range strings.Split(lineBreakNormalizer.Replace(printed), "\n") {
+		for _, line := range strings.Split(model.LineBreakNormalizer.Replace(printed), "\n") {
 			if strings.HasPrefix(strings.TrimLeft(line, " |"), forged) {
 				t.Errorf("%s printed a planted continuation as a row of its own: %q\n%s", name, line, printed)
 			}
@@ -97,9 +97,13 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 
 	// Asked before anything is in progress, next serves the laned ticket, so
 	// its advice names the planted lane.
-	check("next", command(runNext), "left"+quotedBreak+forged+" lane")
+	check("next", command(runNext), "left"+model.QuotedBreak+forged+" lane")
 	h.applyAction(stale.ID, model.Start{Assignee: "tester"}, "")
 	h.backdateUpdatedAt(stale.ID, 7*time.Hour)
+	// Free text beyond title and lane: an assignee and a topic, planted the
+	// same way, so show's header and assignee line are held as the listings are.
+	plant(stale.ID, "assignee", "tester\u2029"+forged+" assignee")
+	plant(open.ID, "topic", "demo\r"+forged+" topic")
 	for _, listing := range []struct {
 		name  string
 		print func(io.Writer) error
@@ -124,4 +128,6 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	} {
 		check(listing.name, listing.print)
 	}
+	check("show's assignee line", command(runShow, stale.ID), "tester"+model.QuotedBreak+forged+" assignee")
+	check("show's topic line", command(runShow, open.ID), "demo"+model.QuotedBreak+forged+" topic")
 }

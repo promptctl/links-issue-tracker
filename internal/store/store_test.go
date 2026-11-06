@@ -1344,7 +1344,7 @@ func TestReplaceFromExport(t *testing.T) {
 			Description: "from file sync",
 			Priority:    0,
 			IssueType:   "task",
-			Labels:      []string{"imported"},
+			Labels:      model.Texts([]string{"imported"}),
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
 		}, model.StateOpen), {
@@ -1646,7 +1646,7 @@ func TestApplySameTargetStateStillRecordsEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue(reclaimed) error = %v", err)
 	}
-	if got, want := reclaimed.AssigneeValue(), "agent-b"; got != want {
+	if got, want := reclaimed.AssigneeValue(), "agent-b"; got.Raw() != want {
 		t.Fatalf("reclaimed.AssigneeValue() = %q, want %q (start rewrites assignee even same-state)", got, want)
 	}
 }
@@ -2652,7 +2652,7 @@ func TestNoWriteLandsBetweenAPlanAndItsWrite(t *testing.T) {
 		applied  storage.Applied
 		from, to string
 	}{{tester, "alice", "tester"}, {raced, "tester", "racer"}} {
-		if landed.applied.Handover == nil || landed.applied.Handover.From.Assignee != landed.from {
+		if landed.applied.Handover == nil || landed.applied.Handover.From.Assignee.Raw() != landed.from {
 			t.Errorf("%s's start: Handover = %+v, want it from %s", landed.to, landed.applied.Handover, landed.from)
 		}
 	}
@@ -2662,7 +2662,7 @@ func TestNoWriteLandsBetweenAPlanAndItsWrite(t *testing.T) {
 	}
 	startBy := map[string]model.IssueEvent{}
 	for _, event := range events {
-		startBy[event.Actor] = event
+		startBy[event.Actor.Raw()] = event
 	}
 	for _, want := range []model.FieldChange{{Field: "assignee", From: "alice", To: "tester"}, {Field: "assignee", From: "tester", To: "racer"}} {
 		if got := startBy[want.To].Changes; !slices.Contains(got, want) {

@@ -199,7 +199,7 @@ type AddLabel struct {
 }
 
 func (a AddLabel) PlanChange(current model.Issue) (Change, error) {
-	return labelsEdit(slices.Concat(current.Labels, []string{a.Name}), a.Actor), nil
+	return labelsEdit(slices.Concat(model.RawTexts(current.Labels), []string{a.Name}), a.Actor), nil
 }
 
 // RemoveLabel is `lit label rm`: the issue's label set without Name, written as
@@ -216,7 +216,7 @@ func (r RemoveLabel) PlanChange(current model.Issue) (Change, error) {
 	if err != nil {
 		return Change{}, err
 	}
-	kept := slices.DeleteFunc(slices.Clone(current.Labels), func(label string) bool { return label == name })
+	kept := slices.DeleteFunc(model.RawTexts(current.Labels), func(label string) bool { return label == name })
 	if len(kept) == len(current.Labels) {
 		return Change{}, NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", current.ID, name)}
 	}

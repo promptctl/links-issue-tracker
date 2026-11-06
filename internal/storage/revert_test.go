@@ -32,7 +32,7 @@ var standingA = map[string]model.Issue{"a": {ID: "a"}}
 
 // titledA is a store that holds a, titled title.
 func titledA(title string) map[string]model.Issue {
-	return map[string]model.Issue{"a": {ID: "a", Title: title}}
+	return map[string]model.Issue{"a": {ID: "a", Title: model.Text(title)}}
 }
 
 func revertOK(t *testing.T, deltas []storage.WriteDelta, now storage.CurrentState) storage.Reverted {

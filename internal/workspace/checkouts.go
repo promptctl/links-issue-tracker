@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // Checkout is one working tree of this repository as the machine can see it at
@@ -34,8 +35,8 @@ import (
 // predicate lets it, and only it, sustain a hold past the freshness window.
 type Checkout struct {
 	Stream StreamID
-	Path   string
-	Branch string
+	Path   model.Text
+	Branch model.Text
 	Locked bool
 }
 
@@ -110,7 +111,7 @@ func LiveCheckouts(env environ.Env, ws Info) ([]Checkout, error) {
 		if err != nil {
 			return nil, err
 		}
-		checkouts = append(checkouts, Checkout{Stream: stream, Path: record.path, Branch: record.branch, Locked: record.locked})
+		checkouts = append(checkouts, Checkout{Stream: stream, Path: model.Text(record.path), Branch: model.Text(record.branch), Locked: record.locked})
 	}
 	return checkouts, nil
 }

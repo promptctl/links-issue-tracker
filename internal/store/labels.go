@@ -30,7 +30,7 @@ func writeLabelsTx(ctx context.Context, tx *sql.Tx, issueID string, before, afte
 		if slices.Contains(before, name) {
 			continue
 		}
-		if err := insertLabelTx(ctx, tx, model.Label{IssueID: issueID, Name: name, CreatedAt: at, CreatedBy: storage.Actor(author)}); err != nil {
+		if err := insertLabelTx(ctx, tx, model.Label{IssueID: issueID, Name: name, CreatedAt: at, CreatedBy: model.Text(storage.Actor(author))}); err != nil {
 			return err
 		}
 	}

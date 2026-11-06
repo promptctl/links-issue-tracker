@@ -324,7 +324,7 @@ func TestDecodedMappingRecoversNovelAheadShape(t *testing.T) {
 	}
 	titles := map[string]bool{}
 	for _, is := range export.Issues {
-		titles[is.Title] = true
+		titles[is.Title.Raw()] = true
 	}
 	if !titles["Open task"] || !titles["Done task"] {
 		t.Fatalf("title values not preserved through the rename: got %+v", titles)

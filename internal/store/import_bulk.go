@@ -130,7 +130,7 @@ func (w edgeWriterTx) Edges(id string, relType model.RelationType) ([]model.Rela
 }
 
 func (w edgeWriterTx) Add(id, target string, relType model.RelationType) error {
-	return addRelationTx(w.ctx, w.tx, model.Relation{SrcID: id, DstID: target, Type: relType, CreatedAt: w.now, CreatedBy: storage.Actor(w.actor)})
+	return addRelationTx(w.ctx, w.tx, model.Relation{SrcID: id, DstID: target, Type: relType, CreatedAt: w.now, CreatedBy: model.Text(storage.Actor(w.actor))})
 }
 
 func (w edgeWriterTx) Remove(edge model.Relation) error {

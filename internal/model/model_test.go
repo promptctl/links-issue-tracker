@@ -468,7 +468,7 @@ func TestSetRetentionRefusesImpostors(t *testing.T) {
 // serialized form carries.
 func TestIssueWireFieldsCoverMarshalOutput(t *testing.T) {
 	now := time.Now().UTC()
-	issue := Issue{ID: "i1", IssueType: "task", Labels: []string{}}
+	issue := Issue{ID: "i1", IssueType: "task", Labels: Texts([]string{})}
 	issue.SetRetention(Archived{At: now})
 	hydrated := hydratedIssue(t, issue, StateOpen)
 	payload, err := json.Marshal(hydrated)

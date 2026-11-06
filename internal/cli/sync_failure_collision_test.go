@@ -15,7 +15,7 @@ import (
 
 func collidingIssue(t *testing.T, id, title, description string, born time.Time) model.Issue {
 	t.Helper()
-	issue := model.Issue{ID: id, IssueType: "task", Title: title, Description: description, CreatedAt: born, UpdatedAt: born}
+	issue := model.Issue{ID: id, IssueType: "task", Title: model.Text(title), Description: description, CreatedAt: born, UpdatedAt: born}
 	hydrated, err := model.HydrateStatus(issue, model.StatusView{Value: model.StateOpen})
 	if err != nil {
 		t.Fatalf("HydrateStatus(%s): %v", id, err)

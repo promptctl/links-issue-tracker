@@ -30,7 +30,7 @@ func TestWriteAndReadAtomicExport(t *testing.T) {
 			Title:     "Renderer cleanup",
 			Priority:  1,
 			IssueType: "task",
-			Labels:    []string{"renderer"},
+			Labels:    model.Texts([]string{"renderer"}),
 			CreatedAt: time.Now().UTC(),
 			UpdatedAt: time.Now().UTC(),
 		}, model.StateOpen)},
@@ -66,7 +66,7 @@ func TestContentHashCoversWhatTheExportHoldsNotWhenItWasTaken(t *testing.T) {
 			ExportedAt:  at,
 			Issues: []model.Issue{issueWithStatus(t, model.Issue{
 				ID:        "issue-1",
-				Title:     title,
+				Title:     model.Text(title),
 				IssueType: "task",
 				CreatedAt: taken,
 				UpdatedAt: taken,

@@ -14,10 +14,10 @@ func TestPlanApprovalNamesWhatTheCurrentPlanLacks(t *testing.T) {
 	const first, second = "Add a retry around the push", "Drop the retry; the lease already bounds it"
 	created := model.IssueEvent{Action: model.ActionCreated, Actor: "creator"}
 	wrote := func(actor, from, to string) model.IssueEvent {
-		return model.IssueEvent{Action: "update", Actor: actor, Changes: []model.FieldChange{{Field: "plan", From: from, To: to}}}
+		return model.IssueEvent{Action: "update", Actor: model.Text(actor), Changes: []model.FieldChange{{Field: "plan", From: from, To: to}}}
 	}
 	review := func(id, by, text string, verdict model.PlanVerdict, laws ...model.Law) model.PlanReview {
-		return model.PlanReview{ID: id, IssueID: "lit-1", PlanDigest: model.DigestPlan(text), Verdict: verdict, Laws: laws, CreatedBy: by}
+		return model.PlanReview{ID: id, IssueID: "lit-1", PlanDigest: model.DigestPlan(text), Verdict: verdict, Laws: laws, CreatedBy: model.Text(by)}
 	}
 	v1 := storage.PlanVersion{Number: 1, Digest: model.DigestPlan(first)}
 	v2 := storage.PlanVersion{Number: 2, Digest: model.DigestPlan(second)}

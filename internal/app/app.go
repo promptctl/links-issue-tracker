@@ -160,7 +160,7 @@ func New(ws workspace.Info, st storage.Store, stream workspace.StreamID) *App {
 
 // StatuslineTicket is issue as the statusline file shows it.
 func StatuslineTicket(issue model.Issue) statusline.Ticket {
-	return statusline.Ticket{ID: issue.ID, Title: issue.Title, Description: issue.Description}
+	return statusline.Ticket{ID: issue.ID, Title: issue.Title.Raw(), Description: issue.Description}
 }
 
 // changeStatuslineFacts is what a change tells the statusline file. Every

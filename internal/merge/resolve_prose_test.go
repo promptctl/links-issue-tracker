@@ -163,7 +163,7 @@ func proseAndCollisionFixture(t *testing.T) MergeResult {
 	t.Helper()
 	base, local, remote := plantCollision(t)
 	titled := func(title string) model.Issue {
-		return leaf(t, "epic.2", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = title })
+		return leaf(t, "epic.2", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = model.Text(title) })
 	}
 	base.Issues = append(base.Issues, titled("base-title"))
 	local.Issues = append(local.Issues, titled("ours-title"))

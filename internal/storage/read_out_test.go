@@ -33,7 +33,7 @@ func standing(issue model.Issue, parents []string, blockers ...string) storage.C
 }
 
 func readIssue() model.Issue {
-	return model.Issue{ID: "lit-x-1", Title: "a title", IssueType: model.TypeTask, Lane: "a-lane", Labels: []string{"alpha", "beta"}}
+	return model.Issue{ID: "lit-x-1", Title: "a title", IssueType: model.TypeTask, Lane: "a-lane", Labels: model.Texts([]string{"alpha", "beta"})}
 }
 
 func mergeOK(t *testing.T, doc storage.BulkIssueSpec, now storage.CurrentState) (storage.BulkIssueSpec, []string) {
@@ -121,7 +121,7 @@ func TestAReadOutEditAnotherWriterAlsoMadeLands(t *testing.T) {
 	same := "same-lane"
 	doc.Lane = &same
 	now := read
-	now.Lane = same
+	now.Lane = model.Text(same)
 	got, kept := mergeOK(t, doc, standing(now, []string{"lit-e"}))
 	if *got.Lane != same || len(kept) != 0 {
 		t.Errorf("lane %q, kept %v; want %q and nothing kept", *got.Lane, kept, same)
@@ -137,7 +137,7 @@ func TestAReadOutValueIsComparedAsTheWriteWouldStoreIt(t *testing.T) {
 	reordered, spaced := []string{"Beta", "alpha"}, "a title  "
 	doc.Labels, doc.Title = &reordered, &spaced
 	now := read
-	now.Labels, now.Title = []string{"gamma"}, "their title"
+	now.Labels, now.Title = model.Texts([]string{"gamma"}), "their title"
 	got, kept := mergeOK(t, doc, standing(now, []string{"lit-e"}))
 	if !slices.Equal(*got.Labels, []string{"gamma"}) || *got.Title != "their title" {
 		t.Errorf("labels %v, title %q; want the other writer's", *got.Labels, *got.Title)

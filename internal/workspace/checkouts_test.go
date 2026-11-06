@@ -109,11 +109,11 @@ func TestLiveCheckoutsCarriesTheAddress(t *testing.T) {
 	}
 	addresses := map[string]string{}
 	for _, checkout := range checkouts {
-		resolved, err := filepath.EvalSymlinks(checkout.Path)
+		resolved, err := filepath.EvalSymlinks(checkout.Path.Raw())
 		if err != nil {
-			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path, err)
+			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path.Raw(), err)
 		}
-		addresses[resolved] = checkout.Branch
+		addresses[resolved] = checkout.Branch.Raw()
 	}
 
 	branchPath, err := filepath.EvalSymlinks(onBranch)
@@ -160,9 +160,9 @@ func TestLiveCheckoutsReportsTheLock(t *testing.T) {
 
 	locks := map[string]bool{}
 	for _, checkout := range checkouts {
-		resolved, err := filepath.EvalSymlinks(checkout.Path)
+		resolved, err := filepath.EvalSymlinks(checkout.Path.Raw())
 		if err != nil {
-			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path, err)
+			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path.Raw(), err)
 		}
 		locks[resolved] = checkout.Locked
 	}
@@ -314,7 +314,7 @@ func TestBareRepositoryContributesNoCheckout(t *testing.T) {
 	if len(checkouts) != 1 {
 		t.Fatalf("enumerated %d checkouts, want only the one working tree: %+v", len(checkouts), checkouts)
 	}
-	resolved, err := filepath.EvalSymlinks(checkouts[0].Path)
+	resolved, err := filepath.EvalSymlinks(checkouts[0].Path.Raw())
 	if err != nil {
 		t.Fatalf("EvalSymlinks() error = %v", err)
 	}
@@ -362,9 +362,9 @@ func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 			continue
 		}
 		found = true
-		resolved, err := filepath.EvalSymlinks(checkout.Path)
+		resolved, err := filepath.EvalSymlinks(checkout.Path.Raw())
 		if err != nil {
-			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path, err)
+			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path.Raw(), err)
 		}
 		want, err := filepath.EvalSymlinks(awkward)
 		if err != nil {

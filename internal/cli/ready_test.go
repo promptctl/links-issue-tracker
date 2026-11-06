@@ -855,7 +855,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 	}
 
 	text := h.runWorkableText()
-	if !strings.Contains(text, "epic: "+epic.ID+"  "+epic.Title) {
+	if !strings.Contains(text, "epic: "+epic.ID+"  "+fmt.Sprint(epic.Title)) {
 		t.Errorf("text output missing 'epic: %s  %s' line; output:\n%s", epic.ID, epic.Title, text)
 	}
 }

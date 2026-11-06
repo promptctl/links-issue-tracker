@@ -269,17 +269,17 @@ func aCreateIsWrittenByItsActor(t *testing.T, ctx context.Context, st storage.St
 		var authors []string
 		for _, event := range export.Events {
 			if event.IssueID == issue.ID && event.Action == model.ActionCreated {
-				authors = append(authors, "event "+event.Actor)
+				authors = append(authors, "event "+event.Actor.Raw())
 			}
 		}
 		for _, rel := range export.Relations {
 			if rel.SrcID == issue.ID && rel.Type == model.RelParentChild {
-				authors = append(authors, "parent "+rel.CreatedBy)
+				authors = append(authors, "parent "+rel.CreatedBy.Raw())
 			}
 		}
 		for _, label := range export.Labels {
 			if label.IssueID == issue.ID {
-				authors = append(authors, "label "+label.CreatedBy)
+				authors = append(authors, "label "+label.CreatedBy.Raw())
 			}
 		}
 		if want := []string{"event " + tc.want, "parent " + tc.want, "label " + tc.want}; !slices.Equal(authors, want) {
@@ -330,13 +330,13 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 		got, want string
 	}{
 		{"ID", read.ID, created.ID},
-		{"Title", read.Title, created.Title},
+		{"Title", read.Title.Raw(), created.Title.Raw()},
 		{"Description", read.Description, created.Description},
 		{"Prompt", read.Prompt, created.Prompt},
 		{"Plan", read.Plan, created.Plan},
-		{"Topic", read.Topic, created.Topic},
-		{"Assignee", read.Assignee, created.Assignee},
-		{"Lane", read.Lane, created.Lane},
+		{"Topic", read.Topic.Raw(), created.Topic.Raw()},
+		{"Assignee", read.Assignee.Raw(), created.Assignee.Raw()},
+		{"Lane", read.Lane.Raw(), created.Lane.Raw()},
 		{"IssueType", string(read.IssueType), string(model.TypeBug)},
 		{"State", string(read.State()), string(model.StateOpen)},
 	} {
@@ -347,7 +347,7 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, cl
 	if read.Priority != model.PriorityUrgent {
 		t.Errorf("Priority = %v, want urgent", read.Priority)
 	}
-	if strings.Join(read.Labels, ",") != "perf" {
+	if strings.Join(model.RawTexts(read.Labels), ",") != "perf" {
 		t.Errorf("Labels = %v, want [perf]", read.Labels)
 	}
 	if read.Rank == "" {
@@ -977,8 +977,8 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 		t.Fatalf("the hand-off to grace recorded assignee row %+v, want ada -> grace", assigneeRow)
 	}
 	want = claims.Handover{
-		From: claims.Claimant{Established: true, Assignee: assigneeRow.From, Checkout: byB.Attribution},
-		To:   claims.Claimant{Established: true, Assignee: assigneeRow.To, Checkout: byB.Attribution},
+		From: claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.From), Checkout: byB.Attribution},
+		To:   claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.To), Checkout: byB.Attribution},
 	}
 	if handed.Handover == nil || *handed.Handover != want {
 		t.Errorf("a hand-off to a new assignee reported %+v, want %+v: the assignee row the start recorded", handed.Handover, want)
@@ -2787,7 +2787,7 @@ func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, _ *clo
 		if err != nil {
 			t.Fatalf("%s error = %v", what, err)
 		}
-		assertStrings(t, what+" labels", applied.Issue.Labels, wantLabels)
+		assertStrings(t, what+" labels", model.RawTexts(applied.Issue.Labels), wantLabels)
 		events, err := st.ListEvents(ctx, issue.ID)
 		if err != nil {
 			t.Fatalf("ListEvents after %s error = %v", what, err)
@@ -2796,7 +2796,7 @@ func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, _ *clo
 		var actors []string
 		for _, event := range events[len(before):] {
 			got = append(got, event.Changes...)
-			actors = append(actors, event.Actor)
+			actors = append(actors, event.Actor.Raw())
 		}
 		if !slices.Equal(got, want) {
 			t.Errorf("%s recorded %v, want %v", what, got, want)
@@ -3869,7 +3869,7 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 	if err != nil {
 		t.Fatalf("GetIssue error = %v", err)
 	}
-	if read.Title != newTitle {
+	if read.Title.Raw() != newTitle {
 		t.Errorf("Title = %q, want %q", read.Title, newTitle)
 	}
 }
@@ -4061,7 +4061,7 @@ func observersHearEveryChange(t *testing.T, ctx context.Context, st storage.Stor
 	}
 	var got []heard
 	st.ObserveChanges(func(c storage.Change, issue model.Issue) {
-		got = append(got, heard{c.Action, issue.ID, issue.Title})
+		got = append(got, heard{c.Action, issue.ID, issue.Title.Raw()})
 	})
 
 	retitle := func(title string) storage.UpdateIssueInput { return storage.UpdateIssueInput{Title: &title} }

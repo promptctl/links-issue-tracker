@@ -88,7 +88,7 @@ func formatLaneProgress(progress claims.LaneProgress) string {
 		return ""
 	}
 	if progress.Active != nil {
-		return fmt.Sprintf("%s in progress, %s", progress.Active.ID, formatProgress(progress.Progress))
+		return fmt.Sprintf("%s in progress, %s", model.HoldRow(progress.Active.ID), formatProgress(progress.Progress))
 	}
 	return formatProgress(progress.Progress)
 }
@@ -122,7 +122,7 @@ func describeClaimant(c claims.Claimant) string {
 	case c.Assignee == "":
 		return nameCheckout(c.Checkout)
 	case !c.Checkout.Present():
-		return c.Assignee
+		return fmt.Sprint(c.Assignee)
 	}
 	return fmt.Sprintf("%s (%s)", c.Assignee, nameCheckout(c.Checkout))
 }
@@ -155,7 +155,7 @@ func nameCheckout(a model.Attribution) string {
 	if len(stream) > labelLen {
 		stream = stream[:labelLen]
 	}
-	return "stream " + stream
+	return "stream " + model.HoldRow(stream)
 }
 
 func nameCheckouts(attributions []model.Attribution) []string {

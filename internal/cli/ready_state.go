@@ -68,7 +68,7 @@ func newBlockingLabelAnnotator() annotation.Annotator {
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
 		var out []annotation.Annotation
 		for _, reserved := range blockingLabels {
-			if slices.Contains(issue.Labels, reserved.label) {
+			if slices.Contains(issue.Labels, model.Text(reserved.label)) {
 				out = append(out, annotation.Annotation{Kind: reserved.kind, Message: reserved.label})
 			}
 		}

@@ -133,7 +133,7 @@ func HomeStranded(export model.Export) (model.Export, []Rehomed) {
 			epic = unfiled
 		}
 		moves[issue.ID] = epic
-		out.Issues[i].Lane = issue.ID
+		out.Issues[i].Lane = model.Text(issue.ID)
 		rehomed = append(rehomed, Rehomed{IssueID: issue.ID, Epic: epic})
 	}
 	for _, child := range trimmed {
@@ -265,7 +265,7 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 		if takesTickets(issue) && issue.Topic == UnfiledTopic && issue.Title == UnfiledTitle {
 			titled = append(titled, issue.ID)
 		}
-		if prefix, ok := issueid.PrefixOf(issue.ID, issue.Topic); ok {
+		if prefix, ok := issueid.PrefixOf(issue.ID, issue.Topic.Raw()); ok {
 			counts[prefix]++
 		}
 		_, deleted := issue.Retention().(model.Deleted)
@@ -301,7 +301,7 @@ func (h hierarchy) unfiledEpic(export model.Export) (string, *model.Issue) {
 		case !occupied && !purged[id]:
 			return id, &model.Issue{
 				ID:          id,
-				Title:       unfiledTitle.text,
+				Title:       model.Text(unfiledTitle.text),
 				Description: unfiledDescription,
 				IssueType:   model.TypeEpic,
 				Topic:       UnfiledTopic,

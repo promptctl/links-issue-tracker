@@ -816,16 +816,16 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 		}
 		now := s.stamps.Stamp(s.clock, filed)
 		issue = model.Issue{
-			Title:       title,
+			Title:       model.Text(title),
 			Description: strings.TrimSpace(in.Description),
 			Prompt:      strings.TrimSpace(in.Prompt),
 			Plan:        strings.TrimSpace(in.Plan),
 			Priority:    in.Priority,
 			IssueType:   issueType,
-			Topic:       topic,
-			Lane:        lane,
-			Labels:      labels,
-			Assignee:    assignee,
+			Topic:       model.Text(topic),
+			Lane:        model.Text(lane),
+			Labels:      model.Texts(labels),
+			Assignee:    model.Text(assignee),
 			FollowsUp:   strings.TrimSpace(in.FollowsUp),
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -861,7 +861,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 			if err != nil {
 				return fmt.Errorf("normalize issue prefix: %w", err)
 			}
-			issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)
+			issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic.Raw(), issue.Title.Raw(), issue.Description, createdBy, issue.CreatedAt, parentID)
 			if err != nil {
 				return err
 			}
@@ -893,13 +893,13 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 					DstID:     parentID,
 					Type:      model.RelParentChild,
 					CreatedAt: issue.CreatedAt,
-					CreatedBy: createdBy,
+					CreatedBy: model.Text(createdBy),
 				}
 				if err := insertRelationTx(ctx, tx, parentEdge); err != nil {
 					return err
 				}
 			}
-			if err := writeLabelsTx(ctx, tx, issue.ID, nil, issue.Labels, createdBy, now); err != nil {
+			if err := writeLabelsTx(ctx, tx, issue.ID, nil, model.RawTexts(issue.Labels), createdBy, now); err != nil {
 				return err
 			}
 			// CreateIssue's "created" event records the initial status as a single
@@ -1581,7 +1581,7 @@ func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor st
 	if err != nil {
 		return fieldWrite{}, err
 	}
-	return fieldWrite{issue: issue, priorLabels: baseline.Labels, actor: actor, reason: in.Reason, changes: changes}, nil
+	return fieldWrite{issue: issue, priorLabels: model.RawTexts(baseline.Labels), actor: actor, reason: in.Reason, changes: changes}, nil
 }
 
 // applyFieldsTx writes a planned field mutation that moved at least one field
@@ -1603,7 +1603,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite, at 
 	}
 	// [LAW:dataflow-not-control-flow] The label rows are always moved; a set
 	// the patch left as it was is a delta with nothing in it.
-	if err := writeLabelsTx(ctx, tx, issue.ID, w.priorLabels, issue.Labels, w.actor, at); err != nil {
+	if err := writeLabelsTx(ctx, tx, issue.ID, w.priorLabels, model.RawTexts(issue.Labels), w.actor, at); err != nil {
 		return err
 	}
 	return insertEventTx(ctx, tx, event)
@@ -1776,7 +1776,7 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 		return model.Comment{}, model.Issue{}, err
 	}
 	now := s.clock.Now()
-	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: storage.Actor(in.CreatedBy)}
+	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: model.Text(storage.Actor(in.CreatedBy))}
 	if err := s.withMutation(ctx, "add comment", func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
 			return fmt.Errorf("insert comment: %w", err)
@@ -2021,7 +2021,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 		changes = append(changes, model.FieldChange{Field: "redirect_target", From: formatNullableString(priorRedirect), To: formatNullableString(postRedirect)})
 	}
 	if prior.Assignee != post.Assignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: prior.Assignee, To: post.Assignee})
+		changes = append(changes, model.FieldChange{Field: "assignee", From: prior.Assignee.Raw(), To: post.Assignee.Raw()})
 	}
 	updated.UpdatedAt = now
 	// updated already carries the leaf the write will persist — the outcome
@@ -2030,7 +2030,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	return transitionWrite{
 		issueID:           issue.ID,
 		toStatus:          toStatus,
-		postAssignee:      post.Assignee,
+		postAssignee:      post.Assignee.Raw(),
 		now:               now,
 		closedAtArg:       closedAtArg,
 		resolutionArg:     resolutionArg,
@@ -2394,8 +2394,8 @@ func (s *Store) newEvent(issueID, action, reason, actor string, at time.Time, ch
 		ID:        "evt-" + uuid.NewString(),
 		IssueID:   issueID,
 		Action:    strings.TrimSpace(action),
-		Reason:    strings.TrimSpace(reason),
-		Actor:     storage.Actor(actor),
+		Reason:    model.Text(strings.TrimSpace(reason)),
+		Actor:     model.Text(storage.Actor(actor)),
 		CreatedAt: at,
 		// The stamp is read off the store rather than passed in, so it is the
 		// same for every event this command writes and cannot be forgotten at a
@@ -2697,8 +2697,8 @@ func (s *Store) queryEvents(ctx context.Context, selection string, args ...any) 
 			event := model.IssueEvent{
 				ID:        evtID,
 				IssueID:   evtIssueID,
-				Reason:    evtReason,
-				Actor:     evtActor,
+				Reason:    model.Text(evtReason),
+				Actor:     model.Text(evtActor),
 				CreatedAt: t,
 				// Routed through NewAttribution so history that predates the
 				// feature — and any row a foreign writer left half-filled —
@@ -2760,24 +2760,24 @@ type issueRow struct {
 func rowFields(row partialIssue, labels []string) model.Issue {
 	issue := model.Issue{
 		ID:          row.ID,
-		Title:       row.Title,
+		Title:       model.Text(row.Title),
 		Description: row.Description,
 		Prompt:      row.Prompt,
 		Plan:        row.Plan,
 		Priority:    row.Priority,
 		IssueType:   row.IssueType,
-		Topic:       row.Topic,
-		Assignee:    row.Assignee,
+		Topic:       model.Text(row.Topic),
+		Assignee:    model.Text(row.Assignee),
 		Rank:        row.Rank,
-		Lane:        row.Lane,
-		Labels:      labels,
+		Lane:        model.Text(row.Lane),
+		Labels:      model.Texts(labels),
 		FollowsUp:   row.FollowsUp,
 		CreatedAt:   row.CreatedAt,
 		UpdatedAt:   row.UpdatedAt,
 	}
 	issue.SetRetention(row.Retention)
 	if issue.Labels == nil {
-		issue.Labels = []string{}
+		issue.Labels = model.Texts([]string{})
 	}
 	return issue
 }
