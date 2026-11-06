@@ -196,9 +196,11 @@ func pushFailureDecision(pushErr error, remote storage.RemoteName, receiveMerges
 // [LAW:single-enforcer] Callers construct nothing themselves: the record is
 // derived once, from the same two values, for every producer. The record also
 // lands on the invocation's event, one value per attempt on push.outcomes.
-// [LAW:nothing-unseen] The push error is parsed here, once, for the schema
+// [LAW:nothing-unseen] The push error is parsed at this seam for the schema
 // refusal it may be — the one failure the owner hears under its own class —
-// so the owner half reads a typed result and never the raw error.
+// so the owner half reads a typed result and never the raw error. (The
+// mirror's block print and the foreground's returned contract parse the same
+// error for their own surfaces.)
 // [LAW:parse-dont-validate] Only the push step raises a schema refusal; a
 // could-not-attempt error (remote resolution, a mirror dying before its
 // attempt) is never one, so pushErr is the one carrier to parse.

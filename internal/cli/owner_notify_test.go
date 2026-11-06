@@ -395,6 +395,17 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "remote_schema_ahead") != 1 {
 		t.Fatalf("the same refusal paged again inside its episode: %q", payload)
 	}
+	// The receive half detecting the same condition — the reconcile's replay
+	// refused by the same remote head — is the same episode, not a second page:
+	// one condition, one marker, whichever half saw it.
+	receiveSide, ok := remoteSchemaAheadFailure(ahead)
+	if !ok {
+		t.Fatal("the receive half did not classify the refusal it shares with the push half")
+	}
+	notifyOwnerForFailure(ctx, testStderr(t), runEnv(t), ws, receiveSide)
+	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "remote_schema_ahead") != 1 {
+		t.Fatalf("the receive half paged a condition the push half had already paged: %q", payload)
+	}
 
 	complete(nil)
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {

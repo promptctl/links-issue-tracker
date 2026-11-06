@@ -18,7 +18,8 @@ import (
 )
 
 // This file is the owner's out-of-band channel: when sync detects a real
-// divergence, a schema refusal that stops the receive, or a failing push, the
+// divergence, a schema refusal (on either half of the channel), or a push that
+// failed with no class of its own, the
 // OWNER — the human whose work the backlog carries — hears about it the day it
 // happens, through a hook they configured (sync.owner_notify_cmd), not days
 // later through an agent's archaeology. The agent-facing blocks stay the
@@ -106,8 +107,9 @@ type ownerNotifyEvent struct {
 }
 
 // fingerprint identifies the episode the marker de-duplicates. For a
-// divergence, the same kind against the same sync target is the same ongoing
-// fact — a re-pointed remote is a NEW fork and notifies immediately. A push
+// divergence or a schema refusal, the same kind against the same sync target
+// is the same ongoing fact, whichever half detected it — a re-pointed remote
+// is a NEW fork and notifies immediately. A push
 // failure keys on the kind alone: the same broken channel can fail at
 // different stages (a refs check that resolves no remote, a push the remote
 // refuses), and per-stage target detail would make one outage read as several
