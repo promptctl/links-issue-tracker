@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"golang.org/x/term"
 )
 
 // runWorkflowsEdit is `lit workflows edit <id-or-point>`'s whole job:
@@ -133,7 +134,7 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	if _, err := fmt.Fprintln(inv.Stdout, path); err != nil {
 		return err
 	}
-	if !isTerminal(inv.Stdout) {
+	if !interactive(inv.Stdin, inv.Stdout) {
 		return nil
 	}
 	editorCmd := strings.Fields(inv.Env.Get("EDITOR"))
@@ -154,24 +155,20 @@ func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	return nil
 }
 
-// isTerminal reports whether w is a real terminal rather than a pipe, file
-// redirect, or an in-memory buffer (what tests and any non-*os.File caller
-// pass) — exactly the distinction `lit workflows edit` needs to decide
-// whether opening $EDITOR makes sense. Checking against the actual stream
-// the command is writing to (rather than the process-global os.Stdout) means
-// a test capturing output into a bytes.Buffer never accidentally launches an
-// editor. Needs no new dependency (golang.org/x/term is not already a direct
-// one) — the character-device check is the standard no-dependency approach.
-func isTerminal(w io.Writer) bool {
-	file, ok := w.(*os.File)
-	if !ok {
-		return false
-	}
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+// interactive reports whether a person can both see what lit writes and answer
+// it: stdin and stdout are each a real terminal, not a pipe, a file redirect,
+// /dev/null (a character device but no terminal), or an in-memory buffer (what
+// tests and any non-*os.File caller pass). Every prompt and the editor launch
+// gate on it, judged on the invocation's own streams rather than the process
+// globals, so a test capturing output never blocks on a read or opens an
+// editor. [LAW:single-enforcer]
+func interactive(stdin io.Reader, stdout io.Writer) bool {
+	return isTerminal(stdin) && isTerminal(stdout)
+}
+
+func isTerminal(stream any) bool {
+	file, ok := stream.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd()))
 }
 
 // unsafeScaffoldFilenameChars is everything a fresh scaffold's filename
