@@ -124,10 +124,10 @@ func writeWorkflowScaffold(path string, subject string, content []byte) error {
 
 // openOrPrintWorkflowFile always names the scaffolded/target path — cheap,
 // and useful whether or not an editor also opens — then, only when stdin and
-// stdout are both real terminals and $EDITOR is set, hands the file to it interactively. A
-// non-interactive caller (an agent, a script, a pipe, or a test harness
-// capturing output into a buffer) or a terminal with no $EDITOR configured
-// gets just the path: enough to open the file themselves.
+// stdout are both real terminals and $EDITOR is set, hands the file to it
+// interactively. A non-interactive caller (an agent, a script, a pipe, or a
+// test harness capturing output into a buffer) or a terminal with no $EDITOR
+// configured gets just the path: enough to open the file themselves.
 func openOrPrintWorkflowFile(inv Invocation, path string) error {
 	if _, err := fmt.Fprintln(inv.Stdout, path); err != nil {
 		return err
