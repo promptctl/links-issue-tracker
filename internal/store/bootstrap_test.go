@@ -327,6 +327,25 @@ func TestBootstrapSetsAsideADatabaseDirectoryWithNoDolt(t *testing.T) {
 	assertOpens(t, root)
 }
 
+// An empty database directory holds nothing to keep: a build removes it
+// rather than setting it aside, and has nothing to warn about.
+func TestBootstrapRemovesAnEmptyDatabaseDirectory(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(filepath.Join(root, doltDatabaseName), 0o755); err != nil {
+		t.Fatalf("MkdirAll() = %v", err)
+	}
+	var stderr strings.Builder
+	bootstrap, err := EnsureDatabase(context.Background(), testEnv(), &stderr, root, "test-workspace-id")
+	if want := storage.BuiltDatabase(false, ""); err != nil || bootstrap != want {
+		t.Fatalf("EnsureDatabase() over an empty database directory = %v, %v; want %v", bootstrap, err, want)
+	}
+	if strings.Contains(stderr.String(), "displaced") {
+		t.Fatalf("stderr = %q; want no set-aside warning", stderr.String())
+	}
+	assertOpens(t, root)
+}
+
 func assertOpens(t *testing.T, root string) {
 	t.Helper()
 	st, err := Open(context.Background(), testEnv(), testStderr(), root, "test-workspace-id")
