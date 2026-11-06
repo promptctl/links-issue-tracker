@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, litHookMarkers.begin) || !strings.Contains(text, litHookMarkers.end) {
 		t.Fatalf("hook missing managed section markers: %q", text)
 	}
-	if !strings.Contains(text, "hook-triggered lit sync push failed") {
+	if !strings.Contains(text, "hook-triggered lit sync push exited") {
 		t.Fatalf("hook missing warning output: %q", text)
 	}
 	if !strings.Contains(text, "LNKS_AUTOMATION_TRIGGER=\"git-pre-push\"") {
@@ -55,6 +56,10 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 // hook must pass that block through and never claim the failure is transient.
 func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		// bash there may be WSL's, which sees neither the hook's path nor binDir.
+		t.Skip("the hook runs under a POSIX bash")
+	}
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not on PATH")
@@ -80,7 +85,12 @@ func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
 		{
 			name:       "failing push",
 			stub:       "echo pushed-summary\necho '" + remedy + "' >&2\nexit 1\n",
-			wantStderr: []string{remedy, "hook-triggered lit sync push failed (trigger=git-pre-push remote=peer"},
+			wantStderr: []string{remedy, "hook-triggered lit sync push exited 1 (trigger=git-pre-push remote=peer trace=unavailable)"},
+		},
+		{
+			name:       "failing push that recorded a trace",
+			stub:       "printf '/traces/push-1.json' > \"$LNKS_AUTOMATION_TRACE_REF_FILE\"\nexit 3\n",
+			wantStderr: []string{"exited 3 (trigger=git-pre-push remote=peer trace=/traces/push-1.json)"},
 		},
 		{name: "succeeding push", stub: "echo pushed-summary\nexit 0\n"},
 	}

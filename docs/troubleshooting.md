@@ -46,13 +46,7 @@ just build       # or: go build -buildvcs=false ./cmd/lit
 
 ## Sync warning on push hook
 
-The hook is warn-only and never blocks push. The warning includes `trigger=git-pre-push`, the remote, and a `trace=` path under the workspace `traces_dir`. Retry manually:
-
-```sh
-lit sync push
-```
-
-Then check status:
+The hook is warn-only and never blocks push. The warning includes lit's exit status, `trigger=git-pre-push`, the remote, and a `trace=` path under the workspace `traces_dir`. Above it, `lit sync push` prints its own failure block, which names the remedy for that failure; a plain retry does not clear a diverged remote or a remote schema ahead. Check status:
 
 ```sh
 lit sync status
