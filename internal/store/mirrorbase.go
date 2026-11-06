@@ -61,8 +61,14 @@ func MirrorRootOf(env environ.Env) (string, error) {
 // under mirrorRoot. [LAW:one-source-of-truth] every reader and writer of a
 // store's mirrors gets the path from here.
 func MirrorBase(mirrorRoot, doltRootDir string) string {
-	sum := sha256.Sum256([]byte(mirrorBaseIdentity(doltRootDir)))
-	return filepath.Join(mirrorRoot, hex.EncodeToString(sum[:])[:mirrorBaseKeyLen])
+	return filepath.Join(mirrorRoot, mirrorBaseName(mirrorBaseIdentity(doltRootDir)))
+}
+
+// mirrorBaseName is the directory name of the base serving the database
+// directory identity.
+func mirrorBaseName(identity string) string {
+	sum := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(sum[:])[:mirrorBaseKeyLen]
 }
 
 // mirrorBaseIdentity is the database directory a base serves, as its root
@@ -216,6 +222,13 @@ func readMirrorBases(mirrorRoot string) (bases []mirrorBaseEntry, unreadable err
 		}
 		if err != nil {
 			skipped = append(skipped, fmt.Errorf("read git mirror base %s: %w", dir, err))
+			continue
+		}
+		// A base is named by the database its root file records. A directory
+		// whose name does not match is not one this package wrote, whatever
+		// it holds, so no collector removes it: a mirror root shared with
+		// other data never loses a byte of it.
+		if mirrorBaseName(string(recorded)) != entry.Name() {
 			continue
 		}
 		bases = append(bases, mirrorBaseEntry{dir: dir, database: string(recorded)})

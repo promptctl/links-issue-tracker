@@ -510,6 +510,12 @@ func validateDoltRootDir(doltRootDir string) (string, error) {
 	if strings.TrimSpace(doltRootDir) == "" {
 		return "", errors.New("dolt root dir is required")
 	}
+	// Absolute, because the store's mirror base is named by this path and its
+	// root file records it for every other process's prune to stat: a relative
+	// one would resolve against whichever cwd read it.
+	if !filepath.IsAbs(doltRootDir) {
+		return "", fmt.Errorf("dolt root dir %q is not an absolute path", doltRootDir)
+	}
 	return filepath.Clean(doltRootDir), nil
 }
 

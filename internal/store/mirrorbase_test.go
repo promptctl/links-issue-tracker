@@ -127,6 +127,31 @@ func TestThePruneSweepsTheMirrorBaseOfADeletedRepositoryOnly(t *testing.T) {
 	}
 }
 
+// A directory under the mirror root that holds a root file but is not named
+// for the database it records is not a base, so neither collector removes it.
+func TestNeitherCollectorRemovesADirectoryLitDidNotName(t *testing.T) {
+	t.Parallel()
+	mirrorRoot := t.TempDir()
+	foreign := filepath.Join(mirrorRoot, "some-other-tool")
+	if err := os.MkdirAll(foreign, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gone := filepath.Join(t.TempDir(), "gone", "dolt", "links")
+	if err := os.WriteFile(filepath.Join(foreign, rootFileName), []byte(gone), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SweepMirrorBasesUnder(mirrorRoot, filepath.Dir(filepath.Dir(gone))); err != nil {
+		t.Fatalf("SweepMirrorBasesUnder() error = %v", err)
+	}
+	if outcome := sweepOrphanedMirrorBases(mirrorRoot); outcome.Problem != "" || outcome.Removed != 0 {
+		t.Fatalf("prune = %+v, want nothing removed", outcome)
+	}
+	if _, err := os.Stat(filepath.Join(foreign, rootFileName)); err != nil {
+		t.Fatalf("the foreign directory lost its file: %v", err)
+	}
+}
+
 // A take's sweep removes the mirror bases of every clone a killed cycle left
 // under its clone base, and no other base.
 func TestATakesSweepRemovesTheMirrorBasesOfDeadClonesUnderItsBase(t *testing.T) {
