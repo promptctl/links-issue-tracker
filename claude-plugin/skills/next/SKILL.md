@@ -44,7 +44,22 @@ Two branches, in order.  First settle whatever is already in flight here — unc
 
 #### Uncommitted changes
 
-determine if these changes are related to a backlog item.  If so, that is your current ticket.  If not, stop and think to your self: Are these changes worthwhile?  Accidential?  Incidental?  Should we commit or discard them?  Use your brain to think about the right solution because there is no one size fits all rule.
+First, before you commit anything, ask whether this branch's PR has already merged:
+
+```
+b="$(git branch --show-current)"; test -n "$b" && gh pr list --head "$b" --state merged --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"'
+```
+
+A non-zero exit is no answer, not a "no" — fix `gh`, or check out a branch, before you trust the empty output.  A line printed means the branch leads nowhere: nothing more is committed to it, and its ticket has landed.  One ticket lands as one PR, so the work here belongs to another ticket — an open one it plainly serves, or a follow-up you file in the merged ticket's epic and lane.  `git log <headRefOid>..HEAD` lists any commits made after the merge; they move with the work.  Cut that ticket's branch from the trunk, carrying the uncommitted changes, then cherry-pick those commits onto it:
+
+```
+git fetch origin
+git switch --no-track -c <ticket-id> origin/master   # or the repo's default branch
+```
+
+`git switch` refuses without touching anything when the changes conflict with the trunk; then `git stash push -u -m <unique-tag>`, run the switch, and `git stash apply` the entry you pushed.  Leave the merged branch where it is.  You now stand on your ticket's branch with the work uncommitted; sort it by the rules below.
+
+Otherwise, determine if these changes are related to a backlog item.  If so, that is your current ticket.  If not, stop and think to your self: Are these changes worthwhile?  Accidential?  Incidental?  Should we commit or discard them?  Use your brain to think about the right solution because there is no one size fits all rule.
 
 Examples:
 - uncommitted pnpm lockfile update: check it out to discard, but then regengerate the lockfile as part of your commit when you do work
@@ -160,23 +175,6 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 3. **Set up the workspace.**
 
    - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
-
-     Unless that branch's PR has already merged.  Then the branch leads nowhere, and work built on it opens a second PR for a merged branch.  Ask:
-
-     ```
-     gh pr list --head "$(git branch --show-current)" --state merged --limit 1
-     ```
-
-     A non-zero exit is no answer, not a "no" — fix `gh` before you trust the empty output.  A line printed means merged: carry the uncommitted work onto a fresh branch cut from the trunk.  `git switch` carries uncommitted changes, and refuses without touching anything when they conflict:
-
-     ```
-     git fetch origin
-     git switch --detach origin/master
-     git branch -D <old-branch>      # only when it holds the ticket's own name
-     git switch -c <ticket-id>
-     ```
-
-     If the switch refuses, commit the work on the old branch and cherry-pick that commit onto the new one.
 
    - **Otherwise, branch from an up-to-date trunk** — not from wherever HEAD happens to be sitting.  Finishing a ticket leaves you standing on its branch, and `git checkout -b` from there silently forks the new ticket off unmerged work: the PR opens carrying the previous ticket's diff on top of its own, and it cannot be reviewed or merged on its own.  Fetch the trunk first; the branch is cut from it below:
 
