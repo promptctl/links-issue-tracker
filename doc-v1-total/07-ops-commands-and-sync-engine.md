@@ -12,7 +12,7 @@ Flag handling common to every command (`flagset.go`, `cli.go`):
 
 - `--help` prints usage plus defaults to stdout and exits 0.
 - `--output` or `--output=<x>` before the command name → `UnsupportedError` ("--output is no longer supported; omit it for text output"), exit 3. After the command name it is an unknown flag.
-- `--continue` → `UnsupportedError` (retired; claim routing already keeps `lit next` in the checkout's own epic first), exit 3.
+- `--continue` on `lit next` → `UnsupportedError` (retired; claim routing already serves the checkout's lanes first in `lit next`), exit 3.
 - Any other flag parse error (unknown flag, missing or invalid value, bad syntax) → `UsageError`, exit 2.
 
 Family commands (`sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, …) resolve their subcommand by exact match; a missing, unknown, or flag-shaped first argument returns the family usage string as a plain error — exit 1, not 2 (`register.go`).
@@ -314,7 +314,8 @@ The eight embedded assets (all also ejectable):
 | Outside a git repo | any workspace/app command | `OutsideWorkspaceError` | 3 |
 | Missing/unknown family subcommand | all families | family usage as a plain error | 1 |
 | Unknown flag | any command | `UsageError` | 2 |
-| `--output` before the command name; `--continue` | any command | `UnsupportedError` | 3 |
+| `--output` before the command name | any command | `UnsupportedError` | 3 |
+| `--continue` | `next` | `UnsupportedError` | 3 |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat *`, `upgrade`, `downgrade`, `sync reconcile` rows | `UsageError` | 2 |
 | Adopt could not confirm workspace state | `init` | refusal, no store created | 1 |
 | Remote schema ahead | pull/reconcile, automatic receive (the reconcile's replay; a push at the remote's schema lands) | `SyncFailureError` block (automatic receive: printed by the next command) | 3 |
