@@ -1498,7 +1498,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 - Retired flag: `--continue` is intercepted at the shared parse boundary as
   `UnsupportedError` → exit 3, message
   ``"--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"``
-  (`flagset.go`).
+  (`next.go`).
 - Prints the sync-staleness warning first (`next.go`).
 - Parses the filter into `asked` (`workableFilter.criteria`), then gathers the
   whole workable queue, unfiltered — rows, relation details, **and the focus

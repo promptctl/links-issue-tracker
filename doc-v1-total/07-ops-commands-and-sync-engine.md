@@ -314,7 +314,8 @@ The eight embedded assets (all also ejectable):
 | Outside a git repo | any workspace/app command | `OutsideWorkspaceError` | 3 |
 | Missing/unknown family subcommand | all families | family usage as a plain error | 1 |
 | Unknown flag | any command | `UsageError` | 2 |
-| `--output` before the command name; `--continue` | any command | `UnsupportedError` | 3 |
+| `--output` before the command name | any command | `UnsupportedError` | 3 |
+| `--continue` | `next` | `UnsupportedError` | 3 |
 | Stray positional | `init`, `version`, `hooks install`, `snapshots new`, `lifeboat *`, `upgrade`, `downgrade`, `sync reconcile` rows | `UsageError` | 2 |
 | Adopt could not confirm workspace state | `init` | refusal, no store created | 1 |
 | Remote schema ahead | pull/reconcile, automatic receive (the reconcile's replay; a push at the remote's schema lands) | `SyncFailureError` block (automatic receive: printed by the next command) | 3 |
