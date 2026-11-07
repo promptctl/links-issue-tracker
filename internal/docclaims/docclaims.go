@@ -923,7 +923,7 @@ func DocClaims(fsys fs.FS, names []string) ([]Claim, error) {
 // quoted message. A chapter names a message's placeholders (`<prefix>` where
 // the source has %q), so the whole message may never match shipped text; the
 // command it quotes is verbatim, and is a claim about the binary all the same.
-// A span written as Go (``UnsupportedError{Message: "…"}``) carries its quotes
+// A span written as Go (“UnsupportedError{Message: "…"}“) carries its quotes
 // and wrapper, so only the stretch inside the quotes is the message.
 func spansIn(src string) ([]string, error) {
 	spans, err := CodeSpans(src)
