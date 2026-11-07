@@ -60,8 +60,6 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 		facts.Record(started(evidence.LaneProgressWith(o.Row.Issue), o.Row.Issue), phaseRead(ticketStateOf(o.Row.Issue, evidence.IssueEvents(o.Row.Issue.ID))))
 	case ServedFromClaim:
 		picked = statuslineTicketRef(o.Row.Issue)
-	case TakeOverHere:
-		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromEpicLane:
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedFromNewLane:
@@ -72,7 +70,7 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedPastNarrowing:
 		picked = statuslineTicketRef(o.Row.Issue)
-	case Exhausted, Narrowed, NoWork:
+	case TakeOverHere, Exhausted, Narrowed, NoWork:
 	default:
 		panic(fmt.Sprintf("nextStatuslineFacts: unhandled NextOutcome %T", outcome))
 	}

@@ -103,8 +103,10 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 		row = o.Row
 		announce = resumeAdvice(o.Row) + "\n"
 	case TakeOverHere:
-		row = o.Row
-		announce = takeOverAdvice(o, cc.addresses) + "\n"
+		// Not a pick: another session holds this ticket, so `lit next` names it and
+		// the take that would make it this session's, and serves nothing.
+		_, err := fmt.Fprintln(w, takeOverAdvice(o, cc.addresses))
+		return workflows.Occasion{}, err
 	case ServedFromEpicLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane, place) + " (a second lane of an epic you already hold a lane in)\n"

@@ -254,6 +254,10 @@ func TestRunNextPointsAtThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	if want := theirs.ID.Raw() + " is held by claude_sess-peer in "; !strings.HasPrefix(text, want) || !strings.Contains(text, "`lit start "+theirs.ID.Raw()+" --take`") {
 		t.Fatalf("next as sess-mine = %q, want %s named as claude_sess-peer's, to take over with --take", text, theirs.ID)
 	}
+	// Named, never served: no ticket summary, so nothing reads as this session's pick.
+	if strings.Contains(text, "Peer's work, in flight") {
+		t.Fatalf("next as sess-mine = %q, served the held ticket as a pick", text)
+	}
 }
 
 // The operator with no session of their own, who is nonetheless somebody, names

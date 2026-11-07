@@ -40,8 +40,9 @@ type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 // TakeOverHere is a ticket in a lane another session holds from this same
 // checkout — a predecessor that stopped or handed off, live or not, perhaps
 // kept past the freshness window by the worktree's lock. It is this checkout's
-// work, so it is served ahead of a new lane, and Held names the holder the
-// successor takes it from with `lit start <id> --take`.
+// work, so it is answered ahead of a new lane, but never served: the answer
+// names the holder in Held and the `lit start <id> --take` a successor takes
+// it with, and picks nothing.
 type TakeOverHere struct {
 	Row  annotation.AnnotatedIssue
 	Held claims.Held

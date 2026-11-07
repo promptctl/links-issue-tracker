@@ -43,7 +43,7 @@ func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 		newLane = startOffPrimaryClone
 	}
 	switch o := outcome.(type) {
-	case ServedFromClaim, ResumedOwnWork, TakeOverHere, ServedFromEpicLane, ServedFromDependency:
+	case ServedFromClaim, ResumedOwnWork, ServedFromEpicLane, ServedFromDependency:
 		return startHere
 	case ServedFromNewLane:
 		return newLane
@@ -54,7 +54,7 @@ func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 		return startBesideHeldWork
 	case ServedPastNarrowing:
 		return startBesideHeldWork
-	case Exhausted, Narrowed, NoWork:
+	case TakeOverHere, Exhausted, Narrowed, NoWork:
 		return startNoPick
 	}
 	panic(fmt.Sprintf("placeFor: unhandled NextOutcome %T", outcome))
