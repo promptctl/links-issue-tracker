@@ -307,6 +307,21 @@ func TestSpansInReadsTheMessageAGoLiteralQuotes(t *testing.T) {
 	}
 }
 
+// TestGoLiteralsStayInStepPastQuotesThatOpenNoString: a rune literal '"' or a
+// stray unterminated quote must not pair with the message's own quotes, or the
+// message is dropped without a word.
+func TestGoLiteralsStayInStepPastQuotesThatOpenNoString(t *testing.T) {
+	for span, want := range map[string][]string{
+		`strings.IndexByte(s, '"') then E{Message: "--flag is retired; run lit next"}`: {"--flag is retired; run lit next"},
+		`E{"first message here"} and "unterminated`:                                    {"first message here"},
+		`5" screen`: nil,
+	} {
+		if got := goLiterals(span); !slices.Equal(got, want) {
+			t.Errorf("goLiterals(%q) = %q, want %q", span, got, want)
+		}
+	}
+}
+
 // TestACollidingHandleIsRefusedRatherThanOverwritten covers the corpus holding
 // two kinds of source in one key space: a Go literal keyed by its own text, an
 // embedded asset keyed by its path. A literal is collected only when it
