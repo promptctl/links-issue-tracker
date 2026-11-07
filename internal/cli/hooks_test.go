@@ -68,7 +68,9 @@ func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
 	cases := []struct {
 		name string
 		// existing is a user's pre-push hook the managed section is added to.
-		existing   string
+		existing string
+		// noTempFile points TMPDIR nowhere, so the hook's mktemp fails.
+		noTempFile bool
 		stub       string
 		wantStderr []string
 	}{
@@ -87,6 +89,12 @@ func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
 			existing:   "#!/usr/bin/env bash\nset -euo pipefail\n",
 			stub:       "exit 5\n",
 			wantStderr: []string{"exited 5 (trigger=git-pre-push remote=peer"},
+		},
+		{
+			name:       "succeeding push with no trace file after a user hook that sets errexit",
+			existing:   "#!/usr/bin/env bash\nset -euo pipefail\n",
+			noTempFile: true,
+			stub:       "exit 0\n",
 		},
 		{name: "succeeding push", stub: "echo pushed-summary\nexit 0\n"},
 	}
@@ -116,6 +124,9 @@ func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
 			}
 			cmd := exec.Command(bash, hookPath, "peer")
 			cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if tc.noTempFile {
+				cmd.Env = append(cmd.Env, "TMPDIR="+filepath.Join(binDir, "missing"))
+			}
 			var hookStdout, hookStderr bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &hookStdout, &hookStderr
 			if err := cmd.Run(); err != nil {

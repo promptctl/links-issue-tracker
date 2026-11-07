@@ -19,7 +19,10 @@ if [[ "${lit_push_status}" -ne 0 ]]; then
   trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
   printf '[links] warning: hook-triggered lit sync push exited %s (trigger=git-pre-push remote=%s trace=%s); lit'\''s output above, if any, says what failed. The git push itself was not blocked.\n' "${lit_push_status}" "${remote_name}" "${trace_ref:-unavailable}" >&2
 fi
-rm -f "${trace_ref_file}"
+# GNU rm rejects an empty path even under -f, which a `set -e` above would make fatal.
+if [[ -n "${trace_ref_file}" ]]; then
+  rm -f "${trace_ref_file}"
+fi
 
 exit 0
 # --- END LIT INTEGRATION ---
