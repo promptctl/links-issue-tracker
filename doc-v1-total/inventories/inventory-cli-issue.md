@@ -1154,7 +1154,7 @@ All eight route through one handler `transitionLeaf(spec)`
 `app.AccessWrite` (`register.go`).
 
 Registry rows and summaries:
-- `start` — "Claim issue work", group `operations` (`register.go`)
+- `start` — "Start a ticket: assign it to you (see --by) and claim its lane for this checkout", group `operations` (`register.go`)
 - `done` — "Finish work (success path; from any non-closed state)" (`register.go`)
 - `close` — "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)" (`register.go`)
 - `open` — "Reopen issue(s)" (`register.go`)
@@ -1476,7 +1476,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 ### 2.14 `lit next` — Print the next workable leaf
 
 - Registration `register.go`, `app.AccessRead`, handler `nextLeaf`
-  (`next.go`). Summary: "Print the next workable leaf to lit start".
+  (`next.go`). Summary: "Print the next workable leaf to lit start, serving this checkout's lanes first".
 - Flags (`registerWorkableFilter` in `next.go`, and the `--by`):
 
 | Flag | Type | Default | Effect |

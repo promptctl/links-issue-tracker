@@ -25,7 +25,7 @@ const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [-
 
 func nextLeaf() appLeaf {
 	fs := newCobraFlagSet("next")
-	fs.Retire("continue", "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag")
+	fs.Retire("continue", "--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag")
 	filterFlags := registerWorkableFilter(fs)
 	// Same flag, same meaning, same deletion condition as `lit backlog --all`:
 	// route over the whole queue rather than the focused goal's path.

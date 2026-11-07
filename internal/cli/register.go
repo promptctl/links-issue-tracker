@@ -710,7 +710,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 		{Name: "backlog", Summary: "List the workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, workableLeafFn(backlogView))},
 		retiredSpec("queue", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
-		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
+		{Name: "next", Summary: "Print the next workable leaf to lit start, serving this checkout's lanes first", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, nextLeaf)},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, orphanedLeaf)},
@@ -728,7 +728,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: r.appCmd(app.AccessWriteRoutine, updateLeaf)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
 			Run: r.appCmdDispatch(app.AccessWrite, rankDispatch), Subcommands: []SubcommandSpec{{Name: rankSetSubcommand}}},
-		{Name: startSpec.name, Summary: "Claim issue work", GroupID: "operations",
+		{Name: startSpec.name, Summary: "Start a ticket: assign it to you (see --by) and claim its lane for this checkout", GroupID: "operations",
 			Run: r.transitionCmd(startSpec)},
 		// assign is retired: reassigning is a single-field write folded into
 		// `lit update --assignee`. Hidden+dispatchable so an old invocation gets the
