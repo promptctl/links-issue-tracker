@@ -114,5 +114,5 @@ func (c Claimant) HandoverTo(next Claimant) *Handover {
 // that guards "is this lane mine" does not apply.
 func (h Handover) Live(lane Standing) bool {
 	held, ok := lane.(Held)
-	return ok && held.By == h.From.Checkout
+	return ok && held.By.Checkout == h.From.Checkout
 }

@@ -2,11 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -27,7 +27,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	cc, err := gatherClaimContext(h.ctx, runEnv(h.t), io.Discard, h.ap)
+	cc, err := gatherClaimContext(h.ctx, runEnv(h.t), io.Discard, h.ap, resolveIdentity(runEnv(h.t), ""))
 	if err != nil {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
@@ -237,17 +237,11 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	}
 }
 
-// Two agent sessions in ONE checkout. Session sess-peer starts a ticket;
-// session sess-mine runs `lit next` and must not be told "already in progress
-// in a lane you hold — continue where you left off", which would be false about
-// the only thing an agent acts on — whose work it is.
-//
-// What is NOT asserted is as deliberate as what is. The row still comes back:
-// the lane really does belong to this checkout, lanes are keyed on the checkout
-// on purpose (design-docs/work-claims.md rejects session-bound claims by name),
-// and routing past it would strand the fresh session that inherits a dead
-// predecessor's work.
-func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
+// Two agent sessions in ONE checkout. Session sess-peer starts a ticket; session
+// sess-mine runs `lit next` and is not handed it: a lane is held by a session in
+// a checkout, so the peer's work in flight is routed around, and with nothing
+// else in the backlog the answer is the empty pool naming why.
+func TestRunNextRoutesAroundThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-peer")
 	h := newReadyTestHarness(t)
@@ -255,20 +249,12 @@ func TestRunNextNamesThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Peer's work, in flight"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
 	h.applyAction(theirs.ID, model.Start{Assignee: "claude_sess-peer"}, "")
 
-	// Same checkout, same stream token, different session — asCheckout is
-	// deliberately not used, because switching streams would make this the
-	// foreign-lane case.
+	// Same checkout, same stream token, different session.
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
-	text := h.runNextText()
-
-	if !strings.Contains(text, theirs.ID.Raw()) {
-		t.Fatalf("next = %q, want the lane's work in flight still handed back (%s)", text, theirs.ID)
-	}
-	if !strings.Contains(text, "claude_sess-peer") {
-		t.Fatalf("next = %q, want it to name claude_sess-peer as the session holding %s", text, theirs.ID)
-	}
-	if strings.Contains(text, "continue where you left off") {
-		t.Fatalf("next = %q, want it not to tell this session it was the one working %s", text, theirs.ID)
+	err := h.runNextErr()
+	var none NoWork
+	if !errors.As(err, &none) || len(none.Unreachable) != 1 || none.Unreachable[0].ID != theirs.ID || none.Unreachable[0].Kind != reachHeldFresh {
+		t.Fatalf("next as sess-mine = %v, want NoWork naming %s as held by another holder", err, theirs.ID)
 	}
 }
 
@@ -728,7 +714,7 @@ func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *te
 	if !strings.Contains(err.Error(), theirs.ID.Raw()) {
 		t.Fatalf("next --status in_progress = %q, want it to name %q rather than report the queue empty", err.Error(), theirs.ID)
 	}
-	if !strings.Contains(err.Error(), "another checkout holds right now") {
+	if !strings.Contains(err.Error(), "another session holds right now") {
 		t.Fatalf("next --status in_progress = %q, want it to say why %q is not servable", err.Error(), theirs.ID)
 	}
 	// Still an answer and not a fault: naming the row must not have moved this
@@ -838,7 +824,7 @@ func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{}, "", false)
+			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{}, false)
 			if err == nil {
 				t.Fatalf("renderNextOutcome(%T) error = nil, want the terminal answer", tc.outcome)
 			}
@@ -916,122 +902,6 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 	}
 }
 
-// The same outcome, the other sentence: what `next` prints when the ticket in
-// flight in this checkout's lane carries a DIFFERENT session's name. Asserted
-// as bytes beside the table above, and separately from it, because it is the
-// one line whose wording depends on a value the table holds empty — the
-// claimContext's acting identity.
-//
-// The two assertions are not one: it must name the holder, and it must not say
-// "a lane you hold" — a sentence could easily acquire the name while keeping
-// the claim.
-func TestRenderNextOutcomeNamesTheOtherSessionWorkingOurLane(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Theirs, in flight"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
-	h.transition(inFlight.ID, model.Start{Assignee: "claude_sess-peer"})
-
-	rows, _, _ := h.gather()
-	inFlightRow := rowByID(t, rows, inFlight.ID)
-	cc := claimContext{self: selfAttribution}
-	const reader = "claude_sess-mine"
-
-	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: inFlightRow}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
-		t.Fatalf("renderNextOutcome() error = %v", err)
-	}
-	text := out.String()
-	want := inFlight.ID.Raw() + " is in progress and assigned to claude_sess-peer, not to you — check that they have stopped before you continue it, or take other work from `lit backlog`"
-	if !strings.Contains(text, want) {
-		t.Fatalf("render = %q, want it to contain %q", text, want)
-	}
-	if strings.Contains(text, "a lane you hold") {
-		t.Fatalf("render = %q, want it NOT to tell a session the work is its own", text)
-	}
-}
-
-// Quiet is not proof the holder stopped, which is why no clock guards the
-// warning. A comment never touches the issue row, and neither does a commit or
-// a push, so a session that holds a branch all day and says so in comments
-// crosses the orphan threshold while still working.
-func TestRenderNextOutcomeStillNamesTheHolderOfAQuietTicket(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	quiet := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Held, and silent about it"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
-	h.transition(quiet.ID, model.Start{Assignee: "claude_sess-peer"})
-	h.backdateUpdatedAt(quiet.ID, 7*time.Hour)
-
-	rows, _, _ := h.gather()
-	cc := claimContext{self: selfAttribution}
-	const reader = "claude_sess-mine"
-
-	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, quiet.ID)}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
-		t.Fatalf("renderNextOutcome() error = %v", err)
-	}
-	text := out.String()
-	if !strings.Contains(text, "claude_sess-peer") {
-		t.Fatalf("render = %q, want the holder named even on a row that has gone quiet", text)
-	}
-	if strings.Contains(text, "continue where you left off") {
-		t.Fatalf("render = %q, want no claim that this session was the one working it", text)
-	}
-}
-
-// A reader that resolved no identity is not the ticket's holder either. Nobody's
-// name is the empty string, so a ticket assigned to anyone at all is assigned to
-// somebody other than a plain shell — the case where a person runs `lit next` in
-// a checkout an agent session has work in flight in.
-func TestRenderNextOutcomeNamesTheHolderToAnUnidentifiedReader(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	agents := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("An agent started this"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
-	h.transition(agents.ID, model.Start{Assignee: "claude_sess-agent"})
-
-	rows, _, _ := h.gather()
-	cc := claimContext{self: selfAttribution}
-	// The whole point: this reader resolved no identity at all.
-	const reader = ""
-
-	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, agents.ID)}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
-		t.Fatalf("renderNextOutcome() error = %v", err)
-	}
-	if text := out.String(); !strings.Contains(text, "claude_sess-agent") {
-		t.Fatalf("render = %q, want the holder named to a reader who resolved no identity of their own", text)
-	}
-}
-
-// The other half of the minted-both-halves rule, and the half a mutation proved
-// nothing else covers: a ticket in flight with NO assignee, read by a session
-// that has one. An unassigned in-progress ticket is ordinary — a checkout
-// driving no agent session resolves no identity to write there — so an empty
-// assignee names nobody, and there is nothing for it to contradict. Compare
-// relationOf, which refuses to read a zero attribution as a match for the same
-// reason: absence is not an identity.
-func TestRenderNextOutcomeSaysNothingAboutAnUnassignedTicketInFlight(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	unassigned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Started by nobody in particular"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 1, ParentID: epic.ID})
-	h.transition(unassigned.ID, model.Start{Assignee: ""})
-
-	rows, _, _ := h.gather()
-	cc := claimContext{self: selfAttribution}
-	const reader = "claude_sess-mine"
-
-	var out bytes.Buffer
-	if _, err := renderNextOutcome(&out, ResumedOwnWork{Row: rowByID(t, rows, unassigned.ID)}, map[model.ID]storage.IssueRelations{}, cc, reader, false); err != nil {
-		t.Fatalf("renderNextOutcome() error = %v", err)
-	}
-	if text := out.String(); !strings.Contains(text, unassigned.ID.Raw()+" is already in progress in a lane you hold — continue where you left off") {
-		t.Fatalf("render = %q, want the lane's own sentence — an empty assignee names no other session", text)
-	}
-}
-
 // Every line renderNextOutcome can print, asserted as bytes. The outcome is
 // constructed rather than routed to, so each line is asserted alone; the routing
 // that produces each one is pinned in next_route_test.go. Standings are left
@@ -1046,11 +916,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	h.transition(inFlight.ID, model.Start{Assignee: "other"})
 
 	rows, details, _ := h.gather()
-	cc := claimContext{self: selfAttribution}
-	// The reader is the row's assignee, so the ResumedOwnWork case below is
-	// genuinely their own work. Any other reader makes it a mismatch and prints
-	// the other sentence — pinned in its own test rather than here.
-	const reader = "other"
+	cc := claimContext{self: selfHolder}
 	freshRow := rowByID(t, rows, fresh.ID)
 	inFlightRow := rowByID(t, rows, inFlight.ID)
 	freshLane := laneOf(t, details, freshRow)
@@ -1090,7 +956,7 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc, reader, false); err != nil {
+			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc, false); err != nil {
 				t.Fatalf("renderNextOutcome(%T) error = %v", tc.outcome, err)
 			}
 			out := buf.String()
@@ -1167,17 +1033,13 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
 
 	rows, details, _ := h.gather()
-	cc := claimContext{self: selfAttribution}
-	// Every outcome here is announced by startAdvice, whose sentences carry no
-	// identity, so the reader is passed only because renderNextOutcome's
-	// signature requires one and is read by no branch under test.
-	const reader = ""
+	cc := claimContext{self: selfHolder}
 	row := rowByID(t, rows, fresh.ID)
 	lane := laneOf(t, details, row)
 
 	render := func(o NextOutcome) string {
 		var buf bytes.Buffer
-		if _, err := renderNextOutcome(&buf, o, details, cc, reader, false); err != nil {
+		if _, err := renderNextOutcome(&buf, o, details, cc, false); err != nil {
 			t.Fatalf("renderNextOutcome(%T) error = %v", o, err)
 		}
 		return buf.String()

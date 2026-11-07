@@ -91,7 +91,7 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	if !found {
 		return Unclaimed{}
 	}
-	holder := establisher.Attribution
+	holder := HolderOf(establisher)
 	activity, establishers := trails(admissible)
 	tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}
 
@@ -114,29 +114,34 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	// [LAW:single-enforcer] This is the one place a claim's liveness is
 	// decided; consumers read Held or Unclaimed and never a clock or a
 	// presence of their own.
-	if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder) != Locked {
+	if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder.Checkout) != Locked {
 		return Unclaimed{}
 	}
 	return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
 }
 
 // trails folds the lane's events into the two facts the predicate needs about
-// each checkout that appears in them: when it last did anything here, and
+// each holder that appears in them: when it last did anything here, and
 // whether any of it was an establishing act. The events are ordered oldest
-// first, so the last write to activity wins and is the checkout's latest.
-func trails(events []model.IssueEvent) (activity map[model.Attribution]time.Time, establishers map[model.Attribution]struct{}) {
-	activity = make(map[model.Attribution]time.Time)
-	establishers = make(map[model.Attribution]struct{})
+// first, so the last write to activity wins and is the holder's latest.
+//
+// Keyed on the Holder, not the checkout, so a second session establishing in
+// the same checkout is a contestant like any other rival, and a session's
+// commentary keeps only its own hold fresh.
+func trails(events []model.IssueEvent) (activity map[Holder]time.Time, establishers map[Holder]struct{}) {
+	activity = make(map[Holder]time.Time)
+	establishers = make(map[Holder]struct{})
 	for _, event := range events {
-		activity[event.Attribution] = event.CreatedAt
+		holder := HolderOf(event)
+		activity[holder] = event.CreatedAt
 		if establishes(event) {
-			establishers[event.Attribution] = struct{}{}
+			establishers[holder] = struct{}{}
 		}
 	}
 	return activity, establishers
 }
 
-// contestants are the checkouts other than the holder that also have live
+// contestants are the holders other than the holder that also have live
 // evidence in this lane: an offline race, or a takeover the previous holder has
 // not yet seen.
 //
@@ -151,21 +156,24 @@ func trails(events []model.IssueEvent) (activity map[model.Attribution]time.Time
 // freshness already keeps the pre-attribution backlog out — that evidence is
 // old, so it never covers.
 //
-// Most recently active first, then by stream token so that two checkouts
-// last seen in the same instant still render in a stable order.
-func contestants(holder model.Attribution, activity map[model.Attribution]time.Time, establishers map[model.Attribution]struct{}, fresh Freshness) []model.Attribution {
-	contested := []model.Attribution{}
+// Most recently active first, then by stream token and session so that two
+// holders last seen in the same instant still render in a stable order.
+func contestants(holder Holder, activity map[Holder]time.Time, establishers map[Holder]struct{}, fresh Freshness) []Holder {
+	contested := []Holder{}
 	for candidate := range establishers {
 		if candidate == holder || !fresh.Covers(activity[candidate]) {
 			continue
 		}
 		contested = append(contested, candidate)
 	}
-	slices.SortFunc(contested, func(a, b model.Attribution) int {
+	slices.SortFunc(contested, func(a, b Holder) int {
 		if order := activity[b].Compare(activity[a]); order != 0 {
 			return order
 		}
-		return strings.Compare(a.Stream().Raw(), b.Stream().Raw())
+		if order := strings.Compare(a.Checkout.Stream().Raw(), b.Checkout.Stream().Raw()); order != 0 {
+			return order
+		}
+		return strings.Compare(a.Session.Actor().Raw(), b.Session.Actor().Raw())
 	})
 	return contested
 }

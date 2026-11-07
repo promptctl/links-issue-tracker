@@ -71,7 +71,7 @@ func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: resolveIdentity(runEnv(t), "")}); err != nil {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer

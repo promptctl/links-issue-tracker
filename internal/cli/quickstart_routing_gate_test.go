@@ -85,13 +85,13 @@ var laneRoutingTable = []laneRoutingCase{
 	},
 	{
 		name:     "we hold it",
-		standing: heldBy(selfAttribution),
+		standing: heldBy(selfHolder),
 		want:     serveWork,
 		teaches:  "`lit next` serves this checkout's own claims before anything else",
 	},
 	{
 		name:     "another checkout holds it right now",
-		standing: heldBy(otherAttribution),
+		standing: heldBy(otherHolder),
 		want:     routeAround,
 		teaches:  "the epic continues into \"any lane of the same epic no other checkout holds fresh\", and \"a fresh claim is reached only by `lit start --take`\"",
 	},
@@ -115,7 +115,7 @@ func TestCapacityForEachLaneRelation(t *testing.T) {
 
 	for _, tc := range laneRoutingTable {
 		t.Run(tc.name, func(t *testing.T) {
-			got := capacityFor(row, tc.standing, selfAttribution)
+			got := capacityFor(row, tc.standing, selfHolder)
 			if got != tc.want {
 				t.Errorf("capacityFor(ready open row, %s) = %s, want %s.\n"+
 					"internal/templates/defaults/quickstart-work.md teaches: %s\n"+
@@ -142,7 +142,7 @@ func TestLaneRoutingTableCoversEveryRelation(t *testing.T) {
 	t.Parallel()
 	covered := map[laneRelation]bool{}
 	for _, tc := range laneRoutingTable {
-		relation := relationOf(tc.standing, selfAttribution)
+		relation := relationOf(tc.standing, selfHolder)
 		if covered[relation] {
 			t.Errorf("case %q duplicates lane relation %s; each relation earns exactly one row", tc.name, relationName(relation))
 		}
@@ -152,9 +152,9 @@ func TestLaneRoutingTableCoversEveryRelation(t *testing.T) {
 	// full input space relationOf is total over.
 	for _, standing := range []claims.Standing{
 		nil, claims.Unclaimed{},
-		heldBy(selfAttribution), heldBy(otherAttribution),
+		heldBy(selfHolder), heldBy(otherHolder),
 	} {
-		if relation := relationOf(standing, selfAttribution); !covered[relation] {
+		if relation := relationOf(standing, selfHolder); !covered[relation] {
 			t.Errorf("standing %T yields lane relation %s, which no row in laneRoutingTable covers; add it, and say what quickstart-work.md teaches about it", standing, relationName(relation))
 		}
 	}

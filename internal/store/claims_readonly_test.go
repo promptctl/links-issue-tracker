@@ -136,7 +136,7 @@ func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
 	if !ok {
 		t.Fatalf("standing of the started ticket's lane = %#v, want Held", standing)
 	}
-	if want := model.NewAttribution(token, "test-workspace-id"); held.By != want {
+	if want := model.NewAttribution(token, "test-workspace-id"); held.By.Checkout != want {
 		t.Fatalf("holder = %+v, want %+v", held.By, want)
 	}
 	if len(held.Contested) != 0 {

@@ -31,7 +31,7 @@ import (
 // give the caller — so a contested lane reads identically here and there.
 // [LAW:one-source-of-truth]
 func reportContestedLanes(ctx context.Context, env environ.Env, stdout io.Writer, ws workspace.Info, syncStore storage.Store) error {
-	cc, err := gatherClaimContext(ctx, env, stdout, &app.App{Workspace: ws, Store: syncStore})
+	cc, err := gatherClaimContext(ctx, env, stdout, &app.App{Workspace: ws, Store: syncStore}, resolveIdentity(env, ""))
 	if err != nil {
 		return err
 	}

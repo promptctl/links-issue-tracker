@@ -57,8 +57,8 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	parent := h.issueDetail(epic.ID)
 	lane := model.LaneOf(held, &parent)
 	contested := claimContext{standings: claims.Standings{lane: claims.Held{
-		Tenure:    claims.Tenure{By: model.NewAttribution("aaaaaaaabbbb", "ws-local")},
-		Contested: []model.Attribution{model.NewAttribution("eeeeeeeeffff", "ws-local")},
+		Tenure:    claims.Tenure{By: claims.Holder{Checkout: model.NewAttribution("aaaaaaaabbbb", "ws-local")}},
+		Contested: []claims.Holder{{Checkout: model.NewAttribution("eeeeeeeeffff", "ws-local")}},
 	}}}
 
 	policy := workspaceReadyPolicy(runEnv(t), h.ap)

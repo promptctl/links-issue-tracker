@@ -181,7 +181,7 @@ func workableLeaf(view workableView) appLeaf {
 		// The view's workload, as `lit next` records its own: what a duration
 		// on this event was spent over. [LAW:one-source-of-truth] one key shape.
 		telemetry.Count(ctx, view.name+".rows_gathered", len(gathered.rows))
-		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
+		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap, resolveIdentity(inv.Env, ""))
 		if err != nil {
 			return err
 		}

@@ -300,7 +300,7 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 	if errors.As(err, &unsupported) {
 		return reasonUnsupportedFlag
 	}
-	// A lane another checkout holds right now, not taken over. Not
+	// A lane another session holds right now, not taken over. Not
 	// validation_refused: that line says "adjust the command", and the one
 	// adjustment that clears this is a flag the remediation has to name.
 	var takeover takeoverUnconfirmedError
@@ -549,7 +549,7 @@ func commandErrorRemediation(reason commandReason) string {
 		// ways out are named and neither is urged, and the envelope says whose
 		// call the takeover is — an agent acts on this line, and --take
 		// overrides another checkout's live work.
-		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover." + agentInstructionsClose
+		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another session holds right now overrides that session's work: pass `--take` only when the user directs the takeover." + agentInstructionsClose
 	case reasonPurgeUnconfirmed:
 		// The reversible way out is named beside the flag, and the envelope says
 		// whose call a purge is: it cannot be undone and reaches every store.

@@ -175,10 +175,17 @@ The price is that two writers with no token are indistinguishable, so they never
 contest each other. That is the definition of the bucket rather than a defect in
 it: an identity nobody minted is one nobody can tell apart.
 
-Sessions, agent identities, and user names play no role in claims. Many
-sessions in one checkout are one claimant; a new session inherits its
-checkout's claims with no re-briefing, which is precisely the behavior the
-design exists to produce.
+A holder is the checkout AND the session that recorded the establishing
+event — the event's actor, the identity `resolveIdentity` resolves. Keyed on
+the checkout alone, two sessions running in one checkout at once were one
+claimant, and the second was served the first's ticket mid-PR. So one ticket
+in flight has one holder: another session, wherever it runs, is refused by
+`lit start`, `lit phase` and `lit done` until it passes `--take`, and `lit
+next` routes it around the lane. A new session continuing a stopped one's
+work takes the lane with `--take`. An event whose actor names nobody (empty,
+or the store's `unknown`) holds as the zero session, a value like any other:
+a plain shell in the same checkout matches its own such hold, and any named
+session meets it as foreign. The assignee plays no role.
 
 **Local liveness prune** (the `git worktree prune` pattern): when deriving
 claims, a machine enumerates its own live worktrees and their stream ids.

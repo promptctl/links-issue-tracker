@@ -85,8 +85,8 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if !strings.Contains(err.Error(), "--take") {
 		t.Fatalf("refusal error = %v, want it to instruct --take", err)
 	}
-	if !strings.Contains(err.Error(), "claimed") {
-		t.Fatalf("refusal error = %v, want provenance naming the current holder", err)
+	if !strings.HasPrefix(err.Error(), ticket+" is held by alpha-agent in stream ") {
+		t.Fatalf("refusal error = %v, want provenance naming the current holder's session and checkout", err)
 	}
 	// What the caller is told to do next is the rendered remediation. The gate
 	// is a refusal, and the act that clears it is the flag.
@@ -267,6 +267,13 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	runGit(t, bravo, "config", "user.name", "bravo")
 	runCLIInDir(t, bravo, "init", "--skip-hooks")
 
+	// A holder is a session in a checkout, so one identity in a second checkout
+	// is still a second holder: without --take its start is refused, naming the
+	// identity and the checkout that holds the ticket.
+	if _, err := runCLIInDirAllowError(t, bravo, "start", ticket, "--by", shared); err == nil || !strings.HasPrefix(err.Error(), ticket+" is held by "+shared+" in stream ") {
+		t.Fatalf("start %s in a second checkout of the same identity = %v, want the refusal naming %s in alpha's checkout", ticket, err, shared)
+	}
+
 	// Alpha's claim is live, so the takeover is the deliberate --take crossing;
 	// the notice it prints is the subject here.
 	out := runCLIInDir(t, bravo, "start", ticket, "--by", shared, "--take")
@@ -333,7 +340,7 @@ func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 
 	// The same command once the lane IS held announces the change, so the
 	// silence above is the preset case specifically and not a dead notice.
-	out = runCLIInDir(t, repo, "start", ticket, "--by", "bob")
+	out = runCLIInDir(t, repo, "start", ticket, "--by", "bob", "--take")
 	if !strings.Contains(out, "claim transferred") {
 		t.Fatalf("start %s over a held lane = %q, want the transfer announced", ticket, out)
 	}

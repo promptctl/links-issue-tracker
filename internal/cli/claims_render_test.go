@@ -77,7 +77,7 @@ func TestFormatClaimLineDossierNeedsNoLocalAddress(t *testing.T) {
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 1, 2, "active-ticket")
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{
-		By: elsewhereHolder, Since: renderNow.Add(-3 * time.Hour), LastActivity: renderNow.Add(-2 * time.Hour),
+		By: claims.Holder{Checkout: elsewhereHolder}, Since: renderNow.Add(-3 * time.Hour), LastActivity: renderNow.Add(-2 * time.Hour),
 	}}}
 	cc := claimContext{standings: standings, evidence: evidence} // no addresses
 
@@ -107,7 +107,7 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{
-		By: hereHolder, Since: renderNow.Add(-time.Hour), LastActivity: renderNow.Add(-time.Hour),
+		By: claims.Holder{Checkout: hereHolder}, Since: renderNow.Add(-time.Hour), LastActivity: renderNow.Add(-time.Hour),
 	}}}
 	cc := claimContext{
 		standings: standings,
@@ -226,7 +226,7 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	}
 	// The standing the gate read before Apply: the unattributed start holds the
 	// lane.
-	notice := transferNotice(claims.Held{Tenure: claims.Tenure{By: model.Attribution{}}}, applied.Handover)
+	notice := transferNotice(claims.Held{Tenure: claims.Tenure{By: claims.Holder{}}}, applied.Handover)
 	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(h.ap)))
 	if notice != want {
 		t.Fatalf("transferNotice = %q, want %q", notice, want)
@@ -253,20 +253,20 @@ func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
 	publicHolder := model.Attribution{}
 	for _, row := range []struct {
 		name     string
-		self     model.Attribution
+		self     claims.Holder
 		standing claims.Standing
 		want     string
 	}{
 		{
 			name:     "held, asked by an identified checkout",
-			self:     hereHolder,
-			standing: claims.Held{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-2 * time.Hour)}},
+			self:     claims.Holder{Checkout: hereHolder, Session: model.SessionOf("here-session")},
+			standing: claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: publicHolder}, LastActivity: renderNow.Add(-2 * time.Hour)}},
 			want:     "claimed: the public checkout (unaddressed)",
 		},
 		{
 			name:     "held, asked by a checkout that minted no token of its own",
-			self:     publicHolder,
-			standing: claims.Held{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-2 * time.Hour)}},
+			self:     claims.Holder{},
+			standing: claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: publicHolder}, LastActivity: renderNow.Add(-2 * time.Hour)}},
 			want:     "claimed: the public checkout (unaddressed)",
 		},
 	} {
@@ -296,8 +296,8 @@ func TestFormatClaimLineContestedAppendsContestants(t *testing.T) {
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	contestant := model.NewAttribution("eeeeeeeeffff", "ws-local")
 	standings := claims.Standings{lane: claims.Held{
-		Tenure:    claims.Tenure{By: elsewhereHolder, LastActivity: renderNow},
-		Contested: []model.Attribution{contestant},
+		Tenure:    claims.Tenure{By: claims.Holder{Checkout: elsewhereHolder}, LastActivity: renderNow},
+		Contested: []claims.Holder{{Checkout: contestant}},
 	}}
 	cc := claimContext{standings: standings, evidence: evidence}
 	line, ok := formatClaimLine(cc, lane, renderNow)

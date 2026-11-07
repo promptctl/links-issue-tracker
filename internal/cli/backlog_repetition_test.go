@@ -93,7 +93,7 @@ func TestBacklogDescribesALaneClaimOncePerRun(t *testing.T) {
 	}
 	rows, details := gathered.rows, gathered.details
 	lane := laneOf(t, details, rows[0])
-	cc := claimContext{standings: claims.Standings{lane: heldBy(otherAttribution)}, self: selfAttribution}
+	cc := claimContext{standings: claims.Standings{lane: heldBy(otherHolder)}, self: selfHolder}
 
 	var out bytes.Buffer
 	if err := printBacklogOutput(&out, defaultColumns(), rows, deriveQueueFacts(rows), details, readinessColumnsFor(rows, details), cc, focusNotice{}); err != nil {
@@ -144,7 +144,7 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 		rowByID(t, rows, a2),
 	}
 	laneA := laneOf(t, details, woven[0])
-	cc := claimContext{standings: claims.Standings{laneA: heldBy(otherAttribution)}, self: selfAttribution}
+	cc := claimContext{standings: claims.Standings{laneA: heldBy(otherHolder)}, self: selfHolder}
 
 	var out bytes.Buffer
 	if err := printBacklogOutput(&out, defaultColumns(), woven, deriveQueueFacts(woven), details, readinessColumnsFor(woven, details), cc, focusNotice{}); err != nil {
@@ -192,7 +192,7 @@ func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
 	// The one-row run directly below epic A's run must not read as part of it.
 	after := []annotation.AnnotatedIssue{rowByID(t, rows, a1), rowByID(t, rows, b1)}
 	var out bytes.Buffer
-	if err := printBacklogOutput(&out, defaultColumns(), after, deriveQueueFacts(after), details, readinessColumnsFor(after, details), claimContext{self: selfAttribution}, focusNotice{}); err != nil {
+	if err := printBacklogOutput(&out, defaultColumns(), after, deriveQueueFacts(after), details, readinessColumnsFor(after, details), claimContext{self: selfHolder}, focusNotice{}); err != nil {
 		t.Fatalf("printBacklogOutput error = %v", err)
 	}
 	if got := blockedOrEpicLines(out.String(), b1); !strings.Contains(got, wantLine) {
@@ -203,7 +203,7 @@ func TestBacklogSaysWhichEpicARunOpensUnder(t *testing.T) {
 	// run, not the row above it.
 	out.Reset()
 	first := []annotation.AnnotatedIssue{rowByID(t, rows, b1), rowByID(t, rows, a1)}
-	if err := printBacklogOutput(&out, defaultColumns(), first, deriveQueueFacts(first), details, readinessColumnsFor(first, details), claimContext{self: selfAttribution}, focusNotice{}); err != nil {
+	if err := printBacklogOutput(&out, defaultColumns(), first, deriveQueueFacts(first), details, readinessColumnsFor(first, details), claimContext{self: selfHolder}, focusNotice{}); err != nil {
 		t.Fatalf("printBacklogOutput error = %v", err)
 	}
 	if got := blockedOrEpicLines(out.String(), b1); !strings.Contains(got, wantLine) {
@@ -245,8 +245,8 @@ func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
 		{Issue: rowTwo, ParentEpic: &annotation.ParentEpicRef{ID: epicTwo.ID, Title: epicTwo.Title}},
 	}
 	cc := claimContext{
-		standings: claims.Standings{laneOne: heldBy(otherAttribution), laneTwo: heldBy(otherAttribution)},
-		self:      selfAttribution,
+		standings: claims.Standings{laneOne: heldBy(otherHolder), laneTwo: heldBy(otherHolder)},
+		self:      selfHolder,
 	}
 
 	var out bytes.Buffer
@@ -287,8 +287,8 @@ func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
 	// A claim stands over the first row; the second is a different, unclaimed
 	// lane under the same epic, so no epic line separates them either.
 	claimed := claimContext{
-		standings: claims.Standings{model.LaneOf(held, &epic): heldBy(otherAttribution)},
-		self:      selfAttribution,
+		standings: claims.Standings{model.LaneOf(held, &epic): heldBy(otherHolder)},
+		self:      selfHolder,
 	}
 	var out bytes.Buffer
 	if err := printBacklogOutput(&out, defaultColumns(), rows, deriveQueueFacts(rows), details, readinessColumnsFor(rows, details), claimed, focusNotice{}); err != nil {
@@ -301,7 +301,7 @@ func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
 	// Nothing standing: the same row must stay silent rather than announce a
 	// fact no one could have misread.
 	out.Reset()
-	if err := printBacklogOutput(&out, defaultColumns(), rows, deriveQueueFacts(rows), details, readinessColumnsFor(rows, details), claimContext{self: selfAttribution}, focusNotice{}); err != nil {
+	if err := printBacklogOutput(&out, defaultColumns(), rows, deriveQueueFacts(rows), details, readinessColumnsFor(rows, details), claimContext{self: selfHolder}, focusNotice{}); err != nil {
 		t.Fatalf("printBacklogOutput error = %v", err)
 	}
 	if got := blockedOrEpicLines(out.String(), free.ID); strings.Contains(got, "unclaimed") {

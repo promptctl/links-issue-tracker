@@ -31,14 +31,17 @@ import (
 type claimContext struct {
 	standings claims.Standings
 	evidence  claims.Evidence
-	self      model.Attribution
+	self      claims.Holder
 	addresses map[model.Attribution]workspace.Checkout
 }
 
 // gatherClaimContext is the one place `next` and `backlog` each read claim
 // evidence and local liveness — the store/filesystem boundary claim-aware
 // rendering and routing both sit behind. [LAW:effects-at-boundaries]
-func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, ap *app.App) (claimContext, error) {
+//
+// actor is the reader's resolved identity (resolveIdentity), the session half
+// of the holder every lane is read against.
+func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, ap *app.App, actor string) (claimContext, error) {
 	evidence, err := readEvidence(ctx, ap)
 	if err != nil {
 		return claimContext{}, err
@@ -48,7 +51,7 @@ func gatherClaimContext(ctx context.Context, env environ.Env, stdout io.Writer, 
 		return claimContext{}, err
 	}
 	standings := claims.Derive(evidence, checkouts.fresh, checkouts.local)
-	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: checkouts.addresses}, nil
+	return claimContext{standings: standings, evidence: evidence, self: ownHolder(ap, actor), addresses: checkouts.addresses}, nil
 }
 
 // checkoutFacts is what a derivation reads besides the evidence, and what a
@@ -131,6 +134,14 @@ func readEvidence(ctx context.Context, ap *app.App) (claims.Evidence, error) {
 // [LAW:dataflow-not-control-flow]
 func ownAttribution(ap *app.App) model.Attribution {
 	return model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
+}
+
+// ownHolder is the holder this invocation's work would be recorded as: this
+// checkout, and the session actor names. actor is the resolved identity the
+// store stamps on the event (resolveIdentity), so the holder a read compares
+// against is the one a write would establish. [LAW:one-source-of-truth]
+func ownHolder(ap *app.App, actor string) claims.Holder {
+	return claims.Holder{Checkout: ownAttribution(ap), Session: model.SessionOf(model.Text(actor))}
 }
 
 // transferNotice is the line a start owes when it takes the ticket FROM

@@ -36,9 +36,9 @@ func formatClaimLine(cc claimContext, lane model.LaneID, now time.Time) (string,
 // the hold because a listing asks once a row, so an unclaimed lane has to cost
 // nothing and counting a lane's progress has to wait for one.
 func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribution]workspace.Checkout, now time.Time) string {
-	line := claimPrefix(held.By, addresses)
+	line := claimPrefix(held.By.Checkout, addresses)
 	if len(held.Contested) > 0 {
-		line += fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(held.Contested), ", "))
+		line += fmt.Sprintf(" · contested by %s", strings.Join(nameHolders(held.Contested), ", "))
 	}
 	parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
 	if progress := formatLaneProgress(lane.Progress()); progress != "" {
@@ -52,13 +52,37 @@ func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribu
 // shared database actually carries.
 func claimPrefix(by model.Attribution, addresses map[model.Attribution]workspace.Checkout) string {
 	if checkout, ok := addresses[by]; ok {
-		branch := checkout.Branch
-		if branch == "" {
-			branch = "detached HEAD"
-		}
-		return fmt.Sprintf("claimed here: %s (%s)", checkout.Path, branch)
+		return fmt.Sprintf("claimed here: %s (%s)", checkout.Path, branchOf(checkout))
 	}
 	return fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by))
+}
+
+// checkoutAddress names a holder's checkout as a reader can find it: its path
+// and branch when this machine enumerated it, the opaque name otherwise.
+func checkoutAddress(by model.Attribution, addresses map[model.Attribution]workspace.Checkout) string {
+	if checkout, ok := addresses[by]; ok {
+		return fmt.Sprintf("%s (%s)", checkout.Path, branchOf(checkout))
+	}
+	return nameCheckout(by)
+}
+
+// branchOf names a live local checkout's branch, the one spelling the claim
+// line and the hold gate share for a detached one. [LAW:one-source-of-truth]
+func branchOf(checkout workspace.Checkout) model.Text {
+	if checkout.Branch == "" {
+		return "detached HEAD"
+	}
+	return checkout.Branch
+}
+
+// nameSession names the session half of a holder. The zero session names
+// nobody, and saying so is the answer: a hold recorded without an identity is
+// still a hold, by a session nobody can name. [LAW:parse-dont-validate]
+func nameSession(s model.Session) string {
+	if !s.Present() {
+		return "an unidentified session"
+	}
+	return fmt.Sprint(s.Actor())
 }
 
 // holdState is the parenthetical half of a claim line a listing cannot walk
@@ -158,10 +182,13 @@ func nameCheckout(a model.Attribution) string {
 	return fmt.Sprintf("stream %s", stream)
 }
 
-func nameCheckouts(attributions []model.Attribution) []string {
-	labels := make([]string, len(attributions))
-	for i, a := range attributions {
-		labels[i] = nameCheckout(a)
+// nameHolders names each contestant by its checkout and, beside it, its
+// session — two sessions of one checkout contest each other, and a list naming
+// only the checkout would print the same name twice.
+func nameHolders(holders []claims.Holder) []string {
+	labels := make([]string, len(holders))
+	for i, h := range holders {
+		labels[i] = fmt.Sprintf("%s (%s)", nameCheckout(h.Checkout), nameSession(h.Session))
 	}
 	return labels
 }

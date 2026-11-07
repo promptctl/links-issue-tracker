@@ -164,7 +164,9 @@ func TestHandoverTo(t *testing.T) {
 // started it after the claim is over, so every row but the matching ones holds
 // a handover the record really did make.
 func TestHandoverLive(t *testing.T) {
-	heldBy := func(by model.Attribution) claims.Standing { return claims.Held{Tenure: claims.Tenure{By: by}} }
+	heldBy := func(by model.Attribution) claims.Standing {
+		return claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: by}}}
+	}
 	fromA := claims.Handover{From: claims.Claimant{Established: true, Checkout: streamA}, To: claims.Claimant{Established: true, Checkout: streamB}}
 	fromPublic := claims.Handover{From: claims.Claimant{Established: true}, To: claims.Claimant{Established: true, Checkout: streamB}}
 

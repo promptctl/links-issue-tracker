@@ -1765,7 +1765,7 @@ type actorResolver func(env environ.Env) string
 
 // byUsage is the one help line for --by, shown on every command that registers
 // it, so the flag reads the same wherever an operator meets it.
-const byUsage = "Who you are: the actor a change records, the assignee lit start writes, and the reader lit next tells whether a ticket in flight is theirs. When CLAUDE_CODE_SESSION_ID is set you are that session and --by is ignored; otherwise you are the --by value. With neither, a change records the actor unknown and lit start clears the assignee"
+const byUsage = "Who you are: the actor a change records, the assignee lit start writes, and the session a lane's hold names — only that session acts on its tickets in flight without --take. When CLAUDE_CODE_SESSION_ID is set you are that session and --by is ignored; otherwise you are the --by value. With neither, a change records the actor unknown and lit start clears the assignee"
 
 // registerActor declares the --by flag on fs and returns the resolver that
 // reads it. Call the returned resolver after parseFlagSet has run.
@@ -1819,10 +1819,10 @@ type transitionSpec struct {
 	// line. [LAW:one-source-of-truth]
 	registerFlags func(fs *cobraFlagSet, usage string) func(actor string) (model.Action, error)
 	// authorize, when set, runs after the action is built and before Apply,
-	// and may abort the transition by returning an error. `start` supplies
-	// the fresh-claim takeover gate (design-docs/work-claims.md,
-	// links-claims-1ihf.7) and `phase` the facts of its move; every other
-	// transition supplies noAuthorize. [LAW:single-enforcer] one hook point
+	// and may abort the transition by returning an error. `start`, `phase`
+	// and `done` run the hold gate (withHoldGate, claims_takeover.go) ahead
+	// of their own hooks; every other transition supplies noAuthorize.
+	// [LAW:single-enforcer] one hook point
 	// for per-transition authorization, rather than a type switch on the
 	// built action scattered through runTransition.
 	//
@@ -1838,8 +1838,10 @@ type transitionSpec struct {
 }
 
 // authorizeFunc is a transition's gate ahead of Apply, run with the invocation
-// so a gate that asks can read the answer from its stdin.
-type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (afterApply, error)
+// so a gate that asks can read the answer from its stdin, and with actor, the
+// resolved identity the write will be recorded under, so a gate reading a hold
+// reads it against the holder the write would name.
+type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (afterApply, error)
 
 // afterApply is what a transition owes once Apply has written the issue: the
 // line it prints and the facts it tells the statusline file. The authorize hook
@@ -1854,7 +1856,7 @@ type afterApply func(written ticketState, handover *claims.Handover) (notice str
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
 func noAuthorize(*cobraFlagSet) authorizeFunc {
-	return func(context.Context, Invocation, *app.App, model.ID, ticketState, model.Action) (afterApply, error) {
+	return func(context.Context, Invocation, *app.App, model.ID, ticketState, model.Action, string) (afterApply, error) {
 		return func(ticketState, *claims.Handover) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
@@ -1880,26 +1882,13 @@ var (
 				return model.Start{Assignee: actor}, nil
 			}
 		},
-		authorize: func(fs *cobraFlagSet) authorizeFunc {
-			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
-			return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (afterApply, error) {
-				// registerFlags above builds every action this hook sees, so a
-				// different variant is a wiring error, not a caller's mistake.
-				// [LAW:no-silent-failure]
-				start, ok := action.(model.Start)
-				if !ok {
-					return nil, fmt.Errorf("start: authorize hook received a %T action", action)
-				}
-				return authorizeStart(ctx, inv, ap, issueID, prior.issue, start, *take)
-			}
-		},
+		authorize: withHoldGate(authorizeStart),
 	}
 	doneSpec = transitionSpec{
 		name:          "done",
+		synopsis:      " [--take]",
 		registerFlags: fixedAction(model.Done{}),
-		authorize: func(*cobraFlagSet) authorizeFunc {
-			return authorizeDone
-		},
+		authorize:     withHoldGate(authorizeDone),
 	}
 	closeSpec = transitionSpec{
 		name:     "close",
@@ -1919,7 +1908,7 @@ var (
 	openSpec  = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{}), authorize: noAuthorize}
 	phaseSpec = transitionSpec{
 		name:     "phase",
-		synopsis: " --to <" + model.JoinPhases("|") + ">",
+		synopsis: " --to <" + model.JoinPhases("|") + "> [--take]",
 		registerFlags: func(fs *cobraFlagSet, usage string) func(string) (model.Action, error) {
 			to := fs.String("to", "", "Phase to move the ticket to (required): "+model.JoinPhases(", "))
 			return func(string) (model.Action, error) {
@@ -1930,9 +1919,7 @@ var (
 				return model.SetPhase{Phase: phase}, nil
 			}
 		},
-		authorize: func(*cobraFlagSet) authorizeFunc {
-			return authorizePhase
-		},
+		authorize: withHoldGate(authorizePhase),
 	}
 	archiveSpec   = transitionSpec{name: "archive", registerFlags: fixedAction(model.Archive{}), authorize: noAuthorize}
 	unarchiveSpec = transitionSpec{name: "unarchive", registerFlags: fixedAction(model.Unarchive{}), authorize: noAuthorize}
@@ -1940,8 +1927,8 @@ var (
 	restoreSpec   = transitionSpec{name: "restore", registerFlags: fixedAction(model.Restore{}), authorize: noAuthorize}
 )
 
-// authorizePhase gates nothing — Issue.PlanPhase, which both engines run, is
-// the phase rule — and owes the move it made: the line saying where the
+// authorizePhase gates nothing beyond the hold gate ahead of it —
+// Issue.PlanPhase, which both engines run, is the phase rule — and owes the move it made: the line saying where the
 // ticket's phase now stands, and on the command's event the phase left, the
 // phase entered, and whether anything changed. The statusline file hears of
 // the move from the store's change observer, as it hears of every change but a
@@ -1949,7 +1936,7 @@ var (
 // The phase left is the one transitionLeaf read before Apply on the same write
 // Store the move is planned on, whose engine holds Dolt's LOCK for the whole
 // command, so both reads answer from one history. [LAW:nothing-unseen]
-func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ model.ID, prior ticketState, action model.Action) (afterApply, error) {
+func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ model.ID, prior ticketState, action model.Action, _ holdReading) (afterApply, error) {
 	set, ok := action.(model.SetPhase)
 	if !ok {
 		return nil, fmt.Errorf("phase: authorize hook received a %T action", action)
@@ -1965,14 +1952,14 @@ func authorizePhase(ctx context.Context, _ Invocation, _ *app.App, _ model.ID, p
 
 // authorizeDone reads where the ticket's plan stands in its law review, the
 // rule storage.PlanApproval holds, and finishes the ticket whatever it finds:
-// review shapes the work, it never keeps a ticket open. It gates nothing — the
-// lifecycle refusals, on an epic or on frozen work, are the store's Apply's
-// alone. A plan short of approval prints a warning naming what is missing.
+// review shapes the work, it never keeps a ticket open. It gates nothing beyond
+// the hold gate ahead of it — the lifecycle refusals, on an epic or on frozen
+// work, are the store's Apply's alone. A plan short of approval prints a warning naming what is missing.
 // done.plan_standing on the event says where the plan stood, and an approval
 // adds the plan and the review it rested on; a done that found the ticket
 // already closed finished nothing, so its event says that instead.
 // [LAW:single-enforcer] [LAW:nothing-unseen]
-func authorizeDone(ctx context.Context, _ Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (afterApply, error) {
+func authorizeDone(ctx context.Context, _ Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, _ holdReading) (afterApply, error) {
 	reviews, err := ap.Store.ListPlanReviews(ctx, issueID)
 	if err != nil {
 		return nil, err
@@ -2103,12 +2090,13 @@ func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID m
 	}
 
 	// [LAW:single-enforcer] The one gate every transition's authorization
-	// passes through, ahead of Apply — a no-op for every transition but
-	// `start`. See transitionSpec.authorize and authorizeStart
+	// passes through, ahead of Apply — the hold gate for `start`, `phase` and
+	// `done`, which reads the lane against the actor this write is recorded
+	// under. See transitionSpec.authorize and withHoldGate
 	// (claims_takeover.go). What it owes is decided on pre-Apply state and
 	// completed after Apply, so a failed Apply announces and records
 	// nothing.
-	owed, err := authorize(ctx, inv, ap, issueID, prior, action)
+	owed, err := authorize(ctx, inv, ap, issueID, prior, action, actor)
 	if err != nil {
 		return transitionDone{}, err
 	}

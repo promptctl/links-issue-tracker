@@ -62,7 +62,7 @@ func aLaneFamilyReadsWhatTheBacklogReads(t *testing.T, ctx context.Context, st s
 		t.Fatalf("NewLane(%s) error = %v", waiting.ID, err)
 	}
 	standing := lane.Standing(claims.Freshness{Now: time.Now(), Window: time.Hour}, claims.LocalCheckouts{})
-	if held, ok := standing.(claims.Held); !ok || held.By.Stream() != "checkout-a" {
+	if held, ok := standing.(claims.Held); !ok || held.By.Checkout.Stream() != "checkout-a" {
 		t.Errorf("the standing of %s's lane = %+v, want it held by checkout-a on its `done` against the closed %s", waiting.ID, standing, finished.ID)
 	}
 }

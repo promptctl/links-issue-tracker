@@ -75,10 +75,10 @@ func TestCapacityForReadsAbandonmentOffTheLane(t *testing.T) {
 	orphaned := rowByID(t, rows, ticket.ID)
 
 	for _, row := range []annotation.AnnotatedIssue{quiet, orphaned} {
-		if got := capacityFor(row, heldBy(otherAttribution), selfAttribution); got != routeAround {
+		if got := capacityFor(row, heldBy(otherHolder), selfHolder); got != routeAround {
 			t.Fatalf("capacityFor(in-flight row, orphaned=%v, lane held by another) = %v, want %v — `lit next` would offer somebody's work in flight", ClassifyReadiness(row.Annotations).IsOrphaned(), got, routeAround)
 		}
-		if got := capacityFor(row, claims.Unclaimed{}, selfAttribution); got != serveWork {
+		if got := capacityFor(row, claims.Unclaimed{}, selfHolder); got != serveWork {
 			t.Fatalf("capacityFor(in-flight row, orphaned=%v, lane unheld) = %v, want %v — nobody holds the lane, so the row is abandoned on that fact alone", ClassifyReadiness(row.Annotations).IsOrphaned(), got, serveWork)
 		}
 	}

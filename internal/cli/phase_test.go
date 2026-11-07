@@ -65,10 +65,10 @@ func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
 		fired   []any
 	}{
 		{[]string{"start", first, "--by", "agent"}, "work_started", []any{"open"}, []any{"in_progress", "plan"}, []any{"enter-plan", "phase-plan", "working"}},
-		{[]string{"phase", first, "--to", "impl"}, "phase_set", []any{"plan"}, []any{"impl"}, []any{"phase-impl"}},
-		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{"impl"}, []any{"review"}, []any{"enter-review", "exit-impl", "phase-review"}},
-		{[]string{"phase", first, "--to", "review"}, "phase_set", []any{}, []any{}, []any{}},
-		{[]string{"done", first}, "work_finished", []any{"in_progress", "review"}, []any{"closed"}, []any{"done", "exit-review"}},
+		{[]string{"phase", first, "--to", "impl", "--by", "agent"}, "phase_set", []any{"plan"}, []any{"impl"}, []any{"phase-impl"}},
+		{[]string{"phase", first, "--to", "review", "--by", "agent"}, "phase_set", []any{"impl"}, []any{"review"}, []any{"enter-review", "exit-impl", "phase-review"}},
+		{[]string{"phase", first, "--to", "review", "--by", "agent"}, "phase_set", []any{}, []any{}, []any{}},
+		{[]string{"done", first, "--by", "agent"}, "work_finished", []any{"in_progress", "review"}, []any{"closed"}, []any{"done", "exit-review"}},
 	} {
 		out := runCLIInDir(t, dir, step.args...)
 		for id := range bound {
@@ -93,7 +93,7 @@ func TestShippedWorkflowsNameEachPhaseMove(t *testing.T) {
 	dir, first, _ := statuslineCheckout(t)
 	phases := model.Phases()
 	for i, phase := range phases {
-		args := []string{"phase", first, "--to", string(phase)}
+		args := []string{"phase", first, "--to", string(phase), "--by", "agent"}
 		if phase == model.PhasePlan {
 			args = []string{"start", first, "--by", "agent"}
 		}
@@ -163,10 +163,10 @@ func TestPhaseMovesAnInProgressTicket(t *testing.T) {
 		{"review", "impl", true, "phase: impl → review\n"},
 		{"impl", "review", true, "phase: review → impl\n"},
 	} {
-		if out := runCLIInDir(t, dir, "phase", first, "--to", step.to); !strings.HasPrefix(out, step.notice) {
+		if out := runCLIInDir(t, dir, "phase", first, "--to", step.to, "--by", "agent"); !strings.HasPrefix(out, step.notice) {
 			t.Fatalf("lit phase --to %s printed %q, want it to open with the line %q", step.to, out, step.notice)
 		}
-		want := map[string]any{"phase.from": step.from, "phase.to": step.to, "phase.changed": step.changed}
+		want := map[string]any{"phase.from": step.from, "phase.to": step.to, "phase.changed": step.changed, "phase.lane_family_issues": float64(2), "phase.lane_held": true}
 		if got := phaseFacts(t); !reflect.DeepEqual(got, want) {
 			t.Fatalf("lit phase --to %s event facts = %v, want %v", step.to, got, want)
 		}
@@ -199,7 +199,7 @@ func TestPhaseMovesAnInProgressTicket(t *testing.T) {
 func TestPhaseUsageNamesTheRequiredPhase(t *testing.T) {
 	t.Parallel()
 	dir, _, _ := statuslineCheckout(t)
-	const usage = "usage: lit phase <id> --to <plan|impl|review|merge> [--reason <text>]"
+	const usage = "usage: lit phase <id> --to <plan|impl|review|merge> [--take] [--reason <text>]"
 	for _, args := range [][]string{
 		{"phase"},
 		{"phase", "no-such-id"},
