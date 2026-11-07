@@ -38,28 +38,28 @@ The moment this goes wrong comes after a merge: the next ticket is in the same l
 
 Which command answers which question is the quickstart's job — run `lit quickstart work` for that reference.  This skill covers only the procedure: wrapping up work already in flight before pulling anything new, what `lit next`'s pick means, and how to work a ticket once you hold one.
 
-Two branches, in order.  First settle whatever is already in flight here — uncommitted changes, then your open PRs.  Only once nothing is in flight do you pull new work.
+Two branches, in order.  First settle whatever is already in flight here — a branch whose PR merged, uncommitted changes, then your open PRs.  Only once nothing is in flight do you pull new work.
 
 ### Wrap up work already in flight
 
+#### A branch whose PR merged
+
+Before anything else, clean tree or not, ask whether the branch you stand on has a PR that merged and none still open:
+
+```
+b="$(git branch --show-current)"; test -z "$b" || gh pr list --head "$b" --state all --limit 1000 --json number,state,headRefOid,mergedAt \
+  --jq 'if any(.[]; .state == "OPEN") then empty else ([.[] | select(.state == "MERGED")] | max_by(.mergedAt) // empty | "\(.number) \(.headRefOid)") end'
+```
+
+A non-zero exit is no answer, not a "no" — fix `gh` before you trust the empty output.  Empty output — including a detached HEAD, which has no branch to have merged — means carry on to "Uncommitted changes".
+
+A line printed means the branch leads nowhere, and its ticket has landed.  One ticket lands as one PR, so anything here past that PR belongs to another ticket.  Find what is here past it: fetch the PR's head with `git fetch origin pull/<number>/head`, then `git merge-base --is-ancestor <headRefOid> HEAD`.  If it is an ancestor, `git log <headRefOid>..HEAD` lists the commits made after the merge; if not, the branch was rewritten since, and you read `git log origin/master..HEAD` to pick out which commits are new work and which are copies of the merged ones.  No such commits and a clean tree: nothing is in flight here — go on to "Open PRs".
+
+Otherwise commit any uncommitted work onto this branch as a WIP commit, so every piece of it is one commit range and nothing rides a shared stash.  Note its tip SHA.  Pick the ticket the work belongs to — an open one it plainly serves, or a follow-up you file in the merged ticket's epic and lane — `lit start` it from this checkout, and set up its branch by step 3 of "Working the ticket", which finds a branch it already has.  On that branch, cherry-pick the commits you listed, through the tip you noted, in order.  Leave the merged branch where it is.  The work is now on your ticket's branch; continue that ticket at "Working the ticket".
+
 #### Uncommitted changes
 
-First, before you commit anything, ask whether this branch's PR has already merged:
-
-```
-b="$(git branch --show-current)"; test -n "$b" && gh pr list --head "$b" --state merged --json number,headRefOid --jq '.[] | "\(.number) \(.headRefOid)"'
-```
-
-A non-zero exit is no answer, not a "no" — fix `gh`, or check out a branch, before you trust the empty output.  A line printed means the branch leads nowhere: nothing more is committed to it, and its ticket has landed.  One ticket lands as one PR, so the work here belongs to another ticket — an open one it plainly serves, or a follow-up you file in the merged ticket's epic and lane.  `git log <headRefOid>..HEAD` lists any commits made after the merge; they move with the work.  Cut that ticket's branch from the trunk, carrying the uncommitted changes, then cherry-pick those commits onto it:
-
-```
-git fetch origin
-git switch --no-track -c <ticket-id> origin/master   # or the repo's default branch
-```
-
-`git switch` refuses without touching anything when the changes conflict with the trunk; then `git stash push -u -m <unique-tag>`, run the switch, and `git stash apply` the entry you pushed.  Leave the merged branch where it is.  You now stand on your ticket's branch with the work uncommitted; sort it by the rules below.
-
-Otherwise, determine if these changes are related to a backlog item.  If so, that is your current ticket.  If not, stop and think to your self: Are these changes worthwhile?  Accidential?  Incidental?  Should we commit or discard them?  Use your brain to think about the right solution because there is no one size fits all rule.
+Determine if these changes are related to a backlog item.  If so, that is your current ticket.  If not, stop and think to your self: Are these changes worthwhile?  Accidential?  Incidental?  Should we commit or discard them?  Use your brain to think about the right solution because there is no one size fits all rule.
 
 Examples:
 - uncommitted pnpm lockfile update: check it out to discard, but then regengerate the lockfile as part of your commit when you do work
