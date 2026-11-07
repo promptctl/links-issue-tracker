@@ -141,7 +141,7 @@ func ownAttribution(ap *app.App) model.Attribution {
 // store stamps on the event (resolveIdentity), so the holder a read compares
 // against is the one a write would establish. [LAW:one-source-of-truth]
 func ownHolder(ap *app.App, actor string) claims.Holder {
-	return claims.Holder{Checkout: ownAttribution(ap), Session: model.SessionOf(model.Text(actor))}
+	return claims.HolderFor(ownAttribution(ap), model.Text(actor))
 }
 
 // transferNotice is the line a start owes when it takes the ticket FROM

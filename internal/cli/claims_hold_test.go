@@ -310,3 +310,27 @@ func TestTakeBackThroughAnUnchangedTicketMovesTheLaneHold(t *testing.T) {
 		t.Fatalf("start %s as session-b after session-a took the lane back = %v, want refused naming session-a", sibling.ID, err)
 	}
 }
+
+// The public checkout is every unattributed writer at once, so its holds never
+// read as ours and a repeat start needs --take, but a start it re-runs on a
+// ticket it last took took nothing from anyone, and records nothing.
+func TestRepeatStartInThePublicCheckoutRecordsNothing(t *testing.T) {
+	t.Parallel()
+	h := holdHarness(t)
+	_, ticket := h.heldTicket("", "")
+	h.asCheckout("")
+	before, err := h.ap.Store.ListEvents(h.ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if _, err := h.runTransitionAs(startSpec, ticket.ID, "", "--take"); err != nil {
+		t.Fatalf("repeat start %s --take in the public checkout: %v", ticket.ID, err)
+	}
+	after, err := h.ap.Store.ListEvents(h.ctx, ticket.ID)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("repeat start recorded %d events, want none", len(after)-len(before))
+	}
+}

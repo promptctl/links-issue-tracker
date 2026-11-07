@@ -176,11 +176,15 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	// the transition is ours, and needs neither the clock nor the machine's
 	// checkouts to say so. The public checkout is every unattributed writer at
 	// once, so it is never ours here, as relationOf never answers it ours.
-	if taker, taken := lane.LastTaker(); taken && self.Checkout.Present() && taker == self {
+	taker, taken := lane.LastTaker()
+	if taken && self.Checkout.Present() && taker == self {
 		telemetry.Set(ctx, verb+".lane_held", true)
 		return action, holdReading{lane: lane}, "", nil
 	}
-	if starts && !records {
+	// A start the ticket's record calls a repeat is owed a write only when the
+	// lane went to somebody else since; the public checkout re-running its own
+	// start took nothing from anyone.
+	if starts && !records && !(taken && taker == self) {
 		start.Reclaim = true
 		action = start
 	}

@@ -163,9 +163,10 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 // started it, because where that session left off is not something this one
 // knows.
 func resumeAdvice(row annotation.AnnotatedIssue, cc claimContext) string {
-	// An in-progress row was started, so its history holds the event.
-	establisher, _ := claims.LatestEstablisher(cc.evidence.IssueEvents(row.ID))
-	if starter := claims.HolderOf(establisher); starter != cc.self {
+	// A row whose history names no start (imported or synced without one) names
+	// no other starter, so it reads as the reader's own.
+	establisher, found := claims.LatestEstablisher(cc.evidence.IssueEvents(row.ID))
+	if starter := claims.HolderOf(establisher); found && starter != cc.self {
 		return fmt.Sprintf("%s is already in progress in a lane you hold, started by %s — read its history before you continue it", row.ID, nameHolder(starter, cc.addresses))
 	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
