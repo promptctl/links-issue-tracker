@@ -917,12 +917,14 @@ func DocClaims(fsys fs.FS, names []string) ([]Claim, error) {
 	return claims, nil
 }
 
-// spansIn pulls the candidate claims out of one document: the code spans, and
-// the commands a quoted message quotes in its own backticks, long enough and
-// multi-word enough to be a quoted message. A chapter names a message's
-// placeholders (`<prefix>` where the source has %q), so the whole message may
-// never match shipped text; the command it quotes is verbatim, and is a claim
-// about the binary all the same.
+// spansIn pulls the candidate claims out of one document: the code spans, the
+// commands a quoted message quotes in its own backticks, and the Go literal a
+// span writes in double quotes, long enough and multi-word enough to be a
+// quoted message. A chapter names a message's placeholders (`<prefix>` where
+// the source has %q), so the whole message may never match shipped text; the
+// command it quotes is verbatim, and is a claim about the binary all the same.
+// A span written as Go (``UnsupportedError{Message: "…"}``) carries its quotes
+// and wrapper, so only the stretch inside the quotes is the message.
 func spansIn(src string) ([]string, error) {
 	spans, err := CodeSpans(src)
 	if err != nil {
@@ -930,7 +932,8 @@ func spansIn(src string) ([]string, error) {
 	}
 	var out []string
 	for _, s := range spans {
-		for _, q := range append([]string{s.Text}, innerQuotes(s.Text)...) {
+		candidates := append([]string{s.Text}, paired(s.Text, "`")...)
+		for _, q := range append(candidates, paired(s.Text, `"`)...) {
 			if len(q) >= minClaimLen && strings.Contains(q, " ") {
 				out = append(out, q)
 			}
@@ -939,10 +942,10 @@ func spansIn(src string) ([]string, error) {
 	return out, nil
 }
 
-// innerQuotes is each stretch a span's own backticks quote, paired in order, as
-// a message pairs them. An odd count pairs nothing.
-func innerQuotes(span string) []string {
-	parts := strings.Split(span, "`")
+// paired is each stretch a span's own marks quote, paired in order, as a
+// message pairs them. An odd count pairs nothing.
+func paired(span, mark string) []string {
+	parts := strings.Split(span, mark)
 	if len(parts)%2 == 0 {
 		return nil
 	}

@@ -112,7 +112,7 @@ to `/Users/bmf/code/links-issue-tracker`.
 - Per-command flag parsing (`parseFlagSet`, `internal/cli/flagset.go`) maps the
   flags each leaf declares retired (`fs.Retire`) to typed errors:
   - on `next`, `--continue` ⇒ `UnsupportedError` 
-    "--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"
+    ``"--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"``
     (`internal/cli/next.go`);
   - on every leaf `registerActor` gives `--by` that registers no `--assignee` of its own,
     `--assignee` ⇒ `UnsupportedError` naming `--by` (`internal/cli/cli.go`);

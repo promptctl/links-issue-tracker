@@ -279,6 +279,27 @@ func TestSpansInReadsTheCommandsAQuotedMessageQuotes(t *testing.T) {
 	}
 }
 
+// TestSpansInReadsTheMessageAGoLiteralQuotes: a span written as Go carries the
+// literal's quotes and wrapper, which no shipped text holds, and its inner
+// backticks split it into fragments too short to be claims; the stretch inside
+// the quotes is the message, and must be a claim whole.
+func TestSpansInReadsTheMessageAGoLiteralQuotes(t *testing.T) {
+	src := "Refused with ``UnsupportedError{Message: \"--flag is retired; run `lit next` with no flag\"}``.\n" +
+		"Or bare: ``\"--flag is gone; run `lit next --all` instead\"``.\n"
+	got, err := spansIn(src)
+	if err != nil {
+		t.Fatalf("spansIn: %v", err)
+	}
+	for _, want := range []string{
+		"--flag is retired; run `lit next` with no flag",
+		"--flag is gone; run `lit next --all` instead",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("claims = %q, missing %q", got, want)
+		}
+	}
+}
+
 // TestACollidingHandleIsRefusedRatherThanOverwritten covers the corpus holding
 // two kinds of source in one key space: a Go literal keyed by its own text, an
 // embedded asset keyed by its path. A literal is collected only when it
