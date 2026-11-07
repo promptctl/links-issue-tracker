@@ -728,7 +728,7 @@ func commandSpecs(ctx context.Context, inv Invocation) []CommandSpec {
 			Run: r.appCmd(app.AccessWriteRoutine, updateLeaf)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
 			Run: r.appCmdDispatch(app.AccessWrite, rankDispatch), Subcommands: []SubcommandSpec{{Name: rankSetSubcommand}}},
-		{Name: startSpec.name, Summary: "Start a ticket: assign it to you and claim its lane for this checkout", GroupID: "operations",
+		{Name: startSpec.name, Summary: "Start a ticket: assign it to you (see --by) and claim its lane for this checkout", GroupID: "operations",
 			Run: r.transitionCmd(startSpec)},
 		// assign is retired: reassigning is a single-field write folded into
 		// `lit update --assignee`. Hidden+dispatchable so an old invocation gets the

@@ -1765,7 +1765,7 @@ type actorResolver func(env environ.Env) string
 
 // byUsage is the one help line for --by, shown on every command that registers
 // it, so the flag reads the same wherever an operator meets it.
-const byUsage = "Who you are: the actor a change records, the assignee lit start writes, and the reader lit next tells whether a ticket in flight is theirs. When CLAUDE_CODE_SESSION_ID is set you are that session and --by is ignored; when it is unset you are the --by value, else unknown. It never decides who holds a lane: a lane belongs to the checkout that started it, shared by every session there"
+const byUsage = "Who you are: the actor a change records, the assignee lit start writes, and the reader lit next tells whether a ticket in flight is theirs. When CLAUDE_CODE_SESSION_ID is set you are that session and --by is ignored; otherwise you are the --by value, and with neither lit start assigns nobody"
 
 // registerActor declares the --by flag on fs and returns the resolver that
 // reads it. Call the returned resolver after parseFlagSet has run.
