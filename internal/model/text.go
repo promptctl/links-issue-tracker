@@ -84,16 +84,30 @@ func formatHeld(f fmt.State, verb rune, raw string) {
 		}
 		held = fmt.Sprintf("%"+flags+"q", raw)
 	}
+	writePadded(f, held)
+}
+
+// FormatComposite writes a rendering built from held parts the way formatHeld
+// writes one value: %q Go-quotes it and width pads it, so a type that names
+// several held values formats as a single held value does.
+func FormatComposite(f fmt.State, verb rune, rendered string) {
+	if verb == 'q' {
+		rendered = fmt.Sprintf("%q", rendered)
+	}
+	writePadded(f, rendered)
+}
+
+func writePadded(f fmt.State, s string) {
 	if width, ok := f.Width(); ok {
-		if pad := width - utf8.RuneCountInString(held); pad > 0 {
+		if pad := width - utf8.RuneCountInString(s); pad > 0 {
 			if f.Flag('-') {
-				held += strings.Repeat(" ", pad)
+				s += strings.Repeat(" ", pad)
 			} else {
-				held = strings.Repeat(" ", pad) + held
+				s = strings.Repeat(" ", pad) + s
 			}
 		}
 	}
-	_, _ = f.Write([]byte(held))
+	_, _ = f.Write([]byte(s))
 }
 
 // QuotedBreak stands in for a line break a one-row rendering cannot honour,

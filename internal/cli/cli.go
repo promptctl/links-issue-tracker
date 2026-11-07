@@ -2498,8 +2498,8 @@ func printBulkApplied(stdout io.Writer, result storage.BulkApplyResult) error {
 }
 
 // printIDs writes a heading line and one indented id per line beneath it. It
-// takes only values that format themselves, so a raw string id cannot reach
-// it and print unheld. [LAW:types-are-the-program]
+// takes only fmt.Formatter values, so a raw string id cannot reach it; holding
+// is each Formatter's own contract (model.ID, model.FormatComposite). [LAW:types-are-the-program]
 func printIDs[T fmt.Formatter](stdout io.Writer, heading string, ids []T) error {
 	if _, err := fmt.Fprintln(stdout, heading); err != nil {
 		return err

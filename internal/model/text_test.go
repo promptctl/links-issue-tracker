@@ -29,6 +29,26 @@ func TestTextPrintsHeldUnderEveryVerb(t *testing.T) {
 	}
 }
 
+// TestFormatCompositeHonoursQAndWidth pins that a type rendering several held
+// values formats as one held value does: %q quotes the rendering, width pads.
+func TestFormatCompositeHonoursQAndWidth(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ format, want string }{
+		{"%v", "a (via epic)"},
+		{"%q", `"a (via epic)"`},
+		{"[%-14v]", "[a (via epic)  ]"},
+		{"[%14v]", "[  a (via epic)]"},
+	} {
+		if got := fmt.Sprintf(tc.format, composite("a (via epic)")); got != tc.want {
+			t.Errorf("Sprintf(%q) = %q, want %q", tc.format, got, tc.want)
+		}
+	}
+}
+
+type composite string
+
+func (c composite) Format(f fmt.State, verb rune) { FormatComposite(f, verb, string(c)) }
+
 // TestIDQuotesRawUnderQ pins that %q shows an id exactly as given, escapes and
 // all, so an error naming a rejected id shows the tab or break it carried,
 // while %s holds it to its row as Text does.

@@ -45,17 +45,19 @@ type Slot struct {
 
 // Format names the slot with its ids held to the row under every verb, so a
 // printer that takes only values that hold themselves can take a slot.
-func (s Slot) Format(f fmt.State, _ rune) {
+func (s Slot) Format(f fmt.State, verb rune) {
+	var rendered string
 	switch s.Kind {
 	case FieldSlot:
-		fmt.Fprintf(f, "%s %s", s.Issue, s.Name)
+		rendered = fmt.Sprintf("%s %s", s.Issue, s.Name)
 	case ParentSlot:
-		fmt.Fprintf(f, "%s parent", s.Issue)
+		rendered = fmt.Sprintf("%s parent", s.Issue)
 	case BlockedBySlot:
-		fmt.Fprintf(f, "%s blocked-by %s", s.Issue, model.ID(s.Name))
+		rendered = fmt.Sprintf("%s blocked-by %s", s.Issue, model.ID(s.Name))
 	default:
 		panic(fmt.Sprintf("storage: slot kind %d", s.Kind))
 	}
+	model.FormatComposite(f, verb, rendered)
 }
 
 // SlotValue is a slot's value in the one spelling every comparison uses: a
