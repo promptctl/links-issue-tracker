@@ -47,15 +47,22 @@ Two branches, in order.  First settle whatever is already in flight here — a b
 Before anything else, clean tree or not, ask whether the branch you stand on has a PR that merged and none still open:
 
 ```
-b="$(git branch --show-current)"; test -z "$b" || gh pr list --head "$b" --state all --limit 1000 --json number,state,headRefOid,mergedAt \
-  --jq 'if any(.[]; .state == "OPEN") then empty else ([.[] | select(.state == "MERGED")] | max_by(.mergedAt) // empty | "\(.number) \(.headRefOid)") end'
+b="$(git branch --show-current)"; test -z "$b" || test "$b" = master || gh pr list --head "$b" --state all --limit 1000 --json number,state,headRefOid,mergedAt,isCrossRepository \
+  --jq 'map(select(.isCrossRepository | not)) | if any(.[]; .state == "OPEN") then empty else ([.[] | select(.state == "MERGED")] | max_by(.mergedAt) // empty | "\(.number) \(.headRefOid)") end'
 ```
 
 A non-zero exit is no answer, not a "no" — fix `gh` before you trust the empty output.  Empty output — including a detached HEAD, which has no branch to have merged — means carry on to "Uncommitted changes".
 
-A line printed means the branch leads nowhere, and its ticket has landed.  One ticket lands as one PR, so anything here past that PR belongs to another ticket.  Find what is here past it: fetch the PR's head with `git fetch origin pull/<number>/head`, then `git merge-base --is-ancestor <headRefOid> HEAD`.  If it is an ancestor, `git log <headRefOid>..HEAD` lists the commits made after the merge; if not, the branch was rewritten since, and you read `git log origin/master..HEAD` to pick out which commits are new work and which are copies of the merged ones.  No such commits and a clean tree: nothing is in flight here — go on to "Open PRs".
+The check skips the trunk (`master` here; put the repo's default branch in its place) and fork PRs, whose branch names say nothing about yours.  Anywhere else, a line printed means the branch leads nowhere and its ticket has landed.  One ticket lands as one PR, so anything here past that PR — uncommitted changes, and commits the PR does not hold — belongs to a follow-up ticket.  Fetch first, then list those commits:
 
-Otherwise commit any uncommitted work onto this branch as a WIP commit, so every piece of it is one commit range and nothing rides a shared stash.  Note its tip SHA.  Pick the ticket the work belongs to — an open one it plainly serves, or a follow-up you file in the merged ticket's epic and lane — `lit start` it from this checkout, and set up its branch by step 3 of "Working the ticket", which finds a branch it already has.  On that branch, cherry-pick the commits you listed, through the tip you noted, in order.  Leave the merged branch where it is.  The work is now on your ticket's branch; continue that ticket at "Working the ticket".
+```
+git fetch origin && git fetch origin pull/<number>/head
+git log --oneline HEAD ^<headRefOid> ^origin/master   # or the repo's default branch
+```
+
+Nothing listed and a clean tree: nothing is in flight here — detach onto the trunk as "Finishing a ticket" does, and go on to "Open PRs".  A branch rewritten since the merge lists copies of merged commits too; read each and keep only new work.
+
+Otherwise sort the uncommitted changes by the rules in "Uncommitted changes" below — discard the junk, stash what is plainly unrelated — and commit what is left onto this branch, so the work is one list of commits and nothing of it rides the shared stash.  File the follow-up in the merged ticket's epic and lane, `lit start` it, and cut its branch from the trunk as step 3 of "Working the ticket" describes, under "Otherwise, branch from an up-to-date trunk".  Cherry-pick the listed commits, plus the one you just made, onto it in order.  Leave the merged branch where it is, and continue at step 4 of "Working the ticket".
 
 #### Uncommitted changes
 
@@ -227,7 +234,7 @@ A ticket with an open PR finishes here, whichever way you reached it: step 5 abo
 
 1. **Hold it from this checkout.**  Read the claim line under the ticket's lane in `lit backlog`.  A claim line naming anything but this checkout's path is another checkout's, and the ticket is theirs: leave it, say so, and take the way out below.  Otherwise run `lit start <id>` here, and check its PR's branch out.  `lit start` is safe to repeat: a ticket already in progress keeps the phase its work had reached, and any other enters `plan`.
 2. **Close its PR out** — clean and merged — through the review process your instructions define, and where none defines one, by working its review threads by hand.  Unless you wrote its code in "Working the ticket", read the ticket fully first, as step 1 there asks: the PR is reviewed against its acceptance criteria, and one that meets only part of them, or rests on a ticket that is not done, is not ready to merge.  Record each phase when the work reaches it, not afterwards: `lit phase <id> --to review` now if `lit show <id>` puts the ticket short of review, and `lit phase <id> --to merge` when review is done and the merge is under way.
-3. **Run `lit done <id>` once it has merged.**
+3. **Run `lit done <id>` once it has merged,** then step off its branch — `git fetch origin && git switch --detach origin/master` (or the repo's default branch) — so nothing is built on a branch that leads nowhere.
 
 A statusline and other sessions read the phase to see where the work stands, so it is only as current as the last `lit phase` you ran.  A handoff to the next session names this checkout's path, because a fresh session starts in the primary clone, and `lit next` run there routes away from the work this checkout holds.
 
