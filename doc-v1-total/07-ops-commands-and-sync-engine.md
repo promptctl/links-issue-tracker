@@ -12,7 +12,7 @@ Flag handling common to every command (`flagset.go`, `cli.go`):
 
 - `--help` prints usage plus defaults to stdout and exits 0.
 - `--output` or `--output=<x>` before the command name → `UnsupportedError` ("--output is no longer supported; omit it for text output"), exit 3. After the command name it is an unknown flag.
-- `--continue` → `UnsupportedError` (retired; claim routing already keeps `lit next` in the checkout's own epic first), exit 3.
+- `--continue` → `UnsupportedError` (retired; claim routing already serves the checkout's lanes first in `lit next`), exit 3.
 - Any other flag parse error (unknown flag, missing or invalid value, bad syntax) → `UsageError`, exit 2.
 
 Family commands (`sync`, `hooks`, `backup`, `snapshots`, `lifeboat`, …) resolve their subcommand by exact match; a missing, unknown, or flag-shaped first argument returns the family usage string as a plain error — exit 1, not 2 (`register.go`).

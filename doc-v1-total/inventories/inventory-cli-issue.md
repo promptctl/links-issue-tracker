@@ -136,7 +136,7 @@ into* one of those, the call and its observable effect are recorded here.
     leaf's sentence → exit 3 (`flagset.go`). `registerActor` retires `assignee`
     with ``"--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`"`` (`cli.go`), inert on a leaf that registers its own
     `--assignee`; `next` retires `continue` (`next.go`) →
-    ``UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"}``
+    ``UnsupportedError{Message: "--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"}``
     → exit 3 (`flagset.go`).
   - Every other parse error — unknown flag, missing value, invalid value, bad
     syntax — → `UsageError{Message: err.Error()}` → exit 2 (`flagset.go`).
@@ -1497,7 +1497,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   (`next.go`).
 - Retired flag: `--continue` is intercepted at the shared parse boundary as
   `UnsupportedError` → exit 3, message
-  ``"--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag"``
+  ``"--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"``
   (`flagset.go`).
 - Prints the sync-staleness warning first (`next.go`).
 - Parses the filter into `asked` (`workableFilter.criteria`), then gathers the

@@ -463,7 +463,7 @@ E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e
 
 ### 9.2 `lit next` — claim-aware routing (a read gate)
 
-Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go`). Flags (`internal/cli/next.go`, plus the `--by` identity fallback): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag`` (`internal/cli/flagset.go`).
+Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go`). Flags (`internal/cli/next.go`, plus the `--by` identity fallback): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag`` (`internal/cli/next.go`).
 
 The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go`).
 

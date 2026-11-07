@@ -245,7 +245,7 @@ lit next [--type <csv>]... [--status open|in_progress] [--labels <csv>]... [--as
 Prints the single next workable leaf to `lit start`, narrowed by the same filters as
 `backlog` — so "the next workable bug" is `lit next --type bug`. `--limit` and
 `--columns` do not apply to a single-row summary and are not accepted. `--continue`
-is retired — claim routing already keeps a checkout in its own epic first,
+is retired — claim routing already serves a checkout's lanes first,
 unconditionally.
 
 Selection is claims-first. A lane this checkout already holds comes back before
