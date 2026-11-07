@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -33,7 +34,7 @@ func workflowsDryRunLeaf() wsLeaf {
 
 		occasion := workflows.Occasion{
 			Event:   workflows.Event(*event),
-			IssueID: *issue,
+			IssueID: model.ID(*issue),
 			Labels:  *labels,
 			Entered: *enter,
 			Exited:  *exit,
@@ -50,7 +51,7 @@ func workflowsDryRunLeaf() wsLeaf {
 
 func printDryRunOccasion(w io.Writer, o workflows.Occasion) error {
 	_, err := fmt.Fprintf(w, "occasion: event=%s labels=%s entered=%s exited=%s issue=%s\n\n",
-		orDash(string(o.Event)), orDash(strings.Join(o.Labels, ",")), stateList(o.Entered), stateList(o.Exited), orDash(o.IssueID))
+		orDash(string(o.Event)), orDash(strings.Join(o.Labels, ",")), stateList(o.Entered), stateList(o.Exited), orDash(fmt.Sprint(o.IssueID)))
 	return err
 }
 
