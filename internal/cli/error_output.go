@@ -551,7 +551,7 @@ func commandErrorRemediation(reason commandReason) string {
 		// the session this one was handed the work from — the ordinary
 		// continuation of stopped work in its own checkout, which would
 		// otherwise stall on a human for every handoff.
-		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another session holds right now overrides that session's work: pass `--take` when the user directs the takeover, or when you are continuing that session's stopped or handed-off work in its own checkout; otherwise run `lit next`." + agentInstructionsClose
+		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. `--take` on `lit phase` acts on the ticket and leaves the hold where it is; `lit start <id> --take` moves the hold to you. " + agentInstructionsOpen + "Taking over a lane another session holds right now overrides that session's work: pass `--take` when the user directs the takeover, or when you are continuing that session's stopped or handed-off work in its own checkout; otherwise run `lit next`." + agentInstructionsClose
 	case reasonPurgeUnconfirmed:
 		// The reversible way out is named beside the flag, and the envelope says
 		// whose call a purge is: it cannot be undone and reaches every store.

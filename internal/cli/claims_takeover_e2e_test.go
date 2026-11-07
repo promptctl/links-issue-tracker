@@ -130,12 +130,13 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	}
 
 	// The lane is now bravo's: starting it again, still as bravo-agent, is
-	// the happy path — no confirmation, no warning, no ceremony.
+	// the happy path — no confirmation, no warning, no ceremony. It records
+	// nothing, so the hold gate reads no lane for it.
 	out = runCLIInDir(t, bravo, "start", ticket, "--by", "bravo-agent")
 	if strings.Contains(out, "claimed") || strings.Contains(out, "--take") {
 		t.Fatalf("start %s on bravo's own lane = %q, want no takeover ceremony", ticket, out)
 	}
-	if got, want := startFacts(t), map[string]any{"start.lane_family_issues": float64(1), "start.lane_held": true, "start.handover": false, "start.transfer_announced": false}; !reflect.DeepEqual(got, want) {
+	if got, want := startFacts(t), map[string]any{"start.handover": false, "start.transfer_announced": false}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("own-lane start event facts = %v, want %v", got, want)
 	}
 }

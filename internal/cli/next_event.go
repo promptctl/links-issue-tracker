@@ -124,6 +124,8 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 		return nextDecision{Outcome: "served_from_claim", Picked: picked(o.Row.ID)}
 	case ResumedOwnWork:
 		return nextDecision{Outcome: "resumed_own_work", Picked: picked(o.Row.ID)}
+	case TakeOverHere:
+		return nextDecision{Outcome: "take_over_here", Picked: picked(o.Row.ID)}
 	case ServedFromEpicLane:
 		return nextDecision{Outcome: "served_from_epic_lane", Picked: picked(o.Row.ID)}
 	case ServedFromNewLane:

@@ -657,8 +657,14 @@ sidecar maps.
   of evidence.
 - **Epic-granularity claims**: one started bug in a catch-all epic would
   monopolize twenty unrelated ones. The lane is the honest unit.
-- **Session-bound claims**: every new session would start unclaimed — the
-  original failure mode, rebuilt.
+- **Session-bound claims that a new session starts without**: a successor
+  would find its predecessor's lane unclaimed and open new work beside it —
+  the original failure mode, rebuilt. Holds are session-bound now, so this
+  alternative was taken in part. What keeps the failure mode out is that the
+  successor still finds the work: `lit next` serves a lane another session
+  holds in the reader's own checkout as its ticket to resume, naming that
+  holder, and the successor continues with an explicit `--take`. Inheriting
+  silently was what let two live sessions in one checkout act on one ticket.
 - **Stream identity derived from the claimed epic's name**: names the holder
   after the held, which destroys exactly the distinction the system exists
   to draw — two streams erroneously in one lane would be indistinguishable,

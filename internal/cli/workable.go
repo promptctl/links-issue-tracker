@@ -196,7 +196,7 @@ func workableLeaf(view workableView) appLeaf {
 		// partition serves every case and nothing downstream learns the flag exists.
 		// [LAW:dataflow-not-control-flow]
 		//
-		// It owns this checkout's lanes and the rest of their epics exactly as
+		// It owns the lanes this session holds and the rest of their epics exactly as
 		// `lit next`'s does, so the work next routes over first is never missing
 		// from the list. A dependency next hands back from outside them is not
 		// this checkout's until `lit start` claims its lane; until then it shows

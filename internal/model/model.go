@@ -912,15 +912,20 @@ type Session struct {
 	actor string
 }
 
+// UnknownActor is the actor a write records when its caller named nobody
+// (storage.Actor writes it, SessionOf reads it back as the zero Session).
+// [LAW:one-source-of-truth] the one spelling of "attributed to nobody".
+const UnknownActor = "unknown"
+
 // SessionOf reads the session an event's actor names. The store records an
-// actor the caller never gave as "unknown" (storage.Actor), so that spelling
+// actor the caller never gave as UnknownActor (storage.Actor), so that spelling
 // and the empty string both collapse to the zero Session: neither names a
 // session anybody could be, and reading "unknown" as an identity would make
 // every unidentified writer the same session. [LAW:parse-dont-validate]
 // [LAW:single-enforcer] the one place an actor becomes a Session.
 func SessionOf(actor Text) Session {
 	trimmed := strings.TrimSpace(actor.Raw())
-	if trimmed == "" || trimmed == "unknown" {
+	if trimmed == "" || trimmed == UnknownActor {
 		return Session{}
 	}
 	return Session{actor: trimmed}

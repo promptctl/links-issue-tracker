@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // `lit next` is not a workableView preset over the shared backlog pipeline (see
@@ -101,6 +102,9 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 	case ResumedOwnWork:
 		row = o.Row
 		announce = resumeAdvice(o.Row) + "\n"
+	case TakeOverHere:
+		row = o.Row
+		announce = takeOverAdvice(o, cc.addresses) + "\n"
 	case ServedFromEpicLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane, place) + " (a second lane of an epic you already hold a lane in)\n"
@@ -161,6 +165,13 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 // session never reaches this line for it.
 func resumeAdvice(row annotation.AnnotatedIssue) string {
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
+}
+
+// takeOverAdvice names the session that holds a lane from this checkout and
+// the one command that moves the hold here, so a successor resumes its
+// predecessor's work instead of opening a lane beside it.
+func takeOverAdvice(o TakeOverHere, addresses map[model.Attribution]workspace.Checkout) string {
+	return fmt.Sprintf("%s is held by %s — if you are continuing that session's work, take it over with `lit start %s --take`", o.Row.ID, nameHolder(o.Held.By, addresses), o.Row.ID)
 }
 
 // dependencyReason says why step 1b or 2b handed this row over. A pick under an

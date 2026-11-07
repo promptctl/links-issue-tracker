@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -238,10 +237,10 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 }
 
 // Two agent sessions in ONE checkout. Session sess-peer starts a ticket; session
-// sess-mine runs `lit next` and is not handed it: a lane is held by a session in
-// a checkout, so the peer's work in flight is routed around, and with nothing
-// else in the backlog the answer is the empty pool naming why.
-func TestRunNextRoutesAroundThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
+// sess-mine runs `lit next` and is pointed at it as the peer's, to take over
+// only with --take: a lane is held by a session in a checkout, and the ticket
+// stranded in flight in this tree is the work this checkout has to move.
+func TestRunNextPointsAtThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-peer")
 	h := newReadyTestHarness(t)
@@ -251,10 +250,9 @@ func TestRunNextRoutesAroundThePeerSessionWorkingThisCheckoutsLane(t *testing.T)
 
 	// Same checkout, same stream token, different session.
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
-	err := h.runNextErr()
-	var none NoWork
-	if !errors.As(err, &none) || len(none.Unreachable) != 1 || none.Unreachable[0].ID != theirs.ID || none.Unreachable[0].Kind != reachHeldFresh {
-		t.Fatalf("next as sess-mine = %v, want NoWork naming %s as held by another holder", err, theirs.ID)
+	text := withoutLivenessWarning(h.runNextText())
+	if want := theirs.ID.Raw() + " is held by claude_sess-peer in "; !strings.HasPrefix(text, want) || !strings.Contains(text, "`lit start "+theirs.ID.Raw()+" --take`") {
+		t.Fatalf("next as sess-mine = %q, want %s named as claude_sess-peer's, to take over with --take", text, theirs.ID)
 	}
 }
 

@@ -288,7 +288,7 @@ empty string means no `remediation:` line is printed:
 - `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 - `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
-- `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another session holds right now overrides that session's work: pass `--take` when the user directs the takeover, or when you are continuing that session's stopped or handed-off work in its own checkout; otherwise run `lit next`.\</agent-instructions>"
+- `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. `--take` on `lit phase` acts on the ticket and leaves the hold where it is; `lit start <id> --take` moves the hold to you. \<agent-instructions>Taking over a lane another session holds right now overrides that session's work: pass `--take` when the user directs the takeover, or when you are continuing that session's stopped or handed-off work in its own checkout; otherwise run `lit next`.\</agent-instructions>"
 - `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
@@ -1421,14 +1421,14 @@ Use 'lit next' to pick the top workable item to start.
    - unfocused, nothing trimmed: `Nothing is hidden: every workable item is listed.`
    - unfocused, `--limit` trimmed rows: `Every workable item is in scope.`
    - focused, `--all` given: `Focus is on %s; this run bypassed it and lists the whole queue.`
-   - focused: `Focused on %s — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; %d workable row(s) outside them are not shown (%s for the whole queue).`
+   - focused: `Focused on %s — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; %d workable row(s) outside them are not shown (%s for the whole queue).`
 
    The first `%s` is the focus goals' ids joined by `", "`
    (`focusScope.describe`, `ready_state.go`), `%d` is the count of rows the
    partition excluded, and the last `%s` is the escape `` `lit backlog --all` ``,
    backticks included (`workable.go`). The own-work clause is empty when no
    kept row is off the focus path, else a space and then
-   `Off that path but in this checkout's lanes or their epics: %s.`,
+   `Off that path but in the lanes you hold or their epics: %s.`,
    where `%s` is the ids of the rows kept before `--limit` that the scope
    holds only through `ownWork.covers`, joined by `", "` (`ownClause`,
    `backlog.go`). The trim
@@ -1482,7 +1482,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 ### 2.14 `lit next` — Print the next workable leaf
 
 - Registration `register.go`, `app.AccessRead`, handler `nextLeaf`
-  (`next.go`). Summary: "Print the next workable leaf to lit start, serving this checkout's lanes first".
+  (`next.go`). Summary: "Print the next workable leaf to lit start, serving the lanes you hold first and never a ticket another session holds".
 - Flags (`registerWorkableFilter` in `next.go`, and the `--by`):
 
 | Flag | Type | Default | Effect |

@@ -114,3 +114,37 @@ func (h Handover) Live(lane Standing) bool {
 	held, ok := lane.(Held)
 	return ok && held.By == h.From.By
 }
+
+// StatusPlan is what a status action does to one ticket: the issue before and
+// after it, and the claimant on each side. Both storage engines and the CLI's
+// hold gate read it, so "does this transition record anything" has one owner.
+// [LAW:one-source-of-truth]
+type StatusPlan struct {
+	Current, Updated model.Issue
+	Prior, Post      Claimant
+}
+
+// PlanStatus runs action against issue, whose own history is events, as
+// taken by taker — the holder the event it would record will name.
+func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker Holder) (StatusPlan, error) {
+	updated, err := issue.Apply(action)
+	if err != nil {
+		return StatusPlan{}, err
+	}
+	prior := ClaimantOf(issue, events)
+	post := prior.After(action, taker)
+	updated.Assignee = post.Assignee
+	return StatusPlan{Current: issue, Updated: updated, Prior: prior, Post: post}, nil
+}
+
+// Records reports that the transition writes: it moves the status or the
+// claimant. A call whose target state and claimant both already hold is the
+// documented no-op — history records mutations that happened, not calls that
+// were made — and a same-state start that moves the claimant is the reclaim
+// path, which records who took the ticket.
+func (p StatusPlan) Records() bool {
+	return p.Updated.StatusValue() != p.Current.StatusValue() || p.Post != p.Prior
+}
+
+// Handover is the claim passing hands this transition records, nil for none.
+func (p StatusPlan) Handover() *Handover { return p.Prior.HandoverTo(p.Post) }

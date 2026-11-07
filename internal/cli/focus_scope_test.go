@@ -260,7 +260,7 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	// what removed them.
 	h.setLabels(goal.ID, FocusLabel)
 	text = h.runWorkableText("--limit", "1")
-	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
+	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
 	if !strings.Contains(text, wantScope.Raw()) {
 		t.Fatalf("focused+trimmed backlog missing scope clause %q\n%s", wantScope, text)
 	}
@@ -349,7 +349,7 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 
 	// Focused: scoped, and it says exactly what it withheld and how to get it.
 	text = h.runWorkableText()
-	want := "Focused on " + goal.ID.Raw() + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
+	want := "Focused on " + goal.ID.Raw() + " — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
 	if !strings.Contains(text, want) {
 		t.Fatalf("focused backlog missing notice %q\n%s", want, text)
 	}
@@ -616,10 +616,10 @@ func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
 	if strings.Contains(text, unrelated) {
 		t.Fatalf("focused backlog lists %s, which is neither on the path nor this checkout's work:\n%s", unrelated, text)
 	}
-	if want := "Focused on " + goal + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."; !strings.Contains(text, want) {
+	if want := "Focused on " + goal + " — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."; !strings.Contains(text, want) {
 		t.Fatalf("focused backlog missing %q — own work counted as withheld?\n%s", want, text)
 	}
-	ownClause := " Off that path but in this checkout's lanes or their epics: "
+	ownClause := " Off that path but in the lanes you hold or their epics: "
 	if !strings.Contains(text, ownClause) {
 		t.Fatalf("focused backlog does not name the own work it listed off the path:\n%s", text)
 	}

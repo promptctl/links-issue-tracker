@@ -12,7 +12,7 @@ type startPlace int
 const (
 	// startNoPick is the place of an outcome that served no ticket.
 	startNoPick startPlace = iota
-	// startHere is this checkout's own work: the lane it holds, the epic it
+	// startHere is this session's own work: the lane it holds, the epic it
 	// carries, or a dependency on that epic's path.
 	startHere
 	// startOffPrimaryClone is new work served in the primary clone, where every
@@ -43,7 +43,7 @@ func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 		newLane = startOffPrimaryClone
 	}
 	switch o := outcome.(type) {
-	case ServedFromClaim, ResumedOwnWork, ServedFromEpicLane, ServedFromDependency:
+	case ServedFromClaim, ResumedOwnWork, TakeOverHere, ServedFromEpicLane, ServedFromDependency:
 		return startHere
 	case ServedFromNewLane:
 		return newLane

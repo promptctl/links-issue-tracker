@@ -24,7 +24,7 @@ import (
 // it fresh" inline.
 // [LAW:one-source-of-truth] [LAW:types-are-the-program]
 //
-// There are three relations and not four. A lane whose claim has expired is
+// An expired claim is not a relation of its own. A lane whose claim has expired is
 // laneUnclaimed, indistinguishable here from one nobody ever started, because
 // claims.Standing has no variant for it: an expired claim is over, not a
 // grade of claim.
@@ -35,10 +35,20 @@ const (
 	laneUnclaimed laneRelation = iota
 	// laneOurs: this session, in this checkout, holds it right now.
 	laneOurs
-	// laneHeldForeign: another session or another checkout holds it right
-	// now. Routed around, and acted on only through --take.
+	// laneHeldHere: another session holds it right now from this same
+	// checkout — the session this one was handed the work from, or one still
+	// working beside it. Acted on only through --take, like any other
+	// holder's lane, but it is this checkout's work, so `lit next` serves it
+	// to resume rather than opening a new lane beside it.
+	laneHeldHere
+	// laneHeldForeign: a session in another checkout holds it right now.
+	// Routed around, and acted on only through --take.
 	laneHeldForeign
 )
+
+// heldByAnother reports that a holder other than the reader holds the lane
+// right now — the relations the hold gate crosses only with --take.
+func (r laneRelation) heldByAnother() bool { return r == laneHeldHere || r == laneHeldForeign }
 
 // relationOf is the one place a Standing is read against the reader.
 //
@@ -59,10 +69,13 @@ func relationOf(standing claims.Standing, self claims.Holder) laneRelation {
 	if !ok {
 		return laneUnclaimed
 	}
-	if self.Checkout.Present() && held.By == self {
+	switch {
+	case !self.Checkout.Present() || held.By.Checkout != self.Checkout:
+		return laneHeldForeign
+	case held.By == self:
 		return laneOurs
 	}
-	return laneHeldForeign
+	return laneHeldHere
 }
 
 // holdReading is what the hold gate read about the target's lane, handed to
@@ -145,9 +158,9 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	//
 	// A transition that will record nothing crosses no hold, so it is not
 	// gated: demanding --take for it, or announcing one, would describe an act
-	// that never happens. A start always records — a start by anyone but the
-	// holder moves the claimant — so the start hook always gets its reading.
-	records, err := landable(prior, action)
+	// that never happens.
+	self := ownHolder(ap, actor)
+	records, err := landable(prior, action, self)
 	if err != nil || !records {
 		return holdReading{}, "", err
 	}
@@ -166,12 +179,12 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 		return holdReading{}, "", err
 	}
 	standing := lane.Standing(checkouts.fresh, checkouts.local)
-	relation := relationOf(standing, ownHolder(ap, actor))
+	relation := relationOf(standing, self)
 	// Recorded before the gate, so a refused takeover's event still says whose
 	// lane it met.
 	telemetry.Set(ctx, verb+".lane_held", relation != laneUnclaimed)
-	if relation == laneHeldForeign {
-		// relationOf answers laneHeldForeign for a Held standing and nothing else.
+	if relation.heldByAnother() {
+		// relationOf answers a held-by-another relation for a Held standing only.
 		line := heldByLine(issueID, standing.(claims.Held), checkouts.addresses, time.Now())
 		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, crossingOf(action.Name()), take); err != nil {
 			return holdReading{}, "", err
@@ -181,25 +194,20 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 }
 
 // landable runs the issue's own refusal of action on the state the gate read —
-// Issue.PlanPhase for a phase move, Issue.Apply for a status action, the rules
-// both engines run inside Apply — and reports whether the transition records
-// anything: a phase move to the phase the ticket is already in, or a status
-// action other than start that leaves the status where it is, is the
-// documented no-op.
-func landable(prior ticketState, action model.Action) (records bool, err error) {
+// Issue.PlanPhase for a phase move, claims.PlanStatus for a status action, the
+// same plans both engines run inside Apply — and reports whether the
+// transition records anything when taken by self.
+func landable(prior ticketState, action model.Action, self claims.Holder) (records bool, err error) {
 	switch action := action.(type) {
 	case model.SetPhase:
 		move, err := prior.issue.PlanPhase(prior.events, action.Phase)
 		return move.Changed(), err
-	case model.Start:
-		_, err := prior.issue.Apply(action)
-		return true, err
 	case model.StatusAction:
-		updated, err := prior.issue.Apply(action)
+		plan, err := claims.PlanStatus(prior.issue, prior.events, action, self)
 		if err != nil {
 			return false, err
 		}
-		return updated.StatusValue() != prior.issue.StatusValue(), nil
+		return plan.Records(), nil
 	}
 	// withHoldGate wraps only start, phase and done, so anything else is a
 	// wiring error, not a caller's mistake. [LAW:no-silent-failure]
