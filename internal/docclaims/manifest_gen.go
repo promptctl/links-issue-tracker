@@ -323,6 +323,7 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: " — pass --take to take it over", Src: " — pass --take to take it over"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s in progress, %s", Src: "%s in progress, %s"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s is already in progress in a lane you hold — continue where you left off", Src: "%s is already in progress in a lane you hold — continue where you left off"},
+	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s is already in progress in a lane you hold, started by %s — read its history before you continue it", Src: "%s is already in progress in a lane you hold, started by %s — read its history before you continue it"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s is held by %s (active %s ago)", Src: "%s is held by %s (active %s ago)"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%s is in progress and nobody holds it —", Src: "%s is in progress and nobody holds it — %s"},
 	{Doc: "doc-v1-total/inventories/inventory-claims.md", Text: "%srun `lit start %s` to claim %s", Src: "%srun `lit start %s` to claim %s"},
