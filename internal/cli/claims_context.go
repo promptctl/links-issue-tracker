@@ -157,11 +157,11 @@ func ownHolder(ap *app.App, actor string) claims.Holder {
 // handover's predecessor as the holder (Handover.Live). Otherwise the
 // predecessor held nothing to hand over, because an expired claim is not a
 // claim.
-func transferNotice(lane claims.Standing, handover *claims.Handover) string {
+func transferNotice(lane claims.Standing, handover *claims.Handover, addresses map[model.Attribution]workspace.Checkout) string {
 	if handover == nil || !handover.Live(lane) {
 		return ""
 	}
-	return fmt.Sprintf("claim transferred: %s -> %s\n", describeClaimant(handover.From), describeClaimant(handover.To))
+	return fmt.Sprintf("claim transferred: %s -> %s\n", nameHolder(handover.From.By, addresses), nameHolder(handover.To.By, addresses))
 }
 
 // addressesByAttribution indexes this machine's live checkouts by the

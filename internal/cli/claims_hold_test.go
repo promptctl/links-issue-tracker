@@ -182,26 +182,29 @@ func withoutLivenessWarning(text string) string {
 
 // `lit phase` and `lit done` from a session that does not hold the ticket are
 // refused, and leave it as it was; the same command with --take is applied and
-// says it took the ticket over.
+// says what it did to the hold: done establishes, so it takes the lane over,
+// and a phase move does not, so it says it acted without taking it.
 func TestPhaseAndDoneRefusedForNonHolderUnlessTake(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		verb string
 		spec transitionSpec
 		args []string
+		// how is what --take does to the hold for this verb.
+		how crossing
 		// notice is what the verb itself prints after the takeover line.
 		notice func(id model.ID) string
 		// landed reports whether the transition took effect.
 		landed func(h readyTestHarness, id model.ID) bool
 	}{
-		{"phase", phaseSpec, []string{"--to", string(model.PhaseReview)}, func(model.ID) string { return "phase: plan → review\n" }, func(h readyTestHarness, id model.ID) bool {
+		{"phase", phaseSpec, []string{"--to", string(model.PhaseReview)}, actsOnHeld, func(model.ID) string { return "phase: plan → review\n" }, func(h readyTestHarness, id model.ID) bool {
 			state, err := readTicketState(h.ctx, h.ap.Store, h.issueDetail(id))
 			if err != nil {
 				h.t.Fatalf("read %s: %v", id, err)
 			}
 			return state.phase == model.PhaseReview
 		}},
-		{"done", doneSpec, nil, func(id model.ID) string {
+		{"done", doneSpec, nil, takesOver, func(id model.ID) string {
 			return "warning: finished without an approved plan: " + id.Raw() + " has no plan\n"
 		}, func(h readyTestHarness, id model.ID) bool {
 			return h.issueDetail(id).State() == model.StateClosed
@@ -214,7 +217,7 @@ func TestPhaseAndDoneRefusedForNonHolderUnlessTake(t *testing.T) {
 			refusal := ticket.ID.Raw() + " is held by session-a in " + nameCheckout(ownAttribution(h.ap)) + " (active under a minute ago)"
 
 			_, err := h.runTransitionAs(tc.spec, ticket.ID, "session-b", tc.args...)
-			assertRefusedNamingHolder(t, err, refusal+" — pass --take to take it over")
+			assertRefusedNamingHolder(t, err, refusal+tc.how.refusal)
 			if tc.landed(h, ticket.ID) {
 				t.Fatalf("%s by a non-holder without --take changed the ticket", tc.verb)
 			}
@@ -223,12 +226,54 @@ func TestPhaseAndDoneRefusedForNonHolderUnlessTake(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s --take by a non-holder = %v, want it applied", tc.verb, err)
 			}
-			if want := refusal + " — taking over (--take)\n" + tc.notice(ticket.ID); !strings.HasPrefix(withoutLivenessWarning(out), want) {
+			if want := refusal + tc.how.announce + tc.notice(ticket.ID); !strings.HasPrefix(withoutLivenessWarning(out), want) {
 				t.Fatalf("%s --take printed %q, want it to open with %q", tc.verb, out, want)
 			}
 			if !tc.landed(h, ticket.ID) {
 				t.Fatalf("%s --take by a non-holder did not change the ticket", tc.verb)
 			}
 		})
+	}
+}
+
+// A transition that records nothing crosses no hold, so a non-holder is neither
+// refused nor told it took anything over: a phase move to the phase the ticket
+// is already in passes silently and leaves the hold where it was.
+func TestNoOpTransitionByANonHolderIsNotGated(t *testing.T) {
+	t.Parallel()
+	h := holdHarness(t)
+	_, ticket := h.heldTicket(h.ap.Stream.Value(), "session-a")
+
+	out, err := h.runTransitionAs(phaseSpec, ticket.ID, "session-b", "--to", string(model.PhasePlan))
+	if err != nil {
+		t.Fatalf("no-op phase move by a non-holder = %v, want it to pass ungated", err)
+	}
+	if strings.Contains(out, "--take") || strings.Contains(out, "held by") {
+		t.Fatalf("no-op phase move printed %q, want nothing about the hold", out)
+	}
+	if _, err := h.runTransitionAs(phaseSpec, ticket.ID, "session-b", "--to", string(model.PhaseReview)); err == nil {
+		t.Fatalf("a real phase move by the non-holder passed, want the hold to still be session-a's")
+	}
+}
+
+// A successor session in the holder's own checkout, under the assignee the
+// ticket already names, takes the ticket with --take and then holds it: its
+// next move needs no --take. The claimant is the holder (checkout and
+// session), so the start is a real transfer even though the assignee is the
+// same on both sides.
+func TestTakeBySuccessorUnderTheSameAssigneeMovesTheHold(t *testing.T) {
+	t.Parallel()
+	h := holdHarness(t)
+	_, ticket := h.heldTicket(h.ap.Stream.Value(), "session-a")
+	successor := "session-b"
+	if _, err := h.ap.Store.Apply(h.ctx, ticket.ID, storage.Change{Fields: storage.UpdateIssueInput{Assignee: &successor}, Actor: "session-a"}); err != nil {
+		t.Fatalf("reassign %s: %v", ticket.ID, err)
+	}
+
+	if _, err := h.runTransitionAs(startSpec, ticket.ID, "session-b", "--take"); err != nil {
+		t.Fatalf("start --take by the successor = %v", err)
+	}
+	if _, err := h.runTransitionAs(phaseSpec, ticket.ID, "session-b", "--to", string(model.PhaseReview)); err != nil {
+		t.Fatalf("successor's phase move after --take = %v, want the hold to be its own", err)
 	}
 }

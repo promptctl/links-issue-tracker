@@ -546,10 +546,12 @@ func commandErrorRemediation(reason commandReason) string {
 		return "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 	case reasonTakeoverUnconfirmed:
 		// Action-only, like its neighbours: the message names the holder. Both
-		// ways out are named and neither is urged, and the envelope says whose
-		// call the takeover is — an agent acts on this line, and --take
-		// overrides another checkout's live work.
-		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another session holds right now overrides that session's work: pass `--take` only when the user directs the takeover." + agentInstructionsClose
+		// ways out are named and neither is urged, and the envelope says when
+		// --take is the agent's to pass: the user directed it, or the holder is
+		// the session this one was handed the work from — the ordinary
+		// continuation of stopped work in its own checkout, which would
+		// otherwise stall on a human for every handoff.
+		return "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. " + agentInstructionsOpen + "Taking over a lane another session holds right now overrides that session's work: pass `--take` when the user directs the takeover, or when you are continuing that session's stopped or handed-off work in its own checkout; otherwise run `lit next`." + agentInstructionsClose
 	case reasonPurgeUnconfirmed:
 		// The reversible way out is named beside the flag, and the envelope says
 		// whose call a purge is: it cannot be undone and reaches every store.

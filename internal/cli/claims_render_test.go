@@ -99,6 +99,37 @@ func TestFormatClaimLineDossierNeedsNoLocalAddress(t *testing.T) {
 	}
 }
 
+// TestFormatClaimLineNamesTheHoldingSession: two sessions holding from one
+// checkout render the same address, so the line names the session beside it —
+// otherwise another session's hold in the reader's own checkout reads exactly
+// like the reader's own.
+func TestFormatClaimLineNamesTheHoldingSession(t *testing.T) {
+	t.Parallel()
+	evidence, lane := laneWithProgress(t, 0, 1, "")
+	addresses := map[model.Attribution]workspace.Checkout{hereHolder: {Path: "../wt", Branch: "topic"}}
+	lineFor := func(session model.Text) string {
+		cc := claimContext{
+			standings: claims.Standings{lane: claims.Held{Tenure: claims.Tenure{By: claims.HolderFor(hereHolder, session), LastActivity: renderNow}}},
+			evidence:  evidence,
+			addresses: addresses,
+		}
+		line, ok := formatClaimLine(cc, lane, renderNow)
+		if !ok {
+			t.Fatalf("formatClaimLine on a Held lane returned ok=false")
+		}
+		return line
+	}
+	for session, want := range map[model.Text]string{
+		"session-a": "claimed here: ../wt (topic) by session-a · ",
+		"session-b": "claimed here: ../wt (topic) by session-b · ",
+		"":          "claimed here: ../wt (topic) by an unidentified session · ",
+	} {
+		if got := lineFor(session); !strings.HasPrefix(got, want) {
+			t.Fatalf("claim line for %q = %q, want it to open with %q", session, got, want)
+		}
+	}
+}
+
 // TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine is the acceptance
 // criterion's other half: the same claimed lane's path/branch render only
 // when cc.addresses resolves the holder to a live local worktree — never
@@ -161,47 +192,27 @@ func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T
 	}
 }
 
-// TestDescribeClaimantNamesAnUnaddressableHolder pins the transfer notice's
-// half of the public-checkout ruling: the four renderings describeClaimant can
-// produce, each against the exact string a reader sees. The unattributed row is
-// driven through the notice it appears in by
-// TestTransferNoticeNamesAPredecessorThatMintedNoToken.
-//
-// The empty-assignee rows are the ruling: "(unassigned)" would describe the
-// empty field while saying nothing about the holder being announced — and the
-// record carries an establishing event, so somebody demonstrably took this
-// ticket.
-func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
+// TestNameHolderNamesBothHalves pins how every holder is named — refusal,
+// contest list, transfer notice: its session, in its checkout's address when
+// this machine has one, the opaque name otherwise. Two sessions in one checkout
+// must read differently, and a checkout this machine enumerated reads as the
+// path a reader can walk to.
+func TestNameHolderNamesBothHalves(t *testing.T) {
 	t.Parallel()
+	addresses := map[model.Attribution]workspace.Checkout{elsewhereHolder: {Path: "../wt", Branch: "topic"}}
 	for _, row := range []struct {
-		name     string
-		claimant claims.Claimant
-		want     string
+		name   string
+		holder claims.Holder
+		want   string
 	}{
-		{
-			name:     "no assignee and no token: the bucket is the whole answer",
-			claimant: claims.Claimant{Established: true},
-			want:     "the public checkout",
-		},
-		{
-			name:     "no assignee, identified checkout: the token carries it alone",
-			claimant: claims.Claimant{Established: true, Checkout: elsewhereHolder},
-			want:     "stream aaaaaaaa",
-		},
-		{
-			name:     "assignee and no token: the bucket discriminates nothing beside a name",
-			claimant: claims.Claimant{Established: true, Assignee: "alpha-agent"},
-			want:     "alpha-agent",
-		},
-		{
-			name:     "both halves: either one can be the half that moved",
-			claimant: claims.Claimant{Established: true, Assignee: "alpha-agent", Checkout: elsewhereHolder},
-			want:     "alpha-agent (stream aaaaaaaa)",
-		},
+		{"nobody named, no token", claims.Holder{}, "an unidentified session in the public checkout"},
+		{"a session in an addressable checkout", claims.HolderFor(elsewhereHolder, "session-a"), "session-a in ../wt (topic)"},
+		{"another session in that same checkout", claims.HolderFor(elsewhereHolder, "session-b"), "session-b in ../wt (topic)"},
+		{"a session in a checkout this machine cannot address", claims.HolderFor(model.NewAttribution("bbbbbbbbbbbb", "ws"), "session-a"), "session-a in stream bbbbbbbb"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			if got := describeClaimant(row.claimant); got != row.want {
-				t.Fatalf("describeClaimant(%+v) = %q, want %q", row.claimant, got, row.want)
+			if got := nameHolder(row.holder, addresses); got != row.want {
+				t.Fatalf("nameHolder(%+v) = %q, want %q", row.holder, got, row.want)
 			}
 		})
 	}
@@ -225,9 +236,13 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 		t.Fatalf("Apply takeover error = %v", err)
 	}
 	// The standing the gate read before Apply: the unattributed start holds the
-	// lane.
-	notice := transferNotice(claims.Held{Tenure: claims.Tenure{By: claims.Holder{}}}, applied.Handover)
-	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(h.ap)))
+	// lane, so its holder is the handover's predecessor.
+	predecessor := applied.Handover.From.By
+	if predecessor.Checkout.Present() {
+		t.Fatalf("predecessor checkout = %v, want the public checkout", predecessor.Checkout)
+	}
+	notice := transferNotice(claims.Held{Tenure: claims.Tenure{By: predecessor}}, applied.Handover, nil)
+	want := fmt.Sprintf("claim transferred: %s -> bravo-agent in %s\n", nameHolder(predecessor, nil), nameCheckout(ownAttribution(h.ap)))
 	if notice != want {
 		t.Fatalf("transferNotice = %q, want %q", notice, want)
 	}
@@ -304,7 +319,7 @@ func TestFormatClaimLineContestedAppendsContestants(t *testing.T) {
 	if !ok {
 		t.Fatalf("formatClaimLine on a contested lane returned ok=false")
 	}
-	if !strings.Contains(line, "contested by "+nameCheckout(contestant)) {
+	if !strings.Contains(line, "contested by "+nameHolder(claims.Holder{Checkout: contestant}, nil)) {
 		t.Fatalf("line = %q, want the contestant named", line)
 	}
 }

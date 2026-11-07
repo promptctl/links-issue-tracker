@@ -24,7 +24,7 @@ func TestGatesRefuseWhenTheStreamsAreTheNullDevice(t *testing.T) {
 		t.Fatalf("interactive(%s, %s) = true, want false", os.DevNull, os.DevNull)
 	}
 
-	_, err = confirmFreshTakeover(null, null, "lane held by another checkout", false)
+	_, err = confirmFreshTakeover(null, null, "lane held by another checkout", takesOver, false)
 	var takeover takeoverUnconfirmedError
 	if !errors.As(err, &takeover) || !strings.Contains(takeover.Message, "lane held by another checkout") || !strings.Contains(takeover.Message, "pass --take") {
 		t.Errorf("confirmFreshTakeover over %s = %v, want the --take refusal naming the holder", os.DevNull, err)

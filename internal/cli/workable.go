@@ -145,6 +145,10 @@ func workableLeaf(view workableView) appLeaf {
 	all := fs.Bool("all", false, "Ignore the focus scope and list the whole queue")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
+	// The reader whose lanes the listing treats as its own, resolved the way
+	// `lit next` resolves it, so an operator named by --by sees as their own
+	// exactly the lanes next serves them. [LAW:one-source-of-truth]
+	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, usage: view.usage(), work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		filter, err := filterFlags.parse()
 		if err != nil {
@@ -181,7 +185,7 @@ func workableLeaf(view workableView) appLeaf {
 		// The view's workload, as `lit next` records its own: what a duration
 		// on this event was spent over. [LAW:one-source-of-truth] one key shape.
 		telemetry.Count(ctx, view.name+".rows_gathered", len(gathered.rows))
-		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap, resolveIdentity(inv.Env, ""))
+		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap, resolveActor(inv.Env))
 		if err != nil {
 			return err
 		}

@@ -63,7 +63,14 @@ type Holder struct {
 // [LAW:single-enforcer] the one reading of an event as a holder, so the
 // derivation's holder, its contestants and its activity trail key on one value.
 func HolderOf(event model.IssueEvent) Holder {
-	return Holder{Checkout: event.Attribution, Session: model.SessionOf(event.Actor)}
+	return HolderFor(event.Attribution, event.Actor)
+}
+
+// HolderFor is the holder an event recorded in checkout under actor will name,
+// so a storage engine deciding whether a write moves the claimant compares the
+// holder the event it is about to stamp would carry.
+func HolderFor(checkout model.Attribution, actor model.Text) Holder {
+	return Holder{Checkout: checkout, Session: model.SessionOf(actor)}
 }
 
 // Held is a lane a holder holds right now: all four legs of the predicate

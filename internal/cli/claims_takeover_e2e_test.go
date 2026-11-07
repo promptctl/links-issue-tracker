@@ -113,17 +113,17 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if !strings.Contains(out, "taking over") {
 		t.Fatalf("start %s --take = %q, want it to announce the takeover", ticket, out)
 	}
-	// The transfer line itself, composed, not sampled: this is the only test
-	// where the two claimants differ in BOTH halves, so it is the only one that
-	// can pin describeClaimant's both-halves render. Substring checks would pass
-	// on a swapped order or a dropped stream.
-	bothHalves := regexp.MustCompile(`claim transferred: alpha-agent \(stream ([a-z0-9]+)\) -> bravo-agent \(stream ([a-z0-9]+)\)`)
-	streams := bothHalves.FindStringSubmatch(out)
-	if streams == nil {
-		t.Fatalf("start %s --take = %q, want the transfer line naming both assignees and both streams", ticket, out)
+	// The transfer line itself, composed, not sampled: the two holders differ
+	// in BOTH halves, so this pins nameHolder's session-in-checkout render on
+	// each side. Substring checks would pass on a swapped order or a dropped
+	// checkout.
+	bothHalves := regexp.MustCompile(`claim transferred: alpha-agent in (\S+[^\n]*?) -> bravo-agent in ([^\n]+)\n`)
+	checkouts := bothHalves.FindStringSubmatch(out)
+	if checkouts == nil {
+		t.Fatalf("start %s --take = %q, want the transfer line naming both sessions and both checkouts", ticket, out)
 	}
-	if streams[1] == streams[2] {
-		t.Fatalf("transfer notice = %q, want two different streams: alpha and bravo are different checkouts", out)
+	if checkouts[1] == checkouts[2] {
+		t.Fatalf("transfer notice = %q, want two different checkouts: alpha and bravo are different clones", out)
 	}
 	if got, want := startFacts(t), map[string]any{"start.lane_family_issues": float64(1), "start.lane_held": true, "start.handover": true, "start.transfer_announced": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("takeover start event facts = %v, want %v", got, want)

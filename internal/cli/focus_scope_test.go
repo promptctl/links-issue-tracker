@@ -812,3 +812,30 @@ func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
 		t.Fatalf("`lit next --all --type bug` = %q, want the off-path bug %q the focus withheld", row.ID, bug.ID)
 	}
 }
+
+// `lit backlog --by` reads the reader the way `lit next --by` does, so an
+// operator named by --by sees their own lane off the focus path, and an
+// operator who is somebody else does not.
+func TestFocusedBacklogReadsTheReaderFromBy(t *testing.T) {
+	t.Parallel()
+	isolateEvents(t)
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
+	repo := newInitTestRepo(t)
+	goalEpic := newEpicInDir(t, repo, "Goal epic")
+	goal := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", goalEpic, "--title", "Goal", "--topic", "goal"))
+	ours := newEpicInDir(t, repo, "Bob's epic")
+	mine := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", ours, "--title", "In flight", "--topic", "ours"))
+	runCLIInDir(t, repo, "start", mine, "--by", "bob")
+	runCLIInDir(t, repo, "label", "add", goal, FocusLabel)
+
+	if text := runCLIInDir(t, repo, "backlog", "--by", "bob"); !strings.Contains(text, mine) {
+		t.Fatalf("backlog --by bob does not list bob's in-flight %s:\n%s", mine, text)
+	}
+	if got := lastEvent(t).Facts["backlog.own_off_path"]; !sameIDs(got, mine) {
+		t.Errorf("backlog --by bob: own_off_path = %#v, want exactly %s", got, mine)
+	}
+	runCLIInDir(t, repo, "backlog", "--by", "carol")
+	if got := lastEvent(t).Facts["backlog.own_off_path"]; !reflect.DeepEqual(got, []any{}) {
+		t.Errorf("backlog --by carol: own_off_path = %#v, want none — bob's lane is not carol's", got)
+	}
+}

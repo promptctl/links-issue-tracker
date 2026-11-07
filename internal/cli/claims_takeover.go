@@ -70,8 +70,9 @@ func relationOf(standing claims.Standing, self claims.Holder) laneRelation {
 // reads the standing again for its transfer notice and the lane for its rollup
 // count, so neither is derived twice. [LAW:one-source-of-truth]
 type holdReading struct {
-	lane     claims.Lane
-	standing claims.Standing
+	lane      claims.Lane
+	standing  claims.Standing
+	addresses map[model.Attribution]workspace.Checkout
 }
 
 // heldAuthorizeFunc is the authorize hook of a transition the hold gate
@@ -87,8 +88,22 @@ type heldAuthorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, 
 func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 	return func(fs *cobraFlagSet) authorizeFunc {
 		take := fs.Bool("take", false, "Confirm acting on a ticket whose lane another session holds right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
+		// One enumeration of this machine's checkouts per invocation, made the
+		// first time a gate needs it: `lit bulk` gates every id against the
+		// same machine, and the enumeration is a subprocess.
+		var gathered *checkoutFacts
 		return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (afterApply, error) {
-			hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, actor, *take)
+			checkouts := func() (checkoutFacts, error) {
+				if gathered == nil {
+					facts, err := gatherCheckouts(inv.Env, inv.Stdout, ap)
+					if err != nil {
+						return checkoutFacts{}, err
+					}
+					gathered = &facts
+				}
+				return *gathered, nil
+			}
+			hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, actor, *take, checkouts)
 			if err != nil {
 				return nil, err
 			}
@@ -120,14 +135,20 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 //
 // takeover is the line owed once Apply lands when --take crossed a foreign
 // hold, so a transition that fails after the gate announces no takeover.
-func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string, take bool) (hold holdReading, takeover string, err error) {
+func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string, take bool, gather func() (checkoutFacts, error)) (hold holdReading, takeover string, err error) {
 	// A takeover is worth confirming only for a transition that can land. The
 	// issue's own rules refuse a frozen issue, a container, and a phase move
 	// off in-progress work whoever holds the lane, so their refusal answers
 	// first; gating first would send the caller to --take and then to this
 	// same refusal. Store.Apply runs them again on the row it writes.
 	// [LAW:single-enforcer]
-	if err := landable(prior, action); err != nil {
+	//
+	// A transition that will record nothing crosses no hold, so it is not
+	// gated: demanding --take for it, or announcing one, would describe an act
+	// that never happens. A start always records — a start by anyone but the
+	// holder moves the claimant — so the start hook always gets its reading.
+	records, err := landable(prior, action)
+	if err != nil || !records {
 		return holdReading{}, "", err
 	}
 	family, err := ap.Store.LaneFamily(ctx, issueID)
@@ -140,7 +161,7 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	if err != nil {
 		return holdReading{}, "", err
 	}
-	checkouts, err := gatherCheckouts(inv.Env, inv.Stdout, ap)
+	checkouts, err := gather()
 	if err != nil {
 		return holdReading{}, "", err
 	}
@@ -152,35 +173,44 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	if relation == laneHeldForeign {
 		// relationOf answers laneHeldForeign for a Held standing and nothing else.
 		line := heldByLine(issueID, standing.(claims.Held), checkouts.addresses, time.Now())
-		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, take); err != nil {
+		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, crossingOf(action.Name()), take); err != nil {
 			return holdReading{}, "", err
 		}
 	}
-	return holdReading{lane: lane, standing: standing}, takeover, nil
+	return holdReading{lane: lane, standing: standing, addresses: checkouts.addresses}, takeover, nil
 }
 
-// landable runs the issue's own refusal of action on the state the gate read:
-// Issue.PlanPhase for a phase move, Issue.Apply for a status action — the rules
-// both engines run inside Apply.
-func landable(prior ticketState, action model.Action) error {
+// landable runs the issue's own refusal of action on the state the gate read —
+// Issue.PlanPhase for a phase move, Issue.Apply for a status action, the rules
+// both engines run inside Apply — and reports whether the transition records
+// anything: a phase move to the phase the ticket is already in, or a status
+// action other than start that leaves the status where it is, is the
+// documented no-op.
+func landable(prior ticketState, action model.Action) (records bool, err error) {
 	switch action := action.(type) {
 	case model.SetPhase:
-		_, err := prior.issue.PlanPhase(prior.events, action.Phase)
-		return err
-	case model.StatusAction:
+		move, err := prior.issue.PlanPhase(prior.events, action.Phase)
+		return move.Changed(), err
+	case model.Start:
 		_, err := prior.issue.Apply(action)
-		return err
+		return true, err
+	case model.StatusAction:
+		updated, err := prior.issue.Apply(action)
+		if err != nil {
+			return false, err
+		}
+		return updated.StatusValue() != prior.issue.StatusValue(), nil
 	}
 	// withHoldGate wraps only start, phase and done, so anything else is a
 	// wiring error, not a caller's mistake. [LAW:no-silent-failure]
-	return fmt.Errorf("hold gate: %T is neither a status action nor a phase move", action)
+	return false, fmt.Errorf("hold gate: %T is neither a status action nor a phase move", action)
 }
 
 // heldByLine names who holds a ticket the caller is about to act on: the
 // session, the checkout — its path and branch when this machine can address
 // it — and how recently that holder last acted in the lane.
 func heldByLine(issueID model.ID, held claims.Held, addresses map[model.Attribution]workspace.Checkout, now time.Time) string {
-	return fmt.Sprintf("%s is held by %s in %s (active %s ago)", issueID, nameSession(held.By.Session), checkoutAddress(held.By.Checkout, addresses), humanizeCoarseDuration(now.Sub(held.LastActivity)))
+	return fmt.Sprintf("%s is held by %s (active %s ago)", issueID, nameHolder(held.By, addresses), humanizeCoarseDuration(now.Sub(held.LastActivity)))
 }
 
 // authorizeStart is what `lit start` owes once the hold gate has passed: the
@@ -195,7 +225,7 @@ func heldByLine(issueID model.ID, held claims.Held, addresses map[model.Attribut
 // counts it as no longer done. [LAW:one-source-of-truth]
 func authorizeStart(ctx context.Context, _ Invocation, _ *app.App, _ model.ID, _ ticketState, action model.Action, hold holdReading) (afterApply, error) {
 	return func(written ticketState, handover *claims.Handover) (string, statusline.Facts) {
-		transfer := transferNotice(hold.standing, handover)
+		transfer := transferNotice(hold.standing, handover, hold.addresses)
 		telemetry.Set(ctx, "start.handover", handover != nil)
 		telemetry.Set(ctx, "start.transfer_announced", transfer != "")
 		return transfer, statusline.Facts{started(hold.lane.ProgressWith(written.issue), written.issue), phaseRead(written)}
@@ -214,15 +244,15 @@ func authorizeStart(ctx context.Context, _ Invocation, _ *app.App, _ model.ID, _
 // a terminal too. interactive is the same signal openOrPrintWorkflowFile uses,
 // so a captured-stdout test never blocks on a stdin read it did not ask for.
 //
-// line is heldByLine's naming of the holder.
-func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, line string, take bool) (announcement string, err error) {
+// line is heldByLine's naming of the holder; how is what crossing it does.
+func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, line string, how crossing, take bool) (announcement string, err error) {
 	if take {
-		return line + " — taking over (--take)\n", nil
+		return line + how.announce, nil
 	}
 	if !interactive(stdin, stdout) {
-		return "", takeoverUnconfirmedError{Message: line + " — pass --take to take it over"}
+		return "", takeoverUnconfirmedError{Message: line + how.refusal}
 	}
-	confirmed, err := askYesNo(stdin, stdout, line+"\ntake it over?")
+	confirmed, err := askYesNo(stdin, stdout, line+how.ask)
 	if err != nil {
 		return "", err
 	}
@@ -230,6 +260,35 @@ func confirmFreshTakeover(stdin io.Reader, stdout io.Writer, line string, take b
 		return "", takeoverUnconfirmedError{Message: "takeover declined"}
 	}
 	return "", nil
+}
+
+// crossing is what --take does to a hold, in the words the gate says it with.
+// An establishing verb (claims.Establishes) makes the caller the holder, so it
+// takes the lane over; a phase move records work on the ticket and leaves the
+// hold where it was, so it acts on held work and says so rather than claiming
+// a transfer that never happens.
+type crossing struct {
+	announce, refusal, ask string
+}
+
+var (
+	takesOver = crossing{
+		announce: " — taking over (--take)\n",
+		refusal:  " — pass --take to take it over",
+		ask:      "\ntake it over?",
+	}
+	actsOnHeld = crossing{
+		announce: " — acting on it without taking it over (--take)\n",
+		refusal:  " — pass --take to act on it without taking it over",
+		ask:      "\nact on it without taking it over?",
+	}
+)
+
+func crossingOf(verb model.ActionName) crossing {
+	if claims.Establishes(verb) {
+		return takesOver
+	}
+	return actsOnHeld
 }
 
 // askYesNo asks question at the terminal and reports whether the answer

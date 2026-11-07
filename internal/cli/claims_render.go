@@ -36,9 +36,12 @@ func formatClaimLine(cc claimContext, lane model.LaneID, now time.Time) (string,
 // the hold because a listing asks once a row, so an unclaimed lane has to cost
 // nothing and counting a lane's progress has to wait for one.
 func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribution]workspace.Checkout, now time.Time) string {
-	line := claimPrefix(held.By.Checkout, addresses)
+	// The session is named beside the checkout because it is half of who
+	// holds: another session's hold in the reader's own checkout is foreign,
+	// and a line naming only the checkout would read as the reader's own.
+	line := claimPrefix(held.By.Checkout, addresses) + " by " + nameSession(held.By.Session)
 	if len(held.Contested) > 0 {
-		line += fmt.Sprintf(" · contested by %s", strings.Join(nameHolders(held.Contested), ", "))
+		line += fmt.Sprintf(" · contested by %s", strings.Join(nameHolders(held.Contested, addresses), ", "))
 	}
 	parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
 	if progress := formatLaneProgress(lane.Progress()); progress != "" {
@@ -123,34 +126,6 @@ func formatProgress(progress claims.Progress) string {
 	return fmt.Sprintf("%d/%d done", progress.Done, progress.Total)
 }
 
-// describeClaimant names a holder in the transfer notice, rendering the
-// identity halves it actually carries: the assignee when there is one, the
-// stream label when the checkout is recorded, both when both are.
-//
-// Both halves are shown together rather than the "better" one alone because
-// either half can be the only one that moved. Two agent sessions transfer under
-// distinct assignees; two worktrees of ONE session transfer under identical
-// ones — and a notice that printed only the assignee would render that as
-// "X -> X", saying a transfer happened while showing nothing that changed.
-//
-// The public checkout is the single exception, dropped when an assignee already
-// names somebody. It is a bucket rather than an address, so beside a real name
-// it discriminates nothing, and "alice (the public checkout) -> bob (the public
-// checkout)" spends both halves on the half that did not move. Where there is
-// no assignee it is the whole answer, and a better one than "(unassigned)": the
-// record here holds an establishing event, so somebody demonstrably took this
-// ticket, and "(unassigned)" describes the empty assignee field while saying
-// nothing about the holder being announced.
-func describeClaimant(c claims.Claimant) string {
-	switch {
-	case c.Assignee == "":
-		return nameCheckout(c.Checkout)
-	case !c.Checkout.Present():
-		return fmt.Sprint(c.Assignee)
-	}
-	return fmt.Sprintf("%s (%s)", c.Assignee, nameCheckout(c.Checkout))
-}
-
 // nameCheckout names a holder for a human, and is the one place either kind of
 // holder gets a name — claim lines, contest lists, and transfer notices all
 // read through here rather than each deciding what an unidentified holder
@@ -182,13 +157,22 @@ func nameCheckout(a model.Attribution) string {
 	return fmt.Sprintf("stream %s", stream)
 }
 
-// nameHolders names each contestant by its checkout and, beside it, its
-// session — two sessions of one checkout contest each other, and a list naming
-// only the checkout would print the same name twice.
-func nameHolders(holders []claims.Holder) []string {
+// nameHolder names a holder as a reader can find it: its session, in its
+// checkout's address when this machine has one and its opaque name otherwise.
+// The hold gate's refusal, the contest list and the transfer notice all name a
+// holder through here, so one holder reads one way wherever it appears.
+// [LAW:single-enforcer]
+func nameHolder(h claims.Holder, addresses map[model.Attribution]workspace.Checkout) string {
+	return fmt.Sprintf("%s in %s", nameSession(h.Session), checkoutAddress(h.Checkout, addresses))
+}
+
+// nameHolders names each contestant through nameHolder — two sessions of one
+// checkout contest each other, and a list naming only the checkout would print
+// the same name twice.
+func nameHolders(holders []claims.Holder, addresses map[model.Attribution]workspace.Checkout) []string {
 	labels := make([]string, len(holders))
 	for i, h := range holders {
-		labels[i] = fmt.Sprintf("%s (%s)", nameCheckout(h.Checkout), nameSession(h.Session))
+		labels[i] = nameHolder(h, addresses)
 	}
 	return labels
 }

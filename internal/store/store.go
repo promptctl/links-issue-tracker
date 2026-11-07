@@ -1949,15 +1949,15 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	if err != nil {
 		return transitionWrite{}, err
 	}
-	// Who holds the ticket is the (assignee, checkout) pair claims owns, read
-	// from this issue's own history — never the assignee alone. The history read
-	// is what makes the checkout half available: ownership is recorded on events,
-	// not on the row, so there is no column to compare. [LAW:one-source-of-truth]
-	// s.attribution is the taker for the same reason it is the right one to
-	// compare against: it is exactly what recordEvent will stamp on the event
-	// this plan is deciding whether to write.
+	// Who holds the ticket is the claimant claims owns, read from this issue's
+	// own history — never the assignee alone. The history read is what makes
+	// the holder available: ownership is recorded on events, not on the row,
+	// so there is no column to compare. [LAW:one-source-of-truth] The taker is
+	// s.attribution and actor for the same reason they are the right ones to
+	// compare against: they are exactly what recordEvent will stamp on the
+	// event this plan is deciding whether to write.
 	prior := claims.ClaimantOf(issue, history)
-	post := prior.After(action, s.attribution)
+	post := prior.After(action, claims.HolderFor(s.attribution, model.Text(actor)))
 	updated.Assignee = post.Assignee
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
@@ -1965,7 +1965,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	// whose target state and resulting claimant both match the record is the
 	// documented leaf-state Apply no-op: no write, no event. The claim audit
 	// substrate survives because a reclaim — same state, new assignee OR a new
-	// checkout taking the lane — moves the claimant and falls through, which is
+	// session or checkout taking the lane — moves the claimant and falls through, which is
 	// what keeps "who took this over" answerable. Comparing only the assignee
 	// would drop every takeover between two checkouts of one identity on the
 	// floor, silently and with exit 0. [LAW:no-silent-failure]

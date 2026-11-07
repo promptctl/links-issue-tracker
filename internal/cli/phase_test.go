@@ -166,7 +166,12 @@ func TestPhaseMovesAnInProgressTicket(t *testing.T) {
 		if out := runCLIInDir(t, dir, "phase", first, "--to", step.to, "--by", "agent"); !strings.HasPrefix(out, step.notice) {
 			t.Fatalf("lit phase --to %s printed %q, want it to open with the line %q", step.to, out, step.notice)
 		}
-		want := map[string]any{"phase.from": step.from, "phase.to": step.to, "phase.changed": step.changed, "phase.lane_family_issues": float64(2), "phase.lane_held": true}
+		// A move that records nothing crosses no hold, so the gate reads no lane
+		// for it.
+		want := map[string]any{"phase.from": step.from, "phase.to": step.to, "phase.changed": step.changed}
+		if step.changed {
+			want["phase.lane_family_issues"], want["phase.lane_held"] = float64(2), true
+		}
 		if got := phaseFacts(t); !reflect.DeepEqual(got, want) {
 			t.Fatalf("lit phase --to %s event facts = %v, want %v", step.to, got, want)
 		}

@@ -46,7 +46,7 @@ func printContestedLanes(stdout io.Writer, cc claimContext, now time.Time) error
 	if len(lanes) == 0 {
 		return nil
 	}
-	if _, err := fmt.Fprintln(stdout, "contested: evidence from more than one checkout just met for these lanes —"); err != nil {
+	if _, err := fmt.Fprintln(stdout, "contested: more than one holder's evidence just met for these lanes —"); err != nil {
 		return err
 	}
 	for _, lane := range lanes {
