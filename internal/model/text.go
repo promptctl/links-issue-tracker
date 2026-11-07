@@ -134,8 +134,9 @@ func HasLineBreak(text string) bool {
 // HoldRow holds a value to the one row it is printed on: its printable lines
 // joined by QuotedBreak, each line's own QuotedBreak defused first so the
 // token means only a break, and a tab turned to a space so the value cannot
-// add a cell to a tab-separated row. Text.Format and ID.Format are built on it; a
-// renderer calls it directly only for a value that is neither.
+// add a cell to a tab-separated row. FormatHeld is built on it, and a type
+// naming several values renders them raw into FormatHeld rather than calling
+// this, so %q still shows their escapes.
 func HoldRow(s string) string {
 	lines := TextLines(s)
 	for i, line := range lines {
