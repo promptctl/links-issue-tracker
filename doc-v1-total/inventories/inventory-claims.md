@@ -619,8 +619,9 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 ### 10.2 `claimPrefix(by, cc)`
 
 `claimPrefix` (`internal/cli/claims_render.go`):
-- If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here: %s (%s)", checkout.Path, branch)`.
-- Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by))`.
+- Both branches name the checkout through `checkoutAddress(by, addresses)`, the one function that formats `<path> (<branch>)` (branch `"detached HEAD"` when empty) for a checkout this machine enumerated and the opaque `nameCheckout(by)` otherwise, so a claim line and a hold-gate refusal name one checkout the same way.
+- If `cc.addresses[by]` resolves: returns `"claimed here: " + checkoutAddress(by, addresses)`.
+- Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", checkoutAddress(by, addresses), holdState(by))`.
 - `holdState(by)`: `"elsewhere"` (an identified `by`) or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and `by.Present()` is false.
 - The prefix carries no freshness tag: a locked worktree past the clock derives an ordinary `Held` lane and renders like any other, and an expired claim derives `Unclaimed` and renders nothing.
 - **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` in every row regardless of `cc.self`.

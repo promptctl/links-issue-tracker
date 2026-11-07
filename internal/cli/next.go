@@ -9,10 +9,10 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // `lit next` is not a workableView preset over the shared backlog pipeline (see
@@ -101,12 +101,7 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 		row = o.Row
 	case ResumedOwnWork:
 		row = o.Row
-		announce = resumeAdvice(o.Row) + "\n"
-	case TakeOverHere:
-		// Not a pick: another session holds this ticket, so `lit next` names it and
-		// the take that would make it this session's, and serves nothing.
-		_, err := fmt.Fprintln(w, takeOverAdvice(o, cc.addresses))
-		return workflows.Occasion{}, err
+		announce = resumeAdvice(o.Row, cc) + "\n"
 	case ServedFromEpicLane:
 		row = o.Row
 		announce = startAdvice(o.Row, o.Lane, place) + " (a second lane of an epic you already hold a lane in)\n"
@@ -161,19 +156,19 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 }
 
 // resumeAdvice is what `next` says when it hands back work already in flight in
-// a lane this session holds. Routing serves such a row only to the holder — the
-// session and checkout the hold names (relationOf) — so "continue where you
-// left off" is said to the one reader it can be true of, and a second live
-// session never reaches this line for it.
-func resumeAdvice(row annotation.AnnotatedIssue) string {
+// a lane this session holds. The hold is the lane's, so the row may be a
+// sibling somebody else started, and the lane came to this session through
+// `lit start --take` on another of its tickets. Only the session that started
+// the row is told to continue where it left off. Anyone else is told who
+// started it, because where that session left off is not something this one
+// knows.
+func resumeAdvice(row annotation.AnnotatedIssue, cc claimContext) string {
+	// An in-progress row was started, so its history holds the event.
+	establisher, _ := claims.LatestEstablisher(cc.evidence.IssueEvents(row.ID))
+	if starter := claims.HolderOf(establisher); starter != cc.self {
+		return fmt.Sprintf("%s is already in progress in a lane you hold, started by %s — read its history before you continue it", row.ID, nameHolder(starter, cc.addresses))
+	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
-}
-
-// takeOverAdvice names the session that holds a lane from this checkout and
-// the one command that moves the hold here, so a successor resumes its
-// predecessor's work instead of opening a lane beside it.
-func takeOverAdvice(o TakeOverHere, addresses map[model.Attribution]workspace.Checkout) string {
-	return fmt.Sprintf("%s is held by %s — if you are continuing that session's work, take it over with `lit start %s --take`", o.Row.ID, nameHolder(o.Held.By, addresses), o.Row.ID)
 }
 
 // dependencyReason says why step 1b or 2b handed this row over. A pick under an

@@ -54,7 +54,7 @@ func placeFor(outcome NextOutcome, primaryClone bool) startPlace {
 		return startBesideHeldWork
 	case ServedPastNarrowing:
 		return startBesideHeldWork
-	case TakeOverHere, Exhausted, Narrowed, NoWork:
+	case Exhausted, Narrowed, NoWork:
 		return startNoPick
 	}
 	panic(fmt.Sprintf("placeFor: unhandled NextOutcome %T", outcome))

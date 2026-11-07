@@ -63,11 +63,11 @@ func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing
 // consume this value, so what it pins is what both of them do.
 // [LAW:behavior-not-structure]
 //
-// The holder is a checkout and a session, so a second session never holds
-// another's lane: in the holder's own checkout it is held here, and in a
-// worktree of it (a worktree mints its own stream, so it is another checkout
-// of one workspace) or in another clone it is foreign. Only the exact pair is
-// ours, and only when the checkout half names somebody.
+// The holder is a checkout and a session, so a second session is foreign
+// wherever it runs: in the holder's own checkout, in a worktree of it (a
+// worktree mints its own stream, so it is another checkout of one workspace),
+// or in another clone. Only the exact pair is ours, and only when both halves
+// name somebody.
 //
 // There is no row for an expired claim because there is no standing for one:
 // the derivation returns Unclaimed the moment the window closes, so this
@@ -88,14 +88,14 @@ func TestRelationOf(t *testing.T) {
 		{"unclaimed is nobody's", claims.Unclaimed{}, selfHolder, laneUnclaimed},
 		{"a nil standing reads as unclaimed, never as a panic", nil, selfHolder, laneUnclaimed},
 		{"held by exactly this checkout and session is ours", heldBy(selfHolder), selfHolder, laneOurs},
-		{"held by another session in this same checkout is held here", heldBy(claims.Holder{Checkout: selfCheckout, Session: otherSession}), selfHolder, laneHeldHere},
+		{"held by another session in this same checkout is foreign", heldBy(claims.Holder{Checkout: selfCheckout, Session: otherSession}), selfHolder, laneHeldForeign},
 		{"held by another session in a worktree of this checkout is foreign", heldBy(claims.Holder{Checkout: worktree, Session: otherSession}), selfHolder, laneHeldForeign},
 		{"held by another session in another checkout is foreign", heldBy(claims.Holder{Checkout: otherClone, Session: otherSession}), selfHolder, laneHeldForeign},
 		{"held by this session in another checkout is foreign", heldBy(claims.Holder{Checkout: worktree, Session: selfHolder.Session}), selfHolder, laneHeldForeign},
 		// The zero session is a value like any other: equal pairs match, and an
 		// identified session meeting it, or it meeting one, is unequal.
-		{"a zero-session hold is held here to a session in this checkout", heldBy(claims.Holder{Checkout: selfCheckout}), selfHolder, laneHeldHere},
-		{"a session's hold is held here to a zero-session self in this checkout", heldBy(selfHolder), claims.Holder{Checkout: selfCheckout}, laneHeldHere},
+		{"a zero-session hold is foreign to a session in this checkout", heldBy(claims.Holder{Checkout: selfCheckout}), selfHolder, laneHeldForeign},
+		{"a session's hold is foreign to a zero-session self in this checkout", heldBy(selfHolder), claims.Holder{Checkout: selfCheckout}, laneHeldForeign},
 		{"a zero-session hold is ours to a zero-session self in the same checkout", heldBy(claims.Holder{Checkout: selfCheckout}), claims.Holder{Checkout: selfCheckout}, laneOurs},
 		{"a zero-session hold in a worktree is foreign to a zero-session self here", heldBy(claims.Holder{Checkout: worktree}), claims.Holder{Checkout: selfCheckout}, laneHeldForeign},
 		// The public checkout is every unattributed writer at once, and a

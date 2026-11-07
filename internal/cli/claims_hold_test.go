@@ -121,23 +121,18 @@ func (h readyTestHarness) runNextAs(by string) string {
 	return out.String()
 }
 
-// A second session in this same checkout is not handed the held ticket as its
-// own, and is not routed past it into a new lane beside it either: `lit next`
-// names the holder and the one command that moves the hold, `lit start <id>
-// --take`, ahead of the free lane. A plain start from there is still refused.
-// The holder session, asking the same question, is handed its own work back.
-func TestRouteNextNamesTheHolderOfThisCheckoutsLaneAndHowToTakeIt(t *testing.T) {
+// `lit next` never serves a ticket another live session holds, even in this
+// same checkout: a second session is routed past the held ticket to the next
+// lane nobody holds. The holder session, asking the same question in the same
+// checkout, is handed its own work back.
+func TestRouteNextRoutesAroundTicketHeldByAnotherSessionInThisCheckout(t *testing.T) {
 	t.Parallel()
 	h := holdHarness(t)
 	_, held := h.heldTicket(h.ap.Stream.Value(), "session-a")
-	h.freeTicket()
+	freeEpic, free := h.freeTicket()
 
-	got := openingLine(h.runNextAs("session-b"))
-	if !strings.HasPrefix(got, held.ID.Raw()+" is held by session-a in ") || !strings.HasSuffix(got, "take it over with `lit start "+held.ID.Raw()+" --take`") {
-		t.Fatalf("next as session-b opens with %q, want the hold on %s named with its holder and `lit start --take`", got, held.ID)
-	}
-	if _, err := h.runTransitionAs(startSpec, held.ID, "session-b"); err == nil {
-		t.Fatalf("start %s as session-b without --take succeeded; the hold must still refuse it", held.ID)
+	if got, want := openingLine(h.runNextAs("session-b")), "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start "+free.ID.Raw()+"` to claim the default lane of epic "+freeEpic.ID.Raw(); got != want {
+		t.Fatalf("next as session-b opens with %q, want %q — the ticket session-a holds must be routed around", got, want)
 	}
 	if got, want := openingLine(h.runNextAs("session-a")), held.ID.Raw()+" is already in progress in a lane you hold — continue where you left off"; got != want {
 		t.Fatalf("next as session-a opens with %q, want %q — the holder gets its own work back", got, want)
@@ -155,15 +150,15 @@ func TestRouteNextServesTheHolderItsLaneSiblingWhateverItsAssignee(t *testing.T)
 	}
 
 	sibling := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("next in the lane"), Lane: storage.SharedLane, Topic: "hold", IssueType: "task", ParentID: epic.ID, Assignee: "somebody-else"})
-	h.freeTicket()
+	freeEpic, free := h.freeTicket()
 
 	// Served from the lane session-a holds, so nothing is announced above the
 	// row: the summary line is the first thing printed.
 	if got, want := openingLine(h.runNextAs("session-a")), sibling.ID.Raw()+"  open  hold  next in the lane"; got != want {
 		t.Fatalf("next as session-a opens with %q, want %q — the lane's sibling is the holder's, whoever it is assigned to", got, want)
 	}
-	if got, want := openingLine(h.runNextAs("session-b")), sibling.ID.Raw()+" is held by session-a in "; !strings.HasPrefix(got, want) {
-		t.Fatalf("next as session-b opens with %q, want it to start %q — session-a's lane is session-b's only through --take", got, want)
+	if got, want := openingLine(h.runNextAs("session-b")), "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start "+free.ID.Raw()+"` to claim the default lane of epic "+freeEpic.ID.Raw(); got != want {
+		t.Fatalf("next as session-b opens with %q, want %q — session-a's lane is not session-b's", got, want)
 	}
 }
 
@@ -280,5 +275,38 @@ func TestTakeBySuccessorUnderTheSameAssigneeMovesTheHold(t *testing.T) {
 	}
 	if _, err := h.runTransitionAs(phaseSpec, ticket.ID, "session-b", "--to", string(model.PhaseReview)); err != nil {
 		t.Fatalf("successor's phase move after --take = %v, want the hold to be its own", err)
+	}
+}
+
+// The hold is the lane's, so it moves through siblings. Session-b takes the
+// lane by starting a sibling with --take, and `lit next` hands it session-a's
+// ticket in flight, naming who started it rather than telling it to continue
+// where it left off. Session-a then takes the lane back with `lit start
+// --take` on its own ticket, whose record still names session-a. That start
+// records, so session-b is the one refused afterwards.
+func TestTakeBackThroughAnUnchangedTicketMovesTheLaneHold(t *testing.T) {
+	t.Parallel()
+	h := holdHarness(t)
+	epic, mine := h.heldTicket(h.ap.Stream.Value(), "session-a")
+	sibling := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("sibling"), Lane: storage.SharedLane, Topic: "hold", IssueType: "task", ParentID: epic.ID})
+
+	if _, err := h.runTransitionAs(startSpec, sibling.ID, "session-b", "--take"); err != nil {
+		t.Fatalf("start %s --take as session-b: %v", sibling.ID, err)
+	}
+	if got, want := openingLine(h.runNextAs("session-b")), mine.ID.Raw()+" is already in progress in a lane you hold, started by session-a in "; !strings.HasPrefix(got, want) {
+		t.Fatalf("next as session-b opens with %q, want it to start %q — the sibling session-a started is not session-b's to continue blind", got, want)
+	}
+
+	out, err := h.runTransitionAs(startSpec, mine.ID, "session-a", "--take")
+	if err != nil {
+		t.Fatalf("start %s --take as session-a: %v", mine.ID, err)
+	}
+	if !strings.Contains(out, "--take") {
+		t.Fatalf("start %s --take as session-a printed %q, want the takeover announced", mine.ID, out)
+	}
+	_, err = h.runTransitionAs(startSpec, sibling.ID, "session-b")
+	var refusal takeoverUnconfirmedError
+	if !errors.As(err, &refusal) || !strings.HasPrefix(refusal.Message, sibling.ID.Raw()+" is held by session-a in ") {
+		t.Fatalf("start %s as session-b after session-a took the lane back = %v, want refused naming session-a", sibling.ID, err)
 	}
 }

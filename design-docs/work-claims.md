@@ -182,7 +182,8 @@ claimant, and the second was served the first's ticket mid-PR. So one ticket
 in flight has one holder: another session, wherever it runs, is refused by
 `lit start`, `lit phase` and `lit done` until it passes `--take`, and `lit
 next` routes it around the lane. A new session continuing a stopped one's
-work takes the lane with `--take`. An event whose actor names nobody (empty,
+work takes the lane with `lit start <id> --take`, the ticket its handoff
+names. An event whose actor names nobody (empty,
 or the store's `unknown`) holds as the zero session, a value like any other:
 a plain shell in the same checkout matches its own such hold, and any named
 session meets it as foreign. The assignee plays no role.
@@ -660,11 +661,12 @@ sidecar maps.
 - **Session-bound claims that a new session starts without**: a successor
   would find its predecessor's lane unclaimed and open new work beside it —
   the original failure mode, rebuilt. Holds are session-bound now, so this
-  alternative was taken in part. What keeps the failure mode out is that the
-  successor still finds the work: `lit next` serves a lane another session
-  holds in the reader's own checkout as its ticket to resume, naming that
-  holder, and the successor continues with an explicit `--take`. Inheriting
-  silently was what let two live sessions in one checkout act on one ticket.
+  alternative was taken in part. The successor finds the work through its
+  handoff, which names the ticket, and continues it with an explicit `lit
+  start <id> --take`. `lit next` routes every session around a lane another
+  session holds, the reader's own checkout included, because it cannot tell a
+  stopped predecessor from a live peer. Inheriting silently was what let two
+  live sessions in one checkout act on one ticket.
 - **Stream identity derived from the claimed epic's name**: names the holder
   after the held, which destroys exactly the distinction the system exists
   to draw — two streams erroneously in one lane would be indistinguishable,

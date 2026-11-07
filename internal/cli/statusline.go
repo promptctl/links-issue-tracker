@@ -70,7 +70,7 @@ func nextStatuslineFacts(outcome NextOutcome, plain bool, evidence claims.Eviden
 		picked = statuslineTicketRef(o.Row.Issue)
 	case ServedPastNarrowing:
 		picked = statuslineTicketRef(o.Row.Issue)
-	case TakeOverHere, Exhausted, Narrowed, NoWork:
+	case Exhausted, Narrowed, NoWork:
 	default:
 		panic(fmt.Sprintf("nextStatuslineFacts: unhandled NextOutcome %T", outcome))
 	}

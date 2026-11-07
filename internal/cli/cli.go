@@ -1841,7 +1841,10 @@ type transitionSpec struct {
 // so a gate that asks can read the answer from its stdin, and with actor, the
 // resolved identity the write will be recorded under, so a gate reading a hold
 // reads it against the holder the write would name.
-type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (afterApply, error)
+//
+// It returns the action Apply writes: the one it was given, or that action
+// with a fact only the gate's own read could settle (model.Start.Reclaim).
+type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (model.Action, afterApply, error)
 
 // afterApply is what a transition owes once Apply has written the issue: the
 // line it prints and the facts it tells the statusline file. The authorize hook
@@ -1856,8 +1859,8 @@ type afterApply func(written ticketState, handover *claims.Handover) (notice str
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
 func noAuthorize(*cobraFlagSet) authorizeFunc {
-	return func(context.Context, Invocation, *app.App, model.ID, ticketState, model.Action, string) (afterApply, error) {
-		return func(ticketState, *claims.Handover) (string, statusline.Facts) { return "", nil }, nil
+	return func(_ context.Context, _ Invocation, _ *app.App, _ model.ID, _ ticketState, action model.Action, _ string) (model.Action, afterApply, error) {
+		return action, func(ticketState, *claims.Handover) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
 
@@ -2096,7 +2099,7 @@ func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID m
 	// (claims_takeover.go). What it owes is decided on pre-Apply state and
 	// completed after Apply, so a failed Apply announces and records
 	// nothing.
-	owed, err := authorize(ctx, inv, ap, issueID, prior, action, actor)
+	action, owed, err := authorize(ctx, inv, ap, issueID, prior, action, actor)
 	if err != nil {
 		return transitionDone{}, err
 	}

@@ -52,12 +52,14 @@ func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribu
 
 // claimPrefix is the badge half of the claim line: where a listing can walk
 // over to the claimant, or, failing that, the opaque discriminator the
-// shared database actually carries.
+// shared database actually carries. The address is checkoutAddress's, so a
+// claim line and a hold-gate refusal name one checkout the same way.
+// [LAW:one-source-of-truth]
 func claimPrefix(by model.Attribution, addresses map[model.Attribution]workspace.Checkout) string {
-	if checkout, ok := addresses[by]; ok {
-		return fmt.Sprintf("claimed here: %s (%s)", checkout.Path, branchOf(checkout))
+	if _, ok := addresses[by]; ok {
+		return "claimed here: " + checkoutAddress(by, addresses)
 	}
-	return fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by))
+	return fmt.Sprintf("claimed: %s (%s)", checkoutAddress(by, addresses), holdState(by))
 }
 
 // checkoutAddress names a holder's checkout as a reader can find it: its path

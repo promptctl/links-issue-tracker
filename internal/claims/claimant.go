@@ -122,6 +122,7 @@ func (h Handover) Live(lane Standing) bool {
 type StatusPlan struct {
 	Current, Updated model.Issue
 	Prior, Post      Claimant
+	reclaims         bool
 }
 
 // PlanStatus runs action against issue, whose own history is events, as
@@ -134,16 +135,19 @@ func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.Statu
 	prior := ClaimantOf(issue, events)
 	post := prior.After(action, taker)
 	updated.Assignee = post.Assignee
-	return StatusPlan{Current: issue, Updated: updated, Prior: prior, Post: post}, nil
+	start, isStart := action.(model.Start)
+	return StatusPlan{Current: issue, Updated: updated, Prior: prior, Post: post, reclaims: isStart && start.Reclaim}, nil
 }
 
-// Records reports that the transition writes: it moves the status or the
-// claimant. A call whose target state and claimant both already hold is the
-// documented no-op — history records mutations that happened, not calls that
-// were made — and a same-state start that moves the claimant is the reclaim
-// path, which records who took the ticket.
+// Records reports that the transition writes: it moves the status, the
+// claimant, or the lane's hold. A call whose target state and claimant both
+// already hold is the documented no-op — history records mutations that
+// happened, not calls that were made. A same-state start that moves the
+// claimant records who took the ticket. So does a start that takes back a
+// lane a sibling's start moved away (model.Start.Reclaim), even though this
+// ticket's own claimant has not changed.
 func (p StatusPlan) Records() bool {
-	return p.Updated.StatusValue() != p.Current.StatusValue() || p.Post != p.Prior
+	return p.Updated.StatusValue() != p.Current.StatusValue() || p.Post != p.Prior || p.reclaims
 }
 
 // Handover is the claim passing hands this transition records, nil for none.

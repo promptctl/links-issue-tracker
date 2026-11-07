@@ -42,7 +42,17 @@ type RetentionAction interface {
 
 // Start claims the issue: it is the only action that rewrites the assignee,
 // so it is the only variant that carries one.
-type Start struct{ Assignee string }
+//
+// Reclaim says the issue's lane is held by somebody other than the taker,
+// even though the issue's own record names the taker. A hold belongs to a
+// lane, so a sibling's start can move it while this issue's history stays
+// unchanged, and a start that read only that history would take nothing back
+// and record nothing. Only a reader of the lane can know this, so the hold
+// gate sets it.
+type Start struct {
+	Assignee string
+	Reclaim  bool
+}
 
 func (Start) Name() ActionName { return ActionStart }
 func (Start) Target() State    { return InProgress }

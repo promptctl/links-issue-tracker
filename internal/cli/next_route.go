@@ -37,17 +37,6 @@ type ServedFromClaim struct{ Row annotation.AnnotatedIssue }
 // would hide every orphan and the very ticket the checkout is working on.
 type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 
-// TakeOverHere is a ticket in a lane another session holds from this same
-// checkout — a predecessor that stopped or handed off, live or not, perhaps
-// kept past the freshness window by the worktree's lock. It is this checkout's
-// work, so it is answered ahead of a new lane, but never served: the answer
-// names the holder in Held and the `lit start <id> --take` a successor takes
-// it with, and picks nothing.
-type TakeOverHere struct {
-	Row  annotation.AnnotatedIssue
-	Held claims.Held
-}
-
 // ServedFromEpicLane is a pick from a different lane of the same epic this
 // checkout already holds a lane in — the GRANULARITY RULING's new step 2,
 // epic-major before global. Starting it would establish a fresh claim on Lane,
@@ -341,7 +330,7 @@ func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self claim
 		return reachTakeable
 	case ClassifyReadiness(row.Annotations).AwaitsOutside():
 		return reachAwaitingOutside
-	case relationOf(standing, self).heldByAnother():
+	case relationOf(standing, self) == laneHeldForeign:
 		return reachHeldFresh
 	case ClassifyReadiness(row.Annotations).HeldByItself():
 		return reachHeldByItself
@@ -371,7 +360,6 @@ type NoWork struct {
 
 func (ServedFromClaim) isNextOutcome()      {}
 func (ResumedOwnWork) isNextOutcome()       {}
-func (TakeOverHere) isNextOutcome()         {}
 func (ServedFromEpicLane) isNextOutcome()   {}
 func (ServedFromNewLane) isNextOutcome()    {}
 func (ServedFromDependency) isNextOutcome() {}
@@ -398,10 +386,6 @@ const (
 	// resumeWork: work already underway in a lane this checkout holds. Handed
 	// back rather than started fresh.
 	resumeWork
-	// takeOverWork: work in a lane another session holds from this same
-	// checkout. Served so the successor resumes it with --take, rather than
-	// routed around into a new lane beside its predecessor's.
-	takeOverWork
 )
 
 // capacityFor derives the verdict from the only three facts that bear on it:
@@ -434,10 +418,6 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self c
 	readiness := ClassifyReadiness(row.Annotations)
 	switch {
 	case relation == laneHeldForeign, readiness.AwaitsOutside():
-		return routeAround
-	case relation == laneHeldHere && (started || readiness.IsReady()):
-		return takeOverWork
-	case relation == laneHeldHere:
 		return routeAround
 	case !started && readiness.IsReady():
 		return serveWork
@@ -695,15 +675,6 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.Is
 	//
 	// "No ready work" is asked of the queue, as exhaustion is: when only the
 	// filter emptied the pool, the answer is the ticket it hid.
-	//
-	// Step 3b, ahead of it — a lane another session holds from this checkout.
-	// Opening a new lane beside it would leave its ticket stranded in flight
-	// in the very tree this reader works in, so it is served first, with its
-	// holder named, for the reader to take over or leave.
-	if row, _, ok := pickFrom(rows, selected, func(model.LaneID) bool { return true }, takeOverWork); ok {
-		// pickFrom accepts takeOverWork only for a Held standing (capacityFor).
-		return TakeOverHere{Row: row, Held: standings.Of(laneOf(row)).(claims.Held)}
-	}
 	if pick, ok := fromPool(selected); ok {
 		return ServedFromNewLane{pick}
 	}

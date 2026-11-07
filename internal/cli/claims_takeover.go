@@ -35,20 +35,10 @@ const (
 	laneUnclaimed laneRelation = iota
 	// laneOurs: this session, in this checkout, holds it right now.
 	laneOurs
-	// laneHeldHere: another session holds it right now from this same
-	// checkout — the session this one was handed the work from, or one still
-	// working beside it. Acted on only through --take, like any other
-	// holder's lane, but it is this checkout's work, so `lit next` serves it
-	// to resume rather than opening a new lane beside it.
-	laneHeldHere
-	// laneHeldForeign: a session in another checkout holds it right now.
-	// Routed around, and acted on only through --take.
+	// laneHeldForeign: another session or another checkout holds it right
+	// now. Routed around, and acted on only through --take.
 	laneHeldForeign
 )
-
-// heldByAnother reports that a holder other than the reader holds the lane
-// right now — the relations the hold gate crosses only with --take.
-func (r laneRelation) heldByAnother() bool { return r == laneHeldHere || r == laneHeldForeign }
 
 // relationOf is the one place a Standing is read against the reader.
 //
@@ -69,13 +59,10 @@ func relationOf(standing claims.Standing, self claims.Holder) laneRelation {
 	if !ok {
 		return laneUnclaimed
 	}
-	switch {
-	case !self.Checkout.Present() || held.By.Checkout != self.Checkout:
-		return laneHeldForeign
-	case held.By == self:
+	if self.Checkout.Present() && held.By == self {
 		return laneOurs
 	}
-	return laneHeldHere
+	return laneHeldForeign
 }
 
 // holdReading is what the hold gate read about the target's lane, handed to
@@ -105,7 +92,7 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 		// first time a gate needs it: `lit bulk` gates every id against the
 		// same machine, and the enumeration is a subprocess.
 		var gathered *checkoutFacts
-		return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (afterApply, error) {
+		return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (model.Action, afterApply, error) {
 			checkouts := func() (checkoutFacts, error) {
 				if gathered == nil {
 					facts, err := gatherCheckouts(inv.Env, inv.Stdout, ap)
@@ -116,15 +103,15 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 				}
 				return *gathered, nil
 			}
-			hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, actor, *take, checkouts)
+			action, hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, actor, *take, checkouts)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			owed, err := inner(ctx, inv, ap, issueID, prior, action, hold)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			return func(written ticketState, handover *claims.Handover) (string, statusline.Facts) {
+			return action, func(written ticketState, handover *claims.Handover) (string, statusline.Facts) {
 				notice, facts := owed(written, handover)
 				return takeover + notice, facts
 			}, nil
@@ -137,9 +124,11 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 // holder other than this one holds the lane right now, demands the deliberate
 // act before the transition may proceed. Every other lane — unclaimed, this
 // holder's own, or one whose claim has expired, which is unclaimed — passes
-// with no ceremony: the happy path pays one read of the lane's family and
-// nothing else. The read stays off the store's size, because a transition
-// asks about one lane; `next` and `backlog` route across all of them.
+// with no ceremony: when this holder was the lane's last taker, the gate pays
+// one read of the lane's family and nothing else, with no config and no
+// enumeration of the machine's checkouts. The read stays off the store's size,
+// because a transition asks about one lane; `next` and `backlog` route across
+// all of them.
 //
 // The self it reads against is this checkout and the session the transition
 // is recorded under — actor, the resolved identity Store.Apply stamps on the
@@ -148,7 +137,10 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 //
 // takeover is the line owed once Apply lands when --take crossed a foreign
 // hold, so a transition that fails after the gate announces no takeover.
-func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string, take bool, gather func() (checkoutFacts, error)) (hold holdReading, takeover string, err error) {
+// The action returned is the one Apply writes: a start on a ticket whose own record
+// already names this holder, in a lane somebody took since, comes back as a
+// reclaim, so taking the lane back records the event that does it.
+func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string, take bool, gather func() (checkoutFacts, error)) (model.Action, holdReading, string, error) {
 	// A takeover is worth confirming only for a transition that can land. The
 	// issue's own rules refuse a frozen issue, a container, and a phase move
 	// off in-progress work whoever holds the lane, so their refusal answers
@@ -158,39 +150,58 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	//
 	// A transition that will record nothing crosses no hold, so it is not
 	// gated: demanding --take for it, or announcing one, would describe an act
-	// that never happens.
+	// that never happens. A start is the exception the ticket's own record
+	// cannot see: its lane may have been taken through a sibling since, and
+	// only the lane read below can tell.
 	self := ownHolder(ap, actor)
 	records, err := landable(prior, action, self)
-	if err != nil || !records {
-		return holdReading{}, "", err
+	if err != nil {
+		return nil, holdReading{}, "", err
+	}
+	start, starts := action.(model.Start)
+	if !records && !starts {
+		return action, holdReading{}, "", nil
 	}
 	family, err := ap.Store.LaneFamily(ctx, issueID)
 	if err != nil {
-		return holdReading{}, "", err
+		return nil, holdReading{}, "", err
 	}
 	verb := action.Name().Verb()
 	telemetry.Set(ctx, verb+".lane_family_issues", len(family.Issues))
 	lane, err := claims.NewLane(issueID, family)
 	if err != nil {
-		return holdReading{}, "", err
+		return nil, holdReading{}, "", err
+	}
+	// This holder took the lane last, so nobody can hold it but this holder:
+	// the transition is ours, and needs neither the clock nor the machine's
+	// checkouts to say so. The public checkout is every unattributed writer at
+	// once, so it is never ours here, as relationOf never answers it ours.
+	if taker, taken := lane.LastTaker(); taken && self.Checkout.Present() && taker == self {
+		telemetry.Set(ctx, verb+".lane_held", true)
+		return action, holdReading{lane: lane}, "", nil
+	}
+	if starts && !records {
+		start.Reclaim = true
+		action = start
 	}
 	checkouts, err := gather()
 	if err != nil {
-		return holdReading{}, "", err
+		return nil, holdReading{}, "", err
 	}
 	standing := lane.Standing(checkouts.fresh, checkouts.local)
 	relation := relationOf(standing, self)
 	// Recorded before the gate, so a refused takeover's event still says whose
 	// lane it met.
 	telemetry.Set(ctx, verb+".lane_held", relation != laneUnclaimed)
-	if relation.heldByAnother() {
-		// relationOf answers a held-by-another relation for a Held standing only.
+	takeover := ""
+	if relation == laneHeldForeign {
+		// relationOf answers laneHeldForeign for a Held standing and nothing else.
 		line := heldByLine(issueID, standing.(claims.Held), checkouts.addresses, time.Now())
 		if takeover, err = confirmFreshTakeover(inv.Stdin, inv.Stdout, line, crossingOf(action.Name()), take); err != nil {
-			return holdReading{}, "", err
+			return nil, holdReading{}, "", err
 		}
 	}
-	return holdReading{lane: lane, standing: standing, addresses: checkouts.addresses}, takeover, nil
+	return action, holdReading{lane: lane, standing: standing, addresses: checkouts.addresses}, takeover, nil
 }
 
 // landable runs the issue's own refusal of action on the state the gate read —

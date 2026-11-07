@@ -2,12 +2,14 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -237,10 +239,10 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 }
 
 // Two agent sessions in ONE checkout. Session sess-peer starts a ticket; session
-// sess-mine runs `lit next` and is pointed at it as the peer's, to take over
-// only with --take: a lane is held by a session in a checkout, and the ticket
-// stranded in flight in this tree is the work this checkout has to move.
-func TestRunNextPointsAtThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
+// sess-mine runs `lit next` and is not handed it: a lane is held by a session in
+// a checkout, so the peer's work in flight is routed around, and with nothing
+// else in the backlog the answer is the empty pool naming why.
+func TestRunNextRoutesAroundThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-peer")
 	h := newReadyTestHarness(t)
@@ -250,13 +252,10 @@ func TestRunNextPointsAtThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
 
 	// Same checkout, same stream token, different session.
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
-	text := withoutLivenessWarning(h.runNextText())
-	if want := theirs.ID.Raw() + " is held by claude_sess-peer in "; !strings.HasPrefix(text, want) || !strings.Contains(text, "`lit start "+theirs.ID.Raw()+" --take`") {
-		t.Fatalf("next as sess-mine = %q, want %s named as claude_sess-peer's, to take over with --take", text, theirs.ID)
-	}
-	// Named, never served: no ticket summary, so nothing reads as this session's pick.
-	if strings.Contains(text, "Peer's work, in flight") {
-		t.Fatalf("next as sess-mine = %q, served the held ticket as a pick", text)
+	err := h.runNextErr()
+	var none NoWork
+	if !errors.As(err, &none) || len(none.Unreachable) != 1 || none.Unreachable[0].ID != theirs.ID || none.Unreachable[0].Kind != reachHeldFresh {
+		t.Fatalf("next as sess-mine = %v, want NoWork naming %s as held by another holder", err, theirs.ID)
 	}
 }
 
@@ -918,7 +917,14 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	h.transition(inFlight.ID, model.Start{Assignee: "other"})
 
 	rows, details, _ := h.gather()
-	cc := claimContext{self: selfHolder}
+	// The reader is the session that started the row in flight, so resuming it
+	// is resuming its own work.
+	evidence, err := readEvidence(h.ctx, h.ap)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	started, _ := claims.LatestEstablisher(evidence.IssueEvents(inFlight.ID))
+	cc := claimContext{self: claims.HolderOf(started), evidence: evidence}
 	freshRow := rowByID(t, rows, fresh.ID)
 	inFlightRow := rowByID(t, rows, inFlight.ID)
 	freshLane := laneOf(t, details, freshRow)
