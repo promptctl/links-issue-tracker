@@ -161,6 +161,23 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
    - **Already on the ticket's branch?**  You are, if you arrived here from uncommitted work.  Stay on it and skip to the cleanliness check — creating a second branch here strands the work you just claimed.
 
+     Unless that branch's PR has already merged.  Then the branch leads nowhere, and work built on it opens a second PR for a merged branch.  Ask:
+
+     ```
+     gh pr list --head "$(git branch --show-current)" --state merged --limit 1
+     ```
+
+     A non-zero exit is no answer, not a "no" — fix `gh` before you trust the empty output.  A line printed means merged: carry the uncommitted work onto a fresh branch cut from the trunk.  `git switch` carries uncommitted changes, and refuses without touching anything when they conflict:
+
+     ```
+     git fetch origin
+     git switch --detach origin/master
+     git branch -D <old-branch>      # only when it holds the ticket's own name
+     git switch -c <ticket-id>
+     ```
+
+     If the switch refuses, commit the work on the old branch and cherry-pick that commit onto the new one.
+
    - **Otherwise, branch from an up-to-date trunk** — not from wherever HEAD happens to be sitting.  Finishing a ticket leaves you standing on its branch, and `git checkout -b` from there silently forks the new ticket off unmerged work: the PR opens carrying the previous ticket's diff on top of its own, and it cannot be reviewed or merged on its own.  Fetch the trunk first; the branch is cut from it below:
 
      ```
