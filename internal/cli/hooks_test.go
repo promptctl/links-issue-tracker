@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, litHookMarkers.begin) || !strings.Contains(text, litHookMarkers.end) {
 		t.Fatalf("hook missing managed section markers: %q", text)
 	}
-	if !strings.Contains(text, "hook-triggered lit sync push failed") {
+	if !strings.Contains(text, "hook-triggered lit sync push exited") {
 		t.Fatalf("hook missing warning output: %q", text)
 	}
 	if !strings.Contains(text, "LNKS_AUTOMATION_TRIGGER=\"git-pre-push\"") {
@@ -47,6 +48,108 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	}
 	if !strings.Contains(text, "exit 0") {
 		t.Fatalf("hook must never block push: %q", text)
+	}
+}
+
+// A push the hook triggers can fail in ways no retry clears (a peer's
+// commits); only the failure's own block names the remedy. The
+// hook must pass that block through and never claim the failure is transient.
+func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		// bash there may be WSL's, which sees neither the hook's path nor binDir.
+		t.Skip("the hook runs under a POSIX bash")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not on PATH")
+	}
+	const remedy = "HOW TO RESOLVE: run `lit sync pull`, then `lit sync push`."
+	cases := []struct {
+		name string
+		// existing is a user's pre-push hook the managed section is added to.
+		existing string
+		// noTempFile points TMPDIR nowhere, so the hook's mktemp fails.
+		noTempFile bool
+		stub       string
+		wantStderr []string
+	}{
+		{
+			name:       "failing push",
+			stub:       "echo pushed-summary\necho '" + remedy + "' >&2\nexit 1\n",
+			wantStderr: []string{remedy, "hook-triggered lit sync push exited 1 (trigger=git-pre-push remote=peer trace=unavailable)"},
+		},
+		{
+			name:       "failing push that recorded a trace",
+			stub:       "printf '/traces/push-1.json' > \"$LNKS_AUTOMATION_TRACE_REF_FILE\"\nexit 3\n",
+			wantStderr: []string{"exited 3 (trigger=git-pre-push remote=peer trace=/traces/push-1.json)"},
+		},
+		{
+			name:       "failing push after a user hook that sets errexit",
+			existing:   "#!/usr/bin/env bash\nset -euo pipefail\n",
+			stub:       "exit 5\n",
+			wantStderr: []string{"exited 5 (trigger=git-pre-push remote=peer"},
+		},
+		{
+			name:       "succeeding push with no trace file after a user hook that sets errexit",
+			existing:   "#!/usr/bin/env bash\nset -euo pipefail\n",
+			noTempFile: true,
+			stub:       "exit 0\n",
+		},
+		{name: "succeeding push", stub: "echo pushed-summary\nexit 0\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := t.TempDir()
+			runGit(t, repo, "init")
+			ws, err := workspace.Resolve(runEnv(t), repo)
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
+			if tc.existing != "" {
+				if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
+					t.Fatalf("MkdirAll(hooks) error = %v", err)
+				}
+				if err := os.WriteFile(hookPath, []byte(tc.existing), 0o755); err != nil {
+					t.Fatalf("WriteFile(existing pre-push) error = %v", err)
+				}
+			}
+			if err := runWsFamily(t, hooksFamily, context.Background(), new(bytes.Buffer), ws, []string{"install"}); err != nil {
+				t.Fatalf("hooks install error = %v", err)
+			}
+			binDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(binDir, "lit"), []byte("#!/bin/sh\n"+tc.stub), 0o755); err != nil {
+				t.Fatalf("WriteFile(stub lit) error = %v", err)
+			}
+			cmd := exec.Command(bash, hookPath, "peer")
+			cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if tc.noTempFile {
+				cmd.Env = append(cmd.Env, "TMPDIR="+filepath.Join(binDir, "missing"))
+			}
+			var hookStdout, hookStderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &hookStdout, &hookStderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("hook exited %v, want 0 (it must never block the push); stderr=%q", err, hookStderr.String())
+			}
+			got := hookStderr.String()
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(got, want) {
+					t.Errorf("hook stderr = %q, want it to contain %q", got, want)
+				}
+			}
+			if len(tc.wantStderr) == 0 && got != "" {
+				t.Errorf("hook stderr = %q, want silence on success", got)
+			}
+			for _, claim := range []string{"retry", "transient"} {
+				if strings.Contains(strings.ToLower(got), claim) {
+					t.Errorf("hook stderr = %q claims %q", got, claim)
+				}
+			}
+			if hookStdout.Len() != 0 {
+				t.Errorf("hook stdout = %q, want the push's summary discarded", hookStdout.String())
+			}
+		})
 	}
 }
 

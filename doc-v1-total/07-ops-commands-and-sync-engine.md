@@ -298,7 +298,7 @@ The eight embedded assets (all also ejectable):
 
 | Asset | Written by | Destination | Role |
 |---|---|---|---|
-| `pre-push-hook.sh` | `installHooks` | managed region of the git `pre-push` hook | runs `lit sync push --remote <r>` with `LNKS_AUTOMATION_TRIGGER=git-pre-push` and a trace-ref file; on failure prints an `<agent-instructions>` warning with the trace path; always exits 0 so a sync failure never blocks the git push |
+| `pre-push-hook.sh` | `installHooks` | managed region of the git `pre-push` hook | runs `lit sync push --remote <r>` with `LNKS_AUTOMATION_TRIGGER=git-pre-push` and a trace-ref file; passes the failed push's own block through and prints a `[links] warning:` line with the exit status and trace path; always exits 0 so a sync failure never blocks the git push |
 | `quickstart.md` | bare `lit` / `lit quickstart` | stdout | 19-line router over the six topics plus a fastpath (`lit next` / `lit start` / `lit workflows`) |
 | `quickstart-work.md` | `lit quickstart work` | stdout | finding/starting work: `ls`, `next`, `backlog`, `show`, claims-first selection, the checkout a ticket is worked from, `start --take`, recording each phase move |
 | `quickstart-new.md` | `lit quickstart new` | stdout | `lit new` flags, description/topic notes, `import --path` |
