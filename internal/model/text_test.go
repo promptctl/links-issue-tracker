@@ -29,6 +29,29 @@ func TestTextPrintsHeldUnderEveryVerb(t *testing.T) {
 	}
 }
 
+// TestCompositeFormatsAsOneHeldValue pins that a type naming several values
+// renders them raw into FormatHeld and so formats as one held value does: %v
+// holds the whole row and %q shows the raw escapes of every part.
+func TestCompositeFormatsAsOneHeldValue(t *testing.T) {
+	t.Parallel()
+	c := composite{id: ID("a\tb"), tail: "x\ny"}
+	for _, tc := range []struct{ format, want string }{
+		{"%v", "a b x" + QuotedBreak + "y"},
+		{"%q", `"a\tb x\ny"`},
+	} {
+		if got := fmt.Sprintf(tc.format, c); got != tc.want {
+			t.Errorf("Sprintf(%q) = %q, want %q", tc.format, got, tc.want)
+		}
+	}
+}
+
+type composite struct {
+	id   ID
+	tail string
+}
+
+func (c composite) Format(f fmt.State, verb rune) { FormatHeld(f, verb, c.id.Raw()+" "+c.tail) }
+
 // TestIDQuotesRawUnderQ pins that %q shows an id exactly as given, escapes and
 // all, so an error naming a rejected id shows the tab or break it carried,
 // while %s holds it to its row as Text does.

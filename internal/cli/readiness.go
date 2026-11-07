@@ -44,7 +44,7 @@ func (r BlockingReason) ticket() model.ID { return model.ID(r.Detail) }
 // arriving on screen as a blank reason or, worse, no reason at all.
 func (r BlockingReason) Phrase() string {
 	if label, ok := r.dependency(); ok {
-		return "blocker " + label + " still open"
+		return fmt.Sprintf("blocker %s still open", label)
 	}
 	if label, ok := blockingLabelOf(r.Kind); ok {
 		return label
@@ -94,14 +94,31 @@ func (r IssueReadiness) RankInversions() []string { return r.rankInversions }
 // the epic, never on this issue.
 // [LAW:one-type-per-behavior] [LAW:one-source-of-truth] the one list of which
 // kinds are dependencies, read by the ids, the labels, and Phrase alike.
-func (r BlockingReason) dependency() (label string, ok bool) {
+func (r BlockingReason) dependency() (label DependencyLabel, ok bool) {
 	switch r.Kind {
 	case annotation.OpenDependency:
-		return fmt.Sprint(r.ticket()), true
+		return DependencyLabel{id: r.ticket()}, true
 	case annotation.InheritedDependency:
-		return fmt.Sprintf("%s (via epic)", r.ticket()), true
+		return DependencyLabel{id: r.ticket(), viaEpic: true}, true
 	}
-	return "", false
+	return DependencyLabel{}, false
+}
+
+// DependencyLabel is a dependency as a "blocked by:" line names it: its id,
+// and whether the edge lives on an epic above. It carries the id typed, so it
+// prints held as the id does. [LAW:types-are-the-program]
+type DependencyLabel struct {
+	id      model.ID
+	viaEpic bool
+}
+
+// Format prints the id held to its row, marked when the edge is the epic's.
+func (l DependencyLabel) Format(f fmt.State, verb rune) {
+	rendered := l.id.Raw()
+	if l.viaEpic {
+		rendered += " (via epic)"
+	}
+	model.FormatHeld(f, verb, rendered)
 }
 
 // DependencyIDs returns the ids of the dependencies among the blocking reasons,
@@ -165,8 +182,8 @@ func (r IssueReadiness) AwaitsOutside() bool {
 
 // DependencyLabels returns the same dependencies as DependencyIDs, in the same
 // order, worded for the "blocked by:" lines a reader sees.
-func (r IssueReadiness) DependencyLabels() []string {
-	var labels []string
+func (r IssueReadiness) DependencyLabels() []DependencyLabel {
+	var labels []DependencyLabel
 	for _, reason := range r.blocking {
 		if label, ok := reason.dependency(); ok {
 			labels = append(labels, label)

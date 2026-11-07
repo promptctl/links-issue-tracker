@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -397,7 +398,7 @@ func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
 		readiness := ClassifyReadiness([]annotation.Annotation{{Kind: kind, Message: "test-detail"}})
 		reasons := nonDependencyBlockingReasons(readiness)
 		if labels := readiness.DependencyLabels(); len(labels) != 0 {
-			if len(labels) != 1 || !strings.HasPrefix(labels[0], "test-detail") || len(reasons) != 0 {
+			if len(labels) != 1 || !strings.HasPrefix(fmt.Sprint(labels[0]), "test-detail") || len(reasons) != 0 {
 				t.Errorf("kind %s rendered %v on \"blocked by:\" and %v in \"blocked:\"; a dependency belongs on \"blocked by:\" alone, named by its id", kind, labels, reasons)
 			}
 			continue

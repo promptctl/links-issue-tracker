@@ -3,6 +3,7 @@ package conformance
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -166,7 +167,7 @@ func aReadOutFileKeepsWhatOtherWritersChanged(t *testing.T, ctx context.Context,
 	assertStrings(t, "updated", result.Updated, []model.ID{issue.ID})
 	kept := make([]string, len(result.Kept))
 	for i, slot := range result.Kept {
-		kept[i] = slot.String()
+		kept[i] = fmt.Sprint(slot)
 	}
 	assertStrings(t, "kept", kept, []string{issue.ID.Raw() + " priority", issue.ID.Raw() + " lane", issue.ID.Raw() + " blocked-by " + blocker.ID.Raw()})
 	relations, err := st.GetRelationsByIDs(ctx, []model.ID{issue.ID})

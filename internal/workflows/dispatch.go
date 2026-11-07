@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -79,9 +80,11 @@ func Dispatch(env environ.Env, w io.Writer, errOut io.Writer, ws workspace.Info,
 }
 
 // Interpolate replaces the <id> placeholder in an injected body with the
-// occasion's issue id. It is the one substitution workflow bodies get.
+// occasion's issue id, held to one row as %s holds it: the id may arrive by
+// sync, and a break in it would forge lines in the guidance an agent reads.
+// It is the one substitution workflow bodies get.
 // Exported so `lit workflows dry-run` can preview the same interpolated body
 // Dispatch would actually inject.
-func Interpolate(body, issueID string) string {
-	return strings.ReplaceAll(body, "<id>", issueID)
+func Interpolate(body string, issueID model.ID) string {
+	return strings.ReplaceAll(body, "<id>", fmt.Sprint(issueID))
 }

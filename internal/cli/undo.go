@@ -129,7 +129,7 @@ func recordRevert(ctx context.Context, result storage.RevertResult, err error) {
 }
 
 func printRevert(stdout io.Writer, result storage.RevertResult) error {
-	if err := printIDs(stdout, fmt.Sprintf("reverted %d writes", len(result.Writes)), result.Writes); err != nil {
+	if err := printIDs(stdout, fmt.Sprintf("reverted %d writes", len(result.Writes)), model.IDsOf(result.Writes)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(stdout, "put back %d\n", len(result.Moves)); err != nil {
@@ -143,5 +143,5 @@ func printRevert(stdout io.Writer, result storage.RevertResult) error {
 	if err := printBulkApplied(stdout, result.Applied); err != nil {
 		return err
 	}
-	return printIDs(stdout, fmt.Sprintf("landed as %d writes (revert them to undo this undo)", len(result.Landed)), result.Landed)
+	return printIDs(stdout, fmt.Sprintf("landed as %d writes (revert them to undo this undo)", len(result.Landed)), model.IDsOf(result.Landed))
 }

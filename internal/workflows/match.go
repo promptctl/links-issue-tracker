@@ -3,6 +3,8 @@ package workflows
 import (
 	"fmt"
 	"slices"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // Occasion is one moment at which workflow definitions may fire: the semantic
@@ -21,7 +23,7 @@ type Occasion struct {
 	// Occasion carries everything a dispatch site knows about the moment,
 	// rather than a second payload type duplicating Labels/Entered/Exited
 	// alongside it.
-	IssueID string
+	IssueID model.ID
 	// Labels are the acted-on ticket's labels in the store's canonical form
 	// (model.NormalizeLabel; definitions are stamped into the same form at
 	// parse time, so comparison here is exact). Nil when the moment has no

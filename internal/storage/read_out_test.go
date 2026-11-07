@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func mergeOK(t *testing.T, doc storage.BulkIssueSpec, now storage.CurrentState) 
 	}
 	kept := make([]string, len(merged.Kept))
 	for i, slot := range merged.Kept {
-		kept[i] = slot.String()
+		kept[i] = fmt.Sprint(slot)
 	}
 	return out, kept
 }
