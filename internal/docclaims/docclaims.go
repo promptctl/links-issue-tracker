@@ -932,8 +932,7 @@ func spansIn(src string) ([]string, error) {
 	}
 	var out []string
 	for _, s := range spans {
-		candidates := append([]string{s.Text}, paired(s.Text, "`")...)
-		for _, q := range append(candidates, paired(s.Text, `"`)...) {
+		for _, q := range slices.Concat([]string{s.Text}, paired(s.Text, "`"), goLiterals(s.Text)) {
 			if len(q) >= minClaimLen && strings.Contains(q, " ") {
 				out = append(out, q)
 			}
@@ -942,8 +941,34 @@ func spansIn(src string) ([]string, error) {
 	return out, nil
 }
 
+// goLiterals is the decoded value of each interpreted Go string literal a span
+// writes. The corpus holds decoded values, so a literal read raw never matches
+// once it carries \n or \", and cutting at every double quote splits a literal
+// that escapes one into fragments. Scanned as embedPatterns scans, with the raw
+// stretch kept when it does not decode.
+func goLiterals(span string) []string {
+	var out []string
+	for rest := span; ; {
+		start := strings.IndexByte(rest, '"')
+		if start < 0 {
+			return out
+		}
+		rest = rest[start:]
+		end := closingQuote(rest)
+		if end < 0 {
+			return out
+		}
+		lit := rest[1:end]
+		if unquoted, err := strconv.Unquote(rest[:end+1]); err == nil {
+			lit = unquoted
+		}
+		out = append(out, lit)
+		rest = rest[end+1:]
+	}
+}
+
 // paired is each stretch a span's own marks quote, paired in order, as a
-// message pairs them. An odd count pairs nothing.
+// message pairs its backticks. An odd count pairs nothing.
 func paired(span, mark string) []string {
 	parts := strings.Split(span, mark)
 	if len(parts)%2 == 0 {

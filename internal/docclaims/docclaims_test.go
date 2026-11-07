@@ -285,18 +285,25 @@ func TestSpansInReadsTheCommandsAQuotedMessageQuotes(t *testing.T) {
 // the quotes is the message, and must be a claim whole.
 func TestSpansInReadsTheMessageAGoLiteralQuotes(t *testing.T) {
 	src := "Refused with ``UnsupportedError{Message: \"--flag is retired; run `lit next` with no flag\"}``.\n" +
-		"Or bare: ``\"--flag is gone; run `lit next --all` instead\"``.\n"
+		"Or bare: ``\"--flag is gone; run `lit next --all` instead\"``.\n" +
+		"Escaped: `X{\"invalid --status \\\"<x>\\\" (valid: open)\"}` and `\"claim moved: %s -> %s\\n\"`.\n"
 	got, err := spansIn(src)
 	if err != nil {
 		t.Fatalf("spansIn: %v", err)
 	}
-	for _, want := range []string{
+	want := []string{
+		"UnsupportedError{Message: \"--flag is retired; run `lit next` with no flag\"}",
 		"--flag is retired; run `lit next` with no flag",
+		"\"--flag is gone; run `lit next --all` instead\"",
+		"lit next --all",
 		"--flag is gone; run `lit next --all` instead",
-	} {
-		if !slices.Contains(got, want) {
-			t.Errorf("claims = %q, missing %q", got, want)
-		}
+		"X{\"invalid --status \\\"<x>\\\" (valid: open)\"}",
+		"invalid --status \"<x>\" (valid: open)",
+		"\"claim moved: %s -> %s\\n\"",
+		"claim moved: %s -> %s\n",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("claims =\n%q\nwant\n%q", got, want)
 	}
 }
 
