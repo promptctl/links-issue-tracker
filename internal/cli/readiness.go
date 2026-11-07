@@ -114,11 +114,11 @@ type DependencyLabel struct {
 
 // Format prints the id held to its row, marked when the edge is the epic's.
 func (l DependencyLabel) Format(f fmt.State, verb rune) {
-	rendered := fmt.Sprint(l.id)
+	rendered := l.id.Raw()
 	if l.viaEpic {
 		rendered += " (via epic)"
 	}
-	model.FormatComposite(f, verb, rendered)
+	model.FormatHeld(f, verb, rendered)
 }
 
 // DependencyIDs returns the ids of the dependencies among the blocking reasons,

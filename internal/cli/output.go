@@ -75,7 +75,7 @@ func printContextLine(w io.Writer, indent, text string) error {
 // [LAW:one-type-per-behavior] both lines are one behavior differing only in
 // label and data. [LAW:dataflow-not-control-flow]
 // It takes only fmt.Formatter values, so a raw string id cannot reach it;
-// holding is each Formatter's own contract (model.ID, model.FormatComposite).
+// holding is each Formatter's own contract (model.ID, model.FormatHeld).
 func printIDListLine[T fmt.Formatter](w io.Writer, indent, label string, ids []T) error {
 	if len(ids) == 0 {
 		return nil

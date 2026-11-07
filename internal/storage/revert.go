@@ -49,15 +49,15 @@ func (s Slot) Format(f fmt.State, verb rune) {
 	var rendered string
 	switch s.Kind {
 	case FieldSlot:
-		rendered = fmt.Sprintf("%s %s", s.Issue, s.Name)
+		rendered = fmt.Sprintf("%s %s", s.Issue.Raw(), s.Name)
 	case ParentSlot:
-		rendered = fmt.Sprintf("%s parent", s.Issue)
+		rendered = fmt.Sprintf("%s parent", s.Issue.Raw())
 	case BlockedBySlot:
-		rendered = fmt.Sprintf("%s blocked-by %s", s.Issue, model.ID(s.Name))
+		rendered = fmt.Sprintf("%s blocked-by %s", s.Issue.Raw(), s.Name)
 	default:
 		panic(fmt.Sprintf("storage: slot kind %d", s.Kind))
 	}
-	model.FormatComposite(f, verb, rendered)
+	model.FormatHeld(f, verb, rendered)
 }
 
 // SlotValue is a slot's value in the one spelling every comparison uses: a

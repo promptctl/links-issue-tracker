@@ -21,7 +21,7 @@ func (t Text) Raw() string { return string(t) }
 // Format prints the text held to one row whatever the verb and width, so %s,
 // %v, %q and %-20s all hold it. [LAW:single-enforcer]
 func (t Text) Format(f fmt.State, verb rune) {
-	formatHeld(f, verb, string(t))
+	FormatHeld(f, verb, string(t))
 }
 
 // ID names a ticket, comment or event: minted by lit, but stored and carried
@@ -38,7 +38,7 @@ func (id ID) Trim() ID { return ID(strings.TrimSpace(string(id))) }
 
 // Format prints the id held to one row whatever the verb and width.
 func (id ID) Format(f fmt.State, verb rune) {
-	formatHeld(f, verb, string(id))
+	FormatHeld(f, verb, string(id))
 }
 
 // JoinIDs prints ids joined by sep, each held to its row as %s holds it, so a
@@ -69,11 +69,11 @@ func RawIDs(ids []ID) []string {
 	return raw
 }
 
-// formatHeld writes a value honouring %q and width, so every type that prints
+// FormatHeld writes a value honouring %q and width, so every type that prints
 // held formats the same way: held to its row under every verb but %q, which
 // Go-quotes the raw value, since its escapes already keep it to one row and
 // show exactly which break, tab or invisible the value carries.
-func formatHeld(f fmt.State, verb rune, raw string) {
+func FormatHeld(f fmt.State, verb rune, raw string) {
 	held := HoldRow(raw)
 	if verb == 'q' {
 		flags := ""
@@ -84,30 +84,16 @@ func formatHeld(f fmt.State, verb rune, raw string) {
 		}
 		held = fmt.Sprintf("%"+flags+"q", raw)
 	}
-	writePadded(f, held)
-}
-
-// FormatComposite writes a rendering built from held parts the way formatHeld
-// writes one value: %q Go-quotes it and width pads it, so a type that names
-// several held values formats as a single held value does.
-func FormatComposite(f fmt.State, verb rune, rendered string) {
-	if verb == 'q' {
-		rendered = fmt.Sprintf("%q", rendered)
-	}
-	writePadded(f, rendered)
-}
-
-func writePadded(f fmt.State, s string) {
 	if width, ok := f.Width(); ok {
-		if pad := width - utf8.RuneCountInString(s); pad > 0 {
+		if pad := width - utf8.RuneCountInString(held); pad > 0 {
 			if f.Flag('-') {
-				s += strings.Repeat(" ", pad)
+				held += strings.Repeat(" ", pad)
 			} else {
-				s = strings.Repeat(" ", pad) + s
+				held = strings.Repeat(" ", pad) + held
 			}
 		}
 	}
-	_, _ = f.Write([]byte(s))
+	_, _ = f.Write([]byte(held))
 }
 
 // QuotedBreak stands in for a line break a one-row rendering cannot honour,

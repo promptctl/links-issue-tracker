@@ -29,25 +29,28 @@ func TestTextPrintsHeldUnderEveryVerb(t *testing.T) {
 	}
 }
 
-// TestFormatCompositeHonoursQAndWidth pins that a type rendering several held
-// values formats as one held value does: %q quotes the rendering, width pads.
-func TestFormatCompositeHonoursQAndWidth(t *testing.T) {
+// TestCompositeFormatsAsOneHeldValue pins that a type naming several values
+// renders them raw into FormatHeld and so formats as one held value does: %v
+// holds the whole row and %q shows the raw escapes of every part.
+func TestCompositeFormatsAsOneHeldValue(t *testing.T) {
 	t.Parallel()
+	c := composite{id: ID("a\tb"), tail: "x\ny"}
 	for _, tc := range []struct{ format, want string }{
-		{"%v", "a (via epic)"},
-		{"%q", `"a (via epic)"`},
-		{"[%-14v]", "[a (via epic)  ]"},
-		{"[%14v]", "[  a (via epic)]"},
+		{"%v", "a b x" + QuotedBreak + "y"},
+		{"%q", `"a\tb x\ny"`},
 	} {
-		if got := fmt.Sprintf(tc.format, composite("a (via epic)")); got != tc.want {
+		if got := fmt.Sprintf(tc.format, c); got != tc.want {
 			t.Errorf("Sprintf(%q) = %q, want %q", tc.format, got, tc.want)
 		}
 	}
 }
 
-type composite string
+type composite struct {
+	id   ID
+	tail string
+}
 
-func (c composite) Format(f fmt.State, verb rune) { FormatComposite(f, verb, string(c)) }
+func (c composite) Format(f fmt.State, verb rune) { FormatHeld(f, verb, c.id.Raw()+" "+c.tail) }
 
 // TestIDQuotesRawUnderQ pins that %q shows an id exactly as given, escapes and
 // all, so an error naming a rejected id shows the tab or break it carried,
