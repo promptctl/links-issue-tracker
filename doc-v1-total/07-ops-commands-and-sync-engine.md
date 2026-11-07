@@ -11,7 +11,7 @@ This chapter covers everything in `lit` that manages the workspace rather than i
 Flag handling common to every command (`flagset.go`, `cli.go`):
 
 - `--help` prints usage plus defaults to stdout and exits 0.
-- `--output` or `--output=<x>` before the command name → `UnsupportedError` ("--output is no longer supported; omit it for text output"), exit 3. After the command name it is an unknown flag.
+- `--output` or `--output=<x>` before the command name → `UnsupportedError` (`--output is no longer supported; omit it for text output`), exit 3. After the command name it is an unknown flag.
 - `--continue` on `lit next` → `UnsupportedError` (retired; claim routing already serves the checkout's lanes first in `lit next`), exit 3.
 - Any other flag parse error (unknown flag, missing or invalid value, bad syntax) → `UsageError`, exit 2.
 

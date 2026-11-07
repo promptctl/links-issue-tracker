@@ -279,6 +279,49 @@ func TestSpansInReadsTheCommandsAQuotedMessageQuotes(t *testing.T) {
 	}
 }
 
+// TestSpansInReadsTheMessageAGoLiteralQuotes: a span written as Go carries the
+// literal's quotes and wrapper, which no shipped text holds, and its inner
+// backticks split it into fragments too short to be claims; the stretch inside
+// the quotes is the message, and must be a claim whole.
+func TestSpansInReadsTheMessageAGoLiteralQuotes(t *testing.T) {
+	src := "Refused with ``UnsupportedError{Message: \"--flag is retired; run `lit next` with no flag\"}``.\n" +
+		"Or bare: ``\"--flag is gone; run `lit next --all` instead\"``.\n" +
+		"Escaped: `X{\"invalid --status \\\"<x>\\\" (valid: open)\"}` and `\"claim moved: %s -> %s\\n\"`.\n"
+	got, err := spansIn(src)
+	if err != nil {
+		t.Fatalf("spansIn: %v", err)
+	}
+	want := []string{
+		"UnsupportedError{Message: \"--flag is retired; run `lit next` with no flag\"}",
+		"--flag is retired; run `lit next` with no flag",
+		"\"--flag is gone; run `lit next --all` instead\"",
+		"lit next --all",
+		"--flag is gone; run `lit next --all` instead",
+		"X{\"invalid --status \\\"<x>\\\" (valid: open)\"}",
+		"invalid --status \"<x>\" (valid: open)",
+		"\"claim moved: %s -> %s\\n\"",
+		"claim moved: %s -> %s\n",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("claims =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// TestGoLiteralsStayInStepPastQuotesThatOpenNoString: a rune literal '"' or a
+// stray unterminated quote must not pair with the message's own quotes, or the
+// message is dropped without a word.
+func TestGoLiteralsStayInStepPastQuotesThatOpenNoString(t *testing.T) {
+	for span, want := range map[string][]string{
+		`strings.IndexByte(s, '"') then E{Message: "--flag is retired; run lit next"}`: {"--flag is retired; run lit next"},
+		`E{"first message here"} and "unterminated`:                                    {"first message here"},
+		`5" screen`: nil,
+	} {
+		if got := goLiterals(span); !slices.Equal(got, want) {
+			t.Errorf("goLiterals(%q) = %q, want %q", span, got, want)
+		}
+	}
+}
+
 // TestACollidingHandleIsRefusedRatherThanOverwritten covers the corpus holding
 // two kinds of source in one key space: a Go literal keyed by its own text, an
 // embedded asset keyed by its path. A literal is collected only when it

@@ -33,6 +33,7 @@ import (
 	"go/ast"
 	"go/build/constraint"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"io/fs"
 	"path"
@@ -917,12 +918,14 @@ func DocClaims(fsys fs.FS, names []string) ([]Claim, error) {
 	return claims, nil
 }
 
-// spansIn pulls the candidate claims out of one document: the code spans, and
-// the commands a quoted message quotes in its own backticks, long enough and
-// multi-word enough to be a quoted message. A chapter names a message's
-// placeholders (`<prefix>` where the source has %q), so the whole message may
-// never match shipped text; the command it quotes is verbatim, and is a claim
-// about the binary all the same.
+// spansIn pulls the candidate claims out of one document: the code spans, the
+// commands a quoted message quotes in its own backticks, and the Go literal a
+// span writes in double quotes, long enough and multi-word enough to be a
+// quoted message. A chapter names a message's placeholders (`<prefix>` where
+// the source has %q), so the whole message may never match shipped text; the
+// command it quotes is verbatim, and is a claim about the binary all the same.
+// A span written as Go, UnsupportedError{Message: "…"}, carries its quotes
+// and wrapper, so only the stretch inside the quotes is the message.
 func spansIn(src string) ([]string, error) {
 	spans, err := CodeSpans(src)
 	if err != nil {
@@ -930,7 +933,7 @@ func spansIn(src string) ([]string, error) {
 	}
 	var out []string
 	for _, s := range spans {
-		for _, q := range append([]string{s.Text}, innerQuotes(s.Text)...) {
+		for _, q := range slices.Concat([]string{s.Text}, paired(s.Text), goLiterals(s.Text)) {
 			if len(q) >= minClaimLen && strings.Contains(q, " ") {
 				out = append(out, q)
 			}
@@ -939,9 +942,36 @@ func spansIn(src string) ([]string, error) {
 	return out, nil
 }
 
-// innerQuotes is each stretch a span's own backticks quote, paired in order, as
-// a message pairs them. An odd count pairs nothing.
-func innerQuotes(span string) []string {
+// goLiterals is the decoded value of each interpreted Go string literal a span
+// writes, read by Go's own scanner. The corpus holds decoded values, so a
+// literal read raw never matches once it carries \n or \"; and pairing double
+// quotes by hand falls out of step on a rune literal '"' or an escaped quote,
+// dropping the real message without a word. The scanner knows both. A span that
+// is not Go scans to errors and stray tokens, which are ignored: at worst a
+// candidate that matches nothing.
+func goLiterals(span string) []string {
+	var s scanner.Scanner
+	fset := token.NewFileSet()
+	src := []byte(span)
+	s.Init(fset.AddFile("", -1, len(src)), src, func(token.Position, string) {}, 0)
+	var out []string
+	for {
+		_, tok, lit := s.Scan()
+		if tok == token.EOF {
+			return out
+		}
+		if tok != token.STRING || lit[0] != '"' {
+			continue
+		}
+		if unquoted, err := strconv.Unquote(lit); err == nil {
+			out = append(out, unquoted)
+		}
+	}
+}
+
+// paired is each stretch a span's own backticks quote, paired in order, as a
+// message pairs them. An odd count pairs nothing.
+func paired(span string) []string {
 	parts := strings.Split(span, "`")
 	if len(parts)%2 == 0 {
 		return nil
