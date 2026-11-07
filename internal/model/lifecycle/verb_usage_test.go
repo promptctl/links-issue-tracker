@@ -444,8 +444,10 @@ func TestActionNameSpellingsAreAccountedFor(t *testing.T) {
 	// Thaw, the retention action its refusal names; and the conformance case's
 	// freeze, the retention action that puts an issue out of the flow.
 	wantValues := []string{"Action", "Thaw", "action", "freeze"}
-	// Verb()'s own receiver: the only ActionName declared inside a function.
-	wantScoped := []string{"n"}
+	// Verb()'s own receiver; claims.Establishes' name, the action an event
+	// records; and the hold gate's crossingOf verb, the verb it words a
+	// takeover for.
+	wantScoped := []string{"n", "name", "verb"}
 
 	check := func(what string, got, want []string) {
 		if strings.Join(got, ",") != strings.Join(want, ",") {

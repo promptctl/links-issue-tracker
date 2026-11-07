@@ -58,7 +58,7 @@ func TestDoneFinishesWhereverThePlanStands(t *testing.T) {
 			runCLIInDir(t, dir, "start", id, "--by", "agent")
 			approval := tc.review(t, id)
 
-			out := runCLIInDir(t, dir, "done", id)
+			out := runCLIInDir(t, dir, "done", id, "--by", "agent")
 			facts := writtenFacts(t, lastEvent(t))
 			if status := strings.TrimSpace(runCLIInDir(t, dir, "show", id, "--field", "status")); status != "closed" {
 				t.Fatalf("lit done with plan %s: status = %q, want closed", tc.name, status)

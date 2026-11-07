@@ -898,6 +898,46 @@ func (a Attribution) IsZero() bool { return a == Attribution{} }
 // [LAW:one-source-of-truth]
 func (a Attribution) Present() bool { return !a.IsZero() }
 
+// Session is the agent session or named operator an event was recorded by —
+// the event's actor read as an identity rather than as provenance text. Many
+// sessions can drive one checkout at once, so a hold names its session beside
+// its checkout: the checkout alone cannot tell the session mid-PR on a ticket
+// from a second one that just opened in the same tree.
+//
+// The field is unexported so SessionOf is the only way to build a populated
+// one, the pattern Attribution follows for the same reason: the "names nobody"
+// state has exactly one representation, so it compares equal to itself and
+// unequal to every identified session.
+type Session struct {
+	actor string
+}
+
+// UnknownActor is the actor a write records when its caller named nobody
+// (storage.Actor writes it, SessionOf reads it back as the zero Session).
+// [LAW:one-source-of-truth] the one spelling of "attributed to nobody".
+const UnknownActor = "unknown"
+
+// SessionOf reads the session an event's actor names. The store records an
+// actor the caller never gave as UnknownActor (storage.Actor), so that spelling
+// and the empty string both collapse to the zero Session: neither names a
+// session anybody could be, and reading "unknown" as an identity would make
+// every unidentified writer the same session. [LAW:parse-dont-validate]
+// [LAW:single-enforcer] the one place an actor becomes a Session.
+func SessionOf(actor Text) Session {
+	trimmed := strings.TrimSpace(actor.Raw())
+	if trimmed == "" || trimmed == UnknownActor {
+		return Session{}
+	}
+	return Session{actor: trimmed}
+}
+
+// Present reports whether the session names somebody; the zero Session is a
+// writer that named nobody, rendered as such.
+func (s Session) Present() bool { return s != Session{} }
+
+// Actor is the identity the session names, empty for the zero Session.
+func (s Session) Actor() Text { return Text(s.actor) }
+
 // attributionWire is the serialized shape, kept as a separate type so that
 // sealing the domain type costs nothing at the boundary.
 type attributionWire struct {

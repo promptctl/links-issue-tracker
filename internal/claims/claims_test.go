@@ -114,7 +114,7 @@ func derive(t *testing.T, issues []model.Issue, parents map[model.ID]model.ID, e
 
 // held is shorthand for the expected standing of an uncontested holder.
 func held(by model.Attribution, since, last time.Time) claims.Held {
-	return claims.Held{Tenure: claims.Tenure{By: by, Since: since, LastActivity: last}}
+	return claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: by}, Since: since, LastActivity: last}}
 }
 
 // TestPredicateGrid drops each leg of the claim predicate in turn and watches
@@ -236,8 +236,8 @@ func TestUnattributedLatestStopsRatherThanScanning(t *testing.T) {
 	}, bothLive)
 
 	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Held{
-		Tenure:    claims.Tenure{By: public, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
-		Contested: []model.Attribution{streamA},
+		Tenure:    claims.Tenure{By: claims.Holder{Checkout: public}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
+		Contested: []claims.Holder{{Checkout: streamA}},
 	})
 }
 
@@ -276,7 +276,7 @@ func TestExpiredClaimPresenceGrid(t *testing.T) {
 		event("e1", "T1", model.ActionStart, ago(72*time.Hour), streamA),
 		event("e2", "T1", "", ago(48*time.Hour), streamA),
 	}
-	tenure := claims.Tenure{By: streamA, Since: ago(72 * time.Hour), LastActivity: ago(48 * time.Hour)}
+	tenure := claims.Tenure{By: claims.Holder{Checkout: streamA}, Since: ago(72 * time.Hour), LastActivity: ago(48 * time.Hour)}
 
 	for _, tc := range []struct {
 		name  string
@@ -394,8 +394,8 @@ func TestContestedAnnotatesWithoutMovingRouting(t *testing.T) {
 	}, bothLive)
 
 	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Held{
-		Tenure:    claims.Tenure{By: streamB, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
-		Contested: []model.Attribution{streamA},
+		Tenure:    claims.Tenure{By: claims.Holder{Checkout: streamB}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
+		Contested: []claims.Holder{{Checkout: streamA}},
 	})
 }
 
@@ -419,8 +419,8 @@ func TestPublicCheckoutContestsAnIdentifiedHolder(t *testing.T) {
 	}, bothLive)
 
 	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Held{
-		Tenure:    claims.Tenure{By: streamA, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
-		Contested: []model.Attribution{public},
+		Tenure:    claims.Tenure{By: claims.Holder{Checkout: streamA}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
+		Contested: []claims.Holder{{Checkout: public}},
 	})
 }
 

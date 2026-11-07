@@ -175,10 +175,18 @@ The price is that two writers with no token are indistinguishable, so they never
 contest each other. That is the definition of the bucket rather than a defect in
 it: an identity nobody minted is one nobody can tell apart.
 
-Sessions, agent identities, and user names play no role in claims. Many
-sessions in one checkout are one claimant; a new session inherits its
-checkout's claims with no re-briefing, which is precisely the behavior the
-design exists to produce.
+A holder is the checkout AND the session that recorded the establishing
+event — the event's actor, the identity `resolveIdentity` resolves. Keyed on
+the checkout alone, two sessions running in one checkout at once were one
+claimant, and the second was served the first's ticket mid-PR. So one ticket
+in flight has one holder: another session, wherever it runs, is refused by
+`lit start`, `lit phase` and `lit done` until it passes `--take`, and `lit
+next` routes it around the lane. A new session continuing a stopped one's
+work takes the lane with `lit start <id> --take`, the ticket its handoff
+names. An event whose actor names nobody (empty,
+or the store's `unknown`) holds as the zero session, a value like any other:
+a plain shell in the same checkout matches its own such hold, and any named
+session meets it as foreign. The assignee plays no role.
 
 **Local liveness prune** (the `git worktree prune` pattern): when deriving
 claims, a machine enumerates its own live worktrees and their stream ids.
@@ -650,8 +658,15 @@ sidecar maps.
   of evidence.
 - **Epic-granularity claims**: one started bug in a catch-all epic would
   monopolize twenty unrelated ones. The lane is the honest unit.
-- **Session-bound claims**: every new session would start unclaimed — the
-  original failure mode, rebuilt.
+- **Session-bound claims that a new session starts without**: a successor
+  would find its predecessor's lane unclaimed and open new work beside it —
+  the original failure mode, rebuilt. Holds are session-bound now, so this
+  alternative was taken in part. The successor finds the work through its
+  handoff, which names the ticket, and continues it with an explicit `lit
+  start <id> --take`. `lit next` routes every session around a lane another
+  session holds, the reader's own checkout included, because it cannot tell a
+  stopped predecessor from a live peer. Inheriting silently was what let two
+  live sessions in one checkout act on one ticket.
 - **Stream identity derived from the claimed epic's name**: names the holder
   after the held, which destroys exactly the distinction the system exists
   to draw — two streams erroneously in one lane would be indistinguishable,

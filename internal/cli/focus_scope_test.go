@@ -260,7 +260,7 @@ func TestBacklogNoticeReportsTheLimitTrimNotJustTheScope(t *testing.T) {
 	// what removed them.
 	h.setLabels(goal.ID, FocusLabel)
 	text = h.runWorkableText("--limit", "1")
-	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
+	wantScope := "Focused on " + goal.ID + " — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
 	if !strings.Contains(text, wantScope.Raw()) {
 		t.Fatalf("focused+trimmed backlog missing scope clause %q\n%s", wantScope, text)
 	}
@@ -349,7 +349,7 @@ func TestFocusedBacklogNamesItsScopeAndItsEscape(t *testing.T) {
 
 	// Focused: scoped, and it says exactly what it withheld and how to get it.
 	text = h.runWorkableText()
-	want := "Focused on " + goal.ID.Raw() + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
+	want := "Focused on " + goal.ID.Raw() + " — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."
 	if !strings.Contains(text, want) {
 		t.Fatalf("focused backlog missing notice %q\n%s", want, text)
 	}
@@ -616,10 +616,10 @@ func TestFocusedBacklogListsThisCheckoutsOwnWork(t *testing.T) {
 	if strings.Contains(text, unrelated) {
 		t.Fatalf("focused backlog lists %s, which is neither on the path nor this checkout's work:\n%s", unrelated, text)
 	}
-	if want := "Focused on " + goal + " — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."; !strings.Contains(text, want) {
+	if want := "Focused on " + goal + " — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; 1 workable row(s) outside them are not shown (`lit backlog --all` for the whole queue)."; !strings.Contains(text, want) {
 		t.Fatalf("focused backlog missing %q — own work counted as withheld?\n%s", want, text)
 	}
-	ownClause := " Off that path but in this checkout's lanes or their epics: "
+	ownClause := " Off that path but in the lanes you hold or their epics: "
 	if !strings.Contains(text, ownClause) {
 		t.Fatalf("focused backlog does not name the own work it listed off the path:\n%s", text)
 	}
@@ -762,7 +762,7 @@ func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, claimContext{self: selfAttribution}, "", false); err != nil {
+			if _, err := renderNextOutcome(&buf, tc.outcome, details, claimContext{self: selfHolder}, false); err != nil {
 				t.Fatalf("renderNextOutcome error = %v", err)
 			}
 			var carrying []string
@@ -810,5 +810,32 @@ func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
 	}
 	if row := h.runNextRowArgs("--all", "--type", "bug"); row.ID != bug.ID {
 		t.Fatalf("`lit next --all --type bug` = %q, want the off-path bug %q the focus withheld", row.ID, bug.ID)
+	}
+}
+
+// `lit backlog --by` reads the reader the way `lit next --by` does, so an
+// operator named by --by sees their own lane off the focus path, and an
+// operator who is somebody else does not.
+func TestFocusedBacklogReadsTheReaderFromBy(t *testing.T) {
+	t.Parallel()
+	isolateEvents(t)
+	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
+	repo := newInitTestRepo(t)
+	goalEpic := newEpicInDir(t, repo, "Goal epic")
+	goal := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", goalEpic, "--title", "Goal", "--topic", "goal"))
+	ours := newEpicInDir(t, repo, "Bob's epic")
+	mine := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", ours, "--title", "In flight", "--topic", "ours"))
+	runCLIInDir(t, repo, "start", mine, "--by", "bob")
+	runCLIInDir(t, repo, "label", "add", goal, FocusLabel)
+
+	if text := runCLIInDir(t, repo, "backlog", "--by", "bob"); !strings.Contains(text, mine) {
+		t.Fatalf("backlog --by bob does not list bob's in-flight %s:\n%s", mine, text)
+	}
+	if got := lastEvent(t).Facts["backlog.own_off_path"]; !sameIDs(got, mine) {
+		t.Errorf("backlog --by bob: own_off_path = %#v, want exactly %s", got, mine)
+	}
+	runCLIInDir(t, repo, "backlog", "--by", "carol")
+	if got := lastEvent(t).Facts["backlog.own_off_path"]; !reflect.DeepEqual(got, []any{}) {
+		t.Errorf("backlog --by carol: own_off_path = %#v, want none — bob's lane is not carol's", got)
 	}
 }

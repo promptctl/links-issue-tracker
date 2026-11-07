@@ -856,7 +856,7 @@ func focusQueue(ctx context.Context, src focusGraphSource, queue workableGather)
 // substitution this type exists to make unrepresentable.
 // [LAW:parse-dont-validate] the walk's answer is kept, not re-derived downstream.
 //
-// own is this checkout's own work, which the scope never narrows away: focus
+// own is this session's own work, which the scope never narrows away: focus
 // decides where a fresh session goes, never whether your own work is still
 // yours. It is set by owning, from the claim standings, and is the zero value
 // on a scope nobody owned — every row the path holds, and no other.
@@ -885,7 +885,7 @@ func focusScopeOf(pathGoals map[model.ID]model.ID) focusScope {
 // the unfocused workspace, whose scope is the whole queue.
 func (s focusScope) active() bool { return len(s.goals) > 0 }
 
-// owning returns the scope with this checkout's own work in it, so a focused
+// owning returns the scope with this session's own work in it, so a focused
 // view lists that work wherever the focus path runs. `lit next` and `lit
 // backlog` both call it with ownScope's answer, which is how the two agree on
 // what a focused view answers over. [LAW:one-source-of-truth]

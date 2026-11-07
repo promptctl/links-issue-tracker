@@ -82,14 +82,14 @@ type CreateIssueInput struct {
 }
 
 // Actor is who a write records as its author: the name the caller gave,
-// trimmed, or "unknown" when it gave none. A write attributed to nobody is a
+// trimmed, or model.UnknownActor when it gave none. A write attributed to nobody is a
 // real state — an engine cannot invent who did something — and this is the
 // one spelling of it. [LAW:one-source-of-truth]
 func Actor(name string) string {
 	if actor := strings.TrimSpace(name); actor != "" {
 		return actor
 	}
-	return "unknown"
+	return model.UnknownActor
 }
 
 // UpdateIssueInput is the field-axis patch of a Change: only columns the field

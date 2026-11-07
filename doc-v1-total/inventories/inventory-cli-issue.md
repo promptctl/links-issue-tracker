@@ -136,7 +136,7 @@ into* one of those, the call and its observable effect are recorded here.
     leaf's sentence → exit 3 (`flagset.go`). `registerActor` retires `assignee`
     with ``"--assignee does not name who is acting here; name yourself with --by <name> (CLAUDE_CODE_SESSION_ID wins when set), or change a ticket's assignee with `lit update <id> --assignee <name>`"`` (`cli.go`), inert on a leaf that registers its own
     `--assignee`; `next` retires `continue` (`next.go`) →
-    ``UnsupportedError{Message: "--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"}``
+    ``UnsupportedError{Message: "--continue is retired; claim routing already serves the lanes you hold first in `lit next` — run `lit next` with no flag"}``
     → exit 3 (`flagset.go`).
   - Every other parse error — unknown flag, missing value, invalid value, bad
     syntax — → `UsageError{Message: err.Error()}` → exit 2 (`flagset.go`).
@@ -288,7 +288,7 @@ empty string means no `remediation:` line is printed:
 - `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
 - `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 - `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
-- `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
+- `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. `--take` on `lit phase` acts on the ticket and leaves the hold where it is; `lit start <id> --take` moves the hold to you. \<agent-instructions>Taking over a lane another session holds right now overrides that session's work: pass `--take` when the user directs the takeover, or when you are continuing that session's stopped or handed-off work in its own checkout; otherwise run `lit next`.\</agent-instructions>"
 - `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
 - `outside_git_workspace`: "Run the command inside a git repository/worktree with links initialized."
 - `workspace_not_initialized`: "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
@@ -1170,10 +1170,11 @@ route through `transitionLeaf` — §2.29.
 `--reason` (string, `""`, "Transition reason") and `--by`.
 
 **Per-spec flags** (`cli.go`):
-- `start` adds `--take` (bool,
-  `false`, help "Confirm taking over a lane another checkout claims right now
-  (required for non-interactive callers; without it an interactive terminal is
-  prompted instead)") (`cli.go`). The action is
+- `start`, `phase` and `done` add `--take` (bool,
+  `false`, help "Confirm acting on a ticket whose lane another session holds
+  right now (required for non-interactive callers; without it an interactive
+  terminal is prompted instead)"), registered once by `withHoldGate`
+  (`claims_takeover.go`). `start`'s action is
   `model.Start{Assignee: actor()}`, `actor` being the `--by` resolver
   `transitionLeaf` passes to `registerFlags` (`cli.go`).
 - `close` adds `--resolution` (string, `""`, "Close resolution (required):
@@ -1276,25 +1277,30 @@ transition row runs per id — §2.21):
   write leaves the status unchanged (the ticket is already closed) prints no
   warning and carries `done.plan_standing` `already_closed`.
 
-### 2.11 `lit start` takeover gate
+### 2.11 The hold gate on `lit start`, `lit phase` and `lit done`
 
-`startSpec.authorize` → `authorizeStart(ctx, stdout, ap, issueID, prior, *take)`
-(`cli.go`, implementation `claims_takeover.go`):
-1. `LaneFamily(issueID)`, parsed by `claims.NewLane(issueID, family)`.
-2. `gatherCheckouts(env, stdout, ap)`.
-3. `relationOf(standing, self)` (`claims_takeover.go`), the one reading of a
-   standing against this checkout, shared with routing:
-   - `Held` by self, or anything that is not `Held` (`Unclaimed`, which is also what
-     a lane whose claim has expired derives) → no ceremony: the start proceeds and
-     prints nothing about the lane.
-   - `Held` by another → `confirmFreshTakeover` (`claims_takeover.go`):
-     - `--take`, at a terminal or not → proceeds; `"<claim line> — taking over (--take)\n"`
-       is printed after Apply, ahead of the transfer notice (step 4).
+`startSpec`, `phaseSpec` and `doneSpec` are built with `withHoldGate`, which
+runs `authorizeHold(ctx, inv, ap, issueID, prior, action, actor, *take)`
+(`claims_takeover.go`) ahead of the verb's own hook:
+1. `landable(prior, action)`, so a transition that cannot land is refused first.
+2. `LaneFamily(issueID)`, parsed by `claims.NewLane(issueID, family)`, then
+   `gatherCheckouts(env, stdout, ap)`.
+3. `relationOf(standing, ownHolder(ap, actor))` (`claims_takeover.go`), the one
+   reading of a standing against this checkout and the session the write is
+   recorded under, shared with routing:
+   - `Held` by that exact holder, or anything that is not `Held` (`Unclaimed`,
+     which is also what a lane whose claim has expired derives) → no ceremony:
+     the transition proceeds and prints nothing about the lane.
+   - `Held` by another session or checkout → `confirmFreshTakeover`
+     (`claims_takeover.go`) on the line `heldByLine` renders,
+     `<id> is held by <session> in <checkout> (active <ago>)`:
+     - `--take`, at a terminal or not → proceeds; `"<line> — taking over (--take)\n"`
+       is printed after Apply, ahead of what the verb itself prints.
      - Non-interactive stdout (`!isTerminal(stdout)`) and no `--take` →
-       `takeoverUnconfirmedError` "<claim line> — this lane is claimed and active; pass --take to confirm the takeover"
+       `takeoverUnconfirmedError` "<line> — pass --take to take it over"
        → exit 3, reason `takeover_unconfirmed`.
-     - Interactive and no `--take` → `askYesNo(stdin, stdout, line+"\ntake over this lane?")`, `stdin` the invocation's
-       (`claims_takeover.go`) prints `"<claim line>\ntake over this lane? [y/N] "`, reads a
+     - Interactive and no `--take` → `askYesNo(stdin, stdout, line+"\ntake it over?")`, `stdin` the invocation's
+       (`claims_takeover.go`) prints `"<line>\ntake it over? [y/N] "`, reads a
        line from stdin; a read error other than EOF →
        `"read confirmation: %w"`; an answer not starting with `y`
        (case-insensitive, trimmed) → `takeoverUnconfirmedError` "takeover declined" → exit 3,
@@ -1415,14 +1421,14 @@ Use 'lit next' to pick the top workable item to start.
    - unfocused, nothing trimmed: `Nothing is hidden: every workable item is listed.`
    - unfocused, `--limit` trimmed rows: `Every workable item is in scope.`
    - focused, `--all` given: `Focus is on %s; this run bypassed it and lists the whole queue.`
-   - focused: `Focused on %s — listing only its unfinished prerequisite path and this checkout's lanes with the rest of their epics, in rank order; %d workable row(s) outside them are not shown (%s for the whole queue).`
+   - focused: `Focused on %s — listing only its unfinished prerequisite path and the lanes you hold with the rest of their epics, in rank order; %d workable row(s) outside them are not shown (%s for the whole queue).`
 
    The first `%s` is the focus goals' ids joined by `", "`
    (`focusScope.describe`, `ready_state.go`), `%d` is the count of rows the
    partition excluded, and the last `%s` is the escape `` `lit backlog --all` ``,
    backticks included (`workable.go`). The own-work clause is empty when no
    kept row is off the focus path, else a space and then
-   `Off that path but in this checkout's lanes or their epics: %s.`,
+   `Off that path but in the lanes you hold or their epics: %s.`,
    where `%s` is the ids of the rows kept before `--limit` that the scope
    holds only through `ownWork.covers`, joined by `", "` (`ownClause`,
    `backlog.go`). The trim
@@ -1476,7 +1482,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 ### 2.14 `lit next` — Print the next workable leaf
 
 - Registration `register.go`, `app.AccessRead`, handler `nextLeaf`
-  (`next.go`). Summary: "Print the next workable leaf to lit start, serving this checkout's lanes first".
+  (`next.go`). Summary: "Print the next workable leaf to lit start, serving the lanes you hold first and never a ticket another session holds".
 - Flags (`registerWorkableFilter` in `next.go`, and the `--by`):
 
 | Flag | Type | Default | Effect |
@@ -1497,7 +1503,7 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
   (`next.go`).
 - Retired flag: `--continue` is intercepted at the shared parse boundary as
   `UnsupportedError` → exit 3, message
-  ``"--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"``
+  ``"--continue is retired; claim routing already serves the lanes you hold first in `lit next` — run `lit next` with no flag"``
   (`next.go`).
 - Prints the sync-staleness warning first (`next.go`).
 - Parses the filter into `asked` (`workableFilter.criteria`), then gathers the
@@ -1641,7 +1647,7 @@ when `ClassifyReadiness(row.Annotations).AwaitsOutside()`, `reachHeldFresh` when
 - `reachAwaitingOutside`: ``"on your path but waiting on an event outside this repository — `lit show` it names the event"``
 
 `poolNotes` (`next_route.go`):
-- `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
+- `reachHeldFresh`: `"in progress or claimed in a lane another session holds right now"`
 - `reachNotReady`: ``"not startable right now — `lit show` it names what blocks it"``
 - `reachAwaitingOutside`: ``"waiting on an event outside this repository — `lit show` it names the event"``
 

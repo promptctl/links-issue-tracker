@@ -136,7 +136,6 @@ Precedence, exactly: **`CLAUDE_CODE_SESSION_ID` (trimmed, non-empty) always wins
 - Actor flag: `--by`, empty default, help string `byUsage`, registered by `registerActor` which never exposes the raw pointer — every read passes through `resolveIdentity` (`internal/cli/cli.go`). `os.Getenv("USER")` was deliberately removed as a privacy violation; the fallback is `""`, normalized by the store to the opaque `"unknown"` (`internal/cli/cli.go`).
 - Applied in `transitionLeaf`: the same `actor` goes to `Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})` (`internal/cli/cli.go`).
 - Every relation/label/bulk verb resolves through the same rule; tests pin `label add`, `parent set`, `dep add`, `bulk label add`, `bulk close` to `"claude_" + sessionID` and assert raw `$USER` never lands in `CreatedBy`/`Actor` (`internal/cli/attribution_test.go`, helpers).
-- A claimant with no assignee is named by its checkout: `describeClaimant` returns `nameCheckout(c.Checkout)` when `c.Assignee == ""` (`internal/cli/claims_render.go`).
 - `Start` is the only lifecycle action that rewrites the assignee: `type Start struct{ Assignee string }` (`internal/model/lifecycle/action.go`), `Target() State` = `InProgress` (`internal/model/lifecycle/action.go`). `Issue.Assignee` is orthogonal to the status machine (`internal/model/model.go`).
 
 Note the interaction pinned by test: because the env var overrides `--by`, an e2e test must clear `CLAUDE_CODE_SESSION_ID` or both checkouts flatten to one assignee and a same-state `start` becomes a documented no-op in `store.Apply`, so the claim never transfers (`internal/cli/claims_takeover_e2e_test.go`).
@@ -429,41 +428,42 @@ Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal
 
 ## 9. Gates: which operations consult claims, and what happens on conflict
 
-### 9.1 `lit start` — the takeover gate (the only write gate)
+### 9.1 `lit start`, `lit phase`, `lit done` — the hold gate (the only write gate)
 
-`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; `start`, `phase` and `done` supply one, and the other transitions use `noAuthorize` (`internal/cli/cli.go`). Only `start`'s consults claims; `done`'s reads where the plan stands and never aborts on it (`authorizeDone`). Wired at `internal/cli/cli.go`. The flag: `--take`, help string `"Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)"` (`internal/cli/cli.go`).
+`transitionSpec.authorize` is an optional hook that runs after the action is built and **before** `Store.Apply`, and may abort the transition by returning an error; `start`, `phase` and `done` supply one, and the other transitions use `noAuthorize` (`internal/cli/cli.go`). All three are built through `withHoldGate` (`internal/cli/claims_takeover.go`), which registers the one `--take` flag and runs `authorizeHold` ahead of the verb's own hook (`authorizeStart`, `authorizePhase`, `authorizeDone`). The flag: `--take`, help string `"Confirm acting on a ticket whose lane another session holds right now (required for non-interactive callers; without it an interactive terminal is prompted instead)"` (`internal/cli/claims_takeover.go`).
 
-**`relationOf(standing, self) laneRelation`** — pure, no I/O (`internal/cli/claims_takeover.go`). It is the one place a `Standing` is read against an identity, and both the gate and routing consume its value, so they cannot disagree about whose lane it is.
+**`relationOf(standing, self) laneRelation`** — pure, no I/O (`internal/cli/claims_takeover.go`). It is the one place a `Standing` is read against an identity, and both the gate and routing consume its value, so they cannot disagree about whose lane it is. `self` is a `claims.Holder` — this checkout's attribution and the session the reader resolved (`ownHolder`, `internal/cli/claims_context.go`) — and a lane's holder is the same pair read off its latest establishing event (`claims.HolderOf`: the event's `Attribution` and `model.SessionOf(event.Actor)`).
 
 | standing | condition | relation |
 |---|---|---|
-| `Held` | `self.Present() && held.By == self` | `laneOurs` |
+| `Held` | `self.Checkout.Present() && held.By == self` | `laneOurs` |
 | `Held` | otherwise | `laneHeldForeign` |
 | anything else (`Unclaimed`, nil) | — | `laneUnclaimed` |
 
-The `self.Present()` half is load-bearing, not a redundant guard: a checkout with no minted token has a zero `self`, and a zero `self` compared against a zero holder (the public checkout) would otherwise prove ownership of a lane this checkout never touched. So a lane the public checkout holds is always `laneHeldForeign` to every checkout, including one that has itself never minted a token.
+The `Checkout.Present()` half is load-bearing: a zero checkout compared against the public checkout would otherwise prove ownership of a lane nobody identifiable holds, so a public-checkout hold is always `laneHeldForeign`. The session half is plain equality: the zero session (an actor that is empty or the store's `unknown`) matches itself, so a plain shell keeps its own work, and is unequal to every named session. A second session in the same checkout, in a worktree of it, or in another clone is a different holder and reads `laneHeldForeign`.
 
 There is no row for an expired claim. The derivation returns `Unclaimed` the moment the window closes (unless the holder's worktree is locked), so `relationOf` never learns a claim existed. The `laneRelation` constants are at `internal/cli/claims_takeover.go`. Pinned by `TestRelationOf` (`internal/cli/claims_takeover_test.go`).
 
-**`authorizeStart(ctx, stdout, ap, issueID, prior, start, take) (afterApply, error)`** (`internal/cli/claims_takeover.go`):
-1. `ap.Store.LaneFamily(ctx, issueID)`, whose size `start.lane_family_issues` records, parsed by `claims.NewLane(issueID, family)` into the `claims.Lane` the ticket is in. `NewLane` shares `partition` with `NewEvidence`, refusals included.
-2. `gatherCheckouts`.
-3. `relationOf(standing, ownAttribution(ap))` over `standing := lane.Standing(checkouts.fresh, checkouts.local)`; `start.lane_held` is set on the invocation's event to whether the relation is anything but `laneUnclaimed`, then `laneHeldForeign` → `confirmFreshTakeover` runs and its error aborts the start.
-4. Returns the `afterApply` `transitionLeaf` calls with the written ticket and the `Handover` `Apply` reported (`transitionSpec.authorize`, `internal/cli/cli.go`): its notice is the takeover line `confirmFreshTakeover` returned (empty unless `--take` crossed a foreign hold) followed by `transferNotice(standing, handover)`, and it sets `start.handover` and `start.transfer_announced` (whether the transfer notice is non-empty) on the event. `lit phase`'s hook (`authorizePhase`) sets `phase.*` facts and returns `""`; `lit done`'s (`authorizeDone`) sets `done.plan_standing`, and on an approved plan `done.plan_digest` and `done.plan_review`, and returns a warning naming what the plan lacks, or `""` when it is approved; every other transition's (`noAuthorize`) returns `""`. An unclaimed lane, this checkout's own lane when nothing changed hands, and a lane whose claim has expired all pass with no output.
+**`authorizeHold(ctx, inv, ap, issueID, prior, action, actor, take)`** (`internal/cli/claims_takeover.go`):
+1. `landable(prior, action)` — `Issue.PlanPhase` for a phase move, `Issue.Apply` for a status action — so a transition that cannot land is refused before any lane is gated.
+2. `ap.Store.LaneFamily(ctx, issueID)`, whose size `<verb>.lane_family_issues` records, parsed by `claims.NewLane(issueID, family)` into the `claims.Lane` the ticket is in. `NewLane` shares `partition` with `NewEvidence`, refusals included.
+3. `gatherCheckouts`.
+4. `relationOf(standing, ownHolder(ap, actor))` over `standing := lane.Standing(checkouts.fresh, checkouts.local)`, `actor` being the identity the write is recorded under; `<verb>.lane_held` is set on the invocation's event to whether the relation is anything but `laneUnclaimed`, then `laneHeldForeign` → `confirmFreshTakeover` runs and its error aborts the transition.
+5. `withHoldGate` prints the takeover line `confirmFreshTakeover` returned (empty unless `--take` crossed a foreign hold) ahead of whatever the verb's own `afterApply` owes. `authorizeStart`'s is `transferNotice(standing, handover)`, and it sets `start.handover` and `start.transfer_announced` (whether the transfer notice is non-empty) on the event. `lit phase`'s hook (`authorizePhase`) sets `phase.*` facts and returns `""`; `lit done`'s (`authorizeDone`) sets `done.plan_standing`, and on an approved plan `done.plan_digest` and `done.plan_review`, and returns a warning naming what the plan lacks, or `""` when it is approved; every other transition's (`noAuthorize`) returns `""`. An unclaimed lane, this checkout's own lane when nothing changed hands, and a lane whose claim has expired all pass with no output.
 
-**`confirmFreshTakeover(stdin, stdout, line, take)`** (`internal/cli/claims_takeover.go`). `authorizeStart` renders `line` with `claimLineOf(standing.(claims.Held), lane, checkouts.addresses, time.Now())`, since it reaches here only for a `Held` standing.
-- `take == true`, at a terminal or not → returns `"<claim line> — taking over (--take)\n"` and proceeds; the start prints it as part of its notice after `Apply`, so a start that fails at `Apply` prints none. It is read before the terminal is.
-- **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses) and no `--take` → **refusal**: `takeoverUnconfirmedError{Message: fmt.Sprintf("%s — this lane is claimed and active; pass --take to confirm the takeover", line)}`.
-- **Interactive** and no `--take`: calls `askYesNo(stdin, stdout, line+"\ntake over this lane?")` with the invocation's stdin, which prints `"%s [y/N] "` — so `"<claim line>\ntake over this lane? [y/N] "` — and reads a line from that stdin one byte at a time, up to `\n` or EOF, so a later prompt in the same run reads the next line. A read error other than `io.EOF` → `fmt.Errorf("read confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `takeoverUnconfirmedError{Message: "takeover declined"}`. `askYesNo` is shared with the `lit purge` confirmation (`internal/cli/purge.go`).
+**`confirmFreshTakeover(stdin, stdout, line, how, take)`** (`internal/cli/claims_takeover.go`). `authorizeHold` renders `line` with `heldByLine(issueID, standing.(claims.Held), checkouts.addresses, time.Now())` — `"%s is held by %s (active %s ago)"`: the ticket, the holder named by `nameHolder` as `"%s in %s"` — the holder's session (`an unidentified session` for the zero one), its checkout (`<path> (<branch>)` when this machine enumerated it, else the stream label), and how long since the holder last acted in the lane — since it reaches here only for a `Held` standing.
+- `take == true`, at a terminal or not → returns `"<line> — taking over (--take)\n"` and proceeds; the transition prints it as part of its notice after `Apply`, so one that fails at `Apply` prints none. It is read before the terminal is.
+- **Non-interactive** (`!isTerminal(stdout)`, the same signal `openOrPrintWorkflowFile` uses) and no `--take` → **refusal**: `takeoverUnconfirmedError{Message: line + " — pass --take to take it over"}`.
+- **Interactive** and no `--take`: calls `askYesNo(stdin, stdout, line+"\ntake it over?")` with the invocation's stdin, which prints `"%s [y/N] "` — so `"<line>\ntake it over? [y/N] "` — and reads a line from that stdin one byte at a time, up to `\n` or EOF, so a later prompt in the same run reads the next line. A read error other than `io.EOF` → `fmt.Errorf("read confirmation: %w", err)`. The answer is accepted iff `strings.HasPrefix(strings.ToLower(strings.TrimSpace(answer)), "y")`; otherwise → `takeoverUnconfirmedError{Message: "takeover declined"}`. `askYesNo` is shared with the `lit purge` confirmation (`internal/cli/purge.go`).
 - Both refusals are `takeoverUnconfirmedError`, which exits 3 with reason `takeover_unconfirmed`, whose remediation names `--take` (`error_output.go`).
 
-**`transferNotice(standing, handover)`** (`internal/cli/claims_context.go`) returns `"claim transferred: %s -> %s\n"`, rendering `handover.From` and `handover.To` with `describeClaimant`, when `Apply` reported a handover and `handover.Live(standing)` — the standing is `Held` and `held.By == handover.From.Checkout`, the public checkout matching like any holder (`internal/claims/claimant.go`); otherwise the empty string. `Apply` reports one through `Claimant.HandoverTo` (`internal/claims/claimant.go`) — the record named a holder (`Held`) and the start changed it — from the same pair the engine compares to decide its write, and the conformance case `a_reported_handover_is_the_one_recorded` holds it to the recorded start events on both engines. A start on a lane nobody holds, or one a later start elsewhere in the lane took from the record's establisher, announces no transfer whatever the row's history records: an expired claim transfers nothing, though `start.handover` on the event still says the write handed the record over. Pinned by `TestHandoverLive` (`internal/claims/claimant_test.go`), `TestTransferNoticeNamesAPredecessorThatMintedNoToken` (`internal/cli/claims_render_test.go`), `TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames` (`internal/cli/claims_takeover_test.go`) and, for the expired lane, `TestStartOnAnExpiredForeignClaimIsSilent`.
+**`transferNotice(standing, handover)`** (`internal/cli/claims_context.go`) returns `"claim transferred: %s -> %s\n"`, naming `handover.From.By` and `handover.To.By` with `nameHolder(..., addresses)`, when `Apply` reported a handover and `handover.Live(standing)` — the standing is `Held` and `held.By == handover.From.By`, the whole holder, the public checkout matching like any holder (`internal/claims/claimant.go`); otherwise the empty string. `Apply` reports one through `Claimant.HandoverTo` (`internal/claims/claimant.go`) — the record named a holder (`Held`) and the start changed it — from the same pair the engine compares to decide its write, and the conformance case `a_reported_handover_is_the_one_recorded` holds it to the recorded start events on both engines. A start on a lane nobody holds, or one a later start elsewhere in the lane took from the record's establisher, announces no transfer whatever the row's history records: an expired claim transfers nothing, though `start.handover` on the event still says the write handed the record over. Pinned by `TestHandoverLive` (`internal/claims/claimant_test.go`), `TestTransferNoticeNamesAPredecessorThatMintedNoToken` (`internal/cli/claims_render_test.go`), `TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames` (`internal/cli/claims_takeover_test.go`) and, for the expired lane, `TestStartOnAnExpiredForeignClaimIsSilent`.
 
 E2E, over two real clones and a real git remote (`internal/cli/claims_takeover_e2e_test.go`): alpha starts and pushes; bravo's `start` without `--take` fails with an error containing both `--take` and `claimed`; the same command with `--take` prints `"taking over"` and the transfer line naming both assignees and both streams; and starting the now-bravo-held lane again produces neither `"claimed"` nor `"--take"` in the output. Expired path (`TestStartOnAnExpiredForeignClaimIsSilent`): with `freshness_window = "1ms"` and a 50 ms sleep, bravo's plain `start` succeeds and prints none of `claimed`, `stale`, `check for unmerged`, `take`, or `claim transferred`.
 
 ### 9.2 `lit next` — claim-aware routing (a read gate)
 
-Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go`). Flags (`internal/cli/next.go`, plus the `--by` identity fallback): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag`` (`internal/cli/next.go`).
+Registered `app.AccessRead`; it performs no writes (`internal/cli/register.go`). Flags (`internal/cli/next.go`, plus the `--by` identity fallback): `--assignee`, `--type`, `--status` (`open|in_progress`), `--labels`, and `--all`, help string `"Ignore the focus scope and route over the whole queue"`. No `--limit`, no `--columns`. `--continue` is retired: `--continue` and `--continue=<x>` are wrapped at the parse boundary as an `UnsupportedError` carrying ``--continue is retired; claim routing already serves the lanes you hold first in `lit next` — run `lit next` with no flag`` (`internal/cli/next.go`).
 
 The leaf gathers rows, relation details and the focus scope, then the claim context, then routes: `routeNext(rows, details, cc.standings, cc.self, focus.scopeFor(*all))` (`internal/cli/next.go`). `focusScope.scopeFor(all)` returns the zero `focusScope` — the whole queue — when `--all` is set, so the flag picks a value and every stage after it stays unconditional (`internal/cli/ready_state.go`).
 
@@ -522,7 +522,7 @@ Steps 1-3 walk every gathered row; step 4 walks the focus-scoped pool. The row s
 - `reachAwaitingOutside`: ``on your path but waiting on an event outside this repository — `lit show` it names the event``
 
 `poolNotes`, exact strings:
-- `reachHeldFresh`: `in progress or claimed in a lane another checkout holds right now`
+- `reachHeldFresh`: `in progress or claimed in a lane another session holds right now`
 - `reachNotReady`: ``not startable right now — `lit show` it names what blocks it``
 - `reachAwaitingOutside`: ``waiting on an event outside this repository — `lit show` it names the event``
 
@@ -566,21 +566,9 @@ The `%s` in both non-empty arms is the rows clause.
 - empty key → `(fmt.Sprintf("the default lane of epic %s", l.epic), true)`.
 - otherwise → `(fmt.Sprintf("lane %s of epic %s", l.key, l.epic), true)`.
 
-**`renderNextOutcome(w, outcome, details, cc, actingAs)`** (`internal/cli/next.go`):
+**`renderNextOutcome(w, outcome, details, cc, primaryClone)`** (`internal/cli/next.go`):
 - `ServedFromClaim` → no announcement at all.
-- `ResumedOwnWork` → `resumeAdvice(o.Row, cc.actingAs)` + `"\n"`. Two sentences, chosen by
-  whether the row carries an assignee that is not the identity running the command
-  (`internal/cli/next.go`). Both halves must be non-empty and differ, so an
-  unassigned ticket and a command with no session identity both take the lane's own
-  sentence: `"%s is already in progress in a lane you hold — continue where you left off"`
-  (Row.ID). Otherwise: ``%s is in progress and assigned to %s, not to you — check that they have stopped before you continue it, or take other work from `lit backlog` ``
-  (Row.ID, assignee). Lanes are keyed on the checkout, not the session, so two sessions
-  in one checkout share every lane, and the assignee is the only fact that separates them.
-  Nothing decides whether the named holder is still running — every session mints a new
-  identity, so a predecessor and a live peer both read as "not you", and lit carries no
-  liveness probe — so the line asks for the check instead of adjudicating. The sentence
-  claims no more than the mismatch proves: an assignee is free text and need not name a
-  session at all (links-routing-t6fa).
+- `ResumedOwnWork` → `resumeAdvice(o.Row, cc)` + `"\n"`: `"%s is already in progress in a lane you hold — continue where you left off"` (Row.ID) when the row's latest start is the reader's or the row has none, and `"%s is already in progress in a lane you hold, started by %s — read its history before you continue it"` (Row.ID, the starting holder) when another session started it, a sibling inherited by taking the lane.
 - `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, place)` + `" (a second lane of an epic you already hold a lane in)\n"`.
 - `ServedFromNewLane` → `o.advice(place)` + `"\n"`.
 - `ServedFromDependency` → `startAdvice(o.Row, o.Lane, place)` + `dependencyReason(o)` + `"\n"`: `" (gates %s, which is on your path)"` on `Gates` when `Blocker == Row.ID`, else `" (it is in epic %s, which gates %s on your path)"` on `Blocker`, `Gates`.
@@ -597,7 +585,7 @@ For the five served cases the announcement is written only when non-empty, then 
 - Builds a temporary `&app.App{Workspace: ws, Store: syncStore}` — note: **no `Stream`**, so `cc.self` is the zero Attribution for this call (cf. `internal/cli/claims_context.go`).
 - Then `printContestedLanes(stdout, cc, time.Now())`, the rendering half, with `now` taken once for the whole report:
 - `lanes := contestedLanes(cc.standings)`; if empty, returns nil silently.
-- Header, verbatim: `contested: evidence from more than one checkout just met for these lanes —`.
+- Header, verbatim: `contested: more than one holder's evidence just met for these lanes —`.
 - Per lane: `"  %s: %s"` with `lane` (via `LaneID.String()`) and `formatClaimLine(cc, lane, now)`, through `singleLine`, then a newline.
 - `ok == false` from `formatClaimLine` → error `contested lane %s reported no claim line — standings and rendering disagree`.
 
@@ -630,8 +618,9 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 ### 10.2 `claimPrefix(by, cc)`
 
 `claimPrefix` (`internal/cli/claims_render.go`):
-- If `cc.addresses[by]` resolves: `branch := checkout.Branch`; if empty, `branch = "detached HEAD"`; returns `fmt.Sprintf("claimed here: %s (%s)", checkout.Path, branch)`.
-- Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by))`.
+- Both branches name the checkout through `checkoutAddress(by, addresses)`, the one function that formats `<path> (<branch>)` (branch `"detached HEAD"` when empty) for a checkout this machine enumerated and the opaque `nameCheckout(by)` otherwise, so a claim line and a hold-gate refusal name one checkout the same way.
+- If `cc.addresses[by]` resolves: returns `"claimed here: " + checkoutAddress(by, addresses)`.
+- Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", checkoutAddress(by, addresses), holdState(by))`.
 - `holdState(by)`: `"elsewhere"` (an identified `by`) or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and `by.Present()` is false.
 - The prefix carries no freshness tag: a locked worktree past the clock derives an ordinary `Held` lane and renders like any other, and an expired claim derives `Unclaimed` and renders nothing.
 - **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` in every row regardless of `cc.self`.

@@ -34,7 +34,7 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: resolveIdentity(runEnv(t), "")}); err != nil {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				}
 
 				var extra []string
-				if verb.spec.name == "start" {
+				if verb.spec.name == "start" || verb.spec.name == "done" {
 					extra = []string{"--by", owner}
 				}
 				// `lit close` requires a resolution at its command boundary; supply
@@ -221,7 +221,7 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--by", "agent-bob"}, startSpec); err != nil {
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--by", "agent-bob", "--take"}, startSpec); err != nil {
 		t.Fatalf("runTransition(reclaim) error = %v, want success with notice", err)
 	}
 	out := stdout.String()

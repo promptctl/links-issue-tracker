@@ -145,6 +145,10 @@ func workableLeaf(view workableView) appLeaf {
 	all := fs.Bool("all", false, "Ignore the focus scope and list the whole queue")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
+	// The reader whose lanes the listing treats as its own, resolved the way
+	// `lit next` resolves it, so an operator named by --by sees as their own
+	// exactly the lanes next serves them. [LAW:one-source-of-truth]
+	resolveActor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, usage: view.usage(), work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		filter, err := filterFlags.parse()
 		if err != nil {
@@ -181,7 +185,7 @@ func workableLeaf(view workableView) appLeaf {
 		// The view's workload, as `lit next` records its own: what a duration
 		// on this event was spent over. [LAW:one-source-of-truth] one key shape.
 		telemetry.Count(ctx, view.name+".rows_gathered", len(gathered.rows))
-		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
+		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap, resolveActor(inv.Env))
 		if err != nil {
 			return err
 		}
@@ -192,7 +196,7 @@ func workableLeaf(view workableView) appLeaf {
 		// partition serves every case and nothing downstream learns the flag exists.
 		// [LAW:dataflow-not-control-flow]
 		//
-		// It owns this checkout's lanes and the rest of their epics exactly as
+		// It owns the lanes this session holds and the rest of their epics exactly as
 		// `lit next`'s does, so the work next routes over first is never missing
 		// from the list. A dependency next hands back from outside them is not
 		// this checkout's until `lit start` claims its lane; until then it shows

@@ -58,33 +58,52 @@ func TestStartAnnouncesNoTransferFromAPredecessorTheLaneNoLongerNames(t *testing
 }
 
 // TestRelationOf is the gate's predicate stated as its own contract: every
-// standing claims.Derive can build, read against the two identities a caller
-// can have, and the relation each pair yields. The takeover gate and routing
-// both consume this value, so what it pins is what both of them do.
+// standing claims.Derive can build, read against the identities a caller can
+// have, and the relation each pair yields. The hold gate and routing both
+// consume this value, so what it pins is what both of them do.
 // [LAW:behavior-not-structure]
+//
+// The holder is a checkout and a session, so a second session is foreign
+// wherever it runs: in the holder's own checkout, in a worktree of it (a
+// worktree mints its own stream, so it is another checkout of one workspace),
+// or in another clone. Only the exact pair is ours, and only when both halves
+// name somebody.
 //
 // There is no row for an expired claim because there is no standing for one:
 // the derivation returns Unclaimed the moment the window closes, so this
 // function never learns a claim existed and cannot treat it as a grade of
-// hold. That absence is the ruling of links-claims-y6yz, and it is pinned
-// where a reader would go looking for the missing row.
+// hold.
 func TestRelationOf(t *testing.T) {
 	t.Parallel()
+	selfCheckout := selfHolder.Checkout
+	worktree := model.NewAttribution("worktree-stream", selfCheckout.Workspace())
+	otherClone := model.NewAttribution("clone-stream", "other-ws")
+	otherSession := model.SessionOf("other-session")
 	tests := []struct {
 		name     string
 		standing claims.Standing
-		self     model.Attribution
+		self     claims.Holder
 		want     laneRelation
 	}{
-		{"unclaimed is nobody's", claims.Unclaimed{}, selfAttribution, laneUnclaimed},
-		{"a nil standing reads as unclaimed, never as a panic", nil, selfAttribution, laneUnclaimed},
-		{"held by self is ours", heldBy(selfAttribution), selfAttribution, laneOurs},
-		{"held by someone else is foreign", heldBy(otherAttribution), selfAttribution, laneHeldForeign},
+		{"unclaimed is nobody's", claims.Unclaimed{}, selfHolder, laneUnclaimed},
+		{"a nil standing reads as unclaimed, never as a panic", nil, selfHolder, laneUnclaimed},
+		{"held by exactly this checkout and session is ours", heldBy(selfHolder), selfHolder, laneOurs},
+		{"held by another session in this same checkout is foreign", heldBy(claims.Holder{Checkout: selfCheckout, Session: otherSession}), selfHolder, laneHeldForeign},
+		{"held by another session in a worktree of this checkout is foreign", heldBy(claims.Holder{Checkout: worktree, Session: otherSession}), selfHolder, laneHeldForeign},
+		{"held by another session in another checkout is foreign", heldBy(claims.Holder{Checkout: otherClone, Session: otherSession}), selfHolder, laneHeldForeign},
+		{"held by this session in another checkout is foreign", heldBy(claims.Holder{Checkout: worktree, Session: selfHolder.Session}), selfHolder, laneHeldForeign},
+		// The zero session is a value like any other: equal pairs match, and an
+		// identified session meeting it, or it meeting one, is unequal.
+		{"a zero-session hold is foreign to a session in this checkout", heldBy(claims.Holder{Checkout: selfCheckout}), selfHolder, laneHeldForeign},
+		{"a session's hold is foreign to a zero-session self in this checkout", heldBy(selfHolder), claims.Holder{Checkout: selfCheckout}, laneHeldForeign},
+		{"a zero-session hold is ours to a zero-session self in the same checkout", heldBy(claims.Holder{Checkout: selfCheckout}), claims.Holder{Checkout: selfCheckout}, laneOurs},
+		{"a zero-session hold in a worktree is foreign to a zero-session self here", heldBy(claims.Holder{Checkout: worktree}), claims.Holder{Checkout: selfCheckout}, laneHeldForeign},
 		// The public checkout is every unattributed writer at once, and a
 		// checkout with no minted token has recorded nothing, so a zero self
 		// equal to a zero holder proves nothing about whose lane it is.
-		{"held by the public checkout is foreign even to an unminted self", heldBy(publicAttribution), publicAttribution, laneHeldForeign},
-		{"held by the public checkout is foreign to a minted self", heldBy(publicAttribution), selfAttribution, laneHeldForeign},
+		{"held by the public checkout is foreign even to an unminted self", heldBy(publicHolder), publicHolder, laneHeldForeign},
+		{"held by the public checkout is foreign to a minted self", heldBy(publicHolder), selfHolder, laneHeldForeign},
+		{"held by this session in the public checkout is foreign to it there", heldBy(claims.Holder{Session: selfHolder.Session}), claims.Holder{Session: selfHolder.Session}, laneHeldForeign},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

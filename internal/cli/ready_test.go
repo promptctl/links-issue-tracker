@@ -119,14 +119,14 @@ func (h readyTestHarness) issueDetail(issueID model.ID) model.Issue {
 
 func (h readyTestHarness) closeIssue(issueID model.ID, reason string) {
 	h.t.Helper()
-	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: model.Done{}, Actor: "tester", Reason: reason}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: model.Done{}, Actor: resolveIdentity(runEnv(h.t), ""), Reason: reason}); err != nil {
 		h.t.Fatalf("Apply(close) error = %v", err)
 	}
 }
 
 func (h readyTestHarness) applyAction(issueID model.ID, action model.Action, reason string) {
 	h.t.Helper()
-	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: action, Actor: "tester", Reason: reason}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: action, Actor: resolveIdentity(runEnv(h.t), ""), Reason: reason}); err != nil {
 		h.t.Fatalf("Apply(%T, %q) error = %v", action, issueID, err)
 	}
 }

@@ -61,7 +61,7 @@ func TestClaimantOf(t *testing.T) {
 			name:   "an establishing event names the checkout that took it",
 			issue:  ticket("ada"),
 			events: []model.IssueEvent{event("e1", "T", model.ActionStart, ago(time.Hour), streamA)},
-			want:   claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA},
+			want:   claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamA}},
 		},
 	}
 
@@ -87,7 +87,7 @@ func TestClaimantOfReadsTheNewestEstablisherOfUnorderedEvents(t *testing.T) {
 		event("e2", "T", fieldUpdate, ago(time.Minute), foreign),
 	}
 
-	want := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamB}
+	want := claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamB}}
 	if got := claims.ClaimantOf(ticket("ada"), events); got != want {
 		t.Errorf("ClaimantOf() = %+v, want %+v", got, want)
 	}
@@ -103,9 +103,9 @@ func TestClaimantOfBreaksASameInstantTieOnID(t *testing.T) {
 	second := event("e2", "T", model.ActionStart, tick, streamB)
 
 	for _, order := range [][]model.IssueEvent{{first, second}, {second, first}} {
-		if got := claims.ClaimantOf(ticket("ada"), order); got.Checkout != streamB {
+		if got := claims.ClaimantOf(ticket("ada"), order); got.By.Checkout != streamB {
 			t.Errorf("ClaimantOf() over %s, %s named checkout %q, want the higher id's %q",
-				order[0].ID, order[1].ID, got.Checkout.Stream(), streamB.Stream())
+				order[0].ID, order[1].ID, got.By.Checkout.Stream(), streamB.Stream())
 		}
 	}
 }
@@ -117,7 +117,7 @@ func TestHeld(t *testing.T) {
 		want     bool
 	}{
 		{"a holder whose start predates attribution", claims.Claimant{Established: true}, true},
-		{"a holder the record can address", claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}, true},
+		{"a holder the record can address", claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamA}}, true},
 		{"an assignee nobody started", claims.Claimant{Assignee: "ada"}, false},
 		{"a ticket with no record at all", claims.Claimant{}, false},
 	}
@@ -135,8 +135,8 @@ func TestHeld(t *testing.T) {
 // pair where the other condition holds, so neither can stand in for both: a
 // holder to pass the claim on from, and a holder that changed.
 func TestHandoverTo(t *testing.T) {
-	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
-	heldByB := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamB}
+	heldByA := claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamA}}
+	heldByB := claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamB}}
 	preset := claims.Claimant{Assignee: "ada"}
 
 	cases := []struct {
@@ -164,9 +164,12 @@ func TestHandoverTo(t *testing.T) {
 // started it after the claim is over, so every row but the matching ones holds
 // a handover the record really did make.
 func TestHandoverLive(t *testing.T) {
-	heldBy := func(by model.Attribution) claims.Standing { return claims.Held{Tenure: claims.Tenure{By: by}} }
-	fromA := claims.Handover{From: claims.Claimant{Established: true, Checkout: streamA}, To: claims.Claimant{Established: true, Checkout: streamB}}
-	fromPublic := claims.Handover{From: claims.Claimant{Established: true}, To: claims.Claimant{Established: true, Checkout: streamB}}
+	heldBy := func(by model.Attribution) claims.Standing {
+		return claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: by}}}
+	}
+	fromA := claims.Handover{From: claims.Claimant{Established: true, By: claims.Holder{Checkout: streamA}}, To: claims.Claimant{Established: true, By: claims.Holder{Checkout: streamB}}}
+	fromPublic := claims.Handover{From: claims.Claimant{Established: true}, To: claims.Claimant{Established: true, By: claims.Holder{Checkout: streamB}}}
+	fromSessionA := claims.Handover{From: claims.Claimant{Established: true, By: claims.HolderFor(streamA, "session-a")}, To: claims.Claimant{Established: true, By: claims.HolderFor(streamA, "session-b")}}
 
 	cases := []struct {
 		name     string
@@ -180,6 +183,8 @@ func TestHandoverLive(t *testing.T) {
 		{"the public checkout holds the lane it is predecessor on", fromPublic, heldBy(model.Attribution{}), true},
 		{"a minted predecessor on a lane the public checkout holds", fromA, heldBy(model.Attribution{}), false},
 		{"the public checkout predecessor on a lane a minted checkout holds", fromPublic, heldBy(streamA), false},
+		{"another session in the predecessor's checkout holds the lane", fromSessionA, claims.Held{Tenure: claims.Tenure{By: claims.HolderFor(streamA, "session-c")}}, false},
+		{"the predecessor session in its checkout still holds the lane", fromSessionA, claims.Held{Tenure: claims.Tenure{By: claims.HolderFor(streamA, "session-a")}}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -233,7 +238,7 @@ func TestEveryActionHasASample(t *testing.T) {
 // ticket in it — and it is exactly that rewrite the engines' no-op comparison
 // would then read as a change worth recording.
 func TestAfterPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
-	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+	heldByA := claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamA}}
 
 	for _, name := range model.Actions() {
 		action, drivesStatus := everyAction[name].(model.StatusAction)
@@ -244,7 +249,7 @@ func TestAfterPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
 			// one verb that does move the claimant, and has its own cases below.
 			continue
 		}
-		if got := heldByA.After(action, streamB); got != heldByA {
+		if got := heldByA.After(action, claims.Holder{Checkout: streamB}); got != heldByA {
 			t.Errorf("After(%q, %s) = %+v, want ownership unchanged at %+v", name, streamB.Stream(), got, heldByA)
 		}
 	}
@@ -256,13 +261,13 @@ func TestAfterPreservesOwnershipForEveryStatusVerbButStart(t *testing.T) {
 // takeover between two checkouts sharing one assignee compares equal and
 // records nothing.
 func TestAfterStartInstallsTheTakingCheckout(t *testing.T) {
-	heldByA := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+	heldByA := claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamA}}
 
 	// Surrounding space on the way in, because `--assignee` is a flag value a
 	// shell can pad and the claimant is compared for equality: an untrimmed
 	// " bob " would read as a transfer away from "bob" on every re-run.
-	want := claims.Claimant{Established: true, Assignee: "bob", Checkout: streamB}
-	if got := heldByA.After(model.Start{Assignee: "  bob  "}, streamB); got != want {
+	want := claims.Claimant{Established: true, Assignee: "bob", By: claims.Holder{Checkout: streamB}}
+	if got := heldByA.After(model.Start{Assignee: "  bob  "}, claims.Holder{Checkout: streamB}); got != want {
 		t.Errorf("After(start, %s) = %+v, want %+v", streamB.Stream(), got, want)
 	}
 }
@@ -275,7 +280,7 @@ func TestAfterStartInstallsTheTakingCheckout(t *testing.T) {
 func TestAfterStartEstablishesAnUnheldClaimant(t *testing.T) {
 	preset := claims.Claimant{Assignee: "ada"}
 
-	got := preset.After(model.Start{Assignee: "ada"}, model.Attribution{})
+	got := preset.After(model.Start{Assignee: "ada"}, claims.Holder{})
 	want := claims.Claimant{Established: true, Assignee: "ada"}
 	if got != want {
 		t.Errorf("After(start, absent) = %+v, want %+v", got, want)
@@ -291,15 +296,15 @@ func TestAfterStartEstablishesAnUnheldClaimant(t *testing.T) {
 // else, so a field the comparison cannot see is a transfer that records
 // nothing and exits 0.
 func TestClaimantEqualityDistinguishesEveryField(t *testing.T) {
-	base := claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}
+	base := claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamA}}
 
 	cases := []struct {
 		field string
 		other claims.Claimant
 	}{
-		{"established", claims.Claimant{Assignee: "ada", Checkout: streamA}},
-		{"assignee", claims.Claimant{Established: true, Assignee: "bob", Checkout: streamA}},
-		{"checkout", claims.Claimant{Established: true, Assignee: "ada", Checkout: streamB}},
+		{"established", claims.Claimant{Assignee: "ada", By: claims.Holder{Checkout: streamA}}},
+		{"assignee", claims.Claimant{Established: true, Assignee: "bob", By: claims.Holder{Checkout: streamA}}},
+		{"checkout", claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamB}}},
 	}
 	for _, c := range cases {
 		if base == c.other {
@@ -307,7 +312,23 @@ func TestClaimantEqualityDistinguishesEveryField(t *testing.T) {
 		}
 	}
 
-	if base != (claims.Claimant{Established: true, Assignee: "ada", Checkout: streamA}) {
+	if base != (claims.Claimant{Established: true, Assignee: "ada", By: claims.Holder{Checkout: streamA}}) {
 		t.Error("identical claimants compared unequal: every re-run of a held ticket would record a transfer to itself")
+	}
+}
+
+// TestAfterMovesTheClaimantToANewSessionInTheSameCheckout pins the write
+// side's half of "the holder is checkout and session": a start by a second
+// session in the holder's checkout, under the assignee the row already names,
+// installs a different claimant, so the engine records it rather than reading
+// a repeated self-start.
+func TestAfterMovesTheClaimantToANewSessionInTheSameCheckout(t *testing.T) {
+	prior := claims.Claimant{Established: true, Assignee: "session-b", By: claims.HolderFor(streamA, "session-a")}
+	got := prior.After(model.Start{Assignee: "session-b"}, claims.HolderFor(streamA, "session-b"))
+	if got == prior {
+		t.Fatalf("After = %+v, want the claimant to move to session-b", got)
+	}
+	if want := (claims.Claimant{Established: true, Assignee: "session-b", By: claims.HolderFor(streamA, "session-b")}); got != want {
+		t.Fatalf("After = %+v, want %+v", got, want)
 	}
 }

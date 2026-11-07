@@ -140,32 +140,25 @@ func (e *Engine) planPhase(current model.Issue, actor, reason string, action mod
 // its children's — and the engine adds only the claimant rule and the
 // integrity floor under a redirecting close.
 func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, now time.Time) (model.Issue, []eventSpec, *claims.Handover, error) {
-	updated, err := current.Apply(action)
-	if err != nil {
-		return model.Issue{}, nil, nil, err
-	}
-	// Who holds the ticket is the (assignee, checkout) pair claims owns, read
-	// from this issue's own history — never the assignee alone, because lane
-	// ownership is keyed on the checkout and the checkout is recorded on events
-	// rather than on the row. [LAW:one-source-of-truth] Start is the one action
-	// that takes a ticket, so it is the one that moves the pair; that rule lives
-	// in Claimant.After, where both engines read it.
-	prior := claims.ClaimantOf(current, e.eventsFor(current.ID))
-	post := prior.After(action, e.attribution)
-	updated.Assignee = model.Text(post.Assignee)
-	// A call whose target state and resulting claimant both already hold is
-	// the documented no-op: history records mutations that happened, not calls
-	// that were made. A same-state start that moves the claimant — a new
-	// assignee, or a new checkout taking the lane from one that shares its
-	// identity — is the reclaim path and falls through, recording who took it.
+	// Who holds the ticket is the claimant claims owns, read from this issue's
+	// own history — never the assignee alone, because lane ownership is keyed
+	// on the holder (checkout and session) recorded on events rather than on
+	// the row. [LAW:one-source-of-truth] Whether the call records anything is
+	// claims.StatusPlan's to say, where the Dolt engine and the hold gate read
+	// it too.
 	//
 	// The no-op is decided BEFORE the redirect target is checked, because the
 	// check guards a write and there is no write here to guard. Checking first
 	// would make a call that changes nothing fail on the state of an issue it
 	// was never going to touch.
-	if updated.StatusValue() == current.StatusValue() && post == prior {
+	plan, err := claims.PlanStatus(current, e.eventsFor(current.ID), action, claims.HolderFor(e.attribution, model.Text(actor)))
+	if err != nil {
+		return model.Issue{}, nil, nil, err
+	}
+	if !plan.Records() {
 		return current, nil, nil, nil
 	}
+	updated := plan.Updated
 	if err := e.validateRedirectTarget(updated); err != nil {
 		return model.Issue{}, nil, nil, err
 	}
@@ -175,7 +168,7 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 		reason:  reason,
 		actor:   actor,
 		changes: statusChanges(current, updated),
-	}}, prior.HandoverTo(post), nil
+	}}, plan.Handover(), nil
 }
 
 // planRetention moves the retention axis. The legal moves and every rejection

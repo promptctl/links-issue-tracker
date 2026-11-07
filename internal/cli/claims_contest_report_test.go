@@ -13,8 +13,8 @@ import (
 // survivors come back in a stable, sorted order.
 func TestContestedLanesFiltersAndSorts(t *testing.T) {
 	t.Parallel()
-	holder := model.NewAttribution("aaaaaaaabbbb", "ws-local")
-	contestant := model.NewAttribution("eeeeeeeeffff", "ws-local")
+	holder := claims.Holder{Checkout: model.NewAttribution("aaaaaaaabbbb", "ws-local")}
+	contestant := claims.Holder{Checkout: model.NewAttribution("eeeeeeeeffff", "ws-local")}
 
 	contestedZ := model.LaneOf(model.Issue{ID: "zzz"}, nil)
 	contestedA := model.LaneOf(model.Issue{ID: "aaa"}, nil)
@@ -22,8 +22,8 @@ func TestContestedLanesFiltersAndSorts(t *testing.T) {
 	unclaimed := model.LaneOf(model.Issue{ID: "sss"}, nil)
 
 	standings := claims.Standings{
-		contestedZ:  claims.Held{Tenure: claims.Tenure{By: holder}, Contested: []model.Attribution{contestant}},
-		contestedA:  claims.Held{Tenure: claims.Tenure{By: holder}, Contested: []model.Attribution{contestant}},
+		contestedZ:  claims.Held{Tenure: claims.Tenure{By: holder}, Contested: []claims.Holder{contestant}},
+		contestedA:  claims.Held{Tenure: claims.Tenure{By: holder}, Contested: []claims.Holder{contestant}},
 		uncontested: claims.Held{Tenure: claims.Tenure{By: holder}},
 		unclaimed:   claims.Unclaimed{},
 	}
@@ -43,7 +43,7 @@ func TestContestedLanesFiltersAndSorts(t *testing.T) {
 // reconcile.
 func TestContestedLanesEmptyForNoContest(t *testing.T) {
 	t.Parallel()
-	holder := model.NewAttribution("aaaaaaaabbbb", "ws-local")
+	holder := claims.Holder{Checkout: model.NewAttribution("aaaaaaaabbbb", "ws-local")}
 	lane := model.LaneOf(model.Issue{ID: "aaa"}, nil)
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{By: holder}}}
 

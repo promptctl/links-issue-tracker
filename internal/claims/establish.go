@@ -54,7 +54,13 @@ var establishing = map[model.ActionName]bool{
 // lookup a known one does — the empty verb is genuinely "an edit, not a
 // transition", which is the answer the map would give anyway.
 func establishes(event model.IssueEvent) bool {
-	return establishing[model.ActionName(event.Action)]
+	return Establishes(model.ActionName(event.Action))
+}
+
+// Establishes reports whether performing the named verb takes or transfers a
+// lane, so a caller about to perform it can say what its act does to the hold.
+func Establishes(name model.ActionName) bool {
+	return establishing[name]
 }
 
 // LatestEstablisher returns the newest event among events that takes or

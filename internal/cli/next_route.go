@@ -324,7 +324,7 @@ func workName(dependency, work model.ID) string {
 // only whether acting would get anywhere. The external label outranks both: a
 // row it holds reports as awaiting outside whoever holds its lane and whatever
 // else blocks it, because no one's work here would move it.
-func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) reachKind {
+func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self claims.Holder) reachKind {
 	switch {
 	case capacityFor(row, standing, self) != routeAround:
 		return reachTakeable
@@ -392,7 +392,7 @@ const (
 // the row's lifecycle state, its lane's relation to this checkout, and whether
 // anything blocks it. Pure and total.
 //
-// Two rules cover the whole table. A lane another checkout holds right now is
+// Two rules cover the whole table. A lane another session holds right now is
 // routed around, whatever is in it. In any other lane — this checkout's own,
 // or nobody's — startable work is served, and work in flight is handed back
 // when the lane is ours and served when it is nobody's: an in-progress row in
@@ -412,7 +412,7 @@ const (
 // the exception because it is not a precondition of starting: it says no work
 // in this repository moves the row, which is as true in flight as before, so a
 // row it holds is routed around in every state.
-func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self model.Attribution) capacity {
+func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self claims.Holder) capacity {
 	relation := relationOf(standing, self)
 	started := row.State() == model.StateInProgress
 	readiness := ClassifyReadiness(row.Annotations)
@@ -442,7 +442,7 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // An unidentified self needs no guard here: relationOf owns what a
 // public-checkout self may match, so ownership and the start gate cannot drift
 // apart on it. [LAW:single-enforcer]
-func ownScope(standings claims.Standings, self model.Attribution) ownWork {
+func ownScope(standings claims.Standings, self claims.Holder) ownWork {
 	own := ownWork{lanes: map[model.LaneID]bool{}, epics: map[model.ID]bool{}}
 	for lane, standing := range standings {
 		if relationOf(standing, self) != laneOurs {
@@ -456,7 +456,7 @@ func ownScope(standings claims.Standings, self model.Attribution) ownWork {
 	return own
 }
 
-// ownWork is this checkout's own work: the lanes it holds and the epics those
+// ownWork is this session's own work: the lanes it holds and the epics those
 // lanes sit in. `lit next` routes over it before anything else, and the focus
 // scope never narrows it away, so both read "ours" from this one value rather
 // than each rebuilding it from the standings. [LAW:one-source-of-truth]
@@ -470,7 +470,7 @@ type ownWork struct {
 // holds reports whether this checkout holds the lane itself.
 func (o ownWork) holds(lane model.LaneID) bool { return o.lanes[lane] }
 
-// covers reports whether the lane is this checkout's own work: a lane it holds,
+// covers reports whether the lane is this session's own work: a lane it holds,
 // or any lane of an epic one of those sits in — the epic-major rule, which
 // keeps `lit next` serving the epic in flight until it has nothing workable.
 // A lane of one has no epic, and epics never holds the empty id, so holding a
@@ -526,7 +526,7 @@ func (o ownWork) holdsAny() bool { return len(o.lanes) > 0 }
 // epicsAbove climbs to tell which rows sit under an epic. evidence is the
 // reading standings were derived from; routing counts a stopped scope's
 // progress from it, since rows hold no closed ticket to count.
-func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.IssueRelations, epics map[model.ID]storage.IssueRelations, standings claims.Standings, evidence claims.Evidence, self model.Attribution, scope focusScope, asked storage.IssueCriteria) NextOutcome {
+func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.IssueRelations, epics map[model.ID]storage.IssueRelations, standings claims.Standings, evidence claims.Evidence, self claims.Holder, scope focusScope, asked storage.IssueCriteria) NextOutcome {
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}
@@ -566,7 +566,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.Is
 	// The pick carries that scope out, so what the run says it answered over is
 	// the scope it did answer over.
 	//
-	// The pool holds this checkout's own work too, since the scope owns it, and
+	// The pool holds this session's own work too, since the scope owns it, and
 	// that changes no pick: step 4 is reached directly only when own holds
 	// nothing, and the own branch consults the pool only after steps 1-2b took
 	// every row of ours it could serve.
@@ -1146,7 +1146,7 @@ var (
 		reachAwaitingOutside: "on your path but waiting on an event outside this repository — `lit show` it names the event",
 	}
 	poolNotes = reachNotes{
-		reachHeldFresh:       "in progress or claimed in a lane another checkout holds right now",
+		reachHeldFresh:       "in progress or claimed in a lane another session holds right now",
 		reachHeldByItself:    "held by something about the ticket itself — `lit show` it names what",
 		reachNotReady:        "not startable right now — `lit show` it names what blocks it",
 		reachAwaitingOutside: "waiting on an event outside this repository — `lit show` it names the event",

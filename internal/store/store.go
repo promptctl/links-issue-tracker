@@ -1945,33 +1945,22 @@ func (w transitionWrite) isNoop() bool               { return w.noop }
 func (w transitionWrite) handover() *claims.Handover { return w.claimHandover }
 
 func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEvent, at time.Time, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
-	updated, err := issue.Apply(action)
+	// Who holds the ticket is the claimant claims owns, read from this issue's
+	// own history — never the assignee alone. The taker is s.attribution and
+	// actor because they are exactly what recordEvent will stamp on the event
+	// this plan is deciding whether to write. Whether it is owed at all is
+	// claims.StatusPlan's to say, where the memory engine and the hold gate
+	// read it too. [LAW:one-source-of-truth]
+	plan, err := claims.PlanStatus(issue, history, action, claims.HolderFor(s.attribution, model.Text(actor)))
 	if err != nil {
 		return transitionWrite{}, err
 	}
-	// Who holds the ticket is the (assignee, checkout) pair claims owns, read
-	// from this issue's own history — never the assignee alone. The history read
-	// is what makes the checkout half available: ownership is recorded on events,
-	// not on the row, so there is no column to compare. [LAW:one-source-of-truth]
-	// s.attribution is the taker for the same reason it is the right one to
-	// compare against: it is exactly what recordEvent will stamp on the event
-	// this plan is deciding whether to write.
-	prior := claims.ClaimantOf(issue, history)
-	post := prior.After(action, s.attribution)
-	updated.Assignee = post.Assignee
-	fromStatus := issue.StatusValue()
-	toStatus := updated.StatusValue()
-	// [LAW:one-source-of-truth] History records actual mutations only. A call
-	// whose target state and resulting claimant both match the record is the
-	// documented leaf-state Apply no-op: no write, no event. The claim audit
-	// substrate survives because a reclaim — same state, new assignee OR a new
-	// checkout taking the lane — moves the claimant and falls through, which is
-	// what keeps "who took this over" answerable. Comparing only the assignee
-	// would drop every takeover between two checkouts of one identity on the
-	// floor, silently and with exit 0. [LAW:no-silent-failure]
-	if toStatus == fromStatus && post == prior {
+	if !plan.Records() {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
+	updated := plan.Updated
+	fromStatus := issue.StatusValue()
+	toStatus := updated.StatusValue()
 	now := at
 	var closedAtArg any
 	if value := updated.ClosedAtValue(); value != nil {
@@ -2020,8 +2009,8 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	if !stringPointersEqual(priorRedirect, postRedirect) {
 		changes = append(changes, model.FieldChange{Field: "redirect_target", From: formatNullableString(priorRedirect), To: formatNullableString(postRedirect)})
 	}
-	if prior.Assignee != post.Assignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: prior.Assignee.Raw(), To: post.Assignee.Raw()})
+	if plan.Prior.Assignee != plan.Post.Assignee {
+		changes = append(changes, model.FieldChange{Field: "assignee", From: plan.Prior.Assignee.Raw(), To: plan.Post.Assignee.Raw()})
 	}
 	updated.UpdatedAt = now
 	// updated already carries the leaf the write will persist — the outcome
@@ -2030,7 +2019,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 	return transitionWrite{
 		issueID:           issue.ID,
 		toStatus:          toStatus,
-		postAssignee:      post.Assignee.Raw(),
+		postAssignee:      plan.Post.Assignee.Raw(),
 		now:               now,
 		closedAtArg:       closedAtArg,
 		resolutionArg:     resolutionArg,
@@ -2040,7 +2029,7 @@ func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEve
 		actor:             actor,
 		changes:           changes,
 		post:              updated,
-		claimHandover:     prior.HandoverTo(post),
+		claimHandover:     plan.Handover(),
 	}, nil
 }
 

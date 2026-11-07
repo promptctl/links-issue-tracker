@@ -38,13 +38,43 @@ type Unclaimed struct{}
 // alive through a long stretch on one ticket, so the two timestamps drift apart
 // on exactly the lanes someone is really working.
 type Tenure struct {
-	By           model.Attribution
+	By           Holder
 	Since        time.Time
 	LastActivity time.Time
 }
 
-// Held is a lane a checkout holds right now: all four legs of the predicate
-// pass. Contested lists the other checkouts that also have live evidence here —
+// Holder is who holds a lane: the checkout the establishing event was recorded
+// in, and the session that recorded it. Both halves, because either alone
+// hands one in-flight ticket to two live sessions. Keyed on the checkout, two
+// sessions in one tree are one holder and the second is served the first's
+// work mid-PR; keyed on the session, one session driving two worktrees is one
+// holder of two trees' work. The pair is the holder, read off the one event
+// that established the hold, so it needs no state of its own.
+// [LAW:one-source-of-truth]
+//
+// Comparable, so a holder is a map key and an equality test like the
+// Attribution it extends.
+type Holder struct {
+	Checkout model.Attribution
+	Session  model.Session
+}
+
+// HolderOf is the holder an event names: where it was recorded and by whom.
+// [LAW:single-enforcer] the one reading of an event as a holder, so the
+// derivation's holder, its contestants and its activity trail key on one value.
+func HolderOf(event model.IssueEvent) Holder {
+	return HolderFor(event.Attribution, event.Actor)
+}
+
+// HolderFor is the holder an event recorded in checkout under actor will name,
+// so a storage engine deciding whether a write moves the claimant compares the
+// holder the event it is about to stamp would carry.
+func HolderFor(checkout model.Attribution, actor model.Text) Holder {
+	return Holder{Checkout: checkout, Session: model.SessionOf(actor)}
+}
+
+// Held is a lane a holder holds right now: all four legs of the predicate
+// pass. Contested lists the other holders that also have live evidence here —
 // an offline race, or a takeover the previous holder has not yet seen. It is an
 // annotation and not a state, so routing is unaffected by it: the holder is
 // still the holder, and the list exists to be surfaced to both sides. Empty is
@@ -52,7 +82,7 @@ type Tenure struct {
 // separate list. [LAW:dataflow-not-control-flow]
 type Held struct {
 	Tenure
-	Contested []model.Attribution
+	Contested []Holder
 }
 
 func (Unclaimed) isStanding() {}

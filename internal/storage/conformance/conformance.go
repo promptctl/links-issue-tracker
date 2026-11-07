@@ -960,8 +960,8 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 		t.Fatalf("both start events carry %+v; the store did not record the second checkout", byA.Attribution)
 	}
 	want := claims.Handover{
-		From: claims.Claimant{Established: true, Assignee: "ada", Checkout: byA.Attribution},
-		To:   claims.Claimant{Established: true, Assignee: "ada", Checkout: byB.Attribution},
+		From: claims.Claimant{Established: true, Assignee: "ada", By: claims.HolderOf(byA)},
+		To:   claims.Claimant{Established: true, Assignee: "ada", By: claims.HolderOf(byB)},
 	}
 	if taken.Handover == nil || *taken.Handover != want {
 		t.Errorf("a second checkout's takeover reported %+v, want %+v: the checkouts on the two recorded start events", taken.Handover, want)
@@ -978,8 +978,8 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 		t.Fatalf("the hand-off to grace recorded assignee row %+v, want ada -> grace", assigneeRow)
 	}
 	want = claims.Handover{
-		From: claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.From), Checkout: byB.Attribution},
-		To:   claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.To), Checkout: byB.Attribution},
+		From: claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.From), By: claims.HolderFor(byB.Attribution, model.Text(assigneeRow.From))},
+		To:   claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.To), By: claims.HolderFor(byB.Attribution, model.Text(assigneeRow.To))},
 	}
 	if handed.Handover == nil || *handed.Handover != want {
 		t.Errorf("a hand-off to a new assignee reported %+v, want %+v: the assignee row the start recorded", handed.Handover, want)

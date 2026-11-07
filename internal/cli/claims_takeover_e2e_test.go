@@ -85,8 +85,8 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if !strings.Contains(err.Error(), "--take") {
 		t.Fatalf("refusal error = %v, want it to instruct --take", err)
 	}
-	if !strings.Contains(err.Error(), "claimed") {
-		t.Fatalf("refusal error = %v, want provenance naming the current holder", err)
+	if !strings.HasPrefix(err.Error(), ticket+" is held by alpha-agent in stream ") {
+		t.Fatalf("refusal error = %v, want provenance naming the current holder's session and checkout", err)
 	}
 	// What the caller is told to do next is the rendered remediation. The gate
 	// is a refusal, and the act that clears it is the flag.
@@ -113,17 +113,17 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	if !strings.Contains(out, "taking over") {
 		t.Fatalf("start %s --take = %q, want it to announce the takeover", ticket, out)
 	}
-	// The transfer line itself, composed, not sampled: this is the only test
-	// where the two claimants differ in BOTH halves, so it is the only one that
-	// can pin describeClaimant's both-halves render. Substring checks would pass
-	// on a swapped order or a dropped stream.
-	bothHalves := regexp.MustCompile(`claim transferred: alpha-agent \(stream ([a-z0-9]+)\) -> bravo-agent \(stream ([a-z0-9]+)\)`)
-	streams := bothHalves.FindStringSubmatch(out)
-	if streams == nil {
-		t.Fatalf("start %s --take = %q, want the transfer line naming both assignees and both streams", ticket, out)
+	// The transfer line itself, composed, not sampled: the two holders differ
+	// in BOTH halves, so this pins nameHolder's session-in-checkout render on
+	// each side. Substring checks would pass on a swapped order or a dropped
+	// checkout.
+	bothHalves := regexp.MustCompile(`claim transferred: alpha-agent in (\S+[^\n]*?) -> bravo-agent in ([^\n]+)\n`)
+	checkouts := bothHalves.FindStringSubmatch(out)
+	if checkouts == nil {
+		t.Fatalf("start %s --take = %q, want the transfer line naming both sessions and both checkouts", ticket, out)
 	}
-	if streams[1] == streams[2] {
-		t.Fatalf("transfer notice = %q, want two different streams: alpha and bravo are different checkouts", out)
+	if checkouts[1] == checkouts[2] {
+		t.Fatalf("transfer notice = %q, want two different checkouts: alpha and bravo are different clones", out)
 	}
 	if got, want := startFacts(t), map[string]any{"start.lane_family_issues": float64(1), "start.lane_held": true, "start.handover": true, "start.transfer_announced": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("takeover start event facts = %v, want %v", got, want)
@@ -267,6 +267,13 @@ func TestStartTakesOverALiveLaneUnderOneSharedIdentity(t *testing.T) {
 	runGit(t, bravo, "config", "user.name", "bravo")
 	runCLIInDir(t, bravo, "init", "--skip-hooks")
 
+	// A holder is a session in a checkout, so one identity in a second checkout
+	// is still a second holder: without --take its start is refused, naming the
+	// identity and the checkout that holds the ticket.
+	if _, err := runCLIInDirAllowError(t, bravo, "start", ticket, "--by", shared); err == nil || !strings.HasPrefix(err.Error(), ticket+" is held by "+shared+" in stream ") {
+		t.Fatalf("start %s in a second checkout of the same identity = %v, want the refusal naming %s in alpha's checkout", ticket, err, shared)
+	}
+
 	// Alpha's claim is live, so the takeover is the deliberate --take crossing;
 	// the notice it prints is the subject here.
 	out := runCLIInDir(t, bravo, "start", ticket, "--by", shared, "--take")
@@ -333,7 +340,7 @@ func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 
 	// The same command once the lane IS held announces the change, so the
 	// silence above is the preset case specifically and not a dead notice.
-	out = runCLIInDir(t, repo, "start", ticket, "--by", "bob")
+	out = runCLIInDir(t, repo, "start", ticket, "--by", "bob", "--take")
 	if !strings.Contains(out, "claim transferred") {
 		t.Fatalf("start %s over a held lane = %q, want the transfer announced", ticket, out)
 	}

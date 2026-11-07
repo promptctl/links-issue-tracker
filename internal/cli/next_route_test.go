@@ -29,18 +29,19 @@ import (
 // contract, tested where it lives. [LAW:behavior-not-structure]
 
 var (
-	selfAttribution  = model.NewAttribution("self-stream", "ws")
-	otherAttribution = model.NewAttribution("other-stream", "ws")
+	selfHolder  = claims.Holder{Checkout: model.NewAttribution("self-stream", "ws"), Session: model.SessionOf("self-session")}
+	otherHolder = claims.Holder{Checkout: model.NewAttribution("other-stream", "ws"), Session: model.SessionOf("other-session")}
 
-	// publicAttribution is what a checkout that has minted no stream token
-	// computes as its own identity. `next` opens in app.AccessRead, which
-	// resolves the stream through workspace.ReadStream and never mints, so
-	// this is the ordinary self of any checkout before its first write --
-	// including a brand-new clone, the design's own headline scenario.
-	publicAttribution = model.Attribution{}
+	// publicHolder is what a checkout that has minted no stream token, read by
+	// no session, computes as its own identity. `next` opens in
+	// app.AccessRead, which resolves the stream through workspace.ReadStream
+	// and never mints, so this is the ordinary self of any checkout before its
+	// first write -- including a brand-new clone, the design's own headline
+	// scenario.
+	publicHolder = claims.Holder{}
 )
 
-func heldBy(who model.Attribution) claims.Standing {
+func heldBy(who claims.Holder) claims.Standing {
 	return claims.Held{Tenure: claims.Tenure{By: who}}
 }
 
@@ -82,7 +83,9 @@ func orphan(t *testing.T, rows []annotation.AnnotatedIssue, id model.ID) {
 
 func (h readyTestHarness) transition(id model.ID, action model.Action) {
 	h.t.Helper()
-	if _, err := h.ap.Store.Apply(h.ctx, id, storage.Change{Action: action, Actor: "tester"}); err != nil {
+	// The harness's own identity, resolved as every leaf it runs resolves it, so
+	// a hold this writes is the one a leaf reads as its own.
+	if _, err := h.ap.Store.Apply(h.ctx, id, storage.Change{Action: action, Actor: resolveIdentity(runEnv(h.t), "")}); err != nil {
 		h.t.Fatalf("Apply(%s, %T) error = %v", id, action, err)
 	}
 }
@@ -127,9 +130,9 @@ func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromClaim)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromClaim", outcome, outcome)
@@ -155,12 +158,12 @@ func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherHolder)}
 
 	// This checkout holds no claims of its own, so routing starts straight at
 	// the global pool, exactly as design-docs/work-claims.md specifies for the
 	// zero state.
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), model.Attribution{}, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), claims.Holder{}, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
@@ -195,9 +198,9 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	// A.1 is closed, so it is not among the gathered rows — its lane is
 	// addressed straight from the issue, which is the shape of the real case:
 	// a claim outlives the ticket that established it.
-	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane", outcome, outcome)
@@ -229,9 +232,9 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedPastExhaustion)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedPastExhaustion serving epic B's B.1", outcome, outcome)
@@ -254,7 +257,7 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	// Every ticket in epic A is done, so this checkout holds nothing unfinished
 	// and, as a linked worktree, starts the pick where it is.
 	var out strings.Builder
-	if _, err := renderNextOutcome(&out, served, details, claimContext{}, "", false); err != nil {
+	if _, err := renderNextOutcome(&out, served, details, claimContext{}, false); err != nil {
 		t.Fatalf("renderNextOutcome error = %v", err)
 	}
 	text := out.String()
@@ -282,11 +285,11 @@ func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — B.1's lane is held elsewhere, so nothing outside epic A is ready", outcome, outcome)
@@ -327,11 +330,11 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                         heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                         heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
@@ -348,7 +351,7 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 	// route serves the new ticket from the lane this checkout holds.
 	unblocker := followStayRoute(t, h, []string{"--parent", epicA.ID.Raw(), "--top"}, blocker.ID)
 	rows, details, epics = h.gather()
-	outcome = routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome = routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	if served, ok := outcome.(ServedFromClaim); !ok || served.Row.ID != unblocker {
 		t.Fatalf("after following the stay route, routeNext = %#v (%T), want ServedFromClaim serving %s", outcome, outcome, unblocker)
 	}
@@ -391,11 +394,11 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                         heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                         heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
@@ -418,7 +421,7 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 		t.Fatalf("lit dep add %s --blocked-by %s: %v", blocker.ID, unblocker, err)
 	}
 	rows, details, epics = h.gather()
-	outcome = routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome = routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	if served, ok := outcome.(ServedFromClaim); !ok || served.Row.ID != unblocker {
 		t.Fatalf("after following the stay route, routeNext = %#v (%T), want ServedFromClaim serving %s", outcome, outcome, unblocker)
 	}
@@ -442,11 +445,11 @@ func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — A.2 is another checkout's and A.3 waits on it", outcome, outcome)
@@ -475,11 +478,11 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                         heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                         heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, blocker.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
@@ -511,10 +514,10 @@ func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherHolder),
 	}
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedPastExhaustion)
 	if !ok || served.Row.ID != b1.ID {
 		t.Fatalf("routeNext = %#v (%T), want ServedPastExhaustion serving %s", outcome, outcome, b1.ID)
@@ -552,14 +555,14 @@ func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherHolder),
 	}
 	// No gathered row carries the FocusPath annotation, so an active scope
 	// withholds every one of them from the pool.
 	focused := focusScope{goals: []model.ID{"test-goal"}}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focused, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focused, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the focus path holds nothing ready", outcome, outcome)
@@ -604,7 +607,7 @@ func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 	}
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a2.ID)): expired}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane — an expired claim of our own holds nothing", outcome, outcome)
@@ -636,11 +639,11 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromDependency)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (on-path dependency)", outcome, outcome)
@@ -677,8 +680,8 @@ func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a3.ID)): heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a3.ID)): heldBy(selfHolder),
 	}
 
 	// The rule's own subject, rendered from the queue: the first of the two
@@ -694,7 +697,7 @@ func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 		t.Fatalf("neither %s nor %s is in the gathered queue; the fixture does not exercise the rule", a2.ID, a3.ID)
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromDependency)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (one dependency gating two of our rows)", outcome, outcome)
@@ -725,9 +728,9 @@ func TestRouteNextResumesOwnInFlightTicket(t *testing.T) {
 	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(selfAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	resumed, ok := outcome.(ResumedOwnWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork (the ticket this checkout is on)", outcome, outcome)
@@ -757,7 +760,7 @@ func TestRouteNextServesOwnOrphanFromAnExpiredLane(t *testing.T) {
 	orphan(t, rows, a1.ID)
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): expired}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	if _, resumed := outcome.(ResumedOwnWork); resumed {
 		t.Fatalf("routeNext = %#v, want a pick from the pool — an expired claim holds nothing to resume", outcome)
 	}
@@ -789,7 +792,7 @@ func TestRouteNextServesOrphanInAnExpiredForeignLane(t *testing.T) {
 	orphan(t, rows, b1.ID)
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): expired}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the abandoned row in the expired lane)", outcome, outcome)
@@ -816,9 +819,9 @@ func TestRouteNextLeavesUnabandonedInFlightWorkAlone(t *testing.T) {
 	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("C.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): heldBy(otherHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
@@ -852,9 +855,9 @@ func TestRouteNextNamesTheTicketAFilterHidFromTheHeldScope(t *testing.T) {
 	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("B.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "bug", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	served, ok := outcome.(ServedPastNarrowing)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedPastNarrowing (epic B's bug, beneath the task the filter hid)", outcome, outcome)
@@ -873,9 +876,9 @@ func TestRouteNextNarrowedWhenNothingTheFilterSelectsIsReady(t *testing.T) {
 	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	narrowed, ok := outcome.(Narrowed)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Narrowed naming %q", outcome, outcome, a1.ID)
@@ -901,11 +904,11 @@ func TestRouteNextStillReportsAnExhaustedScopeUnderAFilter(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                     heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	served, ok := outcome.(ServedPastExhaustion)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedPastExhaustion — nothing in epic A is reachable, filter or not", outcome, outcome)
@@ -947,11 +950,11 @@ func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
 
 			rows, details, epics := h.gather()
 			standings := claims.Standings{
-				model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
-				laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherAttribution),
+				model.LaneOf(a1, &epicA):                     heldBy(selfHolder),
+				laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherHolder),
 			}
 
-			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 			exhausted, ok := outcome.(Exhausted)
 			if !ok {
 				t.Fatalf("routeNext = %#v (%T), want Exhausted — nothing the filter selects is ready anywhere", outcome, outcome)
@@ -993,12 +996,12 @@ func TestRouteNextExhaustionUnderAFilterNamesOnlyWithheldRowsItSelects(t *testin
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(otherHolder),
 	}
 	focused := focusScope{goals: []model.ID{"test-goal"}}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focused, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focused, onlyBugs(t))
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the focus path holds nothing ready", outcome, outcome)
@@ -1019,11 +1022,11 @@ func TestRouteNextNoWorkUnderAFilterNamesOnlyRowsItSelects(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		laneOf(t, details, rowByID(t, rows, bug.ID)):  heldBy(otherAttribution),
-		laneOf(t, details, rowByID(t, rows, task.ID)): heldBy(otherAttribution),
+		laneOf(t, details, rowByID(t, rows, bug.ID)):  heldBy(otherHolder),
+		laneOf(t, details, rowByID(t, rows, task.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	noWork, ok := outcome.(NoWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want NoWork — nothing is ready, filter or not", outcome, outcome)
@@ -1043,7 +1046,7 @@ func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
 	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Task"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("task")})
 
 	rows, details, epics := h.gather()
-	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	narrowed, ok := outcome.(Narrowed)
 	if !ok || narrowed.Hidden.ID != task.ID {
 		t.Fatalf("routeNext = %#v (%T), want Narrowed naming %q", outcome, outcome, task.ID)
@@ -1051,7 +1054,7 @@ func TestRouteNextNarrowedForACheckoutHoldingNoLane(t *testing.T) {
 
 	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Bug"), Topic: "next", IssueType: "bug", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("bug")})
 	rows, details, epics = h.gather()
-	outcome = routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome = routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	if served, ok := outcome.(ServedFromNewLane); !ok || served.Row.ID != bug.ID {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane serving %q", outcome, outcome, bug.ID)
 	}
@@ -1073,9 +1076,9 @@ func TestRouteNextFindsADependencyThroughATicketTheFilterHides(t *testing.T) {
 	h.addDependency(between.ID, upstream.ID)
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	served, ok := outcome.(ServedFromDependency)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (%q, through %q)", outcome, outcome, upstream.ID, between.ID)
@@ -1099,9 +1102,9 @@ func TestRouteNextServesTheTicketUnderAnEpicBlockerThatTheFilterSelects(t *testi
 	h.addDependency(a1.ID, epicE.ID)
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+	standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, onlyBugs(t))
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, onlyBugs(t))
 	served, ok := outcome.(ServedFromDependency)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency serving %q", outcome, outcome, eBug.ID)
@@ -1131,12 +1134,12 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)):  heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                     heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)):  heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency's lane is held fresh elsewhere, so `next` must not offer what `start` would refuse", outcome, outcome)
@@ -1189,8 +1192,8 @@ func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		laneOf(t, details, rowByID(t, rows, first.ID)): heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, later.ID)): heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, first.ID)): heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, later.ID)): heldBy(selfHolder),
 	}
 	var inView []annotation.AnnotatedIssue
 	for _, row := range rows {
@@ -1199,7 +1202,7 @@ func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.
 		}
 	}
 
-	exhausted, ok := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{}).(Exhausted)
+	exhausted, ok := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{}).(Exhausted)
 	if !ok {
 		t.Fatal("routeNext did not answer Exhausted — every row in view waits on other work")
 	}
@@ -1244,9 +1247,9 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 			tc.waitOutside(h, waits)
 
 			rows, details, epics := h.gather()
-			standings := claims.Standings{laneOf(t, details, rowByID(t, rows, ours.ID)): heldBy(selfAttribution)}
+			standings := claims.Standings{laneOf(t, details, rowByID(t, rows, ours.ID)): heldBy(selfHolder)}
 
-			exhausted, ok := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{}).(Exhausted)
+			exhausted, ok := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{}).(Exhausted)
 			if !ok {
 				t.Fatal("routeNext did not answer Exhausted — nothing on the path is takeable")
 			}
@@ -1287,9 +1290,9 @@ func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		laneOf(t, details, rowByID(t, rows, a2.ID)):     heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a3.ID)):     heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, theirs.ID)): heldBy(otherAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)):     heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a3.ID)):     heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, theirs.ID)): heldBy(otherHolder),
 	}
 	var inView []annotation.AnnotatedIssue
 	for _, row := range rows {
@@ -1298,7 +1301,7 @@ func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 		}
 	}
 
-	outcome := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — one blocker is out of view and the other is held elsewhere", outcome, outcome)
@@ -1329,7 +1332,7 @@ func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) 
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		laneOf(t, details, rowByID(t, rows, later.ID)): heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, later.ID)): heldBy(selfHolder),
 	}
 	// The narrowed gather `lit next --type bug` makes: the earlier ticket is
 	// open and ready, and simply not in this run's rows.
@@ -1340,7 +1343,7 @@ func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) 
 		}
 	}
 
-	outcome := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row in view waits on our own lane", outcome, outcome)
@@ -1374,8 +1377,8 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfHolder),
 	}
 	// The narrowed gather: the dependency is unclaimed and ready, and simply
 	// not in this run's rows.
@@ -1387,7 +1390,7 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 		inView = append(inView, row)
 	}
 
-	outcome := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(inView, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the gating dependency is not in view, so nothing here is startable", outcome, outcome)
@@ -1440,12 +1443,12 @@ func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                        heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)):     heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, deeper.ID)): heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                        heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)):     heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, deeper.ID)): heldBy(otherHolder),
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	exhausted, ok := outcome.(Exhausted)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency is itself blocked", outcome, outcome)
@@ -1498,8 +1501,8 @@ func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
 			h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a")})
 
 			rows, details, epics := h.gather()
-			standings := claims.Standings{laneOf(t, details, rowByID(t, rows, lead.ID)): heldBy(selfAttribution)}
-			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+			standings := claims.Standings{laneOf(t, details, rowByID(t, rows, lead.ID)): heldBy(selfHolder)}
+			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 			exhausted, ok := outcome.(Exhausted)
 			if !ok {
 				t.Fatalf("routeNext = %#v (%T), want Exhausted — A.1 is held by %q and A.2 waits behind it", outcome, outcome, tc.label)
@@ -1543,9 +1546,9 @@ func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
 			rows, details, epics := h.gather()
 			standings := claims.Standings{}
 			if tc.ownsLane {
-				standings[laneOf(t, details, rowByID(t, rows, waiting.ID))] = heldBy(selfAttribution)
+				standings[laneOf(t, details, rowByID(t, rows, waiting.ID))] = heldBy(selfHolder)
 			}
-			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 			var served annotation.AnnotatedIssue
 			switch o := outcome.(type) {
 			case ServedFromNewLane:
@@ -1629,12 +1632,12 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 				wantRoute = " — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID.Raw() + " --top`, then make that blocker blocked by it with `lit dep add " + plain.ID.Raw() + " --blocked-by <new>`"
 			}
 			rows, details, epics := h.gather()
-			standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
+			standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfHolder)}
 			for _, id := range foreign {
-				standings[laneOf(t, details, rowByID(t, rows, id))] = heldBy(otherAttribution)
+				standings[laneOf(t, details, rowByID(t, rows, id))] = heldBy(otherHolder)
 			}
 
-			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 			exhausted, ok := outcome.(Exhausted)
 			if !ok {
 				t.Fatalf("routeNext = %#v (%T), want Exhausted — epic A's one open row waits on %q", outcome, outcome, upstream.ID)
@@ -1679,11 +1682,11 @@ func TestExhaustionOffersToClearAStartedBlockerWhateverItStillDependsOn(t *testi
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                         heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, started.ID)): heldBy(otherAttribution),
-		laneOf(t, details, rowByID(t, rows, still.ID)):   heldBy(otherAttribution),
+		model.LaneOf(a1, &epicA):                         heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, started.ID)): heldBy(otherHolder),
+		laneOf(t, details, rowByID(t, rows, still.ID)):   heldBy(otherHolder),
 	}
-	exhausted, ok := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{}).(Exhausted)
+	exhausted, ok := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{}).(Exhausted)
 	if !ok {
 		t.Fatal("routeNext did not answer Exhausted — nothing on the path is takeable")
 	}
@@ -1712,11 +1715,11 @@ func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 	rows, details, epics := h.gather()
 	orphan(t, rows, a2.ID)
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
 		laneOf(t, details, rowByID(t, rows, a2.ID)): expired,
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane — an abandoned sibling lane of our own epic is servable", outcome, outcome)
@@ -1747,7 +1750,7 @@ func TestRouteNextServesOpenTicketInAnExpiredForeignLane(t *testing.T) {
 	rows, details, epics := h.gather()
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): expired}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the expired lane is nobody's, so its ticket is served)", outcome, outcome)
@@ -1777,11 +1780,11 @@ func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 
 	rows, details, epics := h.gather()
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		model.LaneOf(a1, &epicA):                    heldBy(selfHolder),
 		laneOf(t, details, rowByID(t, rows, a2.ID)): expired,
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromEpicLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane (an expired sibling lane of our own epic is nobody's)", outcome, outcome)
@@ -1923,11 +1926,11 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 
 			rows, details, epics := h.gather()
 			standings := claims.Standings{
-				laneOf(t, details, rowByID(t, rows, inFlight.ID)): heldBy(selfAttribution),
-				laneOf(t, details, rowByID(t, rows, ready.ID)):    heldBy(selfAttribution),
+				laneOf(t, details, rowByID(t, rows, inFlight.ID)): heldBy(selfHolder),
+				laneOf(t, details, rowByID(t, rows, ready.ID)):    heldBy(selfHolder),
 			}
 
-			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 			if tc.resumeFirst {
 				resumed, ok := outcome.(ResumedOwnWork)
 				if !ok || resumed.Row.ID != inFlight.ID {
@@ -1963,12 +1966,12 @@ func TestRouteNextServesAnAbandonedOnPathDependency(t *testing.T) {
 	rows, details, epics := h.gather()
 	orphan(t, rows, dep.ID)
 	standings := claims.Standings{
-		model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
-		laneOf(t, details, rowByID(t, rows, a2.ID)):  heldBy(selfAttribution),
+		model.LaneOf(a1, &epicA):                     heldBy(selfHolder),
+		laneOf(t, details, rowByID(t, rows, a2.ID)):  heldBy(selfHolder),
 		laneOf(t, details, rowByID(t, rows, dep.ID)): expired,
 	}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromDependency)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromDependency (the abandoned on-path dependency is servable)", outcome, outcome)
@@ -2015,7 +2018,7 @@ func TestRouteNextServesUnorphanedInFlightRowInAnUnheldLane(t *testing.T) {
 			}
 			standings := claims.Standings{laneOf(t, details, row): expired}
 
-			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+			outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 			served, ok := outcome.(ServedFromNewLane)
 			if !ok {
 				t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane serving %q — never %q with %q served to nobody", outcome, outcome, a1.ID, b1.ID, a1.ID)
@@ -2048,7 +2051,7 @@ func TestRouteNextServesTopRankedRowInExpiredOwnLaneByRank(t *testing.T) {
 	}
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): expired}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane — an expired claim is served by rank, never as a lane we hold (%s ranks below)", outcome, outcome, b1.ID)
@@ -2078,7 +2081,7 @@ func TestRouteNextDoesNotAdoptExpiredPublicHistory(t *testing.T) {
 	orphan(t, rows, a1.ID)
 	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): expired}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), publicAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), publicHolder, focusScope{}, storage.IssueCriteria{})
 	if resumed, adopted := outcome.(ResumedOwnWork); adopted {
 		t.Fatalf("routeNext resumed %q as this checkout's own work; an unminted self shares the public bucket with the history, which proves both unaddressable, not both us", resumed.Row.ID)
 	}
@@ -2105,9 +2108,9 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 	h.transition(a1.ID, model.Start{Assignee: "whoever-is-working-it"})
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(publicAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): heldBy(publicHolder)}
 
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), publicAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), publicHolder, focusScope{}, storage.IssueCriteria{})
 	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane: a fresh public hold is foreign work in flight", outcome, outcome)
@@ -2178,10 +2181,10 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	h.addDependencyWithinEpic(gated.ID, held.ID)
 
 	rows, details, epics := h.gather()
-	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, held.ID)): heldBy(otherAttribution)}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, held.ID)): heldBy(otherHolder)}
 
 	// This checkout holds nothing, so routing starts straight at the global pool.
-	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, standings, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	noWork, ok := outcome.(NoWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want NoWork — nothing in the pool is takeable", outcome, outcome)
@@ -2209,7 +2212,7 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 			t.Fatalf("NoWork.Error() = %q, want it to name %q — a row walked past and not named is a row the agent is told does not exist", msg, id)
 		}
 	}
-	if !strings.Contains(msg, "another checkout holds right now") {
+	if !strings.Contains(msg, "another session holds right now") {
 		t.Fatalf("NoWork.Error() = %q, want %q reported as another checkout's live work", msg, held.ID)
 	}
 	if !strings.Contains(msg, "not startable right now") {
@@ -2229,7 +2232,7 @@ func TestNoWorkReportsARowHeldByItself(t *testing.T) {
 	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Needs design"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: storage.MustParseLane("held"), Labels: []string{NeedsDesignLabel}})
 
 	rows, details, epics := h.gather()
-	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	noWork, ok := outcome.(NoWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want NoWork — the one row is held by a label on itself", outcome, outcome)
@@ -2251,7 +2254,7 @@ func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	rows, details, epics := h.gather()
-	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfAttribution, focusScope{}, storage.IssueCriteria{})
+	outcome := routeNext(rows, details, epics, claims.Standings{}, evidenceIn(h.t, h.ctx, h.ap), selfHolder, focusScope{}, storage.IssueCriteria{})
 	noWork, ok := outcome.(NoWork)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want NoWork for an empty backlog", outcome, outcome)
