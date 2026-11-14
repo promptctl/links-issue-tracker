@@ -305,7 +305,7 @@ The eight embedded assets (all also ejectable):
 | `quickstart-update.md` | `lit quickstart update` | stdout | `update`, `import`, `rank`, `label add/rm`, `parent set`, `dep add`, `comment add` |
 | `quickstart-done.md` | `lit quickstart done` | stdout | `done`, `close --resolution …`, `followup`, `workflows edit done`, commit reminder |
 | `quickstart-doctor.md` | `lit quickstart doctor` | stdout | `doctor [--fix]` plus a self-resolve-first note |
-| `quickstart-review.md` | `lit quickstart review` | stdout | the brief for a reviewer law-reviewing a plan it did not write: load the laws, pin the plan's digest, judge the whole mechanism, record one `lit verdict` |
+| `quickstart-review.md` | `lit quickstart review` | stdout | the brief for a reviewer of a plan it did not write: load the laws, pin the plan's digest, look for accidental complexity and law alignment in the plan's decisions and strategy, record findings the author weighs and one `lit verdict` |
 
 ## Consolidated refusal table (operations scope)
 

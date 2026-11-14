@@ -522,7 +522,7 @@ func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
 	for _, want := range []string{
 		`occasion: event=work_started labels=- entered=["in_progress","plan"] exited=["open"] issue=lit-7` + "\n",
 		"Fired (3)\n",
-		`phase-plan "Plan, have the plan reviewed, then record when the code starts" (embedded)  [state:plan(enter)]` + "\n",
+		`phase-plan "Plan the ticket, then record when the code starts" (embedded)  [state:plan(enter)]` + "\n",
 		"plan-note (project)  [state:plan(enter)]\n",
 		"working-note (project)  [state:in_progress(enter)]\n",
 	} {
@@ -544,7 +544,7 @@ func TestWorkflowsOverviewWalksThePhasesInsideInProgress(t *testing.T) {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
 	shipped := map[string]string{
-		"plan":   `phase-plan "Plan, have the plan reviewed, then record when the code starts"`,
+		"plan":   `phase-plan "Plan the ticket, then record when the code starts"`,
 		"impl":   `phase-impl "Record when the PR is up for review"`,
 		"review": `phase-review "Record when the merge is under way"`,
 		"merge":  `phase-merge "Close the ticket once it has merged"`,

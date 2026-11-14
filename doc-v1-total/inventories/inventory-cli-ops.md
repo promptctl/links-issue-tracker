@@ -1072,7 +1072,7 @@ The only managed file is the pre-push hook (`hooks.go`). Markers: current `# ---
 | `quickstart-update.md` | `lit quickstart update` | stdout | 14 lines: `lit update`, `lit import`, `lit rank`, `lit label add/rm` (`needs-design`, `external`, `focus`), `lit parent set`, `lit dep add` (`--blocked-by`, `--related-to`), `lit comment add` |
 | `quickstart-done.md` | `lit quickstart done` | stdout | 9 lines: `lit done`, `lit close --resolution <duplicate\|superseded\|obsolete\|wontfix>`, `lit followup`, `lit workflows edit done`, and a commit reminder |
 | `quickstart-doctor.md` | `lit quickstart doctor` | stdout | 5 lines: `lit doctor [--fix]` plus an `<agent-instructions>` note to self-resolve first |
-| `quickstart-review.md` | `lit quickstart review` | stdout | the reviewer brief: load the `laws:code` skill, pin the plan's digest from `lit show`, find the whole mechanism and its history, judge the stack rather than the increment, record one `lit verdict` (and on a fail one `lit comment add`) |
+| `quickstart-review.md` | `lit quickstart review` | stdout | the reviewer brief: load the `laws:code` skill, pin the plan's digest from `lit show`, look for accidental complexity and law alignment in the plan's decisions and strategy, record one `lit comment add` of findings the author weighs and one `lit verdict` |
 
 All eight are also the payload of `lit quickstart --eject`, written to `<config.ConfigDir()>/templates/<name>` at mode `0o644` (`quickstart_eject.go`).
 

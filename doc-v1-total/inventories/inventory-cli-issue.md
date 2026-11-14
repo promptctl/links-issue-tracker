@@ -1259,23 +1259,7 @@ transition row runs per id — §2.21):
   `applyStatusAction` is total over the leaf states
   (`internal/model/lifecycle/status_states.go`). A same-state transition is a no-op that records nothing
   (`status_states.go`, `internal/store/store.go`).
-- **`done` finishes wherever the plan stands.** `doneSpec.authorize` →
-  `authorizeDone` (`cli.go`) gates nothing: an epic or a frozen issue gets the
-  lifecycle's refusal from `Store.Apply`. Before the write it takes the events
-  `transitionLeaf` read with the issue, reads the plan reviews, and takes `storage.PlanApproval(issue, events, reviews)`
-  (`internal/storage/plan_review.go`), a sealed `PlanStanding`. The plan is
-  `PlanApproved` when the latest review of the current text passed it; who
-  recorded a verdict decides nothing. Otherwise it is a `PlanGap`: `PlanMissing`
-  ("<id> has no plan"), `PlanUnreviewed` ("<id>'s current plan (v<n>, digest
-  <d>) has no review", plus "; the reviews on record judged an earlier text"
-  when there are any) or `PlanFailed`, the latest review failed it ("… failed
-  its law review: <reviewer> failed it citing <laws>"). The ticket is finished either way; a gap
-  prints `warning: finished without an approved plan: ` and its `Describe`
-  before the summary. The event carries `done.plan_standing` (the standing's
-  `Kind()`: `approved`, `no_plan`, `unreviewed`, `failed`), and
-  an approval adds `done.plan_digest` and `done.plan_review`. A done whose
-  write leaves the status unchanged (the ticket is already closed) prints no
-  warning and carries `done.plan_standing` `already_closed`.
+- **`done` reads no plan review.** `doneSpec.authorize` → `withHoldGate(authorizeDone)`; past the hold gate, `authorizeDone` owes nothing: it prints no notice and records no fact. Plan reviews are recorded and read by nothing on the done path.
 
 ### 2.11 The hold gate on `lit start`, `lit phase` and `lit done`
 

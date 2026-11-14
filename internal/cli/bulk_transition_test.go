@@ -149,56 +149,57 @@ func TestBulkStartRefusesAHeldLaneUnlessTaken(t *testing.T) {
 // Each bulk item's facts land on its own bulk.items entry, in id order, and
 // none of them on the event itself, where the last item would replace the
 // others'.
-func TestBulkDoneRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
+func TestBulkPhaseRecordsEachItemsFactsOnItsOwnEntry(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 	recorder := telemetry.Begin(telemetry.Event{})
 	h.ctx = telemetry.With(h.ctx, recorder)
 	epic := h.epicFixture(0, 0)
-	unplanned := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("unplanned"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic}).ID
-	closed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("closed"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic}).ID
-	h.applyAction(closed, model.Done{}, "")
+	planning := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("planning"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic}).ID
+	building := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("building"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: epic}).ID
+	h.transition(planning, model.Start{Assignee: "agent"})
+	h.transition(building, model.Start{Assignee: "agent"})
+	h.transition(building, model.SetPhase{Phase: model.PhaseImpl})
 	const missing = "test-missing"
 
 	// runLeaf's phases under this test's own recorder, which runLeaf would
 	// replace with a fresh one.
 	var out bytes.Buffer
-	done := bulkTransitionLeaf(doneSpec)()
-	positional, err := parseLeaf(h.ctx, done, []string{"--ids", unplanned.Raw() + "," + closed.Raw() + "," + missing}, dirInvocation(t, t.TempDir(), &out, &out, nil))
+	phase := bulkTransitionLeaf(phaseSpec)()
+	positional, err := parseLeaf(h.ctx, phase, []string{"--to", string(model.PhaseImpl), "--ids", planning.Raw() + "," + building.Raw() + "," + missing}, dirInvocation(t, t.TempDir(), &out, &out, nil))
 	if err != nil {
-		t.Fatalf("parse bulk done error = %v", err)
+		t.Fatalf("parse bulk phase error = %v", err)
 	}
-	if err := done.work(h.ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), h.ap, positional); err == nil {
-		t.Fatalf("bulk done with %s returned nil, want its failure", missing)
+	if err := phase.work(h.ctx, dirInvocation(t, t.TempDir(), &out, &out, nil), h.ap, positional); err == nil {
+		t.Fatalf("bulk phase with %s returned nil, want its failure", missing)
 	}
 
-	// A done's plan warning prints as `lit done` prints it, ahead of the
-	// item's ok line.
-	warning := "warning: finished without an approved plan: "
-	if w, ok := strings.Index(out.String(), warning), strings.Index(out.String(), unplanned.Raw()+" ok\n"); w < 0 || ok < 0 || w > ok {
-		t.Errorf("stdout = %q, want %q ahead of %q", out.String(), warning, unplanned+" ok")
+	// A phase's notice prints as `lit phase` prints it, ahead of the item's ok
+	// line.
+	notice := "phase: plan → impl\n"
+	if n, ok := strings.Index(out.String(), notice), strings.Index(out.String(), planning.Raw()+" ok\n"); n < 0 || ok < 0 || n > ok {
+		t.Errorf("stdout = %q, want %q ahead of %q", out.String(), notice, planning.Raw()+" ok")
 	}
 
 	ev := writtenEvent(t, recorder.Finish(telemetry.End{}))
-	if _, leaked := ev.Facts["done.plan_standing"]; leaked {
-		t.Errorf("event facts carry done.plan_standing = %v; each item's belongs on its own entry", ev.Facts["done.plan_standing"])
+	if _, leaked := ev.Facts["phase.from"]; leaked {
+		t.Errorf("event facts carry phase.from = %v; each item's belongs on its own entry", ev.Facts["phase.from"])
 	}
-	items := ev.Occurrences["bulk.items"]
 	type item struct {
-		id       string
-		standing any
-		failed   bool
+		id     string
+		from   any
+		failed bool
 	}
 	var got []item
-	for _, raw := range items {
+	for _, raw := range ev.Occurrences["bulk.items"] {
 		entry := raw.(map[string]any)
 		facts := entry["bulk.item.facts"].(map[string]any)
-		got = append(got, item{id: entry["bulk.item.id"].(string), standing: facts["done.plan_standing"], failed: entry["bulk.item.error"] != nil})
+		got = append(got, item{id: entry["bulk.item.id"].(string), from: facts["phase.from"], failed: entry["bulk.item.error"] != nil})
 	}
 	want := []item{
-		{id: unplanned.Raw(), standing: "no_plan"},
-		{id: closed.Raw(), standing: "already_closed"},
-		{id: missing, standing: nil, failed: true},
+		{id: planning.Raw(), from: string(model.PhasePlan)},
+		{id: building.Raw(), from: string(model.PhaseImpl)},
+		{id: missing, from: nil, failed: true},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("bulk.items = %+v, want %+v", got, want)
