@@ -204,9 +204,7 @@ func TestPhaseAndDoneRefusedForNonHolderUnlessTake(t *testing.T) {
 			}
 			return state.phase == model.PhaseReview
 		}},
-		{"done", doneSpec, nil, takesOver, func(id model.ID) string {
-			return "warning: finished without an approved plan: " + id.Raw() + " has no plan\n"
-		}, func(h readyTestHarness, id model.ID) bool {
+		{"done", doneSpec, nil, takesOver, func(model.ID) string { return "" }, func(h readyTestHarness, id model.ID) bool {
 			return h.issueDetail(id).State() == model.StateClosed
 		}},
 	} {

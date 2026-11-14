@@ -15,8 +15,7 @@ type PlanReviewStore interface {
 	// decided by PlanReviewOf, and returns it as stored.
 	AddPlanReview(ctx context.Context, in AddPlanReviewInput) (model.PlanReview, error)
 	// ListPlanReviews is every review of the issue's plan, in
-	// PlanReviewOrdering: what PlanApproval decides on, without the rest of
-	// the issue's detail.
+	// PlanReviewOrdering, without the rest of the issue's detail.
 	ListPlanReviews(ctx context.Context, issueID model.ID) ([]model.PlanReview, error)
 }
 
@@ -155,113 +154,4 @@ func DescribeVersions(count int) string {
 		return "1 version"
 	}
 	return fmt.Sprintf("%d versions", count)
-}
-
-// PlanApproval decides whether issue's current plan has passed its law review,
-// given its history events and every review of its plan, oldest first. It
-// returns PlanApproved with the passing review the approval rests on, or the
-// PlanGap naming what is missing.
-//
-// The latest review of the current text decides: a pass approves the plan, a
-// fail stands against it, and a reviewer who changes their mind records
-// another. Who recorded a verdict decides nothing: lit cannot tell one reviewer
-// from another, since a subagent records under its parent's session and --by
-// takes any name. Pure, so every engine decides the same.
-// [LAW:single-enforcer] [LAW:effects-at-boundaries] [LAW:parse-dont-validate]
-func PlanApproval(issue model.Issue, events []model.IssueEvent, reviews []model.PlanReview) PlanStanding {
-	field := PlanField()
-	plan := field.Current(issue)
-	if plan == "" {
-		return PlanMissing{}
-	}
-	version := PlanVersion{
-		Number: slices.Index(TextVersions(issue, events, field), plan) + 1,
-		Digest: model.DigestPlan(plan),
-	}
-	for _, review := range slices.Backward(reviews) {
-		if !review.Judges(plan) {
-			continue
-		}
-		if review.Verdict == model.PlanFail {
-			return PlanFailed{Plan: version, Fail: review}
-		}
-		return PlanApproved{Review: review}
-	}
-	return PlanUnreviewed{Plan: version, EarlierReviewed: len(reviews) > 0}
-}
-
-// PlanVersion is one text of a plan as `lit show` names it: its number in the
-// history and its digest.
-type PlanVersion struct {
-	Number int
-	Digest model.PlanDigest
-}
-
-func (v PlanVersion) String() string {
-	return fmt.Sprintf("v%d, digest %s", v.Number, v.Digest)
-}
-
-// PlanStanding is where a ticket's current plan stands in its law review:
-// PlanApproved, or a PlanGap saying what keeps it from approval. The variants
-// are sealed, and only those with a plan carry its version.
-// [LAW:types-are-the-program]
-type PlanStanding interface {
-	// Kind is the standing's token on the command's event.
-	Kind() string
-	planStanding()
-}
-
-// PlanGap is a standing short of approval.
-type PlanGap interface {
-	PlanStanding
-	// Describe says what is missing, naming the ticket.
-	Describe(issueID model.ID) string
-}
-
-// PlanApproved is a current plan whose latest review passed it. Review is the
-// pass the approval rests on.
-type PlanApproved struct {
-	Review model.PlanReview
-}
-
-// PlanMissing is a ticket with no plan.
-type PlanMissing struct{}
-
-// PlanUnreviewed is a current plan no review has judged. EarlierReviewed is
-// set when the reviews on record judged earlier texts.
-type PlanUnreviewed struct {
-	Plan            PlanVersion
-	EarlierReviewed bool
-}
-
-// PlanFailed is a current plan whose latest review, Fail, failed it.
-type PlanFailed struct {
-	Plan PlanVersion
-	Fail model.PlanReview
-}
-
-func (PlanApproved) Kind() string   { return "approved" }
-func (PlanMissing) Kind() string    { return "no_plan" }
-func (PlanUnreviewed) Kind() string { return "unreviewed" }
-func (PlanFailed) Kind() string     { return "failed" }
-
-func (PlanApproved) planStanding()   {}
-func (PlanMissing) planStanding()    {}
-func (PlanUnreviewed) planStanding() {}
-func (PlanFailed) planStanding()     {}
-
-func (PlanMissing) Describe(issueID model.ID) string {
-	return fmt.Sprintf("%s has no plan", issueID)
-}
-
-func (g PlanUnreviewed) Describe(issueID model.ID) string {
-	earlier := ""
-	if g.EarlierReviewed {
-		earlier = "; the reviews on record judged an earlier text"
-	}
-	return fmt.Sprintf("%s's current plan (%s) has no review%s", issueID, g.Plan, earlier)
-}
-
-func (g PlanFailed) Describe(issueID model.ID) string {
-	return fmt.Sprintf("%s's current plan (%s) failed its law review: %s failed it citing %s", issueID, g.Plan, g.Fail.CreatedBy, model.JoinLaws(g.Fail.Laws))
 }

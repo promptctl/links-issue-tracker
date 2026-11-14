@@ -479,19 +479,6 @@ set and carries its refusal instead.
 | `phase.to` | The phase the command moved it to, the one `--to` names. |
 | `phase.changed` | `false` when the issue was already in that phase, so nothing was recorded; `true` otherwise. |
 
-## What `lit done` records
-
-A done reads the ticket's plan and its reviews before it writes.
-`done.plan_standing` says where the plan stood; a done on an approved plan also
-carries the other two keys. A done the lifecycle refuses, such as one on an epic, carries
-none of them.
-
-| Key | Meaning |
-| --- | --- |
-| `done.plan_standing` | `approved`; `already_closed` (the ticket was already closed, so the done finished nothing); or what kept the plan from approval, which the done also prints as a warning: `no_plan`, `unreviewed` (no review of the current text), or `failed` (the latest review of the current text failed it). |
-| `done.plan_digest` | The digest of the current plan text the ticket was finished on. |
-| `done.plan_review` | The id of the passing review the approval rested on, the latest review of the current text. |
-
 ## What `lit bulk` records
 
 A bulk command puts one entry on `bulk.items` for each issue in `--ids` it ran,
