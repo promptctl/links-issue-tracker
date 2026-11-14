@@ -5,6 +5,44 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-11-14
+
+### Added
+
+- `lit downgrade --remote` lowers a sync remote's schema and holds it there; `lit upgrade --remote` lifts it. A store's schema hold stops every binary that reads it from raising past it.
+- Every released schema Down, v2 through v11, is lossless: the stash carrier keeps what a Down drops, and CI proves every migration round-trips.
+- Every lit carries a released-schema ceiling, so no build migrates an existing store or pushes a remote past what a release carries. A push that raises the remote's schema lands only from a release.
+- A command's event records what it decided across workspace resolution, id minting, rank sets and tree-order reads, `lit dep`, `lit followup`, `lit history`, `lit doctor`'s warnings and repairs, lock acquisitions, reconcile prunes and store-close gc. A detached worker's event carries the trace id of the command that spawned it.
+- A sync remote with no fetch success on record warns once lit has tracked it past the threshold.
+
+### Changed
+
+- The plan phase prints a plan-mode prompt: explore, design, answer open questions from the backlog, code and verified design docs and record them on the ticket, write the plan to the ticket, then record impl and start.
+- Plan reviews are recorded with `lit verdict` and decide nothing: `lit done` finishes a ticket the same way whatever reviews its plan has. `lit quickstart review` reviews a plan's decisions and strategy for accidental complexity and law alignment, and its findings are the author's to weigh.
+- One ticket in flight has one holder, the checkout and session that started it.
+- Writes cost what they touch, not the store's size: rank keys stay short and respaces stay local, rank set writes only the issues it names, a write's stamp reads its own family, neighbours read only the rows they order, a write flushes the drive once, and `lit start` reads only its lane family.
+- A store open reads that the store exists and takes no bootstrap lock; a first open waits out a bootstrap build however long it takes; a compaction keeps its engine and the backstop's hold is routine.
+- A prompt is asked only when stdin and stdout are both terminals, so redirected runs get the `--take` and `--yes` refusals.
+- Stored free text prints on one row in every listing, and no write stores a title or lane holding a line break.
+- Every warning and notice reaches the stderr `cli.Run` was given.
+- `lit doctor` names each blocked-by edge the store would refuse, and its integrity check verifies every committed row.
+- `scripts/install.sh --latest-release` authenticates its GitHub lookup with `GH_TOKEN` or `GITHUB_TOKEN`.
+- The pre-push hook passes `lit sync push`'s own failure block through.
+
+### Fixed
+
+- A push at the remote's own schema lands; a landing adopts the remote head at any schema; a forced push replaces only the head it judged; a schema refusal that stops a push or receive pages the owner.
+- A step that died before its commit, or at its stash settle, runs again from where it stopped; a raise keeps what was written below the Down.
+- A divergent sync keeps a relation one side removed removed.
+- Sync works on Windows from a repository at any depth, and a failed adopt by clone releases its partial database.
+- A bootstrap sets aside a database directory with no `.dolt` instead of deleting it.
+- Back-to-back backups keep the order they were taken in, and a backup take removes the temp file a killed backup left.
+- A snapshot removal that fails part-way is neither listed nor restorable.
+- The quarantine gate refuses only the migrations a lit has pending.
+- A lock wait measures and sleeps on one clock.
+- An unreadable input file is refused as usage before the workspace opens.
+- On Go 1.26, a file where an owned directory belongs is a listing error on every platform.
+
 ## [0.24.0] - 2026-10-26
 
 ### Added
