@@ -224,9 +224,9 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 
    - Confirm the working tree is clean before starting. If dirty, Figure it the f*ck out. You're a mature, responsible, highly skilled engineer. 
 
-4. **State the plan in one paragraph, then start.** What the ticket asks for, how you'll verify it's done (the machine-verifiable criterion), and the first concrete step. Then begin.
+4. **Plan it the way lit says.**  While `lit show <id>` reads `phase: plan`, the plan is the work: do what `lit workflows dry-run --enter plan --issue <id>` prints.  That is the plan-phase guidance lit prints on entering `plan`, from whichever layer the user has it in, and `lit start` does not print it again for a ticket already there.  When the ticket looks small enough to plan in your head and start coding, that is the moment the guidance was written for: follow it anyway.
 
-5. **Record the phase as the work moves.** `lit start` put the ticket in `plan`.  Run `lit phase <id> --to impl` when you start writing its code, and open its PR, or push to it if its branch already has one open; from there "Finishing a ticket" below takes it to `lit done`, and on to the next ticket.
+5. **Open its PR, or push to it if its branch already has one open.**  From there "Finishing a ticket" below takes it to `lit done`, and on to the next ticket.
 
 ## Finishing a ticket
 
