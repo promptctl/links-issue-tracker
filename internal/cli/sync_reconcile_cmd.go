@@ -530,10 +530,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
 			return err
 		}
-		if err := writeLanding(stdout, "the merged backlog", result.Landing); err != nil {
-			return err
-		}
-		return nil
+		return writeLanding(stdout, "the merged backlog", result.Landing)
 	case storage.SyncReconcileCombined:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
 		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
@@ -559,10 +556,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 			describeIDSet(inv.Purged)); err != nil {
 			return err
 		}
-		if err := writeLanding(stdout, "the combined backlog", result.Landing); err != nil {
-			return err
-		}
-		return nil
+		return writeLanding(stdout, "the combined backlog", result.Landing)
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
 		// A settle; see reportTakeOutcome's not-diverged arm.

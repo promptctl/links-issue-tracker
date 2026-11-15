@@ -305,9 +305,9 @@ holder := establisher.Attribution
 
 **The derivation stops at the latest establisher, attributed or not; it never scans back to an older ancestor** (`internal/claims/derive.go`). An establishing event with no attribution belongs to the public checkout — `model.Attribution`'s zero value — and holds the lane exactly like any other holder: an older attributed event is positively known to be superseded, so scanning past the newest establisher would hand the lane to a checkout that has demonstrably moved on. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go`): A starts then completes T1, then the public checkout starts T2 later — the lane reads `Held{By: public}`, **not** `Held{By: A}`. Contrast with a *void* event, which is disproven rather than merely superseded and therefore falls through at leg 4, before leg 2 ever runs (`internal/claims/local.go`).
 
-`lastActivityByHolder(admissible)` returns only the per-holder last-activity map (`internal/claims/derive.go`): `activity[HolderOf(event)] = event.CreatedAt` (last write wins → each holder's latest act, because events are oldest-first).
+`lastActivityOf(establisher, admissible)` returns the establisher's holder's latest act (`internal/claims/derive.go`): seeded with `establisher.CreatedAt`, then overwritten by every event whose `HolderOf` matches (last write wins → the holder's latest act, because events are oldest-first).
 
-`tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}` (`internal/claims/derive.go`).
+`tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: lastActivityOf(establisher, admissible)}` (`internal/claims/derive.go`).
 
 **Leg 3 — the claim is fresh.**
 ```go
@@ -570,7 +570,7 @@ The `%s` in both non-empty arms is the rows clause.
 
 For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go`).
 
-### 9.4 Surfaces that render but do not gate
+### 9.3 Surfaces that render but do not gate
 
 - `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go`).
 - `printInlineDeps` — the shared epic/blocked-by/claim/unblocks block used by `lit next`'s summary, printing the claim line between `blocked by` and `unblocks` (`internal/cli/ready_state.go`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go`).
@@ -607,9 +607,10 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 - `Active != nil` → `fmt.Sprintf("%s in progress, %s", progress.Active.ID, formatProgress(progress.Progress))`.
 - else → `formatProgress(progress.Progress)`, which is `fmt.Sprintf("%d/%d done", progress.Done, progress.Total)`.
 
-### 10.4 `nameCheckout` / `nameCheckouts`
+### 10.4 `nameCheckout`
 
 `internal/cli/claims_render.go`: an identified checkout is named `"stream " + <token, truncated to 8 chars>` (`labelLen = 8`) — a display nicety, not a privacy measure, since the full token is already opaque. The zero Attribution — the public checkout — is named the literal `"the public checkout"` instead of being routed through the token label: reading its empty stream through that path produced `"stream "` with nothing after it, an answer-shaped void.
+
 ### 10.5 `humanizeCoarseDuration`
 
 `internal/cli/output.go`, buckets:

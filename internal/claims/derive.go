@@ -91,8 +91,7 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 		return Unclaimed{}
 	}
 	holder := HolderOf(establisher)
-	activity := lastActivityByHolder(admissible)
-	tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}
+	tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: lastActivityOf(establisher, admissible)}
 
 	// Leg 3 — the claim is fresh. Freshness is measured from the holder's last
 	// mutation of any kind in the lane, not from the establishing event, so
@@ -119,16 +118,19 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	return Held{Tenure: tenure}
 }
 
-// lastActivityByHolder folds the lane's events into when each holder last did
-// anything here. The events are ordered oldest first, so the last write wins and
-// is the holder's latest.
+// lastActivityOf is when the establisher's holder last did anything in the lane:
+// its newest event, which is never older than the establishing one. The events
+// are ordered oldest first, so the last of the holder's own is its latest.
 //
-// Keyed on the Holder, not the checkout, so a session's commentary keeps only its
-// own hold fresh: another session in the same checkout does not refresh it.
-func lastActivityByHolder(events []model.IssueEvent) map[Holder]time.Time {
-	activity := make(map[Holder]time.Time)
+// Matched on the Holder, not the checkout, so a session's commentary keeps only
+// its own hold fresh: another session in the same checkout does not refresh it.
+func lastActivityOf(establisher model.IssueEvent, events []model.IssueEvent) time.Time {
+	holder := HolderOf(establisher)
+	last := establisher.CreatedAt
 	for _, event := range events {
-		activity[HolderOf(event)] = event.CreatedAt
+		if HolderOf(event) == holder {
+			last = event.CreatedAt
+		}
 	}
-	return activity
+	return last
 }
