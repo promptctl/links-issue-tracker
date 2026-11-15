@@ -139,7 +139,4 @@ func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
 	if want := model.NewAttribution(token, "test-workspace-id"); held.By.Checkout != want {
 		t.Fatalf("holder = %+v, want %+v", held.By, want)
 	}
-	if len(held.Contested) != 0 {
-		t.Fatalf("contested = %v, want none: one checkout produced every event", held.Contested)
-	}
 }

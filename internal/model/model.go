@@ -887,11 +887,10 @@ func (a Attribution) IsZero() bool { return a == Attribution{} }
 // An unattributed event is work by THE PUBLIC CHECKOUT, the one holder every
 // unattributed write in a workspace shares. Events older than attribution carry
 // none and never will, because attribution is never backfilled. The public
-// checkout holds and contests lanes like any holder, but it is never the
-// checkout reading it: only a mutating command records events, and it mints a
-// token first, so a checkout with no token has recorded nothing (relationOf).
-// Two unattributed writers are indistinguishable, so they never contest each
-// other.
+// checkout holds lanes like any holder, but it is never the checkout reading it:
+// only a mutating command records events, and it mints a token first, so a
+// checkout with no token has recorded nothing (relationOf). Two unattributed
+// writers are indistinguishable, so they read as one holder.
 //
 // Defined against IsZero rather than repeating the comparison: "present" and
 // "not zero" are one fact, and two spellings of it could later disagree.

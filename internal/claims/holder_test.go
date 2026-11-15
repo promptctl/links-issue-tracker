@@ -18,8 +18,8 @@ func sessionEvent(id, issueID model.ID, action model.ActionName, at time.Time, b
 
 // TestHeldNamesCheckoutAndSession: the holder a lane derives is the checkout
 // AND the session of its latest establishing event. A second session that
-// starts work in the same checkout takes the lane like any rival and leaves
-// the first as its contestant, because one checkout is not one holder. An
+// starts work in the same checkout takes the lane like any rival, because one
+// checkout is not one holder. An
 // actor that names nobody — the store's "unknown" — derives the zero session,
 // the same holder an empty actor derives.
 func TestHeldNamesCheckoutAndSession(t *testing.T) {
@@ -36,15 +36,12 @@ func TestHeldNamesCheckoutAndSession(t *testing.T) {
 			want:   claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: streamA, Session: sessionA}, Since: ago(time.Hour), LastActivity: ago(time.Hour)}},
 		},
 		{
-			name: "a second session establishing in the same checkout holds, contested by the first",
+			name: "a second session establishing in the same checkout holds",
 			events: []model.IssueEvent{
 				sessionEvent("e1", "T1", model.ActionStart, ago(2*time.Hour), streamA, "claude_a"),
 				sessionEvent("e2", "T2", model.ActionStart, ago(time.Hour), streamA, "claude_b"),
 			},
-			want: claims.Held{
-				Tenure:    claims.Tenure{By: claims.Holder{Checkout: streamA, Session: sessionB}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
-				Contested: []claims.Holder{{Checkout: streamA, Session: sessionA}},
-			},
+			want: claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: streamA, Session: sessionB}, Since: ago(time.Hour), LastActivity: ago(time.Hour)}},
 		},
 		{
 			name: "another session's comment keeps only its own trail, not the holder's",

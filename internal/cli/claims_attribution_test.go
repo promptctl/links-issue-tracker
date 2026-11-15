@@ -56,7 +56,7 @@ func eventsByAttribution(t *testing.T, dir string) map[model.Attribution][]model
 // TestSyncCarriesAttributionToASecondClone is the feature's acceptance proof:
 // work done in one clone arrives in another still carrying the pair that says
 // which checkout did it. Everything downstream in the claims design — the
-// predicate, contest detection, routing `next` around another checkout's lane —
+// predicate, routing `next` around another checkout's lane —
 // is a reading of these stamps, so if they do not survive the trip there is
 // nothing to read.
 //

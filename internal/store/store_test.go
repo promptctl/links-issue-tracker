@@ -2622,7 +2622,7 @@ func TestNoWriteLandsBetweenAPlanAndItsWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	ticket, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Contested"), Lane: storage.SharedLane, Topic: "claim", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	ticket, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Taken"), Lane: storage.SharedLane, Topic: "claim", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(ticket) error = %v", err)
 	}

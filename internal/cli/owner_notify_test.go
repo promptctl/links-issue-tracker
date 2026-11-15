@@ -168,14 +168,14 @@ func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 
 	plantSettleEndedEpisodes(t, ws)
 	out.Reset()
-	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
+	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, "lit sync reconcile", remoteName(t, "origin"), "master", notDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult: %v", err)
 	}
 	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged", storage.RemoteSchemaAhead{})
 
 	plantSettleEndedEpisodes(t, ws)
 	out.Reset()
-	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, syncSession{}, "lit sync reconcile", remoteName(t, "origin"), "master", aheadNotDiverged, false); err != nil {
+	if err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &out, ws, "lit sync reconcile", remoteName(t, "origin"), "master", aheadNotDiverged, false); err != nil {
 		t.Fatalf("reportReconcileResult(ahead): %v", err)
 	}
 	requireSettleEndedEpisodesEnded(t, ws, "reconcile not-diverged against an ahead remote", aheadNotDiverged.RemoteSchemaAhead)

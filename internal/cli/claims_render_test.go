@@ -193,7 +193,7 @@ func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T
 }
 
 // TestNameHolderNamesBothHalves pins how every holder is named — refusal,
-// contest list, transfer notice: its session, in its checkout's address when
+// transfer notice: its session, in its checkout's address when
 // this machine has one, the opaque name otherwise. Two sessions in one checkout
 // must read differently, and a checkout this machine enumerated reads as the
 // path a reader can walk to.
@@ -255,9 +255,8 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 // token, so none of them could reach the branch an unattributed holder takes.
 // A zero Attribution is both a legitimate holder and the zero value of
 // claimContext.self, and the two coincide on exactly the reports that build a
-// context carrying no Stream at all -- `lit sync`'s contested-lane report among
-// them. Reading that coincidence as proof of ownership would announce a foreign
-// lane as "claimed here: this checkout".
+// context carrying no Stream at all. Reading that coincidence as proof of
+// ownership would announce a foreign lane as "claimed here: this checkout".
 //
 // So cc.self varies down the rows and the expected badge does not: rendering
 // reads the holder and the addresses this machine actually resolved, never who
@@ -300,26 +299,5 @@ func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
 				t.Fatalf("line = %q, must never announce the public checkout as this one", line)
 			}
 		})
-	}
-}
-
-// TestFormatClaimLineContestedAppendsContestants: contest is an annotation
-// on a Held lane, not a routing decision — the line names every contestant
-// alongside the holder.
-func TestFormatClaimLineContestedAppendsContestants(t *testing.T) {
-	t.Parallel()
-	evidence, lane := laneWithProgress(t, 0, 1, "")
-	contestant := model.NewAttribution("eeeeeeeeffff", "ws-local")
-	standings := claims.Standings{lane: claims.Held{
-		Tenure:    claims.Tenure{By: claims.Holder{Checkout: elsewhereHolder}, LastActivity: renderNow},
-		Contested: []claims.Holder{{Checkout: contestant}},
-	}}
-	cc := claimContext{standings: standings, evidence: evidence}
-	line, ok := formatClaimLine(cc, lane, renderNow)
-	if !ok {
-		t.Fatalf("formatClaimLine on a contested lane returned ok=false")
-	}
-	if !strings.Contains(line, "contested by "+nameHolder(claims.Holder{Checkout: contestant}, nil)) {
-		t.Fatalf("line = %q, want the contestant named", line)
 	}
 }

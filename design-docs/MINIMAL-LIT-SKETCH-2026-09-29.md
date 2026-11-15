@@ -128,7 +128,7 @@ and shrink what the campaign has to port.
 read time from event attribution, a six-hour freshness window and worktree
 liveness; `next` routes around held lanes in four steps; `start` gates
 takeovers. For one checkout none of it fires: the routing steps that need a
-held lane never run, and nothing ever contests. Both storage engines import
+held lane never run. Both storage engines import
 the claims package just to decide whether a repeated `start` is a no-op, and
 every `backlog`, `next` and `start` pays a full scan of issues, relations,
 all events and `git worktree list` to compute it. Lanes exist only as the unit

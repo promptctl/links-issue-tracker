@@ -209,7 +209,7 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: storage.MustParseTitle("Contested claim"),
+		Prefix: "test", Title: storage.MustParseTitle("Taken claim"),
 		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})

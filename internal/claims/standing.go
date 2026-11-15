@@ -9,8 +9,8 @@ import (
 // Standing is what a lane's evidence says about who is working it. The set is
 // sealed to the two variants below by the unexported marker, and it is a sum
 // rather than one struct with a kind field because the variants genuinely carry
-// different data: an unclaimed lane has no holder to describe, and only a held
-// one can be contested. A struct with nullable holder fields would make "no
+// different data: an unclaimed lane has no holder to describe, and a held one
+// does. A struct with nullable holder fields would make "no
 // holder, but here is when they last acted" representable, and every consumer
 // would have to know which combinations were real.
 // [LAW:types-are-the-program]
@@ -61,7 +61,7 @@ type Holder struct {
 
 // HolderOf is the holder an event names: where it was recorded and by whom.
 // [LAW:single-enforcer] the one reading of an event as a holder, so the
-// derivation's holder, its contestants and its activity trail key on one value.
+// derivation's holder and its activity trail key on one value.
 func HolderOf(event model.IssueEvent) Holder {
 	return HolderFor(event.Attribution, event.Actor)
 }
@@ -73,16 +73,10 @@ func HolderFor(checkout model.Attribution, actor model.Text) Holder {
 	return Holder{Checkout: checkout, Session: model.SessionOf(actor)}
 }
 
-// Held is a lane a holder holds right now: all four legs of the predicate
-// pass. Contested lists the other holders that also have live evidence here —
-// an offline race, or a takeover the previous holder has not yet seen. It is an
-// annotation and not a state, so routing is unaffected by it: the holder is
-// still the holder, and the list exists to be surfaced to both sides. Empty is
-// the ordinary case, which is why contest is a slice and not a flag beside a
-// separate list. [LAW:dataflow-not-control-flow]
+// Held is a lane a holder holds right now: all four legs of the predicate pass.
+// Its Tenure names the holder and the evidence behind the hold.
 type Held struct {
 	Tenure
-	Contested []Holder
 }
 
 func (Unclaimed) isStanding() {}

@@ -2,7 +2,6 @@ package claims
 
 import (
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -92,7 +91,7 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 		return Unclaimed{}
 	}
 	holder := HolderOf(establisher)
-	activity, establishers := trails(admissible)
+	activity := lastActivityByHolder(admissible)
 	tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}
 
 	// Leg 3 — the claim is fresh. Freshness is measured from the holder's last
@@ -117,63 +116,19 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder.Checkout) != Locked {
 		return Unclaimed{}
 	}
-	return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
+	return Held{Tenure: tenure}
 }
 
-// trails folds the lane's events into the two facts the predicate needs about
-// each holder that appears in them: when it last did anything here, and
-// whether any of it was an establishing act. The events are ordered oldest
-// first, so the last write to activity wins and is the holder's latest.
+// lastActivityByHolder folds the lane's events into when each holder last did
+// anything here. The events are ordered oldest first, so the last write wins and
+// is the holder's latest.
 //
-// Keyed on the Holder, not the checkout, so a second session establishing in
-// the same checkout is a contestant like any other rival, and a session's
-// commentary keeps only its own hold fresh.
-func trails(events []model.IssueEvent) (activity map[Holder]time.Time, establishers map[Holder]struct{}) {
-	activity = make(map[Holder]time.Time)
-	establishers = make(map[Holder]struct{})
+// Keyed on the Holder, not the checkout, so a session's commentary keeps only its
+// own hold fresh: another session in the same checkout does not refresh it.
+func lastActivityByHolder(events []model.IssueEvent) map[Holder]time.Time {
+	activity := make(map[Holder]time.Time)
 	for _, event := range events {
-		holder := HolderOf(event)
-		activity[holder] = event.CreatedAt
-		if establishes(event) {
-			establishers[holder] = struct{}{}
-		}
+		activity[HolderOf(event)] = event.CreatedAt
 	}
-	return activity, establishers
-}
-
-// contestants are the holders other than the holder that also have live
-// evidence in this lane: an offline race, or a takeover the previous holder has
-// not yet seen.
-//
-// Contest requires an establishing act, which is what keeps it meaningful. A
-// second checkout that only commented here is not disputing possession — under
-// the looser reading every lane anyone had ever glanced at would report as
-// contested, and an annotation that fires constantly is one nobody reads.
-//
-// The public checkout contests on the same terms as any identified one: it is a
-// holder, so it can be the OTHER holder. Excluding it would have made the one
-// race an unidentified checkout can lose the one race nobody is told about, and
-// freshness already keeps the pre-attribution backlog out — that evidence is
-// old, so it never covers.
-//
-// Most recently active first, then by stream token and session so that two
-// holders last seen in the same instant still render in a stable order.
-func contestants(holder Holder, activity map[Holder]time.Time, establishers map[Holder]struct{}, fresh Freshness) []Holder {
-	contested := []Holder{}
-	for candidate := range establishers {
-		if candidate == holder || !fresh.Covers(activity[candidate]) {
-			continue
-		}
-		contested = append(contested, candidate)
-	}
-	slices.SortFunc(contested, func(a, b Holder) int {
-		if order := activity[b].Compare(activity[a]); order != 0 {
-			return order
-		}
-		if order := strings.Compare(a.Checkout.Stream().Raw(), b.Checkout.Stream().Raw()); order != 0 {
-			return order
-		}
-		return strings.Compare(a.Session.Actor().Raw(), b.Session.Actor().Raw())
-	})
-	return contested
+	return activity
 }

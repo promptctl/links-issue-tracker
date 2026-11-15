@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -55,11 +54,6 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 
 	held := h.issueDetail(open.ID)
 	parent := h.issueDetail(epic.ID)
-	lane := model.LaneOf(held, &parent)
-	contested := claimContext{standings: claims.Standings{lane: claims.Held{
-		Tenure:    claims.Tenure{By: claims.Holder{Checkout: model.NewAttribution("aaaaaaaabbbb", "ws-local")}},
-		Contested: []claims.Holder{{Checkout: model.NewAttribution("eeeeeeeeffff", "ws-local")}},
-	}}}
 
 	policy := workspaceReadyPolicy(runEnv(t), h.ap)
 	command := func(run func(testing.TB, context.Context, io.Writer, *app.App, []string) error, args ...string) func(io.Writer) error {
@@ -162,7 +156,6 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 		{"restore's removed list", func(w io.Writer) error {
 			return writeRemoved(w, []storage.Removed{{IssueID: open.ID, Title: held.Title}, {IssueID: epic.ID, Title: parent.Title}}, "/backups/x.json")
 		}},
-		{"contested lanes", func(w io.Writer) error { return printContestedLanes(w, contested, time.Now()) }},
 		// Last: the write's summary row reprints the stored title it left alone.
 		{"update's summary", command(runUpdate, open.ID.Raw(), "--priority", "urgent")},
 	} {

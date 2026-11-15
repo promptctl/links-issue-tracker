@@ -35,7 +35,7 @@ type Attribution struct {
 Sealed sum with two variants, discriminated by unexported marker `isStanding()` (`internal/claims/standing.go`):
 
 - `Unclaimed struct{}` — no holder: never started, finished, or the claim's evidence has aged out (`internal/claims/standing.go`).
-- `Held struct { Tenure; Contested []model.Attribution }` (`internal/claims/standing.go`).
+- `Held struct { Tenure }` (`internal/claims/standing.go`).
 
 There is no variant for an expired claim. `Stale struct { Tenure; Holder Presence }` existed until links-claims-y6yz and was removed: an expired claim is not a claim, and the type has nowhere to record that one existed.
 
@@ -303,29 +303,20 @@ holder := establisher.Attribution
 ```
 `internal/claims/derive.go`. `LatestEstablisher` is exported and lives in `internal/claims/establish.go`, not `derive.go` — it scans the whole slice for the newest event by `model.CompareEventRecency` (in `internal/model/phase.go`, shared with phase derivation) for which `establishes` is true, **regardless of attribution**.
 
-**The derivation stops at the latest establisher, attributed or not; it never scans back to an older ancestor** (`internal/claims/derive.go`). An establishing event with no attribution belongs to the public checkout — `model.Attribution`'s zero value — and holds the lane exactly like any other holder: an older attributed event is positively known to be superseded, so scanning past the newest establisher would hand the lane to a checkout that has demonstrably moved on. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go`): A starts then completes T1, then the public checkout starts T2 later — the lane reads `Held{By: public}` with A contesting, **not** `Held{By: A}`. Contrast with a *void* event, which is disproven rather than merely superseded and therefore falls through at leg 4, before leg 2 ever runs (`internal/claims/local.go`).
+**The derivation stops at the latest establisher, attributed or not; it never scans back to an older ancestor** (`internal/claims/derive.go`). An establishing event with no attribution belongs to the public checkout — `model.Attribution`'s zero value — and holds the lane exactly like any other holder: an older attributed event is positively known to be superseded, so scanning past the newest establisher would hand the lane to a checkout that has demonstrably moved on. Pinned by `TestUnattributedLatestStopsRatherThanScanning` (`internal/claims/claims_test.go`): A starts then completes T1, then the public checkout starts T2 later — the lane reads `Held{By: public}`, **not** `Held{By: A}`. Contrast with a *void* event, which is disproven rather than merely superseded and therefore falls through at leg 4, before leg 2 ever runs (`internal/claims/local.go`).
 
-`trails(admissible)` folds the events into two maps (`internal/claims/derive.go`): `activity[attribution] = event.CreatedAt` (last write wins → each checkout's latest act, because events are oldest-first) and `establishers[attribution] = struct{}{}` for establishing events only.
+`lastActivityByHolder(admissible)` returns only the per-holder last-activity map (`internal/claims/derive.go`): `activity[HolderOf(event)] = event.CreatedAt` (last write wins → each holder's latest act, because events are oldest-first).
 
 `tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: activity[holder]}` (`internal/claims/derive.go`).
 
 **Leg 3 — the claim is fresh.**
 ```go
 if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder) != Locked { return Unclaimed{} }
-return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
+return Held{Tenure: tenure}
 ```
 `internal/claims/derive.go`. Freshness is measured from the holder's **last mutation of any kind in the lane**, not from the establishing event, so ordinary commentary carries a claim through a long stretch (`internal/claims/derive.go`). Pinned by `TestAnyMutationRefreshes`: `start` 80 h ago plus a bare field edit 30 min ago → Held with `Since = -80h`, `LastActivity = -30m` under a 24 h window. A `Locked` holder is the one leg-4 finding that carries a claim past the window; `Present` and `Unprovable` do not.
 
 Expired example: `start` at −72 h plus a field edit at −48 h under a 24 h window → `Unclaimed{}` (`TestPredicateGrid`'s "leg 3 dropped" case). The same fixture with streamA's worktree locked → `Held{By: streamA, Since: -72h, LastActivity: -48h}`; with it merely present, gone, or unenumerable → `Unclaimed{}` (`TestExpiredClaimPresenceGrid`).
-
-**Contest.** `contestants(holder, activity, establishers, fresh)` (`internal/claims/derive.go`):
-- Candidate set = the keys of `establishers` (so **only checkouts with an establishing act** contest; a drive-by comment or grooming edit never does — pinned by `TestDriveByEditsNeitherEstablishNorContest`, `internal/claims/claims_test.go`).
-- Skip candidate if `candidate == holder`, or `!fresh.Covers(activity[candidate])` — a rival whose own evidence aged out is no longer contesting. **Unattributed candidates are not skipped**: the public checkout contests on the same terms as any identified checkout, pinned by `TestPublicCheckoutContestsAnIdentifiedHolder` (`internal/claims/claims_test.go`).
-- Sort: most-recently-active first (`activity[b].Compare(activity[a])`), tie-broken by `strings.Compare(a.Stream(), b.Stream())`.
-- Returns `[]model.Attribution{}` (non-nil empty) when nobody contests.
-- Contest is an annotation, not a state: routing is unaffected and the holder remains the holder (`internal/claims/standing.go`).
-
-Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}` (`TestContestedAnnotatesWithoutMovingRouting`, `internal/claims/claims_test.go`); A's start at −200 h with B at −1 h → Held by B, no contest (`TestContestLapsesWithTheRivalsEvidence`, `internal/claims/claims_test.go`).
 
 **Cold start.** A repository whose whole history predates attribution derives every lane `Held` by the public checkout, subject to freshness. Real pre-attribution history is almost always older than the freshness window, so in practice those claims have expired and the lanes read `Unclaimed`. Pinned by `TestColdStartDerivesThePublicCheckout`: recent all-public-checkout history reads `Held{public}`; the same shape 89-90 days old under a 24 h window reads `Unclaimed`.
 
@@ -342,7 +333,7 @@ Pinned: A starts at −3 h, B starts at −1 h → `Held{By: B, Contested: [A]}`
 | 3 (expired) | start −72 h, edit −48 h | `Unclaimed` |
 | 4 (checkout gone) | start by A, live set = {B} | `Unclaimed` |
 
-An unattributed latest establisher is no longer a fifth "dropped leg" row in this grid: it drops no leg at all. `TestUnattributedLatestStopsRatherThanScanning` above derives `Held{public}` with the earlier establisher contesting, and `TestColdStartDerivesThePublicCheckout` shows the all-unattributed case reads `Held` by the public checkout while fresh — the public checkout is a real holder, never a way of spelling "nobody".
+An unattributed latest establisher is no longer a fifth "dropped leg" row in this grid: it drops no leg at all. `TestUnattributedLatestStopsRatherThanScanning` above derives `Held{public}`, and `TestColdStartDerivesThePublicCheckout` shows the all-unattributed case reads `Held` by the public checkout while fresh — the public checkout is a real holder, never a way of spelling "nobody".
 
 ---
 
@@ -422,7 +413,7 @@ That is the entire `internal/app` surface: `App` (3 fields), `AccessMode` + 2 co
 
 The token projection is `app.LiveCheckoutsOf`, the same function `(*App).LocalCheckouts` uses (`internal/cli/claims_context.go`). `addressesByAttribution` indexes live checkouts by `model.NewAttribution(checkout.Stream.Value(), workspaceID)`, skipping tokenless checkouts (`internal/cli/claims_context.go`).
 
-Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal/cli/workable.go`), `reportContestedLanes` (`internal/cli/claims_contest_report.go`). `authorizeStart` shares only its tail, `gatherCheckouts`, because a start reads one lane.
+Callers: `next` (`internal/cli/next.go`), `workable`/`backlog` runner (`internal/cli/workable.go`). `authorizeStart` shares only its tail, `gatherCheckouts`, because a start reads one lane.
 
 ---
 
@@ -579,22 +570,6 @@ The `%s` in both non-empty arms is the rows clause.
 
 For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go`).
 
-### 9.3 `lit sync reconcile` — the contest report (a read gate on merge)
-
-`reportContestedLanes(ctx, stdout, ws, syncStore)` (`internal/cli/claims_contest_report.go`):
-- Builds a temporary `&app.App{Workspace: ws, Store: syncStore}` — note: **no `Stream`**, so `cc.self` is the zero Attribution for this call (cf. `internal/cli/claims_context.go`).
-- Then `printContestedLanes(stdout, cc, time.Now())`, the rendering half, with `now` taken once for the whole report:
-- `lanes := contestedLanes(cc.standings)`; if empty, returns nil silently.
-- Header, verbatim: `contested: more than one holder's evidence just met for these lanes —`.
-- Per lane: `"  %s: %s"` with `lane` (via `LaneID.String()`) and `formatClaimLine(cc, lane, now)`, through `singleLine`, then a newline.
-- `ok == false` from `formatClaimLine` → error `contested lane %s reported no claim line — standings and rendering disagree`.
-
-`contestedLanes(standings)` (`internal/cli/claims_contest_report.go`): every lane whose standing is `claims.Held` with `len(held.Contested) > 0`; returns a non-nil empty slice otherwise; sorted by `strings.Compare(a.String(), b.String())`. Pinned by `TestContestedLanesFiltersAndSorts` (Unclaimed, Stale, and uncontested Held all drop out; survivors sorted) (`internal/cli/claims_contest_report_test.go`) and `TestContestedLanesEmptyForNoContest`.
-
-**Call sites**: only two — after `storage.SyncReconcileLinearized` (`internal/cli/sync_reconcile_cmd.go`) and after `storage.SyncReconcileCombined` (`internal/cli/sync_reconcile_cmd.go`), the two states where histories actually merged (`internal/cli/sync_reconcile_cmd.go`). Not called for prose-pending, unrelated-histories, or not-diverged outcomes.
-
-E2E: two clones partition-start the same lane; `lit sync reconcile` on bravo prints output containing `"contested"` and the ticket id (`internal/cli/claims_contest_report_e2e_test.go`). Negative half: an ordinary reconcile with no shared lane never mentions `"contested"`.
-
 ### 9.4 Surfaces that render but do not gate
 
 - `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go`).
@@ -610,7 +585,7 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 `internal/cli/claims_render.go`. Returns `("", false)` for anything that is not `Held` — an Unclaimed lane renders **no line at all**, not an empty or placeholder one; and a lane whose claim has expired is Unclaimed, so nothing is printed about it even when its holder's worktree is still on this machine and resolvable through `cc.addresses` (pinned `TestFormatClaimLineUnclaimedLaneRendersNothing`, `TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress`, `internal/cli/claims_render_test.go`).
 
-- `Held` → `line = claimPrefix(held.By, cc)`; if `len(held.Contested) > 0`, append `fmt.Sprintf(" · contested by %s", strings.Join(nameCheckouts(held.Contested), ", "))`.
+- `Held` → `line = claimPrefix(held.By, cc) + " by " + nameSession(held.By.Session)`.
 - Then `parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}`; if `formatLaneProgress(cc.evidence.LaneProgress(lane))` is non-empty, append it; join with `" · "`.
 
 **Two tiers**: the dossier (holder badge, freshness, lane progress) comes entirely from `cc.evidence` and `cc.standings` — the shared, synced data — so it renders identically on any clone; the address renders only when `cc.addresses` resolves the holder to a live worktree **this machine** enumerated (`internal/cli/claims_render.go`).
@@ -623,7 +598,7 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 - Otherwise: returns `fmt.Sprintf("claimed: %s (%s)", checkoutAddress(by, addresses), holdState(by))`.
 - `holdState(by)`: `"elsewhere"` (an identified `by`) or `"unaddressed"` — the public checkout, since `by` is the zero Attribution and `by.Present()` is false.
 - The prefix carries no freshness tag: a locked worktree past the clock derives an ordinary `Held` lane and renders like any other, and an expired claim derives `Unclaimed` and renders nothing.
-- **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it — an earlier version compared `by` against `cc.self` instead and misread that coincidence as proof of ownership, rendering `"claimed here: this checkout"` for a foreign lane on `lit sync`'s contested-lane report (whose `cc.self` is always the zero Attribution). Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` in every row regardless of `cc.self`.
+- **The public checkout never renders `claimed here`, whoever is asking.** `by` is the zero Attribution and a live worktree's holder in `cc.addresses` is always an identified checkout, so the first branch above can never match it. Pinned by `TestFormatClaimLinePublicCheckoutIsNeverHere` (`internal/cli/claims_render_test.go`): `"claimed: the public checkout (unaddressed)"` in every row regardless of `cc.self`.
 
 ### 10.3 `formatLaneProgress(progress)`
 
@@ -634,8 +609,7 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 
 ### 10.4 `nameCheckout` / `nameCheckouts`
 
-`internal/cli/claims_render.go`: an identified checkout is named `"stream " + <token, truncated to 8 chars>` (`labelLen = 8`) — a display nicety, not a privacy measure, since the full token is already opaque. The zero Attribution — the public checkout — is named the literal `"the public checkout"` instead of being routed through the token label: reading its empty stream through that path produced `"stream "` with nothing after it, an answer-shaped void. `nameCheckouts` maps a slice through `nameCheckout`, used for the contest suffix.
-
+`internal/cli/claims_render.go`: an identified checkout is named `"stream " + <token, truncated to 8 chars>` (`labelLen = 8`) — a display nicety, not a privacy measure, since the full token is already opaque. The zero Attribution — the public checkout — is named the literal `"the public checkout"` instead of being routed through the token label: reading its empty stream through that path produced `"stream "` with nothing after it, an answer-shaped void.
 ### 10.5 `humanizeCoarseDuration`
 
 `internal/cli/output.go`, buckets:
@@ -651,7 +625,6 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 - With an address entry: `"claimed here: ../links-wt-pgct (links-claims-1ihf.11)"`; the same standing rendered without addresses must not carry the path and must say `"elsewhere"` (`TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine`).
 - An expired claim whose holder's worktree is still resolvable renders nothing at all (`TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress`).
 - The public checkout, whatever `cc.self` is asking: `"claimed: the public checkout (unaddressed)"`, never `"claimed here"` (`TestFormatClaimLinePublicCheckoutIsNeverHere`).
-- Contested Held: line contains `"contested by " + nameCheckout(contestant)` (`TestFormatClaimLineContestedAppendsContestants`).
 
 ---
 

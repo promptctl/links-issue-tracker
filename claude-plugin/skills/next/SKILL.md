@@ -29,7 +29,7 @@ lit counts a checkout — the primary clone or one linked worktree — as the cl
 - **A ticket held by a checkout on this machine** names it on its claim line in `lit backlog`: `claimed here: <path> (<branch>)`.  That is where the ticket is worked.
 - **A merged ticket does not end the checkout's work.**  Keep the worktree and run `lit next` from inside it; the ticket it serves is cut on a fresh branch there (step 3 below).
 
-The moment this goes wrong comes after a merge: the next ticket is in the same lane, and a fresh worktree off the trunk feels like the clean place to start it.  It is a second checkout for the same lane.  lit sees a new claimant take the lane and reports it `contested by` the old one, and `lit next` run from anywhere but the checkout that holds the lane routes away from the lane's next ticket.
+The moment this goes wrong comes after a merge: the next ticket is in the same lane, and a fresh worktree off the trunk feels like the clean place to start it.  It is a second checkout for the same lane.  lit sees a new claimant take the lane, and `lit next` run from anywhere but the checkout that holds the lane routes away from the lane's next ticket.
 
 - WRONG: an epic's four tickets worked in four worktrees, one per ticket — four claimants for one lane.
 - RIGHT: all four worked in the one worktree that holds the epic, one branch per ticket.
