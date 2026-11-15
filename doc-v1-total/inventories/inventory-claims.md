@@ -570,7 +570,7 @@ The `%s` in both non-empty arms is the rows clause.
 
 For the five served cases the announcement is written only when non-empty, then `lane := model.LaneOf(row.Issue, details[row.ID].Parent)` and `printNextSummary(w, row, cc, lane)` (`internal/cli/ready_state.go`); finally `nextPulledOccasion(row.Issue)` is returned and dispatched to workflows (`internal/cli/next.go`).
 
-### 9.4 Surfaces that render but do not gate
+### 9.3 Surfaces that render but do not gate
 
 - `lit backlog` — `printBacklogContext` prints the claim line, indented, after the `in_progress:` line and before `unblocks:` (`internal/cli/backlog.go`). `backlogView` is the only `workableView` preset (`internal/cli/workable.go`), and its render function is `printBacklogOutput(w, columns, issues, details, cc)` (`internal/cli/backlog.go`).
 - `printInlineDeps` — the shared epic/blocked-by/claim/unblocks block used by `lit next`'s summary, printing the claim line between `blocked by` and `unblocks` (`internal/cli/ready_state.go`). `printNextSummary` calls it after the issue's column line (`internal/cli/ready_state.go`).
@@ -607,9 +607,10 @@ No other command consults `claims.Standings`: the only readers of `cc.standings`
 - `Active != nil` → `fmt.Sprintf("%s in progress, %s", progress.Active.ID, formatProgress(progress.Progress))`.
 - else → `formatProgress(progress.Progress)`, which is `fmt.Sprintf("%d/%d done", progress.Done, progress.Total)`.
 
-### 10.4 `nameCheckout` / `nameCheckouts`
+### 10.4 `nameCheckout`
 
 `internal/cli/claims_render.go`: an identified checkout is named `"stream " + <token, truncated to 8 chars>` (`labelLen = 8`) — a display nicety, not a privacy measure, since the full token is already opaque. The zero Attribution — the public checkout — is named the literal `"the public checkout"` instead of being routed through the token label: reading its empty stream through that path produced `"stream "` with nothing after it, an answer-shaped void.
+
 ### 10.5 `humanizeCoarseDuration`
 
 `internal/cli/output.go`, buckets:
