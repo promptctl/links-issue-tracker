@@ -235,13 +235,13 @@ func (e Evidence) LaneProgressWith(written model.Issue) LaneProgress {
 // ID names the lane this reading is of.
 func (l Lane) ID() model.LaneID { return l.id }
 
-// LastTaker is the holder of the lane's latest establishing event, whether or
+// LastTaker is the checkout of the lane's latest establishing event, whether or
 // not the claim it made is still fresh, with false when nothing in the lane
 // was ever taken. It answers "did anybody take this lane after me" without the
 // clock or the machine's checkouts, both of which Standing needs.
-func (l Lane) LastTaker() (Holder, bool) {
+func (l Lane) LastTaker() (model.Attribution, bool) {
 	establisher, found := LatestEstablisher(l.events)
-	return HolderOf(establisher), found
+	return establisher.Attribution, found
 }
 
 // Standing applies the claim predicate to this lane: what Derive answers for

@@ -34,7 +34,7 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: resolveIdentity(runEnv(t), "")}); err != nil {
+	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 
@@ -199,17 +199,17 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 	}
 }
 
-// TestRunTransitionStartClaimTransferEmitsNotice pins the no-silent-failure
-// half of the reclaim path: taking an in_progress issue over from another
-// owner succeeds, but announces the old and new owner on human output. The
-// assertion names both identities rather than pinning wording.
-func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
+// TestRunTransitionStartBySecondActorInTheHoldingCheckout: a second actor in
+// the checkout that holds a ticket starts it with no --take, the ticket is
+// assigned to it, and no transfer is announced, because the hold stays with
+// the checkout.
+func TestRunTransitionStartBySecondActorInTheHoldingCheckout(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
-		Prefix: "test", Title: storage.MustParseTitle("Taken claim"),
+		Prefix: "test", Title: storage.MustParseTitle("Shared checkout"),
 		Lane: storage.SharedLane, Topic: "lifecycle", IssueType: "task", Priority: 0,
 		ParentID: seedEpicRaw(t, ctx, ap, "Epic", "lifecycle"),
 	})
@@ -221,19 +221,18 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--by", "agent-bob", "--take"}, startSpec); err != nil {
-		t.Fatalf("runTransition(reclaim) error = %v, want success with notice", err)
+	if err := runTransition(t, ctx, &stdout, ap, []string{issue.ID.Raw(), "--by", "agent-bob"}, startSpec); err != nil {
+		t.Fatalf("runTransition(second actor's start) error = %v, want success without --take", err)
 	}
-	out := stdout.String()
-	if !strings.Contains(out, "agent-alice") || !strings.Contains(out, "agent-bob") {
-		t.Fatalf("reclaim output %q does not name both the old and new owner", out)
+	if out := stdout.String(); strings.Contains(out, "claim transferred") || strings.Contains(out, "--take") {
+		t.Fatalf("second actor's start in the holding checkout printed %q, want no transfer and no takeover", out)
 	}
-	reclaimed, err := ap.Store.GetIssue(ctx, issue.ID)
+	restarted, err := ap.Store.GetIssue(ctx, issue.ID)
 	if err != nil {
 		t.Fatalf("GetIssue() error = %v", err)
 	}
-	if got := reclaimed.AssigneeValue(); got != "agent-bob" {
-		t.Fatalf("AssigneeValue() = %q, want agent-bob (transfer must still succeed)", got)
+	if got := restarted.AssigneeValue(); got != "agent-bob" {
+		t.Fatalf("AssigneeValue() = %q, want agent-bob", got)
 	}
 }
 

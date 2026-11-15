@@ -1946,12 +1946,12 @@ func (w transitionWrite) handover() *claims.Handover { return w.claimHandover }
 
 func (s *Store) planStatusTransition(issue model.Issue, history []model.IssueEvent, at time.Time, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
 	// Who holds the ticket is the claimant claims owns, read from this issue's
-	// own history — never the assignee alone. The taker is s.attribution and
-	// actor because they are exactly what recordEvent will stamp on the event
-	// this plan is deciding whether to write. Whether it is owed at all is
+	// own history — never the assignee alone. The taker is s.attribution
+	// because it is exactly what recordEvent will stamp on the event this plan
+	// is deciding whether to write. Whether it is owed at all is
 	// claims.StatusPlan's to say, where the memory engine and the hold gate
 	// read it too. [LAW:one-source-of-truth]
-	plan, err := claims.PlanStatus(issue, history, action, claims.HolderFor(s.attribution, model.Text(actor)))
+	plan, err := claims.PlanStatus(issue, history, action, s.attribution)
 	if err != nil {
 		return transitionWrite{}, err
 	}

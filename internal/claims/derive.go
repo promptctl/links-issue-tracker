@@ -90,7 +90,7 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	if !found {
 		return Unclaimed{}
 	}
-	holder := HolderOf(establisher)
+	holder := establisher.Attribution
 	tenure := Tenure{By: holder, Since: establisher.CreatedAt, LastActivity: lastActivityOf(establisher, admissible)}
 
 	// Leg 3 — the claim is fresh. Freshness is measured from the holder's last
@@ -112,23 +112,20 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	// [LAW:single-enforcer] This is the one place a claim's liveness is
 	// decided; consumers read Held or Unclaimed and never a clock or a
 	// presence of their own.
-	if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder.Checkout) != Locked {
+	if !fresh.Covers(tenure.LastActivity) && local.PresenceOf(holder) != Locked {
 		return Unclaimed{}
 	}
 	return Held{Tenure: tenure}
 }
 
-// lastActivityOf is when the establisher's holder last did anything in the lane:
-// its newest event, which is never older than the establishing one. The events
-// are ordered oldest first, so the last of the holder's own is its latest.
-//
-// Matched on the Holder, not the checkout, so a session's commentary keeps only
-// its own hold fresh: another session in the same checkout does not refresh it.
+// lastActivityOf is when the establisher's checkout last did anything in the
+// lane: its newest event, which is never older than the establishing one. The
+// events are ordered oldest first, so the last of the checkout's own is its
+// latest. Any session's activity in the checkout keeps the checkout's hold fresh.
 func lastActivityOf(establisher model.IssueEvent, events []model.IssueEvent) time.Time {
-	holder := HolderOf(establisher)
 	last := establisher.CreatedAt
 	for _, event := range events {
-		if HolderOf(event) == holder {
+		if event.Attribution == establisher.Attribution {
 			last = event.CreatedAt
 		}
 	}

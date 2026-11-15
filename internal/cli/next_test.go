@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"slices"
 	"strings"
@@ -28,7 +27,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	cc, err := gatherClaimContext(h.ctx, runEnv(h.t), io.Discard, h.ap, resolveIdentity(runEnv(h.t), ""))
+	cc, err := gatherClaimContext(h.ctx, runEnv(h.t), io.Discard, h.ap)
 	if err != nil {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
@@ -239,10 +238,9 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 }
 
 // Two agent sessions in ONE checkout. Session sess-peer starts a ticket; session
-// sess-mine runs `lit next` and is not handed it: a lane is held by a session in
-// a checkout, so the peer's work in flight is routed around, and with nothing
-// else in the backlog the answer is the empty pool naming why.
-func TestRunNextRoutesAroundThePeerSessionWorkingThisCheckoutsLane(t *testing.T) {
+// sess-mine runs `lit next` and is handed it back as this checkout's own work in
+// flight, because the checkout holds the lane, whichever session acts in it.
+func TestRunNextResumesTheCheckoutsWorkForAnySessionInIt(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-peer")
 	h := newReadyTestHarness(t)
@@ -252,20 +250,16 @@ func TestRunNextRoutesAroundThePeerSessionWorkingThisCheckoutsLane(t *testing.T)
 
 	// Same checkout, same stream token, different session.
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
-	err := h.runNextErr()
-	var none NoWork
-	if !errors.As(err, &none) || len(none.Unreachable) != 1 || none.Unreachable[0].ID != theirs.ID || none.Unreachable[0].Kind != reachHeldFresh {
-		t.Fatalf("next as sess-mine = %v, want NoWork naming %s as held by another holder", err, theirs.ID)
+	text := h.runNextText()
+	if !strings.Contains(text, theirs.ID.Raw()+" is already in progress in a lane you hold — continue where you left off") {
+		t.Fatalf("next as sess-mine = %q, want %s handed back as this checkout's work in flight", text, theirs.ID)
 	}
 }
 
-// The operator with no session of their own, who is nonetheless somebody, names
-// themselves once and is the same person to the write and to the read: `lit
-// start --by bob` assigns bob, and `lit next --by bob` reports that ticket as
-// bob's own rather than warning him off somebody else's. One flag on both
-// commands, driven through the CLI, so a start that read its assignee from
-// anywhere but --by fails here.
-func TestStartAndNextNameTheSessionlessOperatorWithOneFlag(t *testing.T) {
+// The operator with no session of their own names themselves with --by: `lit
+// start --by bob` records bob and assigns bob, and `lit next` in the same
+// checkout reports that ticket as this checkout's own work in flight.
+func TestStartNamesTheSessionlessOperatorWithBy(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "")
 	repo, _ := initBootstrapTestRepo(t)
@@ -281,12 +275,9 @@ func TestStartAndNextNameTheSessionlessOperatorWithOneFlag(t *testing.T) {
 		t.Fatalf("history after start --by bob = %q, want the start recorded by bob, assigning bob", history)
 	}
 
-	text := runCLIInDir(t, repo, "next", "--by", "bob")
+	text := runCLIInDir(t, repo, "next")
 	if !strings.Contains(text, mine+" is already in progress in a lane you hold — continue where you left off") {
-		t.Fatalf("next --by bob after start --by bob = %q, want bob's own work reported as his", text)
-	}
-	if strings.Contains(text, "not to you") {
-		t.Fatalf("next --by bob after start --by bob = %q, want no warning about the reader's own ticket", text)
+		t.Fatalf("next after start --by bob = %q, want the checkout's own work reported as its own", text)
 	}
 }
 
@@ -715,7 +706,7 @@ func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *te
 	if !strings.Contains(err.Error(), theirs.ID.Raw()) {
 		t.Fatalf("next --status in_progress = %q, want it to name %q rather than report the queue empty", err.Error(), theirs.ID)
 	}
-	if !strings.Contains(err.Error(), "another session holds right now") {
+	if !strings.Contains(err.Error(), "another checkout holds right now") {
 		t.Fatalf("next --status in_progress = %q, want it to say why %q is not servable", err.Error(), theirs.ID)
 	}
 	// Still an answer and not a fault: naming the row must not have moved this
@@ -917,14 +908,14 @@ func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
 	h.transition(inFlight.ID, model.Start{Assignee: "other"})
 
 	rows, details, _ := h.gather()
-	// The reader is the session that started the row in flight, so resuming it
+	// The reader is the checkout that started the row in flight, so resuming it
 	// is resuming its own work.
 	evidence, err := readEvidence(h.ctx, h.ap)
 	if err != nil {
 		t.Fatalf("read evidence: %v", err)
 	}
 	started, _ := claims.LatestEstablisher(evidence.IssueEvents(inFlight.ID))
-	cc := claimContext{self: claims.HolderOf(started), evidence: evidence}
+	cc := claimContext{self: started.Attribution, evidence: evidence}
 	freshRow := rowByID(t, rows, fresh.ID)
 	inFlightRow := rowByID(t, rows, inFlight.ID)
 	freshLane := laneOf(t, details, freshRow)
@@ -1041,7 +1032,7 @@ func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
 	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
 
 	rows, details, _ := h.gather()
-	cc := claimContext{self: selfHolder}
+	cc := claimContext{self: selfAttribution}
 	row := rowByID(t, rows, fresh.ID)
 	lane := laneOf(t, details, row)
 
