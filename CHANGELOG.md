@@ -5,6 +5,14 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-11-14
+
+### Changed
+
+- A lane's holder is the checkout. Every session in the checkout that holds a lane runs `lit start`, `lit phase` and `lit done` on its tickets without `--take`, and `lit next` hands any of them the lane's work in flight. A different checkout is refused without `--take` and routed around by `lit next`.
+- Claim lines, hold refusals and the transfer notice name the checkout. A start that only changes the assignee inside the holding checkout prints no transfer notice.
+- `lit next` and `lit backlog` read no identity and refuse `--by` with the reason.
+
 ## [0.26.0] - 2026-11-14
 
 ### Changed
