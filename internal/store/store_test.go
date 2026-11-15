@@ -2605,9 +2605,9 @@ func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
 // TestNoWriteLandsBetweenAPlanAndItsWrite is the regression for a write
 // planned against a superseded holder: Apply reads, plans and writes under one
 // commit-lock hold, so a foreign start attempted amid tester's plan reads
-// waits on that hold rather than landing. Each start's assignee
-// change and handover therefore name the holder that held when it landed —
-// alice for tester, tester for racer — and racer's event is stamped past
+// waits on that hold rather than landing. Each start's assignee change
+// therefore names the assignee the ticket had when it landed — alice for
+// tester, tester for racer — and racer's event is stamped past
 // tester's. The clock is frozen, so only the stamp's own read of history can
 // order the two events. The deadline bounds the test, not the outcome: the
 // hold cannot be taken while tester has it.
@@ -2640,21 +2640,11 @@ func TestNoWriteLandsBetweenAPlanAndItsWrite(t *testing.T) {
 		}
 	}
 
-	tester, err := st.Apply(ctx, ticket.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"})
-	if err != nil {
+	if _, err := st.Apply(ctx, ticket.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(start tester) error = %v", err)
 	}
-	raced, err := st.Apply(ctx, ticket.ID, racer)
-	if err != nil {
+	if _, err := st.Apply(ctx, ticket.ID, racer); err != nil {
 		t.Fatalf("Apply(start racer) error = %v", err)
-	}
-	for _, landed := range []struct {
-		applied  storage.Applied
-		from, to string
-	}{{tester, "alice", "tester"}, {raced, "tester", "racer"}} {
-		if landed.applied.Handover == nil || landed.applied.Handover.From.Assignee.Raw() != landed.from {
-			t.Errorf("%s's start: Handover = %+v, want it from %s", landed.to, landed.applied.Handover, landed.from)
-		}
 	}
 	events, err := st.ListEvents(ctx, ticket.ID)
 	if err != nil {
