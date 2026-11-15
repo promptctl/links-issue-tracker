@@ -142,7 +142,7 @@ func (e *Engine) planPhase(current model.Issue, actor, reason string, action mod
 func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, now time.Time) (model.Issue, []eventSpec, *claims.Handover, error) {
 	// Who holds the ticket is the claimant claims owns, read from this issue's
 	// own history — never the assignee alone, because lane ownership is keyed
-	// on the holder (checkout and session) recorded on events rather than on
+	// on the checkout recorded on events rather than on
 	// the row. [LAW:one-source-of-truth] Whether the call records anything is
 	// claims.StatusPlan's to say, where the Dolt engine and the hold gate read
 	// it too.
@@ -151,7 +151,7 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	// check guards a write and there is no write here to guard. Checking first
 	// would make a call that changes nothing fail on the state of an issue it
 	// was never going to touch.
-	plan, err := claims.PlanStatus(current, e.eventsFor(current.ID), action, claims.HolderFor(e.attribution, model.Text(actor)))
+	plan, err := claims.PlanStatus(current, e.eventsFor(current.ID), action, e.attribution)
 	if err != nil {
 		return model.Issue{}, nil, nil, err
 	}

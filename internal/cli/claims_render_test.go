@@ -77,7 +77,7 @@ func TestFormatClaimLineDossierNeedsNoLocalAddress(t *testing.T) {
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 1, 2, "active-ticket")
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{
-		By: claims.Holder{Checkout: elsewhereHolder}, Since: renderNow.Add(-3 * time.Hour), LastActivity: renderNow.Add(-2 * time.Hour),
+		By: elsewhereHolder, Since: renderNow.Add(-3 * time.Hour), LastActivity: renderNow.Add(-2 * time.Hour),
 	}}}
 	cc := claimContext{standings: standings, evidence: evidence} // no addresses
 
@@ -99,34 +99,22 @@ func TestFormatClaimLineDossierNeedsNoLocalAddress(t *testing.T) {
 	}
 }
 
-// TestFormatClaimLineNamesTheHoldingSession: two sessions holding from one
-// checkout render the same address, so the line names the session beside it —
-// otherwise another session's hold in the reader's own checkout reads exactly
-// like the reader's own.
-func TestFormatClaimLineNamesTheHoldingSession(t *testing.T) {
+// TestFormatClaimLineNamesOnlyTheCheckout: the holder is the checkout, so the
+// line names the checkout's address and nobody acting in it.
+func TestFormatClaimLineNamesOnlyTheCheckout(t *testing.T) {
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
-	addresses := map[model.Attribution]workspace.Checkout{hereHolder: {Path: "../wt", Branch: "topic"}}
-	lineFor := func(session model.Text) string {
-		cc := claimContext{
-			standings: claims.Standings{lane: claims.Held{Tenure: claims.Tenure{By: claims.HolderFor(hereHolder, session), LastActivity: renderNow}}},
-			evidence:  evidence,
-			addresses: addresses,
-		}
-		line, ok := formatClaimLine(cc, lane, renderNow)
-		if !ok {
-			t.Fatalf("formatClaimLine on a Held lane returned ok=false")
-		}
-		return line
+	cc := claimContext{
+		standings: claims.Standings{lane: claims.Held{Tenure: claims.Tenure{By: hereHolder, LastActivity: renderNow}}},
+		evidence:  evidence,
+		addresses: map[model.Attribution]workspace.Checkout{hereHolder: {Path: "../wt", Branch: "topic"}},
 	}
-	for session, want := range map[model.Text]string{
-		"session-a": "claimed here: ../wt (topic) by session-a · ",
-		"session-b": "claimed here: ../wt (topic) by session-b · ",
-		"":          "claimed here: ../wt (topic) by an unidentified session · ",
-	} {
-		if got := lineFor(session); !strings.HasPrefix(got, want) {
-			t.Fatalf("claim line for %q = %q, want it to open with %q", session, got, want)
-		}
+	line, ok := formatClaimLine(cc, lane, renderNow)
+	if !ok {
+		t.Fatalf("formatClaimLine on a Held lane returned ok=false")
+	}
+	if want := "claimed here: ../wt (topic) · "; !strings.HasPrefix(line, want) {
+		t.Fatalf("claim line = %q, want it to open with %q", line, want)
 	}
 }
 
@@ -138,7 +126,7 @@ func TestFormatClaimLineAddressOnlyOnClaimantsOwnMachine(t *testing.T) {
 	t.Parallel()
 	evidence, lane := laneWithProgress(t, 0, 1, "")
 	standings := claims.Standings{lane: claims.Held{Tenure: claims.Tenure{
-		By: claims.Holder{Checkout: hereHolder}, Since: renderNow.Add(-time.Hour), LastActivity: renderNow.Add(-time.Hour),
+		By: hereHolder, Since: renderNow.Add(-time.Hour), LastActivity: renderNow.Add(-time.Hour),
 	}}}
 	cc := claimContext{
 		standings: standings,
@@ -192,27 +180,24 @@ func TestFormatClaimLineExpiredClaimRendersNothingEvenWithAnAddress(t *testing.T
 	}
 }
 
-// TestNameHolderNamesBothHalves pins how every holder is named — refusal,
-// transfer notice: its session, in its checkout's address when
-// this machine has one, the opaque name otherwise. Two sessions in one checkout
-// must read differently, and a checkout this machine enumerated reads as the
-// path a reader can walk to.
-func TestNameHolderNamesBothHalves(t *testing.T) {
+// TestCheckoutAddressNamesAHolder pins how every holder is named — claim
+// line, refusal, transfer notice: its checkout's address when this machine has
+// one, the opaque name otherwise.
+func TestCheckoutAddressNamesAHolder(t *testing.T) {
 	t.Parallel()
 	addresses := map[model.Attribution]workspace.Checkout{elsewhereHolder: {Path: "../wt", Branch: "topic"}}
 	for _, row := range []struct {
 		name   string
-		holder claims.Holder
+		holder model.Attribution
 		want   string
 	}{
-		{"nobody named, no token", claims.Holder{}, "an unidentified session in the public checkout"},
-		{"a session in an addressable checkout", claims.HolderFor(elsewhereHolder, "session-a"), "session-a in ../wt (topic)"},
-		{"another session in that same checkout", claims.HolderFor(elsewhereHolder, "session-b"), "session-b in ../wt (topic)"},
-		{"a session in a checkout this machine cannot address", claims.HolderFor(model.NewAttribution("bbbbbbbbbbbb", "ws"), "session-a"), "session-a in stream bbbbbbbb"},
+		{"no token", model.Attribution{}, "the public checkout"},
+		{"an addressable checkout", elsewhereHolder, "../wt (topic)"},
+		{"a checkout this machine cannot address", model.NewAttribution("bbbbbbbbbbbb", "ws"), "stream bbbbbbbb"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			if got := nameHolder(row.holder, addresses); got != row.want {
-				t.Fatalf("nameHolder(%+v) = %q, want %q", row.holder, got, row.want)
+			if got := checkoutAddress(row.holder, addresses); got != row.want {
+				t.Fatalf("checkoutAddress(%+v) = %q, want %q", row.holder, got, row.want)
 			}
 		})
 	}
@@ -220,8 +205,7 @@ func TestNameHolderNamesBothHalves(t *testing.T) {
 
 // TestTransferNoticeNamesAPredecessorThatMintedNoToken takes a ticket over from
 // a hold recorded with no stream token and reads the notice a reader actually
-// sees for the handover Apply reports: the public checkout, with no assignee
-// beside it.
+// sees for the handover Apply reports: the public checkout, then this one.
 func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -237,12 +221,12 @@ func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
 	}
 	// The standing the gate read before Apply: the unattributed start holds the
 	// lane, so its holder is the handover's predecessor.
-	predecessor := applied.Handover.From.By
-	if predecessor.Checkout.Present() {
-		t.Fatalf("predecessor checkout = %v, want the public checkout", predecessor.Checkout)
+	predecessor := applied.Handover.From.Checkout
+	if predecessor.Present() {
+		t.Fatalf("predecessor checkout = %v, want the public checkout", predecessor)
 	}
 	notice := transferNotice(claims.Held{Tenure: claims.Tenure{By: predecessor}}, applied.Handover, nil)
-	want := fmt.Sprintf("claim transferred: %s -> bravo-agent in %s\n", nameHolder(predecessor, nil), nameCheckout(ownAttribution(h.ap)))
+	want := fmt.Sprintf("claim transferred: the public checkout -> %s\n", nameCheckout(ownAttribution(h.ap)))
 	if notice != want {
 		t.Fatalf("transferNotice = %q, want %q", notice, want)
 	}
@@ -267,20 +251,20 @@ func TestFormatClaimLinePublicCheckoutIsNeverHere(t *testing.T) {
 	publicHolder := model.Attribution{}
 	for _, row := range []struct {
 		name     string
-		self     claims.Holder
+		self     model.Attribution
 		standing claims.Standing
 		want     string
 	}{
 		{
 			name:     "held, asked by an identified checkout",
-			self:     claims.Holder{Checkout: hereHolder, Session: model.SessionOf("here-session")},
-			standing: claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: publicHolder}, LastActivity: renderNow.Add(-2 * time.Hour)}},
+			self:     hereHolder,
+			standing: claims.Held{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-2 * time.Hour)}},
 			want:     "claimed: the public checkout (unaddressed)",
 		},
 		{
 			name:     "held, asked by a checkout that minted no token of its own",
-			self:     claims.Holder{},
-			standing: claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: publicHolder}, LastActivity: renderNow.Add(-2 * time.Hour)}},
+			self:     model.Attribution{},
+			standing: claims.Held{Tenure: claims.Tenure{By: publicHolder, LastActivity: renderNow.Add(-2 * time.Hour)}},
 			want:     "claimed: the public checkout (unaddressed)",
 		},
 	} {

@@ -36,11 +36,7 @@ func formatClaimLine(cc claimContext, lane model.LaneID, now time.Time) (string,
 // the hold because a listing asks once a row, so an unclaimed lane has to cost
 // nothing and counting a lane's progress has to wait for one.
 func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribution]workspace.Checkout, now time.Time) string {
-	// The session is named beside the checkout because it is half of who
-	// holds: another session's hold in the reader's own checkout is foreign,
-	// and a line naming only the checkout would read as the reader's own.
-	line := claimPrefix(held.By.Checkout, addresses) + " by " + nameSession(held.By.Session)
-	parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
+	parts := []string{claimPrefix(held.By, addresses), humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
 	if progress := formatLaneProgress(lane.Progress()); progress != "" {
 		parts = append(parts, progress)
 	}
@@ -59,8 +55,11 @@ func claimPrefix(by model.Attribution, addresses map[model.Attribution]workspace
 	return fmt.Sprintf("claimed: %s (%s)", checkoutAddress(by, addresses), holdState(by))
 }
 
-// checkoutAddress names a holder's checkout as a reader can find it: its path
-// and branch when this machine enumerated it, the opaque name otherwise.
+// checkoutAddress names a holder as a reader can find it: its path and branch
+// when this machine enumerated it, the opaque name otherwise. The claim line,
+// the hold gate's refusal, `next`'s in-progress notice and the transfer notice
+// all name a holder through here, so one checkout reads one way wherever it
+// appears. [LAW:single-enforcer]
 func checkoutAddress(by model.Attribution, addresses map[model.Attribution]workspace.Checkout) string {
 	if checkout, ok := addresses[by]; ok {
 		return fmt.Sprintf("%s (%s)", checkout.Path, branchOf(checkout))
@@ -75,16 +74,6 @@ func branchOf(checkout workspace.Checkout) model.Text {
 		return "detached HEAD"
 	}
 	return checkout.Branch
-}
-
-// nameSession names the session half of a holder. The zero session names
-// nobody, and saying so is the answer: a hold recorded without an identity is
-// still a hold, by a session nobody can name. [LAW:parse-dont-validate]
-func nameSession(s model.Session) string {
-	if !s.Present() {
-		return "an unidentified session"
-	}
-	return fmt.Sprint(s.Actor())
 }
 
 // holdState is the parenthetical half of a claim line a listing cannot walk
@@ -153,13 +142,4 @@ func nameCheckout(a model.Attribution) string {
 		stream = stream[:labelLen]
 	}
 	return fmt.Sprintf("stream %s", stream)
-}
-
-// nameHolder names a holder as a reader can find it: its session, in its
-// checkout's address when this machine has one and its opaque name otherwise.
-// The hold gate's refusal, `next`'s in-progress notice and the transfer notice
-// all name a holder through here, so one holder reads one way wherever it
-// appears. [LAW:single-enforcer]
-func nameHolder(h claims.Holder, addresses map[model.Attribution]workspace.Checkout) string {
-	return fmt.Sprintf("%s in %s", nameSession(h.Session), checkoutAddress(h.Checkout, addresses))
 }

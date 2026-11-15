@@ -106,11 +106,9 @@ Commands that record an actor resolve it from the `CLAUDE_CODE_SESSION_ID` envir
 variable (producing an identity like `claude_<session-id>`). The `--by` flag is the
 *fallback* for when that variable is unset — when both are present, the environment
 wins. It is one name for one person: the actor every mutating command records (a
-create's included, so it is the author of a plan given at filing), the
-assignee `lit start` writes, and the reader `lit next` tells whether a ticket in flight
-is theirs, so an operator with no session runs `lit start <id> --by bob` and
-`lit next --by bob` and is the same person to both. `lit start --assignee` is refused
-with a pointer to `--by`.
+create's included, so it is the author of a plan given at filing), and the
+assignee `lit start` writes, so an operator with no session runs `lit start <id>
+--by bob`. `lit start --assignee` is refused with a pointer to `--by`.
 
 Only `lit start` writes that identity into the assignee field. Field-writing
 commands — `new`, `followup`, `update` — honor an explicit `--assignee`
@@ -255,7 +253,7 @@ those lanes that gates one of them. After that the epic continues into any of it
 other lanes no other checkout holds right now. A claim whose holder has been
 silent in the lane for the freshness window has expired, and an expired claim is
 not a claim: the lane is unclaimed, nothing about the old claim is printed, and
-`lit start` on it needs no ceremony. Only a lane another session holds right now
+`lit start` on it needs no ceremony. Only a lane another checkout holds right now
 is passed over, and reaching one takes a deliberate `lit start` on it, which asks
 to confirm the takeover or requires `--take` when there is no terminal to ask. A
 checkout whose epic has open work it cannot reach is offered first a ready
@@ -308,17 +306,11 @@ the epic open in lanes other checkouts hold. The checkout's own work, and new wo
 linked worktree that holds nothing, are started where `next` ran.
 
 Work already in flight in one of your own lanes reports the state it is in rather
-than a command to run. When the ticket carries an assignee that is not the
-identity running the command, that name is printed instead of "continue where you
-left off", with a note to check the holder has stopped before continuing: a lane
-is held by the checkout, so every session running in one checkout shares its
-lanes. Nothing here decides whether that holder is still working — every session
-mints a new identity, so a predecessor and a live peer read alike, and lit carries
-no liveness probe — so the line asks for the check rather than answering it. A
-ticket assigned to you, or to nobody at all, prints the lane's own sentence
-instead: there is no name to contradict. The identity `next` compares against is
-the session environment, falling back to `--by` as every mutating command's does,
-never the `--assignee` filter.
+than a command to run: continue where you left off. A lane is held by the
+checkout, so every session running in one checkout shares its lanes and is handed
+their work in flight. When another checkout started the ticket — the lane came to
+this one through `lit start --take` on a sibling — the line names that checkout
+instead and says to read the ticket's history before continuing it.
 
 The endings that hand back no ticket — the exhaustion diagnostic, the line
 naming the ticket a filter hid, and an empty result — exit 6 rather than 1, and

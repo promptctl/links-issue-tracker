@@ -7,16 +7,16 @@ import (
 )
 
 // Claimant is who the record names as holding one ticket: the assignee written
-// on the issue row, and the Holder — checkout and session — of the
-// establishing event that put it there.
+// on the issue row, and the checkout whose establishing event put it there.
 //
-// The holder is the same value Derive reads a lane's standing off (HolderOf),
-// so the write side and the derivation mean one thing by "owner". The assignee
-// is the row's identity text, routinely EMPTY in a shell with no agent session,
-// and it is not what ownership is keyed on: two sessions in one checkout, or
-// two checkouts of one identity, taking a ticket from each other are a real
-// transfer the assignee cannot see, and a write side comparing only assignees
-// would read that transfer as a repeated self-start and discard it.
+// The checkout alone is the holder: it is the per-worktree stream token, and
+// standingOf reads the latest establishing event's Attribution and never looks
+// at an assignee. The assignee is a field the start writes — the human or agent
+// identity, routinely EMPTY in a checkout with no agent session. The pair is one
+// value because a start owes a write when either half changes: two checkouts of
+// one identity taking a lane from each other move the hold although the
+// assignee cannot see it, and a new assignee inside one checkout changes the
+// row although the hold stays where it is.
 // [LAW:one-source-of-truth]
 type Claimant struct {
 	// Established reports that somebody took this ticket — that the history
@@ -28,11 +28,11 @@ type Claimant struct {
 	// a hold, or a genuine pre-attribution hold as nobody.
 	Established bool
 	Assignee    model.Text
-	By          Holder
+	Checkout    model.Attribution
 }
 
 // ClaimantOf reads the claimant a ticket's own record names: the assignee on the
-// issue, and the holder of the newest establishing event among its events.
+// issue, and the checkout on the newest establishing event among its events.
 //
 // events is that issue's history — the write side hands over what it read for
 // the one row it is about to move, not a lane's run — because the question here
@@ -43,7 +43,7 @@ type Claimant struct {
 // Established false, which is why Held reads the flag and not the pair.
 func ClaimantOf(issue model.Issue, events []model.IssueEvent) Claimant {
 	establisher, found := LatestEstablisher(events)
-	return Claimant{Established: found, Assignee: issue.AssigneeValue(), By: HolderOf(establisher)}
+	return Claimant{Established: found, Assignee: issue.AssigneeValue(), Checkout: establisher.Attribution}
 }
 
 // Held reports that the record names a holder, so a caller asking "was this
@@ -59,8 +59,8 @@ func ClaimantOf(issue model.Issue, events []model.IssueEvent) Claimant {
 // to have been addressable.
 func (c Claimant) Held() bool { return c.Established }
 
-// After returns the claimant a status action installs, taken by the holder —
-// checkout and session — performing it. Start is the act of taking a ticket, so it is the only action
+// After returns the claimant a status action installs, taken by the checkout
+// performing it. Start is the act of taking a ticket, so it is the only action
 // that moves the claimant; every other transition preserves ownership, which is
 // orthogonal to the status it drives. [LAW:types-are-the-program] The new owner
 // comes from the one variant that carries one, not from a loose parameter every
@@ -71,12 +71,12 @@ func (c Claimant) Held() bool { return c.Established }
 // reason the pair exists, and it is why a `done` re-run against an already-done
 // ticket still records nothing from a new checkout: done does not take, so the
 // claimant it installs is the one already there.
-func (c Claimant) After(action model.StatusAction, taker Holder) Claimant {
+func (c Claimant) After(action model.StatusAction, taker model.Attribution) Claimant {
 	start, ok := action.(model.Start)
 	if !ok {
 		return c
 	}
-	return Claimant{Established: true, Assignee: model.Text(strings.TrimSpace(start.Assignee)), By: taker}
+	return Claimant{Established: true, Assignee: model.Text(strings.TrimSpace(start.Assignee)), Checkout: taker}
 }
 
 // Handover is a ticket's claim passing from one holder to another: the
@@ -87,14 +87,15 @@ type Handover struct {
 
 // HandoverTo is the handover a write moving the claimant from c to next
 // records, and nil when it records none: nobody had taken the ticket, so there
-// was no claim to pass on, or the holder did not change.
+// was no claim to pass on, or the holder — the checkout — did not change. A new
+// assignee in the same checkout is a write and no handover.
 //
 // A storage engine asks it of the same pair it compares to decide whether the
 // write is owed, and reports the answer, so the handover a caller announces is
 // the one the write was decided on rather than a second reading of the rule.
 // [LAW:one-source-of-truth]
 func (c Claimant) HandoverTo(next Claimant) *Handover {
-	if !c.Held() || next == c {
+	if !c.Held() || next.Checkout == c.Checkout {
 		return nil
 	}
 	return &Handover{From: c, To: next}
@@ -106,13 +107,12 @@ func (c Claimant) HandoverTo(next Claimant) *Handover {
 // it expired, the ticket finished, or a later start elsewhere in the lane
 // superseded it — and a predecessor who holds nothing hands nothing over.
 //
-// The whole holder is compared, so a lane that passed to another session in
-// the predecessor's checkout reads as superseded. The public checkout and the
-// zero session match like any holder: they are the predecessor's real
-// identity, not a claim of ownership by whoever asks.
+// The public checkout matches like any holder: it is the predecessor's real
+// identity, not a claim of ownership by whoever asks, so the minted-token rule
+// that guards "is this lane mine" does not apply.
 func (h Handover) Live(lane Standing) bool {
 	held, ok := lane.(Held)
-	return ok && held.By == h.From.By
+	return ok && held.By == h.From.Checkout
 }
 
 // StatusPlan is what a status action does to one ticket: the issue before and
@@ -126,8 +126,8 @@ type StatusPlan struct {
 }
 
 // PlanStatus runs action against issue, whose own history is events, as
-// taken by taker — the holder the event it would record will name.
-func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker Holder) (StatusPlan, error) {
+// taken by taker — the checkout the event it would record will name.
+func PlanStatus(issue model.Issue, events []model.IssueEvent, action model.StatusAction, taker model.Attribution) (StatusPlan, error) {
 	updated, err := issue.Apply(action)
 	if err != nil {
 		return StatusPlan{}, err

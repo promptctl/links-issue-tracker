@@ -26,21 +26,13 @@ const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [-
 
 func nextLeaf() appLeaf {
 	fs := newCobraFlagSet("next")
-	fs.Retire("continue", "--continue is retired; claim routing already serves the lanes you hold first in `lit next` — run `lit next` with no flag")
+	fs.Retire("continue", "--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag")
+	fs.Retire("by", "--by is retired here: this command reads no identity, because a lane belongs to the checkout — run it from the checkout that holds your work")
 	filterFlags := registerWorkableFilter(fs)
 	// Same flag, same meaning, same deletion condition as `lit backlog --all`:
 	// route over the whole queue rather than the focused goal's path.
 	// [LAW:one-source-of-truth] one name for one idea across both surfaces.
 	all := fs.Bool("all", false, "Ignore the focus scope and route over the whole queue")
-	// `next` is read-only and still needs to know who is asking, because a lane
-	// is held by a session in a checkout, and only the holder session is
-	// served the lane's work. So it takes the same --by every mutating command
-	// takes, and reads it the same way: the session env wins, --by answers when
-	// there is none. `lit start --by bob` recorded its hold through that rule,
-	// so `lit next --by bob` compares like with like. Not the command's own
-	// --assignee: that narrows the view, and a filter must not be able to
-	// rename the reader. [LAW:one-source-of-truth]
-	actor := registerActor(fs)
 	return appLeaf{fs: fs, positionals: 0, usage: nextUsage, work: func(ctx context.Context, inv Invocation, ap *app.App, positional []string) error {
 		filter, err := filterFlags.parse()
 		if err != nil {
@@ -61,7 +53,7 @@ func nextLeaf() appLeaf {
 		if err != nil {
 			return err
 		}
-		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap, actor(inv.Env))
+		cc, err := gatherClaimContext(ctx, inv.Env, inv.Stdout, ap)
 		if err != nil {
 			return err
 		}
@@ -156,18 +148,17 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[model.ID]st
 }
 
 // resumeAdvice is what `next` says when it hands back work already in flight in
-// a lane this session holds. The hold is the lane's, so the row may be a
-// sibling somebody else started, and the lane came to this session through
-// `lit start --take` on another of its tickets. Only the session that started
-// the row is told to continue where it left off. Anyone else is told who
-// started it, because where that session left off is not something this one
-// knows.
+// a lane this checkout holds. The hold is the lane's, so the row may be a
+// sibling another checkout started, and the lane came to this one through
+// `lit start --take` on another of its tickets. A row this checkout started is
+// told to continue where it left off. A row started elsewhere is told which
+// checkout started it, because where that work left off is not in this tree.
 func resumeAdvice(row annotation.AnnotatedIssue, cc claimContext) string {
 	// A row whose history names no start (imported or synced without one) names
 	// no other starter, so it reads as the reader's own.
 	establisher, found := claims.LatestEstablisher(cc.evidence.IssueEvents(row.ID))
-	if starter := claims.HolderOf(establisher); found && starter != cc.self {
-		return fmt.Sprintf("%s is already in progress in a lane you hold, started by %s — read its history before you continue it", row.ID, nameHolder(starter, cc.addresses))
+	if starter := establisher.Attribution; found && starter != cc.self {
+		return fmt.Sprintf("%s is already in progress in a lane you hold, started by %s — read its history before you continue it", row.ID, checkoutAddress(starter, cc.addresses))
 	}
 	return fmt.Sprintf("%s is already in progress in a lane you hold — continue where you left off", row.ID)
 }

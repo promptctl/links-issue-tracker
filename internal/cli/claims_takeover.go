@@ -15,7 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// laneRelation is what a lane's standing means TO THIS HOLDER — the single
+// laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
 // reading of claims.Standing that every consumer in this package shares.
 //
 // Read against an identity in several places, a lane's standing can disagree
@@ -33,33 +33,25 @@ type laneRelation int
 const (
 	// laneUnclaimed: nobody holds it.
 	laneUnclaimed laneRelation = iota
-	// laneOurs: this session, in this checkout, holds it right now.
+	// laneOurs: this checkout holds it right now.
 	laneOurs
-	// laneHeldForeign: another session or another checkout holds it right
-	// now. Routed around, and acted on only through --take.
+	// laneHeldForeign: another checkout holds it right now. Routed around, and
+	// acted on only through --take.
 	laneHeldForeign
 )
 
-// relationOf is the one place a Standing is read against the reader.
+// relationOf is the one place a Standing is read against this checkout.
 //
-// A lane is ours only when the hold names this checkout AND this session. A
-// second session in the same tree, or in a worktree of it, is a different
-// holder, which is what keeps one in-flight ticket in one session's hands.
-//
-// The match is plain equality of the pair. The zero session is a value like
-// any other: a shell that names no identity, in the checkout it started work
-// from, holds its own work, and a session-bearing caller meets that hold as
-// foreign, as the shell meets a session's. The checkout half alone must be
-// identified: the public checkout is every writer with no token at once, so a
-// zero checkout equal to a zero holder proves nothing about whose lane it is.
-// Nothing else — no assignee, no liveness probe — enters the decision.
+// Only a minted token can match. The public checkout is every unattributed
+// writer at once, and a checkout with no token has recorded nothing, so a zero
+// self equal to a zero holder proves nothing about whose lane it is.
 // [LAW:single-enforcer]
-func relationOf(standing claims.Standing, self claims.Holder) laneRelation {
+func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 	held, ok := standing.(claims.Held)
 	if !ok {
 		return laneUnclaimed
 	}
-	if self.Checkout.Present() && held.By == self {
+	if self.Present() && held.By == self {
 		return laneOurs
 	}
 	return laneHeldForeign
@@ -87,12 +79,12 @@ type heldAuthorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, 
 // act or what crossing a hold takes. [LAW:single-enforcer]
 func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 	return func(fs *cobraFlagSet) authorizeFunc {
-		take := fs.Bool("take", false, "Confirm acting on a ticket whose lane another session holds right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
+		take := fs.Bool("take", false, "Confirm acting on a ticket whose lane another checkout holds right now (required for non-interactive callers; without it an interactive terminal is prompted instead)")
 		// One enumeration of this machine's checkouts per invocation, made the
 		// first time a gate needs it: `lit bulk` gates every id against the
 		// same machine, and the enumeration is a subprocess.
 		var gathered *checkoutFacts
-		return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (model.Action, afterApply, error) {
+		return func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (model.Action, afterApply, error) {
 			checkouts := func() (checkoutFacts, error) {
 				if gathered == nil {
 					facts, err := gatherCheckouts(inv.Env, inv.Stdout, ap)
@@ -103,7 +95,7 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 				}
 				return *gathered, nil
 			}
-			action, hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, actor, *take, checkouts)
+			action, hold, takeover, err := authorizeHold(ctx, inv, ap, issueID, prior, action, *take, checkouts)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -120,27 +112,26 @@ func withHoldGate(inner heldAuthorizeFunc) func(*cobraFlagSet) authorizeFunc {
 }
 
 // authorizeHold is the boundary a transition on held work calls before it
-// writes anything. It derives the target lane's standing and, only when a
-// holder other than this one holds the lane right now, demands the deliberate
-// act before the transition may proceed. Every other lane — unclaimed, this
-// holder's own, or one whose claim has expired, which is unclaimed — passes
-// with no ceremony: when this holder was the lane's last taker, the gate pays
+// writes anything. It derives the target lane's standing and, only when
+// another checkout holds the lane right now, demands the deliberate act before
+// the transition may proceed. Every other lane — unclaimed, this checkout's
+// own, or one whose claim has expired, which is unclaimed — passes with no
+// ceremony: when this checkout was the lane's last taker, the gate pays
 // one read of the lane's family and nothing else, with no config and no
 // enumeration of the machine's checkouts. The read stays off the store's size,
 // because a transition asks about one lane; `next` and `backlog` route across
 // all of them.
 //
-// The self it reads against is this checkout and the session the transition
-// is recorded under — actor, the resolved identity Store.Apply stamps on the
-// event — so "ours" here is exactly the holder the write will name.
-// [LAW:one-source-of-truth]
+// The self it reads against is this checkout, the attribution Store.Apply
+// stamps on the event, so "ours" here is exactly the holder the write will
+// name. [LAW:one-source-of-truth]
 //
 // takeover is the line owed once Apply lands when --take crossed a foreign
 // hold, so a transition that fails after the gate announces no takeover.
 // The action returned is the one Apply writes: a start on a ticket whose own record
-// already names this holder, in a lane somebody took since, comes back as a
+// already names this checkout, in a lane somebody took since, comes back as a
 // reclaim, so taking the lane back records the event that does it.
-func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string, take bool, gather func() (checkoutFacts, error)) (model.Action, holdReading, string, error) {
+func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, take bool, gather func() (checkoutFacts, error)) (model.Action, holdReading, string, error) {
 	// A takeover is worth confirming only for a transition that can land. The
 	// issue's own rules refuse a frozen issue, a container, and a phase move
 	// off in-progress work whoever holds the lane, so their refusal answers
@@ -153,7 +144,7 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	// that never happens. A start is the exception the ticket's own record
 	// cannot see: its lane may have been taken through a sibling since, and
 	// only the lane read below can tell.
-	self := ownHolder(ap, actor)
+	self := ownAttribution(ap)
 	records, err := landable(prior, action, self)
 	if err != nil {
 		return nil, holdReading{}, "", err
@@ -172,12 +163,13 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 	if err != nil {
 		return nil, holdReading{}, "", err
 	}
-	// This holder took the lane last, so nobody can hold it but this holder:
-	// the transition is ours, and needs neither the clock nor the machine's
-	// checkouts to say so. The public checkout is every unattributed writer at
-	// once, so it is never ours here, as relationOf never answers it ours.
+	// This checkout took the lane last, so nobody can hold it but this
+	// checkout: the transition is ours, and needs neither the clock nor the
+	// machine's checkouts to say so. The public checkout is every unattributed
+	// writer at once, so it is never ours here, as relationOf never answers it
+	// ours.
 	taker, taken := lane.LastTaker()
-	if taken && self.Checkout.Present() && taker == self {
+	if taken && self.Present() && taker == self {
 		telemetry.Set(ctx, verb+".lane_held", true)
 		return action, holdReading{lane: lane}, "", nil
 	}
@@ -212,7 +204,7 @@ func authorizeHold(ctx context.Context, inv Invocation, ap *app.App, issueID mod
 // Issue.PlanPhase for a phase move, claims.PlanStatus for a status action, the
 // same plans both engines run inside Apply — and reports whether the
 // transition records anything when taken by self.
-func landable(prior ticketState, action model.Action, self claims.Holder) (records bool, err error) {
+func landable(prior ticketState, action model.Action, self model.Attribution) (records bool, err error) {
 	switch action := action.(type) {
 	case model.SetPhase:
 		move, err := prior.issue.PlanPhase(prior.events, action.Phase)
@@ -230,10 +222,10 @@ func landable(prior ticketState, action model.Action, self claims.Holder) (recor
 }
 
 // heldByLine names who holds a ticket the caller is about to act on: the
-// session, the checkout — its path and branch when this machine can address
-// it — and how recently that holder last acted in the lane.
+// checkout — its path and branch when this machine can address it — and how
+// recently it last acted in the lane.
 func heldByLine(issueID model.ID, held claims.Held, addresses map[model.Attribution]workspace.Checkout, now time.Time) string {
-	return fmt.Sprintf("%s is held by %s (active %s ago)", issueID, nameHolder(held.By, addresses), humanizeCoarseDuration(now.Sub(held.LastActivity)))
+	return fmt.Sprintf("%s is held by %s (active %s ago)", issueID, checkoutAddress(held.By, addresses), humanizeCoarseDuration(now.Sub(held.LastActivity)))
 }
 
 // authorizeStart is what `lit start` owes once the hold gate has passed: the

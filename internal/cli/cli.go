@@ -1765,7 +1765,7 @@ type actorResolver func(env environ.Env) string
 
 // byUsage is the one help line for --by, shown on every command that registers
 // it, so the flag reads the same wherever an operator meets it.
-const byUsage = "Who you are: the actor a change records, the assignee lit start writes, and the session a lane's hold names — only that session acts on its tickets in flight without --take. When CLAUDE_CODE_SESSION_ID is set you are that session and --by is ignored; otherwise you are the --by value. With neither, a change records the actor unknown and lit start clears the assignee"
+const byUsage = "Who you are: the actor a change records and the assignee lit start writes. When CLAUDE_CODE_SESSION_ID is set you are that session and --by is ignored; otherwise you are the --by value. With neither, a change records the actor unknown and lit start clears the assignee"
 
 // registerActor declares the --by flag on fs and returns the resolver that
 // reads it. Call the returned resolver after parseFlagSet has run.
@@ -1838,13 +1838,11 @@ type transitionSpec struct {
 }
 
 // authorizeFunc is a transition's gate ahead of Apply, run with the invocation
-// so a gate that asks can read the answer from its stdin, and with actor, the
-// resolved identity the write will be recorded under, so a gate reading a hold
-// reads it against the holder the write would name.
+// so a gate that asks can read the answer from its stdin.
 //
 // It returns the action Apply writes: the one it was given, or that action
 // with a fact only the gate's own read could settle (model.Start.Reclaim).
-type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action, actor string) (model.Action, afterApply, error)
+type authorizeFunc = func(ctx context.Context, inv Invocation, ap *app.App, issueID model.ID, prior ticketState, action model.Action) (model.Action, afterApply, error)
 
 // afterApply is what a transition owes once Apply has written the issue: the
 // line it prints and the facts it tells the statusline file. The authorize hook
@@ -1859,7 +1857,7 @@ type afterApply func(written ticketState, handover *claims.Handover) (notice str
 // beyond the ordinary state-machine check store.Apply already performs, and
 // owes nothing after it.
 func noAuthorize(*cobraFlagSet) authorizeFunc {
-	return func(_ context.Context, _ Invocation, _ *app.App, _ model.ID, _ ticketState, action model.Action, _ string) (model.Action, afterApply, error) {
+	return func(_ context.Context, _ Invocation, _ *app.App, _ model.ID, _ ticketState, action model.Action) (model.Action, afterApply, error) {
 		return action, func(ticketState, *claims.Handover) (string, statusline.Facts) { return "", nil }, nil
 	}
 }
@@ -2058,12 +2056,11 @@ func applyTransition(ctx context.Context, inv Invocation, ap *app.App, issueID m
 
 	// [LAW:single-enforcer] The one gate every transition's authorization
 	// passes through, ahead of Apply — the hold gate for `start`, `phase` and
-	// `done`, which reads the lane against the actor this write is recorded
-	// under. See transitionSpec.authorize and withHoldGate
+	// `done`. See transitionSpec.authorize and withHoldGate
 	// (claims_takeover.go). What it owes is decided on pre-Apply state and
 	// completed after Apply, so a failed Apply announces and records
 	// nothing.
-	action, owed, err := authorize(ctx, inv, ap, issueID, prior, action, actor)
+	action, owed, err := authorize(ctx, inv, ap, issueID, prior, action)
 	if err != nil {
 		return transitionDone{}, err
 	}
