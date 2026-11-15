@@ -145,10 +145,9 @@ func ownAttribution(ap *app.App) model.Attribution {
 // takeover gate read, and the line is owed only when that standing names the
 // handover's predecessor as the holder (Handover.Live). Otherwise the
 // predecessor held nothing to hand over, because an expired claim is not a
-// claim. The holder is the checkout, so a start that changes only the
-// assignee inside the holder's own checkout moves no hold and owes no line.
+// claim.
 func transferNotice(lane claims.Standing, handover *claims.Handover, addresses map[model.Attribution]workspace.Checkout) string {
-	if handover == nil || handover.From.Checkout == handover.To.Checkout || !handover.Live(lane) {
+	if handover == nil || !handover.Live(lane) {
 		return ""
 	}
 	return fmt.Sprintf("claim transferred: %s -> %s\n", checkoutAddress(handover.From.Checkout, addresses), checkoutAddress(handover.To.Checkout, addresses))

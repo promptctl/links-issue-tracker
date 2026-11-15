@@ -977,12 +977,8 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 	if assigneeRow != (model.FieldChange{Field: "assignee", From: "ada", To: "grace"}) {
 		t.Fatalf("the hand-off to grace recorded assignee row %+v, want ada -> grace", assigneeRow)
 	}
-	want = claims.Handover{
-		From: claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.From), Checkout: byB.Attribution},
-		To:   claims.Claimant{Established: true, Assignee: model.Text(assigneeRow.To), Checkout: byB.Attribution},
-	}
-	if handed.Handover == nil || *handed.Handover != want {
-		t.Errorf("a hand-off to a new assignee reported %+v, want %+v: the assignee row the start recorded", handed.Handover, want)
+	if handed.Handover != nil {
+		t.Errorf("a new assignee in the holding checkout reported handover %+v; the holder is the checkout, and it did not change", *handed.Handover)
 	}
 
 	done, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Done{}, Actor: "grace"})

@@ -335,4 +335,18 @@ func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
 	if strings.Contains(out, "claim transferred") {
 		t.Fatalf("first start of %s = %q, want no transfer notice: an assignee set at creation is a field, not a hold", ticket, out)
 	}
+
+	// The same command once the lane IS held, from a second checkout, announces
+	// the change, so the silence above is the preset case specifically and not
+	// a dead notice.
+	runCLIInDir(t, repo, "sync", "push", "--set-upstream")
+	other := filepath.Join(base, "other")
+	runGit(t, base, "clone", remote, "other")
+	runGit(t, other, "config", "user.email", "b@b.co")
+	runGit(t, other, "config", "user.name", "other")
+	runCLIInDir(t, other, "init", "--skip-hooks")
+	out = runCLIInDir(t, other, "start", ticket, "--by", "bob", "--take")
+	if !strings.Contains(out, "claim transferred") {
+		t.Fatalf("start %s over a held lane from a second checkout = %q, want the transfer announced", ticket, out)
+	}
 }

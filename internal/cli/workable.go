@@ -135,6 +135,7 @@ func workableLeafFn(view workableView) appLeafFn {
 // [LAW:single-enforcer] the flag surface and its marshaling live only here.
 func workableLeaf(view workableView) appLeaf {
 	fs := newCobraFlagSet(view.name)
+	fs.Retire("by", "--by is retired here: this command reads no identity, because a lane belongs to the checkout — run it from the checkout that holds your work")
 	filterFlags := registerWorkableFilter(fs)
 	// [LAW:no-mode-explosion] This flag's cap is the focus label: it selects
 	// between two values of ONE scope, it is deleted the day `focus` is, and no

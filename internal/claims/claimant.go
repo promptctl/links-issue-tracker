@@ -9,17 +9,14 @@ import (
 // Claimant is who the record names as holding one ticket: the assignee written
 // on the issue row, and the checkout whose establishing event put it there.
 //
-// The pair is one value because neither half identifies a holder alone, and
-// keeping them apart would let the write side and this package mean different
-// things by "owner". The assignee is the human or agent identity — routinely
-// EMPTY, because a checkout with no agent session resolves no identity at all,
-// and identical across every checkout one session drives. The checkout is the
-// per-worktree stream token, and it is what lane ownership is actually keyed
-// on: standingOf reads the latest establishing event's Attribution and never
-// looks at an assignee. So two checkouts of one identity taking a lane from
-// each other are a real transfer that the assignee cannot see, and a write side
-// comparing only assignees would read that transfer as a repeated self-start
-// and discard it.
+// The checkout alone is the holder: it is the per-worktree stream token, and
+// standingOf reads the latest establishing event's Attribution and never looks
+// at an assignee. The assignee is a field the start writes — the human or agent
+// identity, routinely EMPTY in a checkout with no agent session. The pair is one
+// value because a start owes a write when either half changes: two checkouts of
+// one identity taking a lane from each other move the hold although the
+// assignee cannot see it, and a new assignee inside one checkout changes the
+// row although the hold stays where it is.
 // [LAW:one-source-of-truth]
 type Claimant struct {
 	// Established reports that somebody took this ticket — that the history
@@ -90,14 +87,15 @@ type Handover struct {
 
 // HandoverTo is the handover a write moving the claimant from c to next
 // records, and nil when it records none: nobody had taken the ticket, so there
-// was no claim to pass on, or the holder did not change.
+// was no claim to pass on, or the holder — the checkout — did not change. A new
+// assignee in the same checkout is a write and no handover.
 //
 // A storage engine asks it of the same pair it compares to decide whether the
 // write is owed, and reports the answer, so the handover a caller announces is
 // the one the write was decided on rather than a second reading of the rule.
 // [LAW:one-source-of-truth]
 func (c Claimant) HandoverTo(next Claimant) *Handover {
-	if !c.Held() || next == c {
+	if !c.Held() || next.Checkout == c.Checkout {
 		return nil
 	}
 	return &Handover{From: c, To: next}
