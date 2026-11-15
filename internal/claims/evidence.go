@@ -155,10 +155,9 @@ func newPartition(issues []model.Issue, parentByChild map[model.ID]model.ID, par
 		}
 		placed.events[lane] = append(placed.events[lane], event)
 	}
-	// One ordering for every lane, imposed once here so that
-	// lastActivityByHolder's fold — which takes the LAST write to a holder's
-	// activity as its latest — reads the data rather than the order a caller
-	// happened to read it in.
+	// One ordering for every lane, imposed once here so that lastActivityOf —
+	// which takes the holder's LAST event as its latest — reads the data rather
+	// than the order a caller happened to read it in.
 	// [LAW:single-enforcer]
 	for lane := range placed.events {
 		slices.SortFunc(placed.events[lane], model.CompareEventRecency)

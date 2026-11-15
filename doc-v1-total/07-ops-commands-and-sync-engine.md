@@ -109,6 +109,7 @@ Flag: `--full` — rewrite the old generation too, cost proportional to the whol
 - **`combine`** unions both backlogs; its report lists `kept local-only:`, `kept remote-only:`, `field-merged on both:`, and `dropped, purged on a side:` id sets (`sync_reconcile_cmd.go`).
 
 The shared reporter (`sync_reconcile_cmd.go`) maps store results: an id collision or unrelated histories → `SyncFailureError`, exit 5; prose pending → guidance printed + `MergeConflictError` ("reconcile holds N free-text field(s) for inline merge…"), exit 5; linearized → "reconciled: the divergence merged into linear history — N local commit(s) replayed…"; combined → the five-line union block; not diverged → "nothing to reconcile…"; an unrecognized state prints and exits 0 with an error-status trace.
+
 ## The background sync engine
 
 ### Scheduling: `maybeAutoSyncAfterCommand`
