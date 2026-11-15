@@ -21,8 +21,8 @@ never stored, never synchronized as their own state, and never cleaned up —
 there are no claim objects, no claim commands, and no claim lifecycle. The
 entire state footprint is: work events carry an opaque attribution, and each
 checkout keeps one identity token in its private git directory. Who holds
-what, what is contested, and where `next` should route are all computed at
-read time from facts the system already synchronizes.
+what, and where `next` should route, are all computed at read time from facts
+the system already synchronizes.
 
 Claiming is implicit — starting a ticket in a lane claims the lane. Release is
 implicit — finishing the lane, the claim expiring, or deleting the checkout
@@ -123,15 +123,7 @@ hold:
    worktree the holder has locked carries its claim past T — leg 3 defers to
    leg 4 in that one case, and in no other.
 
-Derived annotations accompany the predicate:
-
-- **Contested** — a second checkout also has live evidence on L (an offline
-  race, or a takeover the previous holder has not yet seen). Contest is an
-  annotation, not a state: routing stays deterministic (the latest
-  establishing event holds the claim), both sides are notified the next time
-  they look, and sync reconciliation surfaces it for judgment.
-There is no annotation for a claim whose evidence has aged past T. An
-expired claim is not a claim, and it is not the record of one either: the
+An expired claim is not a claim, and it is not the record of one either: the
 lane derives **unclaimed**, exactly as a lane nobody ever started does, and no
 surface says anything about the claim that used to be there. The design once
 carried a third standing here, *Stale*, described as "the record that a claim
@@ -163,7 +155,7 @@ rewritten.
 
 An event carrying no pair belongs to the **public checkout**: the single holder
 every unattributed write in a workspace shares. It is a holder like any other —
-it takes lanes, ages out, and can be contested — with one difference that
+it takes lanes and ages out — with one difference that
 follows from having no token: nothing can address it, so no machine's liveness
 prune can void it and no claim line can walk you over to it. It is also never
 the checkout reading it. Only a mutating command records events, and it mints a
@@ -171,9 +163,9 @@ token first, so a checkout that has minted no token has recorded nothing and no
 public-checkout lane is its own. Lanes are unaffected — the public checkout
 occupies ordinary lanes on ordinary terms.
 
-The price is that two writers with no token are indistinguishable, so they never
-contest each other. That is the definition of the bucket rather than a defect in
-it: an identity nobody minted is one nobody can tell apart.
+The price is that two writers with no token are indistinguishable, so they
+always share one hold. That is the definition of the bucket rather than a
+defect in it: an identity nobody minted is one nobody can tell apart.
 
 A holder is the checkout AND the session that recorded the establishing
 event — the event's actor, the identity `resolveIdentity` resolves. Keyed on
@@ -423,9 +415,6 @@ step, so each step below says only which lanes it looks in:
    demoted, and nothing about it is shown. Overriding a claim that is live
    requires the deliberate act of `lit start` on that ticket, with explicit
    confirmation. A claim is a well-founded default, never a lock.
-7. **Contested lanes** keep deterministic routing (latest establishing event
-   holds), while the other party's selection stands down and says why:
-   "claim on A#1 moved to 7f3a at 14:02 — coordinate or stand down."
 
 Priority composes predictably: urgency reorders *within* eligible sets, and
 claims define eligibility. An urgent ticket landing in a claimed lane hoists
@@ -496,14 +485,12 @@ when online.
 
 Two partitioned checkouts can start work in the same lane; nothing can
 prevent that without locks, and the design refuses locks — under partition an
-advisory system must choose availability. The race resolves into the
-**contested** annotation at reconciliation: both parties' evidence lands,
-routing follows the latest establishing event, both sides get told, and the
-sync report surfaces the lane for judgment — consistent with the system's
-standing philosophy that sync conflicts are resolved by the agent's judgment,
-not by silent policy. The worst case under partition is *visible duplicate
-effort*, never blocked work — the correct failure mode for coordination
-metadata.
+advisory system must choose availability. The race resolves at
+reconciliation: both parties' evidence lands, and the lane is held by whichever
+checkout produced the latest establishing event. The other checkout's claim on
+the lane ends there, and nothing reports that the two overlapped. The worst
+case under partition is *visible duplicate effort*, never blocked work — the
+correct failure mode for coordination metadata.
 
 Cold start is graceful by construction, but by freshness rather than by
 absence. Historical events carry no attribution, so a freshly upgraded
@@ -594,7 +581,7 @@ the same disposition forward rather than re-litigate it.
   attribution pair (stream id, workspace id). Nothing else is added.
 - **Local, per checkout**: one write-once stream-id token in the checkout's
   private git directory.
-- **Derived at read time**: claims, freshness, staleness, contest, liveness,
+- **Derived at read time**: claims, freshness, staleness, liveness,
   routing, and every rendering of "who has what."
 
 There is no shared mutable state between worktrees outside the database — the
@@ -670,7 +657,7 @@ sidecar maps.
 - **Stream identity derived from the claimed epic's name**: names the holder
   after the held, which destroys exactly the distinction the system exists
   to draw — two streams erroneously in one lane would be indistinguishable,
-  and contested-claim detection collapses. Identity that changes with its
+  and no claim could say which of them holds the lane. Identity that changes with its
   referent is not identity.
 - **Hostname / path / directory-name attribution** for friendly display:
   leaks device details into a shared, potentially public database; replaced

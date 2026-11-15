@@ -1306,7 +1306,7 @@ on it`; an expired claim is not a claim, so both the standing and the printout a
 Claim line format — `formatClaimLine(cc, lane, now)` (`claims_render.go`):
 returns `false` (no line) for anything but a `Held` lane — an `Unclaimed` lane,
 including one whose claim has expired, prints nothing. Otherwise
-`"<prefix>[ · contested by <s1>, <s2>] · <age> ago[ · <lane progress>]"` where:
+`"<prefix> by <session> · <age> ago[ · <lane progress>]"` where:
 - prefix, when the holder resolves to a live local worktree:
   `"claimed here: <path> (<branch or 'detached HEAD'>)"`
   (`claimPrefix`, `claims_render.go`)

@@ -915,7 +915,7 @@ func aReportedHandoverIsTheOneRecorded(t *testing.T, ctx context.Context, st sto
 	// about which start came last.
 	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Assignee: "ada"})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("taken"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID, Assignee: "ada"})
 	start := func(assignee string) storage.Applied {
 		t.Helper()
 		applied, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: assignee}, Actor: assignee})
@@ -1129,7 +1129,7 @@ func aStampIsPastTheNewestInstantNotTheNewestSpelling(t *testing.T, ctx context.
 // and both work the same ticket. [LAW:no-silent-failure]
 func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("epic"), Lane: storage.SharedLane, Topic: "core", IssueType: model.TypeEpic})
-	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: storage.MustParseTitle("taken"), Lane: storage.SharedLane, Topic: "core", ParentID: epic.ID})
 
 	st.AttributeTo("checkout-a")
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {

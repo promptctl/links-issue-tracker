@@ -89,7 +89,7 @@ func syncReconcileShowLeaf() syncLeaf {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
-		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, reconcileShowCommand, remote, branch, result, false)
+		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, reconcileShowCommand, remote, branch, result, false)
 	}}
 }
 
@@ -137,7 +137,7 @@ func syncReconcileResolveLeaf() syncLeaf {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, proseResolveCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
-		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, proseResolveCommand, remote, branch, result, true)
+		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, proseResolveCommand, remote, branch, result, true)
 	}}
 }
 
@@ -262,7 +262,7 @@ func syncReconcileCombineLeaf() syncLeaf {
 			recordSyncCommandTrace(inv.Stderr, inv.Env, ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote.String(), "sync_branch": branch})
 			return surfaceSyncFailure(ctx, inv.Stderr, inv.Env, ws, err)
 		}
-		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, session, reconcileCombineCommand, remote, branch, result, false)
+		return reportReconcileResult(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, reconcileCombineCommand, remote, branch, result, false)
 	}}
 }
 
@@ -435,8 +435,7 @@ func purgedIDs(inv *storage.UnrelatedInventory) []model.ID {
 // an unrelated-histories result returns the one sync-failure contract (also exit
 // ExitConflict), so `lit sync reconcile`, `lit sync pull`, and the automatic receive
 // all surface no-common-ancestor identically; every other state is a one-line
-// success — Linearized and Combined follow it with reportContestedLanes, since
-// those are the two states where histories actually just merged.
+// success.
 // resolved=true distinguishes a finalize whose resolutions missed the live
 // divergence (re-surfaced) from a first-time surface, so the agent knows to re-merge
 // the CURRENT conflicts shown. It records the durable, unconditional trace for the
@@ -444,7 +443,7 @@ func purgedIDs(inv *storage.UnrelatedInventory) []model.ID {
 // passes through — and it feeds the owner channel the same way every surface does:
 // a held state notifies out-of-band, a converged one ends the divergence episode.
 // [LAW:single-enforcer]
-func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, session syncSession, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult, resolved bool) error {
+func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.Env, stdout io.Writer, ws workspace.Info, command string, remote storage.RemoteName, branch string, result storage.SyncReconcileResult, resolved bool) error {
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote.String(), "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed),
@@ -534,10 +533,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		if err := writeLanding(stdout, "the merged backlog", result.Landing); err != nil {
 			return err
 		}
-		// The histories that just merged are exactly the moment
-		// design-docs/work-claims.md's "Distribution, races, and failure
-		// modes" says a partition race first becomes knowable. [LAW:no-silent-failure]
-		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
+		return nil
 	case storage.SyncReconcileCombined:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
 		endSettleEndedEpisodes(stderr, ws, result.RemoteSchemaAhead)
@@ -566,7 +562,7 @@ func reportReconcileResult(ctx context.Context, stderr io.Writer, env environ.En
 		if err := writeLanding(stdout, "the combined backlog", result.Landing); err != nil {
 			return err
 		}
-		return reportContestedLanes(ctx, env, stdout, ws, session.engine)
+		return nil
 	case storage.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(stderr, env, ws, command, result.State, metadata)
 		// A settle; see reportTakeOutcome's not-diverged arm.

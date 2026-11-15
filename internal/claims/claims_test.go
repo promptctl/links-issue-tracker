@@ -112,7 +112,7 @@ func derive(t *testing.T, issues []model.Issue, parents map[model.ID]model.ID, e
 	return claims.Derive(evidence, fresh, local)
 }
 
-// held is shorthand for the expected standing of an uncontested holder.
+// held is shorthand for the expected standing of a holder.
 func held(by model.Attribution, since, last time.Time) claims.Held {
 	return claims.Held{Tenure: claims.Tenure{By: claims.Holder{Checkout: by}, Since: since, LastActivity: last}}
 }
@@ -221,11 +221,10 @@ func TestPredicateGrid(t *testing.T) {
 // lane to streamA, a checkout that demonstrably moved on — so derivation stops
 // at the newest establisher and reads it as whose it is: the public checkout's.
 //
-// The Contested arm is what makes the assertion adversarial rather than
-// self-confirming. streamA is present, fresh, and an establisher, so a
-// derivation that scanned past the unattributed event would report it as the
-// HOLDER; one that stops reports it here instead, and the two answers cannot be
-// confused for each other.
+// The assertion is adversarial rather than self-confirming. streamA is present,
+// fresh, and an establisher, so a derivation that scanned past the unattributed
+// event would report it as the HOLDER; one that stops reports the public
+// checkout here instead, and the two answers cannot be confused for each other.
 func TestUnattributedLatestStopsRatherThanScanning(t *testing.T) {
 	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateClosed), leaf(t, "T2", "", model.StateInProgress))
 	standings := derive(t, issues, parents, []model.IssueEvent{
@@ -236,8 +235,7 @@ func TestUnattributedLatestStopsRatherThanScanning(t *testing.T) {
 	}, bothLive)
 
 	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Held{
-		Tenure:    claims.Tenure{By: claims.Holder{Checkout: public}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
-		Contested: []claims.Holder{{Checkout: streamA}},
+		Tenure: claims.Tenure{By: claims.Holder{Checkout: public}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
 	})
 }
 
@@ -366,10 +364,9 @@ func TestCompletingEstablishes(t *testing.T) {
 	assertStanding(t, standings.Of(laneIn(epicID, "")), held(streamA, ago(time.Hour), ago(time.Hour)))
 }
 
-// TestDriveByEditsNeitherEstablishNorContest is the rule the design names
-// outright: a comment or a grooming edit from another checkout must not capture
-// an epic, and must not raise a contest annotation either.
-func TestDriveByEditsNeitherEstablishNorContest(t *testing.T) {
+// TestDriveByEditsDoNotEstablish is the rule the design names outright: a comment
+// or a grooming edit from another checkout must not capture an epic.
+func TestDriveByEditsDoNotEstablish(t *testing.T) {
 	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress))
 	standings := derive(t, issues, parents, []model.IssueEvent{
 		event("e1", "T1", model.ActionStart, ago(3*time.Hour), streamA),
@@ -383,53 +380,13 @@ func TestDriveByEditsNeitherEstablishNorContest(t *testing.T) {
 	assertStanding(t, standings.Of(laneIn(epicID, "")), held(streamA, ago(3*time.Hour), ago(3*time.Hour)))
 }
 
-// TestContestedAnnotatesWithoutMovingRouting: both checkouts started work in one
-// lane, the latest establishing event decides who holds it, and the other side
-// is reported rather than hidden.
-func TestContestedAnnotatesWithoutMovingRouting(t *testing.T) {
+// TestLatestEstablisherHoldsAcrossCheckouts: two checkouts both started work in
+// one lane, as an offline race leaves it, and the lane is held by the one whose
+// establishing event is latest.
+func TestLatestEstablisherHoldsAcrossCheckouts(t *testing.T) {
 	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress), leaf(t, "T2", "", model.StateInProgress))
 	standings := derive(t, issues, parents, []model.IssueEvent{
 		event("e1", "T1", model.ActionStart, ago(3*time.Hour), streamA),
-		event("e2", "T2", model.ActionStart, ago(time.Hour), streamB),
-	}, bothLive)
-
-	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Held{
-		Tenure:    claims.Tenure{By: claims.Holder{Checkout: streamB}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
-		Contested: []claims.Holder{{Checkout: streamA}},
-	})
-}
-
-// TestPublicCheckoutContestsAnIdentifiedHolder is the mirror of the case above.
-// An unattributed establisher that is still fresh is disputing possession on the
-// same terms as any identified rival, so it belongs in Contested rather than
-// being filtered out for having no address.
-//
-// Excluding it would silently pick a side: the one race an unidentified checkout
-// can lose would also be the one race nobody is told about, and the losing side
-// would read the lane as uncontested while its own establishing event sat in the
-// history. Freshness, not presence, is what keeps the pre-attribution backlog out
-// of this list — that evidence is old, so it never covers.
-func TestPublicCheckoutContestsAnIdentifiedHolder(t *testing.T) {
-	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress), leaf(t, "T2", "", model.StateInProgress))
-	standings := derive(t, issues, parents, []model.IssueEvent{
-		// A binary that could not stamp its writes took T1 and is still active.
-		event("e1", "T1", model.ActionStart, ago(3*time.Hour), public),
-		// An identified checkout established later, so the lane is its.
-		event("e2", "T2", model.ActionStart, ago(time.Hour), streamA),
-	}, bothLive)
-
-	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Held{
-		Tenure:    claims.Tenure{By: claims.Holder{Checkout: streamA}, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
-		Contested: []claims.Holder{{Checkout: public}},
-	})
-}
-
-// TestContestLapsesWithTheRivalsEvidence: a rival whose own evidence has aged
-// out is no longer contesting anything.
-func TestContestLapsesWithTheRivalsEvidence(t *testing.T) {
-	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress), leaf(t, "T2", "", model.StateInProgress))
-	standings := derive(t, issues, parents, []model.IssueEvent{
-		event("e1", "T1", model.ActionStart, ago(200*time.Hour), streamA),
 		event("e2", "T2", model.ActionStart, ago(time.Hour), streamB),
 	}, bothLive)
 
@@ -634,11 +591,9 @@ func TestUnknownLaneReadsAsUnclaimed(t *testing.T) {
 	assertStanding(t, claims.Standings{}.Of(laneIn("nope", "")), claims.Unclaimed{})
 }
 
-// assertStanding compares two standings by variant and by every field, which for
-// Held includes the contested list. Held carries a slice and so is not
-// comparable with ==; the comparison is spelled out rather than reached for
-// through reflect, and it never compares an interface directly, which would
-// panic the moment a Held turned up on either side.
+// assertStanding compares two standings by variant and, for Held, by tenure.
+// Tenure holds time.Time, which assertTenure compares with Equal rather than ==,
+// so Held is not compared with == as a whole.
 //
 // Spelled out means every field must be spelled: a variant that grows one and
 // does not grow a line here goes on passing, and passing is what it will look
@@ -657,14 +612,6 @@ func assertStanding(t *testing.T, got, want claims.Standing) {
 			t.Fatalf("standing = %#v, want Held%+v", got, expected.Tenure)
 		}
 		assertTenure(t, actual.Tenure, expected.Tenure)
-		if len(actual.Contested) != len(expected.Contested) {
-			t.Fatalf("contested = %v, want %v", actual.Contested, expected.Contested)
-		}
-		for i := range expected.Contested {
-			if actual.Contested[i] != expected.Contested[i] {
-				t.Fatalf("contested[%d] = %v, want %v", i, actual.Contested[i], expected.Contested[i])
-			}
-		}
 	default:
 		t.Fatalf("unhandled expected standing %#v", want)
 	}

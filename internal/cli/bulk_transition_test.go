@@ -118,31 +118,31 @@ func TestBulkStartRefusesAHeldLaneUnlessTaken(t *testing.T) {
 	h := newReadyTestHarness(t)
 	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("held epic"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "epic"})
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("theirs"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
-	contested := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	taken := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("taken"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
 	free := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("free"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: h.epicFixture(0, 0)})
 	h.asCheckout("otherstream01")
 	h.transition(theirs.ID, model.Start{Assignee: "other"})
 	h.asCheckout(h.ap.Stream.Value())
 
 	var out bytes.Buffer
-	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID.Raw()+","+free.ID.Raw())
+	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", taken.ID.Raw()+","+free.ID.Raw())
 	var refusal takeoverUnconfirmedError
-	if len(failed) != 1 || !errors.As(failed[contested.ID], &refusal) {
-		t.Fatalf("failures = %v, want only %s, refused by the takeover gate", failed, contested.ID)
+	if len(failed) != 1 || !errors.As(failed[taken.ID], &refusal) {
+		t.Fatalf("failures = %v, want only %s, refused by the takeover gate", failed, taken.ID)
 	}
-	if !strings.Contains(out.String(), free.ID.Raw()+" ok\n") || strings.Contains(out.String(), contested.ID.Raw()) {
-		t.Errorf("stdout = %q, want %s ok and no mention of %s", out.String(), free.ID, contested.ID)
+	if !strings.Contains(out.String(), free.ID.Raw()+" ok\n") || strings.Contains(out.String(), taken.ID.Raw()) {
+		t.Errorf("stdout = %q, want %s ok and no mention of %s", out.String(), free.ID, taken.ID)
 	}
-	if got := h.issueDetail(contested.ID).StatusValue(); got != string(model.StateOpen) {
-		t.Errorf("%s status = %s after a refused takeover, want open", contested.ID, got)
+	if got := h.issueDetail(taken.ID).StatusValue(); got != string(model.StateOpen) {
+		t.Errorf("%s status = %s after a refused takeover, want open", taken.ID, got)
 	}
 
 	out.Reset()
-	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", contested.ID.Raw(), "--take"}); err != nil {
+	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", taken.ID.Raw(), "--take"}); err != nil {
 		t.Fatalf("bulk start --take error = %v", err)
 	}
-	if got := h.issueDetail(contested.ID).StatusValue(); got != string(model.StateInProgress) {
-		t.Errorf("%s status = %s after --take, want in_progress", contested.ID, got)
+	if got := h.issueDetail(taken.ID).StatusValue(); got != string(model.StateInProgress) {
+		t.Errorf("%s status = %s after --take, want in_progress", taken.ID, got)
 	}
 }
 
@@ -226,7 +226,7 @@ func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
 	h := newReadyTestHarness(t)
 	held := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("held epic"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "epic"})
 	theirs := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("theirs"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
-	contested := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("contested"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
+	taken := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("taken"), Lane: storage.SharedLane, Topic: "bulk", IssueType: "task", ParentID: held.ID})
 	h.asCheckout("otherstream01")
 	h.transition(theirs.ID, model.Start{Assignee: "other"})
 	h.asCheckout(h.ap.Stream.Value())
@@ -236,9 +236,9 @@ func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
 	refusal := errors.New("store refused the write")
 	h.ap.Store = applyRefusingStore{Store: live, err: refusal}
 	var out bytes.Buffer
-	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", contested.ID.Raw(), "--take")
-	if !errors.Is(failed[contested.ID], refusal) {
-		t.Fatalf("failures = %v, want %s failed with %v", failed, contested.ID, refusal)
+	failed, _ := bulkFailures(t, h, &out, startSpec, "--ids", taken.ID.Raw(), "--take")
+	if !errors.Is(failed[taken.ID], refusal) {
+		t.Fatalf("failures = %v, want %s failed with %v", failed, taken.ID, refusal)
 	}
 	if strings.Contains(out.String(), takeover) {
 		t.Errorf("stdout = %q, want no takeover line for a start that did not land", out.String())
@@ -246,11 +246,11 @@ func TestBulkStartTakeAnnouncesOnlyATakeoverThatLanded(t *testing.T) {
 
 	h.ap.Store = live
 	out.Reset()
-	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", contested.ID.Raw(), "--take"}); err != nil {
+	if err := runLeaf(t, bulkTransitionLeaf(startSpec)(), h.ctx, &out, h.ap, []string{"--ids", taken.ID.Raw(), "--take"}); err != nil {
 		t.Fatalf("bulk start --take error = %v", err)
 	}
-	if line, ok := strings.Index(out.String(), takeover), strings.Index(out.String(), contested.ID.Raw()+" ok\n"); line < 0 || ok < 0 || line > ok {
-		t.Errorf("stdout = %q, want the takeover line ahead of %s ok", out.String(), contested.ID)
+	if line, ok := strings.Index(out.String(), takeover), strings.Index(out.String(), taken.ID.Raw()+" ok\n"); line < 0 || ok < 0 || line > ok {
+		t.Errorf("stdout = %q, want the takeover line ahead of %s ok", out.String(), taken.ID)
 	}
 }
 

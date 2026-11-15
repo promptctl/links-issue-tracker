@@ -40,9 +40,6 @@ func claimLineOf(held claims.Held, lane claims.Lane, addresses map[model.Attribu
 	// holds: another session's hold in the reader's own checkout is foreign,
 	// and a line naming only the checkout would read as the reader's own.
 	line := claimPrefix(held.By.Checkout, addresses) + " by " + nameSession(held.By.Session)
-	if len(held.Contested) > 0 {
-		line += fmt.Sprintf(" · contested by %s", strings.Join(nameHolders(held.Contested, addresses), ", "))
-	}
 	parts := []string{line, humanizeCoarseDuration(now.Sub(held.LastActivity)) + " ago"}
 	if progress := formatLaneProgress(lane.Progress()); progress != "" {
 		parts = append(parts, progress)
@@ -129,16 +126,15 @@ func formatProgress(progress claims.Progress) string {
 }
 
 // nameCheckout names a holder for a human, and is the one place either kind of
-// holder gets a name — claim lines, contest lists, and transfer notices all
-// read through here rather than each deciding what an unidentified holder
-// looks like. [LAW:single-enforcer]
+// holder gets a name — claim lines, the hold gate's refusal, and transfer
+// notices all read through here rather than each deciding what an unidentified
+// holder looks like. [LAW:single-enforcer]
 //
 // An identified checkout is named by its stream token, trimmed to a readable
 // label. Truncation is a display nicety, not a privacy measure — the full token
 // is already opaque and carries nothing identifying — so a shorter label is
 // never wrong to show, only occasionally ambiguous against another token
-// sharing the same prefix, which contested-lane rendering already disambiguates
-// by listing every contestant.
+// sharing the same prefix.
 //
 // The public checkout (model.Attribution.Present) is named rather than
 // rendered from its token, because it has none: reading its empty stream
@@ -161,20 +157,9 @@ func nameCheckout(a model.Attribution) string {
 
 // nameHolder names a holder as a reader can find it: its session, in its
 // checkout's address when this machine has one and its opaque name otherwise.
-// The hold gate's refusal, the contest list and the transfer notice all name a
-// holder through here, so one holder reads one way wherever it appears.
-// [LAW:single-enforcer]
+// The hold gate's refusal, `next`'s in-progress notice and the transfer notice
+// all name a holder through here, so one holder reads one way wherever it
+// appears. [LAW:single-enforcer]
 func nameHolder(h claims.Holder, addresses map[model.Attribution]workspace.Checkout) string {
 	return fmt.Sprintf("%s in %s", nameSession(h.Session), checkoutAddress(h.Checkout, addresses))
-}
-
-// nameHolders names each contestant through nameHolder — two sessions of one
-// checkout contest each other, and a list naming only the checkout would print
-// the same name twice.
-func nameHolders(holders []claims.Holder, addresses map[model.Attribution]workspace.Checkout) []string {
-	labels := make([]string, len(holders))
-	for i, h := range holders {
-		labels[i] = nameHolder(h, addresses)
-	}
-	return labels
 }
