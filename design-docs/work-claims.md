@@ -488,11 +488,8 @@ prevent that without locks, and the design refuses locks — under partition an
 advisory system must choose availability. The race resolves at
 reconciliation: both parties' evidence lands, and the lane is held by whichever
 checkout produced the latest establishing event. The other checkout's claim on
-the lane ends there, and it learns so the next time it acts on the lane:
-`lit next` routes it around the lane, and `lit phase` or `lit done` on its
-ticket is refused as held by the winner until it passes `--take`. The worst
-case under partition is *visible duplicate effort*, never blocked work — the
-correct failure mode for coordination metadata.
+the lane ends there. The worst case under partition is duplicate effort,
+never blocked work — the correct failure mode for coordination metadata.
 
 Cold start is graceful by construction, but by freshness rather than by
 absence. Historical events carry no attribution, so a freshly upgraded
