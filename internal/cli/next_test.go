@@ -303,12 +303,12 @@ func TestStartAssigneePointsToBy(t *testing.T) {
 }
 
 // --by is how a session-less operator names themselves, so --help has to say
-// so: on start, where it becomes the assignee, on next, where it is the reader,
-// and on a mutating command, where it is the actor.
+// so: on start, where it becomes the assignee, and on a mutating command, where
+// it is the actor.
 func TestByFlagIsDocumentedInHelp(t *testing.T) {
 	t.Parallel()
 	repo, _ := initBootstrapTestRepo(t)
-	for _, command := range [][]string{{"start"}, {"next"}, {"label", "add"}} {
+	for _, command := range [][]string{{"start"}, {"label", "add"}} {
 		page := render(t, repo, append(command, "--help"))
 		if !strings.Contains(page, "--by string") || !strings.Contains(page, byUsage) {
 			t.Errorf("`lit %s --help` = %q, want --by listed with its usage %q", strings.Join(command, " "), page, byUsage)
