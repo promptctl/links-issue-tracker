@@ -405,9 +405,6 @@ Defaults are set in `Load` (`internal/config/config.go`).
 5. Returns `Info{Location, RootDir, WorkspaceID, IssuePrefix, PrivateGitDir, Remotes}`, with
    `Remotes = NewRemotes(env, RootDir)` (5.8).
 
-`Info.PrimaryClone()` is `PrivateGitDir == GitCommonDir`: true in the primary clone,
-false in a linked worktree (`internal/workspace/workspace.go`).
-
 The geometry query uses `context.Background()` deliberately (`internal/workspace/workspace.go`).
 
 ### 5.4 Git-error classification (`internal/workspace/workspace.go`)

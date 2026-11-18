@@ -3,11 +3,12 @@ package workflows
 import (
 	"fmt"
 	"io"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -67,7 +68,7 @@ func Dispatch(env environ.Env, w io.Writer, errOut io.Writer, ws workspace.Info,
 	set := Load(env, ws.RootDir)
 	matched := set.Matching(o)
 	for _, def := range matched {
-		if _, err := fmt.Fprintln(w, Interpolate(def.Body, o.IssueID)); err != nil {
+		if _, err := fmt.Fprintln(w, Interpolate(def.Body, o)); err != nil {
 			return matched, err
 		}
 	}
@@ -79,12 +80,16 @@ func Dispatch(env environ.Env, w io.Writer, errOut io.Writer, ws workspace.Info,
 	return matched, nil
 }
 
-// Interpolate replaces the <id> placeholder in an injected body with the
-// occasion's issue id, held to one row as %s holds it: the id may arrive by
-// sync, and a break in it would forge lines in the guidance an agent reads.
-// It is the one substitution workflow bodies get.
-// Exported so `lit workflows dry-run` can preview the same interpolated body
-// Dispatch would actually inject.
-func Interpolate(body string, issueID model.ID) string {
-	return strings.ReplaceAll(body, "<id>", fmt.Sprint(issueID))
+// Interpolate replaces each <name> placeholder in an injected body with the
+// occasion's value for it: the issue id as "id", then the occasion's Data. The
+// id is held to one row as %s holds it: it may arrive by sync, and a break in
+// it would forge lines in the guidance an agent reads. Exported so
+// `lit workflows dry-run` previews the same body Dispatch injects.
+func Interpolate(body string, o Occasion) string {
+	values := map[string]string{"id": fmt.Sprint(o.IssueID)}
+	maps.Copy(values, o.Data)
+	for _, name := range slices.Sorted(maps.Keys(values)) {
+		body = strings.ReplaceAll(body, "<"+name+">", values[name])
+	}
+	return body
 }

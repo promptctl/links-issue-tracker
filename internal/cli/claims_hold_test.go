@@ -79,16 +79,6 @@ func assertRefused(t *testing.T, err error, want string) {
 	}
 }
 
-// runNext runs `lit next` in process in this checkout and returns its output.
-func (h readyTestHarness) runNext() string {
-	h.t.Helper()
-	var out bytes.Buffer
-	if err := runLeaf(h.t, nextLeaf(), h.ctx, &out, h.ap, nil); err != nil {
-		h.t.Fatalf("next: %v", err)
-	}
-	return out.String()
-}
-
 // Two sessions in the checkout that holds a ticket both act on it as its
 // holder: the second session's `lit next` hands it back, and its start, phase
 // and done all land with no --take and nothing said about a hold.
@@ -97,8 +87,8 @@ func TestTwoSessionsInTheHoldingCheckoutBothActWithoutTake(t *testing.T) {
 	h := holdHarness(t)
 	_, ticket := h.heldTicket(h.ap.Stream.Value(), "session-a")
 
-	if got, want := openingLine(h.runNext()), ticket.ID.Raw()+" is already in progress in a lane you hold — continue where you left off"; got != want {
-		t.Fatalf("next opens with %q, want %q — the checkout's ticket is any of its sessions' to continue", got, want)
+	if resumed, ok := h.runNextOutcome().(ResumedOwnWork); !ok || resumed.Row.ID != ticket.ID {
+		t.Fatalf("next = %#v, want %s resumed — the checkout's ticket is any of its sessions' to continue", resumed, ticket.ID)
 	}
 	for _, step := range []struct {
 		by   string
@@ -151,10 +141,10 @@ func TestRouteNextRoutesAroundTicketHeldByAnotherCheckout(t *testing.T) {
 	t.Parallel()
 	h := holdHarness(t)
 	h.heldTicket(foreignStream, "session-a")
-	freeEpic, free := h.freeTicket()
+	_, free := h.freeTicket()
 
-	if got, want := openingLine(h.runNext()), "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start "+free.ID.Raw()+"` to claim the default lane of epic "+freeEpic.ID.Raw(); got != want {
-		t.Fatalf("next opens with %q, want %q — the ticket another checkout holds must be routed around", got, want)
+	if got := h.runNextRow().ID; got != free.ID {
+		t.Fatalf("next hands back %q, want %q — the ticket another checkout holds must be routed around", got, free.ID)
 	}
 }
 
@@ -170,18 +160,9 @@ func TestRouteNextServesTheHolderItsLaneSiblingWhateverItsAssignee(t *testing.T)
 	sibling := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("next in the lane"), Lane: storage.SharedLane, Topic: "hold", IssueType: "task", ParentID: epic.ID, Assignee: "somebody-else"})
 	h.freeTicket()
 
-	// Served from the lane this checkout holds, so nothing is announced above
-	// the row: the summary line is the first thing printed.
-	if got, want := openingLine(h.runNext()), sibling.ID.Raw()+"  open  hold  next in the lane"; got != want {
-		t.Fatalf("next opens with %q, want %q — the lane's sibling is the holder's, whoever it is assigned to", got, want)
+	if served, ok := h.runNextOutcome().(ServedFromClaim); !ok || served.Row.ID != sibling.ID {
+		t.Fatalf("next = %#v, want %s served from the lane this checkout holds — the lane's sibling is the holder's, whoever it is assigned to", served, sibling.ID)
 	}
-}
-
-// openingLine is the first line a command printed about the work, past the
-// warning a harness outside any git repository draws on every claim read.
-func openingLine(text string) string {
-	line, _, _ := strings.Cut(withoutLivenessWarning(text), "\n")
-	return line
 }
 
 // withoutLivenessWarning drops gatherCheckouts' warning that this machine's
@@ -271,9 +252,8 @@ func TestNoOpTransitionFromAnotherCheckoutIsNotGated(t *testing.T) {
 
 // The hold is the lane's, so `lit next` can hand this checkout a ticket in
 // flight that another checkout started, once this checkout took the lane
-// through a sibling. It names the checkout that started it rather than saying
-// to continue where this one left off.
-func TestNextNamesTheCheckoutThatStartedASiblingInFlight(t *testing.T) {
+// through a sibling.
+func TestNextHandsBackASiblingInFlightAnotherCheckoutStarted(t *testing.T) {
 	t.Parallel()
 	h := holdHarness(t)
 	epic, theirs := h.heldTicket(foreignStream, "session-a")
@@ -282,9 +262,8 @@ func TestNextNamesTheCheckoutThatStartedASiblingInFlight(t *testing.T) {
 	if _, err := h.runTransitionAs(startSpec, sibling.ID, "session-b", "--take"); err != nil {
 		t.Fatalf("start %s --take: %v", sibling.ID, err)
 	}
-	want := theirs.ID.Raw() + " is already in progress in a lane you hold, started by " + nameCheckout(model.NewAttribution(foreignStream, h.ap.Workspace.WorkspaceID)) + " — read its history before you continue it"
-	if got := openingLine(h.runNext()); got != want {
-		t.Fatalf("next opens with %q, want %q", got, want)
+	if resumed, ok := h.runNextOutcome().(ResumedOwnWork); !ok || resumed.Row.ID != theirs.ID {
+		t.Fatalf("next = %#v, want %s resumed — the lane is this checkout's now, and so is the ticket in flight in it", resumed, theirs.ID)
 	}
 }
 

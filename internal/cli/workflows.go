@@ -240,10 +240,7 @@ func printSpinePoint(w io.Writer, label string, at []workflows.Definition) error
 // every spine point and the warnings list shares.
 // [LAW:one-source-of-truth]
 func formatDefinitionRef(def workflows.Definition) string {
-	if def.Name != "" {
-		return fmt.Sprintf("%s %q (%s)", def.ID, def.Name, def.Source)
-	}
-	return fmt.Sprintf("%s (%s)", def.ID, def.Source)
+	return fmt.Sprintf("%s %q (%s)", def.ID, def.Description, def.Source)
 }
 
 // printWorkflowWarnings surfaces every load/parse warning — inert files,
@@ -278,7 +275,7 @@ func renderWorkflowDefinition(w io.Writer, set workflows.Set, id string) error {
 	}
 	fields := []struct{ key, value string }{
 		{"id", def.ID},
-		{"name", orDash(def.Name)},
+		{"description", def.Description},
 		{"source", string(def.Source)},
 		{"path", def.Path},
 		{"labels", orDash(strings.Join(def.Labels, ", "))},

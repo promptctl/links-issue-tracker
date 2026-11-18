@@ -24,7 +24,7 @@ func TestRawDefaultReadsGlobalLayer(t *testing.T) {
 	if err := os.MkdirAll(globalWorkflows, 0o755); err != nil {
 		t.Fatalf("MkdirAll(%s) error = %v", globalWorkflows, err)
 	}
-	content := "---\nid: my-global\nevents: [show_ticket]\n---\nglobal body"
+	content := "---\ndescription: fixture\nid: my-global\nevents: [show_ticket]\n---\nglobal body"
 	if err := os.WriteFile(filepath.Join(globalWorkflows, "custom.md"), []byte(content), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}

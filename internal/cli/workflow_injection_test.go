@@ -35,7 +35,7 @@ func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	writeProjectWorkflow(t, ap, "reviews/deep/nested/close.md", "---\nevents: [ticket_closed]\n---\nTicket <id> closed without finishing — check for a duplicate.")
+	writeProjectWorkflow(t, ap, "reviews/deep/nested/close.md", "---\ndescription: fixture\nevents: [ticket_closed]\n---\nTicket <id> closed without finishing — check for a duplicate.")
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: storage.MustParseTitle("Injection test"), Lane: storage.SharedLane, Topic: "workflows", IssueType: "task", Priority: 0,
@@ -62,7 +62,7 @@ func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	writeProjectWorkflow(t, ap, "done.md", "---\nid: done\nevents: [work_finished]\n---\nCUSTOM: <id> wrapped up.")
+	writeProjectWorkflow(t, ap, "done.md", "---\ndescription: fixture\nid: done\nevents: [work_finished]\n---\nCUSTOM: <id> wrapped up.")
 
 	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: storage.MustParseTitle("Override test"), Lane: storage.SharedLane, Topic: "workflows", IssueType: "task", Priority: 0,

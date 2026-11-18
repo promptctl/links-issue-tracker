@@ -80,7 +80,7 @@ func printDryRunMatches(w io.Writer, matched []workflows.Definition, o workflows
 		if _, err := fmt.Fprintf(w, "  %s  [%s]\n", formatDefinitionRef(def), strings.Join(reasons, ", ")); err != nil {
 			return err
 		}
-		body := workflows.Interpolate(def.Body, o.IssueID)
+		body := workflows.Interpolate(def.Body, o)
 		for _, line := range strings.Split(body, "\n") {
 			if _, err := fmt.Fprintf(w, "    %s\n", line); err != nil {
 				return err

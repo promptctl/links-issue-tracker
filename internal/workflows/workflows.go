@@ -57,8 +57,9 @@ type Definition struct {
 	// layer-relative path with the ".md" suffix removed and spaces replaced
 	// by underscores.
 	ID string
-	// Name is an optional pretty name for display surfaces.
-	Name string
+	// Description is one line saying what the guidance is for. Every loaded
+	// definition has one, and `lit workflows` shows it beside the ID.
+	Description string
 
 	Labels []string
 	States []StateActivation

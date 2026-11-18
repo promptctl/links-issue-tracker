@@ -17,24 +17,20 @@ import (
 // the variability in function names, so every new command measured would be
 // new code instead of a new row here. [LAW:one-type-per-behavior]
 
-// probe is one user-facing command to time — the argv it runs against a store,
-// and the exit codes that prove the command actually did its job.
+// probe is one user-facing command to time: the argv it runs against a store.
 //
-// okCodes is the load-bearing field. `lit next` exits 6 with "no ready work" on
-// an empty store: that is the command answering correctly, not failing. But a
-// command that fails returns FAST — a refused invocation lands in ~30ms, which
-// is quicker than any real answer and would therefore win the min this tool
-// reports. So an unchecked exit code turns every breakage into a record-setting
-// measurement: an answer-shaped void, where "0.03s" means "did nothing".
-// Declaring the proving codes is what makes a sample a fact about the command
-// rather than a fact about how fast it can decline. [LAW:no-silent-failure]
+// A probe proves it did its job by exiting 0, and runProbe refuses any other
+// exit. A command that fails returns FAST — a refused invocation lands in
+// ~30ms, which is quicker than any real answer and would therefore win the min
+// this tool reports. So an unchecked exit code turns every breakage into a
+// record-setting measurement: an answer-shaped void, where "0.03s" means "did
+// nothing". [LAW:no-silent-failure]
 type probe struct {
 	// name is how the row prints, and it is written out rather than derived
 	// from argv so a probe can be renamed in the table without changing what
 	// is invoked.
-	name    string
-	argv    argvRule
-	okCodes exitRule
+	name string
+	argv argvRule
 	// mutates marks a probe that writes to the store. It is a field rather
 	// than a separate write-probe list because the ordering it drives — every
 	// read probe measured before anything writes — is then a property of the
@@ -50,7 +46,7 @@ type probe struct {
 // "This store has no legal invocation of this probe" is a case with its own
 // meaning: the empty control has no row for `show` to name, and timing
 // `show <nonexistent-id>` instead would time the refusal path, the
-// answer-shaped void okCodes exists to refuse. A probe with no invocation is
+// answer-shaped void the exit check refuses. A probe with no invocation is
 // simply not measured at that size, and the report prints its cell as absent.
 // It is at most one argv because a sample, a report cell and a breach are each
 // keyed by probe name: a second argv would be a second figure under one name.
@@ -70,44 +66,21 @@ func overFleet(args ...string) argvRule {
 	return func(store generatedStore) ([]string, bool) { return append(slices.Clone(args), store.fleetRoot), true }
 }
 
-// exitRule names the exit codes that prove a probe did its work against a
-// store of a given row count.
-//
-// It is a function of the store's size and not a fixed set because the proving
-// code genuinely moves with the size for one command: on the empty store `lit
-// next` can only answer "no ready work" (6), and on a populated one, where
-// every generated row is open, only a pick (0) proves it ran. A fixed {0, 6}
-// would accept 6 at 590 rows — a routing regression that passes over every row
-// exits in ~30ms and would set that command's fastest time — which is the
-// answer-shaped void okCodes exists to refuse. [LAW:dataflow-not-control-flow]
-// the accepted set is a value derived from the store, not a branch in the
-// runner.
-type exitRule func(rows int) []int
-
-// exits is the rule for every command whose proving codes do not depend on the
-// store's size.
-func exits(codes ...int) exitRule {
-	return func(int) []int { return codes }
-}
-
-// invocation is a probe resolved against one store: the argv it runs there and
-// the exit codes that prove it there.
+// invocation is a probe resolved against one store: the argv it runs there.
 type invocation struct {
-	probe   probe
-	args    []string
-	okCodes []int
+	probe probe
+	args  []string
 }
 
 // invocationsFor resolves probes against store, in the order given, dropping
 // any probe the store admits no invocation of. It is the one place a probe
-// meets a store, so both ways a store shapes a probe, the argv it can name and
-// the codes that prove it at this size, are read here and nowhere else.
-// [LAW:single-enforcer]
+// meets a store, so the argv a store lets a probe name is read here and nowhere
+// else. [LAW:single-enforcer]
 func invocationsFor(ps []probe, store generatedStore) []invocation {
 	var out []invocation
 	for _, p := range ps {
 		if args, ok := p.argv(store); ok {
-			out = append(out, invocation{probe: p, args: args, okCodes: p.okCodes(store.rows())})
+			out = append(out, invocation{probe: p, args: args})
 		}
 	}
 	return out
@@ -122,19 +95,11 @@ func invocationsFor(ps []probe, store generatedStore) []invocation {
 // Without them a whole-table regression (a slower Go runtime, a bigger binary,
 // a loaded machine) reads identically to a store regression.
 var probes = []probe{
-	{name: "version", argv: fixed("version"), okCodes: exits(0)},
-	{name: "quickstart", argv: fixed("quickstart"), okCodes: exits(0)},
-	{name: "ls", argv: fixed("ls"), okCodes: exits(0)},
-	{name: "backlog", argv: fixed("backlog"), okCodes: exits(0)},
-	// 6 is "no ready work" — the honest answer on the empty store, and the
-	// only size at which it can occur, since every generated row is open. The
-	// one branch here is the store's own discriminator, empty or populated.
-	{name: "next", argv: fixed("next"), okCodes: func(rows int) []int {
-		if rows == 0 {
-			return []int{6}
-		}
-		return []int{0}
-	}},
+	{name: "version", argv: fixed("version")},
+	{name: "quickstart", argv: fixed("quickstart")},
+	{name: "ls", argv: fixed("ls")},
+	{name: "backlog", argv: fixed("backlog")},
+	{name: "next", argv: fixed("next")},
 	// The first imported row, which is always an epic. Its children make
 	// `show` print the plan of a real epic, the relations work an agent's
 	// `lit show` pays.
@@ -143,14 +108,14 @@ var probes = []probe{
 			return nil, false
 		}
 		return []string{"show", store.ids[0]}, true
-	}, okCodes: exits(0)},
+	}},
 	// The two commands whose input is a set of stores, discovery alone and
 	// discovery plus a read of each, over the scale point's fleet root.
-	{name: "stores", argv: overFleet("stores"), okCodes: exits(0)},
-	{name: "stores --counts", argv: overFleet("stores", "--counts"), okCodes: exits(0)},
-	{name: "doctor", argv: fixed("doctor"), okCodes: exits(0)},
-	{name: "workspace", argv: fixed("workspace"), okCodes: exits(0)},
-	{name: "new (write)", argv: fixed(benchWrite("perfbench write probe")...), okCodes: exits(0), mutates: true},
+	{name: "stores", argv: overFleet("stores")},
+	{name: "stores --counts", argv: overFleet("stores", "--counts")},
+	{name: "doctor", argv: fixed("doctor")},
+	{name: "workspace", argv: fixed("workspace")},
+	{name: "new (write)", argv: fixed(benchWrite("perfbench write probe")...), mutates: true},
 	// A phase runs round-robin and records no round 0, so a write repeated alone
 	// is not the write: `dep add` finds its edge and exits 6 before the cycle
 	// check, `start` and `rank --bottom` are no-ops, and `rank set` moves its
@@ -160,17 +125,17 @@ var probes = []probe{
 	// from the bottom of the top level to its top.
 	{name: "dep add", argv: inMidStore(func(m midStore) []string {
 		return []string{"dep", "add", m.dependent, "--blocked-by", m.blocker}
-	}), okCodes: exits(0), mutates: true},
+	}), mutates: true},
 	{name: "dep rm", argv: inMidStore(func(m midStore) []string {
 		return []string{"dep", "rm", m.dependent, "--blocked-by", m.blocker}
-	}), okCodes: exits(0), mutates: true},
-	{name: "start", argv: inMidStore(func(m midStore) []string { return []string{"start", m.ticket} }), okCodes: exits(0), mutates: true},
-	{name: "done", argv: inMidStore(func(m midStore) []string { return []string{"done", m.ticket} }), okCodes: exits(0), mutates: true},
+	}), mutates: true},
+	{name: "start", argv: inMidStore(func(m midStore) []string { return []string{"start", m.ticket} }), mutates: true},
+	{name: "done", argv: inMidStore(func(m midStore) []string { return []string{"done", m.ticket} }), mutates: true},
 	{name: "rank set", argv: inMidStore(func(m midStore) []string {
 		return []string{"rank", "set", m.epic, m.earlierEpic}
-	}), okCodes: exits(0), mutates: true},
-	{name: "rank --bottom", argv: inMidStore(func(m midStore) []string { return []string{"rank", m.epic, "--bottom"} }), okCodes: exits(0), mutates: true},
-	{name: "rank --bottom again", argv: inMidStore(func(m midStore) []string { return []string{"rank", m.earlierEpic, "--bottom"} }), okCodes: exits(0), mutates: true},
+	}), mutates: true},
+	{name: "rank --bottom", argv: inMidStore(func(m midStore) []string { return []string{"rank", m.epic, "--bottom"} }), mutates: true},
+	{name: "rank --bottom again", argv: inMidStore(func(m midStore) []string { return []string{"rank", m.earlierEpic, "--bottom"} }), mutates: true},
 }
 
 // midStore is what the write probes act on, a third of the way into a store's

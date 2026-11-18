@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 	"regexp"
 	"slices"
@@ -11,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -405,7 +403,7 @@ func TestFocusedBacklogSaysWhichEmptinessThisIs(t *testing.T) {
 // `lit next` must not quietly hand back an off-path ticket when the focus path
 // has nothing startable. Serving one would be the silent substitution of a
 // similar-looking query for the one asked — and the agent would never learn its
-// focused goal was stuck.
+// focused goal was stuck. The outcome records the row the focus withheld.
 func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -433,29 +431,12 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	h.setLabels(gate.ID, NeedsDesignLabel)
 	h.setLabels(goal.ID, FocusLabel)
 
-	err := h.runNextErr()
-	if err == nil {
-		t.Fatal("next served a row, want the focus-path diagnostic")
+	outcome, ok := h.runNextOutcome().(NoWork)
+	if !ok || !slices.Contains(outcome.OffPath, off.ID) {
+		t.Fatalf("routeNext = %#v, want NoWork recording %s as withheld by the focus", outcome, off.ID)
 	}
-	var outcome NoWork
-	if !errors.As(err, &outcome) {
-		t.Fatalf("next error = %#v (%T), want NoWork", err, err)
-	}
-	got := outcome.Error()
-	if want := "no ready work on the focus path"; !strings.HasPrefix(got, want) {
-		t.Fatalf("NoWork.Error() = %q, want prefix %q", got, want)
-	}
-	if want := "`lit next --all`"; !strings.Contains(got, want) {
-		t.Fatalf("NoWork.Error() = %q, must name the escape %q", got, want)
-	}
-	if !strings.Contains(got, off.ID.Raw()) {
-		t.Fatalf("NoWork.Error() = %q, must name the withheld row %s", got, off.ID)
-	}
-
-	// The exit code is the one `next` already uses for "ran correctly, nothing
-	// to hand back". A focused dead end is that answer, not a new one.
-	if code := ExitCode(err); code != ExitNoWork {
-		t.Fatalf("exit code = %d, want ExitNoWork (%d)", code, ExitNoWork)
+	if text := h.runNextText(); !strings.HasSuffix(text, noTicket+"\n") {
+		t.Fatalf("focused `lit next` = %q, want it to say no ticket and not hand back %s", text, off.ID)
 	}
 
 	// And --all reaches the work the scope withheld.
@@ -464,16 +445,15 @@ func TestNextRefusesToSubstituteOffPathWorkForAStuckFocusPath(t *testing.T) {
 	}
 }
 
-// The focus-scoped lead may say rows sit off the path. It may not say they are
-// startable: withheldByScope names every excluded row
-// without consulting capacityFor, because the kind records which question the
-// run asked rather than a verdict about the row. A lead promising startable
-// work off the path is therefore an assertion nothing checked.
+// A focus-path dead end records two populations apart: the path rows the walk
+// read and went past, each with what this checkout may do about it, and the
+// rows off the path, which it never read and so records by id alone — no
+// verdict on whether they are startable.
 //
-// The fixture makes that claim false and not merely unverified: every off-path
+// The fixture makes "startable" false and not merely unread: every off-path
 // row is itself blocked, so an agent sent to `lit next --all` finds nothing.
 // The sibling test above covers the case where the withheld row IS ready.
-func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
+func TestFocusPathDeadEndRecordsPathRowsApartFromWithheldOnes(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
@@ -504,50 +484,21 @@ func TestFocusPathDeadEndDoesNotClaimOffPathWorkIsStartable(t *testing.T) {
 	h.addDependencyWithinEpic(off.ID, offGate.ID)
 	h.setLabels(offGate.ID, NeedsDesignLabel)
 
-	err := h.runNextErr()
-	if err == nil {
-		t.Fatal("next served a row, want the focus-path diagnostic")
+	outcome, ok := h.runNextOutcome().(NoWork)
+	if !ok {
+		t.Fatalf("routeNext = %#v, want NoWork", outcome)
 	}
-	var outcome NoWork
-	if !errors.As(err, &outcome) {
-		t.Fatalf("next error = %#v (%T), want NoWork", err, err)
+	var walked []model.ID
+	for _, row := range outcome.Unreachable {
+		walked = append(walked, row.ID)
 	}
-	got := outcome.Error()
-
-	// Only the lead is under test. The per-row clauses legitimately say "not
-	// startable" about rows whose capacity the walk DID read, and matching the
-	// whole message would pass on that.
-	lead, _, found := strings.Cut(got, ": ")
-	if !found {
-		t.Fatalf("NoWork.Error() = %q, want a lead ending in %q before the row clauses", got, ": ")
+	// goal and gate are ON the path and were walked and went past; the gate is
+	// the row the agent has to act on.
+	if !slices.Contains(walked, gate.ID) || slices.Contains(walked, off.ID) || slices.Contains(walked, offGate.ID) {
+		t.Fatalf("NoWork.Unreachable = %v, want the on-path gate %s and neither off-path row", walked, gate.ID)
 	}
-	if strings.Contains(lead, "startable") {
-		t.Fatalf("NoWork.Error() lead = %q — nothing off the focus path is startable in this fixture, and the walk never read those rows' capacity, so the lead may not claim it", lead)
-	}
-
-	// The same lead introduces two populations: goal and gate are ON the path and
-	// were walked and rejected by step 4, while off and offGate were never
-	// examined. A header claiming location for the whole list is false for one
-	// half of it, and the on-path half is the news the agent has to act on.
-	if strings.Contains(lead, "off that path") || strings.Contains(lead, "off the focus path") {
-		t.Fatalf("NoWork.Error() lead = %q describes every row it introduces as off the focus path, but %s and %s are on it", lead, goal.ID, gate.ID)
-	}
-	for _, note := range []string{poolNotes[reachNotReady], offFocusPathNote} {
-		if !strings.Contains(got, note) {
-			t.Fatalf("NoWork.Error() = %q lists two populations but is missing the words one of them owns: %q", got, note)
-		}
-	}
-	if !strings.Contains(got, gate.ID.Raw()) {
-		t.Fatalf("NoWork.Error() = %q must name the on-path gate %s — that is the row the agent has to act on", got, gate.ID)
-	}
-
-	// It still has to say the rows are there and how to reach them; refusing the
-	// unchecked claim must not cost the reader the honest half of the answer.
-	if !strings.Contains(got, off.ID.Raw()) {
-		t.Fatalf("NoWork.Error() = %q, must name the withheld row %s", got, off.ID)
-	}
-	if want := "`lit next --all`"; !strings.Contains(got, want) {
-		t.Fatalf("NoWork.Error() = %q, must name the escape %q", got, want)
+	if !slices.Contains(outcome.OffPath, off.ID) || !slices.Contains(outcome.OffPath, offGate.ID) || slices.Contains(outcome.OffPath, gate.ID) {
+		t.Fatalf("NoWork.OffPath = %v, want the withheld rows %s and %s and not the on-path gate", outcome.OffPath, off.ID, offGate.ID)
 	}
 }
 
@@ -681,11 +632,10 @@ func sameIDs(fact any, want ...string) bool {
 
 // A focus label narrows the pool `lit next` picks from, so a ticket ranked
 // above the pick but off the path is passed over without being asked about. The
-// pick says which question produced it — the goal and the way out — or an agent
-// checking it against `lit backlog --all` reads a lower-ranked ticket served
-// first as a ranking bug. A run over the whole queue serves the higher-ranked
-// ticket and claims no scope it did not apply.
-func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
+// pick records which question produced it — the goal the pool was narrowed to —
+// so a lower-ranked ticket served first can be told from a ranking bug. A run
+// over the whole queue serves the higher-ranked ticket.
+func TestFocusedPickRecordsWhichQuestionProducedIt(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 
@@ -712,77 +662,20 @@ func TestFocusedPickSaysWhichQuestionProducedIt(t *testing.T) {
 		t.Fatalf("RankToTop: %v", err)
 	}
 
-	focused := h.runNextText()
-	if want := "run `lit start " + prereq.ID.Raw() + "` to claim lane prereq of epic " + goalEpic.ID.Raw() + " (focused on " + goal.ID.Raw() + ": picked from the focus path alone — `lit next --all` to route over the whole queue)\n"; !strings.Contains(focused, want) {
-		t.Fatalf("focused `lit next` printed:\n%s\nwant the pick line %q", focused, want)
+	focused, ok := h.runNextOutcome().(ServedFromNewLane)
+	if !ok || focused.Row.ID != prereq.ID || !slices.Equal(focused.Scope.goals, []model.ID{goal.ID}) {
+		t.Fatalf("focused routeNext = %#v, want %s served from the pool narrowed to %s", focused, prereq.ID, goal.ID)
 	}
-
-	whole := h.runNextText("--all")
-	if want := "run `lit start " + off.ID.Raw() + "` to claim lane off of epic " + noise.ID.Raw() + "\n"; !strings.Contains(whole, want) {
-		t.Fatalf("`lit next --all` printed:\n%s\nwant the pick line %q", whole, want)
+	if row := h.runNextRowArgs("--all"); row.ID != off.ID {
+		t.Fatalf("`lit next --all` = %q, want the higher-ranked off-path ticket %q", row.ID, off.ID)
 	}
 }
 
-// The focus clause belongs to the pool's row, so on the two outcomes that print
-// the pool's pick as one route among others it lands on that route's line: not
-// on the stopped scope's reason, and not on the ticket the filter hid, which
-// were not drawn from the pool's scope.
-func TestFocusClauseLandsOnThePoolsRoute(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic"})
-	ticket := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Pool pick"), Topic: "next", IssueType: "task", ParentID: epic.ID, Lane: storage.MustParseLane("pick")})
-	rows, details, _ := h.gather()
-	row := rowByID(t, rows, ticket.ID)
-	pick := poolPick{Row: row, Lane: laneOf(t, details, row), Scope: focusScope{goals: []model.ID{"test-goal"}}}
-	const clause = " (focused on test-goal: picked from the focus path alone — `lit next --all` to route over the whole queue)"
-
-	for _, tc := range []struct {
-		name    string
-		outcome NextOutcome
-		route   string
-	}{
-		{
-			// A clearable blocker puts the stay route first, so the pool's route is
-			// the second of two joined on one block and not the only line.
-			name: "past an exhausted scope",
-			outcome: ServedPastExhaustion{poolPick: pick, Exhaustion: Exhausted{
-				Epics:       []model.ID{"test-held"},
-				Progress:    claims.Progress{Done: 0, Total: 1},
-				OwnProgress: claims.Progress{Done: 0, Total: 1},
-				Blocked:     []blockerReach{{depReach: depReach{ID: "test-dep"}, Clearable: true}},
-			}},
-			route: "or move on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID.Raw() + "` to claim lane pick of epic " + epic.ID.Raw() + clause,
-		},
-		{
-			name:    "past a scope the filter narrowed",
-			outcome: ServedPastNarrowing{poolPick: pick, Narrowing: Narrowed{Hidden: rowFor("test-hidden")}},
-			route:   "or take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + ticket.ID.Raw() + "` to claim lane pick of epic " + epic.ID.Raw() + clause,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, claimContext{self: selfAttribution}, false); err != nil {
-				t.Fatalf("renderNextOutcome error = %v", err)
-			}
-			var carrying []string
-			for _, line := range strings.Split(buf.String(), "\n") {
-				if strings.Contains(line, "focused on") {
-					carrying = append(carrying, line)
-				}
-			}
-			if len(carrying) != 1 || carrying[0] != tc.route {
-				t.Fatalf("lines naming the focus = %q, want exactly the pool's route %q in:\n%s", carrying, tc.route, buf.String())
-			}
-		})
-	}
-}
-
-// A focus that kept every row the filter selects out of the pool is said beside
-// the ticket the filter hid, as it is on a pool pick: "drop the filter" alone
-// would hand over the path ticket and never the bug the run asked for, which
-// sits off the path.
-func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
+// A focus that kept every row the filter selects out of the pool is recorded
+// beside the ticket the filter hid, as it is on a pool pick: dropping the
+// filter alone would hand over the path ticket and never the bug the run asked
+// for, which sits off the path.
+func TestFilterHidingAFocusedPoolTicketRecordsTheFocus(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 	goalEpic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
@@ -803,10 +696,12 @@ func TestFilterHidingAFocusedPoolTicketNamesTheFocus(t *testing.T) {
 		Title: storage.MustParseTitle("Ready bug, off the focus path"), Topic: "noise", IssueType: "bug", ParentID: noise.ID, Lane: storage.MustParseLane("off"),
 	})
 
-	err := h.runNextErr("--type", "bug")
-	want := "`lit next` without --type, --status, --labels or --assignee hands you " + prereq.ID.Raw() + " (focused on " + goal.ID.Raw() + ": picked from the focus path alone — `lit next --all` to route over the whole queue), which this run's filter leaves out"
-	if err == nil || err.Error() != want {
-		t.Fatalf("focused `lit next --type bug` = %v, want %q", err, want)
+	narrowed, ok := h.runNextOutcomeAsked(workableFilter{IssueTypes: []model.IssueType{"bug"}}).(Narrowed)
+	if !ok || narrowed.Hidden.ID != prereq.ID || !slices.Equal(narrowed.Scope.goals, []model.ID{goal.ID}) {
+		t.Fatalf("focused routeNext under --type bug = %#v, want Narrowed hiding %s under the focus on %s", narrowed, prereq.ID, goal.ID)
+	}
+	if text := h.runNextText("--type", "bug"); !strings.HasSuffix(text, noTicket+"\n") {
+		t.Fatalf("focused `lit next --type bug` = %q, want it to say no ticket", text)
 	}
 	if row := h.runNextRowArgs("--all", "--type", "bug"); row.ID != bug.ID {
 		t.Fatalf("`lit next --all --type bug` = %q, want the off-path bug %q the focus withheld", row.ID, bug.ID)

@@ -65,8 +65,8 @@ func ScaffoldFresh(dimension string, liveLine string) []byte {
 	}
 	b.WriteString(liveLine)
 	b.WriteString("\n")
+	b.WriteString("description: One line saying what this guidance is for\n")
 	b.WriteString("# id: my-custom-id     # optional; defaults to this file's relative path under .lit/workflows/\n")
-	b.WriteString("# name: My Guidance    # optional pretty name shown by `lit workflows`\n")
 	b.WriteString("---\n")
 	b.WriteString("Write the guidance to inject here. `<id>` is replaced with the acted-on ticket's id when there is one.\n")
 	return []byte(b.String())

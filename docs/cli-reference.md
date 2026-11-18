@@ -37,7 +37,7 @@ Exit codes are a contract, not just 0/1:
 | 3 | Validation error (missing required value, unsupported value, an upgrade or downgrade target on the wrong side of the workspace's schema), or the environment is not ready for lit (outside a git repository/worktree, inside one where `lit init` has never run, a workspace whose schema is newer than this `lit` supports, or a workspace whose pending migration is quarantined after a failed attempt) |
 | 4 | Issue or resource not found |
 | 5 | Conflict (e.g. sync merge conflict) |
-| 6 | Nothing to hand back (`lit next` had no ticket for you), or nothing to do (the state the command asked for already holds) |
+| 6 | Nothing to do (the state the command asked for already holds) |
 | 7 | Data corruption detected |
 
 Code 3 means the command as issued, or the place it was issued, cannot succeed
@@ -87,18 +87,15 @@ the code it arrives on:
 | `restore_would_overwrite` | 5 | `lit backup restore` would overwrite changes made since the last restore; `--force` restores anyway, after the backup it always takes |
 | `write_conflict` | 5 | A change would erase a later write: `lit undo revert` would put back something a later write moved again, or `lit import` of a `lit ls --format yaml` file edits a value another writer changed since the read. The message names each value and the way on |
 | `owner_approval_required` | 5 | `lit sync reconcile take` would discard one side's issues and needs the owner's approval |
-| `no_ready_work` | 6 | `lit next` had no ticket for you |
-| `scope_exhausted` | 6 | `lit next` found open work in your claimed epic but none you can reach; the message names what stops it |
-| `scope_narrowed` | 6 | `lit next`'s filter left out the ticket it would otherwise hand you, and nothing it selects is ready; the message names the ticket |
 | `state_already_holds` | 6 | The state the command asked for already holds |
 | `corruption_detected` | 7 | The store failed an integrity check |
 | `parent_cycle` | 7 | The store's hierarchy holds a loop, so no epic in it has a state to read; the message names the loop and the `lit parent set` that breaks it |
 
 Code 6 is not a failure: the command ran correctly and changed nothing. It exists so a
-caller looping `lit next` can tell "stop, there is nothing for you" from "lit is broken"
-without reading the message, and it carries the same answer for a mutation that was
-already satisfied — `lit done` on an epic whose children are all closed, where the epic
-closed itself when its last child did and there is no transition left to make.
+caller can tell "nothing to do" from "lit is broken" without reading the message, and
+it is the answer for a mutation that was already satisfied — `lit done` on an epic
+whose children are all closed, where the epic closed itself when its last child did
+and there is no transition left to make.
 
 ### Identity
 
@@ -240,7 +237,7 @@ evaluates four of the five reasons (see `lit ls` below); what stays particular t
 lit next [--type <csv>]... [--status open|in_progress] [--labels <csv>]... [--assignee <csv>]... [--all]
 ```
 
-Prints the single next workable leaf to `lit start`, narrowed by the same filters as
+Hands back the single next workable leaf to `lit start`, narrowed by the same filters as
 `backlog` — so "the next workable bug" is `lit next --type bug`. `--limit` and
 `--columns` do not apply to a single-row summary and are not accepted. `--continue`
 is retired — claim routing already serves a checkout's lanes first,
@@ -258,74 +255,36 @@ is passed over, and reaching one takes a deliberate `lit start` on it, which ask
 to confirm the takeover or requires `--take` when there is no terminal to ask. A
 checkout whose epic has open work it cannot reach is offered first a ready
 dependency outside the epic that gates it. Failing that, it is served the top
-ready ticket from the global pool, printed beneath a line naming what blocks the
-epic and the ways on: when something blocks it, file the ticket that clears a
-blocker under the epic (`lit new --parent <epic> --top`, printed with the
-epic's id) and make the blocker blocked by it with
-`lit dep add <blocker> --blocked-by <new>`; or start the ticket served. Only
-when nothing outside the epic is ready either does `next` exit with that
-diagnostic alone, and under a focus label it then names the rows outside the
-epic that the focus withheld. A
+ready ticket from the global pool. Only when nothing outside the epic is ready
+either does `next` hand back no ticket. A
 checkout holding no claims of its own starts straight at the global pool.
 
 A filter narrows which ticket `next` hands you, never what it reads to decide.
 A dependency is still found through a ticket the filter leaves out, and an epic
 is called out of work, or the backlog empty of ready work, only when it is.
 When the epic's next ticket is one the filter leaves out — a task, under
-`--type bug` — `next` names that ticket and says that running it without the
-filter hands it over, then serves the top ready ticket the filter selects
-outside the epic. When nothing the filter selects is ready, it exits with that
-line alone (reason `scope_narrowed`), as a checkout holding no lane does when
-the filter hid every ready ticket. An epic that is out of work, under a filter
-that hid every ready ticket outside it, names the one `next` would serve in
-place of saying nothing outside it is ready.
+`--type bug` — `next` serves the top ready ticket the filter selects outside
+the epic. When nothing the filter selects is ready, it hands back no ticket, as
+a checkout holding no lane does when the filter hid every ready ticket.
 See design-docs/work-claims.md for the full precedence.
 
-`next` is read-only. It claims nothing and starts nothing — `lit start` does both
-— so where a pick's start would establish a claim, the line above the row says so
-in the conditional and names that command: "run `lit start <id>` to claim lane
-one of epic E". A pick that continues an epic you already hold a lane in closes on a
-qualifier saying so, and a pick that gates one of your blocked tickets closes
-on a qualifier naming the ticket it unblocks. The same line from the global
-pool carries neither, unless the pool was reached past an exhausted epic or past
-the ticket a filter hid, when the lines above it say so. Under a `focus` label, a
-pick from the global pool closes on a qualifier naming the focus goals and
-`lit next --all`, because the label narrowed the pool it was picked from; picks
-from your own lanes and epic never carry it. The same qualifier follows the
-pool's ticket a filter hid: the filter emptied a pool the label had already
-narrowed.
+`next` is read-only. It claims nothing and starts nothing — `lit start` does both.
 
-The same line says which checkout the start runs in. For new work served in
-the primary clone, where every session starts, and for a pick from outside
-unfinished work this checkout holds — past an epic with work left in its lanes
-or past the ticket a filter hid — whose own work stays here, it opens "from a
-worktree of its own off the trunk (not …)", naming the checkout to leave,
-because the claim lands on the checkout `lit start` runs in. A pick past an
-epic once every ticket in this checkout's lanes is done is new work, even with
-the epic open in lanes other checkouts hold. The checkout's own work, and new work served in a
-linked worktree that holds nothing, are started where `next` ran.
+What `next` prints is the text bound to the `next` workflow event, on every run
+(see [`lit workflows`](#lit-workflows)). The text lit ships shows the ticket handed
+back as `lit backlog` shows a row — its columns, then its epic, what blocks it,
+and who holds its lane — followed by the steps to start it, including which
+checkout to work it in. On a run that hands back no ticket, the line
+`No ticket: nothing this run asked about is ready to start from this checkout.`
+stands in the ticket's place. `lit workflows edit next` copies that text into the
+project to change it.
 
-Work already in flight in one of your own lanes reports the state it is in rather
-than a command to run: continue where you left off. A lane is held by the
-checkout, so every session running in one checkout shares its lanes and is handed
-their work in flight. When another checkout started the ticket — the lane came to
-this one through `lit start --take` on a sibling — the line names that checkout
-instead and says to read the ticket's history before continuing it.
-
-The endings that hand back no ticket — the exhaustion diagnostic, the line
-naming the ticket a filter hid, and an empty result — exit 6 rather than 1, and
-their remediation names the deliberate act each calls for. None tells you to
-retry: each answer is deterministic and repeats unchanged until the work or the
-question does.
-
-An empty result says which emptiness it is. A backlog with nothing in it answers
-`no ready work`; one whose every row was passed over names those rows and why each
-is not yours to start — held by another checkout, or gated by something unfinished;
-and one whose focus path is stuck says that instead, naming what gates the path
-itself alongside the rows the scope withheld off it, and pointing at
-`lit next --all`, rather than quietly serving one of them as if it were next. So `lit next --status in_progress` can tell "you hold nothing"
-from "your work is in another checkout's hands" instead of answering both the same
-way.
+Every run exits 0, whether or not it hands back a ticket: a run that hands none
+back is an answer, not a failure. Each answer is deterministic and repeats
+unchanged until the work or the question does. Why a run answered as it did —
+the outcome, what blocks an exhausted epic, the ticket a filter hid, the rows
+passed over and the rows a focus label withheld — is recorded on the run's event
+(see [Events](events.md)).
 
 ### `lit orphaned`
 

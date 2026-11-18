@@ -183,29 +183,6 @@ func TestFillerIsDeterministicAndVariesByRow(t *testing.T) {
 	}
 }
 
-// Tolerance for a nonzero exit is confined to the one command that has a
-// documented legitimate one, and to the one store size it is legitimate at.
-// Widening any other probe's set — or accepting 6 from `next` on a populated
-// store, where every generated row is open — would not fail a run or look wrong
-// in the table; it would quietly let that command's failures set its fastest
-// time, which is the exact defect okCodes exists to prevent, so the confinement
-// is pinned rather than left to review. The expected sets are written out, not
-// read from the rule under test.
-func TestOnlyNextToleratesANonZeroExitAndOnlyOnTheEmptyStore(t *testing.T) {
-	for _, p := range probes {
-		for _, rows := range []int{0, 1, 118, 590} {
-			got := fmt.Sprint(p.okCodes(rows))
-			want := "[0]"
-			if p.name == "next" && rows == 0 {
-				want = "[6]"
-			}
-			if got != want {
-				t.Errorf("probe %q at %d rows accepts %s, want %s", p.name, rows, got, want)
-			}
-		}
-	}
-}
-
 // The import budget is a hang detector for a job whose length grows with the
 // row count: 590 rows imported in 22s on 2026-09-27, so a fixed two minutes
 // would report a few thousand rows — the natural probe past the ~1,200-row
@@ -373,7 +350,7 @@ func TestShowIsInvokedOnlyAgainstAStoreWithARow(t *testing.T) {
 var writesThatNameARow = []string{"dep add", "dep rm", "start", "done", "rank set", "rank --bottom", "rank --bottom again"}
 
 // Alone, each of these repeats as a refusal or a no-op, the answer-shaped void
-// okCodes exists to refuse in another form, and nothing would say so. Asserted
+// the exit check refuses in another form, and nothing would say so. Asserted
 // against the rules themselves, so a reordered table fails here.
 func TestEachWriteProbeUndoesTheOneBefore(t *testing.T) {
 	ids := make([]string, 118)
@@ -402,17 +379,6 @@ func TestEachWriteProbeUndoesTheOneBefore(t *testing.T) {
 	moved := args["rank set"][2:]
 	if got := []string{args["rank --bottom"][1], args["rank --bottom again"][1]}; !slices.Equal(got, moved) {
 		t.Errorf("rank --bottom sends %v back, want the %v rank set moved", got, moved)
-	}
-}
-
-func TestEveryProbeDeclaresItsProvingExitCodes(t *testing.T) {
-	for _, p := range probes {
-		for _, rows := range []int{0, 590} {
-			if p.okCodes == nil || len(p.okCodes(rows)) == 0 {
-				t.Errorf("probe %q declares no expected exit codes at %d rows, so any failure would be "+
-					"recorded as its fastest run", p.name, rows)
-			}
-		}
 	}
 }
 

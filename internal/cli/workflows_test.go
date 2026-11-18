@@ -55,7 +55,7 @@ func TestWorkflowsOverviewPlacesProjectDefinitionAtEveryBoundDimension(t *testin
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design/reminder.md",
-		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
+		"---\nid: need-design-note\ndescription: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
 
 	output, err := runLit(t, root, "workflows")
 	if err != nil {
@@ -78,13 +78,13 @@ func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "verify.md",
-		"---\nid: verify-reminder\nstates: [{name: verify, when: enter}]\n---\nVerify before accepting.")
+		"---\ndescription: fixture\nid: verify-reminder\nstates: [{name: verify, when: enter}]\n---\nVerify before accepting.")
 
 	output, err := runLit(t, root, "workflows")
 	if err != nil {
 		t.Fatalf("Run(workflows) error = %v", err)
 	}
-	if !strings.Contains(output, "  verify\n    enter  [verify-reminder (project)]\n    exit\n") {
+	if !strings.Contains(output, "  verify\n    enter  [verify-reminder \"fixture\" (project)]\n    exit\n") {
 		t.Fatalf("workflows output = %q, want the custom \"verify\" state on the spine with enter bound", output)
 	}
 }
@@ -96,7 +96,7 @@ func TestWorkflowsOverviewSurfacesCustomStateOnTheSpine(t *testing.T) {
 func TestWorkflowsOverviewFlagsMalformedFileAsAWarning(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "broken.md", "---\nlabels: 17\n---\nbad")
+	writeCLIWorkflow(t, root, "broken.md", "---\ndescription: fixture\nlabels: 17\n---\nbad")
 
 	output, err := runLit(t, root, "workflows")
 	if err != nil {
@@ -119,7 +119,7 @@ func TestWorkflowsShowResolvesOneDefinition(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
 	writeCLIWorkflow(t, root, "design/reminder.md",
-		"---\nid: need-design-note\nname: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
+		"---\nid: need-design-note\ndescription: Need Design Reminder\nlabels: [need-design]\nevents: [show_ticket]\n---\nNeeds a design pass.")
 
 	output, err := runLit(t, root, "workflows", "show", "need-design-note")
 	if err != nil {
@@ -127,7 +127,7 @@ func TestWorkflowsShowResolvesOneDefinition(t *testing.T) {
 	}
 	for _, want := range []string{
 		"id: need-design-note",
-		"name: Need Design Reminder",
+		"description: Need Design Reminder",
 		"source: project",
 		"path: design/reminder.md",
 		"labels: need-design",
@@ -176,7 +176,7 @@ func TestWorkflowsShowMissingIDIsUsageError(t *testing.T) {
 func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "reminder.md", "---\nid: my-id\nevents: [show_ticket]\n---\nbody")
+	writeCLIWorkflow(t, root, "reminder.md", "---\ndescription: fixture\nid: my-id\nevents: [show_ticket]\n---\nbody")
 
 	_, err := runLit(t, root, "workflows", "show", "my-id", "extra", "junk")
 	if _, ok := err.(UsageError); !ok {
@@ -365,7 +365,7 @@ func TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck(t *testi
 func TestWorkflowsEditRefusesToClobberAnExistingFile(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "blocked.md", "---\nid: something-else\nlabels: [other]\n---\nunrelated body")
+	writeCLIWorkflow(t, root, "blocked.md", "---\ndescription: fixture\nid: something-else\nlabels: [other]\n---\nunrelated body")
 
 	_, err := runLit(t, root, "workflows", "edit", "blocked")
 	var conflict MergeConflictError
@@ -387,7 +387,7 @@ func TestWorkflowsEditRefusesToClobberAnExistingFile(t *testing.T) {
 func TestWorkflowsEditReopensAnExistingProjectOverrideWithoutRescaffolding(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "custom.md", "---\nid: my-custom\nevents: [show_ticket]\n---\nalready mine")
+	writeCLIWorkflow(t, root, "custom.md", "---\ndescription: fixture\nid: my-custom\nevents: [show_ticket]\n---\nalready mine")
 
 	output, err := runLit(t, root, "workflows", "edit", "my-custom")
 	if err != nil {
@@ -412,7 +412,7 @@ func TestWorkflowsEditReopensAnExistingProjectOverrideWithoutRescaffolding(t *te
 func TestWorkflowsDryRunExplainsAHypotheticalMatch(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nlabels: [needs-design]\nevents: [work_finished]\n---\nTicket <id>: needs a design pass.")
+	writeCLIWorkflow(t, root, "design.md", "---\ndescription: fixture\nid: design-note\nlabels: [needs-design]\nevents: [work_finished]\n---\nTicket <id>: needs a design pass.")
 
 	output, err := runLit(t, root, "workflows", "dry-run", "--event", "work_finished", "--label", "needs-design", "--issue", "lit-7")
 	if err != nil {
@@ -421,7 +421,7 @@ func TestWorkflowsDryRunExplainsAHypotheticalMatch(t *testing.T) {
 	if !strings.Contains(output, "Fired (2)") {
 		t.Fatalf("dry-run output = %q, want 2 fired (design-note plus the embedded done default)", output)
 	}
-	if !strings.Contains(output, "design-note (project)  [event:work_finished, label:needs-design]") {
+	if !strings.Contains(output, `design-note "fixture" (project)  [event:work_finished, label:needs-design]`) {
 		t.Fatalf("dry-run output = %q, want design-note listed with both matched reasons", output)
 	}
 	if !strings.Contains(output, "Ticket lit-7: needs a design pass.") {
@@ -495,7 +495,7 @@ func TestWorkflowsDryRunRejectsUnknownFlags(t *testing.T) {
 func TestWorkflowsDryRunNeverRecordsAFiringTrace(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "design.md", "---\nid: design-note\nevents: [work_finished]\n---\nbody")
+	writeCLIWorkflow(t, root, "design.md", "---\ndescription: fixture\nid: design-note\nevents: [work_finished]\n---\nbody")
 
 	if _, err := runLit(t, root, "workflows", "dry-run", "--event", "work_finished"); err != nil {
 		t.Fatalf("Run(workflows dry-run) error = %v", err)
@@ -512,8 +512,8 @@ func TestWorkflowsDryRunNeverRecordsAFiringTrace(t *testing.T) {
 func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
 	t.Parallel()
 	root := tempRepo(t)
-	writeCLIWorkflow(t, root, "plan.md", "---\nid: plan-note\nstates: [plan]\n---\nPlan <id> first.")
-	writeCLIWorkflow(t, root, "working.md", "---\nid: working-note\nstates: [in_progress]\n---\nWorking on <id>.")
+	writeCLIWorkflow(t, root, "plan.md", "---\ndescription: fixture\nid: plan-note\nstates: [plan]\n---\nPlan <id> first.")
+	writeCLIWorkflow(t, root, "working.md", "---\ndescription: fixture\nid: working-note\nstates: [in_progress]\n---\nWorking on <id>.")
 
 	output, err := runLit(t, root, "workflows", "dry-run", "--event", "work_started", "--exit", "open", "--enter", "in_progress", "--enter", "plan", "--issue", "lit-7")
 	if err != nil {
@@ -523,8 +523,8 @@ func TestWorkflowsDryRunEntersEveryRepeatedState(t *testing.T) {
 		`occasion: event=work_started labels=- entered=["in_progress","plan"] exited=["open"] issue=lit-7` + "\n",
 		"Fired (3)\n",
 		`phase-plan "Plan the ticket, then record when the code starts" (embedded)  [state:plan(enter)]` + "\n",
-		"plan-note (project)  [state:plan(enter)]\n",
-		"working-note (project)  [state:in_progress(enter)]\n",
+		`plan-note "fixture" (project)  [state:plan(enter)]` + "\n",
+		`working-note "fixture" (project)  [state:in_progress(enter)]` + "\n",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("dry-run output = %q, want it to contain %q", output, want)

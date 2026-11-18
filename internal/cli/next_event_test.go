@@ -76,10 +76,9 @@ func readThrough(id, ticket model.ID, kind reachKind) depReach {
 }
 
 // An exhausted scope's event says how far the scope had come, names every
-// blocker and held row with what this checkout may do about each, whether a
-// ticket filed here could free each blocker, and whether the route that stays
-// in the scope was offered — it is, exactly when one could. A pick served past
-// the scope records the same, since it prints the same.
+// blocker and held row with what this checkout may do about each, and whether a
+// ticket filed here could free each blocker. A pick served past the scope
+// records the same.
 func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -116,10 +115,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
-				"next.unreachable": [],
-				"next.stay_offered": true,
-				"next.start_place": null,
-				"next.primary_clone": false
+				"next.unreachable": []
 			}`,
 		},
 		{
@@ -152,14 +148,11 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.off_path": [{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}],
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
-				"next.unreachable": [],
-				"next.stay_offered": true,
-				"next.start_place": null,
-				"next.primary_clone": false
+				"next.unreachable": []
 			}`,
 		},
 		{
-			name: "a blocker awaiting an outside event offers no stay",
+			name: "a blocker awaiting an outside event is not clearable from here",
 			outcome: Exhausted{
 				Epics:    []model.ID{"test-epic"},
 				Progress: claims.Progress{Done: 0, Total: 2},
@@ -179,10 +172,7 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
-				"next.unreachable": [],
-				"next.stay_offered": false,
-				"next.start_place": null,
-				"next.primary_clone": false
+				"next.unreachable": []
 			}`,
 		},
 		{
@@ -207,16 +197,13 @@ func TestNextRecordsWhatAnExhaustedScopeNamed(t *testing.T) {
 				"next.off_path": [],
 				"next.hidden_by_filter": null,
 				"next.hidden_focus_goals": [],
-				"next.unreachable": [],
-				"next.stay_offered": true,
-				"next.start_place": "worktree_beside_held_work",
-				"next.primary_clone": false
+				"next.unreachable": []
 			}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, tc.gathered, false)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, tc.gathered)
 			ev := recorder.Finish(telemetry.End{})
 			if got, want := writtenFacts(t, ev), decodeJSON(t, tc.want); !reflect.DeepEqual(got, want) {
 				t.Errorf("facts =\n%v\nwant\n%v", got, want)
@@ -239,7 +226,7 @@ func TestNextRecordsWhatAFocusedEmptyPoolNamed(t *testing.T) {
 		Unreachable: []rowReach{{ID: "test-gate", reading: reading{Row: rowFor("test-gate"), Kind: reachNotReady}}},
 		OffPath:     []model.ID{"test-off"},
 	}
-	recordNextEvent(telemetry.With(context.Background(), recorder), outcome, 2, false)
+	recordNextEvent(telemetry.With(context.Background(), recorder), outcome, 2)
 	want := decodeJSON(t, `{
 		"unreachable": [{"id": "test-gate", "ticket": "test-gate", "reach": "not_ready"}],
 		"off_path": [{"id": "test-off", "ticket": "test-off", "reach": "off_focus_path"}]
@@ -283,7 +270,7 @@ func TestNextRecordsTheChainADependencyPickWasReachedThrough(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
 			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.dependency_path"]; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("next.dependency_path = %#v, want %#v", got, tc.want)
 			}
@@ -311,8 +298,8 @@ func TestNextLeavesItsPickOnTheEvent(t *testing.T) {
 }
 
 // A `lit next` that finds nothing leaves every row it went past on its event,
-// each with its reach — here a ticket waiting on an outside event — beside the
-// exit code and reason the answer printed.
+// each with its reach — here a ticket waiting on an outside event. The run
+// itself succeeds: no ticket is an answer.
 func TestNextLeavesTheRowsItWentPastOnTheEvent(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
@@ -320,13 +307,13 @@ func TestNextLeavesTheRowsItWentPastOnTheEvent(t *testing.T) {
 	epic := newEpicInDir(t, repo, "Home")
 	waiting := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", epic, "--title", "Upstream fix lands", "--topic", "demo", "--labels", ExternalLabel))
 
-	_, err := runCLIInDirAllowError(t, repo, "next")
-	if err == nil {
-		t.Fatal("lit next served a ticket that waits on an outside event")
+	useNextFixture(t, repo)
+	if out := runCLIInDir(t, repo, "next"); !strings.HasSuffix(out, noTicket+"\n") {
+		t.Fatalf("lit next printed:\n%s\nwant %q and not %s, which waits on an outside event", out, noTicket, waiting)
 	}
 	ev := lastEvent(t)
-	if ev.Event != "lit next" || ev.ExitCode != ExitCode(err) || ev.Reason != commandErrorReason(err).String() {
-		t.Errorf("event = %q exit %d reason %q, want lit next exit %d reason %q", ev.Event, ev.ExitCode, ev.Reason, ExitCode(err), commandErrorReason(err))
+	if ev.Event != "lit next" || ev.Outcome != telemetry.OutcomeOK || ev.ExitCode != ExitOK {
+		t.Errorf("event = %q %q exit %d, want lit next ok exit %d", ev.Event, ev.Outcome, ev.ExitCode, ExitOK)
 	}
 	want := decodeJSON(t, `{"unreachable": [{"id": "`+waiting+`", "ticket": "`+waiting+`", "reach": "awaiting_outside"}]}`)["unreachable"]
 	if ev.Facts["next.outcome"] != "no_work" || !reflect.DeepEqual(ev.Facts["next.unreachable"], want) {
@@ -384,7 +371,7 @@ func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
 			facts := writtenFacts(t, recorder.Finish(telemetry.End{}))
 			if facts["next.outcome"] != tc.wantOutcome || facts["next.picked"] != tc.wantPicked {
 				t.Errorf("next.outcome, next.picked = %v, %v; want %v, %v", facts["next.outcome"], facts["next.picked"], tc.wantOutcome, tc.wantPicked)
@@ -398,9 +385,9 @@ func TestNextRecordsTheTicketAFilterHidFromTheScope(t *testing.T) {
 
 // Driven through the real command, because the defect lived in what `lit next`
 // handed routing: a held lane's only ready ticket is a task, and `--type bug`
-// must name it as hidden rather than report the epic exhausted — on stderr, on
-// the exit code and reason, and on the event. rows_gathered counts the rows the
-// filter selected, which is none, not the queue routing read.
+// must record it as hidden rather than record the epic as exhausted.
+// rows_gathered counts the rows the filter selected, which is none, not the
+// queue routing read.
 func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
@@ -413,19 +400,13 @@ func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 	runCLIInDir(t, repo, "start", first)
 	runCLIInDir(t, repo, "done", first)
 
-	_, err := runCLIInDirAllowError(t, repo, "next", "--type", "bug")
-	if err == nil {
-		t.Fatal("lit next --type bug served a ticket from a backlog holding no bug")
-	}
-	if strings.Contains(err.Error(), "no ready work in") {
-		t.Fatalf("lit next --type bug = %q, want the epic not called exhausted — %s is ready in it", err.Error(), second)
-	}
-	if !strings.Contains(err.Error(), "`lit next` without --type, --status, --labels or --assignee hands you "+second+", which this run's filter leaves out") {
-		t.Fatalf("lit next --type bug = %q, want it to name %s as the ticket the filter hid", err.Error(), second)
+	useNextFixture(t, repo)
+	if out := runCLIInDir(t, repo, "next", "--type", "bug"); !strings.HasSuffix(out, noTicket+"\n") {
+		t.Fatalf("lit next --type bug printed:\n%s\nwant %q and not %s, which is no bug", out, noTicket, second)
 	}
 	ev := lastEvent(t)
-	if ev.ExitCode != ExitNoWork || ev.Reason != reasonScopeNarrowed.String() {
-		t.Errorf("event exit %d reason %q, want %d %q", ev.ExitCode, ev.Reason, ExitNoWork, reasonScopeNarrowed)
+	if ev.Outcome != telemetry.OutcomeOK || ev.ExitCode != ExitOK {
+		t.Errorf("event %q exit %d, want ok exit %d", ev.Outcome, ev.ExitCode, ExitOK)
 	}
 	if ev.Facts["next.outcome"] != "narrowed" || ev.Facts["next.hidden_by_filter"] != second {
 		t.Errorf("next.outcome, next.hidden_by_filter = %v, %v; want narrowed, %s", ev.Facts["next.outcome"], ev.Facts["next.hidden_by_filter"], second)
@@ -436,8 +417,8 @@ func TestNextUnderAFilterNamesTheTicketItHidFromTheHeldEpic(t *testing.T) {
 }
 
 // A checkout holding no lane asks for bugs in a backlog of ready tasks. The
-// filter emptied the pool, not the backlog, so the answer names the task
-// `lit next` would hand over rather than reading as no ready work.
+// filter emptied the pool, not the backlog, so the event names the task
+// `lit next` would hand over rather than recording no work.
 func TestNextUnderAFilterNamesThePoolTicketItHid(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
@@ -445,17 +426,11 @@ func TestNextUnderAFilterNamesThePoolTicketItHid(t *testing.T) {
 	epic := newEpicInDir(t, repo, "Home")
 	task := extractTicketID(t, runCLIInDir(t, repo, "new", "--type", "task", "--parent", epic, "--title", "Ready", "--topic", "demo"))
 
-	_, err := runCLIInDirAllowError(t, repo, "next", "--type", "bug")
-	if err == nil {
-		t.Fatal("lit next --type bug served a ticket from a backlog holding no bug")
-	}
-	if want := "`lit next` without --type, --status, --labels or --assignee hands you " + task + ", which this run's filter leaves out"; err.Error() != want {
-		t.Fatalf("lit next --type bug = %q, want %q", err.Error(), want)
+	useNextFixture(t, repo)
+	if out := runCLIInDir(t, repo, "next", "--type", "bug"); !strings.HasSuffix(out, noTicket+"\n") {
+		t.Fatalf("lit next --type bug printed:\n%s\nwant %q and not %s, which is no bug", out, noTicket, task)
 	}
 	ev := lastEvent(t)
-	if ev.ExitCode != ExitNoWork || ev.Reason != reasonScopeNarrowed.String() {
-		t.Errorf("event exit %d reason %q, want %d %q", ev.ExitCode, ev.Reason, ExitNoWork, reasonScopeNarrowed)
-	}
 	if ev.Facts["next.outcome"] != "narrowed" || ev.Facts["next.hidden_by_filter"] != task {
 		t.Errorf("next.outcome, next.hidden_by_filter = %v, %v; want narrowed, %s", ev.Facts["next.outcome"], ev.Facts["next.hidden_by_filter"], task)
 	}
@@ -500,7 +475,7 @@ func TestNextRecordsTheFocusThatNarrowedItsPick(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
 			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.picked_focus_goals"]; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("next.picked_focus_goals = %#v, want %#v", got, tc.want)
 			}
@@ -542,7 +517,7 @@ func TestNextRecordsTheFocusTheHiddenTicketWasDrawnUnder(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := telemetry.Begin(telemetry.Event{})
-			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1, false)
+			recordNextEvent(telemetry.With(context.Background(), recorder), tc.outcome, 1)
 			if got := writtenFacts(t, recorder.Finish(telemetry.End{}))["next.hidden_focus_goals"]; !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("next.hidden_focus_goals = %#v, want %#v", got, tc.want)
 			}

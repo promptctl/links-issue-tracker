@@ -67,15 +67,9 @@ func TestExitCodeMappings(t *testing.T) {
 		// The genuine fault on the same path keeps the unclassified-fault code.
 		{name: "genuine stat fault", err: errors.New("stat database dir: permission denied"), want: ExitGeneric},
 		{name: "generic", err: model.ValidationError{Message: "boom"}, want: ExitValidation},
-		// Both of `lit next`'s terminal answers exit ExitNoWork: the command ran
-		// correctly and simply has no ticket to hand back. Sharing one code is
-		// deliberate — the caller's question is binary, and which emptiness it
-		// was is carried by the reason and the message (links-cli-cpou).
-		{name: "router scope exhausted", err: Exhausted{Epics: []model.ID{"links-epic-abcd"}}, want: ExitNoWork},
-		{name: "router no ready work", err: NoWork{}, want: ExitNoWork},
 		// A container action splits on whether the children already establish
 		// the state that was asked for: a satisfied request changed nothing and
-		// shares the "nothing to hand back" code, while a refusal is an ordinary
+		// exits ExitNoWork, while a refusal is an ordinary
 		// domain-constraint rejection. Neither is ExitGeneric
 		// (links-cli-errors-1u9g). The command-driven proof is in
 		// container_action_error_test.go; these two pin the mapping itself.

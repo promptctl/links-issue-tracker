@@ -36,7 +36,6 @@ var reasonCodes = map[string]int{
 	"migration_failed":            1,
 	"migration_partially_applied": 3,
 	"migration_quarantined":       3,
-	"no_ready_work":               6,
 	"outside_git_workspace":       3,
 	"owner_approval_required":     5,
 	"parent_cycle":                7,
@@ -45,8 +44,6 @@ var reasonCodes = map[string]int{
 	"restore_would_overwrite":     5,
 	"retired_command":             3,
 	"schema_shape_refused":        3,
-	"scope_exhausted":             6,
-	"scope_narrowed":              6,
 	"state_already_holds":         6,
 	"stored_prefix_refused":       3,
 	"sync_divergence":             5,
@@ -188,12 +185,6 @@ func TestCommandErrorReason(t *testing.T) {
 			fmt.Errorf("%w: another lit process held .links-backups.lock for over 30s; retry once it exits", backup.ErrBusy),
 			"workspace_busy",
 		},
-		// The router's terminal answers are answers, not faults, and each names
-		// a different act — so each is its own reason rather than sharing one,
-		// and none may fall through to "command_failed".
-		{"router scope exhausted", Exhausted{Epics: []model.ID{"links-epic-abcd"}}, "scope_exhausted"},
-		{"router scope narrowed", Narrowed{}, "scope_narrowed"},
-		{"router no ready work", NoWork{}, "no_ready_work"},
 		// A repository `lit init` has never run in is terminal: no rerun makes
 		// the workspace exist. Both the bare sentinel and a wrapped one are
 		// pinned, because the store returns it bare today and a caller adding

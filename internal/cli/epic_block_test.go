@@ -409,9 +409,6 @@ func TestRouteNextDescendsAnEpicBlockerToItsWorkableChild(t *testing.T) {
 			if served.Gates != b2.ID || served.Blocker != epicA.ID {
 				t.Fatalf("served gates %q through %q, want %q through %q — a1 has no edge to b2, so the pick must name the epic between them", served.Gates, served.Blocker, b2.ID, epicA.ID)
 			}
-			if served.Lane != aLane {
-				t.Fatalf("served.Lane = %v, want %v, the lane a start of %s would claim", served.Lane, aLane, a1.ID)
-			}
 
 			// With a1 held elsewhere epic B is exhausted, and the unrelated ready
 			// ticket is served past it — beside the exhaustion, which is what

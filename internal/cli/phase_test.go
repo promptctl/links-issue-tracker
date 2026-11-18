@@ -1,15 +1,12 @@
 package cli
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
 // phaseFacts is what the last invocation's event says its phase move did.
@@ -55,7 +52,7 @@ func TestPhaseMovesFireStateBoundWorkflows(t *testing.T) {
 		"working":      "states: [in_progress]",
 	}
 	for id, activation := range bound {
-		writeCLIWorkflow(t, dir, id+".md", "---\n"+activation+"\n---\nFIRED "+id+" on <id>")
+		writeCLIWorkflow(t, dir, id+".md", "---\ndescription: fixture\n"+activation+"\n---\nFIRED "+id+" on <id>")
 	}
 	for _, step := range []struct {
 		args    []string
@@ -100,34 +97,6 @@ func TestShippedWorkflowsNameEachPhaseMove(t *testing.T) {
 		out := runCLIInDir(t, dir, args...)
 		if want := phaseMoveAfter(phases, i, first); !strings.Contains(out, want) {
 			t.Errorf("lit %v printed %q; want it to name %s", args, out, want)
-		}
-	}
-}
-
-// Every text that teaches an agent to work a ticket names each move after
-// lit start with the command that records it.
-func TestAgentGuidanceNamesEveryPhaseMove(t *testing.T) {
-	t.Parallel()
-	texts := map[string]string{}
-	for _, name := range []string{"quickstart-work.md"} {
-		raw, err := templates.EmbeddedDefault(name)
-		if err != nil {
-			t.Fatalf("EmbeddedDefault(%s) error = %v", name, err)
-		}
-		texts[name] = string(raw)
-	}
-	skill, err := os.ReadFile(filepath.Join(mustRepoRoot(t), filepath.FromSlash(nextSkillPath)))
-	if err != nil {
-		t.Fatalf("ReadFile(%s) error = %v", nextSkillPath, err)
-	}
-	texts[nextSkillPath] = string(skill)
-
-	phases := model.Phases()
-	for name, text := range texts {
-		for i := range phases {
-			if want := phaseMoveAfter(phases, i, "<id>"); !strings.Contains(text, want) {
-				t.Errorf("%s does not name %s", name, want)
-			}
 		}
 	}
 }

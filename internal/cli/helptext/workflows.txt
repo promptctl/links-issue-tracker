@@ -32,16 +32,21 @@ Format
 
     ---
     id: done
-    name: Post-close capture reminder
+    description: Post-close capture reminder
     events: [work_finished]
     labels: [user-facing]
     ---
     Ticket <id> is closed. Capture what the next agent needs to know
     before moving on.
 
-  Every key is optional. In the body, <id> is replaced with the acted-on
-  ticket's id when the moment has one. Unrecognized keys are tolerated, so
-  a file authored against a newer lit still loads here.
+  description is required: one line saying what the guidance is for, which
+  lit workflows shows beside the id. A file without one is not loaded and
+  is named under Warnings. Every other key is optional. In the body, <id>
+  is replaced with the acted-on ticket's id when the moment has one. At
+  the next event, <ticket> is replaced with the ticket lit next hands
+  back, shown as lit backlog shows it, or with a line saying it hands
+  none back. Unrecognized keys are tolerated, so a file authored against
+  a newer lit still loads here.
 
 Activation
 
@@ -94,7 +99,7 @@ Event catalog
   Every event lit can dispatch, and what dispatches it today:
 
     show_backlog       lit backlog
-    next_pulled        lit next, when it has a ticket to hand back
+    next               lit next, on every run, with a ticket or without
     show_ticket        lit show
     work_started       lit start
     phase_set          lit phase, whether or not the phase moves
@@ -112,11 +117,11 @@ The subcommands
   a loaded definition binds to, each with its enter and exit sides; and
   every label a loaded definition binds to — annotated with the
   definitions active at each point and the layer each resolved from, then
-  a Warnings section naming every file that loaded but cannot fully fire:
-  inert, unknown event, malformed frontmatter, duplicate id.
+  a Warnings section naming every file that cannot fully fire: inert,
+  unknown event, no description, malformed frontmatter, duplicate id.
 
-  show <id> prints one resolved definition: id, name, source layer, path,
-  its three activation dimensions, and its body.
+  show <id> prints one resolved definition: id, description, source layer,
+  path, its three activation dimensions, and its body.
 
   edit <id-or-point> scaffolds a project-layer file and prints its path. It
   resolves the argument two ways:

@@ -18,7 +18,7 @@ subsystem is `$EDITOR`, launched by `lit workflows edit` (`internal/cli/workflow
 
 ### 1.1 File shape
 
-A definition file is a **markdown file with optional YAML frontmatter**
+A definition file is a **markdown file with YAML frontmatter**
 (`internal/workflows/workflows.go`).
 
 Frontmatter delimiter rules (`internal/workflows/parse.go`):
@@ -29,7 +29,7 @@ Frontmatter delimiter rules (`internal/workflows/parse.go`):
   (`internal/workflows/parse_test.go` pin CRLF files and trailing-whitespace delimiters).
 - The **first line of the file** must be a delimiter for frontmatter to exist at all. If it isn't,
   `found=false` and the **entire file content is the body**, with no frontmatter
-  (`internal/workflows/parse.go`). Such a file loads successfully but is inert — see §1.7
+  (`internal/workflows/parse.go`). Such a file has no description, so it is skipped with a warning — see §1.4
   (`internal/workflows/parse_test.go`).
 - Scanning then proceeds line by line until the next delimiter line; that line closes the header,
   and everything after it is the body (`internal/workflows/parse.go`).
@@ -47,7 +47,7 @@ The YAML struct is `internal/workflows/parse.go`:
 | YAML key | Go type | Meaning |
 |---|---|---|
 | `id` | string | `internal/workflows/parse.go` |
-| `name` | string | `internal/workflows/parse.go` |
+| `description` | string | `internal/workflows/parse.go` |
 | `labels` | list of string | `internal/workflows/parse.go` |
 | `states` | list of StateActivation | `internal/workflows/parse.go` |
 | `events` | list of string | `internal/workflows/parse.go` |
@@ -78,11 +78,13 @@ top level is malformed and the file is skipped (`internal/workflows/parse_test.g
 - ID matching in `Set.Lookup` is exact string equality; no case folding
   (`internal/workflows/workflows.go`).
 
-### 1.4 `name`
+### 1.4 `description`
 
-Optional pretty display name; trimmed (`internal/workflows/parse.go`). Used only for display:
-`formatDefinitionRef` renders `<id> "<name>" (<source>)` when non-empty, else `<id> (<source>)`
-(`internal/cli/workflows.go`).
+Required: one line saying what the guidance is for; trimmed (`internal/workflows/parse.go`). A
+file whose description is absent or blank — a plain markdown file with no frontmatter included —
+is skipped with the warning ``no description: add a `description:` line saying what this guidance
+is for`` (`internal/workflows/parse.go`; pinned `internal/workflows/parse_test.go`).
+`formatDefinitionRef` renders `<id> "<description>" (<source>)` (`internal/cli/workflows.go`).
 
 ### 1.5 `labels` — activation dimension 1
 
@@ -159,29 +161,28 @@ entries (`internal/workflows/parse_test.go`: `open(enter)`, `in_progress(enter)`
 - **never matches anything** — `Matches` short-circuits false on inert
   (`internal/workflows/match.go`).
 
-This is why a plain markdown file with no frontmatter loads but never fires
-(`internal/workflows/parse_test.go`).
-
-### 1.9 Body and the `<id>` substitution
+### 1.9 Body and the `<name>` substitutions
 
 - The body is everything after the closing delimiter, `TrimSpace`d
   (`internal/workflows/parse.go`).
-- Exactly **one** substitution is applied at injection time: every occurrence of the literal
-  string `<id>` is replaced with the occasion's IssueID
-  (`internal/workflows/dispatch.go`, `strings.ReplaceAll(body, "<id>", issueID)`).
+- `Interpolate` (`internal/workflows/dispatch.go`) replaces every occurrence of `<id>` with the
+  occasion's IssueID, and every occurrence of `<key>` for each key of the occasion's `Data` with
+  that key's value.
 - When the occasion carries no issue ID (e.g. `show_backlog`), `<id>` is replaced with the empty
-  string — the substitution is unconditional (`internal/workflows/dispatch.go`).
-- The comment at `internal/workflows/dispatch.go` records that a prior mechanism also
-  supported `<token>`, which is **not** supported here.
+  string (`internal/workflows/dispatch.go`).
+- A `<name>` the occasion does not supply stays in the body as written
+  (`internal/workflows/match.go`).
+- `lit next` supplies the `Data` key `ticket`, so a body bound to `next` writes `<ticket>`
+  (`internal/cli/next_output.go`).
 
 ### 1.10 A complete, valid example file
 
-One of the five files shipped as embedded defaults, `internal/workflows/defaults/done.md`:
+One of the six files shipped as embedded defaults, `internal/workflows/defaults/done.md`:
 
 ```
 ---
 id: done
-name: Post-close capture reminder
+description: Post-close capture reminder
 events: [work_finished]
 ---
 Ticket <id> has been closed. Before moving on, take a moment to review related tickets. …
@@ -208,8 +209,9 @@ Ticket <id> has been closed. Before moving on, take a moment to review related t
 3. **Embedded**: compiled into the binary via `//go:embed defaults/*.md`
    (`internal/workflows/load.go`), rooted at `defaults` so entries walk with root-relative
    paths identical to the other two layers → `templates.SourceEmbedded`
-   (`internal/templates/templates.go`). Today the tree contains five files: `done.md`
-   (`events: [work_finished]`), and `phase-plan.md`, `phase-impl.md`, `phase-review.md` and
+   (`internal/templates/templates.go`). Today the tree contains six files: `done.md`
+   (`events: [work_finished]`), `next.md` (`events: [next]`), whose body is what `lit next`
+   prints and carries `<ticket>` and `<id>`, and `phase-plan.md`, `phase-impl.md`, `phase-review.md` and
    `phase-merge.md`, each bound to entering its phase (`states: [plan]` and so on), whose
    bodies name the command that records the next move — `lit phase <id> --to impl`,
    `lit phase <id> --to review`, `lit phase <id> --to merge`, and `lit done <id>`.
@@ -279,7 +281,7 @@ Eleven events, defined as string constants at `internal/workflows/events.go`:
 |---|---|---|---|
 | `EventShowBacklog` | `show_backlog` | agent views the workable backlog | `lit backlog` — `internal/workflows/events.go` |
 | `EventShowTicket` | `show_ticket` | agent views one ticket's details | `lit show` — `internal/workflows/events.go` |
-| `EventNextPulled` | `next_pulled` | agent asks for the next workable ticket | `lit next` — `internal/workflows/events.go` |
+| `EventNext` | `next` | every `lit next` run, whatever it routed to | `lit next` — `internal/workflows/events.go` |
 | `EventWorkStarted` | `work_started` | a ticket is claimed and work begins | `lit start` — `internal/workflows/events.go` |
 | `EventPhaseSet` | `phase_set` | an in-progress ticket's phase is set, whether or not it moves | `lit phase` — `internal/workflows/events.go` |
 | `EventWorkFinished` | `work_finished` | claimed work finishes on the success path | `lit done` — `internal/workflows/events.go` |
@@ -290,7 +292,7 @@ Eleven events, defined as string constants at `internal/workflows/events.go`:
 | `EventCommentAdded` | `comment_added` | a comment lands on a ticket | `lit comment` — `internal/workflows/events.go` |
 
 `Catalog()` returns them in **display order**, which differs from declaration order:
-`show_backlog, next_pulled, show_ticket, work_started, phase_set, work_finished, ticket_closed,
+`show_backlog, next, show_ticket, work_started, phase_set, work_finished, ticket_closed,
 ticket_reopened, ticket_created, ticket_updated, comment_added`
 (`internal/workflows/events.go`). This is the order `lit workflows` prints the Events spine
 in (`internal/cli/workflows.go`).
@@ -314,16 +316,17 @@ renamed freely, the event name is what user definitions bind to
 | `Labels []string` | the ticket's labels in canonical form; nil when no single ticket | `internal/workflows/match.go` |
 | `Entered []string` | states the ticket entered, if a transition happened; several when a state inside another moves with it | `internal/workflows/match.go` |
 | `Exited []string` | states the ticket exited, if a transition happened | `internal/workflows/match.go` |
+| `Data map[string]string` | the replacements a body receives, keyed by the name it writes as `<name>`. **Never read by matching** | `internal/workflows/match.go` |
 
 ### 3.2 Per-event payloads, as actually built
 
-Builders live in `internal/cli/workflow_events.go`:
+Builders live in `internal/cli/workflow_events.go` and `internal/cli/next_output.go`:
 
 | Event | Builder | Payload fields set |
 |---|---|---|
 | `show_ticket` | `showTicketOccasion` `internal/cli/workflow_events.go` | Event, IssueID=`issue.ID`, Labels=`issue.Labels`. No Entered/Exited. |
 | `show_backlog` | `backlogOccasion` `internal/cli/workflow_events.go` | Event only. **No IssueID, no Labels, no transition.** |
-| `next_pulled` | `nextPulledOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. |
+| `next` | `nextOccasion` `internal/cli/next_output.go` | A run that hands a ticket back: Event, IssueID, Labels, and `Data` key `ticket` = the ticket as `printNextSummary` writes it, trailing newlines trimmed. A run that hands none back: Event and `Data` key `ticket` = "No ticket: nothing this run asked about is ready to start from this checkout."; no IssueID, no Labels. |
 | `ticket_created` | `ticketCreatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels (the labels it was created with). |
 | `ticket_updated` | `ticketUpdatedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. **Never carries a transition** — `lit update` rejects `--status` (`internal/cli/workflow_events.go`; pinned `internal/cli/workflow_events_test.go`). |
 | `comment_added` | `commentAddedOccasion` `internal/cli/workflow_events.go` | Event, IssueID, Labels. |
@@ -351,7 +354,7 @@ returns `fires = false` for a `RetentionAction` (`internal/cli/workflow_events.g
 | `internal/cli/cli.go` (`updateLeaf`) | `ticket_updated` | after `Store.Apply`, before summary/breadcrumb |
 | `internal/cli/cli.go` (`transitionLeaf`) | one of the four status transition events, or `phase_set` | after `Store.Apply` and after `authorize`; **before** the claim-transfer notice at `internal/cli/cli.go`. Guarded by `transitionOccasion`'s `fires` (`internal/cli/cli.go`) |
 | `internal/cli/cli.go` (`commentAddLeaf`) | `comment_added` | after `AddComment`, before `printComment` |
-| `internal/cli/next.go` (`nextLeaf`) | `next_pulled` | **last** — after the start advice and `printNextSummary` (`internal/cli/next.go`). Only reached when a row was actually served; `Exhausted`/`NoWork` return an error before any occasion is built (`internal/cli/next.go`) |
+| `internal/cli/next.go` (`nextLeaf`) | `next` | **last**, on every run — after routing, the invocation event and the statusline facts. The injected text is the command's whole answer on stdout (`internal/cli/next.go`) |
 | `internal/cli/workable.go` (`workableLeaf`) | `show_backlog` | **last** — after the table render (`internal/cli/workable.go`) |
 
 `backlogView` is the only `workableView` that sets an `occasion` function
@@ -567,8 +570,7 @@ beyond the implicit `--help`.
 
 Each spine point line is `printSpinePoint` (`internal/cli/workflows.go`): the bare label if
 nothing is bound there, else `<label>  [<ref>, <ref>, …]` where each ref is `formatDefinitionRef`:
-`<id> "<name>" (<source>)` when a name is set, else `<id> (<source>)`
-(`internal/cli/workflows.go`).
+`<id> "<description>" (<source>)` (`internal/cli/workflows.go`).
 
 Spine composition:
 
@@ -595,7 +597,7 @@ Output is exactly (`internal/cli/workflows.go`):
 
 ```
 id: <id>
-name: <name or ->
+description: <description>
 source: <project|global|embedded>
 path: <layer-relative path>
 labels: <comma-space joined, or ->
@@ -759,15 +761,15 @@ writes `workflows.ScaffoldFresh(dimension, liveLine)`, prints
 # states: [{name: closed, when: exit}] # fires when the ticket EXITS this state     ← omitted if dimension=="states"
 # events: [work_started]                                 ← omitted if dimension=="events"
 <liveLine>
+description: One line saying what this guidance is for
 # id: my-custom-id     # optional; defaults to this file's relative path under .lit/workflows/
-# name: My Guidance    # optional pretty name shown by `lit workflows`
 ---
 Write the guidance to inject here. `<id>` is replaced with the acted-on ticket's id when there is one.
 ```
 
 Line-by-line: `internal/workflows/scaffold.go` (`---`) (the two comment lines),
  (labels example, conditional) (both states examples, conditional)
-(events example, conditional) (live line + newline) (id comment) (name
+(events example, conditional) (live line + newline) (description line) (id
 comment) (closing `---`) (body placeholder). Pinned
 `internal/workflows/scaffold_test.go`.
 

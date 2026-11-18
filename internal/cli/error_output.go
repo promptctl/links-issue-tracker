@@ -115,17 +115,10 @@ var (
 	// Landing it would erase that write, so the agent decides what goes.
 	reasonWriteConflict = commandReason{"write_conflict", ExitConflict}
 
-	// ExitNoWork: the command ran correctly and changed nothing. The router's
-	// three terminal answers share it because the caller's question is binary
-	// (was a ticket handed back?), and a state request that already holds is
-	// the same answer asked of a mutation; under ExitGeneric the
-	// release-closing `lit done <epic>` would report its workflow's final step
-	// as a failure while the state it asked for is exactly the state that
-	// holds. Which emptiness it was is the reason's to say.
-	// [LAW:no-mode-explosion]
-	reasonNoReadyWork       = commandReason{"no_ready_work", ExitNoWork}
-	reasonScopeExhausted    = commandReason{"scope_exhausted", ExitNoWork}
-	reasonScopeNarrowed     = commandReason{"scope_narrowed", ExitNoWork}
+	// ExitNoWork: the command ran correctly and changed nothing, because the
+	// state it asked for already holds. Under ExitGeneric the release-closing
+	// `lit done <epic>` would report its workflow's final step as a failure
+	// while the state it asked for is exactly the state that holds.
 	reasonStateAlreadyHolds = commandReason{"state_already_holds", ExitNoWork}
 
 	reasonCorruptionDetected = commandReason{"corruption_detected", ExitCorruption}
@@ -274,25 +267,6 @@ func typedErrorReason(err error, unnamed commandReason) commandReason {
 			return reasonStateAlreadyHolds
 		}
 		return reasonValidationRefused
-	}
-	// The router's three terminal answers. None is a fault: routing asked a
-	// well-formed question and the honest reply was "nothing to hand you". They
-	// are separate reasons because the act each calls for is different — one
-	// asks you to move work you already hold, one to drop the filter that hid
-	// your scope's next ticket, the other to widen the question or create work
-	// — and a single reason could only name one of them.
-	// [LAW:one-type-per-behavior]
-	var exhausted Exhausted
-	if errors.As(err, &exhausted) {
-		return reasonScopeExhausted
-	}
-	var narrowed Narrowed
-	if errors.As(err, &narrowed) {
-		return reasonScopeNarrowed
-	}
-	var noWork NoWork
-	if errors.As(err, &noWork) {
-		return reasonNoReadyWork
 	}
 	// A retired flag is refused on every run, so it must never reach the
 	// default "Retry the command". [LAW:no-silent-failure]
@@ -501,41 +475,6 @@ func commandErrorRemediation(reason commandReason) string {
 		// contains "lit", and terminating the wrong one is the user's to answer
 		// for. [LAW:one-source-of-truth]
 		return "Wait a moment and retry: a normal command releases the store in well under a second. If it fails the same way again, surface it to the user as blocking."
-	case reasonScopeExhausted:
-		// Stands where the message cannot: the message names what stops the
-		// scope and each route it has, but not that a bare retry changes
-		// nothing. No agent-instructions envelope — the envelopes elsewhere mean
-		// "mechanical, run it without asking", and deciding what unblocks a
-		// scope is the opposite of mechanical.
-		return "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
-	case reasonScopeNarrowed:
-		// The message names the ticket and the flags; what it cannot say is
-		// that the answer is a property of the question, so a retry with the
-		// same flags gets it again.
-		return "Do not retry unchanged — routing is deterministic and repeats this answer while the filter stays. Run `lit next` without the filter, as the message says, to be handed the ticket it names."
-	case reasonNoReadyWork:
-		// NoWork carries the rows the pool walk went past, and the message names
-		// them — so what is left here is the act for each, and the standing rule
-		// that this line must never assert which situation it was: "`lit new`
-		// adds work" under a message that just said the backlog is not empty is
-		// exactly the remediation-contradicts-message defect.
-		// [LAW:no-silent-failure]
-		//
-		// The lead obeys that rule too, which is why it claims determinism and
-		// not startability: withheldByScope names every scope-excluded row
-		// off-path without ever running capacityFor on it, so "nothing here is
-		// startable" is a verdict this line has no reading to support — and
-		// NoWork.Error() already declines to make it. [LAW:one-source-of-truth]
-		//
-		// The last clause names `lit backlog --all` rather than `lit backlog`
-		// because "the whole queue" has to be true on every path that reaches
-		// it. Its "Otherwise" excludes the run a focus label narrowed, but not a
-		// workspace where one is SET: `lit next --all` bypasses the scope for
-		// its own run and lands here with focus still on, where a bare
-		// `lit backlog` prints the path and not the queue it was promised.
-		// `--all` on an unfocused workspace resolves to the same scope the
-		// workspace already has, so the flag costs that reader nothing.
-		return "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 	case reasonStateAlreadyHolds:
 		// No act to name, because there is none: the caller asked for a state
 		// the workspace is already in. It must still say "do not retry":
