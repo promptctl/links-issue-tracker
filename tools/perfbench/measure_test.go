@@ -75,74 +75,25 @@ func devNull(t *testing.T) *os.File {
 
 // The whole tool rests on this: a command that failed returns faster than a
 // command that worked, so an unchecked exit code turns every breakage into the
-// best measurement in the table. An undeclared exit code must therefore produce
-// no sample at all.
-//
-// The codes here are written out rather than read from the probes list, so this
-// test cannot agree with a wrong okCodes value by construction.
-func TestRunProbeRefusesAnUndeclaredExitCode(t *testing.T) {
+// best measurement in the table. A nonzero exit must therefore produce no sample
+// at all.
+func TestRunProbeRefusesANonZeroExit(t *testing.T) {
 	bin, _ := fakeLit(t, 6)
 	store := fakeStore(t)
-	probeUnderTest := resolve(t, probe{name: "next", argv: fixed("next"), okCodes: exits(0)}, store)
+	probeUnderTest := resolve(t, probe{name: "next", argv: fixed("next")}, store)
 	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), gateLimits.kill())
 	if err == nil {
-		t.Fatalf("runProbe accepted exit 6 for a probe declaring only {0}, returning %s; "+
+		t.Fatalf("runProbe accepted exit 6, returning %s; "+
 			"a failed invocation must not become a measurement", elapsed)
 	}
 	if elapsed != 0 {
 		t.Errorf("runProbe returned a duration (%s) alongside its error; a refused "+
 			"invocation has no timing to report", elapsed)
 	}
-	for _, want := range []string{"exited 6", "[0]", "stderr detail"} {
+	for _, want := range []string{"exited 6", "stderr detail"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q — the reader cannot tell what the command did instead of its job", err, want)
 		}
-	}
-}
-
-// The complement, and the reason the check is a declared set rather than a
-// comparison against zero: `lit next` exits 6 on an empty store because there
-// is genuinely no ready work, and the empty store is the control the epic reads
-// first. Treating nonzero as failure would make it unmeasurable.
-func TestRunProbeAcceptsADeclaredNonZeroExitCode(t *testing.T) {
-	bin, _ := fakeLit(t, 6)
-	store := fakeStore(t)
-	probeUnderTest := resolve(t, probe{name: "next", argv: fixed("next"), okCodes: exits(0, 6)}, store)
-	elapsed, err := runProbe(bin, store, probeUnderTest, devNull(t), gateLimits.kill())
-	if err != nil {
-		t.Fatalf("runProbe(exit 6, okCodes {0,6}) error = %v, want a sample", err)
-	}
-	if elapsed <= 0 {
-		t.Errorf("runProbe returned %s, want a positive wall clock", elapsed)
-	}
-}
-
-// The accepted set is judged against the store the probe ran on, not against a
-// fixed list. `lit next` exiting 6 proves it ran on the empty store and proves
-// it did NOT on a populated one, where every generated row is open: a routing
-// regression that passes over every row exits 6 in ~30ms, and a size-blind set
-// would record it as that command's fastest time.
-//
-// This uses the real `next` probe deliberately, with the expected verdicts
-// written out: it pins the shipped rule, not a fixture that mirrors it.
-func TestRunProbeJudgesTheExitAgainstTheStoreSize(t *testing.T) {
-	bin, _ := fakeLit(t, 6)
-	var next probe
-	for _, p := range probes {
-		if p.name == "next" {
-			next = p
-		}
-	}
-	if next.name == "" {
-		t.Fatal("no probe named next")
-	}
-	empty := generatedStore{root: t.TempDir()}
-	if _, err := runProbe(bin, empty, resolve(t, next, empty), devNull(t), gateLimits.kill()); err != nil {
-		t.Errorf("exit 6 on the empty store is the honest answer, got error: %v", err)
-	}
-	populated := generatedStore{root: t.TempDir(), ids: make([]string, 590)}
-	if _, err := runProbe(bin, populated, resolve(t, next, populated), devNull(t), gateLimits.kill()); err == nil {
-		t.Error("exit 6 on a 590-row store, where every row is open, was accepted as a measurement")
 	}
 }
 
@@ -164,7 +115,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 	}
 	configHome := filepath.Join(dir, "config-home")
 	store := generatedStore{root: dir, env: hermeticEnv(os.Environ(), configHome, filepath.Join(dir, "state-home"))}
-	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill()); err != nil {
+	if _, err := runProbe(litBinary{path: path}, store, resolve(t, probe{name: "ls", argv: fixed("ls")}, store), devNull(t), gateLimits.kill()); err != nil {
 		t.Fatalf("runProbe error = %v", err)
 	}
 	got, err := os.ReadFile(seen)
@@ -179,7 +130,7 @@ func TestRunProbeRunsLitUnderTheStoresEnvironment(t *testing.T) {
 func TestRunProbeReportsAMissingBinaryAsAHarnessFailure(t *testing.T) {
 	bin := litBinary{path: filepath.Join(t.TempDir(), "absent")}
 	store := fakeStore(t)
-	_, err := runProbe(bin, store, resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store), devNull(t), gateLimits.kill())
+	_, err := runProbe(bin, store, resolve(t, probe{name: "ls", argv: fixed("ls")}, store), devNull(t), gateLimits.kill())
 	if err == nil {
 		t.Fatal("runProbe with a nonexistent binary returned no error")
 	}
@@ -271,7 +222,7 @@ func TestMeasureDoesNotRecordTheWarmUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	store := fakeStore(t)
-	only := []invocation{resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store)}
+	only := []invocation{resolve(t, probe{name: "ls", argv: fixed("ls")}, store)}
 	samples, err := measurePhase(litBinary{path: path}, store, only, devNull(t), gateLimits, io.Discard)
 	if err != nil {
 		t.Fatalf("measurePhase error = %v", err)
@@ -330,8 +281,8 @@ func TestAKilledProbeIsRecordedAndTheRunContinues(t *testing.T) {
 	}
 	store := fakeStore(t)
 	phase := []invocation{
-		resolve(t, probe{name: "backlog", argv: fixed("backlog"), okCodes: exits(0)}, store),
-		resolve(t, probe{name: "ls", argv: fixed("ls"), okCodes: exits(0)}, store),
+		resolve(t, probe{name: "backlog", argv: fixed("backlog")}, store),
+		resolve(t, probe{name: "ls", argv: fixed("ls")}, store),
 	}
 	var progress strings.Builder
 	lim := limits{budget: 5 * time.Millisecond}

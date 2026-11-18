@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"slices"
 	"strings"
@@ -205,16 +204,13 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	if served.Row.ID != a2.ID {
 		t.Fatalf("served = %q, want %q (epic A's other lane before epic B)", served.Row.ID, a2.ID)
 	}
-	if served.Lane.Epic() != epicA.ID {
-		t.Fatalf("served.Lane.Epic() = %q, want %q", served.Lane.Epic(), epicA.ID)
-	}
 }
 
 // A checkout's own epic having no reachable work — its held lane holds
 // nothing, and the epic has no other lane to offer — does not trap the
 // checkout there. `next` serves the top ready ticket outside the epic, carrying
-// the exhaustion so the pick is announced beside why the epic stopped, never
-// as a silent hop (links-next-5sxz).
+// the exhaustion so the invocation event records why the epic stopped beside
+// the pick that left it.
 //
 // This outcome is reachable only while the claim is live.
 func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
@@ -239,30 +235,13 @@ func TestRouteNextServesPastAnExhaustedEpic(t *testing.T) {
 	if served.Row.ID != b1.ID {
 		t.Fatalf("served = %q, want %q", served.Row.ID, b1.ID)
 	}
-	if served.Lane.Epic() != epicB.ID {
-		t.Fatalf("served.Lane.Epic() = %q, want %q — starting the pick claims epic B's lane", served.Lane.Epic(), epicB.ID)
-	}
 	if len(served.Exhaustion.Epics) != 1 || served.Exhaustion.Epics[0] != epicA.ID {
 		t.Fatalf("exhaustion.Epics = %v, want [%q]", served.Exhaustion.Epics, epicA.ID)
 	}
+	// Nothing blocks epic A, so there is nothing a new ticket could clear:
+	// moving on is the only route.
 	if len(served.Exhaustion.Blocked) != 0 {
 		t.Fatalf("exhaustion.Blocked = %v, want none (epic A has nothing queued)", served.Exhaustion.Blocked)
-	}
-
-	// Nothing blocks epic A, so there is nothing a new ticket could clear:
-	// moving on is the only route, and it is not phrased as an alternative.
-	// Every ticket in epic A is done, so this checkout holds nothing unfinished
-	// and, as a linked worktree, starts the pick where it is.
-	var out strings.Builder
-	if _, err := renderNextOutcome(&out, served, details, claimContext{}, false); err != nil {
-		t.Fatalf("renderNextOutcome error = %v", err)
-	}
-	text := out.String()
-	if strings.Contains(text, "to stay") {
-		t.Fatalf("rendered = %q, want no stay route — nothing blocks epic A", text)
-	}
-	if !strings.Contains(text, "\nmove on to the top ready ticket outside it: run `lit start "+b1.ID.Raw()) {
-		t.Fatalf("rendered = %q, want the move-on route alone on its line, naming %q", text, b1.ID)
 	}
 }
 
@@ -291,27 +270,30 @@ func TestRouteNextExhaustionIsTerminalWhenNothingElseIsReady(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — B.1's lane is held elsewhere, so nothing outside epic A is ready", outcome, outcome)
 	}
-	msg := exhausted.Error()
-	if want := "no ready work in epic(s) " + epicA.ID.Raw() + " (1/1 done) — nothing in it is left to do; `lit next` has nothing ready outside it either"; msg != want {
-		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
+	if !slices.Equal(exhausted.Epics, []model.ID{epicA.ID}) {
+		t.Fatalf("exhausted.Epics = %v, want [%q]", exhausted.Epics, epicA.ID)
+	}
+	if want := (claims.Progress{Done: 1, Total: 1}); exhausted.Progress != want {
+		t.Fatalf("exhausted.Progress = %+v, want %+v — epic A's one ticket is done", exhausted.Progress, want)
+	}
+	if len(exhausted.Blocked) != 0 || len(exhausted.Held) != 0 {
+		t.Fatalf("exhausted.Blocked = %+v, Held = %+v, want neither — nothing in epic A is left to do", exhausted.Blocked, exhausted.Held)
+	}
+	nothingOutside(t, exhausted)
+}
+
+// nothingOutside fails unless the exhausted scope reports nothing outside it:
+// no row a filter hid, and none a focus label withheld.
+func nothingOutside(t *testing.T, exhausted Exhausted) {
+	t.Helper()
+	if exhausted.Narrowing != nil || len(exhausted.OffPath) != 0 {
+		t.Fatalf("exhausted.Narrowing = %+v, OffPath = %v, want neither — nothing outside the scope is ready, hidden or withheld", exhausted.Narrowing, exhausted.OffPath)
 	}
 }
 
-// A held scope whose tickets were all archived or deleted counts 0/0, and
-// nothing stops it. Nothing in it was done and nothing is underway, so the
-// message claims neither.
-func TestExhaustionOfAnEmptiedScopeClaimsNothingWasDone(t *testing.T) {
-	t.Parallel()
-	exhausted := Exhausted{Epics: []model.ID{"test-epic"}}
-	want := "no ready work in epic(s) test-epic (0/0 done) — nothing in it is left to do; `lit next` has nothing ready outside it either"
-	if msg := exhausted.Error(); msg != want {
-		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
-	}
-}
-
-// A blocked epic with nothing ready outside it names the one route left:
-// stay, file the ticket that clears the blocker under the epic — spelled with
-// the epic's own id — and make the blocker wait on it, since filing alone
+// A blocked epic with nothing ready outside it reports its blocker as one a
+// ticket filed here could clear. The one route left is to stay: file that
+// ticket under the epic and make the blocker wait on it, since filing alone
 // leaves the blocked work waiting on what it waited on.
 func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T) {
 	t.Parallel()
@@ -336,14 +318,18 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
 	}
-	want := "no ready work in epic(s) " + epicA.ID.Raw() + " (1/2 done) — blocked by " + blocker.ID.Raw() +
-		" (on your path but claimed by another checkout right now); `lit next` has nothing ready outside it either" +
-		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID.Raw() + " --top`, then make that blocker blocked by it with `lit dep add " + blocker.ID.Raw() + " --blocked-by <new>`"
-	if msg := exhausted.Error(); msg != want {
-		t.Fatalf("exhausted.Error() = %q, want exactly %q", msg, want)
+	if !slices.Equal(exhausted.Epics, []model.ID{epicA.ID}) {
+		t.Fatalf("exhausted.Epics = %v, want [%q] — the epic the clearing ticket is filed under", exhausted.Epics, epicA.ID)
 	}
+	if want := (claims.Progress{Done: 1, Total: 2}); exhausted.Progress != want {
+		t.Fatalf("exhausted.Progress = %+v, want %+v", exhausted.Progress, want)
+	}
+	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != blocker.ID || readingOf(t, exhausted.Blocked[0]).Kind != reachHeldFresh || !exhausted.Blocked[0].Clearable {
+		t.Fatalf("exhausted.Blocked = %+v, want %s alone, held by another checkout and clearable", exhausted.Blocked, blocker.ID)
+	}
+	nothingOutside(t, exhausted)
 
-	// Follow the route as printed. The edge goes through the CLI's own policy
+	// Follow the route to stay. The edge goes through the CLI's own policy
 	// boundary, which refuses a blocked-by edge inside one epic, and the next
 	// route serves the new ticket from the lane this checkout holds.
 	unblocker := followStayRoute(t, h, []string{"--parent", epicA.ID.Raw(), "--top"}, blocker.ID)
@@ -354,29 +340,31 @@ func TestRouteNextTerminalExhaustionNamesTheStayRouteAgainstABlock(t *testing.T)
 	}
 }
 
-// followStayRoute runs the two commands the stay route prints — `lit new` with
-// the flags it names, then `lit dep add` making the blocker wait on the new
-// ticket — through the CLI's own handlers, so a route naming a placement or an
-// edge lit refuses or mis-ranks fails here. It returns the new ticket's id.
+// followStayRoute clears a blocker reported clearable, in the two commands
+// that takes — `lit new` with the given flags, then `lit dep add` making the
+// blocker wait on the new ticket — through the CLI's own handlers, so a
+// blocker reported clearable against a placement or an edge lit refuses or
+// mis-ranks fails here. It returns the new ticket's id.
 func followStayRoute(t *testing.T, h readyTestHarness, newFlags []string, blockerID model.ID) model.ID {
 	t.Helper()
 	var out strings.Builder
 	args := append([]string{"--title", "Clears the blocker", "--topic", "next", "--type", "task"}, newFlags...)
 	if err := runNew(t, h.ctx, &out, h.ap, args); err != nil {
-		t.Fatalf("lit new %v, as the stay route prints it: %v", newFlags, err)
+		t.Fatalf("lit new %v, filing the ticket that clears %s: %v", newFlags, blockerID, err)
 	}
 	newID := strings.Fields(out.String())[0]
 	if err := runDepAdd(t, h.ctx, io.Discard, h.ap, []string{blockerID.Raw(), "--blocked-by", newID}); err != nil {
-		t.Fatalf("lit dep add %s --blocked-by %s, as the stay route prints it: %v", blockerID, newID, err)
+		t.Fatalf("lit dep add %s --blocked-by %s, clearing a blocker reported clearable: %v", blockerID, newID, err)
 	}
 	return model.ID(newID)
 }
 
 // When the block is declared on the epic itself, every child inherits it — a
-// ticket filed under the epic starts out held back too. The stay route still
-// files it there, because the edge it prints next is what frees it: an epic's
-// blocker never holds back a child it waits on. Both halves are observed, the
-// new child held back before the edge and served after it.
+// ticket filed under the epic starts out held back too. The blocker is still
+// reported clearable from under the epic, because the edge added next is what
+// frees the new child: an epic's blocker never holds back a child it waits on.
+// Both halves are observed, the new child held back before the edge and served
+// after it.
 func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -400,8 +388,11 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
 	}
-	if want := "under the epic with `lit new --parent " + epicA.ID.Raw() + " --top`, then make that blocker blocked by it"; !strings.Contains(exhausted.Error(), want) {
-		t.Fatalf("exhausted.Error() = %q, want it to contain %q", exhausted.Error(), want)
+	if !slices.Equal(exhausted.Epics, []model.ID{epicA.ID}) {
+		t.Fatalf("exhausted.Epics = %v, want [%q] — the epic the clearing ticket is filed under", exhausted.Epics, epicA.ID)
+	}
+	if !slices.ContainsFunc(exhausted.Blocked, func(b blockerReach) bool { return b.ID == blocker.ID && b.Clearable }) {
+		t.Fatalf("exhausted.Blocked = %+v, want %s in it, clearable — a ticket under the blocked epic can still free it", exhausted.Blocked, blocker.ID)
 	}
 
 	var out strings.Builder
@@ -426,9 +417,10 @@ func TestRouteNextStayRouteWorksWhenTheEpicItselfIsBlocked(t *testing.T) {
 
 // A dependency inside the epic is never the blocker exhaustion names. lit
 // refuses a blocked-by edge between two tickets of one epic, yet one can exist — an
-// import writes it, or it predates the rule — and a stay route named against it
-// prints a `lit dep add` lit then refuses. Here the sibling is another
-// checkout's work, so the epic waits on work underway and no route stays.
+// import writes it, or it predates the rule — and reported as a blocker to
+// clear it would ask for a `lit dep add` lit then refuses. Here the sibling is
+// another checkout's work, so the epic waits on work underway and reports no
+// blocker at all.
 func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -451,14 +443,18 @@ func TestRouteNextExhaustionNeverNamesASiblingAsTheBlocker(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — A.2 is another checkout's and A.3 waits on it", outcome, outcome)
 	}
-	if want := "no ready work in epic(s) " + epicA.ID.Raw() + " (1/3 done) — nothing else is queued behind what's already in progress; `lit next` has nothing ready outside it either"; exhausted.Error() != want {
-		t.Fatalf("exhausted.Error() = %q, want exactly %q — sibling %s is not a blocker to clear from outside", exhausted.Error(), want, a2.ID)
+	if want := (claims.Progress{Done: 1, Total: 3}); exhausted.Progress != want {
+		t.Fatalf("exhausted.Progress = %+v, want %+v", exhausted.Progress, want)
 	}
+	if len(exhausted.Blocked) != 0 || len(exhausted.Held) != 0 {
+		t.Fatalf("exhausted.Blocked = %+v, Held = %+v, want neither — sibling %s is not a blocker to clear from outside, and the epic waits only on work underway", exhausted.Blocked, exhausted.Held, a2.ID)
+	}
+	nothingOutside(t, exhausted)
 }
 
 // A sibling that is itself blocked is not named either: it is an open row of
-// the epic, so the walk reaches past it to what holds it back, and the stay
-// route names that — an edge lit accepts, followed here as printed.
+// the epic, so the walk reaches past it to what holds it back, and reports
+// that as the blocker to clear — an edge lit accepts, added here.
 func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -484,20 +480,23 @@ func TestRouteNextExhaustionNamesTheOutsideBlockerBehindASibling(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the only row outside epic A is another checkout's", outcome, outcome)
 	}
-	want := "no ready work in epic(s) " + epicA.ID.Raw() + " (1/3 done) — blocked by " + blocker.ID.Raw() +
-		" (on your path but claimed by another checkout right now); `lit next` has nothing ready outside it either" +
-		" — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID.Raw() + " --top`, then make that blocker blocked by it with `lit dep add " + blocker.ID.Raw() + " --blocked-by <new>`"
-	if msg := exhausted.Error(); msg != want {
-		t.Fatalf("exhausted.Error() = %q, want exactly %q — naming %s alone, not sibling %s", msg, want, blocker.ID, a2.ID)
+	if !slices.Equal(exhausted.Epics, []model.ID{epicA.ID}) {
+		t.Fatalf("exhausted.Epics = %v, want [%q] — the epic the clearing ticket is filed under", exhausted.Epics, epicA.ID)
 	}
+	if want := (claims.Progress{Done: 1, Total: 3}); exhausted.Progress != want {
+		t.Fatalf("exhausted.Progress = %+v, want %+v", exhausted.Progress, want)
+	}
+	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != blocker.ID || readingOf(t, exhausted.Blocked[0]).Kind != reachHeldFresh || !exhausted.Blocked[0].Clearable {
+		t.Fatalf("exhausted.Blocked = %+v, want %s alone, held by another checkout and clearable — not sibling %s", exhausted.Blocked, blocker.ID, a2.ID)
+	}
+	nothingOutside(t, exhausted)
 	followStayRoute(t, h, []string{"--parent", epicA.ID.Raw(), "--top"}, blocker.ID)
 }
 
 // This checkout finished its own lane of epic A while another checkout still
 // holds the epic's open lane, so the epic stops for it with work left — but
-// none of that work is this checkout's. Routing counts the two apart, and the
-// pick past the scope is new work: started here from a linked worktree, sent
-// out of the primary clone.
+// none of that work is this checkout's. Routing counts the two apart, so a
+// reader can tell the pick past the scope is new work.
 func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -525,20 +524,12 @@ func TestRouteNextCountsTheCheckoutsOwnLanesApartFromItsEpic(t *testing.T) {
 	if got, want := served.Exhaustion.OwnProgress, (claims.Progress{Done: 1, Total: 1}); got != want {
 		t.Fatalf("OwnProgress = %+v, want %+v — only the lane this checkout holds", got, want)
 	}
-	for _, tc := range []struct {
-		primary bool
-		want    startPlace
-	}{{false, startHere}, {true, startOffPrimaryClone}} {
-		if got := placeFor(outcome, tc.primary); got != tc.want {
-			t.Errorf("placeFor(primary=%v) = %v, want %v", tc.primary, got, tc.want)
-		}
-	}
 }
 
 // Under a focus label the pool is the focus path, so an empty pool is not
 // "nothing ready outside the epic": ready rows off the path were never asked
-// about. They are named, with the way to ask — and our own epic's rows are
-// not among them, since steps 1-2b walk those whether focus is on or not.
+// about. They are named in OffPath — and our own epic's rows are not among
+// them, since steps 1-2b walk those whether focus is on or not.
 func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -567,12 +558,8 @@ func TestRouteNextExhaustionNamesReadyRowsTheFocusWithheld(t *testing.T) {
 	if len(exhausted.OffPath) != 1 || exhausted.OffPath[0] != offPath.ID {
 		t.Fatalf("exhausted.OffPath = %+v, want exactly [%s] — %s is epic A's own, walked by steps 1-2b", exhausted.OffPath, offPath.ID, a2.ID)
 	}
-	msg := exhausted.Error()
-	if strings.Contains(msg, "nothing ready outside it either") {
-		t.Fatalf("exhausted.Error() = %q, want no claim that nothing outside is ready — %s is, off the focus path", msg, offPath.ID)
-	}
-	if want := "nothing on the focus path outside it is ready either: " + offPath.ID.Raw() + " (off the focus path this run answered over — `lit next --all` to route over the whole queue)"; !strings.Contains(msg, want) {
-		t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
+	if exhausted.Narrowing != nil {
+		t.Fatalf("exhausted.Narrowing = %+v, want none — the focus withheld %s, no filter hid it", exhausted.Narrowing, offPath.ID)
 	}
 }
 
@@ -615,13 +602,12 @@ func TestRouteNextExpiredOwnLaneDoesNotOutrankTheBacklog(t *testing.T) {
 }
 
 // An out-of-lane dependency that gates the claimed lane's blocked ticket is
-// offered as on-path — design-docs/work-claims.md, Routing step 1 — and is
-// announced as the claim it establishes. It comes back as ServedFromDependency
-// and not ServedFromClaim: the dependency is by definition OUTSIDE the claimed
-// lane, so starting it claims a second lane, and ServedFromClaim's contract is
-// that nothing is claimed and nothing is said. It is not ServedFromNewLane
-// either: that type is the global pool's, and sharing it would leave this pick
-// rendering the pool's line verbatim.
+// offered as on-path — design-docs/work-claims.md, Routing step 1. It comes
+// back as ServedFromDependency and not ServedFromClaim: the dependency is by
+// definition OUTSIDE the claimed lane, so starting it claims a second lane, and
+// ServedFromClaim's contract is that nothing is claimed. It is not
+// ServedFromNewLane either: that type is the global pool's, and sharing it
+// would leave this pick indistinguishable from the pool's.
 func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -653,13 +639,10 @@ func TestRouteNextOffersOnPathDependencyAsANewLane(t *testing.T) {
 	if served.Gates != a2.ID {
 		t.Fatalf("served.Gates = %q, want %q — the pick must name the blocked row it unblocks, not merely be correct about which dependency to serve", served.Gates, a2.ID)
 	}
-	if want := laneOf(t, details, served.Row); served.Lane != want {
-		t.Fatalf("served.Lane = %v, want %v; the pick would claim a lane this checkout does not hold, and it is the dependency's own lane that gets claimed", served.Lane, want)
-	}
 }
 
 // One dependency can gate several of our own blocked rows, and only one id fits
-// in the announcement. Which one is therefore part of the contract, not an
+// in Gates. Which one is therefore part of the contract, not an
 // accident of the walk: the queue-first gated row. The expectation here is read
 // OUT OF the gathered queue rather than written in as an id, so the test pins
 // the rule and cannot be satisfied by a fixture that happens to order the two
@@ -703,7 +686,7 @@ func TestOnPathDependencyNamesTheQueueFirstRowItGates(t *testing.T) {
 		t.Fatalf("served = %q, want %q (the shared external dependency)", served.Row.ID, dep.ID)
 	}
 	if served.Gates != queueFirst {
-		t.Fatalf("served.Gates = %q, want %q — a dependency gating several of our rows names the queue-first one, so the announcement is deterministic across runs", served.Gates, queueFirst)
+		t.Fatalf("served.Gates = %q, want %q — a dependency gating several of our rows names the queue-first one, so the outcome is deterministic across runs", served.Gates, queueFirst)
 	}
 }
 
@@ -956,21 +939,12 @@ func TestRouteNextExhaustedNamesThePoolTicketAFilterHid(t *testing.T) {
 			if !ok {
 				t.Fatalf("routeNext = %#v (%T), want Exhausted — nothing the filter selects is ready anywhere", outcome, outcome)
 			}
-			msg := exhausted.Error()
 			if !tc.wantHidden {
-				if exhausted.Narrowing != nil || !strings.Contains(msg, "`lit next` has nothing ready outside it either") {
-					t.Fatalf("narrowing = %#v, message %q; want none, and nothing ready outside the epic", exhausted.Narrowing, msg)
-				}
+				nothingOutside(t, exhausted)
 				return
 			}
 			if exhausted.Narrowing == nil || exhausted.Narrowing.Hidden.ID != b1.ID {
 				t.Fatalf("narrowing = %#v, want %q hidden by the filter", exhausted.Narrowing, b1.ID)
-			}
-			if strings.Contains(msg, "nothing ready outside it either") {
-				t.Fatalf("message %q says nothing is ready outside the epic, but %s is", msg, b1.ID)
-			}
-			if want := "`lit next` without --type, --status, --labels or --assignee hands you " + b1.ID.Raw() + ", which this run's filter leaves out"; !strings.Contains(msg, want) {
-				t.Fatalf("message %q, want it to contain %q", msg, want)
 			}
 		})
 	}
@@ -1154,27 +1128,14 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	if !named {
 		t.Fatalf("exhausted.Blocked = %v, want it to name %q — routing around the dependency must not hide it", exhausted.Blocked, dep.ID)
 	}
-	// The diagnostic must not undo the routing decision one line later: `lit
-	// start` on this dependency hits the fresh-takeover gate, so telling the
-	// agent to start it is N2 in the message instead of the pick.
-	msg := exhausted.Error()
-	if !strings.Contains(msg, dep.ID.Raw()) {
-		t.Fatalf("exhausted.Error() = %q, want it to name the blocker %q", msg, dep.ID)
-	}
-	if !strings.Contains(msg, "claimed by another checkout") {
-		t.Fatalf("exhausted.Error() = %q, want it to name %q as held elsewhere rather than as work to pick up", msg, dep.ID)
-	}
-	if strings.Contains(msg, "`lit start` it") {
-		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q — `lit start` would hit the fresh-takeover gate", msg, dep.ID)
-	}
 }
 
 // Whether a hidden ticket is inside the scope does not depend on which chain
 // reaches it first. Here our higher-ranked row's chain reaches it through an
 // outside blocker's dependency edge, which says nothing of its lane, before our
 // other row's lane says it is ours: it is still never named as a blocker, and
-// the outside blocker, which clears when our own ticket does, draws no route
-// to stay.
+// the outside blocker, which clears when our own ticket does, is not one a
+// ticket filed here could clear.
 func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -1206,8 +1167,8 @@ func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.
 	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != outside.ID || readingOf(t, exhausted.Blocked[0]).Kind != reachNotReady {
 		t.Fatalf("exhausted.Blocked = %+v, want only %s, not ready — %s sits in our lane l", exhausted.Blocked, outside.ID, hidden.ID)
 	}
-	if msg := exhausted.Error(); strings.Contains(msg, "to stay, file") {
-		t.Fatalf("exhausted.Error() = %q, want no route to stay — %s clears when our own %s does", msg, outside.ID, hidden.ID)
+	if exhausted.Blocked[0].Clearable {
+		t.Fatalf("exhausted.Blocked[0] = %+v, want it not clearable — %s clears when our own %s does", exhausted.Blocked[0], outside.ID, hidden.ID)
 	}
 }
 
@@ -1216,7 +1177,7 @@ func TestExhaustionPlacesAHiddenLaneMateWhicheverChainReachesItFirst(t *testing.
 // an outside event — through an external ticket it depends on, or by carrying
 // the external label itself: the epic reads as held by itself, through the
 // first. It closes only when both do, and the second waits on that event
-// whatever is filed here, so no route to stay is offered against the epic.
+// whatever is filed here, so the epic is not a blocker a ticket could clear.
 func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1253,8 +1214,8 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 			if got := readingOf(t, exhausted.Blocked[0]); got.ID != epicE.ID || got.Row.ID != held.ID || got.Kind != reachHeldByItself {
 				t.Fatalf("exhausted.Blocked[0] = {%s via %s, %v}, want {%s via %s, held by itself}", got.ID, got.Row.ID, got.Kind, epicE.ID, held.ID)
 			}
-			if msg := exhausted.Error(); strings.Contains(msg, "to stay") {
-				t.Fatalf("exhausted.Error() = %q, want no route to stay — %s closes only when %s does, which waits on an outside event", msg, epicE.ID, waits.ID)
+			if slices.ContainsFunc(exhausted.Blocked, func(b blockerReach) bool { return b.Clearable }) {
+				t.Fatalf("exhausted.Blocked = %+v, want none clearable — %s closes only when %s does, which waits on an outside event", exhausted.Blocked, epicE.ID, waits.ID)
 			}
 		})
 	}
@@ -1263,9 +1224,8 @@ func TestExhaustionReportsAnEpicBlockerByItsTicketHeldByItself(t *testing.T) {
 // Blockers are named in the order the walk reached them, which is the rank of
 // the rows they gate, whether or not the run could see them. Here the
 // higher-ranked row waits on a blocker out of view and the lower-ranked one on
-// a blocker another checkout holds: both are clearable, and the route to stay
-// offers the out-of-view one first. Gathering the out-of-view blocker last
-// would push it past the cap on a busy scope, out of the agent's sight.
+// a blocker another checkout holds: both are clearable, and the out-of-view
+// one comes first.
 func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -1310,16 +1270,16 @@ func TestExhaustionNamesBlockersInWalkOrderWhetherOrNotInView(t *testing.T) {
 	if want := []model.ID{gone.ID, theirs.ID}; !slices.Equal(named, want) {
 		t.Fatalf("exhausted.Blocked = %v, want %v — the walk reached %s first, through %s", named, want, gone.ID, first.ID)
 	}
-	if want := fmt.Sprintf("`lit dep add %s --blocked-by <new>` or `lit dep add %s --blocked-by <new>`", gone.ID, theirs.ID); !strings.Contains(exhausted.Error(), want) {
-		t.Fatalf("exhausted.Error() = %q, want the route to stay to offer %q", exhausted.Error(), want)
+	if !exhausted.Blocked[0].Clearable || !exhausted.Blocked[1].Clearable {
+		t.Fatalf("exhausted.Blocked = %+v, want both clearable — nothing seen holds %s, and %s waits on nothing", exhausted.Blocked, gone.ID, theirs.ID)
 	}
 }
 
 // A row of ours waiting behind an earlier ticket of its own lane waits on our
 // own work, even when a filter keeps that ticket out of view: its lane is the
 // row's own, so it is inside the scope and never a blocker to clear from
-// outside. Collected, it would draw a route to stay that files a ticket in our
-// epic and asks for a blocked-by edge lit refuses between two of its tickets.
+// outside. Collected, it would ask for a ticket filed in our epic and a
+// blocked-by edge lit refuses between two of its tickets.
 func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -1350,8 +1310,8 @@ func TestExhaustionNeverNamesAnEarlierLaneMateOutOfViewAsABlocker(t *testing.T) 
 			t.Fatalf("exhausted.Blocked = %+v, want no %s — it is the earlier ticket of our own lane", exhausted.Blocked, earlier.ID)
 		}
 	}
-	if msg := exhausted.Error(); strings.Contains(msg, "to stay, file") {
-		t.Fatalf("exhausted.Error() = %q, want no route to stay — nothing outside the scope blocks it", msg)
+	if slices.ContainsFunc(exhausted.Blocked, func(b blockerReach) bool { return b.Clearable }) {
+		t.Fatalf("exhausted.Blocked = %+v, want none clearable — nothing outside the scope blocks it", exhausted.Blocked)
 	}
 }
 
@@ -1405,16 +1365,6 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 	if !named {
 		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
 	}
-	msg := exhausted.Error()
-	if !strings.Contains(msg, "outside this view") {
-		t.Fatalf("exhausted.Error() = %q, want %q named as outside this view", msg, dep.ID)
-	}
-	if strings.Contains(msg, "claimed by another checkout") {
-		t.Fatalf("exhausted.Error() = %q, want no claim about who holds %q — this run never gathered it", msg, dep.ID)
-	}
-	if strings.Contains(msg, "`lit start` it") {
-		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q", msg, dep.ID)
-	}
 }
 
 // A blocker nobody holds, blocked by a further dependency of its own whose lane
@@ -1422,8 +1372,8 @@ func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
 // walk descends to the further dependency and offers nothing, so the diagnostic
 // is the whole answer, and it names each link by its own reach — the blocker as
 // not startable, never as held, since its lane is unclaimed, and the further
-// dependency as held. That end is held, not awaiting an outside event, so the
-// route to stay is still offered against it.
+// dependency as held. That end is held, not awaiting an outside event, so it
+// is still a blocker a ticket filed here could clear.
 func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -1450,46 +1400,38 @@ func TestExhaustionNamesEachLinkOfAStuckChainByItsOwnReach(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency is itself blocked", outcome, outcome)
 	}
-	named := false
-	for _, blocked := range exhausted.Blocked {
-		if blocked.ID != dep.ID {
-			continue
+	blocked := func(id model.ID) blockerReach {
+		t.Helper()
+		idx := slices.IndexFunc(exhausted.Blocked, func(b blockerReach) bool { return b.ID == id })
+		if idx < 0 {
+			t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, id)
 		}
-		named = true
-		if readingOf(t, blocked).Kind != reachNotReady {
-			t.Fatalf("blocked dependency %q classified %v, want reachNotReady — nobody holds its lane; it is blocked by %q", dep.ID, readingOf(t, blocked).Kind, deeper.ID)
-		}
+		return exhausted.Blocked[idx]
 	}
-	if !named {
-		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
+	if kind := readingOf(t, blocked(dep.ID)).Kind; kind != reachNotReady {
+		t.Fatalf("blocked dependency %q classified %v, want reachNotReady — nobody holds its lane; it is blocked by %q", dep.ID, kind, deeper.ID)
 	}
-	msg := exhausted.Error()
-	if want := "blocked by " + dep.ID.Raw() + " (on your path but not startable right now"; !strings.Contains(msg, want) {
-		t.Fatalf("exhausted.Error() = %q, want %q", msg, want)
+	end := blocked(deeper.ID)
+	if kind := readingOf(t, end).Kind; kind != reachHeldFresh {
+		t.Fatalf("blocked dependency %q classified %v, want reachHeldFresh — the walk reaches the blocker's own blocker and reports who holds it", deeper.ID, kind)
 	}
-	if want := "blocked by " + deeper.ID.Raw() + " (on your path but claimed by another checkout right now)"; !strings.Contains(msg, want) {
-		t.Fatalf("exhausted.Error() = %q, want %q — the walk reaches the blocker's own blocker and names who holds it", msg, want)
-	}
-	if strings.Contains(msg, "`lit start` it") {
-		t.Fatalf("exhausted.Error() = %q, want no instruction to start %q — it is blocked by %q", msg, dep.ID, deeper.ID)
-	}
-	if !strings.Contains(msg, "to stay, file the ticket that clears a blocker") {
-		t.Fatalf("exhausted.Error() = %q, want the route to stay — the chain ends at %q, which an outside event does not hold", msg, deeper.ID)
+	if !end.Clearable {
+		t.Fatalf("blocked dependency %q is not clearable, want it clearable — the chain ends there, and an outside event does not hold it", deeper.ID)
 	}
 }
 
 // A scope stopped by its own ticket, held by a label on that ticket, names the
-// ticket and the reason. Nothing in it is in progress, so the in-progress
-// sentence would be false; and a ticket inside the epic cannot take a blocks
-// edge, so no stay route is offered against it.
+// ticket in Held with the reason. Nothing in it is in progress, so Held is what
+// keeps the scope from reading as waiting on work underway; and a ticket inside
+// the epic cannot take a blocks edge, so it is not reported as a blocker.
 func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		label string
-		note  string
+		kind  reachKind
 	}{
-		{label: ExternalLabel, note: "on your path but waiting on an event outside this repository"},
-		{label: NeedsDesignLabel, note: "on your path but held by something about the ticket itself"},
+		{label: ExternalLabel, kind: reachAwaitingOutside},
+		{label: NeedsDesignLabel, kind: reachHeldByItself},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			h := newReadyTestHarness(t)
@@ -1504,12 +1446,17 @@ func TestExhaustionNamesTheScopesOwnTicketHeldByALabel(t *testing.T) {
 			if !ok {
 				t.Fatalf("routeNext = %#v (%T), want Exhausted — A.1 is held by %q and A.2 waits behind it", outcome, outcome, tc.label)
 			}
-			want := "no ready work in epic(s) " + epicA.ID.Raw() + " (0/2 done) — held here: " + lead.ID.Raw() + " (" + tc.note
-			if msg := exhausted.Error(); !strings.HasPrefix(msg, want) {
-				t.Fatalf("exhausted.Error() = %q, want it to start %q", msg, want)
+			if !slices.Equal(exhausted.Epics, []model.ID{epicA.ID}) {
+				t.Fatalf("exhausted.Epics = %v, want [%q]", exhausted.Epics, epicA.ID)
 			}
-			if msg := exhausted.Error(); strings.Contains(msg, "already in progress") || strings.Contains(msg, "to stay") {
-				t.Fatalf("exhausted.Error() = %q, want neither the in-progress sentence nor a stay route — nothing is in progress and %q is inside the epic", msg, lead.ID)
+			if want := (claims.Progress{Done: 0, Total: 2}); exhausted.Progress != want {
+				t.Fatalf("exhausted.Progress = %+v, want %+v", exhausted.Progress, want)
+			}
+			if len(exhausted.Held) != 1 || exhausted.Held[0].ID != lead.ID || exhausted.Held[0].Kind != tc.kind {
+				t.Fatalf("exhausted.Held = %+v, want %s alone, reach kind %v", exhausted.Held, lead.ID, tc.kind)
+			}
+			if len(exhausted.Blocked) != 0 {
+				t.Fatalf("exhausted.Blocked = %+v, want none — %q is inside the epic, not a blocker outside it", exhausted.Blocked, lead.ID)
 			}
 		})
 	}
@@ -1552,8 +1499,8 @@ func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
 				served = o.Row
 			case ServedPastExhaustion:
 				served = o.Row
-				if want := waiting.ID.Raw() + " (on your path but waiting on an event outside this repository"; !strings.Contains(o.Exhaustion.why(), want) {
-					t.Fatalf("exhaustion = %q, want it to contain %q", o.Exhaustion.why(), want)
+				if !slices.ContainsFunc(o.Exhaustion.Held, func(r rowReach) bool { return r.ID == waiting.ID && r.Kind == reachAwaitingOutside }) {
+					t.Fatalf("exhaustion.Held = %+v, want %q in it, awaiting an outside event", o.Exhaustion.Held, waiting.ID)
 				}
 			default:
 				t.Fatalf("routeNext = %#v (%T), want %q served past the external ticket", outcome, outcome, plain.ID)
@@ -1566,12 +1513,12 @@ func TestAnExternalTicketInFlightIsNeverServed(t *testing.T) {
 }
 
 // A blocker the external label holds waits on an event outside the repository,
-// so exhaustion names it as such and never tells the agent to file a ticket
-// that would clear it: no ticket filed here can. The same holds for a blocker
-// that waits on it, whether nobody holds its lane, another checkout does, or a
-// label on itself holds it too: a ticket filed against it leaves it waiting on
-// the outside event. Beside a blocker a ticket could clear, the route comes
-// back, and names that blocker alone.
+// so exhaustion names it as such and never reports it clearable: no ticket
+// filed here can clear it. The same holds for a blocker that waits on it,
+// whether nobody holds its lane, another checkout does, or a label on itself
+// holds it too: a ticket filed against it leaves it waiting on the outside
+// event. Beside a blocker a ticket could clear, that blocker alone is
+// clearable.
 func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T) {
 	t.Parallel()
 	// path makes A.2 wait on upstream, the external ticket, by way of a ticket
@@ -1621,12 +1568,12 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 			if tc.heldForeign {
 				foreign = append(foreign, reached.ID)
 			}
-			wantRoute := ""
+			var wantClearable []model.ID
 			if tc.alsoPlain {
 				plain := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Theirs"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicY.ID, Lane: storage.MustParseLane("plain")})
 				h.addDependency(a2.ID, plain.ID)
 				foreign = append(foreign, plain.ID)
-				wantRoute = " — to stay, file the ticket that clears a blocker under the epic with `lit new --parent " + epicA.ID.Raw() + " --top`, then make that blocker blocked by it with `lit dep add " + plain.ID.Raw() + " --blocked-by <new>`"
+				wantClearable = append(wantClearable, plain.ID)
 			}
 			rows, details, epics := h.gather()
 			standings := claims.Standings{model.LaneOf(a1, &epicA): heldBy(selfAttribution)}
@@ -1643,15 +1590,17 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 			if idx < 0 || readingOf(t, exhausted.Blocked[idx]).Kind != reachAwaitingOutside {
 				t.Fatalf("exhausted.Blocked = %v, want %q classified reachAwaitingOutside", exhausted.Blocked, upstream.ID)
 			}
-			msg := exhausted.Error()
-			if want := upstream.ID.Raw() + " (on your path but waiting on an event outside this repository"; !strings.Contains(msg, want) {
-				t.Fatalf("exhausted.Error() = %q, want it to contain %q", msg, want)
+			if !slices.Equal(exhausted.Epics, []model.ID{epicA.ID}) {
+				t.Fatalf("exhausted.Epics = %v, want [%q] — the epic a clearing ticket is filed under", exhausted.Epics, epicA.ID)
 			}
-			if wantRoute == "" && strings.Contains(msg, "to stay") {
-				t.Fatalf("exhausted.Error() = %q, want no route to stay — %q waits only on %q", msg, reached.ID, upstream.ID)
+			var clearable []model.ID
+			for _, blocker := range exhausted.Blocked {
+				if blocker.Clearable {
+					clearable = append(clearable, blocker.ID)
+				}
 			}
-			if !strings.HasSuffix(msg, wantRoute) {
-				t.Fatalf("exhausted.Error() = %q, want it to end %q — the route names only the blocker a ticket filed here could free", msg, wantRoute)
+			if !slices.Equal(clearable, wantClearable) {
+				t.Fatalf("clearable blockers = %v of %+v, want %v — only a blocker a ticket filed here could free; %q waits only on %q", clearable, exhausted.Blocked, wantClearable, reached.ID, upstream.ID)
 			}
 		})
 	}
@@ -1659,8 +1608,8 @@ func TestExhaustionNeverOffersToClearABlockerAwaitingAnOutsideEvent(t *testing.T
 
 // A blocker another checkout has started is past its prerequisites, as routing
 // treats work in flight: the walk does not descend it, so an open dependency
-// it still carries is named nowhere, and does not stop the route to stay from
-// offering to clear it.
+// it still carries is named nowhere, and does not stop the blocker from being
+// reported clearable.
 func TestExhaustionOffersToClearAStartedBlockerWhateverItStillDependsOn(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -1690,15 +1639,12 @@ func TestExhaustionOffersToClearAStartedBlockerWhateverItStillDependsOn(t *testi
 	if len(exhausted.Blocked) != 1 || exhausted.Blocked[0].ID != started.ID || !exhausted.Blocked[0].Clearable {
 		t.Fatalf("exhausted.Blocked = %v, want %q alone, clearable — %q is past its prerequisites", exhausted.Blocked, started.ID, started.ID)
 	}
-	if want := "then make that blocker blocked by it with `lit dep add " + started.ID.Raw() + " --blocked-by <new>`"; !strings.HasSuffix(exhausted.Error(), want) {
-		t.Fatalf("exhausted.Error() = %q, want it to end %q", exhausted.Error(), want)
-	}
 }
 
 // Step 2's other admission. Every expired-foreign test for this step uses an
-// open row, which announces as a plain start; this is the in-flight disjunct,
-// which is the case ServedFromEpicLane's doc comment actually asserts and the
-// only one whose announcement says the row is somebody's abandoned work.
+// open row, a plain start; this is the in-flight disjunct, which is the case
+// ServedFromEpicLane's doc comment actually asserts and the only one where the
+// row served is somebody's abandoned work.
 func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -1721,12 +1667,11 @@ func TestRouteNextServesAnAbandonedSiblingLane(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane — an abandoned sibling lane of our own epic is servable", outcome, outcome)
 	}
-	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
-		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
+	if served.Row.ID != a2.ID {
+		t.Fatalf("served = %q, want %q", served.Row.ID, a2.ID)
 	}
-	advice := startAdvice(served.Row, served.Lane, startHere)
-	if !strings.Contains(advice, "in progress and nobody holds it") {
-		t.Fatalf("startAdvice = %q, want it to say the row is in flight and unheld — this pick inherits %q's unfinished work rather than beginning it", advice, a2.ID)
+	if served.Row.State() != model.StateInProgress {
+		t.Fatalf("served row state = %v, want in progress — this pick inherits %q's unfinished work rather than beginning it", served.Row.State(), a2.ID)
 	}
 }
 
@@ -1786,112 +1731,11 @@ func TestRouteNextContinuesEpicIntoAnExpiredForeignLane(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane (an expired sibling lane of our own epic is nobody's)", outcome, outcome)
 	}
-	if served.Row.ID != a2.ID || served.Lane.Epic() != epicA.ID {
-		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Lane.Epic(), a2.ID, epicA.ID)
+	if served.Row.ID != a2.ID {
+		t.Fatalf("served = %q, want %q", served.Row.ID, a2.ID)
 	}
 	if served.Row.State() != model.StateOpen {
 		t.Fatalf("served row state = %v, want open — the pick must rest on the lane being unheld alone, never on an orphan", served.Row.State())
-	}
-}
-
-// startAdvice varies on two axes, and this pins every cell of the product.
-//
-// The lead clause is routing's admission made visible. An in-progress row
-// reaches a lane this checkout does not hold only when nobody holds that lane,
-// so a bare "claim it" would promise greenfield on a ticket that may carry
-// another checkout's unmerged working tree; the clause says the row is in
-// flight and unheld, and nothing about who left it — an expired claim is not a
-// claim, and the wording carries no provenance.
-//
-// The object is the lane, and rendering LaneID's three shapes through String()
-// would misinform the reader: a solo lane spells the ticket's own id, so the
-// line reads "starting X claims X" and no reader can take a tautology as advice
-// about a command they have yet to run; an epic's default lane, whose key is
-// empty, trails a bare "#" that reads as an unfilled template slot. Only the
-// named lane carries information, and it is the rarest of the three.
-//
-// The solo shape is the type's, not the store's: every leaf lives in an epic,
-// so no gathered row derives one (LaneOf keys a solo lane only for a row with
-// no container over it, which is now a top-level epic — never a row `next`
-// serves). The solo cells build the lane directly, so the arm startAdvice
-// keeps for that shape is still pinned.
-//
-// Whatever else changes here, no cell may contain "#" or say the ticket's id
-// where a lane belongs, and a table is the only way to see all three shapes
-// fail at once.
-func TestStartAdviceNamesTheCommandAndTheLaneShape(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	named := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
-	unnamed := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.5, read as a lane of one"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a5")})
-	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.3"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a3")})
-	unnamedInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.4"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	soloInFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.6, read as a lane of one, abandoned"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a6")})
-	for _, abandoned := range []model.ID{inFlight.ID, unnamedInFlight.ID, soloInFlight.ID} {
-		h.transition(abandoned, model.Start{Assignee: "other"})
-	}
-
-	rows, details, _ := h.gather()
-
-	for _, tc := range []struct {
-		name string
-		id   model.ID
-		want string
-		solo bool
-	}{
-		{"a named lane is the one shape worth naming", named.ID,
-			"run `lit start " + named.ID.Raw() + "` to claim lane a1 of epic " + epicA.ID.Raw(), false},
-		{"an epic's default lane is words, not a trailing #", unnamed.ID,
-			"run `lit start " + unnamed.ID.Raw() + "` to claim the default lane of epic " + epicA.ID.Raw(), false},
-		{"a solo lane is the ticket, so the lane goes unnamed", solo.ID,
-			"run `lit start " + solo.ID.Raw() + "` to claim it", true},
-		{"an in-flight row says so before the same advice", inFlight.ID,
-			inFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + inFlight.ID.Raw() + "` to claim lane a3 of epic " + epicA.ID.Raw(), false},
-		{"a default lane is still words on an in-flight row", unnamedInFlight.ID,
-			unnamedInFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + unnamedInFlight.ID.Raw() + "` to claim the default lane of epic " + epicA.ID.Raw(), false},
-		{"a solo lane still goes unnamed on an in-flight row", soloInFlight.ID,
-			soloInFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + soloInFlight.ID.Raw() + "` to claim it", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			row := rowByID(t, rows, tc.id)
-			lane := laneOf(t, details, row)
-			if tc.solo {
-				lane = model.LaneOf(row.Issue, nil)
-			}
-			got := startAdvice(row, lane, startHere)
-			if got != tc.want {
-				t.Fatalf("startAdvice = %q, want %q", got, tc.want)
-			}
-			if strings.Contains(got, "#") {
-				t.Fatalf("startAdvice = %q, want no %q — String()'s lane grammar is for logs, not for a sentence", got, "#")
-			}
-			if !strings.Contains(got, "run `lit start "+tc.id.Raw()+"`") {
-				t.Fatalf("startAdvice = %q, want it to name the command the reader would run", got)
-			}
-		})
-	}
-}
-
-// The tautology, stated as its own premise rather than left implicit in the
-// table above. A solo lane IS its ticket — LaneOf keys a solo lane by the issue
-// id — so any advice that names both says one id twice. The table's expected
-// string would survive a rename of the phrase "it"; this does not survive
-// naming the lane at all. The lane is built directly, as in the table: no leaf
-// row derives one now that every leaf lives in an epic.
-func TestStartAdviceNeverSpellsASoloTicketTwice(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	solo := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1, read as a lane of one"), Lane: storage.SharedLane, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-
-	rows, _, _ := h.gather()
-	row := rowByID(t, rows, solo.ID)
-	got := startAdvice(row, model.LaneOf(row.Issue, nil), startHere)
-
-	if n := strings.Count(got, solo.ID.Raw()); n != 1 {
-		t.Fatalf("startAdvice = %q names %q %d times, want exactly 1 — a solo lane is its ticket, so naming the lane repeats the id and reads as a log line rather than as advice", got, solo.ID, n)
 	}
 }
 
@@ -2117,35 +1961,6 @@ func TestRouteNextRoutesAroundAFreshPublicHold(t *testing.T) {
 	}
 }
 
-// reachNotes is indexed by the kind, so no diagnostic can drop a kind's ids the
-// way a list of pairs could — but Go fills an unlisted index with "", and the
-// renderer would then print those ids under an empty parenthetical. The array
-// makes the failure loud; only this makes it impossible. The other direction —
-// words for a kind no walk reports — is the compiler's: reachNotes has no slot
-// for reachTakeable, and what each walk reports beyond reachOf's answers is a
-// list of its own outcome, not a kind.
-func TestEveryReachKindHasWordsInBothDiagnostics(t *testing.T) {
-	t.Parallel()
-	for name, notes := range map[string]reachNotes{"exhausted": exhaustedNotes, "pool": poolNotes} {
-		for kind, words := range notes {
-			if words == "" {
-				t.Errorf("%s notes: reachKind %d has no words — its ids would render under an empty parenthetical", name, kind)
-			}
-		}
-	}
-}
-
-// A focus label can withhold every row the pool would have walked. The pool is
-// then empty, but the backlog is not, and the bare "no ready work" would say it
-// is: the message names the withheld rows as off the path.
-func TestNoWorkWithEveryRowOffThePathIsNotAnEmptyBacklog(t *testing.T) {
-	t.Parallel()
-	msg := NoWork{OffPath: []model.ID{"test-off"}}.Error()
-	if !strings.HasPrefix(msg, "no ready work on the focus path — ") || !strings.Contains(msg, "test-off ("+offFocusPathNote+")") {
-		t.Fatalf("NoWork.Error() = %q, want the focus-path lead naming test-off as off the focus path", msg)
-	}
-}
-
 // readingOf is the reading of a blocker the test expects in view, failing the
 // test when the run could not read it.
 func readingOf(t *testing.T, blocker blockerReach) rowReach {
@@ -2162,8 +1977,8 @@ func readingOf(t *testing.T, blocker blockerReach) rowReach {
 // have.
 //
 // Two kinds are put in one pool on purpose. A single-kind fixture passes
-// against a renderer that prints one note for everything it went past: the
-// message has to say that one row is somebody's live work and the other is
+// against a walk that reports one kind for everything it went past: the
+// outcome has to say that one row is somebody's live work and the other is
 // merely gated, because those call for different acts.
 func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 	t.Parallel()
@@ -2196,30 +2011,10 @@ func TestNoWorkNamesEachRowThePoolWalkWentPast(t *testing.T) {
 			t.Fatalf("NoWork.Unreachable[%q] = %v, want %v — the walk's own verdict, kept rather than discarded (got %v)", id, got[id], kind, got)
 		}
 	}
-
-	msg := noWork.Error()
-	if msg == "no ready work" {
-		t.Fatalf("NoWork.Error() = %q — the bare sentence is the empty-backlog answer, and this backlog has %d rows in it", msg, len(rows))
-	}
-	if !strings.Contains(msg, "the backlog is not empty") {
-		t.Fatalf("NoWork.Error() = %q, want it to refute the empty reading outright", msg)
-	}
-	for _, id := range []string{held.ID.Raw(), gated.ID.Raw()} {
-		if !strings.Contains(msg, id) {
-			t.Fatalf("NoWork.Error() = %q, want it to name %q — a row walked past and not named is a row the agent is told does not exist", msg, id)
-		}
-	}
-	if !strings.Contains(msg, "another checkout holds right now") {
-		t.Fatalf("NoWork.Error() = %q, want %q reported as another checkout's live work", msg, held.ID)
-	}
-	if !strings.Contains(msg, "not startable right now") {
-		t.Fatalf("NoWork.Error() = %q, want %q reported as gated rather than as somebody's live work", msg, gated.ID)
-	}
 }
 
-// poolNotes has words for every kind, which holds only because the pool walk
-// can report every kind: a kind it could not reach would leave a note nothing
-// renders. Held fresh and not ready are reached above, and awaiting outside by
+// The pool walk can report every kind of row it goes past. Held fresh and not
+// ready are reached above, and awaiting outside by
 // TestNextLeavesTheRowsItWentPastOnTheEvent; this reaches the fourth, a row
 // held by a label on itself.
 func TestNoWorkReportsARowHeldByItself(t *testing.T) {
@@ -2237,15 +2032,12 @@ func TestNoWorkReportsARowHeldByItself(t *testing.T) {
 	if len(noWork.Unreachable) != 1 || noWork.Unreachable[0].ID != held.ID || noWork.Unreachable[0].Kind != reachHeldByItself {
 		t.Fatalf("NoWork.Unreachable = %+v, want exactly %s, held by itself", noWork.Unreachable, held.ID)
 	}
-	if want := held.ID.Raw() + " (" + poolNotes[reachHeldByItself] + ")"; !strings.Contains(noWork.Error(), want) {
-		t.Fatalf("NoWork.Error() = %q, want %q", noWork.Error(), want)
-	}
 }
 
-// The other half of the same type: an empty backlog. The clause is driven
-// entirely by the rows the walk went past, so no rows means no clause — pinned
-// byte-for-byte, because "no ready work" is still the whole truth when there is
-// nothing to say why about.
+// The other half of the same type: an empty backlog. The outcome names only
+// rows the walk went past or a focus label withheld, so with no rows it names
+// none — both lists empty is what tells an empty backlog from one full of work
+// this checkout may not have.
 func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -2259,90 +2051,7 @@ func TestNoWorkOnAGenuinelyEmptyBacklogIsUnchanged(t *testing.T) {
 	if len(noWork.Unreachable) != 0 {
 		t.Fatalf("NoWork.Unreachable = %v, want empty — nothing was gathered, so nothing was gone past", noWork.Unreachable)
 	}
-	if got := noWork.Error(); got != "no ready work" {
-		t.Fatalf("NoWork.Error() = %q, want exactly %q unchanged", got, "no ready work")
-	}
-}
-
-// The pool walk hands NoWork every row it went past, which in a busy workspace
-// is the whole filtered backlog rather than the epic-scoped handful Exhausted
-// reports. The clause has to stay one readable line at that size without lying
-// about how much of it went unnamed.
-//
-// Asserted per kind rather than per message on purpose: describeReach groups the
-// rows by kind and renders a clause each, so a cap applied to the joined message
-// would pass a single-kind fixture and still emit an unbounded line the moment a
-// second kind appeared.
-func TestReachClauseNamesABoundedPrefixAndCountsTheRest(t *testing.T) {
-	t.Parallel()
-
-	rowsOfKind := func(kind reachKind, prefix string, n int) []rowReach {
-		rows := make([]rowReach, 0, n)
-		for i := range n {
-			rows = append(rows, rowReach{ID: model.ID(fmt.Sprintf("%s-%03d", prefix, i)), reading: reading{Kind: kind}})
-		}
-		return rows
-	}
-
-	t.Run("a pool over the cap names the cap's worth and counts the remainder", func(t *testing.T) {
-		over := 7
-		msg := NoWork{Unreachable: rowsOfKind(reachHeldFresh, "held", maxNamedPerKind+over)}.Error()
-
-		if want := fmt.Sprintf("and %d more", over); !strings.Contains(msg, want) {
-			t.Fatalf("NoWork.Error() = %q, want %q — a truncation that omits the count tells the agent the backlog is smaller than it is", msg, want)
-		}
-		if named := fmt.Sprintf("held-%03d", maxNamedPerKind-1); !strings.Contains(msg, named) {
-			t.Fatalf("NoWork.Error() = %q, want it to name %q — the last id inside the cap is named, not counted", msg, named)
-		}
-		if dropped := fmt.Sprintf("held-%03d", maxNamedPerKind); strings.Contains(msg, dropped) {
-			t.Fatalf("NoWork.Error() = %q, want %q left to the count — naming it means the cap never bit", msg, dropped)
-		}
-	})
-
-	t.Run("a pool at the cap is named whole", func(t *testing.T) {
-		msg := NoWork{Unreachable: rowsOfKind(reachHeldFresh, "held", maxNamedPerKind)}.Error()
-
-		if strings.Contains(msg, "more") {
-			t.Fatalf("NoWork.Error() = %q, want no remainder clause — every row is named, so there is nothing left to count", msg)
-		}
-		for i := range maxNamedPerKind {
-			if id := fmt.Sprintf("held-%03d", i); !strings.Contains(msg, id) {
-				t.Fatalf("NoWork.Error() = %q, want it to name %q — a set at the cap loses nothing", msg, id)
-			}
-		}
-	})
-
-	t.Run("the cap is per kind, so one kind cannot spend another's budget", func(t *testing.T) {
-		over := 4
-		pool := append(
-			rowsOfKind(reachHeldFresh, "held", maxNamedPerKind+over),
-			rowsOfKind(reachNotReady, "gated", maxNamedPerKind+over)...,
-		)
-		msg := NoWork{Unreachable: pool}.Error()
-
-		if got := strings.Count(msg, fmt.Sprintf("and %d more", over)); got != 2 {
-			t.Fatalf("NoWork.Error() = %q, counted %d remainder clauses, want 2 — each kind reports its own tail, or the second kind's rows vanish into the first kind's count", msg, got)
-		}
-		for _, id := range []string{"held-000", "gated-000"} {
-			if !strings.Contains(msg, id) {
-				t.Fatalf("NoWork.Error() = %q, want it to name %q — both kinds get a clause, and each names its own prefix", msg, id)
-			}
-		}
-	})
-}
-
-// The route to stay spells a command per blocker it could clear, and is held to
-// the same cap as the clause naming those blockers, so a scope gated by many
-// clearable blockers still answers in a readable line.
-func TestStayRouteNamesABoundedPrefixAndCountsTheRest(t *testing.T) {
-	t.Parallel()
-	over := 3
-	blocked := make([]blockerReach, maxNamedPerKind+over)
-	for i := range blocked {
-		blocked[i] = blockerReach{depReach: depReach{ID: model.ID(fmt.Sprintf("dep-%03d", i))}, Clearable: true}
-	}
-	route := strings.Join(Exhausted{Epics: []model.ID{"test-epic"}, Blocked: blocked}.stay(), "")
-	if want := fmt.Sprintf("`lit dep add dep-%03d --blocked-by <new>` and %d more", maxNamedPerKind-1, over); !strings.HasSuffix(route, want) {
-		t.Fatalf("stay() = %q, want it to end %q", route, want)
+	if len(noWork.OffPath) != 0 {
+		t.Fatalf("NoWork.OffPath = %v, want empty — no focus label withheld anything", noWork.OffPath)
 	}
 }

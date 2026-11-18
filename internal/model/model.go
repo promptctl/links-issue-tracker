@@ -297,33 +297,6 @@ func (l LaneID) Format(f fmt.State, verb rune) {
 	FormatHeld(f, verb, l.epic.Raw()+"#"+l.key)
 }
 
-// Describe renders the lane for a sentence a person or an agent reads, and
-// reports whether the lane is anything the sentence should name at all.
-//
-// It exists because String's "#" is punctuation doing a word's job. That earns
-// its place where String is read — "A#" must not be mistaken for epic "A" in a
-// test failure — and loses it in prose, where the words "epic" and "lane" draw
-// the same distinction themselves and the default lane's empty key would render
-// as a trailing bare "#", which reads as an unfilled template slot to anyone
-// who does not already know the grammar.
-//
-// A solo lane describes as nothing: it holds exactly the ticket that names it,
-// so any phrase for it only repeats what the surrounding sentence has already
-// said. What to say in its place is the caller's, because only the caller knows
-// whether the ticket was just named. [LAW:composability]
-//
-// Reading the shape off the tag rather than off an empty epic is the point of
-// the tag — see LaneID. [LAW:one-source-of-truth]
-func (l LaneID) Describe() (string, bool) {
-	if l.solo {
-		return "", false
-	}
-	if l.key == "" {
-		return fmt.Sprintf("the default lane of epic %s", l.epic), true
-	}
-	return fmt.Sprintf("lane %s of epic %s", HoldRow(l.key), l.epic), true
-}
-
 // Capabilities reports the issue's structural lifecycle capabilities. Whether an
 // issue exposes a status capability is fixed by its type — leaves do, containers
 // (whose state is derived from children) never do — so a container answers

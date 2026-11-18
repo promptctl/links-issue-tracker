@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"fmt"
 	"maps"
 	"slices"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
@@ -20,13 +18,12 @@ import (
 // pick: it is an answer-shaped void unless the type forbids the confusion.
 // [LAW:types-are-the-program] [LAW:parse-dont-validate]
 //
-// The served variants split on the one question the renderer must answer
-// before handing a row over: does taking it establish a claim this checkout
-// did not already hold? Every announcement follows from that.
+// The served variants split on one question: does taking the row establish a
+// claim this checkout did not already hold?
 type NextOutcome interface{ isNextOutcome() }
 
 // ServedFromClaim is a ready ticket in a lane this checkout already holds —
-// routing step 1. No new claim is established, so nothing is announced.
+// routing step 1. No new claim is established.
 type ServedFromClaim struct{ Row annotation.AnnotatedIssue }
 
 // ResumedOwnWork is a ticket already in flight in a lane this checkout holds,
@@ -39,46 +36,31 @@ type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 
 // ServedFromEpicLane is a pick from a different lane of the same epic this
 // checkout already holds a lane in — the GRANULARITY RULING's new step 2,
-// epic-major before global. Starting it would establish a fresh claim on Lane,
-// which is why it carries the lane to name, and it admits abandoned in-flight
-// work exactly as ServedFromNewLane does.
-//
-// The epic is Lane.Epic() and is not carried beside it: two fields for one fact
-// are two clocks. [LAW:one-source-of-truth]
-type ServedFromEpicLane struct {
-	Row  annotation.AnnotatedIssue
-	Lane model.LaneID
-}
+// epic-major before global. Starting it would establish a fresh claim on the
+// row's lane, and it admits abandoned in-flight work exactly as
+// ServedFromNewLane does.
+type ServedFromEpicLane struct{ Row annotation.AnnotatedIssue }
 
 // ServedFromNewLane is a ready ticket in a lane this checkout does NOT hold, so
-// starting it would establish a claim — which is what Lane is carried to name.
-// The global pool (step 4) is its only producer. Step 1b has its own outcome,
+// starting it would establish a claim. The global pool (step 4) is its only producer. Step 1b has its own outcome,
 // ServedFromDependency: it establishes a claim, so it cannot be ServedFromClaim,
-// whose contract is that nothing is announced, and sharing this type with the
-// pool would leave the renderer unable to tell the two apart.
+// and sharing this type with the pool would leave the invocation event unable
+// to tell the two apart.
 //
-// Abandoned in-flight work arrives here too, and says so — startAdvice reads
-// the row's state. A ready ticket reads as a fresh start whatever its lane's
-// history: a lane whose claim expired is unclaimed, and nothing about the
-// expired claim is printed (links-claims-y6yz).
+// Abandoned in-flight work arrives here too: a lane whose claim expired is
+// unclaimed.
 type ServedFromNewLane struct{ poolPick }
 
-// poolPick is a row the global pool served, with the lane starting it would
-// claim and the focus scope the pool answered over. The scope is the one
+// poolPick is a row the global pool served, with the focus scope the pool
+// answered over. The scope is the one
 // routeNext partitioned the pool by, carried out of the walk rather than
-// re-derived by the renderer, so the pick says which question produced it: the
+// re-derived by its reader, so the pick says which question produced it: the
 // focus path, or — the zero scope — the whole queue. Only the outcomes the pool
 // builds embed it, so a pick from steps 1-2b, which no scope narrowed, has no
 // field through which it could claim one. [LAW:types-are-the-program]
 // [LAW:one-source-of-truth]
-//
-// Lane is the LaneID and not its String(): the rendering belongs to whoever
-// knows the reader, and stringifying here would throw away the discriminator
-// the renderer needs to tell a lane worth naming from one that would only
-// repeat the ticket. [LAW:types-are-the-program]
 type poolPick struct {
 	Row   annotation.AnnotatedIssue
-	Lane  model.LaneID
 	Scope focusScope
 }
 
@@ -92,27 +74,22 @@ type poolPick struct {
 // ready, or in a lane another checkout holds; it is
 // empty when Blocker is one of Gates' own. Like
 // ServedFromNewLane it establishes a claim on a lane this checkout does not
-// hold, so Lane is carried for the same reason. Unlike it, the pick has a
+// hold. Unlike it, the pick has a
 // reason the row cannot show on its own — it unblocks work on our path — and
-// without Blocker the announcement would say Row gates a ticket that Row may
-// have no edge to.
+// without Blocker the record would say Row gates a ticket that Row may have no
+// edge to.
 //
 // It is its own outcome rather than a nullable qualifier on ServedFromNewLane
 // because the two picks answer different questions. A Gates field hanging off
 // the shared type would make "a global-pool pick that gates something" and "a
 // dependency pick that gates nothing" both representable, and neither exists.
 // Here Gates and Blocker are always set, by construction: gatingDependencies
-// only yields a dependency because some in-scope row depends on it. The renderer's switch
-// panics on an unhandled outcome, so a new type announces itself at the first
+// only yields a dependency because some in-scope row depends on it. The event's
+// switch panics on an unhandled outcome, so a new type shows up at the first
 // unhandled call site instead of falling through silently — which is what makes
 // the discriminated form cheaper here than the flag. [LAW:types-are-the-program]
-//
-// Step 2 already qualifies its pick ("a second lane of an epic you already hold
-// a lane in"); this pick has the stronger claim to one, and without it the
-// hardest pick to predict would be the only unexplained one.
 type ServedFromDependency struct {
 	Row     annotation.AnnotatedIssue
-	Lane    model.LaneID
 	Gates   model.ID
 	Via     []hop
 	Blocker model.ID
@@ -138,10 +115,6 @@ func (h hop) ids() []model.ID {
 	return []model.ID{h.Prerequisite, h.Through}
 }
 
-// name is how an announcement names the hop. [LAW:one-source-of-truth]
-// workName is the one phrasing of work under an epic.
-func (h hop) name() string { return workName(h.Prerequisite, h.Through) }
-
 // ServedPastExhaustion is routing step 3 with somewhere to go: this checkout's
 // own scope has nothing reachable (Exhaustion says why), and the global pool
 // has a ready ticket outside it. An epic holding only blocked work used to
@@ -149,11 +122,8 @@ func (h hop) name() string { return workName(h.Prerequisite, h.Through) }
 // `next` repeated it: the agent stayed in the epic with nothing to do until
 // its claim expired (owner ruling, links-next-5sxz, 2026-09-29).
 //
-// It carries the whole exhaustion rather than a flag, because the renderer
-// owes the agent every route out, and only the exhaustion knows whether one
-// stays: file the ticket that unblocks the scope, when something blocks it — or
-// move on to Row. Leaving is never silent — the pick is announced beside the
-// reason the scope stopped.
+// It carries the whole exhaustion rather than a flag, so the invocation event
+// records why the scope stopped beside the pick that left it.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
 type ServedPastExhaustion struct {
 	poolPick
@@ -172,9 +142,6 @@ type ServedPastExhaustion struct {
 // offered it, so a focus that also kept rows the filter selects out of the
 // pool is said beside it as on a pool pick, and the zero scope for the held
 // scope's next ticket, which no scope narrows.
-//
-// It is an error on the same terms as Exhausted and NoWork, whose answers it
-// replaces when the filter is the reason for them.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
 type Narrowed struct {
 	Hidden annotation.AnnotatedIssue
@@ -182,10 +149,9 @@ type Narrowed struct {
 }
 
 // ServedPastNarrowing is Narrowed with somewhere to go: the pool's top ready
-// ticket the filter selects, which lies outside the scope, served beneath the
-// ticket the filter hid. Like ServedPastExhaustion it carries the whole reason
-// rather than a flag, so the one sentence that names the hidden ticket is
-// written once, on Narrowed.
+// ticket the filter selects, which lies outside the scope. Like
+// ServedPastExhaustion it carries the whole reason rather than a flag, so the
+// hidden ticket is recorded once, on Narrowed.
 type ServedPastNarrowing struct {
 	poolPick
 	Narrowing Narrowed
@@ -194,8 +160,7 @@ type ServedPastNarrowing struct {
 // Exhausted is the checkout's own claimed epic(s) having open work with none
 // of it reachable: not the held lanes, not an on-path dependency, not another
 // lane of the same epic — and the global pool having nothing ready outside it
-// either, or routing would have answered ServedPastExhaustion. Loud and
-// diagnostic. Blocked names the open dependencies from outside the scope gating
+// either, or routing would have answered ServedPastExhaustion. Blocked names the open dependencies from outside the scope gating
 // that work, if any, in the order the walk reached them. Held names the scope's
 // own open rows held by a reason about the row itself — a reserved label, a
 // missing field — which no other work finishing will clear; a scope with
@@ -209,21 +174,14 @@ type ServedPastNarrowing struct {
 // it, closed tickets included: "blocked" and "eight-ninths done and blocked"
 // are different answers to an agent deciding whether to stay. OwnProgress is
 // the same count over only the lanes this checkout holds: whether its own work
-// is unfinished, which decides where a pick past the scope is started — the
-// rest of the epic may be open in lanes other checkouts hold.
+// is unfinished — the rest of the epic may be open in lanes other checkouts
+// hold.
 //
 // Narrowing is set when the pool offered nothing the filter selects but would
 // serve a row over the whole queue: the filter, not the backlog, is why nothing
 // outside the scope is on offer, and that row is what `lit next` without the
 // filter hands over. OffPath is then empty, as on ServedPastExhaustion, since
 // the unfiltered pool did offer a row.
-//
-// It is also an error, for the same reason HelpRequestedError is: it is an
-// answer, not a failure, and the error channel is the only channel runNext has
-// for an answer that hands back no row. Being the error itself — rather than
-// being rendered into a separate error type — is what keeps the error
-// classifier reading the routing verdict rather than a copy of it that could drift
-// from these fields. [LAW:one-source-of-truth]
 type Exhausted struct {
 	Epics       []model.ID
 	Progress    claims.Progress
@@ -235,11 +193,9 @@ type Exhausted struct {
 }
 
 // reachKind is what one row is to this checkout right now — the one fact both
-// terminal diagnostics need, and the limit of what either may say. A bool here
-// would read "takeable or not", so a row outside this run's filtered view, or
-// one not startable itself, would render as the one reason the message names:
-// claimed by another checkout. The renderer picks a note per value rather than
-// asserting a cause it cannot see.
+// no-ticket outcomes record of the rows they went past. A bool here would read
+// "takeable or not", so a row outside this run's filtered view, or one not
+// startable itself, would be recorded as claimed by another checkout.
 //
 // Exhaustion asks it of the dependencies gating our scope; an empty global pool
 // asks it of every row the walk went past. Same question, same answers, so one
@@ -274,8 +230,8 @@ const (
 	// reachHeldFresh: another checkout holds its lane right now.
 	reachHeldFresh
 	// reachTakeable: this checkout may start it. Declared last because it is
-	// also the length of every table that words a kind (reachNotes, the event's
-	// names): routing serves a takeable row instead of reporting it, so a word
+	// also the length of the table that words a kind (the event's names):
+	// routing serves a takeable row instead of reporting it, so a word
 	// for one is an index past the table's end, which does not compile.
 	// [LAW:types-are-the-program]
 	reachTakeable
@@ -294,23 +250,6 @@ type reading struct {
 type rowReach struct {
 	ID model.ID
 	reading
-}
-
-// name is how a diagnostic names the entry. A dependency read through a ticket
-// under it is named as both, "<ticket> under <epic>": the note's `lit start` or
-// `lit show` acts on the ticket, since an epic cannot be started, and the epic
-// is what blocks. Every other entry is its own id. [LAW:dataflow-not-control-flow]
-// the last inch of rendering, where the two arms are different phrases.
-func (r rowReach) name() string { return workName(r.ID, r.Row.ID) }
-
-// workName names a dependency by the work read through it: "<work> under
-// <dependency>" when the work is a ticket under it, and the dependency's own id
-// when the work is the dependency itself or there is none in view.
-func workName(dependency, work model.ID) string {
-	if work == "" || work == dependency {
-		return fmt.Sprint(dependency)
-	}
-	return fmt.Sprintf("%s under %s", work, dependency)
 }
 
 // reachOf classifies one row, consuming capacityFor rather than re-deriving
@@ -350,8 +289,7 @@ func reachOf(row annotation.AnnotatedIssue, standing claims.Standing, self model
 // narrowing `next` to --status in_progress is asking what it was already on —
 // the question asked after a crash — and the empty-queue wording would tell it
 // its work is gone. The walk knows every row and every verdict; keeping them is
-// what lets the message name which emptiness this is, instead of the
-// remediation listing all three and hoping. [LAW:parse-dont-validate]
+// what lets the record say which emptiness this is. [LAW:parse-dont-validate]
 // [LAW:types-are-the-program]
 type NoWork struct {
 	Unreachable []rowReach
@@ -492,8 +430,8 @@ func (o ownWork) holdsAny() bool { return len(o.lanes) > 0 }
 // already underway alike; then an on-path external dependency that gates one of
 // them; then the rest of its epic's lanes (the GRANULARITY RULING's epic-major
 // amendment); then, if the epic has open work but none of it is reachable, the
-// global pool's pick announced beside why the epic stopped, or the loud
-// exhaustion diagnostic when the pool has nothing either. A checkout with no
+// global pool's pick carried beside why the epic stopped, or Exhausted when
+// the pool has nothing either. A checkout with no
 // lanes of its own starts straight at the global pool — unfocus is the zero
 // state, not a hop through the earlier steps.
 //
@@ -575,7 +513,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.Is
 	pool, offPath := scope.partition(rows, details)
 	fromPool := func(serves func(annotation.AnnotatedIssue) bool) (poolPick, bool) {
 		row, _, ok := pickFrom(pool, serves, func(model.LaneID) bool { return true }, serveWork)
-		return poolPick{Row: row, Lane: laneOf(row), Scope: scope}, ok
+		return poolPick{Row: row, Scope: scope}, ok
 	}
 	// The diagnostics name only rows the filter selects: what they report is
 	// why this run's question got no row.
@@ -607,14 +545,14 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.Is
 				return ServedFromClaim{Row: row}, row, true
 			}
 			// Step 1b — a dependency outside our lanes that gates one of them. It
-			// establishes a claim on a lane we do not hold, so it is announced as
-			// one and its own lane's standing is honoured rather than ignored.
+			// establishes a claim on a lane we do not hold, so it is its own
+			// outcome and its own lane's standing is honoured rather than ignored.
 			if served, ok := onPathDependency(gatingMine, serves, reachFor, workToward, laneOf); ok {
 				return served, served.Row, true
 			}
 			// Step 2 — the rest of our epic, in lanes we do not already hold.
 			if row, _, ok := pickFrom(rows, serves, func(lane model.LaneID) bool { return own.covers(lane) && !own.holds(lane) }, serveWork); ok {
-				return ServedFromEpicLane{Row: row, Lane: laneOf(row)}, row, true
+				return ServedFromEpicLane{Row: row}, row, true
 			}
 			// Step 2b — a dependency outside our epic that gates any of it.
 			// Clearing it is how the epic moves again, so it outranks every
@@ -628,7 +566,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[model.ID]storage.Is
 		if outcome, _, ok := ownSteps(selected); ok {
 			return outcome
 		}
-		// Step 3 — loud, and never a silent hop. The pool's pick is outside our
+		// Step 3. The pool's pick is outside our
 		// scope by construction: steps 1 and 2 took every serveWork row the
 		// filter selects in our lanes and our epic, and the pick serves only
 		// rows it selects.
@@ -724,7 +662,7 @@ func passedOver(rows []annotation.AnnotatedIssue, reachFor func(annotation.Annot
 // chain between them. The gated id is the whole reason step 1b's pick is worth
 // explaining, and this walk is the only place it is ever in scope: the walk
 // holds the blocked row and its dependency at the same instant. Keeping only
-// the dependency would leave the renderer unable to say why the pick was handed
+// the dependency would leave the record unable to say why the pick was handed
 // over, and dropping Via would leave it claiming an edge `lit show` cannot find.
 //
 // It is a field of this walk's element rather than of rowReach because rowReach
@@ -822,21 +760,6 @@ func blockersOf(deps []gatedDep, workToward map[model.ID][]annotation.AnnotatedI
 		blockers[i] = blockerReach{depReach: dep.depReach, Clearable: !waitsElsewhere}
 	}
 	return blockers
-}
-
-// readingsOf splits the blockers by whether the run could read them: the ones
-// with work in view as the rows they are, and the ids of the ones without, each
-// in walk order.
-func readingsOf(blockers []blockerReach) (inView []rowReach, outOfView []model.ID) {
-	for _, blocker := range blockers {
-		row, ok := blocker.read()
-		if !ok {
-			outOfView = append(outOfView, blocker.ID)
-			continue
-		}
-		inView = append(inView, row)
-	}
-	return inView, outOfView
 }
 
 // workTowardEach indexes the gathered rows, in rank order, by every dependency
@@ -947,7 +870,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 				// ranks first. That is the intent, not a leftover: the pick owes
 				// the reader a reason, not an inventory, and the actionable reason
 				// is the highest-ranked thing it unblocks. Naming every gated row
-				// would put an unbounded list in a one-line announcement.
+				// would put an unbounded list on one pick.
 				// [LAW:polishing-by-subtraction]
 				dep := gatedDep{depReach: depReach{ID: id}, Gates: gated.ID, Via: at.via}
 				for _, work := range workToward[id] {
@@ -995,257 +918,9 @@ func onPathDependency(deps []gatedDep, serves func(annotation.AnnotatedIssue) bo
 	for _, dep := range deps {
 		for _, work := range workToward[dep.ID] {
 			if serves(work) && reachFor(work) == reachTakeable {
-				return ServedFromDependency{Row: work, Lane: laneOf(work), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}, true
+				return ServedFromDependency{Row: work, Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}, true
 			}
 		}
 	}
 	return ServedFromDependency{}, false
-}
-
-// Error names the ticket the filter hid by the run that hands it over. The
-// four flags are named rather than "the filter" because routing never learns
-// which of them the run was given, and every one of them narrows the same way.
-func (o Narrowed) Error() string {
-	return fmt.Sprintf("`lit next` without --type, --status, --labels or --assignee hands you %s%s, which this run's filter leaves out", o.Hidden.ID, o.Scope.pickClause())
-}
-
-// Error renders Exhausted as the loud diagnostic it is when the pool offered
-// nothing outside the scope either, so staying is the only route it can name —
-// and only against a block, since that is all a new ticket could clear.
-func (o Exhausted) Error() string {
-	return strings.Join(append([]string{o.why() + "; " + o.outside()}, o.stay()...), " — ")
-}
-
-// why is what both exhaustion outcomes say first: which scope stopped, how far
-// it had come, and what stops it — the dependencies from outside it, in view
-// and then out of it, then its own rows held by themselves. With none of them,
-// nothing stops the scope, and it says what the scope's progress shows instead.
-func (o Exhausted) why() string {
-	inView, outOfView := readingsOf(o.Blocked)
-	stops := joinClauses(
-		describeReach(inView, "blocked by ", exhaustedNotes),
-		clause("blocked by ", outOfView, outOfViewNote),
-		describeReach(o.Held, "held here: ", exhaustedNotes),
-	)
-	if stops == "" {
-		stops = unstopped(o.Progress)
-	}
-	return fmt.Sprintf("no ready work in %s (%s) — %s", o.scope(), formatProgress(o.Progress), stops)
-}
-
-// unstopped is what a scope nothing stops has left: nothing at all, once no
-// ticket in it is open — the commonest exhaustion, a checkout that has just
-// finished its epic's last ticket, and also a held lane whose tickets were all
-// archived or deleted, which is why it never says they were done — or only
-// work already underway.
-func unstopped(progress claims.Progress) string {
-	if progress.Finished() {
-		return "nothing in it is left to do"
-	}
-	return "nothing else is queued behind what's already in progress"
-}
-
-// outside is what the pool held beyond the scope when it offered nothing: a
-// ready row the filter left out, no ready row at all, or rows a focus label
-// kept it from asking about, named so the agent can widen the question rather
-// than read their absence as none. [LAW:no-silent-failure]
-func (o Exhausted) outside() string {
-	if o.Narrowing != nil {
-		return o.Narrowing.Error()
-	}
-	if len(o.OffPath) == 0 {
-		return "`lit next` has nothing ready outside it either"
-	}
-	return "nothing on the focus path outside it is ready either: " + clause("", o.OffPath, offFocusPathNote)
-}
-
-// stay is the route that keeps the checkout in its scope, as a list of at most
-// one so both renderers join it beside the others unconditionally. It exists
-// only against a block a ticket filed here could clear (blockersOf): with
-// Blocked empty the rest of the scope is work already underway. Filing alone
-// clears nothing — the blocked work still waits on its blocker — so the route
-// names the edge too, and names it exactly: the blocker waits on the new
-// ticket, spelled as one command per blocker it could free, so the agent
-// copies an id rather than picking one of the ids after "blocked by", some of
-// which no new ticket frees. Every blocker is one outside the scope; lit
-// refuses a blocked-by edge between two tickets of one epic.
-func (o Exhausted) stay() []string {
-	var edges []string
-	for _, blocker := range o.Blocked {
-		if blocker.Clearable {
-			edges = append(edges, fmt.Sprintf("`lit dep add %s --blocked-by <new>`", blocker.ID))
-		}
-	}
-	if len(edges) == 0 {
-		return nil
-	}
-	return []string{"to stay, file the ticket that clears a blocker " + o.home() + ", then make that blocker blocked by it with " + nameCapped(edges, " or ")}
-}
-
-// home is where the unblocking ticket is filed, spelled as the command: under
-// the epic, ranked ahead of the work it unblocks, with each epic's command
-// spelled out so the agent copies an id rather than filling in a placeholder.
-// That holds when the block is declared on the epic itself too: an epic's
-// blocker never holds back a child it waits on (heldAncestry), so the edge that
-// makes the blocker wait on the new ticket is also what frees it. A lane with
-// no epic over it files at the top of the backlog, where the pool serves it.
-func (o Exhausted) home() string {
-	if len(o.Epics) == 0 {
-		return "with `lit new --top`"
-	}
-	commands := make([]string, len(o.Epics))
-	for i, epic := range o.Epics {
-		commands[i] = fmt.Sprintf("`lit new --parent %s --top`", epic)
-	}
-	return "under the epic with " + strings.Join(commands, " or ")
-}
-
-// scope names the stopped scope.
-func (o Exhausted) scope() string {
-	if len(o.Epics) == 0 {
-		return "your claimed lane(s)"
-	}
-	return fmt.Sprintf("epic(s) %s", model.JoinIDs(o.Epics, ", "))
-}
-
-// reachNotes is what a diagnostic says about the rows of each kind, indexed by
-// the kind itself. Both diagnostics group the same type the same way and differ
-// only in this wording and in the lead introducing each clause, so the grouping
-// is written once and the words travel as data.
-// [LAW:dataflow-not-control-flow]
-//
-// An array indexed by the kind, not a list of pairs: a pair list can omit a
-// kind and silently drop its ids from the message, which is the class of defect
-// this whole type exists to end. The array cannot drop them — a reported kind
-// with no words still renders its ids, under an empty parenthetical, which is
-// loud rather than silent. Its length is reachTakeable, so it has a slot for
-// every kind a walk can report and none for a row routing would have served
-// instead: words for that are an out-of-range index, which does not compile. No
-// reported list holds a takeable row, and one that did would not pass quietly:
-// describeReach's grouping and the event's name lookup (reachKindNames) are
-// bounded the same way and panic on it. Go does not
-// require an indexed array literal to fill every slot, so
-// TestEveryReachKindHasWordsInBothDiagnostics holds the other direction.
-// [LAW:types-are-the-program] [LAW:no-silent-failure]
-type reachNotes [reachTakeable]string
-
-// The wording each diagnostic carries, named so the totality test can reach
-// them and so neither is rebuilt on every render. Both walks report every kind
-// a reachNotes has a slot for.
-//
-// Neither reports reachTakeable. NoWork is answered only to a checkout holding
-// no lane, so no pool row is laneOurs and capacityFor cannot answer resumeWork,
-// while the pick just declined every serveWork over that same set — leaving
-// routeAround as the only verdict passedOver can see. And exhaustion reports
-// the very walk step 2b just declined, so it never holds a takeable one.
-var (
-	exhaustedNotes = reachNotes{
-		reachHeldFresh:       "on your path but claimed by another checkout right now",
-		reachHeldByItself:    "on your path but held by something about the ticket itself — `lit show` it names what",
-		reachNotReady:        "on your path but not startable right now — `lit show` it",
-		reachAwaitingOutside: "on your path but waiting on an event outside this repository — `lit show` it names the event",
-	}
-	poolNotes = reachNotes{
-		reachHeldFresh:       "in progress or claimed in a lane another checkout holds right now",
-		reachHeldByItself:    "held by something about the ticket itself — `lit show` it names what",
-		reachNotReady:        "not startable right now — `lit show` it names what blocks it",
-		reachAwaitingOutside: "waiting on an event outside this repository — `lit show` it names the event",
-	}
-)
-
-// The words for the two lists only one outcome carries each, which are not
-// kinds: a dependency with no work in view is Exhausted's alone, and a row the
-// focus withheld is said of OffPath on both Exhausted and NoWork, in the pool's
-// words, because those are rows the pool withheld.
-const (
-	outOfViewNote    = "on your path but outside this view — `lit show` it"
-	offFocusPathNote = "off the focus path this run answered over — `lit next --all` to route over the whole queue"
-)
-
-// maxNamedPerKind caps how many ids one clause names outright. NoWork's rows
-// are every row the pool walk went past — the whole filtered backlog, not the
-// epic-scoped handful Exhausted reports — so an uncapped join answers a busy
-// workspace with a single line of hundreds of ids, which is worse for the agent
-// reading it than a dozen and a count. Naming some is what makes the diagnostic
-// actionable; naming all of them is what makes it unreadable.
-const maxNamedPerKind = 12
-
-// nameCapped names at most maxNamedPerKind items, joined by sep, and states how
-// many it left out, so a clause reads the same at any pool size. The route to stay
-// spells its commands through it too, so no clause grows a second answer to how
-// long it may get. The remainder is counted rather
-// than dropped: an agent told "and 135 more" still learns the true scale of what
-// it cannot start. [LAW:no-silent-failure]
-func nameCapped[T any](items []T, sep string) string {
-	named := make([]string, len(items))
-	for i, item := range items {
-		named[i] = fmt.Sprint(item)
-	}
-	// [LAW:dataflow-not-control-flow] the last inch of rendering, where the two
-	// arms are different sentences rather than an operation one of them skips.
-	if len(items) <= maxNamedPerKind {
-		return strings.Join(named, sep)
-	}
-	return fmt.Sprintf("%s and %d more", strings.Join(named[:maxNamedPerKind], sep), len(items)-maxNamedPerKind)
-}
-
-// describeReach renders a clause for each kind that has rows, most this
-// checkout can do first — one ordering for both diagnostics rather than a
-// per-caller one that could disagree. [LAW:one-source-of-truth]
-//
-// The rows are grouped into an array bounded like notes, so a takeable row
-// panics here, at the render, rather than being grouped under a kind no clause
-// is written for and dropped from the message. [LAW:no-silent-failure]
-func describeReach(rows []rowReach, lead string, notes reachNotes) string {
-	var byKind [reachTakeable][]string
-	for _, row := range rows {
-		byKind[row.Kind] = append(byKind[row.Kind], row.name())
-	}
-	parts := make([]string, 0, len(notes))
-	for kind := len(notes) - 1; kind >= 0; kind-- {
-		parts = append(parts, clause(lead, byKind[kind], notes[kind]))
-	}
-	return joinClauses(parts...)
-}
-
-// clause renders "<lead><ids> (<note>)", and nothing when there are no ids.
-// Every list a diagnostic names is rendered through it, so the cap lives here:
-// no clause can grow a second answer to how long it may get.
-// [LAW:single-enforcer]
-func clause[T any](lead string, ids []T, note string) string {
-	if len(ids) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%s%s (%s)", lead, nameCapped(ids, ", "), note)
-}
-
-// joinClauses joins the clauses that say something with "; ".
-func joinClauses(clauses ...string) string {
-	return strings.Join(slices.DeleteFunc(clauses, func(c string) bool { return c == "" }), "; ")
-}
-
-// Error names which emptiness this is.
-//
-// Nothing walked past: the gather came back empty and the backlog really is.
-// Rows walked past: they are named and classified, because the fact is then the
-// opposite one — the pool was full, of work this checkout may not have. The
-// clause leads by refuting the empty reading outright, since that reading tells
-// an agent asking, after a crash, what it was already on that its work is gone.
-func (o NoWork) Error() string {
-	rows := joinClauses(describeReach(o.Unreachable, "", poolNotes), clause("", o.OffPath, offFocusPathNote))
-	if rows == "" {
-		return "no ready work"
-	}
-	// A third emptiness, and it needs its own lead: with rows withheld by the
-	// focus scope, "nothing in it is startable here" is false — those rows were
-	// never asked. The lead claims neither startability nor location, because
-	// the message names two populations here: on-path rows step 4 walked and
-	// rejected, and off-path rows it never examined. A header asserting either
-	// fact over the whole list is false for one of them — and the on-path half
-	// is the news the agent has to act on. Each clause's own note tells them
-	// apart.
-	if len(o.OffPath) > 0 {
-		return fmt.Sprintf("no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: %s", rows)
-	}
-	return fmt.Sprintf("no ready work — the backlog is not empty, but nothing in it is startable here: %s", rows)
 }

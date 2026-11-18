@@ -60,9 +60,6 @@ lines here for reading:
     "next.held": [],
     "next.off_path": [],
     "next.unreachable": [],
-    "next.stay_offered": false,
-    "next.start_place": "worktree_off_primary_clone",
-    "next.primary_clone": true,
     "statusline.changed": ["next"],
     "statusline.rollup_progress": null,
     "statusline.phase": null,
@@ -113,26 +110,25 @@ A command that records no counts or facts of its own writes only `git.lit_spawns
 
 Every `lit next` that reaches a decision writes every key below, empty when it
 does not apply. A run that fails before deciding, such as one given an invalid
-filter, writes `"outcome": "error"` and none of these keys.
+filter, writes `"outcome": "error"` and none of these keys. A run that hands
+back no ticket is not a failure: its `outcome` is `ok` and its `exit_code` is
+`0`, and `next.outcome` is what tells it from a run that handed one back.
 
 | Key | Meaning |
 | --- | --- |
 | `next.outcome` | How the pick was reached: `served_from_claim`, `resumed_own_work`, `served_from_epic_lane`, `served_from_new_lane`, `served_from_dependency`, `served_past_exhaustion`, `served_past_narrowing`, `exhausted`, `narrowed`, or `no_work`. |
-| `next.picked` | The ticket id it printed, or `null` when it picked nothing. |
+| `next.picked` | The id of the ticket it handed back, or `null` when it picked nothing. |
 | `next.picked_focus_goals` | The focus goals whose prerequisite path the pool was narrowed to, when the global pool served the pick. Empty for a pick over the whole queue, for a pick from your own lanes or epic, and when it picked nothing. |
 | `next.dependency_path` | For `served_from_dependency`, how the pick clears the way: the ticket of yours it unblocks, each prerequisite between — an epic followed by the ticket under it the walk went through — then the dependency the pick is work toward, which is the pick itself or the epic it sits under. Empty for every other outcome. |
 | `next.exhausted_epics` | The epics whose open work it found unreachable. |
 | `next.exhausted_progress` | How far the stopped scope had come, counted over every lane of it: `done` is how many of its tickets are closed and `total` is how many there are, archived and deleted tickets left out. Both are `0` when no scope stopped. |
-| `next.exhausted_own_progress` | The same count over only the lanes this checkout holds: whether its own work was unfinished, which decides `next.start_place` for a pick past the scope. Both are `0` when no scope stopped. |
-| `next.blocked` | The prerequisites from outside those epics that block them, at any depth: dependencies, and the earlier ticket of a blocker's own lane. Each entry also carries `clearable`: whether a ticket filed here could free it, which is what the route to stay offers to clear. |
+| `next.exhausted_own_progress` | The same count over only the lanes this checkout holds: whether its own work was unfinished. Both are `0` when no scope stopped. |
+| `next.blocked` | The prerequisites from outside those epics that block them, at any depth: dependencies, and the earlier ticket of a blocker's own lane. Each entry also carries `clearable`: whether a ticket filed here could free it. |
 | `next.held` | Tickets in those epics held by something about the ticket itself, such as a reserved label. |
 | `next.off_path` | Tickets a focus label kept out of the pick. |
 | `next.hidden_by_filter` | The ticket the `--type`, `--status`, `--labels` or `--assignee` filter left out when that is why the run served past its epic or served nothing: the one `lit next` without the filter would hand you. Always set for `served_past_narrowing` and `narrowed`, set for `exhausted` when the filter hid every ready ticket outside the epic, and `null` otherwise. |
 | `next.hidden_focus_goals` | The focus goals whose prerequisite path the pool was narrowed to, when the global pool offered the ticket in `next.hidden_by_filter`. Empty when that ticket came from your own lanes or epic, for a pool over the whole queue, and when no filter hid one. |
 | `next.unreachable` | When it found nothing at all, every ticket it went past. |
-| `next.stay_offered` | Whether its output offered filing a ticket to unblock the epic instead of moving on. |
-| `next.start_place` | Where its output said to start the pick: `here`, `worktree_off_primary_clone` (new work served in the primary clone), `worktree_beside_held_work` (a pick from outside unfinished work this checkout holds), or `null` when it picked nothing. |
-| `next.primary_clone` | Whether it ran in the repository's primary clone rather than a linked worktree. |
 | `counts.next.rows_gathered` | How many tickets it chose among: the workable tickets its filter selects. |
 
 Each entry in the four ticket lists has the same shape:
@@ -141,7 +137,7 @@ Each entry in the four ticket lists has the same shape:
 {"id": "app-auth-082", "ticket": "app-auth-082.oa5", "reach": "held_fresh"}
 ```
 
-`id` is the id the output named, `ticket` is the ticket the entry's reach was
+`id` is the ticket or epic the walk went past, `ticket` is the ticket the entry's reach was
 read from (the same id, a ticket under an epic, or empty when lit could see
 none), and `reach` is what this checkout can do about it:
 
@@ -583,7 +579,7 @@ key already set.
 
 A command that fires a [workflow](workflows.md) occasion records it:
 `lit new`, `lit followup`, `lit show`, `lit update`, `lit comment add`,
-`lit next` when it hands back a ticket, `lit backlog`, and the lifecycle
+`lit next`, `lit backlog`, and the lifecycle
 transitions `lit start`, `lit done`, `lit close`, `lit open` and `lit phase`.
 A command that failed before the occasion fired, such as a refused transition,
 has none of these keys.

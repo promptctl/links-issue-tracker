@@ -35,17 +35,6 @@ func backlogOccasion() workflows.Occasion {
 	return workflows.Occasion{Event: workflows.EventShowBacklog}
 }
 
-// nextPulledOccasion is what `lit next` fires when it has a ticket to hand
-// back — the only case it is ever called, since the empty-selection path
-// returns an error before any occasion is built.
-func nextPulledOccasion(issue model.Issue) workflows.Occasion {
-	return workflows.Occasion{
-		Event:   workflows.EventNextPulled,
-		IssueID: issue.ID,
-		Labels:  model.RawTexts(issue.Labels),
-	}
-}
-
 // ticketCreatedOccasion is what `lit new` and `lit followup` fire once the
 // issue exists, carrying whatever labels it was created with.
 func ticketCreatedOccasion(issue model.Issue) workflows.Occasion {

@@ -17,9 +17,10 @@ const (
 	// EventShowTicket fires when the agent views one ticket's details
 	// (today: `lit show`).
 	EventShowTicket Event = "show_ticket"
-	// EventNextPulled fires when the agent asks for the next workable ticket
+	// EventNext fires on every `lit next` run, whatever it routed to, so the
+	// workflow text for `next` decides what the agent does with the answer
 	// (today: `lit next`).
-	EventNextPulled Event = "next_pulled"
+	EventNext Event = "next"
 	// EventWorkStarted fires when the agent claims a ticket and begins work
 	// (today: `lit start`).
 	EventWorkStarted Event = "work_started"
@@ -51,7 +52,7 @@ const (
 func Catalog() []Event {
 	return []Event{
 		EventShowBacklog,
-		EventNextPulled,
+		EventNext,
 		EventShowTicket,
 		EventWorkStarted,
 		EventPhaseSet,

@@ -16,11 +16,11 @@ import (
 // are deliberately tolerated: a file authored for a newer lit must still load
 // here with the keys this binary understands.
 type frontmatter struct {
-	ID     string            `yaml:"id"`
-	Name   string            `yaml:"name"`
-	Labels []string          `yaml:"labels"`
-	States []StateActivation `yaml:"states"`
-	Events []string          `yaml:"events"`
+	ID          string            `yaml:"id"`
+	Description string            `yaml:"description"`
+	Labels      []string          `yaml:"labels"`
+	States      []StateActivation `yaml:"states"`
+	Events      []string          `yaml:"events"`
 }
 
 // UnmarshalYAML accepts a state activation in either authored shape: a bare
@@ -110,11 +110,13 @@ func splitFrontmatter(content string) (header string, body string, found bool, e
 }
 
 // parseDefinition turns one file's raw content into a Definition. Malformed
-// frontmatter yields ok=false plus a warning — a broken workflow file must
-// never break a lit invocation. A well-formed file always yields a
-// definition; missing activation keys and unknown events are loaded as
-// authored, each with a warning so the mistake is observable rather than
-// silently inert. [LAW:no-silent-failure]
+// frontmatter, or frontmatter with no description, yields ok=false plus a
+// warning — a broken workflow file must never break a lit invocation. Any
+// other file yields a definition; missing activation keys and unknown events
+// are loaded as authored, each with a warning so the mistake is observable
+// rather than silently inert. [LAW:no-silent-failure]
+// [LAW:parse-dont-validate] a Definition that loaded has a description, so no
+// display surface asks again.
 func parseDefinition(content, path string, source templates.Source) (Definition, []Warning, bool) {
 	warn := func(message string) Warning {
 		return Warning{Source: source, Path: path, Message: message}
@@ -129,19 +131,24 @@ func parseDefinition(content, path string, source templates.Source) (Definition,
 		return Definition{}, []Warning{warn("invalid frontmatter: " + err.Error())}, false
 	}
 
+	description := strings.TrimSpace(meta.Description)
+	if description == "" {
+		return Definition{}, []Warning{warn("no description: add a `description:` line saying what this guidance is for")}, false
+	}
+
 	var warnings []Warning
 	labels, labelWarns := canonicalLabels(meta.Labels, warn)
 	warnings = append(warnings, labelWarns...)
 
 	def := Definition{
-		ID:     precedence.First(strings.TrimSpace(meta.ID), defaultID(path)),
-		Name:   strings.TrimSpace(meta.Name),
-		Labels: labels,
-		States: compactStates(meta.States),
-		Events: canonicalEvents(meta.Events),
-		Body:   strings.TrimSpace(body),
-		Source: source,
-		Path:   path,
+		ID:          precedence.First(strings.TrimSpace(meta.ID), defaultID(path)),
+		Description: description,
+		Labels:      labels,
+		States:      compactStates(meta.States),
+		Events:      canonicalEvents(meta.Events),
+		Body:        strings.TrimSpace(body),
+		Source:      source,
+		Path:        path,
 	}
 	if def.Inert() {
 		warnings = append(warnings, warn("no activation keys (labels/states/events): definition is inert and will never fire"))

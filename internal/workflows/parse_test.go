@@ -11,7 +11,7 @@ import (
 func TestParseDefinitionFullFrontmatter(t *testing.T) {
 	content := `---
 id: needs-design-review
-name: Design review reminder
+description: Design review reminder
 labels:
   - needs-design
   - blocked
@@ -35,9 +35,9 @@ Remember to review the design doc first.
 		t.Fatalf("parseDefinition() warnings = %v, want none", warnings)
 	}
 	want := Definition{
-		ID:     "needs-design-review",
-		Name:   "Design review reminder",
-		Labels: []string{"needs-design", "blocked"},
+		ID:          "needs-design-review",
+		Description: "Design review reminder",
+		Labels:      []string{"needs-design", "blocked"},
 		States: []StateActivation{
 			{State: "open", When: WhenEnter},
 			{State: "in_progress", When: WhenEnter},
@@ -55,7 +55,7 @@ Remember to review the design doc first.
 
 func TestParseDefinitionDefaultID(t *testing.T) {
 	// The default ID is the layer-relative path, ".md" dropped, spaces → "_".
-	def, _, ok := parseDefinition("---\nevents: [show_backlog]\n---\nbody", "review tasks/design check.md", templates.SourceGlobal)
+	def, _, ok := parseDefinition("---\ndescription: fixture\nevents: [show_backlog]\n---\nbody", "review tasks/design check.md", templates.SourceGlobal)
 	if !ok {
 		t.Fatal("parseDefinition() not ok")
 	}
@@ -64,16 +64,35 @@ func TestParseDefinitionDefaultID(t *testing.T) {
 	}
 }
 
-func TestParseDefinitionNoFrontmatterIsInertWithWarning(t *testing.T) {
-	def, warnings, ok := parseDefinition("just some notes\n", "notes.md", templates.SourceProject)
+// A definition says what it is for, so a file with no description is not one:
+// it is skipped with a warning that says what to add, whether it has
+// frontmatter or is plain markdown.
+func TestParseDefinitionWithoutDescriptionIsSkippedWithWarning(t *testing.T) {
+	for name, content := range map[string]string{
+		"plain markdown":      "just some notes\n",
+		"frontmatter without": "---\nevents: [show_backlog]\n---\nbody",
+		"blank description":   "---\ndescription: '  '\nevents: [show_backlog]\n---\nbody",
+	} {
+		_, warnings, ok := parseDefinition(content, "notes.md", templates.SourceProject)
+		if ok {
+			t.Fatalf("%s: parseDefinition() ok, want the file skipped", name)
+		}
+		if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "description:") {
+			t.Fatalf("%s: warnings = %v, want one naming the missing description", name, warnings)
+		}
+	}
+}
+
+func TestParseDefinitionWithoutActivationIsInertWithWarning(t *testing.T) {
+	def, warnings, ok := parseDefinition("---\ndescription: Notes\n---\njust some notes\n", "notes.md", templates.SourceProject)
 	if !ok {
-		t.Fatal("parseDefinition() not ok; a plain markdown file must still load")
+		t.Fatal("parseDefinition() not ok; a described file with no activation must still load")
 	}
 	if !def.Inert() {
 		t.Fatalf("definition = %+v, want inert", def)
 	}
 	if def.Body != "just some notes" {
-		t.Fatalf("Body = %q, want the whole file", def.Body)
+		t.Fatalf("Body = %q, want the text after the frontmatter", def.Body)
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0].Message, "inert") {
 		t.Fatalf("warnings = %v, want one inert warning", warnings)
@@ -82,13 +101,13 @@ func TestParseDefinitionNoFrontmatterIsInertWithWarning(t *testing.T) {
 
 func TestParseDefinitionMalformed(t *testing.T) {
 	cases := map[string]string{
-		"unterminated frontmatter": "---\nevents: [show_backlog]\nno closing delimiter",
+		"unterminated frontmatter": "---\ndescription: fixture\nevents: [show_backlog]\nno closing delimiter",
 		"non-mapping frontmatter":  "---\n- a\n- b\n---\nbody",
 		"scalar frontmatter":       "---\nhello\n---\nbody",
-		"invalid when":             "---\nstates:\n  - name: open\n    when: banana\n---\nbody",
-		"invalid state entry kind": "---\nstates:\n  - [open]\n---\nbody",
-		"nameless state mapping":   "---\nstates:\n  - when: enter\n---\nbody",
-		"labels not a sequence":    "---\nlabels: 17\n---\nbody",
+		"invalid when":             "---\ndescription: fixture\nstates:\n  - name: open\n    when: banana\n---\nbody",
+		"invalid state entry kind": "---\ndescription: fixture\nstates:\n  - [open]\n---\nbody",
+		"nameless state mapping":   "---\ndescription: fixture\nstates:\n  - when: enter\n---\nbody",
+		"labels not a sequence":    "---\ndescription: fixture\nlabels: 17\n---\nbody",
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -107,7 +126,7 @@ func TestParseDefinitionMalformed(t *testing.T) {
 }
 
 func TestParseDefinitionUnknownEventWarnsButLoads(t *testing.T) {
-	def, warnings, ok := parseDefinition("---\nevents: [warp_drive_engaged]\n---\nbody", "future.md", templates.SourceProject)
+	def, warnings, ok := parseDefinition("---\ndescription: fixture\nevents: [warp_drive_engaged]\n---\nbody", "future.md", templates.SourceProject)
 	if !ok {
 		t.Fatal("parseDefinition() not ok; unknown events must not reject the file")
 	}
@@ -120,7 +139,7 @@ func TestParseDefinitionUnknownEventWarnsButLoads(t *testing.T) {
 }
 
 func TestParseDefinitionNormalization(t *testing.T) {
-	content := "---\nid: '  spaced  '\nlabels: ['  a  ', '', '   ']\nstates: ['', '  open ']\nevents: [' show_ticket ', '']\n---\n\n  body text  \n"
+	content := "---\ndescription: fixture\nid: '  spaced  '\nlabels: ['  a  ', '', '   ']\nstates: ['', '  open ']\nevents: [' show_ticket ', '']\n---\n\n  body text  \n"
 	def, warnings, ok := parseDefinition(content, "n.md", templates.SourceProject)
 	if !ok {
 		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
@@ -145,7 +164,7 @@ func TestParseDefinitionNormalization(t *testing.T) {
 // Frontmatter labels are stamped into the store's canonical form at parse
 // time, so an authored "Needs-Design" matches the persisted "needs-design".
 func TestParseDefinitionLabelsCanonicalized(t *testing.T) {
-	def, warnings, ok := parseDefinition("---\nlabels: ['Needs-Design', 'has,comma']\n---\nbody", "l.md", templates.SourceProject)
+	def, warnings, ok := parseDefinition("---\ndescription: fixture\nlabels: ['Needs-Design', 'has,comma']\n---\nbody", "l.md", templates.SourceProject)
 	if !ok {
 		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
 	}
@@ -160,7 +179,7 @@ func TestParseDefinitionLabelsCanonicalized(t *testing.T) {
 // State names resolve case variants to the lifecycle's lowercase spelling,
 // in both authored shapes.
 func TestParseDefinitionStatesCanonicalized(t *testing.T) {
-	content := "---\nstates:\n  - ' In_Progress '\n  - name: ' OPEN '\n    when: exit\n---\nbody"
+	content := "---\ndescription: fixture\nstates:\n  - ' In_Progress '\n  - name: ' OPEN '\n    when: exit\n---\nbody"
 	def, warnings, ok := parseDefinition(content, "s.md", templates.SourceProject)
 	if !ok {
 		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
@@ -176,7 +195,7 @@ func TestParseDefinitionStatesCanonicalized(t *testing.T) {
 
 // `when:` values are case-insensitive like every other frontmatter field.
 func TestParseDefinitionWhenCaseInsensitive(t *testing.T) {
-	content := "---\nstates:\n  - name: open\n    when: Exit\n---\nbody"
+	content := "---\ndescription: fixture\nstates:\n  - name: open\n    when: Exit\n---\nbody"
 	def, warnings, ok := parseDefinition(content, "w.md", templates.SourceProject)
 	if !ok {
 		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
@@ -189,7 +208,7 @@ func TestParseDefinitionWhenCaseInsensitive(t *testing.T) {
 // Event entries resolve case variants to the catalog's lowercase canonical
 // form, symmetric with label canonicalization.
 func TestParseDefinitionEventsCanonicalized(t *testing.T) {
-	def, warnings, ok := parseDefinition("---\nevents: [' Show_Ticket ']\n---\nbody", "e.md", templates.SourceProject)
+	def, warnings, ok := parseDefinition("---\ndescription: fixture\nevents: [' Show_Ticket ']\n---\nbody", "e.md", templates.SourceProject)
 	if !ok {
 		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
 	}
@@ -202,7 +221,7 @@ func TestParseDefinitionEventsCanonicalized(t *testing.T) {
 }
 
 func TestParseDefinitionCRLF(t *testing.T) {
-	def, _, ok := parseDefinition("---\r\nevents: [show_backlog]\r\n---\r\nbody\r\n", "crlf.md", templates.SourceProject)
+	def, _, ok := parseDefinition("---\r\ndescription: fixture\r\nevents: [show_backlog]\r\n---\r\nbody\r\n", "crlf.md", templates.SourceProject)
 	if !ok {
 		t.Fatal("parseDefinition() not ok on CRLF input")
 	}
@@ -214,7 +233,7 @@ func TestParseDefinitionCRLF(t *testing.T) {
 // Delimiter lines tolerate trailing horizontal whitespace, per the frontmatter
 // convention — a trailing space must not silently degrade the file to inert.
 func TestParseDefinitionDelimiterTrailingWhitespace(t *testing.T) {
-	def, warnings, ok := parseDefinition("--- \nevents: [show_backlog]\n---\t\nbody", "ws.md", templates.SourceProject)
+	def, warnings, ok := parseDefinition("--- \ndescription: fixture\nevents: [show_backlog]\n---\t\nbody", "ws.md", templates.SourceProject)
 	if !ok {
 		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
 	}
@@ -229,7 +248,7 @@ func TestParseDefinitionDelimiterTrailingWhitespace(t *testing.T) {
 func TestParseDefinitionUnknownKeysTolerated(t *testing.T) {
 	// Forward compatibility: a file authored for a newer lit still loads with
 	// the keys this binary understands.
-	def, warnings, ok := parseDefinition("---\nevents: [show_ticket]\nfuture_key: whatever\n---\nbody", "fwd.md", templates.SourceProject)
+	def, warnings, ok := parseDefinition("---\ndescription: fixture\nevents: [show_ticket]\nfuture_key: whatever\n---\nbody", "fwd.md", templates.SourceProject)
 	if !ok || len(warnings) != 0 {
 		t.Fatalf("parseDefinition() ok=%v warnings=%v, want clean load", ok, warnings)
 	}

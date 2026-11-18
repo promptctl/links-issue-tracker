@@ -8,9 +8,9 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
 // runNextOutcome reproduces exactly what `lit next` decides — the shared
@@ -23,9 +23,20 @@ import (
 // hold lanes as this checkout. Use asCheckout to write as somebody else.
 func (h readyTestHarness) runNextOutcome() NextOutcome {
 	h.t.Helper()
-	gathered, err := gatherWorkableAnnotated(h.ctx, runEnv(h.t), h.ap, workableFilter{})
+	return h.runNextOutcomeAsked(workableFilter{})
+}
+
+// runNextOutcomeAsked is runNextOutcome for a run under filter flags: the whole
+// queue is gathered and the filter is handed to routing, as `lit next` does.
+func (h readyTestHarness) runNextOutcomeAsked(filter workableFilter) NextOutcome {
+	h.t.Helper()
+	asked, err := filter.criteria()
 	if err != nil {
-		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
+		h.t.Fatalf("filter.criteria error = %v", err)
+	}
+	gathered, err := gatherWorkableQueue(h.ctx, runEnv(h.t), h.ap)
+	if err != nil {
+		h.t.Fatalf("gatherWorkableQueue error = %v", err)
 	}
 	cc, err := gatherClaimContext(h.ctx, runEnv(h.t), io.Discard, h.ap)
 	if err != nil {
@@ -34,7 +45,7 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 	// The gathered scope, not focusScope{}: this helper stands in for `lit next`
 	// itself, and handing routing an empty scope here would quietly answer every
 	// focus test from the unfocused path — green, and about a command nobody runs.
-	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, evidenceIn(h.t, h.ctx, h.ap), cc.self, gathered.scope, storage.IssueCriteria{})
+	return routeNext(gathered.rows, gathered.details, gathered.epics, cc.standings, evidenceIn(h.t, h.ctx, h.ap), cc.self, gathered.scope, asked)
 }
 
 // runNextRow narrows an outcome to the row it served, for the ordering and
@@ -49,44 +60,26 @@ func (h readyTestHarness) runNextOutcome() NextOutcome {
 func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 	h.t.Helper()
 	outcome := h.runNextOutcome()
-	if row, ok := servedRow(outcome); ok {
+	if row, ok := routedRow(outcome); ok {
 		return row
 	}
 	h.t.Fatalf("routeNext = %#v (%T), want an outcome carrying a served row", outcome, outcome)
 	return annotation.AnnotatedIssue{}
 }
 
-// servedRow is the single place the harness decides which outcomes carry a row.
-// Inside runNextRow nothing could reach it but a full routing run; out here,
-// the totality the comment above asserts is directly testable by
-// TestServedRowIsTotalOverTheSealedSum.
-// [LAW:one-source-of-truth]
-func servedRow(outcome NextOutcome) (annotation.AnnotatedIssue, bool) {
-	switch served := outcome.(type) {
-	case ServedFromClaim:
-		return served.Row, true
-	case ResumedOwnWork:
-		return served.Row, true
-	case ServedFromEpicLane:
-		return served.Row, true
-	case ServedFromNewLane:
-		return served.Row, true
-	case ServedFromDependency:
-		return served.Row, true
-	case ServedPastExhaustion:
-		return served.Row, true
-	case ServedPastNarrowing:
-		return served.Row, true
+// sealedSumRow is the row each serving variant in sealedNextOutcomes carries:
+// an open task, hydrated so it prints as a row of the backlog does.
+var sealedSumRow = func() annotation.AnnotatedIssue {
+	issue, err := model.HydrateStatus(model.Issue{ID: "test-served-1", IssueType: model.TypeTask, Labels: model.Texts([]string{"tracked"})}, model.StatusView{Value: model.StateOpen})
+	if err != nil {
+		panic(err)
 	}
-	return annotation.AnnotatedIssue{}, false
-}
-
-// sealedSumRow is the row each serving variant in sealedNextOutcomes carries.
-var sealedSumRow = annotation.AnnotatedIssue{Issue: model.Issue{ID: "test-served-1"}}
+	return annotation.AnnotatedIssue{Issue: issue}
+}()
 
 // sealedNextOutcomes is one value of every NextOutcome variant, and whether it
 // hands a row over. Every test that ranges over the whole sum reads it here,
-// so the count TestServedRowIsTotalOverTheSealedSum holds it to covers them
+// so the count TestRoutedRowIsTotalOverTheSealedSum holds it to covers them
 // all. [LAW:one-source-of-truth]
 var sealedNextOutcomes = []struct {
 	name    string
@@ -108,12 +101,11 @@ var sealedNextOutcomes = []struct {
 }
 
 // Go type switches are not exhaustive, so nothing in the compiler holds
-// servedRow level with the sealed sum — the renderer's default panics, but this
-// helper just reports "routing declined to serve", which is the WRONG answer
-// rather than a loud one. Asserted over every variant the sum has, so a new
-// outcome that carries a row fails here by name instead of turning a served row
-// into a confusing failure far from its cause.
-func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
+// routedRow level with the sealed sum, and a variant it misses reads as "no
+// ticket" — the WRONG answer rather than a loud one. Asserted over every
+// variant the sum has, so a new outcome that carries a row fails here by name
+// instead of printing that nothing is ready above a ticket routing served.
+func TestRoutedRowIsTotalOverTheSealedSum(t *testing.T) {
 	t.Parallel()
 	row, cases := sealedSumRow, sealedNextOutcomes
 	// The sum is sealed at ten cases (isNextOutcome, next_route.go). Counting
@@ -125,15 +117,15 @@ func TestServedRowIsTotalOverTheSealedSum(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := servedRow(tc.outcome)
+			got, ok := routedRow(tc.outcome)
 			if ok != tc.served {
-				t.Fatalf("servedRow(%T) served = %v, want %v", tc.outcome, ok, tc.served)
+				t.Fatalf("routedRow(%T) served = %v, want %v", tc.outcome, ok, tc.served)
 			}
 			if tc.served && got.ID != row.ID {
-				t.Fatalf("servedRow(%T) = %q, want the row it carries (%q)", tc.outcome, got.ID, row.ID)
+				t.Fatalf("routedRow(%T) = %q, want the row it carries (%q)", tc.outcome, got.ID, row.ID)
 			}
 			if !tc.served && got.ID != "" {
-				t.Fatalf("servedRow(%T) = %q, want the zero row — a terminal outcome serves nothing", tc.outcome, got.ID)
+				t.Fatalf("routedRow(%T) = %q, want the zero row — a terminal outcome serves nothing", tc.outcome, got.ID)
 			}
 		})
 	}
@@ -157,8 +149,23 @@ func (h readyTestHarness) runNextErr(args ...string) error {
 	return runLeaf(h.t, nextLeaf(), h.ctx, &stdout, h.ap, args)
 }
 
+// nextFixture replaces the shipped `next` definition with a body that prints
+// <ticket> and nothing else, so a test reads what `lit next` hands its workflow
+// rather than the shipped wording around it.
+const nextFixture = "---\nid: next\ndescription: fixture\nevents: [next]\n---\n<ticket>"
+
+// useNextFixture installs nextFixture in the project layer of the workspace at
+// root, where it overrides the embedded `next` by id.
+func useNextFixture(t *testing.T, root string) {
+	t.Helper()
+	writeCLIWorkflow(t, root, "next.md", nextFixture)
+}
+
+// runNextText runs `lit next` under nextFixture and returns what it printed:
+// the <ticket> value the run handed its workflow.
 func (h readyTestHarness) runNextText(args ...string) string {
 	h.t.Helper()
+	useNextFixture(h.t, h.ap.Workspace.RootDir)
 	var stdout bytes.Buffer
 	if err := runLeaf(h.t, nextLeaf(), h.ctx, &stdout, h.ap, args); err != nil {
 		h.t.Fatalf("runNext(%v) error = %v", args, err)
@@ -208,10 +215,10 @@ func TestRunNextRoutesAroundAnInProgressLeafHeldElsewhere(t *testing.T) {
 func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	t.Parallel()
 	// The session that started it is the session asking, spelled out rather
-	// than inherited: this test's subject is the sentence that says the work is
-	// YOURS, and an ambient CLAUDE_CODE_SESSION_ID would decide that off-stage
-	// — green on a CI runner that sets none, and a different sentence on any
-	// developer machine inside an agent session.
+	// than inherited: this test's subject is whether the work is YOURS, and an
+	// ambient CLAUDE_CODE_SESSION_ID would decide that off-stage — green on a
+	// CI runner that sets none, and a different answer on any developer machine
+	// inside an agent session.
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
@@ -229,8 +236,8 @@ func TestRunNextResumesOwnWorkInFlight(t *testing.T) {
 	}
 
 	text := h.runNextText()
-	if !strings.Contains(text, inProgress.ID.Raw()+" is already in progress in a lane you hold") {
-		t.Fatalf("next output = %q, want it to say %s is already in flight and ours", text, inProgress.ID)
+	if !strings.Contains(text, inProgress.ID.Raw()) {
+		t.Fatalf("next output = %q, want %s handed back as our work in flight", text, inProgress.ID)
 	}
 	if strings.Contains(text, lowerRanked.ID.Raw()) {
 		t.Fatalf("next output = %q, want %q not served while our own work is in flight", text, lowerRanked.ID)
@@ -250,9 +257,9 @@ func TestRunNextResumesTheCheckoutsWorkForAnySessionInIt(t *testing.T) {
 
 	// Same checkout, same stream token, different session.
 	setRunEnv(t, "CLAUDE_CODE_SESSION_ID", "sess-mine")
-	text := h.runNextText()
-	if !strings.Contains(text, theirs.ID.Raw()+" is already in progress in a lane you hold — continue where you left off") {
-		t.Fatalf("next as sess-mine = %q, want %s handed back as this checkout's work in flight", text, theirs.ID)
+	resumed, ok := h.runNextOutcome().(ResumedOwnWork)
+	if !ok || resumed.Row.ID != theirs.ID {
+		t.Fatalf("next as sess-mine = %#v, want %s handed back as this checkout's work in flight", resumed, theirs.ID)
 	}
 }
 
@@ -275,9 +282,10 @@ func TestStartNamesTheSessionlessOperatorWithBy(t *testing.T) {
 		t.Fatalf("history after start --by bob = %q, want the start recorded by bob, assigning bob", history)
 	}
 
+	useNextFixture(t, repo)
 	text := runCLIInDir(t, repo, "next")
-	if !strings.Contains(text, mine+" is already in progress in a lane you hold — continue where you left off") {
-		t.Fatalf("next after start --by bob = %q, want the checkout's own work reported as its own", text)
+	if !strings.Contains(text, mine+"  in_progress") || !strings.Contains(text, "claimed here:") {
+		t.Fatalf("next after start --by bob = %q, want the checkout's own work handed back, its lane claimed here", text)
 	}
 }
 
@@ -341,17 +349,11 @@ func TestRunNextServesTheNextTicketOfALaneWeHold(t *testing.T) {
 		t.Fatalf("served.ID = %q, want %q (the next ticket of the lane we hold)", served.Row.ID, nextUp.ID)
 	}
 
+	// The harness workspace is no git checkout, so lit cannot address the
+	// holder and the claim line names its stream rather than "claimed here".
 	text := h.runNextText()
-	if !strings.Contains(text, nextUp.ID.Raw()) {
-		t.Fatalf("next output = %q, want %q served", text, nextUp.ID)
-	}
-	// The claim line beneath the row still prints "claimed here: …" — that is a
-	// true report of a hold we already have. What must be absent is every phrase
-	// that offers a commitment, because there is none left to make.
-	for _, advice := range []string{"run `lit start", "to claim", "to take over", "is already in progress"} {
-		if strings.Contains(text, advice) {
-			t.Fatalf("next output = %q, want no %q line — the lane was already ours, so there is nothing to commit and nothing to say", text, advice)
-		}
+	if !strings.Contains(text, nextUp.ID.Raw()) || !strings.Contains(text, "claimed: ") {
+		t.Fatalf("next output = %q, want %q served with its lane's claim line", text, nextUp.ID)
 	}
 }
 
@@ -383,9 +385,6 @@ func TestRunNextServesAReadyTicketBehindABlockerThatIsNotStartable(t *testing.T)
 	if served.Row.ID != blockersBlocker.ID || served.Blocker != blockersBlocker.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blocker.ID, Through: blocker.ID}}) {
 		t.Fatalf("served %s blocking %s, gating %s via %v; want %s blocking itself, gating %s via [%s]", served.Row.ID, served.Blocker, served.Gates, served.Via, blockersBlocker.ID, gated.ID, blocker.ID)
 	}
-	if text, want := h.runNextText(), "(gates "+gated.ID.Raw()+", which is on your path, through "+blocker.ID.Raw()+")"; !strings.Contains(text, want) {
-		t.Fatalf("next output = %q, want it to contain %q", text, want)
-	}
 }
 
 // A blocker held behind the earlier ticket of its own lane is cleared by that
@@ -413,9 +412,8 @@ func TestRunNextServesTheEarlierTicketOfABlockersOwnLane(t *testing.T) {
 }
 
 // A chain that passes through an epic passes through a ticket under it, and the
-// announcement names both: `lit show` on our row lists the epic, `lit show` on
-// the pick lists the ticket, and naming either alone leaves a link the reader
-// cannot find.
+// pick records both: `lit show` on our row lists the epic, `lit show` on the
+// pick lists the ticket, and either alone leaves a link the reader cannot find.
 func TestRunNextNamesTheTicketUnderAnEpicTheChainPassesThrough(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -435,9 +433,6 @@ func TestRunNextNamesTheTicketUnderAnEpicTheChainPassesThrough(t *testing.T) {
 	served, ok := h.runNextOutcome().(ServedFromDependency)
 	if !ok || served.Row.ID != upstream.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blockingEpic.ID, Through: under.ID}}) {
 		t.Fatalf("served %+v, want %s through %s under %s", served, upstream.ID, under.ID, blockingEpic.ID)
-	}
-	if text, want := h.runNextText(), "(gates "+gated.ID.Raw()+", which is on your path, through "+under.ID.Raw()+" under "+blockingEpic.ID.Raw()+")"; !strings.Contains(text, want) {
-		t.Fatalf("next output = %q, want it to contain %q", text, want)
 	}
 }
 
@@ -471,9 +466,6 @@ func TestRunNextServesTheReadyBlockerOfAnEpicOurEpicWaitsOn(t *testing.T) {
 	if served.Row.ID != upstream.ID || served.Blocker != upstream.ID || served.Gates != gated.ID || !slices.Equal(served.Via, []hop{{Prerequisite: blockingEpic.ID, Through: under.ID}}) {
 		t.Fatalf("served %s blocking %s, gating %s via %v; want %s blocking itself, gating %s through %s under %s", served.Row.ID, served.Blocker, served.Gates, served.Via, upstream.ID, gated.ID, under.ID, blockingEpic.ID)
 	}
-	if text, want := h.runNextText(), "(gates "+gated.ID.Raw()+", which is on your path, through "+under.ID.Raw()+" under "+blockingEpic.ID.Raw()+")"; !strings.Contains(text, want) {
-		t.Fatalf("next output = %q, want it to contain %q", text, want)
-	}
 }
 
 // The walk follows the backlog's order, not distance: the ready ticket two hops
@@ -502,20 +494,16 @@ func TestRunNextServesTheChainOfOurHighestRankedRowFirst(t *testing.T) {
 }
 
 // The trap links-next-5sxz names: our epic still has open work, none of it is
-// reachable, and another epic has a ready ticket. `next` serves that ticket and
-// says why our epic stopped and how to stay in it instead — the agent chooses.
-// Asserted through runNext, where the exit path is decided: answered as an
-// error, it would be repeated verbatim by every later `next`, and the agent
-// would sit in the epic until its claim expired.
+// reachable, and another epic has a ready ticket. `next` serves that ticket,
+// and the outcome records why our epic stopped. Asserted through runNext too:
+// a run that handed nothing back would be repeated verbatim by every later
+// `next`, and the agent would sit in the epic until its claim expired.
 //
 // The gating dependency is itself blocked, and its own blocker waits on an
 // event outside this repository, so nothing along the chain is ours to take:
 // that is what forecloses routing steps 1b and 2b and leaves the epic
-// exhausted. The diagnostic says how far the epic had come — First is done,
-// Second is not — and the walk reaches the end of the chain, so it names
-// every link by what it is to this checkout — and offers no route to stay,
-// since the chain's only end awaits that event and the link before it clears
-// only when it does.
+// exhausted. The outcome records how far the epic had come — First is done,
+// Second is not — and every link of the chain the walk reached.
 func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -546,19 +534,11 @@ func TestRunNextServesPastAnEpicWhoseWorkIsAllBlocked(t *testing.T) {
 		t.Fatalf("exhaustion.Blocked = %+v, want the gating dependency %s, then its own %s", got, blocker.ID, upstream.ID)
 	}
 
-	text := h.runNextText()
-	for _, want := range []string{
-		"no ready work in epic(s) " + epic.ID.Raw() + " (1/2 done) — ",
-		blocker.ID.Raw() + " (on your path but not startable right now",
-		upstream.ID.Raw() + " (on your path but waiting on an event outside this repository",
-		"\nmove on to the top ready ticket outside it: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + elsewhere.ID.Raw() + "`",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("next output = %q, want it to contain %q", text, want)
-		}
+	if got := served.Exhaustion.Progress; got.Done != 1 || got.Total != 2 {
+		t.Fatalf("exhaustion.Progress = %+v, want 1 of 2 done", got)
 	}
-	if strings.Contains(text, "to stay, file") {
-		t.Fatalf("next output = %q, want no route to stay — no ticket filed here clears %s, and %s waits only on it", text, upstream.ID, blocker.ID)
+	if text := h.runNextText(); !strings.Contains(text, elsewhere.ID.Raw()) {
+		t.Fatalf("next output = %q, want %s handed back", text, elsewhere.ID)
 	}
 }
 
@@ -621,9 +601,9 @@ func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
 }
 
 // A held lane whose ready ticket is a task, asked for bugs: the bug elsewhere
-// is served beneath a line naming the task the filter hid, and nothing calls
-// the epic out of work. Driven through runNext, since the defect was in what
-// the command handed routing.
+// is served, the outcome records the task the filter hid, and nothing calls
+// the epic out of work. Driven through runNext too, since the defect was in
+// what the command handed routing.
 func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -635,13 +615,13 @@ func TestRunNextUnderAFilterServesPastTheTicketItHid(t *testing.T) {
 	h.applyAction(first.ID, model.Start{Assignee: "tester"}, "")
 	h.applyAction(first.ID, model.Done{}, "")
 
-	text := h.runNextText("--type", "bug")
-	if strings.Contains(text, "no ready work in") {
-		t.Fatalf("next --type bug = %q, want the epic not called exhausted — %s is ready in it", text, second.ID)
+	past, ok := h.runNextOutcomeAsked(workableFilter{IssueTypes: []model.IssueType{"bug"}}).(ServedPastNarrowing)
+	if !ok || past.Row.ID != bug.ID || past.Narrowing.Hidden.ID != second.ID {
+		t.Fatalf("next --type bug = %#v, want %s served past %s, which the filter hid — %s is ready in the epic, so it is not exhausted", past, bug.ID, second.ID, second.ID)
 	}
-	want := "`lit next` without --type, --status, --labels or --assignee hands you " + second.ID.Raw() + ", which this run's filter leaves out\nor take the top ready ticket the filter selects, outside the work you hold: from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), run `lit start " + bug.ID.Raw() + "`"
-	if !strings.Contains(text, want) {
-		t.Fatalf("next --type bug = %q, want it to contain %q", text, want)
+	text := h.runNextText("--type", "bug")
+	if !strings.Contains(text, bug.ID.Raw()) || strings.Contains(text, second.ID.Raw()) {
+		t.Fatalf("next --type bug = %q, want %s handed back and %s left out", text, bug.ID, second.ID)
 	}
 }
 
@@ -661,8 +641,7 @@ func TestRunNextRejectsLimitAndColumns(t *testing.T) {
 
 // `lit next --status in_progress` is a documented flag combination. It is the
 // question an agent asks after a crash or a context reset — "what was I already
-// on?" — so these two tests pin both answers it can get, and the wording that
-// separates them.
+// on?" — so these two tests pin both answers it can get.
 //
 // Driven through runNext rather than routeNext: only the real command proves
 // --status reaches the gather that makes the in_progress row available to route
@@ -679,16 +658,17 @@ func TestRunNextStatusInProgressResumesOurOwnWorkInFlight(t *testing.T) {
 	if !strings.Contains(text, mine.ID.Raw()) {
 		t.Fatalf("next --status in_progress = %q, want it to hand back %q — narrowing to in_progress is how an agent asks what it already holds", text, mine.ID)
 	}
-	if !strings.Contains(text, mine.ID.Raw()+" is already in progress in a lane you hold") {
-		t.Fatalf("next --status in_progress = %q, want it reported as a resumption of %q and not a fresh start", text, mine.ID)
+	resumed, ok := h.runNextOutcomeAsked(workableFilter{Status: model.StateInProgress}).(ResumedOwnWork)
+	if !ok || resumed.Row.ID != mine.ID {
+		t.Fatalf("next --status in_progress = %#v, want a resumption of %q and not a fresh start", resumed, mine.ID)
 	}
 }
 
 // When the only in_progress rows are held fresh by other checkouts, every one
-// verdicts routeAround and the walk ends at NoWork. That must not print a bare
-// "no ready work" — byte-identical to an empty backlog, telling an agent asking
-// what it was on that its work is gone.
-func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *testing.T) {
+// verdicts routeAround and the walk ends at NoWork. The run hands no ticket
+// back, and the outcome records the row another checkout holds, so the event
+// tells an empty backlog from one whose work is held elsewhere.
+func TestRunNextStatusInProgressRecordsForeignHeldWork(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Home epic"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
@@ -696,163 +676,47 @@ func TestRunNextStatusInProgressNamesForeignHeldWorkRatherThanReadingEmpty(t *te
 	h.asCheckout("otherstream01")
 	h.applyAction(theirs.ID, model.Start{Assignee: "tester"}, "")
 
-	err := h.runNextErr("--status", "in_progress")
-	if err == nil {
-		t.Fatal("next --status in_progress error = nil, want the loud diagnostic: the row exists and is not ours to take")
+	none, ok := h.runNextOutcomeAsked(workableFilter{Status: model.StateInProgress}).(NoWork)
+	if !ok || len(none.Unreachable) != 1 || none.Unreachable[0].ID != theirs.ID || none.Unreachable[0].Kind != reachHeldFresh {
+		t.Fatalf("next --status in_progress = %#v, want NoWork recording %s as held by another checkout", none, theirs.ID)
 	}
-	if err.Error() == "no ready work" {
-		t.Fatal("next --status in_progress = \"no ready work\" — the exact empty-backlog wording, for a backlog holding one live in_progress ticket")
-	}
-	if !strings.Contains(err.Error(), theirs.ID.Raw()) {
-		t.Fatalf("next --status in_progress = %q, want it to name %q rather than report the queue empty", err.Error(), theirs.ID)
-	}
-	if !strings.Contains(err.Error(), "another checkout holds right now") {
-		t.Fatalf("next --status in_progress = %q, want it to say why %q is not servable", err.Error(), theirs.ID)
-	}
-	// Still an answer and not a fault: naming the row must not have moved this
-	// off the exit code a looping caller reads.
-	var stderr bytes.Buffer
-	if code := WriteCommandError(&stderr, err); code != ExitNoWork {
-		t.Fatalf("exit code = %d, want %d (ExitNoWork) — work held elsewhere is the backlog's state, not a fault", code, ExitNoWork)
+	text := h.runNextText("--status", "in_progress")
+	if !strings.HasSuffix(text, noTicket+"\n") {
+		t.Fatalf("next --status in_progress = %q, want it to say no ticket and not hand back %s", text, theirs.ID)
 	}
 }
 
-// No ready work → non-nil error so the calling shell exits non-zero.
-// Agents script `lit next` in loops; silent empty success would be a hang.
-//
-// The exit code separates the two nonzero meanings a looping caller has to tell
-// apart — "stop, there is nothing for you" versus "lit is broken" — so that
-// telling them apart never requires parsing the English.
-func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
+// An empty backlog is an answer, not a failure: the run succeeds and says there
+// is no ticket.
+func TestRunNextOnAnEmptyBacklogSaysThereIsNoTicket(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	err := h.runNextErr()
-	if err == nil {
-		t.Fatal("runNext() error = nil, want non-nil for empty ready set")
+	if outcome, ok := h.runNextOutcome().(NoWork); !ok {
+		t.Fatalf("routeNext on an empty backlog = %#v, want NoWork", outcome)
 	}
-	// Exactly, not merely contains: NoWork appends a clause naming the rows
-	// the pool walk went past, and an empty backlog has none. A contains-check
-	// would pass on a message that had grown a clause here.
-	if err.Error() != "no ready work" {
-		t.Fatalf("runNext() error = %q, want exactly %q — an empty backlog gained no clause", err.Error(), "no ready work")
-	}
-	var stderr bytes.Buffer
-	if code := WriteCommandError(&stderr, err); code != ExitNoWork {
-		t.Fatalf("exit code = %d, want %d (ExitNoWork) — an empty backlog is not a generic fault", code, ExitNoWork)
-	}
-	if out := stderr.String(); strings.Contains(out, "Retry the command") || strings.Contains(out, "lit doctor") {
-		t.Fatalf("an empty backlog must not be described as a retryable fault: %q", out)
+	if text := h.runNextText(); !strings.HasSuffix(text, noTicket+"\n") {
+		t.Fatalf("next on an empty backlog = %q, want <ticket> to read %q", text, noTicket)
 	}
 }
 
-// TestRenderNextOutcomeTerminalOutcomesKeepTheirType pins that
-// renderNextOutcome renders the router's terminal outcomes as TYPED errors,
-// keeping the discriminator routeNext established to keep the exhaustion case
-// distinguishable. Both sinks dispatch by type, so an untyped error falls
-// through to "command_failed", whose remediation tells the agent to retry an
-// answer that is deterministic and then to run `lit doctor` against a perfectly
-// healthy workspace — two dead ends, attached to a message saying the situation
-// calls for a deliberate act.
-//
-// The test drives the real seam rather than the error types in isolation:
-// asserting commandErrorReason(Exhausted{}) alone would still pass if
-// renderNextOutcome wrapped the outcome in errors.New.
-func TestRenderNextOutcomeTerminalOutcomesKeepTheirType(t *testing.T) {
+// Every outcome fires the one `next` event. One that hands a ticket back
+// carries it as the occasion's ticket, with its labels, and in <ticket>; one
+// that hands none back carries no ticket and the statement that there is none.
+func TestNextOccasionCarriesTheTicketOrSaysThereIsNone(t *testing.T) {
 	t.Parallel()
-	tests := []struct {
-		name       string
-		outcome    NextOutcome
-		wantReason commandReason
-		// wantAct is the deliberate act the message calls for but cannot name,
-		// which is the whole job the remediation line has left to do.
-		wantAct string
-		// wantAbsent are claims the remediation may not make about this
-		// outcome's rows. Checked as a list so every case runs the same loop
-		// over whatever it forbids. [LAW:dataflow-not-control-flow]
-		wantAbsent []string
-	}{
-		{
-			name:       "exhausted",
-			outcome:    Exhausted{Epics: []model.ID{"links-epic-abcd"}},
-			wantReason: reasonScopeExhausted,
-			wantAct:    "finish or hand off what you already hold",
-		},
-		{
-			name:       "narrowed",
-			outcome:    Narrowed{Hidden: annotation.AnnotatedIssue{Issue: model.Issue{ID: "links-hidden-abcd"}}},
-			wantReason: reasonScopeNarrowed,
-			wantAct:    "without the filter",
-		},
-		{
-			name:       "no work",
-			outcome:    NoWork{},
-			wantReason: reasonNoReadyWork,
-			wantAct:    "lit new",
-		},
-		{
-			// The focus scope withheld every startable row, so the message
-			// says the backlog is NOT empty — the situation in which offering
-			// `lit new` is the remediation-contradicts-message defect. Both
-			// populations are present because the real outcome carries both:
-			// an on-path row step 4 walked and rejected, and an off-path row
-			// it never examined.
-			name: "no work withheld by focus scope",
-			outcome: NoWork{
-				Unreachable: []rowReach{{ID: "links-gate-onpath", reading: reading{Kind: reachNotReady}}},
-				OffPath:     []model.ID{"links-other-offpath"},
-			},
-			wantReason: reasonNoReadyWork,
-			wantAct:    "lit next --all",
-			// withheldByScope names the off-path row without ever running
-			// capacityFor on it, so the remediation holds no reading of its
-			// capacity and may pass no verdict on it — in any wording, which
-			// is why the pin is the bare word and not one sentence's phrasing.
-			// NoWork.Error() already declines the same verdict; a remediation
-			// that makes it contradicts the message it prints under.
-			wantAbsent: []string{"startable"},
-		},
-	}
-	for _, tc := range tests {
-		tc := tc
+	for _, tc := range sealedNextOutcomes {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			occasion, err := renderNextOutcome(io.Discard, tc.outcome, nil, claimContext{}, false)
-			if err == nil {
-				t.Fatalf("renderNextOutcome(%T) error = nil, want the terminal answer", tc.outcome)
+			occasion := nextOccasion(tc.outcome, nil, claimContext{self: selfAttribution})
+			if occasion.Event != workflows.EventNext {
+				t.Fatalf("nextOccasion(%T).Event = %q, want %q", tc.outcome, occasion.Event, workflows.EventNext)
 			}
-			// No ticket was handed back, so no next_pulled event fires — the
-			// workflow dispatch must not be told a pull happened.
-			if occasion.Event != "" || occasion.IssueID != "" {
-				t.Fatalf("renderNextOutcome(%T) occasion = %#v, want none — no ticket was handed back", tc.outcome, occasion)
+			ticket := occasion.Data["ticket"]
+			if tc.served && (occasion.IssueID != sealedSumRow.ID || !slices.Equal(occasion.Labels, []string{"tracked"}) || !strings.Contains(ticket, sealedSumRow.ID.Raw())) {
+				t.Fatalf("nextOccasion(%T) = %#v, want %s as its ticket, labelled, and in <ticket>", tc.outcome, occasion, sealedSumRow.ID)
 			}
-			if got := commandErrorReason(err); got != tc.wantReason {
-				t.Fatalf("commandErrorReason = %q, want %q — the outcome lost its type crossing the seam", got, tc.wantReason)
-			}
-			var stderr bytes.Buffer
-			if code := WriteCommandError(&stderr, err); code != ExitNoWork {
-				t.Fatalf("exit code = %d, want %d (ExitNoWork)", code, ExitNoWork)
-			}
-			out := stderr.String()
-			if strings.Contains(out, "Retry the command") || strings.Contains(out, "lit doctor") {
-				t.Fatalf("a deterministic terminal answer must carry neither a retry nor a doctor referral: %q", out)
-			}
-			// The remediation must agree with the message body, so the body has
-			// to still be there to agree with.
-			if !strings.Contains(out, tc.outcome.(error).Error()) {
-				t.Fatalf("stderr dropped the outcome's own message: %q", out)
-			}
-			// Asserted against the remediation alone rather than all of stderr:
-			// the withheld case's per-row note already names `lit next --all`
-			// in the message body, so a stderr-wide check would stay green with
-			// the remediation silent — the exact gap this case exists to close.
-			rem := commandErrorRemediation(commandErrorReason(err))
-			if !strings.Contains(rem, tc.wantAct) {
-				t.Fatalf("remediation does not name the deliberate act %q: %q", tc.wantAct, rem)
-			}
-			for _, claim := range tc.wantAbsent {
-				if strings.Contains(rem, claim) {
-					t.Fatalf("remediation claims %q over rows whose capacity was never read: %q", claim, rem)
-				}
+			if !tc.served && (occasion.IssueID != "" || occasion.Labels != nil || ticket != noTicket) {
+				t.Fatalf("nextOccasion(%T) = %#v, want no ticket and <ticket> = %q", tc.outcome, occasion, noTicket)
 			}
 		})
 	}
@@ -894,93 +758,13 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 	}
 }
 
-// Every line renderNextOutcome can print, asserted as bytes. The outcome is
-// constructed rather than routed to, so each line is asserted alone; the routing
-// that produces each one is pinned in next_route_test.go. Standings are left
-// empty deliberately: formatClaimLine stays on its ("", false) arm, so nothing
-// but this line is under assertion.
-func TestRenderNextOutcomeSpeaksOnlyInTheConditional(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
-	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
-	h.transition(inFlight.ID, model.Start{Assignee: "other"})
-
-	rows, details, _ := h.gather()
-	// The reader is the checkout that started the row in flight, so resuming it
-	// is resuming its own work.
-	evidence, err := readEvidence(h.ctx, h.ap)
-	if err != nil {
-		t.Fatalf("read evidence: %v", err)
-	}
-	started, _ := claims.LatestEstablisher(evidence.IssueEvents(inFlight.ID))
-	cc := claimContext{self: started.Attribution, evidence: evidence}
-	freshRow := rowByID(t, rows, fresh.ID)
-	inFlightRow := rowByID(t, rows, inFlight.ID)
-	freshLane := laneOf(t, details, freshRow)
-	inFlightLane := laneOf(t, details, inFlightRow)
-
-	for _, tc := range []struct {
-		name    string
-		outcome NextOutcome
-		want    string
-	}{
-		{"a lane already held says nothing", ServedFromClaim{Row: freshRow}, ""},
-		{"own work in flight is reported as the state it is in", ResumedOwnWork{Row: inFlightRow},
-			inFlight.ID.Raw() + " is already in progress in a lane you hold — continue where you left off"},
-		{"the epic's next lane names what a start would lock", ServedFromEpicLane{Row: freshRow, Lane: freshLane},
-			"run `lit start " + fresh.ID.Raw() + "` to claim lane a1 of epic " + epicA.ID.Raw() + " (a second lane of an epic you already hold a lane in)"},
-		{"abandoned work says it is in flight and unheld before the same claim advice", ServedFromNewLane{poolPick{Row: inFlightRow, Lane: inFlightLane}},
-			inFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + inFlight.ID.Raw() + "` to claim lane a2 of epic " + epicA.ID.Raw()},
-		// Step 2 serves abandoned in-flight rows too, so the epic's next lane
-		// can carry one: the one place the state-dependent sentence and the
-		// fixed suffix are concatenated. Pinned whole, because a product left
-		// partly covered is where a tautology survives.
-		{"the epic's next lane serves abandoned work, qualifier and all", ServedFromEpicLane{Row: inFlightRow, Lane: inFlightLane},
-			inFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + inFlight.ID.Raw() + "` to claim lane a2 of epic " + epicA.ID.Raw() + " (a second lane of an epic you already hold a lane in)"},
-		// Step 1b, both states. Its qualifier concatenates onto the
-		// state-dependent sentence exactly as step 2's does, so the product
-		// needs both cells: a ready row and an abandoned one. This is the pick
-		// an agent is least likely to predict, and these two cells pin that it
-		// never renders the global pool's line verbatim.
-		{"the on-path dependency names the row it unblocks", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: inFlight.ID, Blocker: fresh.ID},
-			"run `lit start " + fresh.ID.Raw() + "` to claim lane a1 of epic " + epicA.ID.Raw() + " (gates " + inFlight.ID.Raw() + ", which is on your path)"},
-		{"an abandoned dependency is served and still names what it unblocks", ServedFromDependency{Row: inFlightRow, Lane: inFlightLane, Gates: fresh.ID, Blocker: inFlight.ID},
-			inFlight.ID.Raw() + " is in progress and nobody holds it — run `lit start " + inFlight.ID.Raw() + "` to claim lane a2 of epic " + epicA.ID.Raw() + " (gates " + fresh.ID.Raw() + ", which is on your path)"},
-		// Work under an epic that blocks has no edge of its own to the row it
-		// frees, so the line names the epic between them.
-		{"work under a blocking epic names the epic that gates", ServedFromDependency{Row: freshRow, Lane: freshLane, Gates: "test-gated", Blocker: epicA.ID},
-			"run `lit start " + fresh.ID.Raw() + "` to claim lane a1 of epic " + epicA.ID.Raw() + " (it is in epic " + epicA.ID.Raw() + ", which gates test-gated on your path)"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc, false); err != nil {
-				t.Fatalf("renderNextOutcome(%T) error = %v", tc.outcome, err)
-			}
-			out := buf.String()
-			if tc.want == "" {
-				if !strings.HasPrefix(out, fresh.ID.Raw()) {
-					t.Fatalf("ServedFromClaim printed %q; its contract is that no claim is established and nothing is said above the row", out)
-				}
-				return
-			}
-			if !strings.HasPrefix(out, tc.want+"\n") {
-				t.Fatalf("renderNextOutcome printed %q, want it to open with %q", out, tc.want)
-			}
-		})
-	}
-}
-
 // `lit next` reports a pick; `lit start` takes it. This is that contract as the
 // only thing that finally settles it — not what the output says, but what the
 // store holds after the command has run.
 //
-// Asserted through runNext rather than renderNextOutcome so the whole command
-// path is under it, and over the pick that has the most to lie about: an
-// unclaimed ticket in a lane nobody holds.
-// The wording assertions elsewhere in this file all become vacuous if the
-// command ever does start claiming, and this is what would still fail.
+// Asserted through runNext so the whole command path is under it, and over the
+// pick that has the most to lie about: an unclaimed ticket in a lane nobody
+// holds.
 func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
@@ -1002,57 +786,5 @@ func TestRunNextClaimsNothingAndStartsNothing(t *testing.T) {
 	}
 	if after.State() != model.StateOpen || after.Assignee != "" {
 		t.Fatalf("ticket is %v assigned to %q after `lit next`, want it still open and unassigned", after.State(), after.Assignee)
-	}
-
-	// The output must not claim otherwise either: a reader who believes the
-	// perfect tense skips `lit start` and works unclaimed, which is the harm the
-	// state assertions above prove has not happened but the line could still
-	// report.
-	for _, lie := range []string{"starting " + target.ID.Raw(), "claims " + target.ID.Raw(), "taking over " + target.ID.Raw(), "resuming " + target.ID.Raw()} {
-		if strings.Contains(text, lie) {
-			t.Fatalf("next output = %q contains %q — it reports a side effect this command does not have", text, lie)
-		}
-	}
-	if !strings.Contains(text, "run `lit start "+target.ID.Raw()+"`") {
-		t.Fatalf("next output = %q, want it to name the command that would actually claim %q", text, target.ID)
-	}
-}
-
-// The two picks that both establish a claim in a lane we do not hold must remain
-// tellable apart BY THE OUTPUT ALONE — it is not implied by either line being
-// correct in isolation. Asserted on ONE row deliberately: holding the row,
-// the lane and the standings fixed leaves the routing step as the only variable,
-// so a future edit that made the qualifier unconditional (or dropped it) could
-// not pass this by changing the fixture.
-func TestDependencyPickIsDistinguishableFromThePool(t *testing.T) {
-	t.Parallel()
-	h := newReadyTestHarness(t)
-	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("Epic A"), Lane: storage.SharedLane, Topic: "next", IssueType: "epic", Priority: 1})
-	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.1"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a1")})
-	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: storage.MustParseTitle("A.2"), Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: storage.MustParseLane("a2")})
-
-	rows, details, _ := h.gather()
-	cc := claimContext{self: selfAttribution}
-	row := rowByID(t, rows, fresh.ID)
-	lane := laneOf(t, details, row)
-
-	render := func(o NextOutcome) string {
-		var buf bytes.Buffer
-		if _, err := renderNextOutcome(&buf, o, details, cc, false); err != nil {
-			t.Fatalf("renderNextOutcome(%T) error = %v", o, err)
-		}
-		return buf.String()
-	}
-	pool := render(ServedFromNewLane{poolPick{Row: row, Lane: lane}})
-	dep := render(ServedFromDependency{Row: row, Lane: lane, Gates: blocked.ID, Blocker: row.ID})
-
-	if pool == dep {
-		t.Fatalf("the global pool and the on-path dependency render identically as %q — the pick an agent cannot predict is the one that must explain itself", pool)
-	}
-	if !strings.Contains(dep, blocked.ID.Raw()) {
-		t.Fatalf("dependency pick rendered %q, want it to name the blocked row %q it unblocks", dep, blocked.ID)
-	}
-	if strings.Contains(pool, "gates") {
-		t.Fatalf("global-pool pick rendered %q, want no gating clause — it gates nothing, and a line that claims otherwise is worse than the silence it replaced", pool)
 	}
 }

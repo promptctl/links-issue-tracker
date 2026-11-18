@@ -1,6 +1,6 @@
 ---
 id: phase-plan
-name: Plan the ticket, then record when the code starts
+description: Plan the ticket, then record when the code starts
 states: [plan]
 ---
 <id> is in plan. The ticket is not to be executed yet -- you MUST NOT make any edits (with the exception of the ticket's plan and comments, described below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received.

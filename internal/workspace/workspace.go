@@ -107,16 +107,6 @@ type Info struct {
 	Project config.ProjectLayer
 }
 
-// PrimaryClone says this checkout is the repository's primary clone rather than
-// a linked worktree: its own git directory IS the common one. `lit next` reads
-// it to say where a pick is started, because the primary clone is where every
-// session starts. Read off the two directories rather than stored beside them,
-// so it cannot disagree with them; both are canonical, so the comparison is of
-// physical paths. [LAW:one-source-of-truth]
-func (i Info) PrimaryClone() bool {
-	return i.PrivateGitDir == i.GitCommonDir
-}
-
 // Location is the on-disk geometry of a lit store — every path derived from a
 // git repository's git-common-dir, and nothing that requires reading or writing
 // the store. It is what a filesystem scan can know about a store WITHOUT opening
@@ -583,8 +573,7 @@ func anchorGitPath(base string, gitPath string) string {
 //
 // It is canonicalized through EvalSymlinks, as the common dir is, so the two
 // compare as physical paths: on macOS a checkout under /var is the same
-// directory as /private/var, and Info.PrimaryClone would otherwise call the
-// primary clone a linked worktree.
+// directory as /private/var.
 func checkoutGitDir(root string) (string, error) {
 	entry := filepath.Join(root, ".git")
 	info, err := os.Stat(entry)

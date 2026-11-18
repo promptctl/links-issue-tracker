@@ -6,16 +6,16 @@ This document covers the definition-file format, loading and override, the event
 
 ## The definition file
 
-A definition is a markdown file with optional YAML frontmatter (`internal/workflows/workflows.go`).
+A definition is a markdown file with YAML frontmatter (`internal/workflows/workflows.go`).
 
-**Frontmatter delimiters** (`internal/workflows/parse.go`): the delimiter is a line equal to `---` after stripping trailing spaces, tabs, and `\r` (so CRLF files work). Frontmatter exists only if the *first line* of the file is a delimiter; otherwise the entire file is body and the definition is inert (see below). An opened-but-unclosed frontmatter block is an error (`unterminated frontmatter: missing closing ---`), which makes the file malformed: skipped entirely, one warning (`parse.go`). The body is everything after the closing delimiter, whitespace-trimmed (`parse.go`).
+**Frontmatter delimiters** (`internal/workflows/parse.go`): the delimiter is a line equal to `---` after stripping trailing spaces, tabs, and `\r` (so CRLF files work). Frontmatter exists only if the *first line* of the file is a delimiter; otherwise the entire file is body, so it has no description and is skipped (see `description` below). An opened-but-unclosed frontmatter block is an error (`unterminated frontmatter: missing closing ---`), which makes the file malformed: skipped entirely, one warning (`parse.go`). The body is everything after the closing delimiter, whitespace-trimmed (`parse.go`).
 
 **Frontmatter keys** — the complete set (`parse.go`). Unknown keys are tolerated and ignored, deliberately, so a file authored for a newer lit still loads (`parse.go`). The frontmatter must be a YAML mapping; a top-level sequence or scalar — or a non-sequence value for a sequence-typed key like `labels: 17` — is malformed and skips the file (`parse.go`).
 
 | Key | Type | Semantics |
 |---|---|---|
 | `id` | string | primary key across layers; trimmed; defaults to the layer-relative path with `.md` removed and spaces replaced by `_` (directory separators preserved: `review tasks/design check.md` → `review_tasks/design_check`) (`parse.go`). Lookup is exact string equality, no case folding (`workflows.go`) |
-| `name` | string | optional display name, trimmed; used only in listings, rendered as `<id> "<name>" (<source>)` (`internal/cli/workflows.go`) |
+| `description` | string | required; one line saying what the guidance is for, trimmed. A file whose description is absent or blank is skipped with the warning ``no description: add a `description:` line saying what this guidance is for`` (`parse.go`). Shown in listings as `<id> "<description>" (<source>)` (`internal/cli/workflows.go`) |
 | `labels` | list of string | activation dimension 1 |
 | `states` | list (see below) | activation dimension 2 |
 | `events` | list of string | activation dimension 3 |
@@ -26,16 +26,16 @@ A definition is a markdown file with optional YAML frontmatter (`internal/workfl
 
 **`events`**: entries are lowercased and trimmed; empties dropped (`parse.go`). An event not in this binary's catalog still loads, preserved as authored, with the warning `unknown event %q: not in this lit's catalog, will never fire here` (`parse.go`).
 
-**Inertness**: a definition with all three dimensions empty is inert — it loads, appears in listings, warns `no activation keys (labels/states/events): definition is inert and will never fire`, and never matches (`workflows.go`, `parse.go`, `match.go`). This is why a plain markdown file with no frontmatter loads but never fires.
+**Inertness**: a definition with all three dimensions empty is inert — it loads, appears in listings, warns `no activation keys (labels/states/events): definition is inert and will never fire`, and never matches (`workflows.go`, `parse.go`, `match.go`).
 
-**Body substitution**: exactly one substitution exists — every literal `<id>` in the body is replaced with the occasion's issue ID at injection time, unconditionally; when the occasion carries no issue ID (e.g. `show_backlog`) it is replaced with the empty string (`dispatch.go`). A prior mechanism's `<token>` substitution is not supported (`dispatch.go`).
+**Body substitution** (`Interpolate`, `dispatch.go`): at injection time every literal `<id>` in the body is replaced with the occasion's issue ID, unconditionally; when the occasion carries no issue ID (e.g. `show_backlog`) it is replaced with the empty string. Every key of the occasion's `Data` is replaced the same way, as `<key>`. A `<name>` the occasion does not supply stays in the body as written. The one occasion that carries `Data` is `next`, whose key is `ticket` (see the occasion payload below).
 
-The shipped defaults are embedded in the binary (`internal/workflows/defaults/`). Four are bound to entering a phase — `phase-plan.md` (`states: [plan]`), `phase-impl.md`, `phase-review.md`, `phase-merge.md` — and each body names the command that records the next move: `lit phase <id> --to impl`, `--to review`, `--to merge`, and from `merge`, `lit done <id>`. The fifth is `done.md`:
+The shipped defaults are embedded in the binary (`internal/workflows/defaults/`). Four are bound to entering a phase — `phase-plan.md` (`states: [plan]`), `phase-impl.md`, `phase-review.md`, `phase-merge.md` — and each body names the command that records the next move: `lit phase <id> --to impl`, `--to review`, `--to merge`, and from `merge`, `lit done <id>`. The fifth is `next.md` (`id: next`, `events: [next]`), which is what `lit next` prints: its body places `<ticket>`, says what to do when that reads as no ticket, and otherwise gives the steps for starting ticket `<id>`, among them which checkout to work it in. The sixth is `done.md`:
 
 ```
 ---
 id: done
-name: Post-close capture reminder
+description: Post-close capture reminder
 events: [work_finished]
 ---
 Ticket <id> has been closed. Before moving on, take a moment to review related tickets. …
@@ -47,7 +47,7 @@ Definitions load from three layers, nearest first (`load.go`):
 
 1. **Project** — `<workspaceRoot>/.lit/workflows/`
 2. **Global** — `<config-dir>/workflows/`, where the config dir is `$XDG_CONFIG_HOME/links-issue-tracker` if set, else `$HOME/.config/links-issue-tracker`; if no home dir can be determined the layer contributes nothing (`internal/config/config.go`, `load.go`)
-3. **Embedded** — compiled into the binary via `go:embed`; today five files, `done.md` and the four `phase-*.md` (`load.go`)
+3. **Embedded** — compiled into the binary via `go:embed`; today six files, `done.md`, `next.md` and the four `phase-*.md` (`load.go`)
 
 Within a layer, discovery walks the root recursively; a file participates iff its path ends in `.md` (case-sensitive — `.MD` does not); the folder hierarchy carries no activation meaning and only seeds the default ID; walk order is lexical, making within-layer conflicts deterministic (`load.go`).
 
@@ -59,6 +59,7 @@ Within a layer, discovery walks the root recursively; a file participates iff it
 | any other walk error, or file read error | `cannot read: <err>` |
 | unterminated frontmatter | `unterminated frontmatter: missing closing ---` |
 | YAML unmarshal failure | `invalid frontmatter: <err>` |
+| absent or blank description | ``no description: add a `description:` line saying what this guidance is for`` |
 | comma-bearing label | `label %q can never match: <err>` |
 | inert definition | `no activation keys (labels/states/events): definition is inert and will never fire` |
 | unknown event | `unknown event %q: not in this lit's catalog, will never fire here` |
@@ -74,7 +75,7 @@ Eleven events, defined as string constants (`internal/workflows/events.go`). Eve
 |---|---|---|
 | `show_backlog` | agent views the workable backlog | `lit backlog` |
 | `show_ticket` | agent views one ticket's details | `lit show` |
-| `next_pulled` | agent asks for the next workable ticket | `lit next` |
+| `next` | agent asks for the next workable ticket, on every run, whether or not one is handed back | `lit next` |
 | `work_started` | a ticket is claimed and work begins | `lit start` |
 | `phase_set` | an in-progress ticket's phase is set, whether or not it moves | `lit phase` |
 | `work_finished` | claimed work finishes on the success path | `lit done` |
@@ -84,15 +85,16 @@ Eleven events, defined as string constants (`internal/workflows/events.go`). Eve
 | `ticket_updated` | an existing ticket's fields change | `lit update` |
 | `comment_added` | a comment lands on a ticket | `lit comment` |
 
-`Catalog()` returns display order — `show_backlog, next_pulled, show_ticket, work_started, phase_set, work_finished, ticket_closed, ticket_reopened, ticket_created, ticket_updated, comment_added` — which differs from declaration order and is the order `lit workflows` prints (`events.go`).
+`Catalog()` returns display order — `show_backlog, next, show_ticket, work_started, phase_set, work_finished, ticket_closed, ticket_reopened, ticket_created, ticket_updated, comment_added` — which differs from declaration order and is the order `lit workflows` prints (`events.go`).
 
 ### The occasion payload
 
-The single payload type is `Occasion` (`match.go`): `Event` (zero when none), `IssueID` (never read by matching — used only for `<id>` interpolation, display, tracing), `Labels` (canonical form; nil when no single ticket), `Entered` and `Exited` (lists of states, set only when a transition happened; one transition can enter or exit several, since a phase is a state inside `in_progress`). Per-event payloads as actually built (`internal/cli/workflow_events.go`):
+The single payload type is `Occasion` (`match.go`): `Event` (zero when none), `IssueID` (never read by matching — used only for `<id>` interpolation, display, tracing), `Labels` (canonical form; nil when no single ticket), `Entered` and `Exited` (lists of states, set only when a transition happened; one transition can enter or exit several, since a phase is a state inside `in_progress`), and `Data` (the replacements a body receives, keyed by the name it writes as `<name>`; never read by matching). Per-event payloads as actually built (`internal/cli/workflow_events.go`; `next` in `internal/cli/next_output.go`):
 
 | Event | Payload set |
 |---|---|
-| `show_ticket`, `next_pulled`, `ticket_created`, `comment_added` | Event, IssueID, Labels |
+| `show_ticket`, `ticket_created`, `comment_added` | Event, IssueID, Labels |
+| `next` | built by `nextOccasion`. When routing handed a ticket back: Event, IssueID, Labels, and `Data["ticket"]` = the ticket as `printNextSummary` shows it, trailing newlines trimmed. When it handed none back: Event and `Data["ticket"]` = `No ticket: nothing this run asked about is ready to start from this checkout.` (`noTicket`), with no IssueID and no Labels. `routedRow` is the one place that says which outcomes hand a ticket back |
 | `show_backlog` | Event only — no IssueID, no Labels, no transition |
 | `ticket_updated` | Event, IssueID, Labels; never a transition — `lit update` rejects `--status` (`workflow_events.go`) |
 | `work_started`/`work_finished`/`ticket_closed`/`ticket_reopened`/`phase_set` | Event, IssueID, post-transition Labels, `Entered` = the states after (the status, then the phase while in progress) that were not states before, `Exited` = the states before that are not states after (`workflow_events.go`) |
@@ -112,7 +114,7 @@ Where each event actually fires, and where in the command's output the injected 
 | `lit update` (`cli.go`) | `ticket_updated` | after apply, before summary |
 | transitions (`cli.go`) | one of the four status transition events, or `phase_set` | after apply and authorize, before the claim-transfer notice |
 | `lit comment` (`cli.go`) | `comment_added` | after the comment is stored, before it is printed |
-| `lit next` (`internal/cli/next.go`) | `next_pulled` | last, after the start advice and summary; only when a row was actually served — exhausted/no-work paths return before any occasion is built |
+| `lit next` (`internal/cli/next.go`) | `next` | on every run, after routing; the injected text is the whole of the command's stdout answer, so the shipped `next` definition fires on a run that hands no ticket back too |
 | `lit backlog` (`internal/cli/workable.go`) | `show_backlog` | last, after the table render |
 
 ## Matching
@@ -174,9 +176,9 @@ lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--labe
 
 Routing: no positionals → overview; `show <id>`; `edit <id-or-point>`; `dry-run`; anything else is a usage error (exit 2) (`internal/cli/workflows.go`). Overview, show, and edit take no flags — any flag-shaped token there is a usage error.
 
-**Overview** (`workflows.go`) prints, in order: the header `lit workflows — work lifecycle guidance (project > global > embedded)`; an `Events` spine (the full catalog, always, bound or not, in catalog order); a `States` spine (the built-in states in lifecycle order — `open`, `in_progress`, the four phases in work order, `closed` — then any custom state a loaded definition binds, alphabetically, each with `enter`/`exit` sub-lines); a `Labels` spine (every label any definition binds — not every label used on tickets — deduped and sorted, or `(none bound)`); then warnings. Each spine point shows the bound definitions as `<id> "<name>" (<source>)` refs; a definition appears at every point it binds. The warnings section, printed only on the overview and only when non-empty, is headed `Warnings (loaded but not fully active)` with each warning collapsed to one line.
+**Overview** (`workflows.go`) prints, in order: the header `lit workflows — work lifecycle guidance (project > global > embedded)`; an `Events` spine (the full catalog, always, bound or not, in catalog order); a `States` spine (the built-in states in lifecycle order — `open`, `in_progress`, the four phases in work order, `closed` — then any custom state a loaded definition binds, alphabetically, each with `enter`/`exit` sub-lines); a `Labels` spine (every label any definition binds — not every label used on tickets — deduped and sorted, or `(none bound)`); then warnings. Each spine point shows the bound definitions as `<id> "<description>" (<source>)` refs; a definition appears at every point it binds. The warnings section, printed only on the overview and only when non-empty, is headed `Warnings (loaded but not fully active)` with each warning collapsed to one line.
 
-**`show <id>`** prints exactly `id:`, `name:` (`-` when empty), `source:`, `path:`, `labels:`, `states:` (as `state(when)`), `events:`, a `---` separator, then the body (`workflows.go`). Unknown ID → validation error naming the id, exit 3; missing ID → usage error.
+**`show <id>`** prints exactly `id:`, `description:`, `source:`, `path:`, `labels:`, `states:` (as `state(when)`), `events:`, a `---` separator, then the body (`workflows.go`). Unknown ID → validation error naming the id, exit 3; missing ID → usage error.
 
 **`dry-run`** builds a hypothetical occasion from `--event`, repeatable `--label`, repeatable `--enter`, repeatable `--exit`, `--issue` — **verbatim, with no canonicalization**, so `--label Needs-Design` will not match a canonicalized definition label (`workflows_dryrun.go`). Output: an `occasion:` line summarizing the inputs (`-` for unset), then `Fired (<n>)` with `(none)` or, per match, the definition ref, its match reasons, and its interpolated body indented 4 spaces. Dry-run never writes a firing trace and never reads the store (`workflows_dryrun.go`). Stray positionals and unknown flags are usage errors.
 
@@ -197,7 +199,7 @@ The scaffold's live line for a state point is `states: ["<state>"]` (enter) or `
 
 The filename slug lowercases, trims, replaces runs outside `[a-z0-9_-]` with `-` (underscore deliberately kept, so `work_started` → `work_started.md`), trims edge dashes, falls back to `point`, and appends `_exit` for exit-side state points (`closed:exit` → `closed_exit.md`) (`workflows_edit.go`). Other pinned examples: `deploy:staging:enter` → `deploy-staging.md`, `needs-design` → `needs-design.md`, `foo,bar:enter` → `foo-bar.md`.
 
-The fresh scaffold's content is fixed (`scaffold.go`): frontmatter opening `---`; two comment lines explaining AND-across/OR-within; commented example lines for each dimension *other than* the one being scaffolded (`# labels: [needs-design, blocked]`, both `# states:` forms with enter/exit comments, `# events: [work_started]`); the live line; commented `# id:` and `# name:` hints; closing `---`; and the body placeholder ``Write the guidance to inject here. `<id>` is replaced with the acted-on ticket's id when there is one.``
+The fresh scaffold's content is fixed (`scaffold.go`): frontmatter opening `---`; two comment lines explaining AND-across/OR-within; commented example lines for each dimension *other than* the one being scaffolded (`# labels: [needs-design, blocked]`, both `# states:` forms with enter/exit comments, `# events: [work_started]`); the live line; a live `description:` line to fill in; a commented `# id:` hint; closing `---`; and the body placeholder ``Write the guidance to inject here. `<id>` is replaced with the acted-on ticket's id when there is one.``
 
 **No-clobber**: scaffolding refuses to overwrite in two stages — a stat check returning a merge-conflict error (exit 5) with `cannot scaffold "<subject>": <path> already exists (edit it directly, or run 'lit workflows' to see what's already loaded there)`, and the real enforcer, an `O_CREATE|O_EXCL` open that converts `IsExist` to the same error, closing the check-then-write race (`workflows_edit.go`). Scaffolding only ever writes under the project `.lit/workflows/`, never the global or embedded layers.
 
@@ -209,6 +211,6 @@ None. `internal/cli/hooks.go` installs a git `pre-push` hook — a managed secti
 
 ## What a workflow author can and cannot do
 
-**Can**: bind on any subset of {labels, states, events}; use enter/exit sides independently; bind custom non-lifecycle state names; nest files arbitrarily; override a farther layer by ID or by matching relative path; use `<id>` in the body; author for a future lit (unknown events and unknown YAML keys both load).
+**Can**: bind on any subset of {labels, states, events}; use enter/exit sides independently; bind custom non-lifecycle state names; nest files arbitrarily; override a farther layer by ID or by matching relative path; use `<id>` in the body, and `<ticket>` in a body bound to `next`; replace what `lit next` prints by overriding the `next` id, or add to it by binding another definition to the `next` event; author for a future lit (unknown events and unknown YAML keys both load).
 
 **Cannot**: run anything; receive environment variables; gate or block a command; set an exit code; use wildcards, globs, regexes, or negation; order or prioritize between simultaneous matches (all fire, ID-ascending); require ALL of several labels (label matching is OR); match on issue ID; or match a state binding on a moment that carries no transition.

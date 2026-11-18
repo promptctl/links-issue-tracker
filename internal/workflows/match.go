@@ -37,6 +37,11 @@ type Occasion struct {
 	// occurred.
 	Entered []string
 	Exited  []string
+	// Data are the replacements a body receives, keyed by the name it writes
+	// as <name>. A key the occasion does not supply stays in the body as
+	// written, so a template that asks for data the command never gives shows
+	// the gap instead of hiding it.
+	Data map[string]string
 }
 
 // Matches reports whether the definition fires on the occasion. Composition

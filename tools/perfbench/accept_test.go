@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -70,9 +69,9 @@ func TestLitCarriesOutThePlan(t *testing.T) {
 			for _, phase := range phasesOf(invocationsFor(probes, store), invocation.probeOf) {
 				for _, inv := range phase {
 					code, stdout, stderr := runLitIn(t, store.root, env, gateLimits.kill(), inv.args)
-					if !slices.Contains(inv.okCodes, code) {
-						t.Errorf("probe %q exited %d at %d rows, want one of %v:\n%s%s",
-							inv.probe.name, code, sz.rows, inv.okCodes, stdout, stderr)
+					if code != 0 {
+						t.Errorf("probe %q exited %d at %d rows:\n%s%s",
+							inv.probe.name, code, sz.rows, stdout, stderr)
 					}
 				}
 			}

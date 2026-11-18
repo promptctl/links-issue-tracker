@@ -96,9 +96,9 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 		}
 	}
 
-	// Asked before anything is in progress, next serves the laned ticket, so
-	// its advice names the planted lane.
-	check("next", command(runNext), "left"+model.QuotedBreak+forged+" lane")
+	// Asked before anything is in progress, next serves the laned ticket, and
+	// prints it as backlog does: its planted title, over its epic's.
+	check("next", command(runNext), "open"+model.QuotedBreak+forged+" open", "epic"+model.QuotedBreak+forged+" epic")
 	h.applyAction(stale.ID, model.Start{Assignee: "tester"}, "")
 	h.backdateUpdatedAt(stale.ID, 7*time.Hour)
 	// Free text beyond title and lane: an assignee and a topic, planted the
@@ -181,5 +181,5 @@ func TestEveryListingHoldsAStoredBreakToItsRow(t *testing.T) {
 	check("history's id", command(runHistory, open.ID.Raw()), openID)
 	check("update's summary id", command(runUpdate, open.ID.Raw(), "--priority", "normal"), openID)
 	h.applyAction(open.ID, model.Start{Assignee: "tester"}, "")
-	check("next's in-progress advice", command(runNext), openID)
+	check("next's in-progress ticket", command(runNext), openID)
 }

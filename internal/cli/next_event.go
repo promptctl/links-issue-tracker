@@ -10,8 +10,9 @@ import (
 )
 
 // reachKindNames is how the invocation event spells each reachKind a walk can
-// report. Indexed by the kind and bounded by reachTakeable, like reachNotes, and
-// held total by TestEveryReachKindHasAnEventName.
+// report. Indexed by the kind and bounded by reachTakeable, so it has a slot
+// for every kind a walk can report and none for a row routing would have
+// served instead, and held total by TestEveryReachKindHasAnEventName.
 var reachKindNames = [reachTakeable]string{
 	reachHeldFresh:       "held_fresh",
 	reachHeldByItself:    "held_by_itself",
@@ -19,8 +20,8 @@ var reachKindNames = [reachTakeable]string{
 	reachAwaitingOutside: "awaiting_outside",
 }
 
-// The event's reach for the entries of the two lists that are not kinds, as
-// outOfViewNote and offFocusPathNote are their words.
+// The event's reach for the entries of the two lists that are not kinds: a
+// dependency with no work in view, and a row the focus label withheld.
 const (
 	outOfViewReach    = "out_of_view"
 	offFocusPathReach = "off_focus_path"
@@ -159,15 +160,13 @@ func decideNextEvent(outcome NextOutcome) nextDecision {
 // was picked from, the chain a dependency pick was reached
 // through, how far a stopped scope had come, the ticket a filter hid and the
 // focus goals it was drawn under, how far the lanes this checkout holds had
-// come within that scope, every
-// row its diagnostics named with what this checkout may do about each and, for
-// a blocker, whether a ticket filed here could free it, whether it offered the
-// route that stays in the scope, where its pick is started beside the checkout
-// kind that decided it, and how many rows it chose among — the ones the filter
-// selects, though routing reads the whole queue. Its stdout says the same in
-// prose, for the session that ran it; this is what is left of it afterwards.
+// come within that scope, every row the walk went past with what this checkout
+// may do about each and, for a blocker, whether a ticket filed here could free
+// it, and how many rows it chose among — the ones the filter selects, though
+// routing reads the whole queue. Stdout carries only the ticket handed back, so
+// this event is the one record of why routing answered as it did.
 // [LAW:nothing-unseen]
-func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int, primaryClone bool) {
+func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int) {
 	decision := decideNextEvent(outcome)
 	telemetry.Set(ctx, "next.outcome", decision.Outcome)
 	telemetry.Set(ctx, "next.picked", decision.Picked)
@@ -184,8 +183,5 @@ func recordNextEvent(ctx context.Context, outcome NextOutcome, gathered int, pri
 	telemetry.Set(ctx, "next.hidden_by_filter", decision.HiddenByFilter)
 	telemetry.Set(ctx, "next.hidden_focus_goals", model.RawIDs(decision.HiddenFocusGoals))
 	telemetry.Set(ctx, "next.unreachable", reachFacts(decision.NoWork.Unreachable))
-	telemetry.Set(ctx, "next.stay_offered", len(decision.Exhaustion.stay()) > 0)
-	telemetry.Set(ctx, "next.start_place", placeFor(outcome, primaryClone).eventName())
-	telemetry.Set(ctx, "next.primary_clone", primaryClone)
 	telemetry.Count(ctx, "next.rows_gathered", gathered)
 }

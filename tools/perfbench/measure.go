@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"slices"
 	"strings"
 	"time"
 )
@@ -216,13 +215,9 @@ var errKilled = errors.New("still running at the kill limit")
 // runProbe times one invocation and returns its wall clock, or an error naming
 // what the command did instead of its job.
 //
-// The exit code is checked against the probe's declared set for this store's
-// size rather than against zero, and an undeclared code is fatal rather than
-// skipped. Both halves matter: `lit next` exits 6 on an empty store because
-// there is genuinely no ready work, so treating nonzero as failure would make
-// the empty control unmeasurable — while treating any exit as success would let
-// a refused invocation, which returns an order of magnitude faster than a real
-// answer, set the minimum this tool reports. [LAW:no-silent-failure]
+// A nonzero exit is fatal rather than skipped: a refused invocation returns an
+// order of magnitude faster than a real answer, so recording it would let it
+// set the minimum this tool reports. [LAW:no-silent-failure]
 func runProbe(bin litBinary, store generatedStore, inv invocation, devnull *os.File, kill time.Duration) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), kill)
 	defer cancel()
@@ -246,10 +241,10 @@ func runProbe(bin litBinary, store generatedStore, inv invocation, devnull *os.F
 	if err != nil {
 		return 0, err
 	}
-	if !slices.Contains(inv.okCodes, code) {
-		return 0, fmt.Errorf("`lit %s` exited %d, which is not among its expected codes %v at %d rows — "+
+	if code != 0 {
+		return 0, fmt.Errorf("`lit %s` exited %d at %d rows — "+
 			"the command did not do its work, so its %s is not a measurement of it:\n%s",
-			strings.Join(inv.args, " "), code, inv.okCodes, store.rows(), elapsed.Round(time.Millisecond),
+			strings.Join(inv.args, " "), code, store.rows(), elapsed.Round(time.Millisecond),
 			strings.TrimSpace(stderr.String()))
 	}
 	return elapsed, nil

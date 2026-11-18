@@ -44,15 +44,6 @@ func TestBacklogOccasionCarriesNoSingleTicket(t *testing.T) {
 	}
 }
 
-func TestNextPulledOccasion(t *testing.T) {
-	t.Parallel()
-	issue := hydratedIssue(t, "lit-2", []string{"epic-child"}, model.StateOpen)
-	got := nextPulledOccasion(issue)
-	if got.Event != workflows.EventNextPulled || got.IssueID != "lit-2" || !slices.Equal(got.Labels, []string{"epic-child"}) {
-		t.Fatalf("nextPulledOccasion() = %+v", got)
-	}
-}
-
 func TestTicketCreatedOccasion(t *testing.T) {
 	t.Parallel()
 	issue := hydratedIssue(t, "lit-3", []string{"needs-triage"}, model.StateOpen)

@@ -184,7 +184,7 @@ with its code (`error_output.go`):
 - 3: `migration_partially_applied`, `migration_quarantined`, `outside_git_workspace`, `purge_unconfirmed`, `retired_command`, `schema_shape_refused`, `stored_prefix_refused`, `takeover_unconfirmed`, `template_shape_refused`, `unknown_command`, `unsupported_flag`, `validation_refused`, `workspace_not_initialized`, `workspace_schema_ahead`
 - 4: `entity_not_found`, `version_not_found`
 - 5: `merge_conflict`, `owner_approval_required`, `restore_would_overwrite`, `sync_divergence`
-- 6: `no_ready_work`, `scope_exhausted`, `scope_narrowed`, `state_already_holds`
+- 6: `state_already_holds`
 - 7: `corruption_detected`, `parent_cycle`
 
 Error types defined in `errors.go`: `RestoreOverwriteError`, `MergeConflictError`,
@@ -237,28 +237,25 @@ types gets the reason of the earliest one:
     derived state already equals the requested one, and no child remains
     unfinished; for `RetentionError`: the `Retain` cell says so), otherwise
     `validation_refused`
-18. `Exhausted` → `scope_exhausted`
-19. `Narrowed` → `scope_narrowed`
-20. `NoWork` → `no_ready_work`
-21. `UnsupportedError` → `unsupported_flag`
-22. `takeoverUnconfirmedError` → `takeover_unconfirmed`
-23. `purgeUnconfirmedError` → `purge_unconfirmed`
-24. `OutsideWorkspaceError` → `outside_git_workspace`
-25. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
-26. `*store.QuarantineBlockError` → `migration_quarantined`
-27. `workspace.StoredPrefixError` → `stored_prefix_refused`
-28. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
-    (`StoredPrefixError` unwraps to this sentinel; step 27 catches it first)
-29. `BulkError` → `bulkReason`: the reason every item the run ran classifies
+18. `UnsupportedError` → `unsupported_flag`
+19. `takeoverUnconfirmedError` → `takeover_unconfirmed`
+20. `purgeUnconfirmedError` → `purge_unconfirmed`
+21. `OutsideWorkspaceError` → `outside_git_workspace`
+22. `errors.Is(err, store.ErrWorkspaceNotInitialized)` → `workspace_not_initialized`
+23. `*store.QuarantineBlockError` → `migration_quarantined`
+24. `workspace.StoredPrefixError` → `stored_prefix_refused`
+25. `errors.Is(err, workspace.ErrIssuePrefixRefused)` → `validation_refused`
+    (`StoredPrefixError` unwraps to this sentinel; step 24 catches it first)
+26. `BulkError` → `bulkReason`: the reason every item the run ran classifies
     as (by this same classifier) when they all share one — so only when no
     item landed — else `bulk_partial_failure`
-30. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
+27. `store.WorkspaceWriteBlockedError` → `workspace_write_blocked` (it unwraps
     to `store.ErrTransientGCContention`; this step catches it first)
-31. `errors.Is(err, store.ErrWorkspaceBusy)`,
+28. `errors.Is(err, store.ErrWorkspaceBusy)`,
     `errors.Is(err, workspace.ErrConfigBusy)` or `errors.Is(err, backup.ErrBusy)`
     → `workspace_busy`
-32. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
-33. anything else → `command_failed`
+29. `errors.Is(err, store.ErrTransientGCContention)` → `transient_gc_contention`
+30. anything else → `command_failed`
 
 `commandErrorRemediation(reason)` (`error_output.go`), verbatim strings. An
 empty string means no `remediation:` line is printed:
@@ -284,9 +281,6 @@ empty string means no `remediation:` line is printed:
 - `migration_partially_applied`: "Do not retry, and run no other lit command first: every command opens the store and runs this migration again on top of its partial changes. Run `lit snapshots restore <name>` with the snapshot the message above names — it holds the workspace as it was just before this open migrated it, and restore moves the current store aside rather than deleting it — then rerun the command."
 - `schema_shape_refused`: "Do not retry unchanged — this workspace's stored shape is one lit does not converge on its own, and every command that opens the store repeats this refusal. The message above names the shape. \<agent-instructions>Repairing a stored shape by hand is the user's call: surface this refusal to the user as blocking.\</agent-instructions>"
 - `workspace_write_blocked`: "Wait a moment and retry: a normal command releases the store in well under a second. If it fails the same way again, surface it to the user as blocking."
-- `scope_narrowed`: "Do not retry unchanged — routing is deterministic and repeats this answer while the filter stays. Run `lit next` without the filter, as the message says, to be handed the ticket it names."
-- `scope_exhausted`: "Do not retry unchanged — routing is deterministic and repeats this answer until the work named above moves. Act on what the message names — the route it offers, or the rows off your focus path — or finish or hand off what you already hold."
-- `no_ready_work`: "Do not retry unchanged — routing is deterministic and repeats this answer until something in the backlog moves. That is the backlog's state, not a fault. If `--type`, `--labels`, `--assignee`, or `--status` narrowed this run, drop the filter and ask again. If a `focus` label narrowed it, `lit next --all` routes over the whole queue for one run and `lit label rm <id> focus` lifts the scope. Otherwise `lit backlog --all` shows the whole queue and who holds what, and `lit new` adds work if it is genuinely empty."
 - `state_already_holds`: "No action is needed — the command asked for a state the workspace is already in. Do not retry: running it again cannot change the answer, and `lit doctor` has nothing to diagnose because nothing is broken."
 - `takeover_unconfirmed`: "Rerun with `--take` to take the lane over, or run `lit next` for work nobody else holds. `--take` on `lit phase` acts on the ticket and leaves the hold where it is; `lit start <id> --take` moves the hold to you. \<agent-instructions>Taking over a lane another checkout holds right now overrides that checkout's work: pass `--take` only when the user directs the takeover.\</agent-instructions>"
 - `purge_unconfirmed`: "Rerun with `--yes` to purge it, or run `lit delete <id>` to remove it reversibly. \<agent-instructions>A purge cannot be undone and reaches every store lit syncs with: pass `--yes` only when the user directs the purge.\</agent-instructions>"
@@ -358,7 +352,8 @@ Every dispatch is `workflows.Dispatch(env, stdout, stderr, ws, o)`, with the inv
 Occasion builders (`workflow_events.go`):
 - `showTicketOccasion` → `EventShowTicket`, carries IssueID + Labels
 - `backlogOccasion` → `EventShowBacklog`, no IssueID/Labels
-- `nextPulledOccasion` → `EventNextPulled`
+- `nextOccasion` (`next_output.go`) → `EventNext`, on every run; carries
+  IssueID + Labels when a ticket is handed back, and `Data` key `ticket` always
 - `ticketCreatedOccasion` → `EventTicketCreated`
 - `ticketUpdatedOccasion` → `EventTicketUpdated`; never carries Entered/Exited
   because `update` rejects `--status`
@@ -1483,35 +1478,38 @@ Lane for the claim line is `model.LaneOf(entry.Issue, details[entry.ID].Parent)`
 - Retired flag: `--continue` is intercepted at the shared parse boundary as
   `UnsupportedError` → exit 3, message
   ``"--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"``
+  (`next.go`). `--by` is retired the same way, message
+  ``"--by is retired here: this command reads no identity, because a lane belongs to the checkout — run it from the checkout that holds your work"``
   (`next.go`).
 - Prints the sync-staleness warning first (`next.go`).
 - Parses the filter into `asked` (`workableFilter.criteria`), then gathers the
   whole workable queue, unfiltered — rows, relation details, **and the focus
   scope** — via `gatherWorkableQueue` (`next.go`, `cli.go`), then the claim
   context (`next.go`), and then routes (`next.go`):
-  `routeNext(rows, details, epics, cc.standings, cc.self, scope.scopeFor(*all), asked)`.
+  `routeNext(rows, details, epics, cc.standings, cc.evidence, cc.self, scope.scopeFor(*all), asked)`.
   `scopeFor(true)` returns the zero `focusScope`, which holds every row
   (`ready_state.go`).
 
 **`NextOutcome`** — a sealed sum interface (`next_route.go`,
-`next_route.go`) with **eight** cases:
+`next_route.go`) with **ten** cases:
 
 | Case | Fields | Meaning |
 |---|---|---|
 | `ServedFromClaim` | `Row` | a ready ticket in a lane this checkout already holds — step 1 (`next_route.go`) |
 | `ResumedOwnWork` | `Row` | a ticket already in flight in a lane this checkout holds, handed back to its holder — also step 1 (`next_route.go`) |
-| `ServedFromEpicLane` | `Row`, `Lane model.LaneID` | a pick from a different lane of the same epic this checkout already holds a lane in — step 2. The epic is `Lane.Epic()`; there is no `Epic` field (`next_route.go`) |
-| `ServedFromNewLane` | `poolPick` (`Row`, `Lane model.LaneID`, `Scope focusScope`) | a ticket in a lane this checkout does **not** hold — produced by step 4 alone; `Scope` is the scope the pool was partitioned by (`next_route.go`) |
-| `ServedFromDependency` | `Row`, `Lane model.LaneID`, `Gates string` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, so the pick explains itself (`next_route.go`) |
+| `ServedFromEpicLane` | `Row` | a pick from a different lane of the same epic this checkout already holds a lane in — step 2 (`next_route.go`) |
+| `ServedFromNewLane` | `poolPick` (`Row`, `Scope focusScope`) | a ticket in a lane this checkout does **not** hold — produced by step 4 alone; `Scope` is the scope the pool was partitioned by (`next_route.go`) |
+| `ServedFromDependency` | `Row`, `Gates model.ID`, `Via []hop`, `Blocker model.ID` | step 1b's or 2b's on-path dependency; `Gates` is the id of the blocked row it unblocks, `Blocker` the dependency the pick is work toward, and `Via` the prerequisites between the two (`next_route.go`) |
 | `ServedPastExhaustion` | `poolPick`, `Exhaustion Exhausted` | the checkout's own epic(s) have open work, none of it reachable, and the global pool has a ready ticket outside them — step 3 (`next_route.go`) |
 | `ServedPastNarrowing` | `poolPick`, `Narrowing Narrowed` | steps 1–2b serve nothing the filter selects, the same steps over the whole queue would serve `Narrowing.Hidden`, and the global pool has a ready ticket the filter selects — step 3 (`next_route.go`) |
-| `Exhausted` | `Epics []string`, `Progress claims.Progress`, `Blocked []blockerReach`, `Held []rowReach`, `OffPath []string`, `Narrowing *Narrowed` | the same, with nothing the filter selects ready in the global pool either — step 3; `Narrowing` is the pool's pick over the whole queue, if any, and `OffPath`, set only when there is none, is the rows outside the scope a focus label withheld from the pool (`next_route.go`) |
-| `Narrowed` | `Hidden annotation.AnnotatedIssue` | no step serves a row the filter selects, and the same steps over the whole queue serve `Hidden` — step 3, with nothing the filter selects ready in the global pool either, or step 4 (`next_route.go`) |
-| `NoWork` | `Unreachable []rowReach`, `OffPath []string` | the global pool produced nothing — step 4; `OffPath` is the rows a focus label kept out of the pool (`next_route.go`) |
+| `Exhausted` | `Epics []model.ID`, `Progress claims.Progress`, `OwnProgress claims.Progress`, `Blocked []blockerReach`, `Held []rowReach`, `OffPath []model.ID`, `Narrowing *Narrowed` | the same, with nothing the filter selects ready in the global pool either — step 3; `Narrowing` is the pool's pick over the whole queue, if any, and `OffPath`, set only when there is none, is the rows outside the scope a focus label withheld from the pool (`next_route.go`) |
+| `Narrowed` | `Hidden annotation.AnnotatedIssue`, `Scope focusScope` | no step serves a row the filter selects, and the same steps over the whole queue serve `Hidden` — step 3, with nothing the filter selects ready in the global pool either, or step 4 (`next_route.go`) |
+| `NoWork` | `Unreachable []rowReach`, `OffPath []model.ID` | the global pool produced nothing — step 4; `OffPath` is the rows a focus label kept out of the pool (`next_route.go`) |
 
-`Exhausted`, `Narrowed` and `NoWork` implement `error` and travel outward as themselves
-rather than being rendered into a generic error (`next_route.go`,
-`next_route.go`).
+`Exhausted`, `Narrowed` and `NoWork` are plain values of the sum like the other
+seven: none is an error, none has an `Error()` method, and none maps to an exit
+code or a reason (`next_route.go`). Every `lit next` run exits 0, whether or not
+it hands a ticket back (`next.go`).
 
 **Admission** — `capacityFor(row, standing, self) capacity`
 (`next_route.go`) is the single eligibility verdict. The three capacities
@@ -1534,7 +1532,7 @@ orphan annotation does not enter routing. A lane whose claim has expired is
 Only `laneHeldForeign` is routed around; a locked worktree past the clock
 derives `Held` and is one of these. Servability is not gated on `model.StateOpen`.
 
-**Routing precedence** — `routeNext(rows, details, epics, standings, self, scope focusScope)`
+**Routing precedence** — `routeNext(rows, details, epics, standings, evidence, self, scope focusScope, asked)`
 (`next_route.go`). `rows` are already in rank order (§1.18).
 `laneOf(row) = model.LaneOf(row.Issue, details[row.ID].Parent)`
 (`next_route.go`);
@@ -1571,10 +1569,10 @@ serves nothing, over every row; both dependency walks read every row either way:
      `Best` is the `reading` of the highest `reachFor` among `workToward[id]`,
      carried by the first row in rank order with it, or nil when that is empty
      (`next_route.go`) →
-     **`ServedFromDependency{Row: work, Lane: laneOf(work), Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates and `work` the first row of `workToward[dep.ID]` the run may serve that `reachFor` reads `reachTakeable` — the dependency itself or, for an epic, a ticket under it.
+     **`ServedFromDependency{Row: work, Gates: dep.Gates, Via: dep.Via, Blocker: dep.ID}`** (`next_route.go`), the `Gates` being the blocked row the dependency gates and `work` the first row of `workToward[dep.ID]` the run may serve that `reachFor` reads `reachTakeable` — the dependency itself or, for an epic, a ticket under it.
 2. Else **the rest of our epic, in lanes we do not already hold** — predicate
    `own.covers(lane) && !own.holds(lane)`, accepting
-   `serveWork` → **`ServedFromEpicLane{Row, Lane: laneOf(row)}`**.
+   `serveWork` → **`ServedFromEpicLane{Row}`**.
    - 2b. Else, with `gating := gatingDependencies(rows, laneOf, own.covers, reachFor, workToward)`,
      `onPathDependency(gating, serves, reachFor, workToward, laneOf)` →
      **`ServedFromDependency`**, as in step 1b.
@@ -1596,7 +1594,7 @@ Step 4 is reached directly by a checkout holding no lanes:
 4. **The global pool, focus-scoped.** `pool, offPath := scope.partition(rows, details)`
    (`next_route.go`, `ready_state.go`), then
    `pickFrom(pool, selected, func(model.LaneID) bool { return true }, serveWork)` →
-   **`ServedFromNewLane{poolPick{Row, Lane: laneOf(row), Scope: scope}}`**.
+   **`ServedFromNewLane{poolPick{Row, Scope: scope}}`**.
    Else, the same pick over every row → **`Narrowed{Hidden: pick.Row, Scope: pick.Scope}`**.
    Else → **`NoWork{Unreachable: passedOver(<pool rows asked selects>, reachFor), OffPath: withheldByScope(<offPath rows asked selects>)}`**
    (`next_route.go`), where `passedOver` stamps every walked pool row with
@@ -1610,148 +1608,44 @@ visible (`next_route.go`).
 **`reachKind`** (`next_route.go`) — what one row is to this checkout right
 now, declared from least to most this checkout can do: `reachAwaitingOutside`,
 `reachNotReady`, `reachHeldByItself`, `reachHeldFresh`, `reachTakeable`.
-`reachTakeable` is also the length of `reachNotes` and `reachKindNames`, so
-neither has a slot for it. `reachOf(row, standing, self)` answers
+`reachTakeable` is also the length of `reachKindNames` (`next_event.go`), so
+that table has no slot for it. `reachOf(row, standing, self)` answers
 `reachTakeable` when `capacityFor(...) != routeAround`, `reachAwaitingOutside`
 when `ClassifyReadiness(row.Annotations).AwaitsOutside()`, `reachHeldFresh` when
 `relationOf(...) == laneHeldForeign`, `reachHeldByItself` when
 `ClassifyReadiness(row.Annotations).HeldByItself()`, else `reachNotReady`
-(`next_route.go`). `rowReach{ID string, Row annotation.AnnotatedIssue, Kind reachKind}`
+(`next_route.go`). `rowReach{ID model.ID, Row annotation.AnnotatedIssue, Kind reachKind}`
 (`next_route.go`) is what `Exhausted` and `NoWork` carry.
 
-`exhaustedNotes` (`next_route.go`), with no `reachTakeable` entry — exhaustion reports the very walk step 2b declined:
-- `reachHeldFresh`: `"on your path but claimed by another checkout right now"`
-- `reachNotReady`: ``"on your path but not startable right now — `lit show` it"``
-- `reachAwaitingOutside`: ``"on your path but waiting on an event outside this repository — `lit show` it names the event"``
-
-`poolNotes` (`next_route.go`):
-- `reachHeldFresh`: `"in progress or claimed in a lane another checkout holds right now"`
-- `reachNotReady`: ``"not startable right now — `lit show` it names what blocks it"``
-- `reachAwaitingOutside`: ``"waiting on an event outside this repository — `lit show` it names the event"``
-
-The two lists that are not kinds carry one note each (`next_route.go`):
-`outOfViewNote`, ``"on your path but outside this view — `lit show` it"``, for a
-`Blocked` entry with no `Best`, and `offFocusPathNote`,
-``"off the focus path this run answered over — `lit next --all` to route over the whole queue"``,
-for `OffPath`.
-
-`describeReach(rows, lead, notes)` renders `"<lead><names> (<note>)"` for each kind
-that has rows, joined by `"; "`, from the highest `reachKind` down
-(`next_route.go`). An entry's name is its `ID`, or `"<Row.ID> under <ID>"` when
-it carries a `Row` whose id differs — a dependency read through a ticket under it
-(`rowReach.name`, `next_route.go`). `nameCapped` names at most `maxNamedPerKind = 12` items and
-otherwise appends `" and <n> more"` (`next_route.go`).
-
-**Terminal messages.** `Exhausted.scope()` (`next_route.go`) names the scope:
-`"epic(s) <Epics joined by ", ">"` when `Epics` is non-empty, else
-`"your claimed lane(s)"`. `Exhausted.home()` is ``"with `lit new --top`"``
-when `Epics` is empty, else `"under the epic with "` +
-``"`lit new --parent <epic> --top`"`` for each epic, joined by `" or "`.
 `Exhausted.Blocked` (`blockersOf`) holds one `blockerReach` per gating
 dependency, in walk order: its `depReach`, and `Clearable`, true when none of
 its `workToward` rows has `AwaitsOutside()`, or is open with any
 `Prerequisites()` — so always true for one out of view.
-`Exhausted.stay()` is empty when no `Blocked` entry is `Clearable` (so when
-`Blocked` is empty too), else the one route
-``"to stay, file the ticket that clears a blocker <home()>, then make that blocker blocked by it with <edges>"``,
-the edges being ``"`lit dep add <id> --blocked-by <new>`"`` for each
-`Clearable` entry, through `nameCapped` with `" or "`.
-`Exhausted.why()`:
-- `"no ready work in <scope> (<progress>) — <clauses>"`, the progress being `formatProgress(Progress)` — `"<done>/<total> done"` over every lane of the scope, closed tickets included and archived and deleted ones left out — and the clauses being the non-empty ones of `describeReach(<each Blocked entry's Best>, "blocked by ", exhaustedNotes)`, `"blocked by <ids> (<outOfViewNote>)"` for the `Blocked` entries with no `Best`, and `describeReach(Held, "held here: ", exhaustedNotes)`, joined by `"; "`
-- All three empty: `"no ready work in <scope> (<progress>) — nothing in it is left to do"` when `Done == Total`, else `"no ready work in <scope> (<progress>) — nothing else is queued behind what's already in progress"`
 
-`Exhausted.outside()`: `Narrowing.Error()` when `Narrowing` is set, else
-``"`lit next` has nothing ready outside it either"`` when `OffPath` is empty, else
-`"nothing on the focus path outside it is ready either: <OffPath> (<offFocusPathNote>)"`.
+**What the run prints** (`next.go`, `next_output.go`). The outcome is not
+rendered into prose. After routing, the leaf hands it to `recordNextEvent`
+(which reads it through `decideNextEvent`, `next_event.go`) and to
+`nextStatuslineFacts` (`statusline.go`), then dispatches
+`nextOccasion(outcome, gathered.details, cc)` as `EventNext`: the text bound to
+the `next` workflow event is the whole of the command's stdout answer, on every
+run. `routedRow(outcome)` is the one place that says which outcomes carry a
+row — the seven served cases:
+- a row → the occasion carries `IssueID: row.ID`, the row's labels, and `Data`
+  key `ticket` set to what `printNextSummary(w, row, cc, lane)` writes, trailing
+  newlines trimmed, with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)`.
+  `printNextSummary` prints the **default columns** (`id state topic title`)
+  joined by two spaces (`ready_state.go`, `columns.go`), then `printInlineDeps`
+  (`ready_state.go`): `    epic: …`, `    blocked by: …`, and the claim line.
+- `Exhausted`, `Narrowed`, `NoWork` → the occasion carries no `IssueID` and no
+  labels, and `Data` key `ticket` set to `noTicket`:
+  `No ticket: nothing this run asked about is ready to start from this checkout.`
 
-`Exhausted.Error()`: `"<why()>; <outside()>"`, then each `stay()` route,
-joined by `" — "`.
-
-`NoWork.Error()` (`next_route.go`):
-- `Unreachable` and `OffPath` both empty: `"no ready work"`
-- `OffPath` non-empty:
-  `"no ready work on the focus path — the backlog is not empty, and each row below says why this run did not serve it: <rows>"`
-- Otherwise: `"no ready work — the backlog is not empty, but nothing in it is startable here: <rows>"`
-
-`<rows>` is `describeReach(Unreachable, "", poolNotes)` followed by
-`"<OffPath> (<offFocusPathNote>)"` when `OffPath` is non-empty, joined by `"; "`.
-
-Both map to `ExitNoWork` = **6** (`error_output.go`), with reasons
-`scope_exhausted` and `no_ready_work` respectively (`error_output.go`).
-
-**Rendering** — `renderNextOutcome(w, outcome, details, cc, primaryClone)` (`next.go`):
-- `ServedFromClaim` → no announcement at all (`next.go`).
-- `ResumedOwnWork` → `resumeAdvice(o.Row, cc)` + `"\n"` (`next.go`). The
-  checkout of the row's latest start decides which of two sentences: when it is
-  another checkout than this one,
-  `"<RowID> is already in progress in a lane you hold, started by <checkout> — read its history before you continue it"`;
-  otherwise, or when the row records no start,
-  `"<RowID> is already in progress in a lane you hold — continue where you left off"`.
-- `ServedFromEpicLane` → `startAdvice(o.Row, o.Lane, place)`
-  + `" (a second lane of an epic you already hold a lane in)\n"`.
-- `ServedFromNewLane` → `o.advice(place)` + `"\n"`.
-- `ServedFromDependency` → the same `startAdvice(...)` + `dependencyReason(o)` + `"\n"`:
-  `" (gates %s, which is on your path)"` on `Gates` when `Blocker == Row.ID`,
-  else `" (it is in epic %s, which gates %s on your path)"` on `Blocker`, `Gates`.
-- `ServedPastExhaustion` → `"<why()>\n"`, then the `stay()` routes followed by `"move on to the top ready ticket outside it: <o.advice(place)>"`, joined by `"\nor "`, then `"\n"`.
-- `ServedPastNarrowing` → `"<o.Narrowing.Error()>\nor take the top ready ticket the filter selects, outside the work you hold: <o.advice(place)>\n"`.
-- `Exhausted`, `Narrowed`, `NoWork` → returned as themselves; no ticket printed.
-- Any other outcome type → panic.
-
-`startAdvice(row, lane, place)` (`next.go`) is one sentence with an optional
-lead clause. `object, named := lane.Describe()`, `object = "it"` when not named,
-and `<where>` is `place.where()` (below):
-- ``"<where>run `lit start <id>` to claim <object>"``
-- in progress: ``"<id> is in progress and nobody holds it — <where>run `lit start <id>` to claim <object>"``
-
-The ``run `lit start` `` sentence goes through `singleLine`, since `<object>` can
-name a lane key.
-
-The lead clause says only what the standing proves — routing serves an
-in-progress row from a lane this checkout does not hold only when nobody holds
-that lane — and nothing about who left the row or when.
-
-`poolPick.advice(place)` (`next.go`) is `startAdvice(Row, Lane, place)` followed by
-`focusScope.pickClause()`: nothing for the whole queue, and under a `focus`
-label ``" (focused on <goals>: picked from the focus path alone — `lit next --all` to route over the whole queue)"``, the goals joined by `", "`.
-
-`LaneID.Describe() (string, bool)` (`model.go`):
-- solo lane → `("", false)`
-- empty key → `("the default lane of epic <epic>", true)`
-- otherwise → `("lane <key> of epic <epic>", true)`
-
-On a served row, `renderNextOutcome` calls `printNextSummary(w, row, cc, lane)`
-with `lane = model.LaneOf(row.Issue, details[row.ID].Parent)` (`next.go`),
-which prints the **default columns** (`id state topic title`) joined by two
-spaces (`ready_state.go`, `columns.go`), then `printInlineDeps`
-(`ready_state.go`): `    epic: …`, `    blocked by: …`, the claim line,
-and `    unblocks: …` — but `next` passes a **nil** unblocks map, so the unblocks
-line never appears (`ready_state.go`). It then returns
-`nextPulledOccasion(row.Issue)` (`next.go`, `workflow_events.go`),
-dispatched as `EventNextPulled` (`next.go`).
-
-`renderNextOutcome(w, outcome, details, cc, actingAs, primaryClone)` first takes
-`place := placeFor(outcome, primaryClone)` (`next_place.go`); the leaf reads
-`primaryClone` once and passes it to `recordNextEvent` too, which takes the same
-`placeFor` for the event. `placeFor` is total over the sealed sum and panics
-on an unnamed variant: `ServedFromClaim`, `ResumedOwnWork`, `ServedFromEpicLane`
-and `ServedFromDependency` → `startHere`; `ServedFromNewLane` →
-`startOffPrimaryClone` in the primary clone, `startHere` in a linked worktree;
-`ServedPastExhaustion` → the `ServedFromNewLane` place when
-`o.Exhaustion.OwnProgress.Finished()` (`Done == Total`, `internal/claims/evidence.go`;
-`OwnProgress` is `evidence.ScopeProgress(own.holds)`, `next_route.go`),
-else `startBesideHeldWork`; `ServedPastNarrowing` → `startBesideHeldWork`;
-`Exhausted`, `Narrowed`, `NoWork` → `startNoPick`. `startAdvice(row, lane, place)`
-prefixes `place.where()` to ``"run `lit start <id>` to claim <object>"``:
-empty for `startNoPick` and `startHere`, ``"from a worktree of its own off the trunk (not the primary clone, where every session starts), "`` for
-`startOffPrimaryClone`, ``"from a worktree of its own off the trunk (not this checkout, whose own work is unfinished), "`` for `startBesideHeldWork`.
-`recordNextEvent` sets the event facts `next.start_place` (`here`,
-`worktree_off_primary_clone`, `worktree_beside_held_work`, or `null` for
-`startNoPick`) and `next.primary_clone`.
+The shipped `next` definition (`internal/workflows/defaults/next.md`) places
+`<ticket>` in its body and says which checkout to work the ticket in — this
+one, or a new worktree; no Go code decides that.
 
 `lit next` performs **no writes** — it is registered `app.AccessRead`
-(`register.go`). `startAdvice` names what a subsequent `lit start` would
-claim; this command claims nothing.
+(`register.go`); it claims nothing.
 
 ### 2.15 `lit orphaned` — quiet in-progress issues
 
@@ -2418,7 +2312,8 @@ a successful run (§1.4). A refused verdict records nothing (`verdict_test.go`).
    `claims_takeover.go`).
 7. **Three functions panic on unreachable states** and would abort the process:
    `ClassifyReadiness` on an unclassified annotation kind (`readiness.go`),
-   `renderNextOutcome` on an unhandled outcome type (`next.go`),
+   `decideNextEvent` and `nextStatuslineFacts` on an unhandled outcome type
+   (`next_event.go`, `statusline.go`),
    `transitionOccasion` on an unmapped lifecycle action (`workflow_events.go`),
    `emitBreadcrumb`/`quickstartBreadcrumb` on an unknown topic
    (`quickstart_topics.go`), `completionRenderer` on an unknown shell

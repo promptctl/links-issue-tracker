@@ -40,7 +40,7 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 	Set(ctx, "next.outcome", "no_work")
 	Count(ctx, "next.rows_gathered", 0)
 
-	ev := recorder.Finish(End{At: started.Add(1500 * time.Millisecond), Outcome: OutcomeError, ExitCode: 6, Reason: "no_ready_work", Error: "no ready work"})
+	ev := recorder.Finish(End{At: started.Add(1500 * time.Millisecond), Outcome: OutcomeError, ExitCode: 4, Reason: "entity_not_found", Error: "issue not found"})
 	if ev.Event != "lit next" || ev.Service != "lit" {
 		t.Errorf("Event, Service = %q, %q; want lit next, lit", ev.Event, ev.Service)
 	}
@@ -59,8 +59,8 @@ func TestFactsAddedThroughTheContextLandOnTheFinishedEvent(t *testing.T) {
 	if ev.StartedAt.Location() != time.UTC || !ev.StartedAt.Equal(started) {
 		t.Errorf("StartedAt = %v, want %v in UTC", ev.StartedAt, started)
 	}
-	if ev.Outcome != OutcomeError || ev.ExitCode != 6 || ev.Reason != "no_ready_work" || ev.Error != "no ready work" {
-		t.Errorf("end fields = %q %d %q %q, want error 6 no_ready_work, no ready work", ev.Outcome, ev.ExitCode, ev.Reason, ev.Error)
+	if ev.Outcome != OutcomeError || ev.ExitCode != 4 || ev.Reason != "entity_not_found" || ev.Error != "issue not found" {
+		t.Errorf("end fields = %q %d %q %q, want error 4 entity_not_found, issue not found", ev.Outcome, ev.ExitCode, ev.Reason, ev.Error)
 	}
 }
 
