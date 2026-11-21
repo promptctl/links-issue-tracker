@@ -5058,7 +5058,7 @@ Meaning of the two modes (`workspace_lock.go`): shared marks **directory readers
 - `workspace_lock_test.go` exclusive refuses while shared is held.
 - `workspace_lock_test.go` shared refuses while exclusive is held.
 - `workspace_lock_test.go` exclusive is released after `Store.Close()`.
-- `workspace_lock_test.go` (`TestOpenForReadAcquiresLockBeforeStat`) — `OpenForRead` takes the shared lock **before** its database-exists stat, so a concurrent restore that transiently renames the database dir away yields a workspace-busy refusal, never a false "repository not initialized".
+- `workspace_lock_test.go` (`TestOpenForReadAcquiresLockBeforeStat`) — `OpenForRead` takes the shared lock **before** its database-exists stat, so a concurrent restore that transiently renames the database dir away yields a workspace-busy refusal, never a false `ErrWorkspaceNotInitialized`.
 - `workspace_lock_test.go` `OpenSync` holds the workspace lock.
 - `workspace_lock_test.go` exclusive holds serialize.
 

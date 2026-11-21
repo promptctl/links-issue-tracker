@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -280,9 +281,9 @@ func TestCommandErrorReason(t *testing.T) {
 			"validation_refused",
 		},
 	}
-	// Asserted on the rendered header, not on commandErrorReason: the header
-	// is where a caller reads the reason, so a reason computed correctly and
-	// printed nowhere must fail here.
+	// Asserted on the invocation event, not on commandErrorReason: the event is
+	// where a caller reads the reason, so a reason computed correctly and
+	// recorded nowhere must fail here.
 	produced := map[string]bool{}
 	for _, tc := range tests {
 		tc := tc
@@ -292,17 +293,14 @@ func TestCommandErrorReason(t *testing.T) {
 			if !ok {
 				t.Fatalf("reason %q is not in reasonCodes", tc.want)
 			}
-			var stderr bytes.Buffer
-			WriteCommandError(&stderr, tc.err)
-			header, _, _ := strings.Cut(stderr.String(), "\n")
-			wantPrefix := fmt.Sprintf("error (code=%d, reason=%s): ", code, tc.want)
-			if !strings.HasPrefix(header, wantPrefix) {
-				t.Fatalf("header = %q, want prefix %q", header, wantPrefix)
+			end := invocationEnd(time.Time{}, tc.err, nil)
+			if end.Reason != tc.want || end.ExitCode != code {
+				t.Fatalf("event records reason %q at code %d, want %q at code %d", end.Reason, end.ExitCode, tc.want, code)
 			}
 		})
 	}
-	// Every published reason is rendered by at least one real error above, so
-	// no row of the vocabulary is a token nothing prints.
+	// Every published reason is recorded for at least one real error above, so
+	// no row of the vocabulary is a token nothing records.
 	for reason := range reasonCodes {
 		if !produced[reason] {
 			t.Errorf("no case renders reason %q", reason)
@@ -394,7 +392,7 @@ func TestCommandReasonVocabulary(t *testing.T) {
 	}
 }
 
-// TestWriteCommandError pins the text error surface: the code+message line plus
+// TestWriteCommandError pins the text error surface: the message line plus
 // the actionable remediation for the error's typed reason. Text is the one
 // canonical surface, so the remediation guidance reaches every caller.
 func TestWriteCommandError(t *testing.T) {
@@ -405,8 +403,8 @@ func TestWriteCommandError(t *testing.T) {
 		t.Fatalf("exitCode = %d, want %d", exitCode, ExitValidation)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "error (code=3, reason=unknown_command): unknown command \"unknown\"") {
-		t.Fatalf("missing error line: %q", out)
+	if !strings.HasPrefix(out, "unknown command \"unknown\"\n") {
+		t.Fatalf("stderr does not open with the message: %q", out)
 	}
 	if !strings.Contains(out, "remediation: Run `lit --help`") {
 		t.Fatalf("missing remediation line: %q", out)
@@ -474,8 +472,7 @@ func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 	if code := WriteCommandError(&stderr, store.ErrWorkspaceNotInitialized); code != ExitValidation {
 		t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 	}
-	want := "error (code=3, reason=workspace_not_initialized): lit workspace is not initialized.  Run 'lit init' to initialize lit for this project.\n" +
-		"This will pull the remote's existing backlog, if available\n"
+	want := store.ErrWorkspaceNotInitialized.Error() + "\n"
 	if got := stderr.String(); got != want {
 		t.Fatalf("stderr =\n%q\nwant\n%q", got, want)
 	}
@@ -559,8 +556,11 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 				t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 			}
 			out := stderr.String()
-			if !strings.Contains(out, "error (code=3, reason="+tc.reason+"): "+tc.err.Error()) {
-				t.Fatalf("missing the message body at exit 3: %q", out)
+			if !strings.HasPrefix(out, tc.err.Error()+"\n") {
+				t.Fatalf("stderr does not open with the message: %q", out)
+			}
+			if got := commandErrorReason(tc.err).String(); got != tc.reason {
+				t.Fatalf("reason = %q, want %q", got, tc.reason)
 			}
 			_, remediation, ok := strings.Cut(out, "\nremediation: ")
 			if !ok {

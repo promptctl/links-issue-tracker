@@ -14,8 +14,9 @@ import (
 // [LAW:one-source-of-truth] This sentence has one home, here, so no copy of it
 // can drift.
 // [LAW:types-are-the-program] It exists so the CLI's error classifier
-// dispatches on the condition itself; a bare fmt.Errorf would carry no type, so
-// the classifier could not recognize a terminal precondition and would tell the
+// dispatches on the condition itself, matched by identity through errors.Is; a
+// fresh fmt.Errorf at each raise site would have no identity to match, so the
+// classifier could not recognize a terminal precondition and would tell the
 // agent to retry it forever.
 var ErrWorkspaceNotInitialized = errors.New("lit workspace is not initialized.  Run 'lit init' to initialize lit for this project.\nThis will pull the remote's existing backlog, if available")
 
@@ -27,13 +28,12 @@ var ErrWorkspaceNotInitialized = errors.New("lit workspace is not initialized.  
 // the root is also what a damaged or half-deleted Dolt tree looks like, so a
 // check pointed there would answer "never initialized" for a workspace that
 // plainly exists, and send the caller to `lit init`, which refuses a root it
-// cannot read. [LAW:types-are-the-program] With no directory to choose and no
-// label to vary, that call is not expressible.
+// cannot read.
 //
 // It hands back a sentinel rather than a proof-carrying type because no type
 // could honestly carry this proof — the directory can vanish between this stat
 // and the caller's next syscall, so "initialized" is a fact about an instant,
-// not about a value. [LAW:parse-dont-validate] What it does keep is the single
+// not about a value. [LAW:single-enforcer] What it does keep is the single
 // boundary: the OS answer is classified once, here, instead of at each caller.
 //
 // [LAW:no-silent-failure] Only ENOENT means uninitialized; every other stat

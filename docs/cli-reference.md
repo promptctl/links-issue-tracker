@@ -47,13 +47,12 @@ newer than the installed `lit` supports, or a workspace whose pending migration 
 quarantined after a failed attempt. Running the same command
 again without changing something reproduces the same refusal.
 
-A failed command's first stderr line carries the code and a reason:
-`error (code=3, reason=workspace_not_initialized): <message>`. The reason is a stable
-token that tells apart failures sharing a code — within code 3, `validation_refused`,
-`outside_git_workspace` and `workspace_not_initialized` each call for a different act —
-so a script branches on it rather than on the message, which may span several lines.
-A `remediation:` line follows the message when the reason has one. Every reason, with
-the code it arrives on:
+A failed command prints its message to stderr, and a `remediation:` line after it
+when the reason has one. The exit status carries the code. The reason is a stable
+token, recorded as `reason` on the command's [invocation event](events.md), that tells
+apart failures sharing a code — within code 3, `validation_refused`,
+`outside_git_workspace` and `workspace_not_initialized` each call for a different act.
+Every reason, with the code it arrives on:
 
 | Reason | Code | Failure |
 |--------|------|---------|

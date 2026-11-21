@@ -289,7 +289,6 @@ var Manifest = []Claim{
 	{Doc: "doc-v1-total/10-platform.md", Text: "--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag", Src: "--continue is retired; claim routing already serves your checkout's lanes first in `lit next` — run `lit next` with no flag"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "--output is no longer supported; omit it for text output", Src: "--output is no longer supported; omit it for text output"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "--to <version>", Src: "usage: lit upgrade [--to <version>] | lit upgrade --remote <name>"},
-	{Doc: "doc-v1-total/10-platform.md", Text: "error (code=%d, reason=%s): %v", Src: "error (code=%d, reason=%s): %v\n"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "git ls-remote", Src: "git ls-remote: %w"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "git remote -v", Src: "git remote -v of %q: %w"},
 	{Doc: "doc-v1-total/10-platform.md", Text: "git rev-parse --show-toplevel", Src: "git rev-parse --show-toplevel --git-common-dir --git-dir"},

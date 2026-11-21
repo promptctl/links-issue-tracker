@@ -203,8 +203,9 @@ rules in `internal/model/validation.go`.
 
 `WriteCommandError(stderr, err)` (`error_output.go`) — called from
 `cmd/lit/main.go` as the process exit path:
-- Line 1: `error (code=%d, reason=%s): %v\n` (exit code + reason +
-  `err.Error()`, which may itself span lines).
+- Line 1: `%v\n` (`err.Error()`, which may itself span lines). The exit code
+  is the process's exit status; the reason is recorded on the invocation
+  event (`invocationEnd`, `invocation_event.go`), not printed.
 - Then, only when non-empty: `remediation: %s\n`.
 
 `commandErrorReason(err)` maps type → reason string (`error_output.go`). Its

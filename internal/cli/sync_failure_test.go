@@ -531,10 +531,10 @@ func TestADivergedPushIsTheSyncFailureBlock(t *testing.T) {
 	if code := WriteCommandError(&stderr, asSyncFailure(fmt.Errorf("sync push: %w", refusal))); code != ExitConflict {
 		t.Fatalf("exit code = %d, want %d", code, ExitConflict)
 	}
-	out := stderr.String()
-	if !strings.HasPrefix(out, "error (code=5, reason=sync_divergence): ") {
-		t.Fatalf("header is not the sync_divergence conflict:\n%s", out)
+	if got := commandErrorReason(asSyncFailure(fmt.Errorf("sync push: %w", refusal))); got != reasonSyncDivergence {
+		t.Fatalf("reason = %s, want %s", got, reasonSyncDivergence)
 	}
+	out := stderr.String()
 	pull := strings.Index(out, "lit sync pull --remote mirror  #")
 	push := strings.Index(out, "lit sync push --remote mirror  #")
 	if pull < 0 || push < pull {

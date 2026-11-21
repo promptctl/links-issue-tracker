@@ -81,8 +81,8 @@ type Event struct {
 	DurationMS int64     `json:"duration_ms"`
 	Outcome    Outcome   `json:"outcome"`
 	ExitCode   int       `json:"exit_code"`
-	// Reason is the machine-readable reason a failed invocation printed beside
-	// its exit code; empty on success.
+	// Reason is the machine-readable reason a failed invocation ended on, the
+	// token that tells apart failures sharing its exit code; empty on success.
 	Reason string `json:"reason,omitempty"`
 	Error  string `json:"error,omitempty"`
 	// Sink, SinkRotation, and SinkRotationError are the export edge's own
