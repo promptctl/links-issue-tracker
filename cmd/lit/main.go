@@ -20,8 +20,8 @@ func main() {
 	// process exits: exit ends it with the code the guard decided, which is the
 	// code the invocation's event records.
 	ctx, exit := interrupt.Guard(context.Background(), interrupt.DefaultGrace)
-	// A failure claims the exit before it is printed, so the code on stderr is
-	// the code the process exits with. A failure after the hard exit decided
+	// A failure claims the exit before it is printed, so the code
+	// WriteCommandError returns is the code the process exits with. A failure after the hard exit decided
 	// is printed under the interrupt and code the process is ending on.
 	fail := func(err error) {
 		decided := interrupt.Claim(ctx, cli.CommandExitCode(err))

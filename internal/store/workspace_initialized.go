@@ -30,11 +30,10 @@ var ErrWorkspaceNotInitialized = errors.New("lit workspace is not initialized.  
 // plainly exists, and send the caller to `lit init`, which refuses a root it
 // cannot read.
 //
-// It hands back a sentinel rather than a proof-carrying type because no type
-// could honestly carry this proof — the directory can vanish between this stat
-// and the caller's next syscall, so "initialized" is a fact about an instant,
-// not about a value. [LAW:parse-dont-validate] exception: it returns only an
-// error, because the fact it checks does not outlive the check.
+// It hands back a sentinel rather than a proof-carrying type.
+// [LAW:parse-dont-validate] exception: what keeps the answer true afterwards is
+// the workspace lock each caller holds across the stat, so a proof that the
+// workspace exists belongs to that lock's hold, not to this stat.
 //
 // [LAW:no-silent-failure] Only ENOENT means uninitialized; every other stat
 // error (EACCES, EIO, ELOOP, …) is its own failure mode, never a guessed

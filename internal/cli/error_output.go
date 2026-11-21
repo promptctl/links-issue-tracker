@@ -492,7 +492,7 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonSchemaShapeRefused:
 		return "Do not retry unchanged — this workspace's stored shape is one lit does not converge on its own, and every command that opens the store repeats this refusal. The message above names the shape. " + agentInstructionsOpen + "Repairing a stored shape by hand is the user's call: surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonWorkspaceWriteBlocked:
-		// Action-only: the error line above already states the diagnosis (another
+		// Action-only: the message above already states the diagnosis (another
 		// process holds the store). No process hunt: a command-line pattern
 		// cannot tell lit's holder from any other process whose command line
 		// contains "lit", and terminating the wrong one is the user's to answer
