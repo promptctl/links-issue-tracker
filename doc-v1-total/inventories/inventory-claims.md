@@ -368,7 +368,7 @@ Covered in §2.2. Type declarations at `internal/app/app.go`.
 7. `return &App{Workspace: ws, Store: st, Stream: stream}, nil`.
 
 Validation/behavior pinned by test:
-- `AccessWrite` bootstraps a missing database; `AccessRead` fails with an error containing `"not initialized"` (`internal/app/app_test.go`).
+- Every access mode refuses an uninitialized workspace with `store.ErrWorkspaceNotInitialized` and leaves no database behind (`internal/app/app_test.go`).
 - Read mode accepts the database write mode bootstrapped (`internal/app/app_test.go`).
 - `""` and `"admin"` both fail with `"invalid access mode"` (`internal/app/app_test.go`).
 - A damaged token file makes `Open` fail with a `"malformed"` diagnosis and the store must be released — proven by a repaired second open succeeding (`internal/app/app_test.go`).

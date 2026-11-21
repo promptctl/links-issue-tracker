@@ -145,10 +145,9 @@ Test evidence: a foreign holder of `<doltRoot>/links/.dolt/noms/LOCK` makes `Ope
 `store.go`. Ordered steps:
 
 1. `validateOpenArgs` (`store.go`).
-2. `acquireWorkspaceShared(ctx, doltRootDir)` (`store.go`; defined `internal/store/workspace_lock.go`). Acquired **before** database bootstrap.
+2. `acquireLiveStoreHold(ctx, doltRootDir)` (`pushed_head.go`), the hold `OpenForRead` takes (2.3): the shared workspace lock, then `requireInitializedWorkspace` and `requireNoPendingAdopt`, both **after** the lock. A workspace `lit init` never initialized is refused with `ErrWorkspaceNotInitialized` and nothing is created; only `EnsureDatabase` (2.4) makes a workspace.
 3. `success := false` plus a deferred release-on-failure that `errors.Join`s the release error into the named return (`store.go`).
-4. `requireNoPendingAdopt(doltRootDir)` (`store.go`; defined `internal/store/adopt.go`) — runs **after** the lock.
-5. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`store.go`).
+4. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`store.go`) — inside an initialized workspace, rebuilds a missing database.
 6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)` (`store.go`).
 7. `s.releaseWorkspaceLock = release` (`store.go`).
 8. Under `s.withCommitLock` (`store.go`): `ensureMasterDefaultBranch(ctx, s.db)` wrapped by `wrapEngineOpenContention`, then `s.migrate(ctx)` (`internal/store/migration_runner.go`).
@@ -172,7 +171,7 @@ Behavioral evidence:
 
 1. `openInitialized(ctx, doltRootDir, workspaceID, engineRead)` (`store.go`), the open `DumpRaw` and `Unquarantine` share:
    - `validateOpenArgs` (`store.go`);
-   - `acquireLiveStoreHold` (`pushed_head.go`): `acquireWorkspaceShared` **before** the existence stat, then `requireInitializedWorkspace(doltRootDir)` — `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), whose text begins `lit workspace is not initialized`; any other stat error → `stat database dir: %w` — then `requireNoPendingAdopt`; either refusal is joined with the release;
+   - `acquireLiveStoreHold` (`pushed_head.go`): `acquireWorkspaceShared` **before** the existence check, then `requireInitializedWorkspace(doltRootDir)`, which asks `workspace.Initialized` (`internal/workspace/initialized.go`) — an absent root → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), whose text begins `lit workspace is not initialized`; a non-directory there → `check whether the lit workspace is initialized: %s is not a directory`; any other stat error → `check whether the lit workspace is initialized: %w` — then `requireNoPendingAdopt`; either refusal is joined with the release;
    - `openStoreConnection(..., access)` (`store.go`) — pinged eagerly like a write engine; its failure is joined with the release;
    - `s.releaseWorkspaceLock = release` (`store.go`), so `Close` releases the hold.
 2. `s.assessMigration(ctx)` (`migration_runner.go`) with **no** commit lock: classify, the schema-ahead baseline check, and applied-version content verification, all reads. On error: `s.Close()` (which releases the workspace hold) joined beside it (`store.go`).
@@ -193,7 +192,7 @@ Behavioral evidence:
 
 #### 2.4 `EnsureDatabase(ctx, doltRootDir, workspaceID) (bool, error)`
 
-`store.go`. `validateOpenArgs` → `acquireWorkspaceShared` (deferred unconditional release, `errors.Join`ed into the named return, `store.go`) → `requireNoPendingAdopt` → `ensureDoltDatabase`. Returns `ensureDoltDatabase`'s `storage.Bootstrap`. Doc states `Open`/`OpenSync` do **not** call it because they already hold the lock (`store.go`).
+`store.go`. `validateOpenArgs` → `acquireWorkspaceShared` (deferred unconditional release, `errors.Join`ed into the named return, `store.go`) → `requireNoPendingAdopt` → `ensureDoltDatabase`. Returns `ensureDoltDatabase`'s `storage.Bootstrap`. It is the one call that makes a workspace where none was initialized (`lit init`'s non-adopt outcomes, the recovery candidate, tests); every open refuses one. Doc states `Open`/`OpenSync` do **not** call it because they already hold the lock (`store.go`).
 
 #### 2.5 `ensureDoltDatabase(ctx, doltRootDir, workspaceID) (storage.Bootstrap, error)`
 
@@ -4178,7 +4177,7 @@ Signature: `Recover(ctx, canonicalDoltDir string, dump RawDump, mapper Mapper, m
 - `Apply(dump, mapping)` runs **first and purely** — a mapping rejection touches no filesystem resource at all (`candidate.go`).
 - `os.MkdirTemp(parentDir, "lit-candidate-*")` creates the candidate root (`candidate.go`); the literal pattern is `lit-candidate-*`.
 - On any failure after that point, a deferred cleanup closes the store (if opened) and runs `os.RemoveAll(root)`, joining errors into the return (`candidate.go`).
-- `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)` — the Dolt workspace is nested at `<root>/workspace` so the workspace lock and migration snapshots land inside the owned root (`candidate.go`). Error: `open candidate workspace: %w`.
+- `EnsureDatabase(ctx, <root>/workspace, dump.WorkspaceID)` then `Open` on the same path — the Dolt workspace is nested at `<root>/workspace` so the workspace lock and migration snapshots land inside the owned root, and is initialized as any workspace is before its first open (`candidate.go`). Errors: `initialize candidate workspace: %w`, `open candidate workspace: %w`.
 - `st.rebuildFromExport(ctx, export, commitStamp{Message: "replace from export"})` loads the data (`candidate.go`), error `load export into candidate: %w`. That path commits inside the candidate's own Dolt database with commit message `"replace from export"` (`internal/store/import_export.go`) — the only commit any recovery pass makes, and it is made in the throwaway candidate, never in the canonical workspace.
 - The candidate stamps `expectedHead: dump.DoltHead` and `workspaceID: dump.WorkspaceID` for a later promotion's lost-update check (`candidate.go`).
 - `Candidate.Discard()` closes the store then `os.RemoveAll(c.root)`; `root` is cleared only on successful removal, so a later `Discard` retries. It is documented and implemented as **idempotent** (`candidate.go`).
@@ -4238,7 +4237,7 @@ Signature `DumpRaw(ctx, doltRootDir string, workspaceID string) (RawDump, error)
 1. `openInitialized(ctx, doltRootDir, workspaceID, engineRead)` (`store.go`), the open `OpenForRead` and `Unquarantine` share; it runs, in this order:
    1. `validateOpenArgs(doltRootDir, workspaceID)` — rejects an empty/whitespace root dir with `dolt root dir is required` (`store.go`) and an empty/whitespace workspace id with `workspace id is required` (`store.go`).
    2. `acquireWorkspaceShared(ctx, doltRootDir)`, through `acquireLiveStoreHold` (`pushed_head.go`) — a **shared** workspace lock, excluding directory rotators such as `lit snapshots restore`. On contention the error text is `a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w` wrapping `ErrWorkspaceBusy` (`internal/store/workspace_lock.go`).
-   3. `requireInitializedWorkspace(doltRootDir)`: `os.ErrNotExist` → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), `lit workspace is not initialized` …; any other stat error → `stat database dir: %w`.
+   3. `requireInitializedWorkspace(doltRootDir)`, which asks `workspace.Initialized`: an absent root → the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), `lit workspace is not initialized` …; any other answer that is not a directory → `check whether the lit workspace is initialized: …`.
    4. `requireNoPendingAdopt(doltRootDir)` — run **after** the lock is taken; either refusal is joined with the release. Its message (`internal/store/adopt.go`): ``%w: a `lit init` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it sets the leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to abandon the adopt and start fresh``, with the `%s` context either the literal `a backlog adopt` or `the adopt of %s/%s started %s` (`adopt.go`); a marker read failure yields `read adopt-pending marker: %w` (`adopt.go`).
    5. `openStoreConnection(ctx, doltRootDir, workspaceID, access)` with the `access` the caller passed (`engineRead` here) — **no `migrate()` call**, which is what lets it read a workspace `store.Open` refuses (`rawdump.go`, doc at `rawdump.go`). `engineRead` is the first `engineAccess` value (`store.go`). The store then owns the hold.
 2. Deferred `s.Close()` (`rawdump.go`) — the engine closed (its error dropped when it is `context.Canceled`), then the workspace hold released — whose error is joined into the return.
@@ -4481,7 +4480,7 @@ with args `errAdoptPending, interrupted, path, cleanRoot`.
 
 | Entry point | Call site |
 |---|---|
-| `Open` | `internal/store/store.go` (after `acquireWorkspaceShared`, before `ensureDoltDatabase`) |
+| `Open` | `internal/store/store.go` (through `acquireLiveStoreHold`, before `ensureDoltDatabase`) |
 | `OpenForRead` | `internal/store/store.go` |
 | `EnsureDatabase` | `internal/store/store.go` |
 | `OpenSync` | `internal/store/sync.go` |
@@ -4639,7 +4638,7 @@ Ordered:
 1. `export, err := Apply(dump, mapping)` — **pure, runs first**, so an invalid mapping is rejected before any directory or handle exists (`candidate.go`, rationale). On error → `fmt.Errorf("%w: %w", ErrInvalidMapping, err)` (`candidate.go`). `Apply` is at `internal/store/shapemap.go`.
 2. `os.MkdirTemp(parentDir, "lit-candidate-*")`; on error → `"create candidate workspace dir: %w"` (`candidate.go`).
 3. Installs the unconditional cleanup defer keyed on a `success bool` (`candidate.go`): if not successful, `err = errors.Join(err, st.Close())` when `st != nil`, then `err = errors.Join(err, os.RemoveAll(root))`.
-4. `Open(ctx, filepath.Join(root, "workspace"), dump.WorkspaceID)`; on error → `"open candidate workspace: %w"` (`candidate.go`).
+4. `EnsureDatabase(ctx, <root>/workspace, dump.WorkspaceID)`; on error → `"initialize candidate workspace: %w"`; then `Open` on the same path; on error → `"open candidate workspace: %w"` (`candidate.go`).
 5. `st.rebuildFromExport(ctx, export, commitStamp{Message: "replace from export"})` (defined `internal/store/import_export.go`; no homing, so the verify gate's row and id counts hold); on error → `"load export into candidate: %w"` (`candidate.go`).
 6. `success = true`; returns `&Candidate{store: st, root: root, expectedHead: dump.DoltHead, workspaceID: dump.WorkspaceID}` (`candidate.go`).
 
@@ -5250,7 +5249,7 @@ Classification predicates:
 - `LockDoltJournalExclusive(ctx, databasePath)` (`workspace_lock.go`):
   1. `requireInitializedWorkspace(databasePath)` **first**, before any acquisition (`workspace_lock.go`). It reads the workspace root, not the journal directory: on `os.ErrNotExist` it returns the package sentinel `ErrWorkspaceNotInitialized` (`workspace_initialized.go`), whose text begins:
      `lit workspace is not initialized`.
-     Any other stat failure returns `stat database dir: %w`.
+     A non-directory at the root, or any other stat failure, returns `check whether the lit workspace is initialized: …` (`internal/workspace/initialized.go`).
   2. `os.Stat(filepath.Dir(lockPath))` second (`workspace_lock.go`) — this helper contends on Dolt's lock and never mints Dolt's tree, so an absent noms directory is refused rather than created. Under an existing root that absence is a damaged or half-deleted Dolt tree, **not** an uninitialized repository, so it is never reported as the sentinel; every failure here returns `stat dolt journal dir: %w` and reaches the unclassified-fault default.
   3. `acquireStoreLock(ctx, lockPath, true /*exclusive*/, 700, 100ms)`.
   4. On `ErrWorkspaceBusy`, wraps (preserving the sentinel):

@@ -215,7 +215,7 @@ func unifiedSchemaDiff(fromLabel, toLabel, from, to string) string {
 // migration run with itself.
 func openFreshWorkspace(t *testing.T) *Store {
 	t.Helper()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "drift-canary")
 	st, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "drift-canary")
 	if err != nil {
 		t.Fatalf("Open: %v", err)

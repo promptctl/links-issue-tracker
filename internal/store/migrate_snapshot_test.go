@@ -26,7 +26,7 @@ import (
 func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -91,7 +91,7 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 func TestMigrateSnapshotFailureNamesTheSnapshot(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level failpointForTest.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	sentinel := errors.New("synthetic post-snapshot failure")
 	injectFailpoint(t, sentinel, stepMigrationProvider)
@@ -123,7 +123,7 @@ func TestMigrateSnapshotFailureNamesTheSnapshot(t *testing.T) {
 func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level failpointForTest.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	// First Open creates the workspace + retains its pre-migrate snapshot.
 	first, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
@@ -703,7 +703,7 @@ func breakSnapshotBaseline(t *testing.T, ctx context.Context, snapshotPath strin
 func TestRollbackSnapshotIsOneTheOlderLitOpens(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	snaps := rollbackHistory(t, ctx, doltRoot)
 	fromV5, fromV3 := snaps[0], snaps[1]
 
@@ -795,7 +795,7 @@ func TestRollbackSnapshotPassesOverAnUnreadableSnapshot(t *testing.T) {
 func TestRollbackSnapshotSearchStopsWhenCanceled(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	rollbackHistory(t, ctx, doltRoot)
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		canceled, cancel := context.WithCancel(ctx)

@@ -133,27 +133,23 @@ func TestDiscoverSurfacesBrokenGitInsteadOfEmptySuccess(t *testing.T) {
 	}
 }
 
-// TestDiscoverSkipsFileShapedStoreDatabase guards the openability contract: a
-// regular file where the store database directory should be (a leftover from a
-// failed operation) exists but is not openable, so it must not be reported as a
-// store. [LAW:types-are-the-program]
-func TestDiscoverSkipsFileShapedStoreDatabase(t *testing.T) {
+// TestDiscoverFailsOnFileShapedStoreDatabase: a regular file where the store
+// database directory should be is neither a store nor a repository without
+// one, so the scan fails naming it, as every open of that workspace would.
+func TestDiscoverFailsOnFileShapedStoreDatabase(t *testing.T) {
 	root := t.TempDir()
 	repo := mkdir(t, filepath.Join(root, "repo"))
 	run(t, repo, "git", "init")
 	// Plant links/ but make dolt a regular file rather than the store directory.
 	mkdir(t, filepath.Join(repo, ".git", "links"))
-	if err := os.WriteFile(filepath.Join(repo, ".git", "links", "dolt"), []byte("not a store\n"), 0o644); err != nil {
+	dolt := filepath.Join(repo, ".git", "links", "dolt")
+	if err := os.WriteFile(dolt, []byte("not a store\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(dolt file) error = %v", err)
 	}
 
 	found, err := Discover(testEnv(), []string{root})
-	locations := found.Locations
-	if err != nil {
-		t.Fatalf("Discover() error = %v", err)
-	}
-	if len(locations) != 0 {
-		t.Fatalf("Discover() = %v, want no stores (dolt is a file, not a directory)", locations)
+	if err == nil || !strings.Contains(err.Error(), "is not a directory") {
+		t.Fatalf("Discover() = %v, %v; want an error saying the store database is not a directory", found.Locations, err)
 	}
 }
 
@@ -286,7 +282,7 @@ func TestDiscoverReportsTheFirstErrorInWalkOrder(t *testing.T) {
 		if err == nil {
 			t.Fatal("Discover() returned nil error over two broken stores and an unlistable directory")
 		}
-		if !strings.Contains(err.Error(), "stat store database") || !strings.Contains(err.Error(), want) {
+		if !strings.Contains(err.Error(), "check whether the lit workspace is initialized") || !strings.Contains(err.Error(), want) {
 			t.Fatalf("Discover() error = %v, want a's store database stat, the first in walk order", err)
 		}
 	}

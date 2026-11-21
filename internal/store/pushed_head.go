@@ -196,12 +196,14 @@ func settlePushedHead(ctx context.Context, stderr io.Writer, root string, remote
 	return record, atHead, nil
 }
 
-// acquireLiveStoreHold is what a write to the live store from outside its
-// engine takes before holdForRefWrite: the same shared hold every reader of
-// the Dolt directory takes, so a rotator (snapshots restore, adopt) cannot
+// acquireLiveStoreHold is the hold every open of the live store takes, and a
+// write to it from outside its engine takes before holdForRefWrite: the shared
+// hold on the workspace lock, so a rotator (snapshots restore, adopt) cannot
 // swap the directory under the open, on a workspace that is initialized and
-// has no adopt pending. The caller releases it once everything it writes
-// under the workspace has landed. [LAW:single-enforcer]
+// has no adopt pending. Both refusals run under the hold: a live adopt holds
+// the lock exclusively, so a marker seen here always belongs to a dead one.
+// The caller releases it once everything it writes under the workspace has
+// landed. [LAW:single-enforcer] [LAW:no-ambient-temporal-coupling]
 func acquireLiveStoreHold(ctx context.Context, stderr io.Writer, root string) (func() error, error) {
 	release, err := acquireWorkspaceShared(ctx, stderr, root)
 	if err != nil {

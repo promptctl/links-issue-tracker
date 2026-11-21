@@ -36,10 +36,12 @@ func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	}
 }
 
-func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
+// A sync open of a workspace `lit init` just made, before any write open has
+// run, finds its database on master.
+func TestOpenSyncOfAFreshWorkspaceIsOnMaster(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	syncStore, err := OpenSync(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -50,7 +52,7 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 	}
 
 	if branch := observedBranch(t, ctx, doltRoot, "test-workspace-id"); branch != "master" {
-		t.Fatalf("database OpenSync created is on branch %q, want master", branch)
+		t.Fatalf("a freshly initialized database is on branch %q, want master", branch)
 	}
 }
 
@@ -1232,7 +1234,7 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	// From nothing on purpose: the pristine stage exists to reach the
 	// issues-table-absent short-circuit, which a pre-migrated template copy
 	// can never exercise.
-	root := filepath.Join(t.TempDir(), "dolt")
+	root := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "ws")
 
 	pristine, err := OpenSync(ctx, testEnv(), testStderr(), root, "ws")
 	if err != nil {

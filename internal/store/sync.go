@@ -52,11 +52,11 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 	if err := requireEmbeddedSyncSupport(); err != nil {
 		return nil, err
 	}
-	// [LAW:single-enforcer] Workspace shared lock is acquired BEFORE
-	// EnsureDatabase so the bootstrap and the long-lived sync connection
-	// are both protected against a concurrent `lit snapshots restore`
-	// rotating the Dolt directory — the same invariant store.Open enforces.
-	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
+	// [LAW:single-enforcer] The same hold and refusals as the write open
+	// (acquireLiveStoreHold), taken before ensureDoltDatabase so the database
+	// check and the long-lived sync connection are both protected against a
+	// concurrent `lit snapshots restore` rotating the Dolt directory.
+	release, err := acquireLiveStoreHold(ctx, stderr, doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -69,15 +69,9 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 			err = errors.Join(err, relErr)
 		}
 	}()
-	// Post-lock, same as Store.Open: a marker seen while holding the
-	// workspace lock always belongs to a dead adopt (a live one holds the
-	// lock exclusively), so this refusal can neither fire on a healthy
-	// in-flight adopt nor miss a dead one that expired while we waited.
-	// [LAW:no-ambient-temporal-coupling]
-	if err = requireNoPendingAdopt(doltRootDir); err != nil {
-		return nil, err
-	}
-	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
+	// [LAW:single-enforcer] The sync open rebuilds a missing database through
+	// the same initializer as the write open, so the two share one creation
+	// boundary.
 	bootstrap, err := ensureDoltDatabase(ctx, env, stderr, doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err

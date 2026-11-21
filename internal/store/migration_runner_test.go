@@ -34,7 +34,7 @@ func headVersion(t *testing.T) int64 {
 func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -446,7 +446,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	// Fresh open: runs the baseline migration -> takes a recovery snapshot of
 	// the empty workspace. A downgrade and the open after it leave a recovery

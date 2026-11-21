@@ -12,9 +12,8 @@ Repo: `/Users/bmf/code/links-issue-tracker`. Derived entirely from Go/SQL source
 
 1. `validateOpenArgs(doltRootDir, workspaceID)` — shared argument-validation boundary (`sync.go`).
 2. `requireEmbeddedSyncSupport()` (`sync.go`) — version floor check, see §1.2.
-3. `acquireWorkspaceShared(ctx, doltRootDir)` (`sync.go`) — workspace shared lock acquired **before** database bootstrap. On any later failure the release is invoked and its error joined onto the returned error (`sync.go`).
-4. `requireNoPendingAdopt(doltRootDir)` (`sync.go`) — refuses if an adopt marker is present while the workspace lock is held.
-5. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`sync.go`) — same initializer `store.Open` uses.
+3. `acquireLiveStoreHold(ctx, doltRootDir)` (`pushed_head.go`) — the hold every open takes: the workspace shared lock, then, under it, the refusal of a workspace `lit init` never initialized (`ErrWorkspaceNotInitialized`, nothing created) and of a pending adopt marker. On any later failure the release is invoked and its error joined onto the returned error (`sync.go`).
+4. `ensureDoltDatabase(ctx, doltRootDir, workspaceID)` (`sync.go`) — same initializer `store.Open` uses; inside an initialized workspace it rebuilds a missing database.
 6. `openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)` (`sync.go`) — eager write engine open; waits on Dolt's journal lock bounded by `coResidentHolderWait`, and records itself as the lock's holder for the engine's life.
 7. `s.releaseWorkspaceLock = release` (`sync.go`).
 8. `assessOperability(ctx)`, then `refuseUnwritable(ctx, op)` (`schema_operability.go`): the refusal the migrating open makes, with no migration; `s.migrated` is `Migrated{Bootstrap, SchemaAhead: op.schemaAhead()}`.

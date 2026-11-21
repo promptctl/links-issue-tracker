@@ -3,15 +3,21 @@ package store
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 )
 
 // TestUninitializedWorkspaceIsOneCondition drives every store entry point that
 // can meet a repository `lit init` has never run in, and pins that each reports
-// it as the same typed condition with the same sentence.
+// it as the same typed condition with the same sentence, and leaves the
+// workspace as uninitialized as it found it. A write open that built a store
+// here would make `lit init` find local tickets and skip adopting the remote's
+// backlog, the promise the sentence makes.
 //
 // That is the contract the CLI's reason and exit-code sinks read: a bare
 // fmt.Errorf is a condition they cannot recognize, so it falls through to the
@@ -26,6 +32,10 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 		name string
 		run  func(ctx context.Context, doltRoot string) error
 	}{
+		{"Open", openAndClose(Open)},
+		{"OpenRoutine", openAndClose(OpenRoutine)},
+		{"OpenSync", openAndClose(OpenSync)},
+		{"OpenMaintenance", openAndClose(OpenMaintenance)},
 		{"OpenForRead", func(ctx context.Context, doltRoot string) error {
 			st, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "ws")
 			if st != nil {
@@ -65,7 +75,22 @@ func TestUninitializedWorkspaceIsOneCondition(t *testing.T) {
 			if err.Error() != ErrWorkspaceNotInitialized.Error() {
 				t.Fatalf("%s() error text = %q; want the single-home text %q", tc.name, err.Error(), ErrWorkspaceNotInitialized.Error())
 			}
+			if _, statErr := os.Stat(doltRoot); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("%s() refused but left a workspace root behind; stat = %v", tc.name, statErr)
+			}
 		})
+	}
+}
+
+// openAndClose drives one store open the way TestUninitializedWorkspaceIsOneCondition
+// drives every entry point: run it, close what it returns, report its error.
+func openAndClose(open func(context.Context, environ.Env, io.Writer, string, string) (*Store, error)) func(context.Context, string) error {
+	return func(ctx context.Context, doltRoot string) error {
+		st, err := open(ctx, testEnv(), testStderr(), doltRoot, "ws")
+		if st != nil {
+			_ = st.Close()
+		}
+		return err
 	}
 }
 
@@ -90,7 +115,7 @@ func TestRequireInitializedWorkspaceSeparatesGenuineStatFaults(t *testing.T) {
 	if errors.Is(err, ErrWorkspaceNotInitialized) {
 		t.Fatalf("a non-ENOENT stat fault was reported as an uninitialized workspace: %v", err)
 	}
-	if !strings.Contains(err.Error(), "stat database dir:") {
+	if !strings.Contains(err.Error(), "check whether the lit workspace is initialized:") {
 		t.Fatalf("stat fault = %v; want it to name the directory that failed", err)
 	}
 }

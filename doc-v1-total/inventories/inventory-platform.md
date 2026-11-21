@@ -434,9 +434,11 @@ The geometry query uses `context.Background()` deliberately (`internal/workspace
 - Derivation, per working tree, on an `errgroup` limited to `runtime.GOMAXPROCS(0)`
   (`internal/workspace/discover.go`):
   - `Locate(path)`: `ErrNotGitRepo` ⇒ skip; any other error ⇒ surfaced.
-  - `os.Stat(loc.DatabasePath)`: `os.ErrNotExist` ⇒ skip ("git repo, no lit store"); other error
-    ⇒ `stat store database %q: %w`.
-  - The database path must be a **directory**; a regular file there is skipped.
+  - `Initialized(loc.DatabasePath)` (`internal/workspace/initialized.go`), the answer every store
+    open asks: `os.ErrNotExist` ⇒ skip ("git repo, no lit store"); a directory ⇒ a store; anything
+    else at the path ⇒ `check whether the lit workspace is initialized: %s is not a directory`;
+    any other stat error ⇒ `check whether the lit workspace is initialized: %w`. Either error
+    fails the scan.
   - Otherwise `byStore[loc.StorageDir] = loc` — so all worktrees of one repository collapse to
     one entry.
 - The error returned is the first in walk order: a working tree's derivation error before

@@ -269,13 +269,15 @@ func openWrite(ctx context.Context, env environ.Env, stderr io.Writer, doltRootD
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	// [LAW:single-enforcer] Workspace shared lock is acquired BEFORE
-	// ensureDoltDatabase because its "is there a database" check and the
-	// rename that installs one are decisions about the Dolt directory.
-	// Acquiring after would leave a window in which `lit snapshots restore`
-	// or an adopt could rotate the directory between the check and the
-	// install.
-	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
+	// [LAW:single-enforcer] The hold every open of the live store takes, and
+	// with it the refusals of a workspace `lit init` never initialized and of
+	// a dead adopt's residue. A write open never makes a workspace: `lit init`
+	// alone does, so it can first adopt the remote's backlog into the empty
+	// path. The hold comes BEFORE ensureDoltDatabase because its "is there a
+	// database" check and the rename that installs one are decisions about the
+	// Dolt directory, which a `lit snapshots restore` or an adopt could rotate
+	// between the check and the install.
+	release, err := acquireLiveStoreHold(ctx, stderr, doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -293,18 +295,6 @@ func openWrite(ctx context.Context, env environ.Env, stderr io.Writer, doltRootD
 			err = errors.Join(err, relErr)
 		}
 	}()
-	// The adopt-pending check runs HERE, after the lock is held — never
-	// before. A pre-lock check is a decision made about a workspace another
-	// process may still be rewriting: a caller that read "no marker", then
-	// blocked on the lock while an adopt started and died mid-clone, would
-	// sail into the residue on a stale answer. Under the lock the marker's
-	// meaning is unambiguous — a live adopt holds the workspace lock
-	// exclusively, so marker-with-acquirable-lock always means a DEAD adopt.
-	// [LAW:no-ambient-temporal-coupling] the lock is the liveness owner; the
-	// check's answer is only valid while it is held.
-	if err = requireNoPendingAdopt(doltRootDir); err != nil {
-		return nil, err
-	}
 	bootstrap, err := ensureDoltDatabase(ctx, env, stderr, doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
@@ -388,8 +378,9 @@ func OpenForRead(ctx context.Context, env environ.Env, stderr io.Writer, doltRoo
 // openInitialized opens an engine on an initialized workspace without
 // migrating it: the shared hold every reader of the Dolt directory takes, then
 // the connection. The Store owns the hold from the moment it exists, so Close
-// releases both. Open and OpenSync do not use it: they create the database
-// when it is missing, where this refuses.
+// releases both. Open and OpenSync take the same hold but not this sequence:
+// inside an initialized workspace they rebuild a missing database
+// (ensureDoltDatabase), where this refuses.
 //
 // [LAW:single-enforcer] The read open and the below-the-gate entry points
 // (DumpRaw, Unquarantine) reach the database through this one sequence, so the
@@ -447,8 +438,10 @@ func (s *Store) ObserveChanges(observe func(storage.Change, model.Issue)) {
 }
 
 // EnsureDatabase bootstraps the database for standalone callers (lit init's
-// non-adopt outcomes; tests). It takes the same workspace-shared lock
-// Store.Open holds, for the same reason: its check-then-create must be
+// non-adopt outcomes, the recovery candidate, tests), and is the one call that
+// makes a workspace where none was initialized: every open refuses one
+// (acquireLiveStoreHold). It takes the same workspace-shared lock Store.Open
+// holds, for the same reason: its check-then-create must be
 // serialized against a concurrent adopt's destructive window — an unlocked
 // CREATE could land between an adopt's discard and clone, or be destroyed by
 // it. Racing bootstraps serialize on the bootstrap lock inside

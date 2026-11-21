@@ -376,7 +376,7 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	t.Helper()
 	ctx := context.Background()
 	storageDir = filepath.Join(repoDir, ".git", "links")
-	dbPath := filepath.Join(storageDir, "dolt")
+	dbPath := initWorkspace(t, filepath.Join(storageDir, "dolt"), workspaceID)
 
 	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, dbPath, workspaceID)
 	if err != nil {

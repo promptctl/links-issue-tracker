@@ -39,7 +39,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		t.Fatalf("WriteFile(config.json) error = %v", err)
 	}
 
-	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, loc.DatabasePath, wsID)
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, initWorkspace(t, loc.DatabasePath, wsID), wsID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}

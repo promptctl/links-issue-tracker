@@ -14,8 +14,9 @@ import (
 )
 
 // The package's migrated-store templates: each built once per test binary by
-// the real Open (so a template cannot drift from what Open produces — it IS
-// an Open artifact [LAW:one-source-of-truth]), then handed to tests as
+// the real EnsureDatabase and Open (so a template cannot drift from what an
+// initialized, opened workspace holds — it IS their artifact
+// [LAW:one-source-of-truth]), then handed to tests as
 // per-test directory copies. Copying ~0.1MB costs ~6ms where replaying the
 // bootstrap+migration chain costs ~390ms, and every creation skipped is also
 // one fewer pass through the process-wide engine-construction mutex
@@ -64,9 +65,23 @@ func unrelatedDoltDir(t *testing.T) string {
 	return unrelatedStoreTemplate.Copy(t)
 }
 
-// buildStoreTemplate opens a new store at dir and closes it, so the template
-// holds no engine.
+// initWorkspace initializes a workspace at root the one way any workspace is
+// initialized (EnsureDatabase, `lit init`'s step), and returns root, for a test
+// whose premise is a workspace built from nothing rather than a template copy.
+func initWorkspace(t testing.TB, root, workspaceID string) string {
+	t.Helper()
+	if _, err := EnsureDatabase(context.Background(), testEnv(), testStderr(), root, workspaceID); err != nil {
+		t.Fatalf("EnsureDatabase(%s): %v", root, err)
+	}
+	return root
+}
+
+// buildStoreTemplate initializes a workspace at dir as `lit init` does, opens
+// it once so it is migrated, and closes it, so the template holds no engine.
 func buildStoreTemplate(dir string) error {
+	if _, err := EnsureDatabase(context.Background(), testEnv(), testStderr(), dir, "test-workspace-id"); err != nil {
+		return fmt.Errorf("template EnsureDatabase: %w", err)
+	}
 	st, err := Open(context.Background(), testEnv(), testStderr(), dir, "test-workspace-id")
 	if err != nil {
 		return fmt.Errorf("template Open: %w", err)

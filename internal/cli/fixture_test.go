@@ -7,27 +7,44 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // storeTemplate is the migrated store newTestCLIApp's workspaces start from,
-// built once per test binary by the very open the helper used to run for every
-// test: the read-write engine open, under the same workspace id. A copy is
-// therefore the database that open would have built, down to the author of its
-// bootstrap and migration commits. [LAW:one-source-of-truth]
+// built once per test binary by what `lit init` and the first command after it
+// run: store.EnsureDatabase, then the read-write engine open, under the same
+// workspace id. A copy is therefore the database those would have built, down
+// to the author of its bootstrap and migration commits.
+// [LAW:one-source-of-truth]
 //
 // Only a helper that opens one store directly copies it. Tests that create a
-// workspace through `lit init` or a first write in a git repository keep
-// building from nothing: a store already in place makes init report the
-// workspace as already initialized, and two checkouts seeded from one template
-// share history that production checkouts never would.
+// workspace through `lit init` keep building from nothing: a store already in
+// place makes init report the workspace as already initialized, and two
+// checkouts seeded from one template share history that production checkouts
+// never would.
 var storeTemplate = dirtemplate.New("dolt", func(dir string) error {
+	if _, err := store.EnsureDatabase(context.Background(), testEnv(), os.Stderr, dir, "test-workspace-id"); err != nil {
+		return err
+	}
 	st, err := engine.Open(context.Background(), testEnv(), os.Stderr, engine.ReadWrite, dir, "test-workspace-id")
 	if err != nil {
 		return err
 	}
 	return st.Close()
 })
+
+// initWorkspace initializes a workspace at databasePath the one way any
+// workspace is initialized (store.EnsureDatabase, `lit init`'s step), and
+// returns databasePath, for a test that seeds a store directly rather than
+// through `lit init`.
+func initWorkspace(t testing.TB, databasePath, workspaceID string) string {
+	t.Helper()
+	if _, err := store.EnsureDatabase(context.Background(), runEnv(t), testStderr(t), databasePath, workspaceID); err != nil {
+		t.Fatalf("store.EnsureDatabase(%s) error = %v", databasePath, err)
+	}
+	return databasePath
+}
 
 // The fixture's whole saving: a copy is already the store this binary's open
 // would build, so opening it neither builds a database nor applies a migration.

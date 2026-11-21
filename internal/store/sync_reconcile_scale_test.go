@@ -241,7 +241,7 @@ const scaleEpicID = "bench-epic"
 func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, remoteURL string, issues, commits int) {
 	t.Helper()
 
-	stA, err := Open(ctx, testEnv(), testStderr(), rootA, "wsA")
+	stA, err := Open(ctx, testEnv(), testStderr(), initWorkspace(t, rootA, "wsA"), "wsA")
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
@@ -260,7 +260,7 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 		t.Fatalf("Close(A sync): %v", err)
 	}
 
-	stB, err := Open(ctx, testEnv(), testStderr(), rootB, "wsB")
+	stB, err := Open(ctx, testEnv(), testStderr(), initWorkspace(t, rootB, "wsB"), "wsB")
 	if err != nil {
 		t.Fatalf("Open(B): %v", err)
 	}

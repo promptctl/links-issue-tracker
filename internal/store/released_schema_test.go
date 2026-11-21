@@ -78,7 +78,7 @@ func TestAMigratingOpenRefusesToMoveAnExistingWorkspacePastTheReleasedSchema(t *
 func TestCreatingAStoreIsNotBoundedByTheReleasedSchema(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	st, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(0)), testStderr(), filepath.Join(t.TempDir(), "dolt"), "ws")
+	st, err := Open(ctx, testEnv().WithReleasedSchema(ceilingAt(0)), testStderr(), initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "ws"), "ws")
 	if err != nil {
 		t.Fatalf("Open() of a fresh store with released schema 0 = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestAPushOfAStoreAboveTheReleasedSchemaSendsNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	producer := filepath.Join(base, "producer")
+	producer := initWorkspace(t, filepath.Join(base, "producer"), "ws")
 	remoteURL := "file://" + filepath.Join(base, "remote")
 	origin := remoteName(t, "origin")
 	max := registryMax(t)

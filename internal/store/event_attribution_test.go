@@ -266,7 +266,7 @@ func TestRestoringACorruptedExportWritesNoHalfPair(t *testing.T) {
 func TestRecoveredWorkspaceKeepsItsAttribution(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	src := filepath.Join(t.TempDir(), "src")
+	src := initWorkspace(t, filepath.Join(t.TempDir(), "src"), "test-workspace-id")
 	// withStore opens with this id, and the pair the events carry is built from
 	// it, so the assertion below names the store's real workspace rather than a
 	// value this test chose.

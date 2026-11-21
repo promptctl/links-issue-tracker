@@ -106,9 +106,15 @@ func RebuildCandidate(ctx context.Context, env environ.Env, stderr io.Writer, pa
 		err = errors.Join(err, os.RemoveAll(root))
 	}()
 
-	// Open at a child of root so its sibling artifacts (workspace lock, migration
-	// snapshots) land inside root rather than escaping into parentDir.
-	st, err = Open(ctx, env, stderr, filepath.Join(root, "workspace"), dump.WorkspaceID)
+	// Initialize and open at a child of root so its sibling artifacts (workspace
+	// lock, migration snapshots) land inside root rather than escaping into
+	// parentDir. The candidate is a workspace of its own, so it is initialized
+	// the one way any workspace is (EnsureDatabase) before its first open.
+	workspaceRoot := filepath.Join(root, "workspace")
+	if _, err = EnsureDatabase(ctx, env, stderr, workspaceRoot, dump.WorkspaceID); err != nil {
+		return nil, fmt.Errorf("initialize candidate workspace: %w", err)
+	}
+	st, err = Open(ctx, env, stderr, workspaceRoot, dump.WorkspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("open candidate workspace: %w", err)
 	}

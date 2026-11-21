@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -22,38 +24,24 @@ func gitRepo(t *testing.T) string {
 	return dir
 }
 
-// TestOpenModeContract pins the behavioral split the mode value carries:
-// write bootstraps a missing database, read refuses one. [LAW:behavior-not-structure]
-func TestOpenModeContract(t *testing.T) {
-	cases := []struct {
-		name string
-		mode AccessMode
-		// wantErr is the substring an uninitialized workspace must fail
-		// with; empty means open must succeed and bootstrap the database.
-		wantErr string
-	}{
-		{name: "write bootstraps uninitialized workspace", mode: AccessWrite},
-		{name: "read refuses uninitialized workspace", mode: AccessRead, wantErr: "not initialized"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := gitRepo(t)
-			ap, err := Open(context.Background(), testEnv(), os.Stderr, resolvedWorkspace(t, repo), tc.mode)
-			if tc.wantErr != "" {
-				if err == nil {
-					ap.Close()
-					t.Fatalf("Open(%v) on uninitialized workspace succeeded, want error containing %q", tc.mode, tc.wantErr)
-				}
-				if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("Open(%v) error = %q, want substring %q", tc.mode, err, tc.wantErr)
-				}
-				return
+// TestEveryModeRefusesAnUninitializedWorkspace: no access mode makes a
+// workspace. Each refuses one `lit init` never ran in with the same condition
+// and leaves no database behind, so `lit init` still meets an empty path it can
+// adopt the remote's backlog into. [LAW:behavior-not-structure]
+func TestEveryModeRefusesAnUninitializedWorkspace(t *testing.T) {
+	for mode := range accessContracts {
+		t.Run(string(mode), func(t *testing.T) {
+			ws := resolvedWorkspace(t, gitRepo(t))
+			ap, err := Open(context.Background(), testEnv(), os.Stderr, ws, mode)
+			if err == nil {
+				ap.Close()
+				t.Fatalf("Open(%v) on an uninitialized workspace succeeded, want ErrWorkspaceNotInitialized", mode)
 			}
-			if err != nil {
-				t.Fatalf("Open(%v) error = %v", tc.mode, err)
+			if !errors.Is(err, store.ErrWorkspaceNotInitialized) {
+				t.Fatalf("Open(%v) error = %v, want ErrWorkspaceNotInitialized", mode, err)
 			}
-			if err := ap.Close(); err != nil {
-				t.Fatalf("Close() error = %v", err)
+			if _, statErr := os.Stat(ws.DatabasePath); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("Open(%v) refused but left a database behind; stat = %v", mode, statErr)
 			}
 		})
 	}
@@ -63,7 +51,7 @@ func TestOpenModeContract(t *testing.T) {
 // bootstrapped — the two modes describe one store, not two.
 func TestOpenReadAfterWrite(t *testing.T) {
 	repo := gitRepo(t)
-	writer, err := Open(context.Background(), testEnv(), os.Stderr, resolvedWorkspace(t, repo), AccessWrite)
+	writer, err := Open(context.Background(), testEnv(), os.Stderr, initializedWorkspace(t, repo), AccessWrite)
 	if err != nil {
 		t.Fatalf("Open(write) error = %v", err)
 	}
@@ -85,7 +73,7 @@ func TestOpenReadAfterWrite(t *testing.T) {
 func TestOpenRejectsUnknownMode(t *testing.T) {
 	repo := gitRepo(t)
 	for _, mode := range []AccessMode{"", "admin"} {
-		ap, err := Open(context.Background(), testEnv(), os.Stderr, resolvedWorkspace(t, repo), mode)
+		ap, err := Open(context.Background(), testEnv(), os.Stderr, initializedWorkspace(t, repo), mode)
 		if err == nil {
 			ap.Close()
 			t.Fatalf("Open(%q) succeeded, want invalid-mode error", mode)
@@ -108,8 +96,7 @@ func gitRepoWithWorktree(t *testing.T) (string, string) {
 	if out, err := commit.CombinedOutput(); err != nil {
 		t.Fatalf("git commit: %v\n%s", err, out)
 	}
-	// Bootstraps the database, which the read mode below requires to exist.
-	ap, err := Open(context.Background(), testEnv(), os.Stderr, resolvedWorkspace(t, repo), AccessWrite)
+	ap, err := Open(context.Background(), testEnv(), os.Stderr, initializedWorkspace(t, repo), AccessWrite)
 	if err != nil {
 		t.Fatalf("Open(AccessWrite) error = %v", err)
 	}
@@ -128,7 +115,7 @@ func gitRepoWithWorktree(t *testing.T) (string, string) {
 
 func openStream(t *testing.T, dir string, mode AccessMode) workspace.StreamID {
 	t.Helper()
-	ap, err := Open(context.Background(), testEnv(), os.Stderr, resolvedWorkspace(t, dir), mode)
+	ap, err := Open(context.Background(), testEnv(), os.Stderr, initializedWorkspace(t, dir), mode)
 	if err != nil {
 		t.Fatalf("Open(%v) error = %v", mode, err)
 	}
@@ -212,7 +199,7 @@ func TestFailedIdentityResolutionReleasesTheStore(t *testing.T) {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
-	ap, err := Open(context.Background(), testEnv(), os.Stderr, resolvedWorkspace(t, repo), AccessWrite)
+	ap, err := Open(context.Background(), testEnv(), os.Stderr, initializedWorkspace(t, repo), AccessWrite)
 	if err == nil {
 		ap.Close()
 		t.Fatal("Open must fail when the checkout's identity is damaged")
@@ -237,6 +224,18 @@ func resolvedWorkspace(t *testing.T, dir string) workspace.Info {
 	ws, err := workspace.Resolve(testEnv(), dir)
 	if err != nil {
 		t.Fatalf("workspace.Resolve(%s) error = %v", dir, err)
+	}
+	return ws
+}
+
+// initializedWorkspace resolves the workspace at dir and initializes it the
+// one way any workspace is (store.EnsureDatabase, `lit init`'s step), so a
+// test can open it in any mode.
+func initializedWorkspace(t *testing.T, dir string) workspace.Info {
+	t.Helper()
+	ws := resolvedWorkspace(t, dir)
+	if _, err := store.EnsureDatabase(context.Background(), testEnv(), os.Stderr, ws.DatabasePath, ws.WorkspaceID); err != nil {
+		t.Fatalf("store.EnsureDatabase(%s) error = %v", ws.DatabasePath, err)
 	}
 	return ws
 }

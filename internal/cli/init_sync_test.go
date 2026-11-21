@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -165,6 +166,11 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
+	// A write before init refuses as a read does and makes no store, so the
+	// init after it still finds the empty path it adopts the backlog into.
+	if out, err := runCLIInDirAllowError(t, consumer, "new", "--title", "local-ticket", "--topic", "demo", "--type", "epic"); !errors.Is(err, store.ErrWorkspaceNotInitialized) {
+		t.Fatalf("consumer `lit new` before init = %q, %v; want ErrWorkspaceNotInitialized", out, err)
+	}
 	initOut, progress, err := runCLIInDirSplit(t, consumer, "init", "--skip-hooks")
 	if err != nil {
 		t.Fatalf("consumer init error = %v\nstderr:\n%s", err, progress)

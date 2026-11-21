@@ -20,7 +20,7 @@ import (
 func seedWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
-	canonical := filepath.Join(root, "dolt")
+	canonical := initWorkspace(t, filepath.Join(root, "dolt"), "test-workspace-id")
 	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, canonical, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("seed workspace: %v", err)

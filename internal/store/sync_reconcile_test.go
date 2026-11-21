@@ -441,7 +441,7 @@ func strptr(s string) *string { return &s }
 // epic carries (title, lane, priority, labels).
 func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL string) model.ID {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), initWorkspace(t, root, "ws"), "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
@@ -465,10 +465,11 @@ func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 	return issue.ID
 }
 
-// adoptRemote points a fresh clone at the remote and resets to its head.
+// adoptRemote initializes a fresh clone, points it at the remote and resets to
+// its head.
 func adoptRemote(t *testing.T, ctx context.Context, root, remoteURL string) {
 	t.Helper()
-	sync := openSyncOrFatal(t, ctx, root)
+	sync := openSyncOrFatal(t, ctx, initWorkspace(t, root, "ws"))
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote(adopt): %v", err)
 	}

@@ -21,7 +21,7 @@ import (
 func TestQuarantineTableCreatedByFreshOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -462,7 +462,7 @@ func TestTransientMigrationFailureIsNotQuarantined(t *testing.T) {
 func TestMigrationCheckpointCreatedByFreshOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {

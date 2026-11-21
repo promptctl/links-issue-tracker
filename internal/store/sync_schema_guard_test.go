@@ -37,7 +37,7 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL s
 	}
 	future := registryMax + 1
 
-	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), initWorkspace(t, root, "ws"), "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}

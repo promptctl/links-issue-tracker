@@ -153,22 +153,13 @@ func storeAt(env environ.Env, tree string) treeStore {
 		}
 		return treeStore{err: err}
 	}
-	info, err := os.Stat(loc.DatabasePath)
+	// [LAW:single-enforcer] "Is there a lit store here" is Initialized's
+	// answer, the one every store open asks, so a repository the scan skips is
+	// one whose open would say "run `lit init`", and one it fails on is one
+	// whose open would fail the same way.
+	initialized, err := Initialized(loc.DatabasePath)
 	if err != nil {
-		// [LAW:single-enforcer] "Is there a lit store here" is answered by the
-		// same existence check OpenForRead uses — the store database dir — so
-		// every discovered Location is openable and no lit-less git repo slips
-		// in. os.ErrNotExist is the ordinary "git repo, no lit store" case;
-		// any other stat error is surfaced, not swallowed.
-		if errors.Is(err, os.ErrNotExist) {
-			return treeStore{}
-		}
-		return treeStore{err: fmt.Errorf("stat store database %q: %w", loc.DatabasePath, err)}
+		return treeStore{err: err}
 	}
-	// [LAW:types-are-the-program] A dolt store is a directory; a regular file
-	// at that path (a leftover from a failed operation) exists but is not
-	// openable, so counting it would break this function's contract that every
-	// returned Location opens read-only. The predicate is "a store database
-	// directory is here", not merely "a path exists here".
-	return treeStore{loc: loc, holdsStore: info.IsDir()}
+	return treeStore{loc: loc, holdsStore: initialized}
 }

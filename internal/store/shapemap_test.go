@@ -301,7 +301,7 @@ func mustClean(t *testing.T, report storage.HealthReport) {
 func TestDeterministicMapCleanAhead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	src := filepath.Join(t.TempDir(), "src")
+	src := initWorkspace(t, filepath.Join(t.TempDir(), "src"), "test-workspace-id")
 	const ws = "test-workspace-id"
 
 	wantIDs := map[model.ID]bool{}
@@ -399,7 +399,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 	}
 	assertSoloSurvives("map+apply", export.Issues, export.PlanReviews)
 
-	dst := filepath.Join(t.TempDir(), "dst")
+	dst := initWorkspace(t, filepath.Join(t.TempDir(), "dst"), "test-workspace-id")
 	withStore(t, ctx, dst, func(st *Store) {
 		if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 			t.Fatalf("ReplaceFromExport: %v", err)
@@ -478,7 +478,7 @@ func TestDeterministicMapPreGoose(t *testing.T) {
 		t.Fatalf("issue_events.assignee did not map to events.actor: %q", export.Events[0].Actor)
 	}
 
-	dst := filepath.Join(t.TempDir(), "dst")
+	dst := initWorkspace(t, filepath.Join(t.TempDir(), "dst"), "test-workspace-id")
 	withStore(t, ctx, dst, func(st *Store) {
 		if _, err := st.ReplaceFromExport(ctx, export); err != nil {
 			t.Fatalf("ReplaceFromExport: %v", err)

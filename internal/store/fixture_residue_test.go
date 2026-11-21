@@ -104,7 +104,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 
 	// From-scratch equivalence: the copy's schema version must match a store
 	// built by replaying the whole chain right now.
-	scratch, err := Open(ctx, testEnv(), testStderr(), filepath.Join(t.TempDir(), "dolt"), "residue-scratch")
+	scratch, err := Open(ctx, testEnv(), testStderr(), initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "residue-scratch"), "residue-scratch")
 	if err != nil {
 		t.Fatalf("Open from scratch: %v", err)
 	}

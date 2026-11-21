@@ -75,9 +75,9 @@ func TestInitAndRefreshLeaveAgentFilesAlone(t *testing.T) {
 	}
 }
 
-// A command whose open finds the database gone builds it again and says so on
-// its event, a write command and a sync command alike; a command that finds it
-// there says it built nothing.
+// A command whose open finds the database gone from an initialized workspace
+// builds it again and says so on its event, a write command and a sync command
+// alike; a command that finds it there says it built nothing.
 func TestAnOpenThatBuildsTheDatabaseSaysSoOnItsEvent(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
@@ -98,7 +98,7 @@ func TestAnOpenThatBuildsTheDatabaseSaysSoOnItsEvent(t *testing.T) {
 		{true, []string{"sync", "status"}, "built"},
 	} {
 		if step.removeDatabase {
-			if err := os.RemoveAll(ws.DatabasePath); err != nil {
+			if err := os.RemoveAll(filepath.Join(ws.DatabasePath, "links")); err != nil {
 				t.Fatalf("remove the database: %v", err)
 			}
 		}

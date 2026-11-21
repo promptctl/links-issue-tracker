@@ -390,7 +390,7 @@ func assertWorkingSetClean(t *testing.T, ctx context.Context, st *Store) {
 // is a pre-migration commit. Returns the issue id.
 func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) model.ID {
 	t.Helper()
-	st, err := Open(ctx, testEnv(), testStderr(), root, "ws")
+	st, err := Open(ctx, testEnv(), testStderr(), initWorkspace(t, root, "ws"), "ws")
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}

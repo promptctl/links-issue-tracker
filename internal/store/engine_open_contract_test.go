@@ -38,7 +38,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	// coResidentHolderWait budget and asserts a wall-clock bound on the
 	// failure.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
@@ -84,7 +84,7 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	// coResidentHolderWait budget, which would govern every concurrently
 	// running Open.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
@@ -132,7 +132,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	// coResidentHolderWait budget, which would govern every concurrently
 	// running Open.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
@@ -170,7 +170,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
@@ -252,7 +252,7 @@ func stampTree(t *testing.T, root string) map[string]fileStamp {
 func TestAReadOpenWritesNothing(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -323,7 +323,7 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait,
 	// so a writer that did wait on the reader fails within the test's time.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -370,7 +370,7 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
@@ -447,7 +447,7 @@ func TestStoreOutlivesTheContextItWasOpenedUnder(t *testing.T) {
 func TestAReaderOutlivesAFullCompactionBesideIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	s, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)

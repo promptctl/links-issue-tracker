@@ -229,7 +229,7 @@ func TestSyncOpenMeetsTheWriteFloor(t *testing.T) {
 func TestRollbackSnapshotIsOneTheOlderLitWrites(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := initWorkspace(t, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	snaps := rollbackHistory(t, ctx, doltRoot)
 	fromV5, fromV3 := snaps[0], snaps[1]
 
