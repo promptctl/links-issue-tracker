@@ -484,7 +484,7 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonMigrationFailed:
 		// `lit doctor` is not named even to rule it out: doctor opens the store
 		// through the same migration, and an agent that skims acts on the
-		// command it sees, as workspace_not_initialized's remediation records.
+		// command it sees, not the negation around it.
 		// The line claims only what every step behind this reason shares: the
 		// next open converges from the state the step left.
 		return "Retry the command: the next open runs the step the message names again from the state it left, and converges. If it fails the same way again, surface it to the user as blocking."
@@ -557,27 +557,10 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonOutsideGitWorkspace:
 		return "Run the command inside a git repository/worktree with links initialized."
 	case reasonWorkspaceNotInitialized:
-		// Action-only, like its neighbours: the message above already names the
-		// condition and the command that resolves it, so what this line adds is
-		// that the condition is terminal and what the two ways out of it are.
-		//
-		// `lit doctor` is not named even to dismiss it. The default remediation
-		// this reason displaces sends agents there, at a workspace that does
-		// not exist for doctor to read; an agent that skims reads the command,
-		// not the negation around it, so the honest way to stop sending it is
-		// to leave the string out.
-		//
-		// No agent-instructions envelope, deliberately. The envelopes elsewhere
-		// mean "mechanical, run it without asking"; `lit init` writes a
-		// workspace and an agents section into someone's repository, which is
-		// the repo owner's decision, not a step an agent takes on its own to
-		// get itself unblocked.
-		// The claim is about *this* command, not about every command. Not every
-		// store-touching command repeats this answer until a workspace exists:
-		// the write paths bootstrap one. Remediation is the surface an agent
-		// acts on, so a convenient overstatement here is a defect.
-		// [LAW:no-silent-failure]
-		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
+		// The message names the act that resolves it and what that act does, so
+		// a remediation line would be a drifting copy of it. Emit none.
+		// [LAW:one-source-of-truth]
+		return ""
 	case reasonWorkspaceSchemaAhead:
 		// The message names the supported path and, when a snapshot exists,
 		// the lossy rollback, so this line defers to it rather than restating

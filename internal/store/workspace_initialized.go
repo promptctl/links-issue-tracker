@@ -17,7 +17,7 @@ import (
 // dispatches on the condition itself; a bare fmt.Errorf would carry no type, so
 // the classifier could not recognize a terminal precondition and would tell the
 // agent to retry it forever.
-var ErrWorkspaceNotInitialized = errors.New("repository not initialized with lit — run 'lit init' first")
+var ErrWorkspaceNotInitialized = errors.New("lit workspace is not initialized.  Run 'lit init' to initialize lit for this project.\nThis will pull the remote's existing backlog, if available")
 
 // requireInitializedWorkspace classifies one stat of the workspace root into
 // the two answers its callers act on differently: `lit init` has never run

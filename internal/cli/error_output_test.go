@@ -464,42 +464,20 @@ func TestWriteCommandErrorValidationRefusalNeverSaysRetry(t *testing.T) {
 	}
 }
 
-// TestWriteCommandErrorUninitializedWorkspace pins the surface an agent
-// actually reads. The condition is terminal — `lit init` has never run here —
-// so the remediation must agree with the message body instead of contradicting
-// it: no retry advice, and no referral to `lit doctor`, which reads the very
-// workspace that is missing.
-//
-// The absence assertions alone would be vacuous (they hold of any answer that
-// merely avoids the default), so the reason and exit code are pinned as data in
-// the tables above, and this test also asserts the positive: the one act that
-// resolves the condition is named.
+// TestWriteCommandErrorUninitializedWorkspace pins the whole surface a person
+// reads: what is wrong, what to run, and what running it does, at the
+// precondition exit code, with no remediation line under it to contradict or
+// repeat the message.
 func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, store.ErrWorkspaceNotInitialized); code != ExitValidation {
 		t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 	}
-	out := stderr.String()
-	if !strings.Contains(out, "error (code=3, reason=workspace_not_initialized): repository not initialized with lit — run 'lit init' first") {
-		t.Fatalf("missing the message body at the precondition exit code: %q", out)
-	}
-	if strings.Contains(out, "Retry the command") {
-		t.Fatalf("a terminal precondition must not carry the generic retry remediation: %q", out)
-	}
-	if strings.Contains(out, "lit doctor") {
-		t.Fatalf("remediation must not send an agent to `lit doctor` for a workspace that does not exist: %q", out)
-	}
-	if !strings.Contains(out, "Do not retry unchanged") || !strings.Contains(out, "lit init") {
-		t.Fatalf("remediation must say the condition is terminal and name `lit init`: %q", out)
-	}
-	// The terminal claim is about this command, not about all of them: saying
-	// every store-touching command repeats this answer until a workspace exists
-	// is false, because the write paths bootstrap one. A remediation is acted
-	// on, not read for flavour, so an overstatement here is as much a defect as
-	// retry advice. [LAW:no-silent-failure]
-	if strings.Contains(out, "every store-touching command") {
-		t.Fatalf("remediation must not claim every command repeats this answer; the write paths bootstrap: %q", out)
+	want := "error (code=3, reason=workspace_not_initialized): lit workspace is not initialized.  Run 'lit init' to initialize lit for this project.\n" +
+		"This will pull the remote's existing backlog, if available\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("stderr =\n%q\nwant\n%q", got, want)
 	}
 }
 
