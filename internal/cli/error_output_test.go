@@ -281,9 +281,10 @@ func TestCommandErrorReason(t *testing.T) {
 			"validation_refused",
 		},
 	}
-	// Asserted on the invocation event, not on commandErrorReason: the event is
-	// where a caller reads the reason, so a reason computed correctly and
-	// recorded nowhere must fail here.
+	// Asserted on what the invocation event records for the error
+	// (invocationEnd), not on commandErrorReason alone: the event is where the
+	// reason is read. TestAFailedInvocationRecordsItsExitCodeAndReason pins
+	// that Run writes it.
 	produced := map[string]bool{}
 	for _, tc := range tests {
 		tc := tc
@@ -311,7 +312,7 @@ func TestCommandErrorReason(t *testing.T) {
 // TestCommandReasonVocabulary holds the published reason list to the code:
 // the reasons error_output.go declares, reasonCodes, and the table in
 // docs/cli-reference.md name the same tokens, and the doc gives each the code
-// reasonCodes does. A script branches on these tokens, so a reason added,
+// reasonCodes does. Every invocation event records these tokens, so a reason added,
 // renamed, or moved to another code without the reference changing is a
 // broken contract, not a doc nit.
 func TestCommandReasonVocabulary(t *testing.T) {

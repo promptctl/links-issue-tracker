@@ -4,7 +4,8 @@ Every lit invocation appends one line to a per-user file saying which command
 ran, where, how it ended, and what the command decided. When you need to know
 afterwards what a command did — what `lit next` told a session an hour ago, or
 how often a command failed and why — read this file. A command's own output
-says the same things once, to whoever ran it; the events file keeps them.
+says what it did once, to whoever ran it; the events file keeps that, and adds
+what the output leaves out, such as a failure's reason.
 
 ## Where the file lives
 
@@ -97,7 +98,7 @@ lines here for reading:
 | `flags` | The names of the flags given, in alphabetical order. Flag values are never recorded, because a value can be a ticket title, a comment body, or a pasted secret. |
 | `started_at`, `duration_ms` | When the invocation started, in UTC, and how long it ran. |
 | `outcome` | `ok`, `error`, `panic`, or `interrupted`: still running when the grace after a Ctrl-C or `SIGTERM` ran out, so lit exited without finishing. |
-| `exit_code` | The process's exit code, the same one a failed command prints on its error line; `2` for a panic; `130` or `143` for an interrupted invocation (128 plus the signal number). |
+| `exit_code` | The process's exit code; `2` for a panic; `130` or `143` for an interrupted invocation (128 plus the signal number). |
 | `reason` | Present only on a failure: the reason token that tells apart failures sharing its exit code (see the [CLI reference](cli-reference.md)). |
 | `error` | Present unless the outcome is `ok`: the error message as lit printed it, which can quote a value you typed, the panic value, or, for an interrupted invocation, the signal (`SIGINT` or `SIGTERM`) whose grace ran out. |
 | `sink` | Where the line was written. Always `file`. |

@@ -33,8 +33,8 @@ var ErrWorkspaceNotInitialized = errors.New("lit workspace is not initialized.  
 // It hands back a sentinel rather than a proof-carrying type because no type
 // could honestly carry this proof — the directory can vanish between this stat
 // and the caller's next syscall, so "initialized" is a fact about an instant,
-// not about a value. [LAW:single-enforcer] What it does keep is the single
-// boundary: the OS answer is classified once, here, instead of at each caller.
+// not about a value. [LAW:parse-dont-validate] exception: it returns only an
+// error, because the fact it checks does not outlive the check.
 //
 // [LAW:no-silent-failure] Only ENOENT means uninitialized; every other stat
 // error (EACCES, EIO, ELOOP, …) is its own failure mode, never a guessed

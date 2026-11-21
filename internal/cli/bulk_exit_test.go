@@ -8,7 +8,6 @@ import (
 	"io"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -106,8 +105,8 @@ func commandAnswer(t *testing.T, repo string, args ...string) (answer, stderr, r
 	if err == nil {
 		return "", "", "", out.String()
 	}
-	end := invocationEnd(time.Time{}, err, nil)
-	answer = fmt.Sprintf("code=%d, reason=%s", end.ExitCode, end.Reason)
+	ev := lastEvent(t)
+	answer = fmt.Sprintf("code=%d, reason=%s", ev.ExitCode, ev.Reason)
 	var written bytes.Buffer
 	WriteCommandError(&written, err)
 	for _, line := range strings.Split(written.String(), "\n") {
@@ -126,6 +125,7 @@ func commandAnswer(t *testing.T, repo string, args ...string) (answer, stderr, r
 // with its reason and advises re-running none of them.
 func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) {
 	t.Parallel()
+	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "bulk answers")
 	task := func(t *testing.T, title string) string {

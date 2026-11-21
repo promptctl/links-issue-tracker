@@ -527,11 +527,12 @@ func TestADivergedPushIsTheSyncFailureBlock(t *testing.T) {
 		Branch:  "master",
 		Refusal: errors.New(`push remote "mirror": ! [rejected] HEAD -> master (non-fast-forward)`),
 	}
+	err := asSyncFailure(fmt.Errorf("sync push: %w", refusal))
 	var stderr bytes.Buffer
-	if code := WriteCommandError(&stderr, asSyncFailure(fmt.Errorf("sync push: %w", refusal))); code != ExitConflict {
+	if code := WriteCommandError(&stderr, err); code != ExitConflict {
 		t.Fatalf("exit code = %d, want %d", code, ExitConflict)
 	}
-	if got := commandErrorReason(asSyncFailure(fmt.Errorf("sync push: %w", refusal))); got != reasonSyncDivergence {
+	if got := commandErrorReason(err); got != reasonSyncDivergence {
 		t.Fatalf("reason = %s, want %s", got, reasonSyncDivergence)
 	}
 	out := stderr.String()

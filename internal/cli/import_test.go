@@ -124,10 +124,11 @@ func TestRunImportRefusesARuleBreakingFileWithoutRetryAdvice(t *testing.T) {
 				t.Fatalf("exit code = %d, want %d (a deterministic refusal); error = %v", code, ExitValidation, err)
 			}
 			rendered := stderr.String()
-			for _, want := range []string{"reason=validation_refused", tc.want} {
-				if !strings.Contains(rendered, want) {
-					t.Fatalf("rendered error = %q, want it to contain %q", rendered, want)
-				}
+			if got := commandErrorReason(err); got != reasonValidationRefused {
+				t.Fatalf("reason = %s, want %s", got, reasonValidationRefused)
+			}
+			if !strings.Contains(rendered, tc.want) {
+				t.Fatalf("rendered error = %q, want it to contain %q", rendered, tc.want)
 			}
 			for _, misdirection := range []string{"Retry the command", "lit doctor"} {
 				if strings.Contains(rendered, misdirection) {

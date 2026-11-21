@@ -31,7 +31,7 @@ func WriteCommandError(stderr io.Writer, err error) int {
 }
 
 // CommandExitCode is the exit code a failed command arrives on: the one
-// WriteCommandError prints and returns.
+// WriteCommandError returns.
 func CommandExitCode(err error) int { return commandErrorReason(err).exit }
 
 // commandReason is the machine-readable reason a failed command records on its

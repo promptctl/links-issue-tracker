@@ -141,8 +141,8 @@ func TestTheRootRecordsItsFlags(t *testing.T) {
 	}
 }
 
-// A failed invocation's event carries the exit code and reason its error line
-// printed, read from the same error.
+// A failed invocation's event carries the exit code it exited with and the
+// reason its error classifies as, read from the same error.
 func TestAFailedInvocationRecordsItsExitCodeAndReason(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)

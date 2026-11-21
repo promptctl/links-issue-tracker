@@ -274,8 +274,8 @@ func gcFailureValue(f blobstore.GCFailure) map[string]any {
 }
 
 // invocationEnd is how an invocation ended: Run's returned error, or the
-// panic it died of. A failed command's exit code and reason are the ones
-// WriteCommandError prints for the same error, read off one classification.
+// panic it died of. A failed command's exit code is the one WriteCommandError
+// returns for the same error, read off the classification that names its reason.
 // [LAW:one-source-of-truth]
 func invocationEnd(at time.Time, err error, panicked any) telemetry.End {
 	end := telemetry.End{At: at, Outcome: telemetry.OutcomeOK, ExitCode: ExitOK}
