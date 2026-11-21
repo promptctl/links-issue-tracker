@@ -180,7 +180,7 @@ reason-to-code list is in inventory-cli-issue.md §1.8.
 
 ### 2.8 Error rendering (`internal/cli/error_output.go`)
 
-- `WriteCommandError` prints `error (code=%d, reason=%s): %v\n` to stderr, then, when a remediation exists
+- `WriteCommandError` prints `%v\n` to stderr, then, when a remediation exists
   for the error's reason, `remediation: %s\n`; it returns the exit code
   (`internal/cli/error_output.go`).
 - `commandErrorReason` maps typed errors to machine reason strings, including

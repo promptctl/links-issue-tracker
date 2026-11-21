@@ -221,7 +221,7 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 // takes the workspace shared lock BEFORE its database-exists stat — so a
 // concurrent lit snapshots restore (which transiently renames the database
 // dir away between rotate and install) cannot make OpenForRead return a
-// false-negative "repository not initialized" error.
+// false-negative ErrWorkspaceNotInitialized.
 //
 // The test simulates the transient state by:
 //  1. Opening and closing a Store to bootstrap the workspace
@@ -265,7 +265,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 	if err == nil {
 		t.Fatal("OpenForRead succeeded while exclusive workspace lock held; expected workspace-busy refusal")
 	}
-	if strings.Contains(err.Error(), "repository not initialized") {
+	if errors.Is(err, ErrWorkspaceNotInitialized) {
 		t.Fatalf("OpenForRead returned false-negative 'not initialized' instead of workspace-busy: %v", err)
 	}
 	if !strings.Contains(err.Error(), "workspace busy") && !strings.Contains(err.Error(), "deadline exceeded") {

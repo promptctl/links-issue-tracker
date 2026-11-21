@@ -12,21 +12,18 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// WriteCommandError renders a failed command to stderr: a header carrying the
-// exit code and the error's typed reason, the message, then the actionable
-// remediation for that reason. Text is the one canonical surface, so the
+// WriteCommandError renders a failed command to stderr: the message, then the
+// actionable remediation for the error's typed reason, for every reason whose
+// message does not already carry it. Text is the one canonical surface, so the
 // remediation guidance reaches every caller. [LAW:single-enforcer] The
 // error→reason→remediation mapping is derived in one boundary.
 //
-// The reason rides in the header beside the code because the exit code is
-// deliberately coarse — exit 3 alone covers a value the rules refuse, a
-// directory that is not a repository, and a repository with no workspace, each
-// cleared by a different act — and the header is the one line whose position is fixed: a
-// message can span lines, so a reason printed after it would sit at an offset
-// no caller can find without parsing the message.
+// The code and the reason are not printed: the exit status carries the code,
+// and the invocation event records both (invocationEnd), so stderr is the
+// message a person reads and nothing a caller has to parse past.
 func WriteCommandError(stderr io.Writer, err error) int {
 	reason := commandErrorReason(err)
-	_, _ = fmt.Fprintf(stderr, "error (code=%d, reason=%s): %v\n", reason.exit, reason, err)
+	_, _ = fmt.Fprintf(stderr, "%v\n", err)
 	if remediation := commandErrorRemediation(reason); remediation != "" {
 		_, _ = fmt.Fprintf(stderr, "remediation: %s\n", remediation)
 	}
@@ -34,13 +31,13 @@ func WriteCommandError(stderr io.Writer, err error) int {
 }
 
 // CommandExitCode is the exit code a failed command arrives on: the one
-// WriteCommandError prints and returns.
+// WriteCommandError returns.
 func CommandExitCode(err error) int { return commandErrorReason(err).exit }
 
-// commandReason is the machine-readable reason a failed command prints beside
-// its exit code, and the exit code it arrives on. The tokens are a published
-// contract (docs/cli-reference.md lists each with its code): a script branches
-// on them where one exit code covers failures that call for different acts.
+// commandReason is the machine-readable reason a failed command records on its
+// invocation event, and the exit code it arrives on. The tokens are a published
+// contract (docs/cli-reference.md lists each with its code): they tell apart
+// failures one exit code covers that call for different acts.
 // [LAW:one-source-of-truth] a reason is declared once, with its code, so the
 // code is a property of the reason and no second classifier can give a failure
 // a code its reason does not carry. [LAW:types-are-the-program] each token is
@@ -80,8 +77,8 @@ var (
 	// ExitGeneric, which also means "lit is broken": under one code a script
 	// could tell a self-fixable precondition from a fault only by parsing the
 	// English. The act each calls for differs (adjust the command, edit a
-	// file, run `lit init`, install a different lit), and the reason printed
-	// beside the code carries that difference, not a code of its own.
+	// file, run `lit init`, install a different lit), and the reason the
+	// invocation event records carries that difference, not a code of its own.
 	// [LAW:no-mode-explosion]
 	reasonMigrationPartiallyApplied = commandReason{"migration_partially_applied", ExitValidation}
 	reasonMigrationQuarantined      = commandReason{"migration_quarantined", ExitValidation}
@@ -484,7 +481,7 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonMigrationFailed:
 		// `lit doctor` is not named even to rule it out: doctor opens the store
 		// through the same migration, and an agent that skims acts on the
-		// command it sees, as workspace_not_initialized's remediation records.
+		// command it sees, not a "do not run" around it.
 		// The line claims only what every step behind this reason shares: the
 		// next open converges from the state the step left.
 		return "Retry the command: the next open runs the step the message names again from the state it left, and converges. If it fails the same way again, surface it to the user as blocking."
@@ -495,7 +492,7 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonSchemaShapeRefused:
 		return "Do not retry unchanged — this workspace's stored shape is one lit does not converge on its own, and every command that opens the store repeats this refusal. The message above names the shape. " + agentInstructionsOpen + "Repairing a stored shape by hand is the user's call: surface this refusal to the user as blocking." + agentInstructionsClose
 	case reasonWorkspaceWriteBlocked:
-		// Action-only: the error line above already states the diagnosis (another
+		// Action-only: the message above already states the diagnosis (another
 		// process holds the store). No process hunt: a command-line pattern
 		// cannot tell lit's holder from any other process whose command line
 		// contains "lit", and terminating the wrong one is the user's to answer
@@ -557,27 +554,10 @@ func commandErrorRemediation(reason commandReason) string {
 	case reasonOutsideGitWorkspace:
 		return "Run the command inside a git repository/worktree with links initialized."
 	case reasonWorkspaceNotInitialized:
-		// Action-only, like its neighbours: the message above already names the
-		// condition and the command that resolves it, so what this line adds is
-		// that the condition is terminal and what the two ways out of it are.
-		//
-		// `lit doctor` is not named even to dismiss it. The default remediation
-		// this reason displaces sends agents there, at a workspace that does
-		// not exist for doctor to read; an agent that skims reads the command,
-		// not the negation around it, so the honest way to stop sending it is
-		// to leave the string out.
-		//
-		// No agent-instructions envelope, deliberately. The envelopes elsewhere
-		// mean "mechanical, run it without asking"; `lit init` writes a
-		// workspace and an agents section into someone's repository, which is
-		// the repo owner's decision, not a step an agent takes on its own to
-		// get itself unblocked.
-		// The claim is about *this* command, not about every command. Not every
-		// store-touching command repeats this answer until a workspace exists:
-		// the write paths bootstrap one. Remediation is the surface an agent
-		// acts on, so a convenient overstatement here is a defect.
-		// [LAW:no-silent-failure]
-		return "Do not retry unchanged — this repository has no lit workspace, and retrying this command cannot create one. Run `lit init` here to create it, or change to a directory that already has one."
+		// The message names the act that resolves it and what that act does, so
+		// a remediation line would be a drifting copy of it. Emit none.
+		// [LAW:one-source-of-truth]
+		return ""
 	case reasonWorkspaceSchemaAhead:
 		// The message names the supported path and, when a snapshot exists,
 		// the lossy rollback, so this line defers to it rather than restating

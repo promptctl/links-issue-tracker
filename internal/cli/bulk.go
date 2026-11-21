@@ -91,7 +91,7 @@ func (s bulkStop) String() string {
 }
 
 // Error names each unlanded item with the reason its error classifies as, the
-// reason its single command would have printed, so a run whose items differ
+// reason its single command would end on, so a run whose items differ
 // still says what each one calls for. Where the run stopped, if it did, is a
 // sentence of its own after that list, since the stopping item landed: the
 // ids it never reached are counted as not landed and named there.

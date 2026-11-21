@@ -94,17 +94,19 @@ func TestBulkLabelTotalFailureExitsNonZero(t *testing.T) {
 	}
 }
 
-// commandAnswer is how the real CLI answers args in repo: what main prints to
-// stderr for its error ("error (code=N, reason=R): …" and on), its
-// "remediation: …" line, and stdout alone. A run that succeeds, or a reason
-// with no remediation, answers with empty strings there.
-func commandAnswer(t *testing.T, repo string, args ...string) (stderr, remediation, stdout string) {
+// commandAnswer is how the real CLI answers args in repo: the code and reason
+// its invocation event records ("code=N, reason=R"), what main prints to stderr
+// for its error, its "remediation: …" line, and stdout alone. A run that
+// succeeds, or a reason with no remediation, answers with empty strings there.
+func commandAnswer(t *testing.T, repo string, args ...string) (answer, stderr, remediation, stdout string) {
 	t.Helper()
 	var out bytes.Buffer
 	err := Run(context.Background(), dirInvocation(t, repo, &out, io.Discard, args))
 	if err == nil {
-		return "", "", out.String()
+		return "", "", "", out.String()
 	}
+	ev := lastEvent(t)
+	answer = fmt.Sprintf("code=%d, reason=%s", ev.ExitCode, ev.Reason)
 	var written bytes.Buffer
 	WriteCommandError(&written, err)
 	for _, line := range strings.Split(written.String(), "\n") {
@@ -112,18 +114,7 @@ func commandAnswer(t *testing.T, repo string, args ...string) (stderr, remediati
 			remediation = line
 		}
 	}
-	return written.String(), remediation, out.String()
-}
-
-// codeAndReason reads "code=6, reason=state_already_holds" off stderr that
-// opens "error (code=6, reason=state_already_holds): …".
-func codeAndReason(t *testing.T, stderr string) string {
-	t.Helper()
-	start, end := strings.Index(stderr, "("), strings.Index(stderr, ")")
-	if !strings.HasPrefix(stderr, "error (") || end < start {
-		t.Fatalf("stderr = %q, want error (code=…, reason=…)", stderr)
-	}
-	return stderr[start+1 : end]
+	return answer, written.String(), remediation, out.String()
 }
 
 // The ticket's acceptance, through the real CLI: `lit bulk archive` over an
@@ -134,6 +125,7 @@ func codeAndReason(t *testing.T, stderr string) string {
 // with its reason and advises re-running none of them.
 func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) {
 	t.Parallel()
+	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	epic := newEpicInDir(t, repo, "bulk answers")
 	task := func(t *testing.T, title string) string {
@@ -159,8 +151,7 @@ func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) 
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			want := fmt.Sprintf("code=%d, reason=%s", tc.code, tc.reason)
-			single, _, _ := commandAnswer(t, repo, "archive", tc.stuck)
-			if got := codeAndReason(t, single); got != want {
+			if got, _, _, _ := commandAnswer(t, repo, "archive", tc.stuck); got != want {
 				t.Fatalf("lit archive %s answers %q, want %q", tc.stuck, got, want)
 			}
 			ids, wantStdout := tc.stuck, ""
@@ -168,8 +159,8 @@ func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) 
 				live := task(t, "lands")
 				ids, wantStdout, want = tc.stuck+","+live, live+" ok\n", partial
 			}
-			stderr, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", ids)
-			if got := codeAndReason(t, stderr); got != want {
+			got, stderr, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", ids)
+			if got != want {
 				t.Errorf("lit bulk archive --ids %s answers %q, want %q", ids, got, want)
 			}
 			if named := tc.stuck + " (" + tc.reason + ")"; !strings.Contains(stderr, named) {
@@ -188,8 +179,8 @@ func TestBulkArchiveAnswersEachTicketItCannotMoveAsLitArchiveDoes(t *testing.T) 
 	}
 
 	t.Run("already archived and deleted", func(t *testing.T) {
-		stderr, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", archived+","+deleted)
-		if got := codeAndReason(t, stderr); got != partial {
+		got, stderr, remediation, stdout := commandAnswer(t, repo, "bulk", "archive", "--ids", archived+","+deleted)
+		if got != partial {
 			t.Errorf("answer = %q, want %q", got, partial)
 		}
 		for _, named := range []string{archived + " (state_already_holds)", deleted + " (validation_refused)"} {

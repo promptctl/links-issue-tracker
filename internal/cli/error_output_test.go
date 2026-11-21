@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -280,9 +281,10 @@ func TestCommandErrorReason(t *testing.T) {
 			"validation_refused",
 		},
 	}
-	// Asserted on the rendered header, not on commandErrorReason: the header
-	// is where a caller reads the reason, so a reason computed correctly and
-	// printed nowhere must fail here.
+	// Asserted on what the invocation event records for the error
+	// (invocationEnd), not on commandErrorReason alone: the event is where the
+	// reason is read. TestAFailedInvocationRecordsItsExitCodeAndReason pins
+	// that Run writes it.
 	produced := map[string]bool{}
 	for _, tc := range tests {
 		tc := tc
@@ -292,17 +294,14 @@ func TestCommandErrorReason(t *testing.T) {
 			if !ok {
 				t.Fatalf("reason %q is not in reasonCodes", tc.want)
 			}
-			var stderr bytes.Buffer
-			WriteCommandError(&stderr, tc.err)
-			header, _, _ := strings.Cut(stderr.String(), "\n")
-			wantPrefix := fmt.Sprintf("error (code=%d, reason=%s): ", code, tc.want)
-			if !strings.HasPrefix(header, wantPrefix) {
-				t.Fatalf("header = %q, want prefix %q", header, wantPrefix)
+			end := invocationEnd(time.Time{}, tc.err, nil)
+			if end.Reason != tc.want || end.ExitCode != code {
+				t.Fatalf("event records reason %q at code %d, want %q at code %d", end.Reason, end.ExitCode, tc.want, code)
 			}
 		})
 	}
-	// Every published reason is rendered by at least one real error above, so
-	// no row of the vocabulary is a token nothing prints.
+	// Every published reason is recorded for at least one real error above, so
+	// no row of the vocabulary is a token nothing records.
 	for reason := range reasonCodes {
 		if !produced[reason] {
 			t.Errorf("no case renders reason %q", reason)
@@ -313,7 +312,7 @@ func TestCommandErrorReason(t *testing.T) {
 // TestCommandReasonVocabulary holds the published reason list to the code:
 // the reasons error_output.go declares, reasonCodes, and the table in
 // docs/cli-reference.md name the same tokens, and the doc gives each the code
-// reasonCodes does. A script branches on these tokens, so a reason added,
+// reasonCodes does. Every invocation event records these tokens, so a reason added,
 // renamed, or moved to another code without the reference changing is a
 // broken contract, not a doc nit.
 func TestCommandReasonVocabulary(t *testing.T) {
@@ -394,7 +393,7 @@ func TestCommandReasonVocabulary(t *testing.T) {
 	}
 }
 
-// TestWriteCommandError pins the text error surface: the code+message line plus
+// TestWriteCommandError pins the text error surface: the message line plus
 // the actionable remediation for the error's typed reason. Text is the one
 // canonical surface, so the remediation guidance reaches every caller.
 func TestWriteCommandError(t *testing.T) {
@@ -405,8 +404,8 @@ func TestWriteCommandError(t *testing.T) {
 		t.Fatalf("exitCode = %d, want %d", exitCode, ExitValidation)
 	}
 	out := stderr.String()
-	if !strings.Contains(out, "error (code=3, reason=unknown_command): unknown command \"unknown\"") {
-		t.Fatalf("missing error line: %q", out)
+	if !strings.HasPrefix(out, "unknown command \"unknown\"\n") {
+		t.Fatalf("stderr does not open with the message: %q", out)
 	}
 	if !strings.Contains(out, "remediation: Run `lit --help`") {
 		t.Fatalf("missing remediation line: %q", out)
@@ -464,42 +463,19 @@ func TestWriteCommandErrorValidationRefusalNeverSaysRetry(t *testing.T) {
 	}
 }
 
-// TestWriteCommandErrorUninitializedWorkspace pins the surface an agent
-// actually reads. The condition is terminal — `lit init` has never run here —
-// so the remediation must agree with the message body instead of contradicting
-// it: no retry advice, and no referral to `lit doctor`, which reads the very
-// workspace that is missing.
-//
-// The absence assertions alone would be vacuous (they hold of any answer that
-// merely avoids the default), so the reason and exit code are pinned as data in
-// the tables above, and this test also asserts the positive: the one act that
-// resolves the condition is named.
+// TestWriteCommandErrorUninitializedWorkspace pins the whole surface a person
+// reads: what is wrong, what to run, and what running it does, at the
+// precondition exit code, with no remediation line under it to contradict or
+// repeat the message.
 func TestWriteCommandErrorUninitializedWorkspace(t *testing.T) {
 	t.Parallel()
 	var stderr bytes.Buffer
 	if code := WriteCommandError(&stderr, store.ErrWorkspaceNotInitialized); code != ExitValidation {
 		t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 	}
-	out := stderr.String()
-	if !strings.Contains(out, "error (code=3, reason=workspace_not_initialized): repository not initialized with lit — run 'lit init' first") {
-		t.Fatalf("missing the message body at the precondition exit code: %q", out)
-	}
-	if strings.Contains(out, "Retry the command") {
-		t.Fatalf("a terminal precondition must not carry the generic retry remediation: %q", out)
-	}
-	if strings.Contains(out, "lit doctor") {
-		t.Fatalf("remediation must not send an agent to `lit doctor` for a workspace that does not exist: %q", out)
-	}
-	if !strings.Contains(out, "Do not retry unchanged") || !strings.Contains(out, "lit init") {
-		t.Fatalf("remediation must say the condition is terminal and name `lit init`: %q", out)
-	}
-	// The terminal claim is about this command, not about all of them: saying
-	// every store-touching command repeats this answer until a workspace exists
-	// is false, because the write paths bootstrap one. A remediation is acted
-	// on, not read for flavour, so an overstatement here is as much a defect as
-	// retry advice. [LAW:no-silent-failure]
-	if strings.Contains(out, "every store-touching command") {
-		t.Fatalf("remediation must not claim every command repeats this answer; the write paths bootstrap: %q", out)
+	want := store.ErrWorkspaceNotInitialized.Error() + "\n"
+	if got := stderr.String(); got != want {
+		t.Fatalf("stderr =\n%q\nwant\n%q", got, want)
 	}
 }
 
@@ -581,8 +557,11 @@ func TestWriteCommandErrorSchemaVersionRefusals(t *testing.T) {
 				t.Fatalf("exitCode = %d, want %d (ExitValidation)", code, ExitValidation)
 			}
 			out := stderr.String()
-			if !strings.Contains(out, "error (code=3, reason="+tc.reason+"): "+tc.err.Error()) {
-				t.Fatalf("missing the message body at exit 3: %q", out)
+			if !strings.HasPrefix(out, tc.err.Error()+"\n") {
+				t.Fatalf("stderr does not open with the message: %q", out)
+			}
+			if got := commandErrorReason(tc.err).String(); got != tc.reason {
+				t.Fatalf("reason = %q, want %q", got, tc.reason)
 			}
 			_, remediation, ok := strings.Cut(out, "\nremediation: ")
 			if !ok {

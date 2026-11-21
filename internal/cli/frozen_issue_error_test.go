@@ -41,9 +41,11 @@ func TestStatusCommandOnFrozenTicketRefusesNamingTheThaw(t *testing.T) {
 					t.Errorf("message = %q, want %q", err.Error(), want)
 				}
 				rendered := renderCommandError(t, err)
-				header := fmt.Sprintf("error (code=%d, reason=%s): ", ExitValidation, reasonValidationRefused)
-				if !strings.HasPrefix(rendered, header) {
-					t.Errorf("rendered error does not open with %q:\n%s", header, rendered)
+				if got := commandErrorReason(err); got != reasonValidationRefused {
+					t.Errorf("reason = %s, want %s", got, reasonValidationRefused)
+				}
+				if !strings.HasPrefix(rendered, want+"\n") {
+					t.Errorf("rendered error does not open with its message:\n%s", rendered)
 				}
 				for _, fault := range []string{retryAdvice, doctorAdvice} {
 					if strings.Contains(rendered, fault) {
