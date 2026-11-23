@@ -65,6 +65,7 @@ func TestClassifiesEachFixtureByWhatItTouches(t *testing.T) {
 		{"helperprocess", "TestReRunningTheBinaryForOneTestIsAnotherProcess", "proc", layerIntegration},
 		{"helperprocess", "TestHelper", "-", layerUnit},
 		{"network", "TestAListenerTouchesTheNetwork", "network", layerIntegration},
+		{"importerprocess", "TestTheDefaultImporterIsAnotherProcess", "proc", layerIntegration},
 		{"cliinprocess", "TestRunningTheCLIInProcessIsEndToEnd", "cli", layerE2E},
 	} {
 		t.Run(c.pkg+"/"+c.test, func(t *testing.T) {

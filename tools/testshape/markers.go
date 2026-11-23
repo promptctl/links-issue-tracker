@@ -45,6 +45,14 @@ var externalMarkers = []marker{
 	// git: Dolt's git, which Env.Git wraps.
 	{"github.com/dolthub/dolt/go/libraries/utils/gitcmd.Command", touchGit},
 
+	// Another process, started inside a dependency the walk does not enter:
+	// go/packages runs `go list`, and so does the gc importer go/importer
+	// constructs, to find export data.
+	{"golang.org/x/tools/go/packages.Load", touchProc},
+	{"go/importer.Default", touchProc},
+	{"go/importer.For", touchProc},
+	{"go/importer.ForCompiler", touchProc},
+
 	// The filesystem: the os, io/ioutil and path/filepath functions that read
 	// or write the disk, and the test harness's own directories.
 	{"os.Open", touchFS},
