@@ -70,7 +70,7 @@
     "testing": {"note": "M.Run runs each test, and each test is measured from its own root.", "default": "none", "functions": {"T.TempDir": "fs", "B.TempDir": "fs", "F.TempDir": "fs", "T.Chdir": "fs", "B.Chdir": "fs", "F.Chdir": "fs", "T.ArtifactDir": "fs", "B.ArtifactDir": "fs", "F.ArtifactDir": "fs"}},
     "testing/fstest": {"default": "none"},
     "text/tabwriter": {"default": "none"},
-    "time": {"default": "none", "functions": {"Now": "clock", "Since": "clock", "Until": "clock", "Sleep": "clock", "After": "clock", "AfterFunc": "clock", "Tick": "clock", "NewTicker": "clock", "NewTimer": "clock", "Timer.Reset": "clock", "Ticker.Reset": "clock", "LoadLocation": "fs"}},
+    "time": {"note": "Now and the timers read the clock. A Local time's zone comes from the zone database, which Location.get loads once per process on first use; like the environment os.Getenv reads, it is the process's setting, not a touch of the test.", "default": "none", "functions": {"Now": "clock", "Since": "clock", "Until": "clock", "Sleep": "clock", "After": "clock", "AfterFunc": "clock", "Tick": "clock", "NewTicker": "clock", "NewTimer": "clock", "Timer.Reset": "clock", "Ticker.Reset": "clock", "LoadLocation": "fs"}},
     "unicode": {"default": "none"},
     "unicode/utf8": {"default": "none"},
     "github.com/cenkalti/backoff/v4": {"note": "Retry sleeps between attempts and its back-offs read the clock.", "default": "clock"},
