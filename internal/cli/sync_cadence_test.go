@@ -49,7 +49,7 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 // errs toward allow.
 func TestShouldReceiveNowDebounce(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 	now := time.Now()
 	interval := 10 * time.Second
 
@@ -89,7 +89,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspacetest.Checkout(t, runEnv(t), root).Info()
+	ws := workspacetest.Resolved(t, runEnv(t), root)
 	ctx := underInvocation(context.Background())
 
 	ensureMirrorCoverage(ctx, testStderr(t), runEnv(t), ws)

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/store"
-	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // Parallelism convention for this package: a test calls t.Parallel() unless it
@@ -68,7 +68,13 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
-	suiteenv.UnsetConfigPaths()
+	// Children inherit this environment, so none reads a config file the
+	// developer's shell points at.
+	for _, key := range config.PathEnvVars() {
+		if err := os.Unsetenv(key); err != nil {
+			panic("unset " + key + ": " + err.Error())
+		}
+	}
 	// Every Run appends its invocation event under XDG_STATE_HOME and reads the
 	// global config layer under XDG_CONFIG_HOME, and Dolt reads its own home
 	// in-process on every store open, from the process environment no run's

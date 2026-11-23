@@ -47,7 +47,7 @@ func withTemplateStore(t testing.TB, ws workspace.Info) workspace.Info {
 // migration always commits, so the same head after it proves none ran.
 func TestAStoreTemplateCopyOpensWithoutBuildingOrMigrating(t *testing.T) {
 	t.Parallel()
-	ws := withTemplateStore(t, workspacetest.New(t, runEnv(t)).Info())
+	ws := withTemplateStore(t, workspacetest.New(t, runEnv(t)))
 	before := doltHead(t, ws)
 
 	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)

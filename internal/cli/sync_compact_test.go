@@ -22,7 +22,7 @@ import (
 // "nothing is due". A fresh marker must block; an aged one must allow.
 func TestCompactProbeIntervalGatesTheBackstop(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 	now := time.Now()
 
 	if !shouldRunNow(compactMarkerPath(ws), now, compactProbeInterval) {
@@ -50,7 +50,7 @@ func TestCompactProbeIntervalGatesTheBackstop(t *testing.T) {
 // every mutation forever.
 func TestCompactMarkerIsDistinctFromTheReceiveMarker(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 
 	if compactMarkerPath(ws) == receiveMarkerPath(ws) {
 		t.Fatal("compaction and receive share a debounce marker; one would silently suppress the other")
@@ -157,7 +157,7 @@ func TestRunSyncCompactCarriesTheDepthAndReportsThePass(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			ws := workspacetest.New(t, runEnv(t)).Info()
+			ws := workspacetest.New(t, runEnv(t))
 			syncer := &compactSyncer{outcome: storage.CompactionOutcome{
 				Ran: true, Depth: tc.want, Detail: "journal 4.0 KiB -> 0 B",
 			}}
@@ -218,7 +218,7 @@ func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
 		},
 	}
 	for command, recordPass := range record {
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 		recordPass(ws)
 
 		traces := readSyncTraces(t, ws)
@@ -266,7 +266,7 @@ func TestCompactionAttemptMetadataRendersOneShapeForEveryPath(t *testing.T) {
 // [LAW:no-silent-failure]
 func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 	failure := errors.New("dolt gc: store is read-only")
 	var out bytes.Buffer
 
@@ -308,7 +308,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 
 	t.Run("a pass that ran is recorded under the backstop's own name", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 		syncer := &compactSyncer{outcome: storage.CompactionOutcome{
 			Ran: true, Depth: storage.GCFull, Detail: "journal 2.0 KiB -> 0 B",
 		}}
@@ -333,7 +333,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 
 	t.Run("a declined pass records nothing", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		// The zero outcome: nothing was owed, which is the common case on every
 		// mutating command. A trace here would be one row per command forever.
@@ -346,7 +346,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 
 	t.Run("an engine failure is recorded", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 		failure := errors.New("dolt gc: store is read-only")
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws, &compactSyncer{err: failure})
@@ -365,7 +365,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 	// fabricated one misleads whoever reads it during an incident.
 	t.Run("a failure that never chose a depth records none", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws,
 			&compactSyncer{err: errors.New("measure compaction signals: permission denied")})
@@ -384,7 +384,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 	// the deep form needs to know which depth keeps failing.
 	t.Run("a failure that chose a depth records it without a reclaim", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{Depth: storage.GCFull},
@@ -410,7 +410,7 @@ func TestMaintainThroughRecordsEachOutcome(t *testing.T) {
 	// behind an unrelated failure.
 	t.Run("a pass that ran and then failed is recorded as the rewrite it was", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws, &compactSyncer{
 			outcome: storage.CompactionOutcome{
@@ -450,7 +450,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 
 	t.Run("pruned snapshots are named, with the footprint they left", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws, &compactSyncer{
 			pruned:    []string{"1-pre-reconcile-1", "2-pre-reconcile-2"},
@@ -482,7 +482,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 
 	t.Run("a store still over names the part holding the bytes", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws, &compactSyncer{footprint: footprint(300, 50, 200)})
 
@@ -500,7 +500,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 
 	t.Run("a store within its ceiling that did nothing records nothing", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws, &compactSyncer{footprint: footprint(100, 50, 200)})
 
@@ -511,7 +511,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 
 	t.Run("a failure keeps what the probe still knew", func(t *testing.T) {
 		t.Parallel()
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 
 		maintainThrough(context.Background(), testStderr(t), runEnv(t), ws, &compactSyncer{
 			pruned: []string{"1-pre-migrate-1"},
@@ -538,7 +538,7 @@ func TestMaintainThroughRecordsTheCeiling(t *testing.T) {
 // [LAW:no-silent-failure]
 func TestRunSyncCompactFailsWhenItCannotReportThePass(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 	syncer := &compactSyncer{outcome: storage.CompactionOutcome{
 		Ran: true, Depth: storage.GCNewGen, Detail: "journal 4.0 KiB -> 0 B",
 	}}

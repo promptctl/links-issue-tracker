@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
@@ -63,13 +64,23 @@ func TestMain(m *testing.M) {
 	// XDG_STATE_HOME, and the child processes inherit this environment: point
 	// it at a directory the suite owns, never the developer's own events file.
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-")
-	suiteenv.UnsetConfigPaths()
+	// Children inherit this environment, so none reads a config file the
+	// developer's shell points at.
+	for _, key := range config.PathEnvVars() {
+		if err := os.Unsetenv(key); err != nil {
+			panic("unset " + key + ": " + err.Error())
+		}
+	}
 	// Every git remote a lit here opens keeps its mirror under the mirror
 	// root, never the developer's user cache directory.
 	mirrorRoot := isolateXDGHome(store.MirrorRootEnvVar, "lit-cmd-mirrors-")
+	// The global config layer lives under XDG_CONFIG_HOME: the suite's own,
+	// never the developer's.
+	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cmd-config-")
 	code := m.Run()
 	_ = os.RemoveAll(stateHome)
 	_ = os.RemoveAll(mirrorRoot)
+	_ = os.RemoveAll(configHome)
 	os.Exit(code)
 }
 
@@ -334,7 +345,9 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 // verification steps on the store's single read-write engine — a flake these
 // tests are not designed to account for. Both wedge tests pin cadence
 // explicitly instead of depending on whatever value happens to be the shipped
-// default. [LAW:no-ambient-temporal-coupling]
+// default. [LAW:no-ambient-temporal-coupling] exception: the pin keeps the
+// on-change mirror out of these tests; a run under the shipped cadence still
+// has that second actor.
 func pinOnPushCadence(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "wedge-test-config.toml")

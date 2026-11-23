@@ -555,7 +555,7 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspacetest.New(t, runEnv(t)).Info())
+	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspacetest.New(t, runEnv(t)))
 
 	<-abandoned
 	if got := stderr.String(); !strings.Contains(got, "while the run waits") || strings.Contains(got, "after the run returned") {

@@ -43,7 +43,7 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		t.Fatalf("engine.Open() error = %v", err)
 	}
 	ap := &app.App{
-		Workspace: workspacetest.StoreAt(t, runEnv(t), storeDir).WorkspaceID(wsID).IssuePrefix(prefix).Info(),
+		Workspace: workspacetest.WithIssuePrefix(t, workspacetest.WithWorkspaceID(workspacetest.StoreAt(t, runEnv(t), storeDir), wsID), prefix),
 		Store:     st,
 	}
 	issueID = seedOpenIssueRaw(t, ctx, ap, "Ticket in the foreign store").Raw()
@@ -90,7 +90,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 	ap := &app.App{
-		Workspace: workspacetest.StoreAt(t, runEnv(t), storeDir).WorkspaceID("ws-foreign").IssuePrefix("proj").Info(),
+		Workspace: workspacetest.WithIssuePrefix(t, workspacetest.WithWorkspaceID(workspacetest.StoreAt(t, runEnv(t), storeDir), "ws-foreign"), "proj"),
 		Store:     st,
 	}
 	if id := seedOpenIssueRaw(t, ctx, ap, "Written after a foreign read"); id == "" {

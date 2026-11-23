@@ -80,7 +80,7 @@ func TestReconcilerForRefusesAnEngineThatDeclinesReconcile(t *testing.T) {
 	} {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
-			ws := workspacetest.New(t, runEnv(t)).Info()
+			ws := workspacetest.New(t, runEnv(t))
 
 			reconciler, err := reconcilerFor(testStderr(t), runEnv(t), ws, syncSession{engine: syncOnlyEngine{}}, command)
 
@@ -116,7 +116,7 @@ func TestReconcilerForRefusesAnEngineThatDeclinesReconcile(t *testing.T) {
 // place a decline can land. [LAW:no-silent-failure]
 func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 
 	outcome, err := performInlineReconcile(context.Background(), testStderr(t), runEnv(t), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
 
@@ -160,7 +160,7 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 // Store. [LAW:behavior-not-structure]
 func TestRestoreRefusesAnEngineThatCannotImportBeforeTouchingAnything(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 	ap := &app.App{Workspace: ws, Store: syncOnlyEngine{}}
 
 	_, err := restoreFromExportFile(context.Background(), testStderr(t), runEnv(t), ap, inputFile{path: filepath.Join(t.TempDir(), "export.json"), data: []byte("not an export")}, false)

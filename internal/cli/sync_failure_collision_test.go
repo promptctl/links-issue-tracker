@@ -269,7 +269,7 @@ func TestCollisionBlockRendersOrdinaryTicketReadably(t *testing.T) {
 func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
@@ -310,7 +310,7 @@ func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 func TestReportReconcileResultCollisionExitsConflict(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
-	ws := workspacetest.New(t, runEnv(t)).Info()
+	ws := workspacetest.New(t, runEnv(t))
 	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,

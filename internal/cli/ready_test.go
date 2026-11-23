@@ -23,7 +23,7 @@ func newTestCLIApp(t testing.TB) *app.App {
 	t.Helper()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	ctx := context.Background()
-	ws := withTemplateStore(t, workspacetest.Handed(t, runEnv(t), t.TempDir()).Info())
+	ws := withTemplateStore(t, workspacetest.Handed(t, runEnv(t), t.TempDir()))
 	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)

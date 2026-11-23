@@ -25,7 +25,7 @@ import (
 func TestResolveRestoreSourceCap(t *testing.T) {
 	t.Parallel()
 	t.Run("no source is a usage error", func(t *testing.T) {
-		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t)).Info()}
+		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t))}
 		_, err := resolveRestoreSource(ap, nil, false)
 		if _, ok := err.(UsageError); !ok {
 			t.Fatalf("resolveRestoreSource(no source) error = %v, want UsageError", err)
@@ -33,7 +33,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 	})
 
 	t.Run("both sources is a mutual-exclusion error, not silent precedence", func(t *testing.T) {
-		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t)).Info()}
+		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t))}
 		_, err := resolveRestoreSource(ap, &inputFile{path: "/some/export.json"}, true)
 		ue, ok := err.(UsageError)
 		if !ok || !strings.Contains(ue.Message, "mutually exclusive") {
@@ -42,7 +42,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 	})
 
 	t.Run("explicit file passes through as read", func(t *testing.T) {
-		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t)).Info()}
+		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t))}
 		explicit := inputFile{path: "/some/export.json", data: []byte("{}")}
 		got, err := resolveRestoreSource(ap, &explicit, false)
 		if err != nil || got.path != explicit.path || string(got.data) != string(explicit.data) {
@@ -51,7 +51,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 	})
 
 	t.Run("latest with no backups fails loudly", func(t *testing.T) {
-		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t)).Info()}
+		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t))}
 		_, err := resolveRestoreSource(ap, nil, true)
 		if err == nil || !strings.Contains(err.Error(), "no backups available") {
 			t.Fatalf("resolveRestoreSource(latest, empty) error = %v, want no backups available", err)
@@ -60,7 +60,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 
 	t.Run("latest reads the newest snapshot", func(t *testing.T) {
 		dir := t.TempDir()
-		ap := &app.App{Workspace: workspacetest.StoreAt(t, runEnv(t), dir).Info()}
+		ap := &app.App{Workspace: workspacetest.StoreAt(t, runEnv(t), dir)}
 		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
 		taken, err := backup.Take(context.Background(), dir, backup.Budget, func() (model.Export, error) { return export, nil })
 		if err != nil {
@@ -116,20 +116,20 @@ func TestGuardRestoreVerdicts(t *testing.T) {
 	moved := later
 	moved.Issues = nil
 	recordedIn := func(t *testing.T) workspace.Info {
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 		if err := writeMarkerAtomic(restoreDigestPath(ws), []byte(recorded+"\n")); err != nil {
 			t.Fatalf("record digest: %v", err)
 		}
 		return ws
 	}
 	unreadable := func(t *testing.T) workspace.Info {
-		ws := workspacetest.New(t, runEnv(t)).Info()
+		ws := workspacetest.New(t, runEnv(t))
 		if err := os.MkdirAll(filepath.Join(restoreDigestPath(ws), "blocked"), 0o755); err != nil {
 			t.Fatalf("block digest: %v", err)
 		}
 		return ws
 	}
-	unrecorded := func(t *testing.T) workspace.Info { return workspacetest.New(t, runEnv(t)).Info() }
+	unrecorded := func(t *testing.T) workspace.Info { return workspacetest.New(t, runEnv(t)) }
 	for _, tc := range []struct {
 		name  string
 		ws    func(*testing.T) workspace.Info

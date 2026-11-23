@@ -25,7 +25,7 @@ import (
 func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	ws := workspacetest.New(t, runEnv(t)).IssuePrefix("test").Info()
+	ws := workspacetest.New(t, runEnv(t))
 	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
 	}

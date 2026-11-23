@@ -237,7 +237,7 @@ func TestRecordReceivedWritesOnlyWhatASettledReceiveLearned(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ws := workspacetest.New(t, runEnv(t)).Info()
+			ws := workspacetest.New(t, runEnv(t))
 			if err := store.WriteReceivedRefs(ws.DatabasePath, previous); err != nil {
 				t.Fatalf("seed record error = %v", err)
 			}
@@ -301,7 +301,7 @@ func TestAPushToARemoteTheReceiveDoesNotAskIsUnproven(t *testing.T) {
 	runGit(t, dir, "init", "-q")
 	runGit(t, dir, "remote", "add", "origin", "https://example.com/a.git")
 	runGit(t, dir, "remote", "add", "fork", "https://example.com/b.git")
-	proven, unproven := provePushedAdvertisement(underInvocation(t.Context()), runEnv(t), nil, workspacetest.Checkout(t, runEnv(t), dir).Info(), remoteName(t, "origin"))
+	proven, unproven := provePushedAdvertisement(underInvocation(t.Context()), runEnv(t), nil, workspacetest.Resolved(t, runEnv(t), dir), remoteName(t, "origin"))
 	if proven != (remoteAdvertisement{}) || unproven != "the automatic receive asks no remote" {
 		t.Fatalf("provePushedAdvertisement() = %+v, %q; want nothing proven because the receive asks no remote", proven, unproven)
 	}
