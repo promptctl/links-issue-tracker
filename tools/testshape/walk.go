@@ -234,7 +234,7 @@ func (w *walker) enter(fn, from *ssa.Function) {
 		w.queue = append(w.queue, fn)
 		return
 	}
-	if in, generic := w.a.instanceOf(fn); generic {
+	if in, generic := instanceOf(fn); generic {
 		w.typeArguments(in, fn)
 	}
 	w.charge(o.name, o.knows, fn.Signature, fn, from)
@@ -279,8 +279,6 @@ func (w *walker) typeArguments(in instance, at *ssa.Function) {
 		switch u := ta.use.(type) {
 		case conversion:
 			w.convert(u.typ, u.to, at, ta)
-		case unreadConversion:
-			w.convert(u.typ, anyInterface, at, ta)
 		case constraintCall:
 			switch m := w.a.method(u.typ, u.pkg, u.method).(type) {
 			case concreteMethod:

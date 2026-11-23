@@ -32,8 +32,9 @@ type converting struct{ typ types.Type }
 // does with the type ("nested/strs.Join[genericjoin.file] calls String of
 // genericjoin.file through its constraint").
 type typeArgument struct {
-	path []instance
-	use  argUse
+	path   []instance
+	use    argUse
+	unread *unread // why the deciding body could not be read, its use the conversion that counts in its place; nil for a body read
 }
 
 // throughFunc is a reach through an address-taken function of the RTA
@@ -69,6 +70,9 @@ func (t typeArgument) text(n namer) string {
 	for _, in := range t.path[1:] {
 		s += " instantiates " + n.instance(in) + ", which"
 	}
+	if t.unread != nil {
+		return s + " cannot be read (" + t.unread.why + "), so it counts as one that " + t.use.text(n)
+	}
 	return s + " " + t.use.text(n)
 }
 
@@ -76,12 +80,9 @@ func (c conversion) text(n namer) string { return n.converts(c.typ) }
 func (c constraintCall) text(n namer) string {
 	return "calls " + c.method + " of " + n.typ(c.typ) + " through its constraint"
 }
-func (c unreadConversion) text(n namer) string {
-	return "cannot be read (" + c.why + "), so it counts as one that " + n.converts(c.typ)
-}
 
 func (w withholding) text(n namer) string {
-	return n.instance(w.in) + " neither converts " + n.typ(w.in.args[w.arg]) + " nor calls a method of it"
+	return n.instance(w.in) + " neither converts its type parameter " + w.param + " (" + n.typ(w.in.args[w.arg]) + ") nor calls a method of it"
 }
 
 func (u unreadInstance) text(n namer) string { return n.instance(u.in) + ": " + u.why }

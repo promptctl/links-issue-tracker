@@ -139,17 +139,6 @@ func eachType(t types.Type, into func(types.Type, part) bool, visit func(types.T
 // needs.
 func structural(_ types.Type, k part) bool { return k == underlyingPart || k == elementPart }
 
-// holds reports whether a value of type t holds a value of type x: x is t,
-// or is in t's structure.
-func holds(t, x types.Type) bool {
-	found := false
-	eachType(t, structural, func(u types.Type) bool {
-		found = found || types.Identical(u, x)
-		return !found
-	})
-	return found
-}
-
 // structureOf is the structure of t, derived once per type.
 func (a *analyzer) structureOf(t types.Type) *structure {
 	if s, ok := a.structures.At(t).(*structure); ok {

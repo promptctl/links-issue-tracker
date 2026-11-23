@@ -293,7 +293,7 @@ func TestAnInitializerOnlyADependencyImportsRunsInTheSetup(t *testing.T) {
 func TestATypeArgumentAGenericNeitherConvertsNorCallsIsWithheld(t *testing.T) {
 	ts := testShapeOf(t, "genericclone", "TestCopy")
 	expectReach(t, ts.Reached, Unit, "none", nil)
-	expectWithheld(t, ts, "slices.Clone[genericclone.paths, string] neither converts genericclone.paths nor calls a method of it")
+	expectWithheld(t, ts, "slices.Clone[genericclone.paths, string] neither converts its type parameter S (genericclone.paths) nor calls a method of it")
 }
 
 // Withholding is decided per type argument: an instance that converts its
@@ -303,7 +303,70 @@ func TestAGenericWithholdsEachTypeArgumentItNeitherConvertsNorCalls(t *testing.T
 	expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{
 		FS: "genericpair.TestPick → genericpair.Pick → nested/gen.First[genericpair.doc, genericpair.page] → (genericpair.doc).Close [nested/gen.First[genericpair.doc, genericpair.page] converts genericpair.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
 	})
-	expectWithheld(t, ts, "nested/gen.First[genericpair.doc, genericpair.page] neither converts genericpair.page nor calls a method of it")
+	expectWithheld(t, ts, "nested/gen.First[genericpair.doc, genericpair.page] neither converts its type parameter B (genericpair.page) nor calls a method of it")
+}
+
+// Withholding is per type parameter, not per type: one type handed as two
+// type arguments is converted through the first and withheld as the second.
+func TestATypeParameterIsWithheldThoughItsTypeIsAnotherParametersToo(t *testing.T) {
+	ts := testShapeOf(t, "genericpair", "TestPickSame")
+	expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{
+		FS: "genericpair.TestPickSame → genericpair.PickSame → nested/gen.First[genericpair.doc, genericpair.doc] → (genericpair.doc).Close [nested/gen.First[genericpair.doc, genericpair.doc] converts genericpair.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+	expectWithheld(t, ts, "nested/gen.First[genericpair.doc, genericpair.doc] neither converts its type parameter B (genericpair.doc) nor calls a method of it")
+}
+
+// A constraint call reaches one method of its type argument: the other
+// methods of the type it points to are not reached, and a type parameter
+// whose argument is that type is withheld.
+func TestAConstraintCallReachesOneMethodAndLeavesTheOtherParameterWithheld(t *testing.T) {
+	ts := testShapeOf(t, "genericonly", "TestShut")
+	expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{
+		FS: "genericonly.TestShut → genericonly.Shut → nested/gen.CloseFirst[*genericonly.doc, genericonly.doc] → (*genericonly.doc).Close [nested/gen.CloseFirst[*genericonly.doc, genericonly.doc] calls Close of *genericonly.doc through its constraint] → (genericonly.doc).Close → os.Remove ⇒ os.Remove (fs)",
+	})
+	expectWithheld(t, ts, "nested/gen.CloseFirst[*genericonly.doc, genericonly.doc] neither converts its type parameter D (genericonly.doc) nor calls a method of it")
+}
+
+// A promotion wrapper runs the embedded type's method: it is read as an
+// instance of that method, over the embedded type's type arguments.
+func TestAPromotedMethodOfAGenericTypeIsReadAsTheEmbeddedTypesMethod(t *testing.T) {
+	expectReach(t, reachOf(t, "genericpromote", "TestShow"), Integration, "fs", map[Touch]string{
+		FS: "genericpromote.TestShow → genericpromote.Show → (nested/gen.Outer[genericpromote.doc]).Show [converts nested/gen.Outer[genericpromote.doc] to an interface] → (genericpromote.doc).Close [nested/gen.Shelf.Show[genericpromote.doc] converts genericpromote.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+}
+
+// A type made of a type argument, converted, reaches the methods of every
+// module type in its structure; a type over the argument that holds none of
+// it reaches nothing of it, and the argument is not withheld: the body uses
+// it.
+func TestAConvertedTypeMadeOfATypeArgumentReachesWhatItsStructureHolds(t *testing.T) {
+	close := func(test, fn, inst, conv string) string {
+		return "genericshapes." + test + " → genericshapes." + fn + " → " + inst + " → (genericshapes.doc).Close [" + inst + " converts " + conv + " to an interface] → os.Remove ⇒ os.Remove (fs)"
+	}
+	for _, tc := range []struct {
+		test, fn, inst, conv string
+	}{
+		{"TestSlice", "InSlice", "nested/gen.Slice[genericshapes.doc]", "[]genericshapes.doc"},
+		{"TestField", "InField", "nested/gen.Field[genericshapes.doc]", `struct{F genericshapes.doc "json:\"f\""}`},
+		{"TestPointer", "InPointer", "nested/gen.Pointer[genericshapes.doc]", "*genericshapes.doc"},
+		{"TestHolder", "InHolder", "nested/gen.Hold[genericshapes.doc]", "nested/gen.holder[genericshapes.doc]"},
+	} {
+		ts := testShapeOf(t, "genericshapes", tc.test)
+		expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{FS: close(tc.test, tc.fn, tc.inst, tc.conv)})
+		expectWithheld(t, ts)
+	}
+	ts := testShapeOf(t, "genericshapes", "TestMap")
+	m := "nested/gen.Map[genericshapes.doc, genericshapes.page]"
+	expectReach(t, ts.Reached, Integration, "net,fs", map[Touch]string{
+		FS:  close("TestMap", "InMap", m, "map[genericshapes.doc]genericshapes.page"),
+		Net: "genericshapes.TestMap → genericshapes.InMap → " + m + " → (genericshapes.page).Fetch [" + m + " converts map[genericshapes.doc]genericshapes.page to an interface] → net/http.Get ⇒ net/http.Get (net)",
+	})
+	expectWithheld(t, ts)
+	for _, test := range []string{"TestFunc", "TestTag"} {
+		ts := testShapeOf(t, "genericshapes", test)
+		expectReach(t, ts.Reached, Unit, "none", nil)
+		expectWithheld(t, ts)
+	}
 }
 
 func expectWithheld(t *testing.T, ts testShape, want ...string) {

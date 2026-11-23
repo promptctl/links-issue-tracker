@@ -18,3 +18,7 @@ type page string
 func (p page) Fetch() { http.Get(string(p)) }
 
 func Pick() any { return gen.First(doc("a"), page("b")) }
+
+// PickSame hands the generic one type twice: it converts the first, and
+// does nothing with the second.
+func PickSame() any { return gen.First(doc("a"), doc("b")) }

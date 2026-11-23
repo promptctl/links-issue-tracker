@@ -13,15 +13,16 @@ package main
 // generic's body, and the bodies of the generics it instantiates over T, in
 // generic form: no value is followed.
 //
-// [LAW:one-source-of-truth] exception: export data carries no generic
-// bodies, so an outside package whose generic the module instantiates is
-// type-checked a second time, from the source files the build compiles, for
-// its bodies alone. Every type a reading yields is the export-data copy's,
-// which the rest of the program sees: the second copy's declarations are
-// translated to the first's by path and name, and a declaration the first
-// lacks is the tool's inconsistency, which refuses the run. Nothing about a
-// generic is recorded beside its source, so no toolchain, version or
-// invocation can make a reading stale.
+// [LAW:one-source-of-truth] exception: the go/types importer
+// (gcexportdata.Read) exposes no generic bodies, though the gc export data
+// carries them, so an outside package whose generic the module instantiates
+// is type-checked a second time, from the source files the build compiles,
+// for its bodies alone. Every type a reading yields is the export-data
+// copy's, which the rest of the program sees: the second copy's
+// declarations are translated to the first's by path and name. Any way the
+// second copy disagrees with the build is the tool's inconsistency, which
+// refuses the run. Nothing about a generic is recorded beside its source,
+// so no toolchain, version or invocation can make a reading stale.
 
 import (
 	"fmt"
@@ -56,25 +57,29 @@ func newGenericSource(ld *loader) *genericSource {
 	}
 }
 
-// unread is what the reading cannot decide, and why: a package with no
-// source that type-checks, a body it does not model, an instance whose body
-// is either.
+// unread is a body with a construct the reading does not model, and which:
+// a type parameter's value taken as an unsafe.Pointer, a type declared in
+// the body. Its instances count as converting every type argument.
 type unread struct{ why string }
 
-// sourcePackage is an outside package read from source, or unread.
-// [LAW:types-are-the-program]
+// inconsistency is the reading's view of the build disagreeing with the
+// build itself, and how: a bug in the tool, which refuses the run.
+type inconsistency struct{ why string }
+
+// sourcePackage is an outside package read from source, or an
+// inconsistency. [LAW:types-are-the-program]
 type sourcePackage interface{ sourcePackage() }
 
 type sourceRead struct{ pkg *types.Package }
 
-func (sourceRead) sourcePackage() {}
-func (unread) sourcePackage()     {}
+func (sourceRead) sourcePackage()    {}
+func (inconsistency) sourcePackage() {}
 
 // genericBody is what a generic's body does with its type parameters: a
-// readBody, or unread. instantiate is its reading for an instance with
-// type arguments args.
+// readBody, unread, or an inconsistency. instantiate is its reading for an
+// instance with type arguments args.
 type genericBody interface {
-	instantiate(g *genericSource, args []types.Type) (reading, error)
+	instantiate(g *genericSource, args []types.Type) reading
 }
 
 // readBody is a generic body's every way a value of a type parameter can
@@ -84,24 +89,44 @@ type readBody struct {
 	uses
 }
 
-// uses is every way a value of a type argument leaves a body: converted to
-// an interface, as a type mentioning one; a constraint method called on
-// one; handed to an instance of a generic over a type mentioning one.
+// uses is every way a value of a type argument leaves a body, each with the
+// body's type parameters it mentions; and the names of those parameters.
 type uses struct {
-	converts  []conversion
-	calls     []constraintCall
-	instances []instance
+	names     []string
+	each      []bodyUse
+	instances []bodyInstance
 }
 
-func (b readBody) instantiate(g *genericSource, args []types.Type) (reading, error) {
+// bodyUse is a use of a value whose type mentions the body's type
+// parameters params, by index: a conversion reaches the whole structure of
+// the converted type; a constraintCall, one method.
+type bodyUse struct {
+	use    argUse
+	params []int
+}
+
+// bodyInstance is a generic the body instantiates over types mentioning its
+// type parameters: params holds, for each type argument, the body's type
+// parameters it mentions.
+type bodyInstance struct {
+	in     instance
+	params [][]int
+}
+
+func (b readBody) instantiate(g *genericSource, args []types.Type) reading {
 	u, err := g.bind(b, args)
 	if err != nil {
-		return nil, err
+		return inconsistency{err.Error()}
 	}
-	return u, nil
+	return u
 }
 
-func (u unread) instantiate(*genericSource, []types.Type) (reading, error) { return u, nil }
+func (u unread) instantiate(*genericSource, []types.Type) reading        { return u }
+func (i inconsistency) instantiate(*genericSource, []types.Type) reading { return i }
+
+// argUse is one use of a type argument's value: a conversion, or a
+// constraintCall. [LAW:types-are-the-program]
+type argUse interface{ text(n namer) string }
 
 // constraintCall is a call of the method named method, of package pkg, on
 // a value of type typ through its constraint.
@@ -124,11 +149,11 @@ func (g *genericSource) pkg(path string) sourcePackage {
 func (g *genericSource) read(path string) sourcePackage {
 	p := g.ld.byID[path]
 	if p == nil || g.ld.exported[path] == nil {
-		return unread{"the build lists no source for " + path}
+		return inconsistency{"the build lists no source for " + path}
 	}
 	pkg, files, info, problems := checkSource(g.ld.fset, g.ld.sizes, p, func(imp string) (*types.Package, error) { return g.ld.imported(p, imp) })
 	if len(problems) > 0 {
-		return unread{"its source does not type-check: " + strings.Join(problems, "; ")}
+		return inconsistency{"the source the build compiles for " + path + " does not type-check: " + strings.Join(problems, "; ")}
 	}
 	// Not importable: the export-data package of the same path is the one
 	// every other package imports.
@@ -150,23 +175,25 @@ func (g *genericSource) body(origin funcName) genericBody {
 func (g *genericSource) readBody(origin funcName) genericBody {
 	var pkg *types.Package
 	switch sp := g.pkg(origin.pkg).(type) {
-	case unread:
+	case inconsistency:
 		return sp
 	case sourceRead:
 		pkg = sp.pkg
 	}
 	obj := lookupFunc(pkg, origin.key)
 	if obj == nil {
-		return unread{"its source declares no " + origin.key}
+		return inconsistency{"the source of " + origin.pkg + " declares no " + origin.key}
 	}
 	fn := g.prog.FuncValue(obj)
-	r := bodyReader{seen: map[*ssa.Function]bool{}}
+	r := bodyReader{seen: map[*ssa.Function]bool{}, index: map[*types.TypeParam]int{}}
 	for tp := range fn.TypeParams().TypeParams() {
+		r.index[tp] = len(r.body.params)
 		r.body.params = append(r.body.params, tp)
+		r.body.names = append(r.body.names, tp.Obj().Name())
 	}
 	r.scan(fn)
-	if r.problem != "" {
-		return unread{r.problem}
+	if r.stop != nil {
+		return r.stop
 	}
 	return r.body
 }
@@ -199,14 +226,15 @@ func lookupFunc(pkg *types.Package, key string) *types.Func {
 // in it, and the thunks and wrappers it makes, all of which see its type
 // parameters.
 type bodyReader struct {
-	body    readBody
-	seen    map[*ssa.Function]bool
-	problem string // the first construct the reading does not model
+	body  readBody
+	index map[*types.TypeParam]int
+	seen  map[*ssa.Function]bool
+	stop  genericBody // the first unread construct or inconsistency, which ends the reading
 }
 
-func (r *bodyReader) unread(format string, args ...any) {
-	if r.problem == "" {
-		r.problem = fmt.Sprintf(format, args...)
+func (r *bodyReader) halt(b genericBody) {
+	if r.stop == nil {
+		r.stop = b
 	}
 }
 
@@ -216,7 +244,7 @@ func (r *bodyReader) scan(fn *ssa.Function) {
 	}
 	r.seen[fn] = true
 	if fn.Blocks == nil {
-		r.unread("%s has no Go body", fn)
+		r.halt(inconsistency{fmt.Sprintf("%s, which a generic's body reaches, has no Go body in its source", fn)})
 		return
 	}
 	for _, anon := range fn.AnonFuncs {
@@ -233,7 +261,7 @@ func (r *bodyReader) instr(instr ssa.Instruction) {
 	if c, ok := instr.(ssa.CallInstruction); ok {
 		if common := c.Common(); common.IsInvoke() {
 			if tp, ok := common.Value.Type().(*types.TypeParam); ok {
-				r.body.calls = append(r.body.calls, constraintCall{tp, common.Method.Pkg(), common.Method.Name()})
+				r.use(constraintCall{tp, common.Method.Pkg(), common.Method.Name()}, tp)
 			}
 		}
 	}
@@ -245,33 +273,53 @@ func (r *bodyReader) instr(instr ssa.Instruction) {
 	if x, to, ok := converted(instr); ok && mentionsTypeParam(x) {
 		switch {
 		case isUnsafePointer(to):
-			r.unread("it converts %s to unsafe.Pointer", x)
+			r.halt(unread{fmt.Sprintf("it converts %s to unsafe.Pointer", x)})
 		case types.IsInterface(to) && !isTypeParam(to):
 			r.record(x)
-			r.body.converts = append(r.body.converts, conversion{x, to.Underlying().(*types.Interface)})
+			r.use(conversion{x, to.Underlying().(*types.Interface)}, x)
 		}
 	}
 }
 
+func (r *bodyReader) use(u argUse, t types.Type) {
+	r.body.each = append(r.body.each, bodyUse{u, r.mentioned(t)})
+}
+
+// mentioned is the index of each of the body's type parameters t mentions.
+func (r *bodyReader) mentioned(t types.Type) []int {
+	var params []int
+	eachType(t, inBody, func(t types.Type) bool {
+		if tp, ok := t.(*types.TypeParam); ok {
+			i, ours := r.index[tp]
+			if !ours {
+				r.halt(inconsistency{fmt.Sprintf("its body names type parameter %s, which is not its own", tp)})
+			}
+			params = append(params, i)
+		}
+		return true
+	})
+	return params
+}
+
 // function reads a function the body calls or takes as a value: an
-// instance of a generic is a call of it; a thunk or wrapper, which sees the
-// type parameters, is read as part of the body (go/ssa shares them across
-// packages, so they have none). Any other function is not generic, so it
-// cannot take a type parameter's value.
+// instance of a generic over a type mentioning a type parameter is a call
+// of it; a thunk or wrapper with no instance of its own, which sees the type
+// parameters, is read as part of the body (go/ssa shares them across
+// packages, so they have none). Any other function cannot take a type
+// parameter's value.
 func (r *bodyReader) function(f *ssa.Function) {
-	args := f.TypeArgs()
+	in, generic := instanceOf(f)
 	switch {
-	case len(args) > 0 && slices.ContainsFunc(args, mentionsTypeParam):
-		name, declared := declaredName(f)
-		if !declared {
-			r.unread("it calls %s, which declares nothing", f)
-			return
-		}
-		for _, t := range args {
+	case generic && slices.ContainsFunc(in.args, mentionsTypeParam):
+		bi := bodyInstance{in: in}
+		for _, t := range in.args {
 			r.record(t)
+			bi.params = append(bi.params, r.mentioned(t))
 		}
-		r.body.instances = append(r.body.instances, instance{name, args})
-	case len(args) == 0 && f.Synthetic != "" && f.Pkg == nil:
+		r.body.instances = append(r.body.instances, bi)
+	case !generic && slices.ContainsFunc(f.TypeArgs(), mentionsTypeParam):
+		r.halt(inconsistency{fmt.Sprintf("its body instantiates %s, which declares nothing", f)})
+	case f.Synthetic != "" && f.Pkg == nil:
 		r.scan(f)
 	}
 }
@@ -281,7 +329,7 @@ func (r *bodyReader) function(f *ssa.Function) {
 func (r *bodyReader) record(t types.Type) {
 	eachType(t, inBody, func(t types.Type) bool {
 		if n, ok := t.(*types.Named); ok && declaredInBody(n.Obj()) {
-			r.unread("it declares type %s in its body", n.Obj().Name())
+			r.halt(unread{"it declares type " + n.Obj().Name() + " in its body"})
 		}
 		return true
 	})
@@ -354,35 +402,20 @@ func (g *genericSource) bind(b readBody, args []types.Type) (uses, error) {
 	for i, tp := range b.params {
 		s.args[tp] = args[i]
 	}
-	var out uses
-	for _, c := range b.converts {
-		typ, err := s.of(c.typ)
+	out := uses{names: b.names}
+	for _, bu := range b.each {
+		u, err := s.use(bu.use)
 		if err != nil {
 			return uses{}, err
 		}
-		to, err := s.iface(c.to)
-		if err != nil {
-			return uses{}, err
-		}
-		out.converts = append(out.converts, conversion{typ, to})
+		out.each = append(out.each, bodyUse{u, bu.params})
 	}
-	for _, c := range b.calls {
-		typ, err := s.of(c.typ)
+	for _, bi := range b.instances {
+		targs, err := s.list(bi.in.args)
 		if err != nil {
 			return uses{}, err
 		}
-		pkg, err := s.pkg(c.pkg)
-		if err != nil {
-			return uses{}, err
-		}
-		out.calls = append(out.calls, constraintCall{typ, pkg, c.method})
-	}
-	for _, in := range b.instances {
-		targs, err := s.list(in.args)
-		if err != nil {
-			return uses{}, err
-		}
-		out.instances = append(out.instances, instance{in.origin, targs})
+		out.instances = append(out.instances, bodyInstance{instance{bi.in.origin, targs}, bi.params})
 	}
 	return out, nil
 }
@@ -392,6 +425,32 @@ func (g *genericSource) bind(b readBody, args []types.Type) (uses, error) {
 type substitution struct {
 	g    *genericSource
 	args map[*types.TypeParam]types.Type
+}
+
+func (s *substitution) use(u argUse) (argUse, error) {
+	switch u := u.(type) {
+	case conversion:
+		typ, err := s.of(u.typ)
+		if err != nil {
+			return nil, err
+		}
+		to, err := s.iface(u.to)
+		if err != nil {
+			return nil, err
+		}
+		return conversion{typ, to}, nil
+	case constraintCall:
+		typ, err := s.of(u.typ)
+		if err != nil {
+			return nil, err
+		}
+		pkg, err := s.pkg(u.pkg)
+		if err != nil {
+			return nil, err
+		}
+		return constraintCall{typ, pkg, u.method}, nil
+	}
+	return nil, fmt.Errorf("a use %T the reading does not model", u)
 }
 
 // pkg is the export-data copy of p, which every other package imports.
@@ -547,34 +606,50 @@ func (s *substitution) tuple(t *types.Tuple) (*types.Tuple, error) {
 	return types.NewTuple(vars...), nil
 }
 
-// instance is a generic's instance: its origin, by the name the
-// classification gives it, and its type arguments, in the types of the
-// program it is read from.
+// instance is a generic's instance: its origin, by the name of the
+// declaration whose body is read, and its type arguments, in the types of
+// the program it is read from.
 type instance struct {
 	origin funcName
 	args   []types.Type
 }
 
-// instanceOf is the instance an outside function is, false for a function
-// with no type arguments: it is handed no type.
-func (a *analyzer) instanceOf(fn *ssa.Function) (instance, bool) {
-	args := typeArgsOf(fn)
-	return instance{a.owner(fn).name, args}, len(args) > 0
+// instanceOf is the instance fn's code is, false for code handed no type
+// argument. Its origin and type arguments come from one object, the
+// declaration whose body runs: a method's type arguments are its receiver
+// type's, so a promotion wrapper of Outer[T] embedding Box[T] is an
+// instance of Box's method, and a bound method value or method expression
+// wrapper, which carries no type arguments itself, is its method's. Go
+// methods have no type parameters of their own. A function nested in
+// another is its outermost function's code.
+func instanceOf(fn *ssa.Function) (instance, bool) {
+	for fn.Parent() != nil {
+		fn = fn.Parent()
+	}
+	obj, ok := fn.Object().(*types.Func)
+	if !ok || obj == nil || obj.Pkg() == nil {
+		return instance{}, false
+	}
+	recv := obj.Signature().Recv()
+	if recv == nil {
+		args := fn.TypeArgs()
+		return instance{funcName{obj.Pkg().Path(), obj.Name()}, args}, len(args) > 0
+	}
+	n := namedOf(recv.Type())
+	if n == nil || types.IsInterface(n) || n.TypeArgs().Len() == 0 {
+		return instance{}, false
+	}
+	return instance{funcName{n.Obj().Pkg().Path(), n.Obj().Name() + "." + obj.Name()}, slices.Collect(n.TypeArgs().Types())}, true
 }
 
-// typeArgsOf is fn's type arguments. A method's are its receiver type's: a
-// bound method value or a method expression of an instantiated type is a
-// wrapper that carries none itself, and Go methods have no type parameters
-// of their own.
-func typeArgsOf(fn *ssa.Function) []types.Type {
-	if obj, ok := fn.Object().(*types.Func); ok {
-		if recv := obj.Signature().Recv(); recv != nil {
-			if n := namedOf(recv.Type()); n != nil {
-				return slices.Collect(n.TypeArgs().Types())
-			}
-		}
+// String is in's identity across programs: its origin and the full path of
+// each type argument.
+func (in instance) String() string {
+	args := make([]string, len(in.args))
+	for i, t := range in.args {
+		args[i] = types.TypeString(t, nil)
 	}
-	return fn.TypeArgs()
+	return in.origin.String() + "[" + strings.Join(args, ", ") + "]"
 }
 
 // instanceKey is an instance's key: one per origin and type arguments,
@@ -593,11 +668,12 @@ func (a *analyzer) instanceKey(in instance) instanceKey {
 }
 
 // reading is an instance's own body in the module program's types: its
-// uses, or unread. [LAW:types-are-the-program]
+// uses, unread, or an inconsistency. [LAW:types-are-the-program]
 type reading interface{ reading() }
 
-func (uses) reading()   {}
-func (unread) reading() {}
+func (uses) reading()          {}
+func (unread) reading()        {}
+func (inconsistency) reading() {}
 
 // genericInstance is what the analyzer knows of one instance: its reading,
 // and, once decided, its decision.
@@ -608,42 +684,36 @@ type genericInstance struct {
 	decision *decision
 }
 
-// generic is in's entry, its reading read once.
+// generic is in's entry, its reading read once. An inconsistency is
+// recorded, refusing the run.
 func (a *analyzer) generic(in instance) *genericInstance {
 	key := a.instanceKey(in)
 	if gi, ok := a.instances[key]; ok {
 		return gi
 	}
-	gi := &genericInstance{in: in, key: key, reading: a.readInstance(in)}
+	r := a.generics.body(in.origin).instantiate(a.generics, in.args)
+	if i, ok := r.(inconsistency); ok {
+		a.inconsistent("reading %s: %s", namer{a.mod}.instance(in), i.why)
+	}
+	gi := &genericInstance{in: in, key: key, reading: r}
 	a.instances[key] = gi
 	return gi
 }
 
-// readInstance binds in's body to its type arguments. A body that does not
-// bind is the tool's inconsistency, which refuses the run: the instance
-// reads as using nothing only so the walk can finish and say so.
-func (a *analyzer) readInstance(in instance) reading {
-	r, err := a.generics.body(in.origin).instantiate(a.generics, in.args)
-	if err != nil {
-		a.inconsistent("reading %s: %v", namer{a.mod}.instance(in), err)
-		return uses{}
-	}
-	return r
-}
-
 // decision is what an instance does with its type arguments, through its
 // own body and every instance it makes over them, transitively: each use,
-// as the type argument reach it is; and each type argument it withholds.
+// as the type argument reach it is; and each type parameter it withholds.
 type decision struct {
 	uses     []typeArgument
 	withheld []withholding
 }
 
-// withholding is a type argument, the arg'th of in, that no use converts
-// or calls a method of, though converting it would reach module code.
+// withholding is a type parameter of in, the arg'th, named param, that no
+// use mentions, though converting its argument would reach module code.
 type withholding struct {
-	in  instance
-	arg int
+	in    instance
+	arg   int
+	param string
 }
 
 // withheldKey is a withholding's key: identical instances share it.
@@ -652,7 +722,10 @@ type withheldKey struct {
 	arg      int
 }
 
-// decide is what in does with its type arguments, decided once.
+// decide is what in does with its type arguments, decided once. Each use is
+// traced to the type parameters of in it mentions, through the type
+// arguments of every instance between: a type parameter of in that no use
+// mentions is withheld.
 func (a *analyzer) decide(in instance) *decision {
 	root := a.generic(in)
 	if root.decision != nil {
@@ -660,66 +733,73 @@ func (a *analyzer) decide(in instance) *decision {
 	}
 	d := &decision{}
 	type pending struct {
-		gi   *genericInstance
-		path []instance // from in to gi's instance
+		gi    *genericInstance
+		path  []instance // from in to gi's instance
+		roots [][]int    // for each of gi's type parameters, the type parameters of in it stands for
 	}
-	seen := map[instanceKey]bool{root.key: true}
-	queue := []pending{{root, []instance{in}}}
+	start := pending{gi: root, path: []instance{in}}
+	for i := range in.args {
+		start.roots = append(start.roots, []int{i})
+	}
+	used := make([]bool, len(in.args))
+	mark := func(p pending, params []int) {
+		for _, j := range params {
+			for _, i := range p.roots[j] {
+				used[i] = true
+			}
+		}
+	}
+	seen := map[string]bool{}
+	queue := []pending{start}
 	for len(queue) > 0 {
 		p := queue[0]
 		queue = queue[1:]
+		k := fmt.Sprint(p.gi.key, p.roots)
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
 		switch r := p.gi.reading.(type) {
 		case unread:
 			// The conservative reading: every type argument converted, the
 			// reach module code converting it gets, which errs away from
 			// unit. [LAW:no-silent-failure] the witness says why the body
 			// was not read, and the output counts the instance with why.
-			for _, t := range p.gi.in.args {
-				d.uses = append(d.uses, typeArgument{p.path, unreadConversion{r.why, t}})
+			for j, t := range p.gi.in.args {
+				d.uses = append(d.uses, typeArgument{path: p.path, use: conversion{t, anyInterface}, unread: &r})
+				mark(p, []int{j})
 			}
 		case uses:
-			for _, c := range r.converts {
-				d.uses = append(d.uses, typeArgument{p.path, c})
+			for _, u := range r.each {
+				d.uses = append(d.uses, typeArgument{path: p.path, use: u.use})
+				mark(p, u.params)
 			}
-			for _, c := range r.calls {
-				d.uses = append(d.uses, typeArgument{p.path, c})
-			}
-			for _, sub := range r.instances {
-				gi := a.generic(sub)
-				if !seen[gi.key] {
-					seen[gi.key] = true
-					queue = append(queue, pending{gi, append(slices.Clip(p.path), sub)})
+			for _, bi := range r.instances {
+				next := pending{gi: a.generic(bi.in), path: append(slices.Clip(p.path), bi.in)}
+				for _, params := range bi.params {
+					var roots []int
+					for _, j := range params {
+						roots = append(roots, p.roots[j]...)
+					}
+					slices.Sort(roots)
+					next.roots = append(next.roots, slices.Compact(roots))
 				}
+				queue = append(queue, next)
 			}
+		case inconsistency:
+			// Recorded, refusing the run: the reading answers nothing.
 		}
 	}
-	for i, t := range in.args {
-		used := slices.ContainsFunc(d.uses, func(u typeArgument) bool { return holds(u.use.argType(), t) })
-		if !used && a.couldReachModuleCode(t) {
-			d.withheld = append(d.withheld, withholding{in, i})
+	if r, ok := root.reading.(uses); ok {
+		for i, t := range in.args {
+			if !used[i] && a.couldReachModuleCode(t) {
+				d.withheld = append(d.withheld, withholding{in, i, r.names[i]})
+			}
 		}
 	}
 	root.decision = d
 	return d
 }
-
-// argUse is one use of a type argument's value: a conversion, a
-// constraintCall, or an unreadConversion.
-type argUse interface {
-	argType() types.Type // the type of the value used
-	text(n namer) string
-}
-
-// unreadConversion is the conversion of typ to an interface that an
-// unread body is taken to make.
-type unreadConversion struct {
-	why string
-	typ types.Type
-}
-
-func (c conversion) argType() types.Type       { return c.typ }
-func (c constraintCall) argType() types.Type   { return c.typ }
-func (c unreadConversion) argType() types.Type { return c.typ }
 
 // anyInterface is the interface an unread body's type argument is
 // converted to.

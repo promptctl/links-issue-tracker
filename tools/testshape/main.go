@@ -310,6 +310,7 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 		inStream[p.ImportPath] = p
 	}
 	var out suiteShape
+	unread := map[string]bool{}
 	for _, l := range loads {
 		owned := func(path string) bool { return s.moduleOf[path] == l.Module.Path }
 		refusals = append(refusals, absentRefusals(l.Binaries, inStream, owned)...)
@@ -324,7 +325,13 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 			out.packages = append(out.packages, modulePackage{mp, l.Module})
 		}
 		for _, u := range a.unreadInstances() {
-			out.unread = append(out.unread, moduleUnread{u, l.Module})
+			// Each module's analysis reads over its own program, so one
+			// instance two modules read is one by its origin and the full
+			// paths of its type arguments.
+			if id := u.in.String(); !unread[id] {
+				unread[id] = true
+				out.unread = append(out.unread, moduleUnread{u, l.Module})
+			}
 		}
 		refusals = append(refusals, analysisRefusals(a)...)
 	}

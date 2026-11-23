@@ -53,14 +53,14 @@ func TestTheListingGivesEachTestItsLayerAWitnessPerTouchAndWhatWasWithheld(t *te
 		ImportPath: "example.com/m/a",
 		Setup: found{
 			Reached:  reached{Clock: witness{chain: []string{"init of a", "time.Now"}, what: "time.Now (clock)"}},
-			Withheld: []withholding{{instance{funcName{"slices", "Clone"}, []types.Type{paths, types.Typ[types.String]}}, 0}},
+			Withheld: []withholding{{instance{funcName{"slices", "Clone"}, []types.Type{paths, types.Typ[types.String]}}, 0, "S"}},
 		},
 		Tests: []measuredTest{
 			{testShape: testShape{Name: "TestPure", found: found{
 				Reached: reached{},
 				Withheld: []withholding{
-					{instance{funcName{"slices", "Sort"}, []types.Type{types.NewSlice(key), key}}, 1},
-					{instance{funcName{"slices", "Max"}, []types.Type{types.NewSlice(key), key}}, 1},
+					{instance{funcName{"slices", "Sort"}, []types.Type{types.NewSlice(key), key}}, 1, "E"},
+					{instance{funcName{"slices", "Max"}, []types.Type{types.NewSlice(key), key}}, 1, "E"},
 				},
 			}}, Ran: true},
 			{testShape: testShape{Name: "TestDisk", found: found{Reached: reached{
@@ -73,10 +73,10 @@ func TestTheListingGivesEachTestItsLayerAWitnessPerTouchAndWhatWasWithheld(t *te
 	writeListing(&out, pkgs)
 	want := "\nexample.com/m/a\n" +
 		"    setup clock: init of a → time.Now ⇒ time.Now (clock)\n" +
-		"    setup withheld: slices.Clone[a.paths, string] neither converts a.paths nor calls a method of it\n" +
+		"    setup withheld: slices.Clone[a.paths, string] neither converts its type parameter S (a.paths) nor calls a method of it\n" +
 		"  unit        TestPure\n" +
-		"    withheld: slices.Max[[]a.key, a.key] neither converts a.key nor calls a method of it\n" +
-		"    withheld: slices.Sort[[]a.key, a.key] neither converts a.key nor calls a method of it\n" +
+		"    withheld: slices.Max[[]a.key, a.key] neither converts its type parameter E (a.key) nor calls a method of it\n" +
+		"    withheld: slices.Sort[[]a.key, a.key] neither converts its type parameter E (a.key) nor calls a method of it\n" +
 		"  integration TestDisk  [not run]\n" +
 		`    git: a.TestDisk → a.git ⇒ os/exec.Command spawns "git", which is git` + "\n" +
 		"    fs: a.TestDisk → a.load → os.ReadFile ⇒ os.ReadFile (fs)\n"
