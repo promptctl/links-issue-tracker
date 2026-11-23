@@ -14,7 +14,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // journalWarning is one dolt.journal_warnings occurrence, as the events file
@@ -66,10 +66,7 @@ var doltChunkJournalName = strings.Repeat("v", 32)
 // keeps its chunk journal and journal.idx.
 func nomsDir(t *testing.T, repo string) string {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	return filepath.Dir(store.DoltJournalLockPath(ws.DatabasePath))
 }
 

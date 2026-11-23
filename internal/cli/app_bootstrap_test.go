@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
@@ -56,10 +57,7 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 		t.Fatalf("Run(init --skip-hooks) error = %v", err)
 	}
 
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)

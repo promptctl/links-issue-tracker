@@ -4,17 +4,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
-
-func resolveForTest(t *testing.T, repo string) workspace.Info {
-	t.Helper()
-	info, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	return info
-}
 
 // What resolving the workspace did to config.json is on the event: the first
 // init created it, a later command read it, and one that found a prefix the
@@ -46,7 +37,7 @@ func TestResolvingTheWorkspaceSaysWhatItDidToConfig(t *testing.T) {
 		t.Errorf("workspace.prefix_derived = %#v on a prefix read from config, want false", facts["workspace.prefix_derived"])
 	}
 
-	info := resolveForTest(t, repo)
+	info := workspacetest.Resolved(t, runEnv(t), repo)
 	rewriteStoredPrefix(t, info.ConfigPath, "  "+string(info.IssuePrefix.Stored())+"  ")
 	runCLIInDir(t, repo, "workspace")
 	settle("renormalized")
@@ -64,7 +55,7 @@ func TestAFailedResolutionStillSaysItQueuedForTheConfigLock(t *testing.T) {
 	t.Parallel()
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
-	info := resolveForTest(t, repo)
+	info := workspacetest.Resolved(t, runEnv(t), repo)
 	if err := os.WriteFile(info.ConfigPath, []byte("{not json"), 0o644); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
 	}
@@ -122,7 +113,7 @@ func TestTheIDPrefixCensusIsOnTheEvent(t *testing.T) {
 	isolateEvents(t)
 	repo := newInitTestRepo(t)
 	newEpicInDir(t, repo, "counted")
-	prefix := string(resolveForTest(t, repo).IssuePrefix.Stored())
+	prefix := string(workspacetest.Resolved(t, runEnv(t), repo).IssuePrefix.Stored())
 	for _, args := range [][]string{{"doctor"}, {"prefix", "set", "other", "--apply"}} {
 		// doctor may exit on what it found; prefix set must succeed.
 		if _, err := runCLIInDirAllowError(t, repo, args...); err != nil && args[0] == "prefix" {

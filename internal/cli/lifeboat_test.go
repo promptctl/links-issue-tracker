@@ -13,28 +13,22 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // seedWorkspace creates a real current-baseline workspace at the canonical path
 // and closes it, so a recover run can dump it below the gate and rebuild it.
 func seedWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	root := t.TempDir()
-	canonical := filepath.Join(root, "dolt")
-	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, canonical, "test-workspace-id")
+	ws := workspacetest.New(t, runEnv(t))
+	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close seed workspace: %v", err)
 	}
-	return workspace.Info{
-		Location:    workspace.Location{DatabasePath: canonical},
-		RootDir:     root,
-		WorkspaceID: "test-workspace-id",
-		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root)),
-	}
+	return ws
 }
 
 // TestRunLifeboatRecoverPromotesRecognizedWorkspace is the CLI acceptance for the
@@ -53,7 +47,7 @@ func TestRunLifeboatRecoverPromotesRecognizedWorkspace(t *testing.T) {
 	}
 
 	// The canonical path still holds a readable workspace, and a backup was kept.
-	entries, err := os.ReadDir(ws.RootDir)
+	entries, err := os.ReadDir(ws.StorageDir)
 	if err != nil {
 		t.Fatalf("read storage dir: %v", err)
 	}

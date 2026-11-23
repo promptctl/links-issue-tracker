@@ -9,19 +9,8 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
-
-// testIssuePrefix mints a legal PrefixState for fixtures through the same
-// validating boundary production uses; fixtures cannot hold an un-normalized
-// prefix.
-func testIssuePrefix(t testing.TB, raw string) workspace.PrefixState {
-	t.Helper()
-	spec, err := workspace.ConfiguredPrefix(raw)
-	if err != nil {
-		t.Fatalf("ConfiguredPrefix(%q) error = %v", raw, err)
-	}
-	return workspace.LegalPrefixState(spec)
-}
 
 // initRepoForPrefixTest stamps a fresh git repo + lit init in a temp dir and
 // returns the repo path and a runner that runs lit inside it.
@@ -190,10 +179,7 @@ func TestPrefixSetIdempotentWhenAlreadyCurrent(t *testing.T) {
 func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 	t.Parallel()
 	repo, _ := initRepoForPrefixTest(t)
-	stale, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	stale := workspacetest.Resolved(t, runEnv(t), repo)
 	if _, _, err := workspace.UpdateConfig(stale.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
 		cfg.IssuePrefix = "between"
 		return cfg, nil

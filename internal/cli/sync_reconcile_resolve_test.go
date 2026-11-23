@@ -11,7 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestParseProseResolutions(t *testing.T) {
@@ -254,10 +254,7 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 	if version := runCLIInDir(t, consumer, "history", ticketID, "--version", "description@4"); !strings.Contains(version, "alpha-desc and bravo-desc merged") {
 		t.Fatalf("description@4 is not the merged text:\n%s", version)
 	}
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	var trace *syncTraceRecord
 	for _, record := range readSyncTraceRecords(t, ws) {
 		if record.Command == proseResolveCommand {

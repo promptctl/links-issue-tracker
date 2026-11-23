@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface drives the
@@ -56,10 +57,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	if err := os.Remove(fetchRecordPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
@@ -215,28 +213,14 @@ func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 	return unblock
 }
 
-// addOwnerNotifyHook turns the owner channel on for an initialized workspace,
-// keeping whatever its project config already holds.
+// addOwnerNotifyHook turns the owner channel on for an initialized workspace:
+// its checkout's whole project config becomes one whose only setting is the
+// owner hook hook.
 func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) {
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
-	path := filepath.Join(ws.RootDir, ".lit", "config.toml") // where config.Load reads the project layer
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir project config dir: %v", err)
-	}
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read project config: %v", err)
-	}
-	line := "owner_notify_cmd = '" + hook + "'\n"
-	updated := string(existing) + "\n[sync]\n" + line
-	if strings.Contains(string(existing), "[sync]\n") {
-		updated = strings.Replace(string(existing), "[sync]\n", "[sync]\n"+line, 1)
-	}
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-		t.Fatalf("write project config: %v", err)
-	}
+	writeCheckoutProject(t, ws.RootDir, ownerHookConfig(hook))
 }
 
 // receiveTraceStops is the stopped metadata of every receive trace the
@@ -287,10 +271,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	runGit(t, dir, "push", "origin", "HEAD")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
 	clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), ws)
 	if err != nil {

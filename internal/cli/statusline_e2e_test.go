@@ -19,7 +19,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // readStatusline reads the checkout's statusline file the way a statusline
@@ -78,13 +78,7 @@ func TestStatuslineFileFollowsEachCheckoutsOwnWork(t *testing.T) {
 	runGit(t, main, "init")
 	runGit(t, main, "config", "user.email", "m@m.co")
 	runGit(t, main, "config", "user.name", "main")
-	if err := os.MkdirAll(filepath.Join(main, ".lit"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	configPath := filepath.Join(main, ".lit", "config.toml")
-	if err := os.WriteFile(configPath, []byte("# committed project config\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	configPath := writeCheckoutProject(t, main, "# committed project config\n")
 	runGit(t, main, "add", "-A")
 	runGit(t, main, "commit", "-m", "seed")
 	runCLIInDir(t, main, "init", "--skip-hooks")
@@ -451,7 +445,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	fsperm.Deny(t, litDir, fsperm.Write)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
-	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
+	ws := workspacetest.Handed(t, runEnv(t), root)
 	recordStatusline(ctx, testStderr(t), ws, statusline.Facts{statusline.NewStarted(statusline.Ticket{ID: "t-1", Title: "One"}, statusline.RollupProgress{CompletedCount: 0, TotalCount: 1})})
 	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
 	facts := writtenFacts(t, ev)

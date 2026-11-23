@@ -16,7 +16,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // The identity header is where prefix provenance becomes observable: the one
@@ -24,12 +24,7 @@ import (
 func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	ws := workspace.Info{
-		Location:    workspace.Location{StorageDir: "/tmp/store", GitCommonDir: "/tmp/repo/.git"},
-		WorkspaceID: "ws-id",
-		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{}),
-	}
+	ws := workspacetest.New(t, runEnv(t))
 	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
 	}
@@ -48,10 +43,7 @@ func TestPrintWorkspaceIdentityReportsDerivedPrefix(t *testing.T) {
 	}
 	// A derived PrefixSpec is only mintable by the workspace resolver itself —
 	// the first resolve of a fresh repo derives the prefix from the repo name.
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	if !ws.IssuePrefix.Derived() {
 		t.Fatalf("first resolve of a fresh repo must derive the prefix")
 	}
@@ -132,7 +124,7 @@ func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 	t.Parallel()
 	repo, _ := initBootstrapTestRepo(t)
 	ctx := context.Background()
-	ap, err := app.Open(ctx, runEnv(t), testStderr(t), resolvedWorkspace(t, repo), app.AccessRead)
+	ap, err := app.Open(ctx, runEnv(t), testStderr(t), workspacetest.Resolved(t, runEnv(t), repo), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}

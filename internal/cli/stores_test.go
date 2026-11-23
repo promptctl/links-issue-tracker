@@ -436,8 +436,6 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
-	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
-	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 
 	// EvalSymlinks up front so the seed path, the config path, and the path
 	// Discover derives from git are one spelling of the store, never two.
@@ -483,8 +481,6 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
-	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
-	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
@@ -557,8 +553,6 @@ func TestGatherCrossProjectRollupCountsIgnoreTheFocusScope(t *testing.T) {
 func TestRunStoresCountsRendersRollup(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
-	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
-	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {

@@ -20,12 +20,14 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // reexecEnvVar, when set on a child invocation of this test binary, makes
@@ -63,12 +65,23 @@ func TestMain(m *testing.M) {
 	// XDG_STATE_HOME, and the child processes inherit this environment: point
 	// it at a directory the suite owns, never the developer's own events file.
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-")
+	// Children inherit this environment, so none reads a config file the
+	// developer's shell points at.
+	for _, key := range config.PathEnvVars() {
+		if err := os.Unsetenv(key); err != nil {
+			panic("unset " + key + ": " + err.Error())
+		}
+	}
 	// Every git remote a lit here opens keeps its mirror under the mirror
 	// root, never the developer's user cache directory.
 	mirrorRoot := isolateXDGHome(store.MirrorRootEnvVar, "lit-cmd-mirrors-")
+	// The global config layer lives under XDG_CONFIG_HOME: the suite's own,
+	// never the developer's.
+	configHome := isolateXDGHome("XDG_CONFIG_HOME", "lit-cmd-config-")
 	code := m.Run()
 	_ = os.RemoveAll(stateHome)
 	_ = os.RemoveAll(mirrorRoot)
+	_ = os.RemoveAll(configHome)
 	os.Exit(code)
 }
 
@@ -137,7 +150,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	// below would prove nothing.
 	time.Sleep(2 * time.Second)
 	if !processAlive(pid) {
-		t.Fatalf("receive worker %d ended before the wedge engaged:\n%s", pid, receiveLog(t, ws))
+		t.Fatalf("receive worker %d ended before the wedge engaged:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 	sigtermReceiveWorker(t, ws, pid, 8*time.Second) // comfortably under the receive's 15s deadline
 
@@ -177,8 +190,8 @@ func commandReturnsAheadOfItsReceive(t *testing.T, ws workspace.Info, self, cade
 		t.Fatalf("lit backlog: %v\noutput:\n%s", err, out)
 	}
 	pid := receiveWorkerPID(t, ws)
-	if strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
-		t.Fatalf("the receive had already ended when the command returned, so this wedge did not hold it:\n%s", receiveLog(t, ws))
+	if strings.Contains(receiveLog(t, ws.StorageDir), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("the receive had already ended when the command returned, so this wedge did not hold it:\n%s", receiveLog(t, ws.StorageDir))
 	}
 	return pid
 }
@@ -190,7 +203,7 @@ func receiveWorkerPID(t *testing.T, ws workspace.Info) int {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		for _, line := range strings.Split(receiveLog(t, ws), "\n") {
+		for _, line := range strings.Split(receiveLog(t, ws.StorageDir), "\n") {
 			if _, rest, ok := strings.Cut(line, " receive start pid="); ok {
 				pid, err := strconv.Atoi(strings.Fields(rest)[0])
 				if err != nil {
@@ -200,7 +213,7 @@ func receiveWorkerPID(t *testing.T, ws workspace.Info) int {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no receive worker started within 15s:\n%s", receiveLog(t, ws))
+			t.Fatalf("no receive worker started within 15s:\n%s", receiveLog(t, ws.StorageDir))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -219,12 +232,12 @@ func sigtermReceiveWorker(t *testing.T, ws workspace.Info, pid int, deadline tim
 	for processAlive(pid) {
 		if time.Since(sentAt) > deadline {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
-			t.Fatalf("receive worker %d did not exit within %v of SIGTERM — the receive is not cancellation-responsive:\n%s", pid, deadline, receiveLog(t, ws))
+			t.Fatalf("receive worker %d did not exit within %v of SIGTERM — the receive is not cancellation-responsive:\n%s", pid, deadline, receiveLog(t, ws.StorageDir))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
-		t.Fatalf("receive worker %d exited without its end line — it did not end on the clean path:\n%s", pid, receiveLog(t, ws))
+	if !strings.Contains(receiveLog(t, ws.StorageDir), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("receive worker %d exited without its end line — it did not end on the clean path:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 }
 
@@ -263,9 +276,9 @@ func receiveTraceReasons(t *testing.T, ws workspace.Info) []string {
 	return reasons
 }
 
-func receiveLog(t *testing.T, ws workspace.Info) string {
+func receiveLog(t *testing.T, storageDir string) string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join(ws.StorageDir, cli.ReceiveLogName))
+	body, err := os.ReadFile(filepath.Join(storageDir, cli.ReceiveLogName))
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read receive log: %v", err)
 	}
@@ -301,10 +314,7 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 
-	ws, err := workspace.Resolve(testEnv(), root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), root)
 	// The remote must carry lit data, or the receive's ask finds nothing to
 	// fetch and ends before it touches the store — there would be nothing to
 	// wedge. The push records the advertisement it left, which would make the
@@ -333,7 +343,9 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 // verification steps on the store's single read-write engine — a flake these
 // tests are not designed to account for. Both wedge tests pin cadence
 // explicitly instead of depending on whatever value happens to be the shipped
-// default. [LAW:locality-or-seam]
+// default. [LAW:no-ambient-temporal-coupling] exception: the pin keeps the
+// on-change mirror out of these tests; a run under the shipped cadence still
+// has that second actor.
 func pinOnPushCadence(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "wedge-test-config.toml")
@@ -461,11 +473,11 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	select {
 	case <-connected:
 	case <-time.After(15 * time.Second):
-		t.Fatalf("the receive worker never reached the remote:\n%s", receiveLog(t, ws))
+		t.Fatalf("the receive worker never reached the remote:\n%s", receiveLog(t, ws.StorageDir))
 	}
 	time.Sleep(200 * time.Millisecond) // git has sent its request and is waiting on the reply
 	if !processAlive(pid) {
-		t.Fatalf("receive worker %d ended before the git wedge could be signalled:\n%s", pid, receiveLog(t, ws))
+		t.Fatalf("receive worker %d ended before the git wedge could be signalled:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 
 	// Deliberately UNDER interrupt.DefaultGrace: a clean ctx-cancel exit is
@@ -533,10 +545,7 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	lit(consumer, quiet, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(testEnv(), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), consumer)
 
 	lit(producer, quiet, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	lit(producer, quiet, "sync", "push")
@@ -549,13 +558,13 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	// The join reads the worker's exit from the kernel, so once it returns the
 	// worker has made its last write and its end line is already in the log.
 	if err := cli.JoinDetachedWorkers(ws.StorageDir, 60*time.Second); err != nil {
-		t.Fatalf("%v:\n%s", err, receiveLog(t, ws))
+		t.Fatalf("%v:\n%s", err, receiveLog(t, ws.StorageDir))
 	}
-	if !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
-		t.Fatalf("receive worker %d has no end line once the join returned:\n%s", pid, receiveLog(t, ws))
+	if !strings.Contains(receiveLog(t, ws.StorageDir), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("receive worker %d has no end line once the join returned:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 	if backlog := lit(consumer, quiet, "backlog"); !strings.Contains(backlog, "second-ticket") {
-		t.Fatalf("consumer backlog missing the peer's second-ticket after the receive worker ended:\n%s\nreceive log:\n%s", backlog, receiveLog(t, ws))
+		t.Fatalf("consumer backlog missing the peer's second-ticket after the receive worker ended:\n%s\nreceive log:\n%s", backlog, receiveLog(t, ws.StorageDir))
 	}
 }
 
@@ -621,10 +630,7 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 	runGit(t, root, "remote", "add", "origin", remoteURL)
 	runGit(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
 
-	ws, err := workspace.Resolve(testEnv(), root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), root)
 	return ws, cadenceConfig
 }
 

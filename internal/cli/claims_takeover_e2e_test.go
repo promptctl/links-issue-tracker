@@ -207,19 +207,12 @@ func waitPastFreshnessWindow(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-// writeTinyFreshnessWindow points dir's workspace config at a
+// writeTinyFreshnessWindow puts in force in dir's checkout a
 // claims.freshness_window short enough that any claim already on disk has
 // expired the moment waitPastFreshnessWindow returns.
 func writeTinyFreshnessWindow(t *testing.T, dir string) {
 	t.Helper()
-	litDir := filepath.Join(dir, ".lit")
-	if err := os.MkdirAll(litDir, 0o755); err != nil {
-		t.Fatalf("mkdir %s error = %v", litDir, err)
-	}
-	config := "[claims]\nfreshness_window = \"1ms\"\n"
-	if err := os.WriteFile(filepath.Join(litDir, "config.toml"), []byte(config), 0o644); err != nil {
-		t.Fatalf("write config.toml error = %v", err)
-	}
+	writeCheckoutProject(t, dir, "[claims]\nfreshness_window = \"1ms\"\n")
 }
 
 // TestStartTakesOverALiveLaneUnderOneSharedIdentity is the takeover that

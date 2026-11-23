@@ -18,7 +18,7 @@ func TestLoadDefaults(t *testing.T) {
 	// Point XDG_CONFIG_HOME to a directory with no config file.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -79,7 +79,7 @@ func TestLoadBuildsTheHistoryWindowOnlyFromWholeCounts(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+			cfg, err := Load(testEnv(), NoProject())
 			if tc.refusal != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.refusal) {
 					t.Fatalf("Load() error = %v; want a refusal containing %q", err, tc.refusal)
@@ -126,7 +126,7 @@ func TestLoadRejectsUnusableFreshnessWindow(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+			cfg, err := Load(testEnv(), NoProject())
 			if err == nil {
 				t.Fatalf("Load() with %q accepted the value as %s, want a refusal", body, cfg.Claims.FreshnessWindow)
 			}
@@ -156,7 +156,7 @@ func TestLoadAcceptsDurationsWithUnits(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Setenv("XDG_CONFIG_HOME", dir)
-			cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+			cfg, err := Load(testEnv(), NoProject())
 			if err != nil {
 				t.Fatalf("Load() with %q error = %v", body, err)
 			}
@@ -179,7 +179,7 @@ func TestLoadSyncOwnerNotifyCmdFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -199,7 +199,7 @@ func TestLoadSyncReceiveFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -219,7 +219,7 @@ func TestLoadSyncCadenceFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -243,7 +243,7 @@ func TestLoadSyncCadenceOnPushFromTOML(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -263,7 +263,7 @@ func TestLoadRejectsUnknownSyncCadence(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	if _, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{})); err == nil {
+	if _, err := Load(testEnv(), NoProject()); err == nil {
 		t.Fatal("Load(pathspec.PathSpec{}) with unknown sync.cadence expected error, got nil")
 	}
 }
@@ -283,7 +283,7 @@ func TestLoadRejectsNonPositiveRetentionBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("XDG_CONFIG_HOME", dir)
-		if _, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{})); err == nil {
+		if _, err := Load(testEnv(), NoProject()); err == nil {
 			t.Fatalf("Load(pathspec.PathSpec{}) with body %q expected error, got nil", body)
 		}
 	}
@@ -307,7 +307,7 @@ soil_mode = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -348,7 +348,7 @@ soil_mode = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v, want a config with retired sections to load", err)
 	}
@@ -501,7 +501,7 @@ soil_mode = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -523,7 +523,7 @@ soil_mode = true
 func TestLoadMissingDir(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/nonexistent/path/that/does/not/exist")
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(testEnv(), NoProject())
 	if err != nil {
 		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
@@ -623,9 +623,9 @@ func TestLoadHonorsProjectEnvOverrideWithoutWorkspaceRoot(t *testing.T) {
 	if err := os.WriteFile(projectFile, []byte("[quickstart]\nsoil_mode = true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("LIT_CONFIG_PROJECT_PATH", projectFile)
+	env := testEnv().With(projectConfigPathEnv + "=" + projectFile)
 
-	cfg, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{}))
+	cfg, err := Load(env, CheckoutProject(env, pathspec.PathSpec{}))
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -645,14 +645,19 @@ func TestLoadInvalidTOMLReturnsError(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	if _, err := Load(testEnv(), CheckoutProject(testEnv(), pathspec.PathSpec{})); err == nil {
+	if _, err := Load(testEnv(), NoProject()); err == nil {
 		t.Fatal("Load(pathspec.PathSpec{}) expected error for invalid TOML")
 	}
 }
 
-// testEnv is the test process's environment, read when it is called, so a
-// test's t.Setenv reaches the Load it runs.
-func testEnv() environ.Env { return environ.Of(os.Environ()) }
+// testEnv is the test process's environment, read when it is called so a
+// test's t.Setenv reaches the Load it runs, without the config path
+// overrides: no layer a test loads is the file a developer's shell points at,
+// and a test of an override sets it on the Env it hands Load. This package
+// cannot import suiteenv, which imports it.
+func testEnv() environ.Env {
+	return environ.Of(os.Environ()).Without(PathEnvVars()...)
+}
 
 // A handed project layer is read from its content, never from a file, and
 // each layer says where it came from.
@@ -687,8 +692,8 @@ func TestAFileLayerAndItsHandedBytesReadAlike(t *testing.T) {
 	if err := os.WriteFile(path, []byte("[quickstart]\nsoil_mode = true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv(projectConfigPathEnv, path)
-	file := CheckoutProject(testEnv(), pathspec.PathSpec{})
+	env := testEnv().With(projectConfigPathEnv + "=" + path)
+	file := CheckoutProject(env, pathspec.PathSpec{})
 	content, err := file.Content()
 	if err != nil {
 		t.Fatal(err)

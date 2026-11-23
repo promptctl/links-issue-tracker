@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 func TestLoadReturnsEmbeddedDefaultWhenNoOverride(t *testing.T) {
@@ -221,4 +222,4 @@ func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the load it runs.
-func testEnv() environ.Env { return environ.Of(os.Environ()) }
+func testEnv() environ.Env { return suiteenv.Of(os.Environ()) }

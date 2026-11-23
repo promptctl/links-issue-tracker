@@ -21,6 +21,7 @@ import (
 	"github.com/dolthub/dolt/go/store/types"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestTwoCheckoutsSyncAcrossTheHistoryBound is links-storage-3k6u's
@@ -69,20 +70,16 @@ type boundCheckout struct {
 
 func newBoundCheckout(t *testing.T, name, dir, sink string) *boundCheckout {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve %s: %v", name, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	_, branch := syncHeadAndBranch(t, dir)
 	return &boundCheckout{name: name, dir: dir, sink: sink, branch: branch, ws: ws}
 }
 
 func driveTheBound(t *testing.T, rounds int) {
 	r, base := newSharedCheckouts(t)
-	finishSharedCheckouts(t, r, base)
-	for _, repo := range []string{r.alpha, r.bravo} {
-		setHistoryWindow(t, repo, checkpointReRootAt, checkpointKeep)
-	}
+	finishSharedCheckouts(t, r, base, func(sink string) string {
+		return receivingNotifyConfig(sink) + historyWindowConfig(checkpointReRootAt, checkpointKeep)
+	})
 	remote := filepath.Join(base, "remote.git")
 	alpha := newBoundCheckout(t, "alpha", r.alpha, filepath.Join(base, "alpha-notifications"))
 	bravo := newBoundCheckout(t, "bravo", r.bravo, r.sink)

@@ -8,10 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/config"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
+	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
@@ -19,10 +18,7 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
@@ -48,10 +44,7 @@ func TestQuickstartRefreshReportsIncompatibleHookAsSkipped(t *testing.T) {
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
@@ -171,7 +164,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	got, err := renderQuickstartGuidance(runEnv(t), repo, config.CheckoutProject(runEnv(t), pathspec.New(repo)))
+	got, err := renderQuickstartGuidance(runEnv(t), repo, configtest.HandedProject(""))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() error = %v", err)
 	}
@@ -185,7 +178,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	// Verify default (no config) does not include the soil section.
 	xdg2 := t.TempDir()
 	setRunEnv(t, "XDG_CONFIG_HOME", xdg2)
-	gotDefault, err := renderQuickstartGuidance(runEnv(t), repo, config.CheckoutProject(runEnv(t), pathspec.New(repo)))
+	gotDefault, err := renderQuickstartGuidance(runEnv(t), repo, configtest.HandedProject(""))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() default error = %v", err)
 	}

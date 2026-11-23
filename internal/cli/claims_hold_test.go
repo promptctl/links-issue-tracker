@@ -153,7 +153,9 @@ func TestRouteNextRoutesAroundTicketHeldByAnotherCheckout(t *testing.T) {
 	h.heldTicket(foreignStream, "session-a")
 	freeEpic, free := h.freeTicket()
 
-	if got, want := openingLine(h.runNext()), "from a worktree of its own off the trunk (not the primary clone, where every session starts), run `lit start "+free.ID.Raw()+"` to claim the default lane of epic "+freeEpic.ID.Raw(); got != want {
+	// The harness's workspace is no primary clone, so the pick starts here;
+	// where a primary clone sends it is next_place_test's subject.
+	if got, want := openingLine(h.runNext()), "run `lit start "+free.ID.Raw()+"` to claim the default lane of epic "+freeEpic.ID.Raw(); got != want {
 		t.Fatalf("next opens with %q, want %q — the ticket another checkout holds must be routed around", got, want)
 	}
 }

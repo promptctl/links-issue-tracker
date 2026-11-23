@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 const snapshotPruneWarning = "lit: could not prune old recovery snapshots (what the reconcile landed is kept): "
@@ -67,10 +68,7 @@ func TestAReconcileWhosePruneFailsReportsItOnItsEvent(t *testing.T) {
 	runCLIInDir(t, producer, "sync", "push")
 	runCLIInDir(t, consumer, "new", "--title", "consumer-only", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, consumer, "sync", "fetch")
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	plantStuckReconcileSnapshots(t, ws)
 
 	stdout, stderr, err := runCLIInDirSplit(t, consumer, "sync", "reconcile")

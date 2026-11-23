@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // unpushedCloneWithOneLocalChange stands up a bare remote and a single clone
@@ -147,10 +147,7 @@ func TestBacklogWarnsOnStaleFetchUntilTheSyncRemoteIsFetched(t *testing.T) {
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	runCLIInDir(t, dir, "sync", "push", "--remote", "fork")
 
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	// The pushes above never fetch, so no fetch-success marker exists yet —
 	// create origin's, then backdate it past the threshold.
 	origin := remoteName(t, "origin")
@@ -192,10 +189,7 @@ func TestBacklogWarnsOnceAFailingSyncRemoteHasNoSuccessOnRecordPastTheThreshold(
 	dir := soloCheckout(t)
 	runGit(t, dir, "remote", "set-url", "origin", filepath.Join(filepath.Dir(dir), "gone.git"))
 
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	origin := remoteName(t, "origin")
 	record := fetchRecordPath(ws, origin)
 
@@ -250,10 +244,7 @@ func soloCheckout(t *testing.T) string {
 func TestEverySyncVerbConfirmsARemoteWithNoRefs(t *testing.T) {
 	t.Parallel()
 	dir := soloCheckout(t)
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	origin := remoteName(t, "origin")
 	for _, verb := range []string{"fetch", "pull"} {
 		if err := os.WriteFile(fetchRecordPath(ws, origin), []byte(fetchRecordUnconfirmed), 0o644); err != nil {

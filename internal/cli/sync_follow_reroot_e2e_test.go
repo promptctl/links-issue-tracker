@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // reRootedCheckouts is two checkouts over one git remote after alpha re-rooted
@@ -33,7 +33,7 @@ func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
 		runCLIInDir(t, r.alpha, "sync", "push")
 	}
 	r.root = reRootAlphaAndForcePush(t, r, r.cut)
-	finishSharedCheckouts(t, r, base)
+	finishSharedCheckouts(t, r, base, receivingNotifyConfig)
 	return r
 }
 
@@ -75,10 +75,7 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 // returns the re-root's parentless root.
 func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) string {
 	t.Helper()
-	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	alphaWS := workspacetest.Resolved(t, runEnv(t), r.alpha)
 	_, branch := syncHeadAndBranch(t, r.alpha)
 	reRooted, err := store.ReRoot(context.Background(), testStderr(t), alphaWS.DatabasePath, branch, cut)
 	if err != nil {
@@ -88,15 +85,19 @@ func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) stri
 	return reRooted.Root
 }
 
-// finishSharedCheckouts sends each checkout's owner notifications to its own
-// sink, turns the automatic sync back on, and isolates the events the test
-// reads.
-func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string) {
+// receivingNotifyConfig is the shared checkouts' usual project config: on-push
+// cadence, the receive on, and the owner hook appending to sink.
+func receivingNotifyConfig(sink string) string { return ownerNotifyConfig(sink, true) }
+
+// finishSharedCheckouts runs each checkout under config of its own sink, the
+// whole project config that sends its owner notifications there, turns the
+// automatic sync back on, and isolates the events the test reads.
+func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string, config func(sink string) string) {
 	t.Helper()
-	writeOwnerNotifyProjectConfig(t, r.bravo, r.sink)
+	writeOwnerNotifyProjectConfig(t, r.bravo, config(r.sink))
 	// alpha gets the same config so its own commands spawn no background
 	// receive; its notifications go elsewhere.
-	writeOwnerNotifyProjectConfig(t, r.alpha, filepath.Join(base, "alpha-notifications"))
+	writeOwnerNotifyProjectConfig(t, r.alpha, config(filepath.Join(base, "alpha-notifications")))
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	isolateEvents(t)
 }
@@ -104,10 +105,7 @@ func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string) {
 // syncHeadAndBranch reads the workspace's head commit and active branch.
 func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve %s: %v", dir, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
@@ -141,10 +139,7 @@ func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entries []string,
 	if !strings.Contains(show, "bravo-title") || strings.Contains(show, "alpha-description") != wantDescription {
 		t.Fatalf("bravo's ticket after the follow (alpha's description expected: %v):\n%s", wantDescription, show)
 	}
-	ws, err := workspace.Resolve(runEnv(t), r.bravo)
-	if err != nil {
-		t.Fatalf("resolve bravo: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), r.bravo)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !os.IsNotExist(err) {
 		t.Fatalf("a receive block is pending after the follow (stat err=%v)", err)
 	}
@@ -240,10 +235,7 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 
 	runGit(t, remote, "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
 	runGit(t, alpha, "remote", "set-head", "origin", "-d")
-	ws, err := workspace.Resolve(runEnv(t), alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), alpha)
 	if err := os.Remove(advertisedSyncBranchPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("remove the sync branch record: %v", err)
 	}

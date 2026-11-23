@@ -10,7 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // assertSyncFailureBlock pins that a captured surface carries every element of the
@@ -82,10 +82,7 @@ func proseDivergedClones(t *testing.T) (consumer, ticketID string) {
 func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	t.Parallel()
 	consumer, ticketID := proseDivergedClones(t)
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 
 	// The receive reconciles, finds the held free-text conflict, and leaves
 	// the contract for the next command. Auto-sync is then ON for the

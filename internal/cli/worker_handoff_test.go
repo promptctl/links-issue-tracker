@@ -12,16 +12,14 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // workerHandoffStdin is the handoff a command run in dir hands the worker it
 // spawns, built by the launcher's own function.
 func workerHandoffStdin(t testing.TB, dir string) string {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve the workspace at %s: %v", dir, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	handoff, err := handoffOf(underInvocation(context.Background()), ws)
 	if err != nil {
 		t.Fatalf("handoffOf(%s): %v", dir, err)
@@ -78,12 +76,7 @@ func twoRemoteCheckout(t *testing.T) string {
 		runGit(t, root, "push", remote, "HEAD")
 	}
 	runGit(t, root, "branch", "--set-upstream-to", "origin/trunk")
-	if err := os.MkdirAll(filepath.Join(root, ".lit"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".lit", "config.toml"), []byte("[sync]\nreceive = false\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeCheckoutProject(t, root, "[sync]\nreceive = false\n")
 	runCLIInDir(t, root, "init", "--skip-hooks")
 	return root
 }
@@ -93,10 +86,7 @@ func twoRemoteCheckout(t *testing.T) string {
 func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
-	ws, err := workspace.Resolve(runEnv(t), root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), root)
 	ctx := underInvocation(context.Background())
 	handed, err := handoffOf(ctx, ws)
 	if err != nil {
@@ -162,10 +152,7 @@ func TestAHandedWorkspaceAsksNothingOfARemovedCheckout(t *testing.T) {
 func TestAMirrorWithAnUnreadableHandoffRecordsAFailedPush(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
-	ws, err := workspace.Resolve(runEnv(t), root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), root)
 	if err := os.WriteFile(mirrorPendingMarkerPath(ws), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -213,11 +200,8 @@ func TestTheEventNamesTheProjectLayerItRead(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	runCLIInDir(t, root, "backlog")
-	ws, err := workspace.Resolve(runEnv(t), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := lastEvent(t).Facts["config.project"], "checkout:"+filepath.Join(ws.RootDir, ".lit", "config.toml"); got != want {
+	checkoutFile := filepath.Join(workspacetest.Resolved(t, runEnv(t), root).RootDir, ".lit", "config.toml")
+	if got, want := lastEvent(t).Facts["config.project"], "checkout:"+checkoutFile; got != want {
 		t.Fatalf("backlog's config.project = %v, want %q", got, want)
 	}
 	runWorkerInDir(t, root, backgroundReceiveSubcommand)

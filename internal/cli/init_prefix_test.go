@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // gitRepoNamed creates a git repository whose DIRECTORY NAME is exactly name.
@@ -108,10 +109,7 @@ func TestInitAcceptsAnExplicitPrefixWhereDerivationRefuses(t *testing.T) {
 	// Asked of the package that owns store geometry rather than rebuilt here, so
 	// this assertion cannot drift from where lit actually writes.
 	// [LAW:one-source-of-truth]
-	info, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	info := workspacetest.Resolved(t, runEnv(t), repo)
 	if got := info.IssuePrefix.Stored(); got != "demo" {
 		t.Fatalf("IssuePrefix = %q, want demo", got)
 	}
@@ -218,10 +216,7 @@ func storedIllegalPrefixWorkspace(t *testing.T) (info workspace.Info, issueID st
 		t.Fatalf("Run(new) error = %v\n%s", err, out)
 	}
 	issueID = issueIDFromNew(out)
-	info, err = workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	info = workspacetest.Resolved(t, runEnv(t), repo)
 	rewriteStoredPrefix(t, info.ConfigPath, "ab")
 	return info, issueID, runLit
 }
@@ -336,10 +331,7 @@ func TestPrefixSetRepairsAStoredIllegalPrefixBeforeTheStoreExists(t *testing.T) 
 	if out, err := runLit("workspace"); err != nil {
 		t.Fatalf("Run(workspace) error = %v\n%s", err, out)
 	}
-	info, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	info := workspacetest.Resolved(t, runEnv(t), repo)
 	rewriteStoredPrefix(t, info.ConfigPath, "ab")
 
 	if err := runInit(t, repo); commandErrorReason(err) != reasonStoredPrefixRefused {
@@ -393,10 +385,7 @@ func TestInitReportsThePrefixItActuallyStored(t *testing.T) {
 		t.Fatalf("init output does not report issue_prefix in the shape `lit prefix set` uses:\n%s", out.String())
 	}
 	// And what it printed is what a later command actually reads back.
-	info, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	info := workspacetest.Resolved(t, runEnv(t), repo)
 	if got := info.IssuePrefix.Stored(); got != stored {
 		t.Fatalf("stored prefix = %q, want %q — init reported a value the workspace does not carry", got, stored)
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAPushRecordsTheAdvertisementItLeft is links-scale-om3r.1tg's DONE-WHEN
@@ -66,10 +67,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	runCLIInDir(t, producer, "sync", "pull")
 	runCLIInDir(t, producer, "new", "--title", "pushed-by-the-peer", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
-	resolved, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	resolved := workspacetest.Resolved(t, runEnv(t), consumer)
 	session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), resolved)
 	if err != nil {
 		t.Fatalf("open consumer sync session: %v", err)

@@ -26,7 +26,7 @@ func TestListReadsReadyPolicyOnlyWhenProjected(t *testing.T) {
 	// Invalid for a reason that has nothing to do with listing, and not the
 	// required-fields key this path consumes: a test that broke [ready] itself
 	// could pass while `lit ls` still read config for every projection.
-	h.writeProjectConfig("[sync]\ncadence = \"not-a-cadence\"\n")
+	h.useProjectConfig("[sync]\ncadence = \"not-a-cadence\"\n")
 
 	epic := h.createIssue(storage.CreateIssueInput{
 		Prefix: "policy", Title: storage.MustParseTitle("Home epic"),

@@ -16,6 +16,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // lockedBuffer is a bytes.Buffer whose every access holds one mutex, so the
@@ -94,10 +95,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 		t.Fatalf("cycle log does not report the deadline cut:\noutput:\n%s", res.out.String())
 	}
 	// The clone the push ran from is gone with the cycle — success or cut.
-	ws, err := workspace.Resolve(runEnv(t), rig.root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
 	assertNoMirrorClone(t, ws)
 
 	// The cut left the durable record that makes the next field episode
@@ -164,10 +162,7 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 		t.Fatalf("cycle log does not report the deadline cut:\noutput:\n%s", mirrorOut.String())
 	}
 
-	ws, err := workspace.Resolve(runEnv(t), rig.root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
 	assertNoMirrorClone(t, ws)
 	entries, err := os.ReadDir(syncTraceDir(ws))
 	if err != nil {
@@ -216,10 +211,7 @@ func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 	if !strings.Contains(out.String(), "attempted=false push_deadline_cut=true") {
 		t.Fatalf("cycle log does not report the open the deadline cut:\noutput:\n%s", out.String())
 	}
-	ws, err := workspace.Resolve(runEnv(t), rig.root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
 	assertNoMirrorClone(t, ws)
 	assertOutcomeRecordsTheCut(t, ws)
 	rec, _, _ := lastPushOutcome(testStderr(t), ws, time.Now())
@@ -237,10 +229,7 @@ func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 	t.Parallel()
 	rig := setupMirrorDeadlineRepo(t)
-	ws, err := workspace.Resolve(runEnv(t), rig.root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
 	corpse := filepath.Join(mirrorCloneBase(ws), "1", "dolt")
 	if err := os.MkdirAll(corpse, 0o755); err != nil {
 		t.Fatalf("plant a dead mirror's clone: %v", err)
@@ -558,10 +547,7 @@ func measureHealthyMirrorCycle(t *testing.T, rig *mirrorRig) time.Duration {
 	if !strings.Contains(out.String(), "attempted=true push_deadline_cut=false") {
 		t.Fatalf("the sample cycle was cut or never attempted under the production deadline, so its cost is not the cost of a healthy cycle:\noutput:\n%s", out.String())
 	}
-	ws, err := workspace.Resolve(runEnv(t), rig.root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
 	now := time.Now()
 	outcome, age, recorded := lastPushOutcome(testStderr(t), ws, now)
 	if !recorded || outcome.Decision != pushDecisionPushed || age > now.Sub(started) {

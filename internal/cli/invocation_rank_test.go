@@ -6,6 +6,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
+
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -170,7 +172,7 @@ func TestARankSetRefusedOverATieNamesThePair(t *testing.T) {
 	slices.Sort(ids)
 	low, high := ids[0], ids[1]
 	ctx := context.Background()
-	ap, err := app.Open(ctx, runEnv(t), testStderr(t), resolvedWorkspace(t, repo), app.AccessWrite)
+	ap, err := app.Open(ctx, runEnv(t), testStderr(t), workspacetest.Resolved(t, runEnv(t), repo), app.AccessWrite)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}

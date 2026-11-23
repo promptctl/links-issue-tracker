@@ -1,10 +1,8 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,7 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestTheMirrorAloneKeepsTheHistoryBound drives alpha's writes past a small
@@ -29,14 +27,11 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
 
-	setHistoryWindow(t, r.alpha, uint64(seeded)+3, 2)
+	writeCheckoutProject(t, r.alpha, historyWindowConfig(uint64(seeded)+3, 2))
 	for _, title := range []string{"one", "two", "three"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
-	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	alphaWS := workspacetest.Resolved(t, runEnv(t), r.alpha)
 	before := dirBytes(t, alphaWS.DatabasePath)
 
 	runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)
@@ -93,16 +88,13 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 	isolateEvents(t)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
-	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	alphaWS := workspacetest.Resolved(t, runEnv(t), r.alpha)
 	proved, err := store.ReadReceivedRefs(alphaWS.DatabasePath)
 	if err != nil || proved == nil {
 		t.Fatalf("the seeding push's received-refs record = %q (%v); want the advertisement it proved", proved, err)
 	}
 
-	setHistoryWindow(t, r.alpha, uint64(seeded)+1, 2)
+	writeCheckoutProject(t, r.alpha, historyWindowConfig(uint64(seeded)+1, 2))
 	runCLIInDir(t, r.alpha, "new", "--title", "one", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	bound := boundRecordOf(t, lastEvent(t))
@@ -212,7 +204,7 @@ func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
 	t.Parallel()
 	r, _ := newSharedCheckouts(t)
 	pushed := extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "pushed", "--topic", "demo", "--type", "task", "--parent", r.epic))
-	setHistoryWindow(t, r.alpha, 5, 5)
+	writeCheckoutProject(t, r.alpha, historyWindowConfig(5, 5))
 	isolateEvents(t)
 	const refusal = "config: sync.history_bound: a history window keeps at least one commit and fewer than it re-roots at; re_root_at 5, keep 5 is not one"
 	if out := runCLIInDir(t, r.alpha, "sync", "push"); !strings.Contains(out, "history bound not kept: "+refusal) {
@@ -229,24 +221,9 @@ func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
 	runCLIInDir(t, r.bravo, "show", pushed)
 }
 
-// setHistoryWindow sets sync.history_bound in repo's project config,
-// creating the file if no fixture wrote one, so every later push from repo
-// keeps its history inside that window. The table it writes is always the
-// file's last, so a later call replaces it rather than adding a second.
-func setHistoryWindow(t *testing.T, repo string, reRootAt, keep uint64) {
-	t.Helper()
-	const table = "\n[sync.history_bound]\n"
-	path := filepath.Join(repo, ".lit", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
-	}
-	existing, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("read project config %s: %v", path, err)
-	}
-	before, _, _ := strings.Cut(string(existing), table)
-	content := fmt.Sprintf("%s%sre_root_at = %d\nkeep = %d\n", before, table, reRootAt, keep)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write sync.history_bound to %s: %v", path, err)
-	}
+// historyWindowConfig is a project config setting sync.history_bound, so
+// every push from a checkout running under it keeps its history inside that
+// window.
+func historyWindowConfig(reRootAt, keep uint64) string {
+	return fmt.Sprintf("[sync.history_bound]\nre_root_at = %d\nkeep = %d\n", reRootAt, keep)
 }

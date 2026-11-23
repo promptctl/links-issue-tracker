@@ -15,6 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // foreignStore stands up a real lit store at an explicit storage directory —
@@ -25,8 +26,6 @@ import (
 func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) {
 	t.Helper()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
-	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
-	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 	ctx := context.Background()
 
 	storeDir = filepath.Join(t.TempDir(), "links")
@@ -44,14 +43,8 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		t.Fatalf("engine.Open() error = %v", err)
 	}
 	ap := &app.App{
-		Workspace: workspace.Info{
-			Location:    loc,
-			RootDir:     storeDir,
-			WorkspaceID: wsID,
-			IssuePrefix: testIssuePrefix(t, prefix),
-			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(t, checkoutRoot(t, storeDir)),
-		},
-		Store: st,
+		Workspace: workspacetest.WithIssuePrefix(t, workspacetest.WithWorkspaceID(workspacetest.StoreAt(t, runEnv(t), storeDir), wsID), prefix),
+		Store:     st,
 	}
 	issueID = seedOpenIssueRaw(t, ctx, ap, "Ticket in the foreign store").Raw()
 	if err := st.Close(); err != nil {
@@ -97,14 +90,8 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 	ap := &app.App{
-		Workspace: workspace.Info{
-			Location:    loc,
-			RootDir:     storeDir,
-			WorkspaceID: "ws-foreign",
-			IssuePrefix: testIssuePrefix(t, "proj"),
-			Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, storeDir), checkoutRoot(t, storeDir)), Project: testProject(t, checkoutRoot(t, storeDir)),
-		},
-		Store: st,
+		Workspace: workspacetest.WithIssuePrefix(t, workspacetest.WithWorkspaceID(workspacetest.StoreAt(t, runEnv(t), storeDir), "ws-foreign"), "proj"),
+		Store:     st,
 	}
 	if id := seedOpenIssueRaw(t, ctx, ap, "Written after a foreign read"); id == "" {
 		t.Fatal("writer produced no issue id after a foreign read")
@@ -156,10 +143,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
 	t.Parallel()
 	repo, runLit := initRepoForPrefixTest(t)
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)

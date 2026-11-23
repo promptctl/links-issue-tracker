@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
+
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -137,7 +139,7 @@ func TestBackupRestoreThatFailsAfterItsReplaceNamesTheTicketsItRemoved(t *testin
 // force the restore: an unforced one reads that path, and fails before it.
 func restoreFailingAfterItsReplace(t *testing.T, repo string, args ...string) string {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Join(restoreDigestPath(resolvedWorkspace(t, repo)), "blocked"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(restoreDigestPath(workspacetest.Resolved(t, runEnv(t), repo)), "blocked"), 0o755); err != nil {
 		t.Fatalf("block restore digest: %v", err)
 	}
 	out, err := runCLIInDirAllowError(t, repo, append([]string{"backup", "restore"}, args...)...)

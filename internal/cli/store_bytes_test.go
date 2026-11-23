@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 var numberedBacklogRow = regexp.MustCompile(`(?m)^\s*\d+\. `)
@@ -77,10 +78,7 @@ func TestEveryStoreSeamRecordsTheStoresSize(t *testing.T) {
 			t.Fatalf("last event = %q, want the receive worker's", ev.Event)
 		}
 		assertStoreMeasured(t, ev)
-		ws, err := workspace.Resolve(runEnv(t), consumer)
-		if err != nil {
-			t.Fatal(err)
-		}
+		ws := workspacetest.Resolved(t, runEnv(t), consumer)
 		want, err := engine.ChunkStoreBytes(ws.DatabasePath)
 		if err != nil {
 			t.Fatal(err)

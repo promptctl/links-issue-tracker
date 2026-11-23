@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt has alpha and
@@ -50,8 +50,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 		} {
 			t.Run(receive.name+"/"+step.name, func(t *testing.T) {
 				r, base := newSharedCheckouts(t)
-				finishSharedCheckouts(t, r, base)
-				writeOwnerNotifyConfig(t, r.bravo, r.sink, receive.on)
+				finishSharedCheckouts(t, r, base, func(sink string) string { return ownerNotifyConfig(sink, receive.on) })
 				runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
 				runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
 				runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)
@@ -72,10 +71,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				if merges := ev.Occurrences["push.outcomes"][0].(map[string]any)["push.receive_merges"]; merges != receive.on {
 					t.Fatalf("bravo's push.receive_merges = %v; want %t", merges, receive.on)
 				}
-				ws, err := workspace.Resolve(runEnv(t), r.bravo)
-				if err != nil {
-					t.Fatalf("resolve bravo: %v", err)
-				}
+				ws := workspacetest.Resolved(t, runEnv(t), r.bravo)
 				if rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now()); !ok || rec.Decision != receive.decision {
 					t.Fatalf("bravo's push-outcome marker = %+v (ok=%t); want %s", rec, ok, receive.decision)
 				}

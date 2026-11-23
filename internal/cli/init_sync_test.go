@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // testBuildNote is a fixed sentinel stood in for the real (clock-dependent)
@@ -95,10 +96,7 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		repo := newInitTestRepo(t)
 		epicID := newEpicInDir(t, repo, "local-epic")
 		runCLIInDir(t, repo, "new", "--title", "local-work", "--topic", "demo", "--type", "task", "--parent", epicID)
-		ws, err := workspace.Resolve(runEnv(t), repo)
-		if err != nil {
-			t.Fatalf("workspace.Resolve() error = %v", err)
-		}
+		ws := workspacetest.Resolved(t, runEnv(t), repo)
 		var progress bytes.Buffer
 		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, runEnv(t), ws)
 		if outcome.State != initSyncHasLocalTickets {
@@ -115,10 +113,7 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 	t.Run("reports not_configured when no git remote exists", func(t *testing.T) {
 		t.Parallel()
 		repo := newInitTestRepo(t)
-		ws, err := workspace.Resolve(runEnv(t), repo)
-		if err != nil {
-			t.Fatalf("workspace.Resolve() error = %v", err)
-		}
+		ws := workspacetest.Resolved(t, runEnv(t), repo)
 		var progress bytes.Buffer
 		outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &progress, runEnv(t), ws)
 		if outcome.State != initSyncNotConfigured {
@@ -228,10 +223,7 @@ func TestInitBesideARemoteDoltCannotHold(t *testing.T) {
 		dir := filepath.Join(base, name)
 		runGit(t, base, "clone", remote, name)
 		runGit(t, dir, "remote", "rename", "origin", "my.fork")
-		ws, err := workspace.Resolve(runEnv(t), dir)
-		if err != nil {
-			t.Fatalf("workspace.Resolve(%s) error = %v", name, err)
-		}
+		ws := workspacetest.Resolved(t, runEnv(t), dir)
 		return dir, ws
 	}
 
@@ -324,10 +316,7 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	// so the retry the error text asks for starts from a provably clean slate.
 	// (AdoptRemoteByClone still MkdirAlls the root itself; empty is the
 	// postcondition, absence is not.)
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	entries, err := os.ReadDir(ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("ReadDir(%q) error = %v", ws.DatabasePath, err)
@@ -390,10 +379,7 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	writeAbandonedAdoptMarker := func() {
 		t.Helper()
 		if err := os.MkdirAll(ws.DatabasePath, 0o755); err != nil {
@@ -488,10 +474,7 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 	// remote to resolveSyncRemote/GitRemotes.
 	badRemote := filepath.Join(t.TempDir(), "gone", "does-not-exist.git")
 	runGit(t, repo, "remote", "add", "origin", badRemote)
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	initOut, initErr := runCLIInDirAllowError(t, repo, "init", "--skip-hooks")
 
@@ -554,7 +537,7 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspace.Info{})
+	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspacetest.New(t, runEnv(t)))
 
 	<-abandoned
 	if got := stderr.String(); !strings.Contains(got, "while the run waits") || strings.Contains(got, "after the run returned") {

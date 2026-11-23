@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // readSyncTraceRecords reads every record recordSyncTrace has written for ws,
@@ -54,10 +55,7 @@ func TestRecordSyncTraceWritesCanonicalJSONUnconditionally(t *testing.T) {
 	}
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	path, err := recordSyncTrace(runEnv(t), ws, syncTraceRecord{
 		Command:   "lit sync fetch",
@@ -109,10 +107,7 @@ func TestRecordSyncTraceCarriesTriggerWhenAutomated(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	setRunEnv(t, automationTriggerEnvVar, "git-pre-push")
 
 	path, err := recordSyncTrace(runEnv(t), ws, syncTraceRecord{Command: "lit sync push", Decision: "pushed", Status: "ok"})
@@ -140,10 +135,7 @@ func TestInitLeavesDurableSyncTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runCLIInDir(t, repo, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	records := readSyncTraceRecords(t, ws)
 	if len(records) != 1 {
@@ -202,10 +194,7 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	// init already recorded its own trace; the four explicit commands below are
 	// this test's subject, so start counting fresh from here.
 	initRecordCount := len(readSyncTraceRecords(t, ws))
@@ -272,10 +261,7 @@ func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runCLIInDir(t, repo, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	before := len(readSyncTraceRecords(t, ws))
 
 	runCLIInDir(t, repo, "sync", "reconcile", "abort")
@@ -330,10 +316,7 @@ func disjointConsumer(t *testing.T) (consumer string, ws workspace.Info) {
 	// history and the producer's are disjoint by the time consumer reconciles.
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
 
-	resolvedWs, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	resolvedWs := workspacetest.Resolved(t, runEnv(t), consumer)
 	return consumer, resolvedWs
 }
 
@@ -439,10 +422,7 @@ func TestRecordSyncCommandTraceErrorPath(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	cause := fmt.Errorf("simulated backend failure")
 	recordSyncCommandTrace(testStderr(t), runEnv(t), ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})

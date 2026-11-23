@@ -9,7 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands drives the
@@ -52,10 +52,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	observed, err := askRemote(ctx, runEnv(t), ws)
@@ -115,10 +112,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 // target name the same commit, as the last fetch or push left them.
 func assertLevelWithTheRemote(t *testing.T, dir string, target syncTarget) {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve %s: %v", dir, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)
