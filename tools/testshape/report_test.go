@@ -43,12 +43,13 @@ func TestTheTableHasARowPerPackageAndATotal(t *testing.T) {
 	}
 }
 
-func TestTheListingGivesEachTestItsLayerAndAWitnessPerTouch(t *testing.T) {
+func TestTheListingGivesEachTestItsLayerAWitnessPerTouchAndWhatWasWithheld(t *testing.T) {
 	pkgs := []measuredPackage{{
-		ImportPath: "example.com/m/a",
-		Setup:      reached{Clock: witness{chain: []string{"init of a", "time.Now"}, what: "time.Now (clock)"}},
+		ImportPath:    "example.com/m/a",
+		Setup:         reached{Clock: witness{chain: []string{"init of a", "time.Now"}, what: "time.Now (clock)"}},
+		SetupWithheld: []string{"slices.Clone[a.paths, string] neither converts a type argument nor calls a method of one"},
 		Tests: []measuredTest{
-			{Name: "TestPure", Reached: reached{}, Ran: true},
+			{Name: "TestPure", Reached: reached{}, Withheld: []string{"slices.Sort[[]a.key, a.key] neither converts a type argument nor calls a method of one"}, Ran: true},
 			{Name: "TestDisk", Reached: reached{
 				FS:  witness{chain: []string{"a.TestDisk", "a.load", "os.ReadFile"}, what: "os.ReadFile (fs)"},
 				Git: witness{chain: []string{"a.TestDisk", "a.git"}, what: `os/exec.Command spawns "git", which is git`},
@@ -59,7 +60,9 @@ func TestTheListingGivesEachTestItsLayerAndAWitnessPerTouch(t *testing.T) {
 	writeListing(&out, pkgs)
 	want := "\nexample.com/m/a\n" +
 		"    setup clock: init of a → time.Now ⇒ time.Now (clock)\n" +
+		"    setup withheld: slices.Clone[a.paths, string] neither converts a type argument nor calls a method of one\n" +
 		"  unit        TestPure\n" +
+		"    withheld: slices.Sort[[]a.key, a.key] neither converts a type argument nor calls a method of one\n" +
 		"  integration TestDisk  [not run]\n" +
 		`    git: a.TestDisk → a.git ⇒ os/exec.Command spawns "git", which is git` + "\n" +
 		"    fs: a.TestDisk → a.load → os.ReadFile ⇒ os.ReadFile (fs)\n"

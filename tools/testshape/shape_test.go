@@ -31,7 +31,7 @@ func TestTheLayerIsDecidedByTheTouches(t *testing.T) {
 func TestJoinPutsDurationsOnlyOnTestsThatRan(t *testing.T) {
 	fs := reached{FS: witness{chain: []string{"p.TestDisk"}, what: "os.ReadFile (fs)"}}
 	shape := binaryShape{
-		Tests: []testShape{{"TestDisk", fs}, {"TestPure", reached{}}, {"TestSkipped", fs}, {"TestUnselected", reached{}}},
+		Tests: []testShape{{Name: "TestDisk", Reached: fs}, {Name: "TestPure", Reached: reached{}}, {Name: "TestSkipped", Reached: fs}, {Name: "TestUnselected", Reached: reached{}}},
 	}
 	pkg := gotestjson.Package{ImportPath: "p", Tests: []gotestjson.Test{
 		{Name: "TestDisk", Elapsed: time.Second, Ending: gotestjson.Failed},
@@ -64,7 +64,7 @@ func TestJoinPutsDurationsOnlyOnTestsThatRan(t *testing.T) {
 }
 
 func TestJoinRefusesWhatTheBinaryDoesNotDeclareAndWhatRanTwice(t *testing.T) {
-	shape := binaryShape{Tests: []testShape{{"TestA", reached{}}}}
+	shape := binaryShape{Tests: []testShape{{Name: "TestA", Reached: reached{}}}}
 	pkg := gotestjson.Package{ImportPath: "p", Tests: []gotestjson.Test{
 		{Name: "TestA", Ending: gotestjson.Passed},
 		{Name: "TestA", Ending: gotestjson.Passed},

@@ -96,6 +96,9 @@ type loaded struct {
 	// module a package belongs to: a module nested under another's path is
 	// its own.
 	ModuleOf map[string]string
+	// Generics reads the bodies of the outside generics the module
+	// instantiates, from the source files the build compiles.
+	Generics *genericSource
 }
 
 // listedPackage is the subset of `go list -json` this loader reads.
@@ -205,7 +208,7 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	}
 	prog.Build()
 
-	l := &loaded{Module: m, Prog: prog, Binaries: map[string]*binary{}, ModuleOf: map[string]string{}}
+	l := &loaded{Module: m, Prog: prog, Binaries: map[string]*binary{}, ModuleOf: map[string]string{}, Generics: newGenericSource(ld)}
 	for _, p := range listed {
 		switch {
 		case p.isTestMain():
@@ -294,6 +297,15 @@ func (ld *loader) readExport(p *listedPackage) error {
 }
 
 func (ld *loader) check(p *listedPackage) {
+	pkg, files, info, problems := checkSource(ld.fset, ld.sizes, p, func(path string) (*types.Package, error) { return ld.imported(p, path) })
+	ld.problems = append(ld.problems, problems...)
+	ld.checked[p.ImportPath], ld.syntax[p.ImportPath], ld.infos[p.ImportPath] = pkg, files, info
+}
+
+// checkSource parses and type-checks p's compiled files, its imports
+// resolved by imported, returning every problem: a file that does not parse
+// stops the check.
+func checkSource(fset *token.FileSet, sizes types.Sizes, p *listedPackage, imported func(path string) (*types.Package, error)) (*types.Package, []*ast.File, *types.Info, []string) {
 	var files []*ast.File
 	for _, name := range p.CompiledGoFiles {
 		if !filepath.IsAbs(name) {
@@ -301,10 +313,9 @@ func (ld *loader) check(p *listedPackage) {
 		}
 		// Comments too: an example's output comment decides whether go test
 		// runs it.
-		f, err := parser.ParseFile(ld.fset, name, nil, parser.SkipObjectResolution|parser.ParseComments)
+		f, err := parser.ParseFile(fset, name, nil, parser.SkipObjectResolution|parser.ParseComments)
 		if err != nil {
-			ld.problems = append(ld.problems, err.Error())
-			return
+			return nil, nil, nil, []string{err.Error()}
 		}
 		files = append(files, f)
 	}
@@ -318,14 +329,29 @@ func (ld *loader) check(p *listedPackage) {
 		Selections:   map[*ast.SelectorExpr]*types.Selection{},
 		FileVersions: map[*ast.File]string{},
 	}
+	var problems []string
 	conf := types.Config{
-		Importer:  importerFunc(func(path string) (*types.Package, error) { return ld.imported(p, path) }),
-		Sizes:     ld.sizes,
-		GoVersion: "go" + p.Module.GoVersion,
-		Error:     func(err error) { ld.problems = append(ld.problems, err.Error()) },
+		Importer:  importerFunc(imported),
+		Sizes:     sizes,
+		GoVersion: p.goVersion(),
+		Error:     func(err error) { problems = append(problems, err.Error()) },
 	}
-	pkg, _ := conf.Check(p.path(), ld.fset, files, info)
-	ld.checked[p.ImportPath], ld.syntax[p.ImportPath], ld.infos[p.ImportPath] = pkg, files, info
+	pkg, _ := conf.Check(p.path(), fset, files, info)
+	return pkg, files, info, problems
+}
+
+// goVersion is the language version the go command compiles p's files at:
+// the toolchain's own for the standard library, which has no module; a
+// module's go directive, go1.16 where it has none.
+func (p *listedPackage) goVersion() string {
+	switch {
+	case p.Module == nil:
+		return ""
+	case p.Module.GoVersion == "":
+		return "go1.16"
+	default:
+		return "go" + p.Module.GoVersion
+	}
 }
 
 // imported resolves an import in p's source to the package the build links

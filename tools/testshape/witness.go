@@ -44,19 +44,16 @@ type throughType struct {
 }
 
 // typeArgument is a reach through a type handed to an outside generic as a
-// type argument; how is the call ("call into strs.Join").
-type typeArgument struct {
-	how string
-	typ types.Type
-}
+// type argument; why is the instantiation that decided it, and how
+// ("nested/strs.Join[genericjoin.file] calls String of genericjoin.file
+// through its constraint").
+type typeArgument struct{ why string }
 
 func (staticCall) text(types.Qualifier) string { return "" }
 func (c converting) text(q types.Qualifier) string {
 	return "converts " + types.TypeString(c.typ, q) + " to an interface"
 }
-func (t typeArgument) text(q types.Qualifier) string {
-	return t.how + " is handed type argument " + types.TypeString(t.typ, q)
-}
+func (t typeArgument) text(types.Qualifier) string { return t.why }
 func (t throughFunc) text(types.Qualifier) string {
 	return t.how + " reaches value " + t.where.text()
 }

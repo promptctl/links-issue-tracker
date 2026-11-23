@@ -62,6 +62,12 @@ func measureFixture(t *testing.T, pkg string) (binaryShape, []string) {
 // reachOf is what one fixture test reaches, the analysis refusing nothing.
 func reachOf(t *testing.T, pkg, test string) reached {
 	t.Helper()
+	return testShapeOf(t, pkg, test).Reached
+}
+
+// testShapeOf is one fixture test's shape, the analysis refusing nothing.
+func testShapeOf(t *testing.T, pkg, test string) testShape {
+	t.Helper()
 	shape, refusals := measureFixture(t, pkg)
 	if len(refusals) > 0 {
 		t.Fatalf("measuring %s refused:\n%s", pkg, strings.Join(refusals, "\n"))
@@ -69,12 +75,12 @@ func reachOf(t *testing.T, pkg, test string) reached {
 	var names []string
 	for _, ts := range shape.Tests {
 		if ts.Name == test {
-			return ts.Reached
+			return ts
 		}
 		names = append(names, ts.Name)
 	}
 	t.Fatalf("%s declares no %s; it declares %v", pkg, test, names)
-	return nil
+	return testShape{}
 }
 
 // expectReach checks a test's layer and touches, and, for each touch given a
@@ -281,9 +287,66 @@ func TestAnInitializerOnlyADependencyImportsRunsInTheSetup(t *testing.T) {
 	})
 }
 
-func TestAModuleTypeHandedToAnOutsideGenericHasItsMethodsReached(t *testing.T) {
+// What an outside generic does with a type argument is read from its
+// source: a body that neither converts the type nor calls a method of it
+// reaches nothing of it, and the test names the instance that withheld it.
+func TestATypeArgumentAGenericNeitherConvertsNorCallsIsWithheld(t *testing.T) {
+	ts := testShapeOf(t, "genericclone", "TestCopy")
+	expectReach(t, ts.Reached, Unit, "none", nil)
+	want := []string{"slices.Clone[genericclone.paths, string] neither converts a type argument nor calls a method of one"}
+	if !slices.Equal(ts.Withheld, want) {
+		t.Errorf("withheld = %q, want %q", ts.Withheld, want)
+	}
+}
+
+func TestAConstraintMethodAGenericCallsIsReachedOnItsTypeArgument(t *testing.T) {
 	expectReach(t, reachOf(t, "genericjoin", "TestNames"), Integration, "fs", map[Touch]string{
-		FS: "genericjoin.TestNames → genericjoin.Names → nested/strs.Join[genericjoin.file] → (genericjoin.file).String [call into example.com/shape/nested/strs.Join is handed type argument genericjoin.file] → os.ReadFile ⇒ os.ReadFile (fs)",
+		FS: "genericjoin.TestNames → genericjoin.Names → nested/strs.Join[genericjoin.file] → (genericjoin.file).String [nested/strs.Join[genericjoin.file] calls String of genericjoin.file through its constraint] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+// A method expression of a constraint method is a thunk the generic hands
+// out, which calls the method: it is read as part of the body.
+func TestAConstraintMethodAGenericTakesAsAMethodExpressionIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericthunk", "TestName"), Integration, "fs", map[Touch]string{
+		FS: "genericthunk.TestName → genericthunk.Name → nested/gen.Namer[genericthunk.file] → (genericthunk.file).String [nested/gen.Namer[genericthunk.file] calls String of genericthunk.file through its constraint] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+// A type argument the body converts reaches what module code converting it
+// reaches: every method of the type, GoString included, which %#v calls.
+func TestATypeArgumentAGenericConvertsHasEveryMethodReached(t *testing.T) {
+	expectReach(t, reachOf(t, "generickeep", "TestRender"), Integration, "fs", map[Touch]string{
+		FS: "generickeep.TestRender → generickeep.Render → nested/gen.Keep[generickeep.doc] → (generickeep.doc).GoString [nested/gen.Keep[generickeep.doc] converts generickeep.doc to an interface] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+func TestAModuleTypeInAConvertedTypeArgumentsStructureIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericshow", "TestShowSlice"), Integration, "fs", map[Touch]string{
+		FS: "genericshow.TestShowSlice → genericshow.ShowSlice → nested/gen.Show[[]genericshow.file] → (genericshow.file).String [nested/gen.Show[[]genericshow.file] converts []genericshow.file to an interface] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+	expectReach(t, reachOf(t, "genericshow", "TestShowStruct"), Integration, "fs", map[Touch]string{
+		FS: "genericshow.TestShowStruct → genericshow.ShowStruct → nested/gen.Show[genericshow.wrap] → (genericshow.file).String [nested/gen.Show[genericshow.wrap] converts genericshow.wrap to an interface] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+func TestATypeArgumentADispatchingGenericRegistersIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericvisit", "TestRegister"), Integration, "fs", map[Touch]string{
+		FS: "genericvisit.TestRegister → genericvisit.Register → nested/gen.Visit[genericvisit.cleaner] → (genericvisit.cleaner).Visit [nested/gen.Visit[genericvisit.cleaner] converts genericvisit.cleaner to an interface] → os.RemoveAll ⇒ os.RemoveAll (fs)",
+	})
+}
+
+func TestATypeArgumentAnInstantiatedGenericConvertsIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "generictwice", "TestHold"), Integration, "fs", map[Touch]string{
+		FS: "generictwice.TestHold → generictwice.Hold → nested/gen.Twice[generictwice.doc] → (generictwice.doc).Close [nested/gen.Twice[generictwice.doc] instantiates nested/gen.Keep[generictwice.doc], which converts generictwice.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+}
+
+// A body the reading cannot decide converts every type argument, the reach
+// a module conversion gets, and the witness says why it was not read.
+func TestATypeArgumentOfAGenericThatCannotBeReadIsConverted(t *testing.T) {
+	expectReach(t, reachOf(t, "genericaddress", "TestWhere"), Integration, "fs", map[Touch]string{
+		FS: "genericaddress.TestWhere → genericaddress.Where → nested/gen.Address[genericaddress.lock] → (genericaddress.lock).Release [nested/gen.Address[genericaddress.lock] cannot be read (it converts *T to unsafe.Pointer), so genericaddress.lock is converted to an interface] → os.Remove ⇒ os.Remove (fs)",
 	})
 }
 

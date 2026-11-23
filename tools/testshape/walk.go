@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/ssa"
 	"golang.org/x/tools/go/types/typeutil"
@@ -25,6 +26,9 @@ type analyzer struct {
 	carriages  typeutil.Map // *types.Signature -> carriage
 	typeKeys   typeutil.Map // types.Type -> int
 	owners     map[*ssa.Function]owner
+	generics   *genericSource
+	readings   map[instanceKey]*reading
+	decisions  map[instanceKey]*decision
 
 	// unclassified: every outside function module code reaches that the
 	// classification does not cover, with the first function seen reaching
@@ -46,6 +50,9 @@ func newAnalyzer(l *loaded, class *Classification) *analyzer {
 		class:        class,
 		summaries:    map[*ssa.Function]*summary{},
 		owners:       map[*ssa.Function]owner{},
+		generics:     l.Generics,
+		readings:     map[instanceKey]*reading{},
+		decisions:    map[instanceKey]*decision{},
 		unclassified: map[string]string{},
 		bodiless:     map[string]string{},
 		unresolved:   map[string]string{},
@@ -65,6 +72,7 @@ type walker struct {
 	steps      set[*ssa.Function, step]
 	indirect   set[*ssa.Function, via]
 	touches    set[Touch, touched]
+	withheld   set[string, string]
 	sites      set[callSite, callSite]
 	spawns     set[spawnSite, spawnSite]
 	taken      set[*ssa.Function, funcEntry]
@@ -85,6 +93,7 @@ func newWalker(a *analyzer, binary *finished) *walker {
 		steps:      set[*ssa.Function, step]{b.steps, own.steps},
 		indirect:   set[*ssa.Function, via]{b.indirect, own.indirect},
 		touches:    set[Touch, touched]{b.touches, own.touches},
+		withheld:   set[string, string]{b.withheld, own.withheld},
 		sites:      set[callSite, callSite]{b.sites, own.sites},
 		spawns:     set[spawnSite, spawnSite]{b.spawns, own.spawns},
 		taken:      set[*ssa.Function, funcEntry]{b.taken, own.taken},
@@ -124,6 +133,13 @@ func (w *walker) reached() reached {
 		r[t.touch] = t.witness
 	}
 	return r
+}
+
+// withholding is every outside generic instance the walk's own layer
+// reached that withheld its type arguments, in name order: what a test's
+// setup withheld is its setup's.
+func (w *walker) withholding() []string {
+	return slices.Sorted(slices.Values(w.own.withheld.entries))
 }
 
 // root starts the walk at fn, made to run by origin.
@@ -206,22 +222,27 @@ func (w *walker) indirectly(fn, from *ssa.Function, how via) {
 	}
 }
 
-// enter walks fn if it is module code, and charges it otherwise.
+// enter walks fn if it is module code, and charges it otherwise: an
+// outside generic's instance is also handed the types it is instantiated
+// with.
 func (w *walker) enter(fn, from *ssa.Function) {
 	o := w.a.owner(fn)
 	if _, walked := o.knows.(moduleCode); walked {
 		w.queue = append(w.queue, fn)
 		return
 	}
-	w.charge(o.name, o.knows, fn.Signature, fn.TypeArgs(), fn, from)
+	if in, generic := w.a.instanceOf(fn); generic {
+		w.typeArguments(in, fn)
+	}
+	w.charge(o.name, o.knows, fn.Signature, fn, from)
 }
 
 // charge records what the classification says a call of the outside
-// function or interface method name, of signature sig and instantiated with
-// typeArgs, reached at at from from, can do: it is a call the walk does not
-// follow, and whatever else its class says.
-func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, typeArgs []types.Type, at, from *ssa.Function) {
-	w.unfollowed(sig, typeArgs, at, "call into "+name.String())
+// function or interface method name, of signature sig, reached at at from
+// from, can do: it is a call the walk does not follow, and whatever else its
+// class says.
+func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, at, from *ssa.Function) {
+	w.unfollowed(sig, at, "call into "+name.String())
 	switch k := k.(type) {
 	case unclassified:
 		if _, seen := w.a.unclassified[name.String()]; !seen {
@@ -242,19 +263,34 @@ func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, typeAr
 	}
 }
 
+// typeArguments: what an outside generic's instance, at, does with the
+// types it is instantiated with is decided from its source (see
+// generic.go). Each type it converts to an interface reaches exactly what
+// module code converting that type reaches; each constraint method it
+// calls is reached on its type argument; a type it does neither with
+// reaches nothing, and the walk records the instance as withholding it.
+func (w *walker) typeArguments(in instance, at *ssa.Function) {
+	d := w.a.decide(in)
+	for _, c := range d.converts {
+		w.convert(c.what.typ, c.what.to, at, typeArgument{c.why})
+	}
+	for _, c := range d.calls {
+		if fn, ok := w.a.method(c.what.typ, c.what.pkg, c.what.method); ok {
+			w.reach(fn, at, typeArgument{c.why})
+		}
+	}
+	for _, name := range d.withheld {
+		w.withheld.add(name, name)
+	}
+}
+
 // unfollowed is the one rule at every callee the walk does not follow: an
 // outside function or method, and the target of every dynamic call, which
 // may be one. Whatever it does, it can call back any address-taken function
 // whose signature its argument types (receiver and parameters, through
 // their structure) can carry; and, handed an interface, any function
-// converted to one, which reflection can call. Each type argument of an
-// outside generic's instance is a type of the values it is handed, whose
-// methods its constraint lets it call: the type is converted to an
-// interface.
-func (w *walker) unfollowed(sig *types.Signature, typeArgs []types.Type, at *ssa.Function, how string) {
-	for _, t := range typeArgs {
-		w.convert(t, anyInterface, at, typeArgument{how, t})
-	}
+// converted to one, which reflection can call.
+func (w *walker) unfollowed(sig *types.Signature, at *ssa.Function, how string) {
 	c := w.a.carried(sig)
 	for _, s := range c.sigs {
 		w.call(s, at, how)
@@ -268,16 +304,11 @@ func (w *walker) unfollowed(sig *types.Signature, typeArgs []types.Type, at *ssa
 	}
 }
 
-// anyInterface is the interface a type argument is converted to: an outside
-// generic calls on it only what its constraint names, which only an outside
-// interface can, and those methods are charged where they are called.
-var anyInterface = types.NewInterfaceType(nil, nil)
-
 // callValue is a call of a function value of signature sig: it reaches every
 // address-taken function of it, and its target may be outside code.
 func (w *walker) callValue(sig *types.Signature, from *ssa.Function) {
 	w.call(sig, from, "dynamic call")
-	w.unfollowed(sig, nil, from, "dynamic call")
+	w.unfollowed(sig, from, "dynamic call")
 }
 
 // call is a call of some function of signature sig: it reaches every
@@ -422,7 +453,7 @@ func (w *walker) invoke(inv invoke, from *ssa.Function) {
 	}
 	if !module {
 		name := interfaceMethodName(inv.method)
-		w.charge(name, w.a.class.Lookup(name.pkg, name.key), inv.method.Signature(), nil, from, from)
+		w.charge(name, w.a.class.Lookup(name.pkg, name.key), inv.method.Signature(), from, from)
 	}
 	for _, e := range w.implementing(inv.iface) {
 		if module || w.a.moduleType(e.typ) {

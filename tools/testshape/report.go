@@ -102,24 +102,28 @@ func writeRow(w io.Writer, r row) {
 func seconds(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
 
 // writeListing renders each package's setup touches and each test's layer,
-// its touches, and the chain that reaches each.
+// its touches, and the chain that reaches each; and, for the setup and each
+// test, the outside generic instances that withheld their type arguments.
 func writeListing(w io.Writer, pkgs []measuredPackage) {
 	for _, m := range pkgs {
 		fmt.Fprintf(w, "\n%s\n", m.ImportPath)
-		writeTouches(w, "    setup ", m.Setup)
+		writeTouches(w, "    setup ", m.Setup, m.SetupWithheld)
 		for _, t := range m.Tests {
 			mark := ""
 			if !t.Ran {
 				mark = "  [not run]"
 			}
 			fmt.Fprintf(w, "  %-11s %s%s\n", t.Layer(), t.Name, mark)
-			writeTouches(w, "    ", t.Reached)
+			writeTouches(w, "    ", t.Reached, t.Withheld)
 		}
 	}
 }
 
-func writeTouches(w io.Writer, indent string, r reached) {
+func writeTouches(w io.Writer, indent string, r reached, withheld []string) {
 	for t := range r.set().Each {
 		fmt.Fprintf(w, "%s%s: %s\n", indent, t, r[t])
+	}
+	for _, name := range withheld {
+		fmt.Fprintf(w, "%swithheld: %s\n", indent, name)
 	}
 }

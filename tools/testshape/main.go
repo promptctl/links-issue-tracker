@@ -15,8 +15,8 @@
 // tests that ran, the count of declared tests at each layer, the elapsed of
 // those that ran summed per layer, the unit share, per touch the tests that
 // can reach it, and the touches of the package's setup. -tests adds a
-// listing of every test's layer, its touches, and one witness chain per
-// touch.
+// listing of every test's layer, its touches, one witness chain per touch,
+// and each outside generic instance that withheld its type arguments.
 //
 // THE INVARIANT. The unit share is what the suite's layering is judged
 // by, so a measure that overstates it certifies work that was never done.
@@ -59,9 +59,7 @@
 //     function type in their structure (fields, elements, pointees), or a
 //     method of an interface there; and, handed an interface (`any`
 //     included), every function converted to one, which reflection can
-//     call. A type argument of an outside generic's instance is converted
-//     to an interface, since the generic calls what its constraint names
-//     (`Join[T fmt.Stringer]` calls T's String). A function stored in a field of a struct handed to outside code
+//     call. A function stored in a field of a struct handed to outside code
 //     (`&cobra.Command{RunE: f}`) is reached as surely as one passed
 //     directly; so is a range-over-func loop's body, which the iterator is
 //     handed, and a fuzz function handed to f.Fuzz. A value with no use
@@ -81,6 +79,19 @@
 //     interface method (`testing.TB`'s TempDir, `io.Writer`'s Write) is a
 //     call of an outside method, charged by its classification; the runtime
 //     module types implementing it are reached as well.
+//   - What an outside generic's instance does with its type arguments is
+//     read from the generic's source, the files the build compiles (see
+//     generic.go). A value of a type parameter leaves a body only converted
+//     to an interface, as a type mentioning the parameter, or handed to
+//     another generic instantiated over one, whose body is read in turn. A
+//     type a body converts reaches exactly what module code converting it
+//     reaches; a constraint method a body calls (`Join[T fmt.Stringer]`
+//     calls T's String) is reached on the type argument; a type it does
+//     neither with reaches nothing, and the instance is listed as
+//     withholding it. A body that cannot be read (no source, no Go body, a
+//     type parameter's value taken as an unsafe.Pointer, a type declared in
+//     the body) converts every type argument, and the witness says why.
+//     Nothing about a generic is recorded in the classification.
 //   - Code outside the module is never walked. Every outside function module
 //     code reaches is classified in classification.json: the touches it can
 //     make, none,

@@ -131,6 +131,7 @@ type layer struct {
 	steps    *store[*ssa.Function, step] // every reached function, with how
 	indirect *store[*ssa.Function, via]  // those reached other than by a static call, by the first such reach
 	touches  *store[Touch, touched]
+	withheld *store[string, string]     // the outside generic instances that withheld their type arguments
 	sites    *store[callSite, callSite] // static calls into module functions, grouped by callee
 	spawns   *store[spawnSite, spawnSite]
 
@@ -153,6 +154,7 @@ func newLayer() *layer {
 		steps:      newStore[*ssa.Function, step](),
 		indirect:   newStore[*ssa.Function, via](),
 		touches:    newStore[Touch, touched](),
+		withheld:   newStore[string, string](),
 		sites:      newStore[callSite, callSite](),
 		spawns:     newStore[spawnSite, spawnSite](),
 		taken:      newStore[*ssa.Function, funcEntry](),
