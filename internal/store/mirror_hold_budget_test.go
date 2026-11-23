@@ -6,8 +6,8 @@ import (
 )
 
 // The sizing chains in store.go are arithmetic over measured facts, so these
-// tests assert the consts rather than the package vars the deadline regression
-// tests shrink: the design is what is being pinned, not a test's knob.
+// tests assert the consts ShippedDeadlines is made of: the design is what is
+// being pinned, not a figure a test hands a run.
 
 // TestMirrorHoldBudgetExceedsObservedCloneCost checks the budget against the
 // cost of the work it bounds. A check that the budget fits inside the

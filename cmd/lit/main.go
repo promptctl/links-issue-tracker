@@ -8,6 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/interrupt"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -32,26 +33,35 @@ func main() {
 		}
 		exit(decided.Code)
 	}
-	// [LAW:effects-at-boundaries] The one place lit reads its process: the run
-	// below is handed everything it would otherwise read from it.
-	// The released-schema ceiling and the raise policy are read from this
-	// binary's build stamp here and nowhere below: they ride the run's Env to
-	// every store open. So does this binary's own path, which the run's
-	// detached workers are spawned as.
-	released, err := version.ReadReleasedSchemaCeiling()
+	inv, err := processInvocation()
 	if err != nil {
 		fail(err)
-	}
-	inv := cli.Invocation{
-		Dir:    cli.WorkingDirOf(os.Getwd()),
-		Args:   os.Args[1:],
-		Env:    environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(version.Origin)).WithExecutable(os.Executable),
-		Stdin:  os.Stdin,
-		Stdout: os.Stdout,
-		Stderr: os.Stderr,
 	}
 	if err := cli.Run(ctx, inv); err != nil {
 		fail(err)
 	}
 	exit(cli.ExitOK)
+}
+
+// processInvocation is the run this process is: everything the run would
+// otherwise read from the process, read here, once. [LAW:effects-at-boundaries]
+// The released-schema ceiling and the raise policy are read from this
+// binary's build stamp here and nowhere below: they ride the run's Env to
+// every store open. The run's detached workers are started as this binary,
+// under the shipped deadlines, which the run hands each worker.
+func processInvocation() (cli.Invocation, error) {
+	released, err := version.ReadReleasedSchemaCeiling()
+	if err != nil {
+		return cli.Invocation{}, err
+	}
+	return cli.Invocation{
+		Dir:       cli.WorkingDirOf(os.Getwd()),
+		Args:      os.Args[1:],
+		Env:       environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(version.Origin)),
+		Stdin:     os.Stdin,
+		Stdout:    os.Stdout,
+		Stderr:    os.Stderr,
+		Workers:   cli.LaunchWorkersAs(os.Executable()),
+		Deadlines: store.ShippedDeadlines(),
+	}, nil
 }

@@ -48,7 +48,7 @@ func TestRemoteOperationsLeaveTheMirrorHoldingOnlyItsLastKnownRef(t *testing.T) 
 			if err := s.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 				return err
 			}
-			_, err := s.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), true, false)
+			_, err := s.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), true, false)
 			return err
 		}},
 		{"fetch", func(s *Store) error { return s.SyncFetch(ctx, remoteName(t, "origin")) }},
@@ -139,7 +139,7 @@ func pushedMirror(t *testing.T) (doltRoot, remote, mirror string) {
 	if err := session.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := session.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), true, false); err != nil {
+	if _, err := session.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 	mirror = soleMirrorGitDir(t, session)
@@ -275,7 +275,7 @@ func TestSyncCompactAndPushReportsTheSweep(t *testing.T) {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
 	commitPayload(t, ctx, session, "c2")
-	result, err := session.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), false, false)
+	result, err := session.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), false, false)
 	if closeErr := session.Close(); closeErr != nil {
 		t.Fatalf("Close() error = %v", closeErr)
 	}
@@ -378,7 +378,7 @@ func TestBackgroundReceiveLandsTheClonesLastKnownRef(t *testing.T) {
 	if fetchErr != nil {
 		t.Fatalf("SyncFetch(clone) error = %v", fetchErr)
 	}
-	if _, err := LandFetchedHead(ctx, testEnv(), testStderr(), live, clone, remoteName(t, "origin"), "master", nil); err != nil {
+	if _, err := LandFetchedHead(ctx, testEnv(), testStderr(), live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", nil); err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
 

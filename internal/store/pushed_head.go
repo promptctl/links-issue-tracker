@@ -76,7 +76,8 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // the commit lock for the write.
 //
 // The hold — everything from the open's success to the ref write — runs under
-// MirrorHoldBudget, the same deadline the clone step runs under: the lock
+// holdBudget, the run's Deadlines.MirrorHold, the same deadline the clone step
+// runs under: the lock
 // waits before it are waiting, not holding, and a ref write still running at
 // the budget is a stalled one. A cut is returned wrapping ErrHoldCut.
 // [LAW:no-ambient-temporal-coupling]
@@ -119,7 +120,7 @@ var ErrReceivedRefsNotRecorded = errors.New("received-refs record not written, s
 // already past head was carried there by something that recorded a newer
 // advertisement. A nil record leaves the one on disk standing.
 // [LAW:one-source-of-truth]
-func RecordPushedHead(ctx context.Context, stderr io.Writer, doltRootDir string, remote storage.RemoteName, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
+func RecordPushedHead(ctx context.Context, stderr io.Writer, doltRootDir string, holdBudget time.Duration, remote storage.RemoteName, branch string, head string, receivedRefs []byte) (record PushedHeadRecord, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return 0, err
@@ -137,7 +138,7 @@ func RecordPushedHead(ctx context.Context, stderr io.Writer, doltRootDir string,
 		return 0, err
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
-	record, atHead, err := settlePushedHead(ctx, stderr, root, remote, trimmedBranch, trimmedHead)
+	record, atHead, err := settlePushedHead(ctx, stderr, root, holdBudget, remote, trimmedBranch, trimmedHead)
 	if err != nil {
 		return 0, err
 	}
@@ -157,8 +158,8 @@ func RecordPushedHead(ctx context.Context, stderr io.Writer, doltRootDir string,
 // settlePushedHead is RecordPushedHead's ref write: the one ref comparison and
 // move, run inside holdForRefWrite. atHead reports whether the ref now names
 // head, moved there or already there, as against left on a descendant of it.
-func settlePushedHead(ctx context.Context, stderr io.Writer, root string, remote storage.RemoteName, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
-	err = holdForRefWrite(ctx, stderr, root, engineWriteRoutine, MirrorHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+func settlePushedHead(ctx context.Context, stderr io.Writer, root string, holdBudget time.Duration, remote storage.RemoteName, trimmedBranch, trimmedHead string) (record PushedHeadRecord, atHead bool, err error) {
+	err = holdForRefWrite(ctx, stderr, root, engineWriteRoutine, holdBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		trackingRef := ref.NewRemoteRef(remote.String(), trimmedBranch)
 		pushedCommit, err := readFullCommit(holdCtx, ddb, hash.Parse(trimmedHead))
 		if err != nil {

@@ -3625,10 +3625,9 @@ const (
 	// a safety valve; it is a scheduled failure.
 	mirrorHoldStallFactor = 2
 
-	// mirrorHoldBudget is the deadline each mirror hold on the live store runs
-	// under — the clone step, and the pushed-head record after the push. The
-	// exported MirrorHoldBudget below is the variable the cli reads and tests
-	// shrink; this const is what it starts at, so the waits derived from it
+	// mirrorHoldBudget is the shipped deadline each mirror hold on the live
+	// store runs under — the clone step, and the pushed-head record after the
+	// push (Deadlines.MirrorHold). A const, so the waits derived from it
 	// further down stay const arithmetic.
 	mirrorHoldBudget = mirrorCloneObservedTail * mirrorHoldStallFactor
 
@@ -3738,9 +3737,8 @@ const (
 	// the only thing on the far side is a stall.
 	mirrorPushStallFactor = 2
 
-	// mirrorPushDeadline is the deadline the mirror's push runs under. The
-	// exported MirrorPushDeadline below is the variable the cli reads and the
-	// deadline regression test shrinks; this const is what it starts at.
+	// mirrorPushDeadline is the shipped deadline the mirror's push runs under
+	// (Deadlines.MirrorPush).
 	mirrorPushDeadline = mirrorPushObservedTail * mirrorPushStallFactor
 
 	// MirrorPushCancelLagObserved is how much longer a cut push keeps its
@@ -3758,57 +3756,68 @@ const (
 	MirrorPushCancelLagObserved = 22 * time.Second
 )
 
-// MirrorHoldBudget is the deadline each background-mirror hold on the live
-// store runs under: the clone step before the push, and the pushed-head record
-// after it. It is a deadline, not a bound on the hold: a cut lands up to
-// mirrorHoldCancelLag later, and mirrorHoldCeiling is the number that follows
-// from that. TestMirrorHoldBudgetExceedsObservedCloneCost and
-// TestCoResidentWaitIsSizedToTheMirrorHold pin both relations. A package
-// variable so a regression test can shrink it without sleeping through the
-// production one, and a test whose subject is not the budget lifts it out of
-// play.
-var MirrorHoldBudget = mirrorHoldBudget
+// receiveDeadline is the shipped deadline the automatic receive runs under
+// (Deadlines.Receive says what it bounds).
+const receiveDeadline = 15 * time.Second
 
-// MirrorPushDeadline is the deadline the background mirror's push runs
-// under: the clone engine's open and the push from it. The close after them
-// takes no ctx and is not bounded by it. The push traverses
-// the network with no inherent bound, so the bound is imposed by the actor
-// that owns it. It holds nothing on the live store; it exists so a stalled
-// transport cannot wedge the single-flight mirror forever.
-// TestMirrorPushDeadlineExceedsObservedPushCost pins its relation to the
-// measured push. A package variable so the deadline regression test can
-// shrink it without sleeping through the production one.
-var MirrorPushDeadline = mirrorPushDeadline
+// Deadlines is the set of deadlines one run's background sync work runs
+// under. A run is handed it whole at its composition root (cmd/lit hands
+// ShippedDeadlines), and a command that spawns a detached worker hands its own
+// on to the worker, so a worker runs under its spawner's figures. A test
+// shrinks or lifts a deadline by handing its own value, never by reaching into
+// a process-wide one. [LAW:no-shared-mutable-globals]
+type Deadlines struct {
+	// MirrorHold is the deadline each background-mirror hold on the live store
+	// runs under: the clone step before the push, and the pushed-head record
+	// after it (RecordPushedHead). It is a deadline, not a bound on the hold: a
+	// cut lands up to mirrorHoldCancelLag later, and mirrorHoldCeiling is the
+	// number that follows from that. TestMirrorHoldBudgetExceedsObservedCloneCost
+	// and TestCoResidentWaitIsSizedToTheMirrorHold pin both relations for the
+	// shipped figure.
+	MirrorHold time.Duration
+	// MirrorPush is the deadline the background mirror's push runs under: the
+	// clone engine's open and the push from it. The close after them takes no
+	// ctx and is not bounded by it. The push traverses the network with no
+	// inherent bound, so the bound is imposed by the actor that owns it. It
+	// holds nothing on the live store; it exists so a stalled transport cannot
+	// wedge the single-flight mirror forever.
+	// TestMirrorPushDeadlineExceedsObservedPushCost pins the shipped figure
+	// against the measured push.
+	MirrorPush time.Duration
+	// Receive bounds the automatic receive — the remote check and the fetch
+	// its detached worker runs when the receive debounce lapses — so an
+	// offline or slow remote cannot keep the worker running indefinitely. A
+	// cut abandons only the fetch (the next interval retries). The fetch runs
+	// on a clone of this store, so this deadline bounds the worker, not a
+	// hold: the live store is held for the clone's copy (under MirrorHold) and
+	// for the landing of the fetch, whose cost is proportional to how far the
+	// remote moved and which only this deadline bounds (LandFetchedHead says
+	// why).
+	Receive time.Duration
+}
 
-// ReceiveDeadline bounds the automatic receive — the remote check and the
-// fetch its detached worker runs when the receive debounce lapses — so an
-// offline or slow remote cannot keep the worker running indefinitely. A cut
-// abandons only the fetch (the next interval retries). The fetch runs on a
-// clone of this store, so this deadline bounds the worker, not a hold: the
-// live store is held for the clone's copy (under MirrorHoldBudget) and for the
-// landing of the fetch, whose cost is proportional to how far the remote moved
-// and which only this deadline bounds (LandFetchedHead says why). A package
-// variable so a test whose subject is not this deadline lifts it out of play.
-// [LAW:one-source-of-truth]
-var ReceiveDeadline = 15 * time.Second
+// ShippedDeadlines is the deadlines lit ships with, each derived above from
+// what it bounds. [LAW:one-source-of-truth]
+func ShippedDeadlines() Deadlines {
+	return Deadlines{MirrorHold: mirrorHoldBudget, MirrorPush: mirrorPushDeadline, Receive: receiveDeadline}
+}
 
-// HistoryBoundDeadline is the deadline a landed push's history bound runs
-// under. The bound crosses the network three times — the re-root's lease
-// push, the remote's GC, the fetch that learns what the remote carries — and
-// each leg is a transport of a push's kind, so each gets the push deadline.
-// The local legs, the re-roots, ride in the stall factor's margin; their cost
-// is reroot.elapsed_ms. The bound's follow collects nothing below the cut:
-// the live store's push verb runs that full GC after the bound, on its own
+// HistoryBound is the deadline a landed push's history bound runs under. The
+// bound crosses the network three times — the re-root's lease push, the
+// remote's GC, the fetch that learns what the remote carries — and each leg
+// is a transport of a push's kind, so each gets the push deadline. The local
+// legs, the re-roots, ride in the stall factor's margin; their cost is
+// reroot.elapsed_ms. The bound's follow collects nothing below the cut: the
+// live store's push verb runs that full GC after the bound, on its own
 // lifetime (collectOwedCut). The remote GC's upload has not been measured
-// against a hosted remote; history_bound.elapsed_ms on the push's event is
-// the figure to re-measure from. A cut bound fails nothing:
-// the push landed. A cut before the re-root reaches the remote leaves the
-// next push past the bound to run it again; a cut after it leaves the
-// remote's history below the cut to the next re-root's GC, which collects it
-// with its own, since the remote's GC replaces nothing once a push lands on
-// top of the re-root. A function because the push deadline it derives from
-// is a variable. [LAW:one-source-of-truth]
-func HistoryBoundDeadline() time.Duration { return 3 * MirrorPushDeadline }
+// against a hosted remote; history_bound.elapsed_ms on the push's event is the
+// figure to re-measure from. A cut bound fails nothing: the push landed. A cut
+// before the re-root reaches the remote leaves the next push past the bound to
+// run it again; a cut after it leaves the remote's history below the cut to
+// the next re-root's GC, which collects it with its own, since the remote's GC
+// replaces nothing once a push lands on top of the re-root. Derived from the
+// push deadline, never held beside it. [LAW:one-source-of-truth]
+func (d Deadlines) HistoryBound() time.Duration { return 3 * d.MirrorPush }
 
 // wrapEngineOpenContention attaches operator guidance to an engine open that
 // exhausted its wait against a held Dolt journal lock, naming who holds it;

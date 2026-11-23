@@ -63,7 +63,7 @@ func TestASnapshotLeavesOutTheRemoteCacheAndStillSyncsOnceRestored(t *testing.T)
 		}
 		sync := openSyncOrFatal(t, ctx, root)
 		defer sync.Close()
-		if _, err := sync.SyncCompactAndPush(ctx, ctx, origin, "master", unfiredBound(t), false, false); err != nil {
+		if _, err := sync.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), origin, "master", unfiredBound(t), false, false); err != nil {
 			t.Fatalf("SyncCompactAndPush(%q) error = %v", title, err)
 		}
 	}

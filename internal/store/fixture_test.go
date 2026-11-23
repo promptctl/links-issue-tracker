@@ -74,12 +74,19 @@ func buildStoreTemplate(dir string) error {
 	return st.Close()
 }
 
+// testDeadlines is the deadlines this package's tests hand the store. The
+// hold budget and the receive's deadline bound local holds here, the work a
+// busy machine slows, so a test with no interest in them would take its
+// verdict from the load. A minute still cuts a hung hold inside the test that
+// met it. A test about a deadline hands its own figure.
+// [LAW:no-ambient-temporal-coupling]
+func testDeadlines() Deadlines {
+	d := ShippedDeadlines()
+	d.MirrorHold, d.Receive = time.Minute, time.Minute
+	return d
+}
+
 func TestMain(m *testing.M) {
-	// These deadlines bound local holds here, the work a busy machine slows, so
-	// a test with no interest in them would take its verdict from the load. A
-	// minute still cuts a hung hold inside the test that met it. A test about a
-	// deadline installs its own figure. [LAW:no-ambient-temporal-coupling]
-	MirrorHoldBudget, ReceiveDeadline = time.Minute, time.Minute
 	os.Exit(withTestMirrorRoot(func() int { return dirtemplate.Run(m, storeTemplate, unrelatedStoreTemplate) }))
 }
 

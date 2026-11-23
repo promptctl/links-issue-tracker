@@ -135,8 +135,8 @@ const (
 // separate process. The automation-trace env is set here so a push that runs
 // and fails records a trace through the one shared writer the pre-push hook
 // already uses. [LAW:one-source-of-truth]
-func spawnBackgroundMirror(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, parentPID int) error {
-	return spawnDetachedWorker(ctx, stderr, ws, backgroundMirrorSubcommand, mirrorLogName, mirrorEnv(env), parentPID)
+func spawnBackgroundMirror(ctx context.Context, inv Invocation, ws workspace.Info, from spawner) error {
+	return spawnDetachedWorker(ctx, inv.withEnv(mirrorEnv(inv.Env)), ws, backgroundMirrorSubcommand, mirrorLogName, from)
 }
 
 // detachedWorkerLeaf is the worker side of spawnDetachedWorker, the one entry
@@ -152,17 +152,29 @@ func spawnBackgroundMirror(ctx context.Context, stderr io.Writer, env environ.En
 // before the worker's own ordering: the store's Location is pure geometry, and
 // a build that fails is handed to the worker, which ends it through its
 // completion seam. [LAW:no-ambient-temporal-coupling]
-func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context.Context, inv Invocation, built workerWorkspace, parentPID int) error) bareLeaf {
+//
+// The worker runs under the deadlines its spawner handed it, not its own
+// process's, and hands them on to any worker it spawns: a run's deadlines are
+// the run's whole tree of processes. A build that failed was handed none, and
+// its worker keeps its own; its completion reads no deadline.
+// [LAW:one-source-of-truth]
+func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context.Context, inv Invocation, built workerWorkspace, from spawner) error) bareLeaf {
 	fs := newCobraFlagSet(subcommand)
 	storageDir := fs.String("store", "", "storage directory of the store the spawning command ran against")
-	parentPID := fs.Int("parent-pid", 0, parentPIDUsage)
+	parentPID := fs.String("parent-pid", "", parentPIDUsage+", or "+strconv.Quote(noSpawnerFlag)+" when no engine of the store's precedes it")
 	return bareLeaf{fs: fs, positionals: 0, work: func(ctx context.Context, inv Invocation, _ struct{}, _ []string) error {
 		if !filepath.IsAbs(*storageDir) {
 			return UsageError{Message: fmt.Sprintf("lit %s: --store must name the store's absolute storage directory, got %q", subcommand, *storageDir)}
 		}
+		from, err := parseSpawner(*parentPID)
+		if err != nil {
+			return UsageError{Message: fmt.Sprintf("lit %s: %v", subcommand, err)}
+		}
 		loc := workspace.LocationFromStorageDir(*storageDir)
 		keepWorkerHoldFromChildren()
-		err := work(ctx, inv, buildWorkerWorkspace(ctx, inv.Stderr, inv.Env, loc, inv.Stdin), *parentPID)
+		built := buildWorkerWorkspace(ctx, inv.Stderr, inv.Env, loc, inv.Stdin, inv.Deadlines)
+		inv.Deadlines = built.deadlines
+		err = work(ctx, inv, built, from)
 		// The workspace's store, once, after the worker's own closes: the clones
 		// a worker pushes and fetches through are its means, not the store it
 		// ran against, and one fact read at each of their closes would keep only
@@ -179,15 +191,13 @@ func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context
 // lives exactly as long as the store, and reads the handoff (workerHandoff)
 // from its stdin. [LAW:one-type-per-behavior] the mirror and the receive are
 // two instances of one detached worker; what differs is the subcommand, the
-// log and the environment, all values. The program the worker runs is the
-// environment's too (environ.Env.Executable): cmd/lit names itself there.
+// log and the environment (inv.Env, the worker's own), all values. Everything
+// about the worker is decided here; inv.Workers only starts it, so which
+// program it runs as is the run's composition root's to say.
 // [LAW:effects-at-boundaries]
-func spawnDetachedWorker(ctx context.Context, stderr io.Writer, ws workspace.Info, subcommand, logName string, env environ.Env, parentPID int) error {
-	self, err := env.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve lit binary: %w", err)
-	}
-	handoff, err := handoffOf(ctx, ws)
+func spawnDetachedWorker(ctx context.Context, inv Invocation, ws workspace.Info, subcommand, logName string, from spawner) error {
+	stderr := inv.Stderr
+	handoff, err := handoffOf(ctx, ws, inv.Deadlines)
 	if err != nil {
 		return err
 	}
@@ -195,13 +205,6 @@ func spawnDetachedWorker(ctx context.Context, stderr io.Writer, ws workspace.Inf
 	if err != nil {
 		return fmt.Errorf("encode the worker's handoff: %w", err)
 	}
-	handoffRead, handoffWrite, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("open the worker's handoff pipe: %w", err)
-	}
-	// Each end is also closed here, so no path leaks one; the read end is
-	// closed early, right after Start, and closing it again is a no-op.
-	defer func() { _ = handoffRead.Close(); _ = handoffWrite.Close() }()
 	// The worker is joinable from before it exists: the shared hold is taken
 	// here and inherited, so there is no instant at which the worker is alive
 	// and unheld. A worker nobody can join is the race the hold exists to
@@ -211,9 +214,21 @@ func spawnDetachedWorker(ctx context.Context, stderr io.Writer, ws workspace.Inf
 	if err != nil {
 		return err
 	}
-	cmd := env.Command(ws.StorageDir, self, subcommand, "--store", ws.StorageDir, "--parent-pid", strconv.Itoa(parentPID))
-	cmd.Stdin = handoffRead
-	cmd.ExtraFiles = holds
+	// The child shares each hold's open file description, so closing the
+	// parent's copy once the worker is started leaves the lock held by the
+	// worker; after a failed start it is the release.
+	defer func() {
+		for _, hold := range holds {
+			_ = hold.Close()
+		}
+	}()
+	worker := detachedWorker{
+		dir:     ws.StorageDir,
+		args:    []string{subcommand, "--store", ws.StorageDir, "--parent-pid", from.flag()},
+		env:     inv.Env,
+		handoff: payload,
+		holds:   holds,
+	}
 	// Route the detached worker's output to a durable log. [LAW:no-silent-failure]
 	// If the log cannot be opened, surface that on the command's terminal-attached
 	// stderr and still spawn with discarded streams — the worker's run matters
@@ -227,39 +242,13 @@ func spawnDetachedWorker(ctx context.Context, stderr io.Writer, ws workspace.Inf
 	if logErr != nil {
 		fmt.Fprintf(stderr, "lit: %s unavailable (%v); background worker output will be discarded\n", logName, logErr)
 	} else {
-		cmd.Stdout, cmd.Stderr = logFile, logFile
+		// The child inherits its own dup of the fd at exec; the parent's copy
+		// is not needed past the start. Closing it cannot affect the child's
+		// logging.
+		defer func() { _ = logFile.Close() }()
+		worker.log = logFile
 	}
-	cmd.SysProcAttr = detachSysProcAttr()
-	startErr := cmd.Start()
-	// The child holds its own copy of the read end from exec on. Closing ours
-	// is what makes a write to a worker that already died fail instead of
-	// waiting on a pipe nobody reads.
-	_ = handoffRead.Close()
-	if logFile != nil {
-		// The child inherited its own dup of the fd at exec; the parent's copy is
-		// no longer needed. Closing it cannot affect the child's logging.
-		_ = logFile.Close()
-	}
-	// The child shares each hold's open file description, so closing the
-	// parent's copy leaves the lock held by the worker; after a failed start
-	// it is the release.
-	for _, hold := range holds {
-		_ = hold.Close()
-	}
-	if startErr != nil {
-		return startErr
-	}
-	// Written after Start, then closed by the defer, so the worker reads the
-	// whole handoff and then EOF. A write the pipe's buffer cannot take waits
-	// for the worker, which reads its handoff first.
-	//
-	// A failed write is a failed spawn: the worker holds the only read end, so
-	// the write fails only once the worker has exited, before it could finish
-	// reading and so before it recorded anything. Its hold went with it.
-	if _, err := handoffWrite.Write(payload); err != nil {
-		return fmt.Errorf("write the worker's handoff: %w", err)
-	}
-	return nil
+	return inv.Workers.start(worker)
 }
 
 // mirrorEnv builds the detached mirror's environment: the parent's environment
@@ -299,7 +288,7 @@ func workerEnv(parent environ.Env, strip []string, set ...string) environ.Env {
 // the loser still exits without opening a store, writing a trace, or creating a
 // file — the quiescence property test cleanups rely on.
 func backgroundMirrorLeaf() bareLeaf {
-	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, parentPID int) error {
+	return detachedWorkerLeaf(backgroundMirrorSubcommand, "PID of the spawning command; the mirror waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, from spawner) error {
 		ws := built.ws
 		// A live mirror IS the coverage the claim protocol counts on, and its
 		// liveness is proven by the kernel: hold the beacon shared from entry —
@@ -340,13 +329,13 @@ func backgroundMirrorLeaf() bareLeaf {
 		// precondition is unmet — abort rather than race a live engine. A wait cut
 		// short by teardown is not that failure: it ends as a teardown, below.
 		// [LAW:no-ambient-temporal-coupling]
-		if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
+		if !from.awaitExit(ctx, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 			if ctx.Err() != nil {
 				return teardownMirror(inv.Stderr, inv.Env, ws, ctx.Err(), stopAnswering)
 			}
 			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, fmt.Errorf(
-				"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
-				parentPID, workerParentWaitTimeout), stopAnswering)
+				"spawning command (%s) still running after %s; skipping mirror to avoid racing its engine",
+				from, workerParentWaitTimeout), stopAnswering)
 		}
 		// A workspace that could not be built ends like the mirror's other
 		// pre-attempt deaths, once the parent has exited, so no push outcome is
@@ -356,6 +345,12 @@ func backgroundMirrorLeaf() bareLeaf {
 			return completeMirrorWithoutAttempt(ctx, inv.Stderr, inv.Env, ws, built.failed, stopAnswering)
 		}
 
+		// The loop ends on exactly six paths, each a return below: teardown
+		// (ctx done), a sync-push lock that cannot be read, a lost
+		// single-flight race, a cycle that never reached its attempt, a
+		// re-check that cannot give a verdict, and a re-check that finds no
+		// claim landed after the cycle began. One path does not end it: a
+		// claim that did land runs another whole cycle.
 		for {
 			// Teardown owns the loop's lifetime: once the context is done (the
 			// SIGTERM grace window), starting another engine cycle would fight the
@@ -383,7 +378,7 @@ func backgroundMirrorLeaf() bareLeaf {
 			// Replaced on the worker's one Info, so the cycle and everything after
 			// it read the same remotes. [LAW:one-source-of-truth]
 			ws.Remotes = ws.Remotes.Reread()
-			attempted := mirrorCycle(ctx, inv.Stderr, inv.Env, inv.Stdout, ws, stopAnswering)
+			attempted := mirrorCycle(ctx, inv.Stderr, inv.Env, inv.Stdout, inv.Deadlines, ws, stopAnswering)
 			// Released only after the cycle's engine has closed (mirrorCycle's
 			// deferred Close), so the lock brackets the whole session. The kernel
 			// drops the flock on process exit, so an unlock error cannot strand
@@ -414,8 +409,8 @@ func backgroundMirrorLeaf() bareLeaf {
 			// claimant's closed session, which is the proof. An extra cycle for a
 			// claim that WAS already covered is an up-to-date push — cheap, and
 			// always on the correct side. [LAW:dataflow-not-control-flow] every
-			// cycle runs the same path; only the marker decides whether another
-			// begins.
+			// cycle runs the same path; the marker is what decides between this
+			// path and the re-check's ending above.
 		}
 	})
 }
@@ -473,9 +468,6 @@ type liveClone struct {
 	dir string
 	// databasePath is the cloned dolt root, an engine-openable store.
 	databasePath string
-	// held is how long the live store was held for the take: from the last
-	// lock acquired to the first released, measured inside the hold.
-	held time.Duration
 	// taken is the clone as it was taken, read before any session opened on
 	// it: what a landing of its fetch requires the live store to still hold
 	// (store.LandFetchedHead).
@@ -500,52 +492,53 @@ func (c liveClone) remove() error {
 // is what proves any tree already under base belongs to a holder that died,
 // and so what makes the sweep safe.
 //
-// The copy runs under store.MirrorHoldBudget, and only the copy: the lock
-// waits before it are bounded by their own retry budgets and are waiting, not
-// holding. cut reports that the budget, not the work, ended the hold; the
-// wording of that is the caller's. [LAW:single-enforcer] one take, whoever
-// clones.
+// The copy runs under holdBudget (store.Deadlines.MirrorHold), and only the
+// copy: the lock waits before it are bounded by their own retry budgets and
+// are waiting, not holding. The take's account of its hold (cloneHold) comes
+// back whether the take succeeded or not; the wording of a cut is the
+// caller's. A failed take returns the zero liveClone: there is no clone.
+// [LAW:single-enforcer] one take, whoever clones.
 //
 // Once the hold is released the clone is read as taken (store.ReadTakenClone),
 // before anything runs on it; a clone that will not open for that read fails
 // the take, since the session the caller opens on it next would not open
 // either.
-func cloneLiveStore(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, base string, underHold func()) (clone liveClone, cut bool, err error) {
+func cloneLiveStore(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, base string, holdBudget time.Duration, underHold func()) (clone liveClone, hold cloneHold, err error) {
 	mirrorRoot, err := store.MirrorRootOf(env)
 	if err != nil {
-		return liveClone{}, false, err
+		return liveClone{}, cloneHold{}, err
 	}
 	// A dead holder's clone keeps its git mirror base outside base, so the
 	// base goes first, by the same sweep, on the same schedule.
 	if err := store.SweepMirrorBasesUnder(mirrorRoot, base); err != nil {
-		return liveClone{}, false, fmt.Errorf("collect a dead holder's clone mirrors under %s: %w", base, err)
+		return liveClone{}, cloneHold{}, fmt.Errorf("collect a dead holder's clone mirrors under %s: %w", base, err)
 	}
 	if err := os.RemoveAll(base); err != nil {
-		return liveClone{}, false, fmt.Errorf("collect a dead holder's clone under %s: %w", base, err)
+		return liveClone{}, cloneHold{}, fmt.Errorf("collect a dead holder's clone under %s: %w", base, err)
 	}
 	dir := filepath.Join(base, strconv.FormatInt(time.Now().UnixNano(), 10))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return liveClone{}, false, fmt.Errorf("create clone dir: %w", err)
+		return liveClone{}, cloneHold{}, fmt.Errorf("create clone dir: %w", err)
 	}
 	clone = liveClone{dir: dir, databasePath: filepath.Join(dir, "dolt"), mirrorRoot: mirrorRoot}
 	var holdStart time.Time
 	err = withDoltDirectoryHeld(ctx, stderr, ws, func() error {
 		holdStart = time.Now()
-		holdCtx, cancel := context.WithTimeout(ctx, store.MirrorHoldBudget)
+		holdCtx, cancel := context.WithTimeout(ctx, holdBudget)
 		defer cancel()
 		if err := dbsnapshot.CloneTree(holdCtx, ws.DatabasePath, clone.databasePath); err != nil {
-			cut = holdCtx.Err() != nil && ctx.Err() == nil
+			hold.cut = holdCtx.Err() != nil && ctx.Err() == nil
 			return fmt.Errorf("clone the store: %w", err)
 		}
 		if err := store.SeedCloneMirrors(holdCtx, mirrorRoot, ws.DatabasePath, clone.databasePath); err != nil {
-			cut = holdCtx.Err() != nil && ctx.Err() == nil
+			hold.cut = holdCtx.Err() != nil && ctx.Err() == nil
 			return fmt.Errorf("clone the store: %w", err)
 		}
 		underHold()
 		return nil
 	})
 	if !holdStart.IsZero() {
-		clone.held = time.Since(holdStart)
+		hold.held = time.Since(holdStart)
 	}
 	if err == nil {
 		clone.taken, err = store.ReadTakenClone(ctx, clone.databasePath)
@@ -561,9 +554,19 @@ func cloneLiveStore(ctx context.Context, stderr io.Writer, env environ.Env, ws w
 		// The hold's cost travels with the failure: a cut hold reported as
 		// hold=0s is the one reading a cut's explanation tells the operator
 		// to consult, erased. [LAW:no-silent-failure]
-		return liveClone{held: clone.held}, cut, err
+		return liveClone{}, hold, err
 	}
-	return clone, false, nil
+	return clone, cloneHold{held: hold.held}, nil
+}
+
+// cloneHold is a take's account of its hold on the live store, kept whether
+// the take succeeded or not.
+type cloneHold struct {
+	// held is how long the live store was held for the take: from the last
+	// lock acquired to the first released, measured inside the hold.
+	held time.Duration
+	// cut says the hold budget, not the work, ended a take that failed.
+	cut bool
 }
 
 // takeMirrorClone takes this cycle's clone of the live store under exactly
@@ -592,22 +595,23 @@ func cloneLiveStore(ctx context.Context, stderr io.Writer, env environ.Env, ws w
 // which is why collection lives here and not on some later path a crash can
 // skip. [LAW:no-ambient-temporal-coupling]
 //
-// The clone itself runs under store.MirrorHoldBudget, and only the clone:
+// The clone itself runs under holdBudget, and only the clone:
 // the lock waits before it are bounded by their own retry budgets and are
 // waiting, not holding. A clone still running at the deadline is not a slow
 // copy, it is a stalled one, and the cut is reported as such through the
 // could-not-attempt seam — the hold explanation names the step so the reader
-// does not go looking for a network fault.
-func takeMirrorClone(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) (mirrorClone, error) {
-	clone, cut, err := cloneLiveStore(ctx, stderr, env, ws, mirrorCloneBase(ws), func() { clearMirrorPending(stderr, ws) })
+// does not go looking for a network fault. held is how long the take held the
+// live store, whether it succeeded or not.
+func takeMirrorClone(ctx context.Context, stderr io.Writer, env environ.Env, holdBudget time.Duration, ws workspace.Info) (clone mirrorClone, held time.Duration, err error) {
+	taken, hold, err := cloneLiveStore(ctx, stderr, env, ws, mirrorCloneBase(ws), holdBudget, func() { clearMirrorPending(stderr, ws) })
 	if err != nil {
 		err = fmt.Errorf("take the push's clone: %w", err)
-		if cut {
-			err = fmt.Errorf("%w: %w", holdBudgetCutExplanation("cloning the store"), err)
+		if hold.cut {
+			err = fmt.Errorf("%w: %w", holdBudgetCutExplanation("cloning the store", holdBudget), err)
 		}
-		return mirrorClone{liveClone{held: clone.held}}, err
+		return mirrorClone{}, hold.held, err
 	}
-	return mirrorClone{clone}, nil
+	return mirrorClone{taken}, hold.held, nil
 }
 
 // remove discards the cycle's clone. Loud on the log, never fatal: the push
@@ -709,7 +713,7 @@ func (p pushedHead) liveStoreStep() liveStoreStep {
 //
 // The push — performSyncPush clears nothing here (the take already did, see
 // takeMirrorClone) and completes the attempt's outcome record on every path —
-// runs under store.MirrorPushDeadline. Nothing on the live store waits on it,
+// runs under deadlines.MirrorPush. Nothing on the live store waits on it,
 // but the mirror process holds the single-flight lock for its whole run and
 // every mirror spawned meanwhile loses that race and exits, so a transport
 // that stalls would stop pushes for as long as it cared to. The deadline
@@ -734,21 +738,21 @@ func (p pushedHead) liveStoreStep() liveStoreStep {
 // push= too, under its own deadline; its share is history_bound.elapsed_ms.
 // Only a cycle that holds the single-flight lock writes: a mirror that loses
 // the race stays silent, as the quiescence property requires.
-func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
+func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, deadlines store.Deadlines, ws workspace.Info, stopAnswering func()) (attempted bool) {
 	start := time.Now()
-	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s, push deadline %s)\n", start.UTC().Format(time.RFC3339), store.MirrorHoldBudget, store.MirrorPushDeadline)
-	clone, err := takeMirrorClone(ctx, stderr, env, ws)
+	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s, push deadline %s)\n", start.UTC().Format(time.RFC3339), deadlines.MirrorHold, deadlines.MirrorPush)
+	clone, held, err := takeMirrorClone(ctx, stderr, env, deadlines.MirrorHold, ws)
 	if err != nil {
 		_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, err, stopAnswering)
 		fmt.Fprintf(log, "%s mirror cycle end attempted=false push_deadline_cut=false hold=%s elapsed=%s\n",
-			time.Now().UTC().Format(time.RFC3339), clone.held.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+			time.Now().UTC().Format(time.RFC3339), held.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 		return false
 	}
 	defer clone.remove(log)
-	fmt.Fprintf(log, "%s mirror hold released step=clone elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), clone.held.Round(time.Millisecond))
+	fmt.Fprintf(log, "%s mirror hold released step=clone elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), held.Round(time.Millisecond))
 
 	pushStart := time.Now()
-	pushCtx, cancel := context.WithTimeout(ctx, store.MirrorPushDeadline)
+	pushCtx, cancel := context.WithTimeout(ctx, deadlines.MirrorPush)
 	defer cancel()
 	// ending is the error the attempt ended on, every step's verdict on the
 	// push deadline already taken inside it where that step returned. A push
@@ -762,20 +766,20 @@ func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.
 		session, closeStore, err := openSyncSessionAt(pushCtx, env, stderr, clone.databasePath, ws.WorkspaceID)
 		openElapsed = time.Since(pushStart)
 		if err != nil {
-			ending = cutByPushDeadline(pushCtx, ctx, fmt.Errorf("open sync store on the clone: %w", err))
+			ending = cutByPushDeadline(pushCtx, ctx, deadlines.MirrorPush, fmt.Errorf("open sync store on the clone: %w", err))
 			_ = completeMirrorWithoutAttempt(ctx, stderr, env, ws, ending, stopAnswering)
 			return false
 		}
 		defer closeStore()
-		landed, ending = mirrorOnce(pushCtx, ctx, stderr, env, session, ws)
+		landed, ending = mirrorOnce(pushCtx, ctx, stderr, env, deadlines, session, ws)
 		return true
 	}()
 	pushElapsed := time.Since(pushStart)
 
-	record, recordHeld := liveStoreLearns(ctx, stderr, env, log, ws, clone.liveClone, landed)
+	record, recordHeld := liveStoreLearns(ctx, stderr, env, log, deadlines, ws, clone.liveClone, landed)
 	fmt.Fprintf(log, "%s mirror cycle end attempted=%t push_deadline_cut=%t hold=%s record=%s ref=%s open=%s push=%s elapsed=%s\n",
 		time.Now().UTC().Format(time.RFC3339), attempted, pushDeadlineCutOf(ending),
-		clone.held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+		held.Round(time.Millisecond), recordHeld.Round(time.Millisecond), record, openElapsed.Round(time.Millisecond), pushElapsed.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 	return attempted
 }
 
@@ -790,17 +794,17 @@ func mirrorCycle(ctx context.Context, stderr io.Writer, env environ.Env, log io.
 // so it lands the clone's fetch and follows the same re-root, which arrives
 // at the hashes the clone pushed. [LAW:one-source-of-truth] the tracking ref
 // still says where the remote is, through the receive's own landing.
-func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, ws workspace.Info, clone liveClone, landed pushedHead) (record store.PushedHeadRecord, recordHeld time.Duration) {
+func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log io.Writer, deadlines store.Deadlines, ws workspace.Info, clone liveClone, landed pushedHead) (record store.PushedHeadRecord, recordHeld time.Duration) {
 	step := landed.liveStoreStep()
 	var stepErr error
 	switch step {
 	case liveStoreReceives:
-		stepErr = receivePushedReRoot(ctx, stderr, env, ws, clone, landed)
+		stepErr = receivePushedReRoot(ctx, stderr, env, deadlines.Receive, ws, clone, landed)
 		fmt.Fprintf(log, "%s mirror step=receive_reroot received=%t err=%v\n", time.Now().UTC().Format(time.RFC3339), stepErr == nil, stepErr)
 	case liveStoreRecords:
 		recordStart := time.Now()
 		var recordErr error
-		record, recordErr = store.RecordPushedHead(ctx, stderr, ws.DatabasePath, landed.remote, landed.branch, landed.head, landed.proven.record())
+		record, recordErr = store.RecordPushedHead(ctx, stderr, ws.DatabasePath, deadlines.MirrorHold, landed.remote, landed.branch, landed.head, landed.proven.record())
 		recordHeld = time.Since(recordStart)
 		if recordErr != nil {
 			// The push landed and its outcome stands; what failed is the
@@ -809,7 +813,7 @@ func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log
 			// named as the budget's doing, through the one wording the clone
 			// step uses. [LAW:no-silent-failure] [LAW:one-source-of-truth]
 			if errors.Is(recordErr, store.ErrHoldCut) {
-				recordErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation("recording the pushed head"), recordErr)
+				recordErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation("recording the pushed head", deadlines.MirrorHold), recordErr)
 			}
 			// Which write failed decides the consequence: the tracking ref's
 			// (freshness reads are wrong until the next fetch) or only the
@@ -841,10 +845,11 @@ func liveStoreLearns(ctx context.Context, stderr io.Writer, env environ.Env, log
 // for the mirror's log. It does not hold the receive lock, so it reads the run
 // of post-fetch stops and leaves writing it to the automatic receive, which
 // fetches past the head this push moved and counts its own stop
-// (leaveUnsettledRun).
-func receivePushedReRoot(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, landed pushedHead) error {
+// (leaveUnsettledRun). landDeadline is the landing's hold deadline, the
+// receive's own (store.Deadlines.Receive).
+func receivePushedReRoot(ctx context.Context, stderr io.Writer, env environ.Env, landDeadline time.Duration, ws workspace.Info, clone liveClone, landed pushedHead) error {
 	target := syncTarget{remote: landed.remote, branch: landed.branch, skip: syncTargetReady}
-	outcome, closeLive := performSyncReceive(ctx, stderr, env, ws, clone, receiveFetch{target: target, pruned: landed.pruned}, leaveUnsettledRun(ws.DatabasePath))
+	outcome, closeLive := performSyncReceive(ctx, stderr, env, landDeadline, ws, clone, receiveFetch{target: target, pruned: landed.pruned}, leaveUnsettledRun(ws.DatabasePath))
 	if err := closeLive(); err != nil {
 		fmt.Fprintf(stderr, "lit: on-change mirror: live store not closed cleanly after receiving its re-rooted push: %v\n", err)
 	}
@@ -864,11 +869,12 @@ func receivePushedReRoot(ctx context.Context, stderr io.Writer, env environ.Env,
 // store", "recording the pushed head"). It refuses to name a cause beyond
 // what the deadline established — the hold ran past twice the slowest healthy
 // one ever measured — and names the evidence that separates a stalled disk
-// from an undersized budget. [LAW:one-source-of-truth] [FRAMING:representation]
-func holdBudgetCutExplanation(step string) error {
+// from an undersized budget; budget is the one that cut it.
+// [LAW:one-source-of-truth] [FRAMING:representation]
+func holdBudgetCutExplanation(step string, budget time.Duration) error {
 	return fmt.Errorf(
 		"mirror hold exceeded its %s budget %s — a deadline, not a diagnosis: check %s before blaming the disk. Its hold= and record= values say which: holds clustered just under the budget mean the budget is sized under this store's real cost; one hold far past it means the work stopped making progress. The live store is released as the cut unwinds, and the next mutation's mirror retries",
-		store.MirrorHoldBudget, step, mirrorLogName)
+		budget, step, mirrorLogName)
 }
 
 // pushDeadlineCut is an attempt's ending error once the push deadline is
@@ -893,13 +899,14 @@ func (c pushDeadlineCut) Unwrap() error { return c.cause }
 // not. Foreground callers pass one lifetime twice, so it never holds for
 // them. Every later reader — the log line, the trace, the outcome record —
 // reads the verdict off the error with pushDeadlineCutOf, never off a clock,
-// whose reading would drift with whatever ran after the step.
+// whose reading would drift with whatever ran after the step. deadline is the
+// push deadline ctx runs under, which a cut names.
 // [LAW:single-enforcer]
-func cutByPushDeadline(ctx, completionCtx context.Context, err error) error {
+func cutByPushDeadline(ctx, completionCtx context.Context, deadline time.Duration, err error) error {
 	if err == nil || ctx.Err() == nil || completionCtx.Err() != nil {
 		return err
 	}
-	return pushDeadlineCut{explanation: pushDeadlineCutExplanation(), cause: err}
+	return pushDeadlineCut{explanation: pushDeadlineCutExplanation(deadline), cause: err}
 }
 
 // pushDeadlineCutOf reads the verdict cutByPushDeadline took for the
@@ -933,10 +940,10 @@ func pushDeadlineCutOf(err error) bool {
 // longer (a value in minutes renders as "1h40m0s", not "40s") cannot push it
 // over. TestDeadlineCutFramingSurvivesTheBanner pins that, because a margin
 // nobody measures is how an invariant asserted in a comment stops being one.
-func pushDeadlineCutExplanation() error {
+func pushDeadlineCutExplanation(deadline time.Duration) error {
 	return fmt.Errorf(
 		"mirror push exceeded its %s deadline — a deadline, not a diagnosis: check %s's push= values before blaming the remote. Pushes clustered just under the deadline mean it is sized under this workspace's real push cost; one push far past it means the transport stopped answering, or the clone's open did when open= carries the time. Nothing on the live store waits on the push, and the next mutation's mirror retries it",
-		store.MirrorPushDeadline, mirrorLogName)
+		deadline, mirrorLogName)
 }
 
 // mirrorOnce runs the one shared push path from the clone's session, without
@@ -954,7 +961,7 @@ func pushDeadlineCutExplanation() error {
 // commit that lands after the clone is a fresh mirror-pending claim, and the
 // caller's post-release re-check answers it with another whole cycle. The
 // unsynced window shrinks toward zero without ever blocking a mutation.
-func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info) (pushedHead, error) {
+func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, deadlines store.Deadlines, session syncSession, ws workspace.Info) (pushedHead, error) {
 	// The mirror pushes without compaction, from a clone: SyncPushFromClone,
 	// never the compact-and-push variant the explicit command uses. The clone
 	// variant is what makes a race with that explicit command safe — nothing
@@ -962,7 +969,7 @@ func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env enviro
 	// this one is in flight, and the rejection that follows is judged by
 	// whether the remote carries the clone's head, not reported as a failure
 	// over a remote that is fully up to date.
-	outcome, err := performSyncPush(ctx, completionCtx, stderr, env, session, ws, "", syncPushCommand, false, false, session.syncer.SyncPushFromClone)
+	outcome, err := performSyncPush(ctx, completionCtx, stderr, env, deadlines, session, ws, "", syncPushCommand, false, false, session.syncer.SyncPushFromClone)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
 		// own deferred completion already recorded the outcome, but no trace,
@@ -993,36 +1000,6 @@ func mirrorOnce(ctx, completionCtx context.Context, stderr io.Writer, env enviro
 	// which followedReRoot reports. The live store learns it through
 	// RecordPushedHead, or by receiving a re-rooted push.
 	return pushedHead{remote: outcome.remote, branch: outcome.branch, head: outcome.head, proven: outcome.proven, followedReRoot: len(session.syncer.FollowedReRoots()) > 0, reRoot: outcome.reRoot, pruned: session.syncer.PrunedRefs()}, nil
-}
-
-// waitForParentExit blocks until the spawning command has exited, returning
-// true, or the timeout elapses with it still alive, returning false. It watches
-// the worker's own parent pid (getppid): the detached worker is a direct child
-// of the spawning command, so when that command exits the worker is reparented
-// (to init or a subreaper) and getppid stops equalling parentPID. This is robust
-// where a kill(pid,0) probe is not — a zombie parent still answers kill(pid,0)
-// until it is reaped (delaying the mirror past the actual exit), and a reused
-// pid could be mistaken for the original; reparenting happens at exit, before
-// reaping, and getppid reports the real current parent. [LAW:no-ambient-temporal-coupling]
-// The ordering owner is the getppid check, not the sleep, which is only the poll
-// interval; the boolean distinguishes "parent exited" from "parent outlived the
-// wait" so the caller aborts rather than proceeding blindly on a timeout.
-// getppid is a parameter so the wait is testable without a real process tree.
-// A done context also ends the wait (false): a mirror in the SIGTERM grace
-// window must spend it releasing state, not sleeping toward a deadline; the
-// caller tells teardown from timeout by ctx.Err().
-func waitForParentExit(ctx context.Context, parentPID int, getppid func() int, timeout, poll time.Duration) bool {
-	if parentPID <= 0 {
-		return true
-	}
-	deadline := time.Now().Add(timeout)
-	for getppid() == parentPID {
-		if ctx.Err() != nil || time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(poll)
-	}
-	return true
 }
 
 // completeMirrorWithoutAttempt is the completion path for a mirror that died

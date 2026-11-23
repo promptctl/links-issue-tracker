@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // TestCutByPushDeadline pins the one verdict every step the push deadline
@@ -29,14 +31,14 @@ func TestCutByPushDeadline(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := cutByPushDeadline(tc.ctx, tc.completionCtx, tc.err)
+			got := cutByPushDeadline(tc.ctx, tc.completionCtx, time.Minute, tc.err)
 			if pushDeadlineCutOf(got) != tc.wantCut {
 				t.Fatalf("cutByPushDeadline() = %v, cut = %t; want cut = %t", got, pushDeadlineCutOf(got), tc.wantCut)
 			}
 			if !errors.Is(got, tc.err) {
 				t.Fatalf("cutByPushDeadline() = %v; it must keep the step's error %v readable", got, tc.err)
 			}
-			if tc.wantCut && !strings.HasPrefix(got.Error(), pushDeadlineCutExplanation().Error()+": ") {
+			if tc.wantCut && !strings.HasPrefix(got.Error(), pushDeadlineCutExplanation(time.Minute).Error()+": ") {
 				t.Fatalf("cut error %q does not lead with the deadline's explanation", got)
 			}
 		})
@@ -55,7 +57,7 @@ func endedContext() context.Context {
 // ended under a live completion lifetime: through cutByPushDeadline, the one
 // constructor of the verdict.
 func cutAtTheDeadline(err error) error {
-	return cutByPushDeadline(endedContext(), context.Background(), err)
+	return cutByPushDeadline(endedContext(), context.Background(), store.ShippedDeadlines().MirrorPush, err)
 }
 
 // TestMirrorEnvStripsInheritedTraceRefFile pins that the detached mirror never
@@ -97,27 +99,44 @@ func TestMirrorEnvStripsInheritedTraceRefFile(t *testing.T) {
 	}
 }
 
-// TestWaitForParentExitReturnsImmediatelyForNoParent pins the sentinel: a
-// non-positive parent pid means "no parent to wait for", so the mirror proceeds
-// at once (true) without polling.
-func TestWaitForParentExitReturnsImmediatelyForNoParent(t *testing.T) {
+// --parent-pid names the spawner as its pid or as "none", and nothing else:
+// a worker handed a zero, a negative, or no spawner at all is refused, so no
+// worker skips its wait by omission.
+func TestParseSpawnerNamesAPidOrNone(t *testing.T) {
 	t.Parallel()
-	calls := 0
-	got := waitForParentExit(context.Background(), 0, func() int { calls++; return 4242 }, time.Second, time.Millisecond)
-	if !got {
-		t.Fatal("waitForParentExit(0, ...) must report success without waiting")
+	for flag, want := range map[string]spawner{"none": noSpawner{}, "4242": spawnedBy(4242)} {
+		if got, err := parseSpawner(flag); err != nil || got != want {
+			t.Errorf("parseSpawner(%q) = %v, %v; want %v", flag, got, err, want)
+		}
+		if got, _ := parseSpawner(want.flag()); got != want {
+			t.Errorf("parseSpawner(%v.flag()) = %v; want %v back", want, got, want)
+		}
 	}
-	if calls != 0 {
-		t.Fatalf("getppid was polled %d times for a no-parent wait, want 0", calls)
+	for _, flag := range []string{"", "0", "-1", "pid"} {
+		if got, err := parseSpawner(flag); err == nil {
+			t.Errorf("parseSpawner(%q) = %v; want it refused", flag, got)
+		}
 	}
 }
 
-// TestWaitForParentExitReturnsWhenReparented is the load-bearing proof: while
+// A worker handed no spawner proceeds at once, without polling.
+func TestAWorkerHandedNoSpawnerWaitsForNone(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	if !(noSpawner{}).awaitExit(context.Background(), func() int { calls++; return 4242 }, time.Second, time.Millisecond) {
+		t.Fatal("noSpawner.awaitExit must report success without waiting")
+	}
+	if calls != 0 {
+		t.Fatalf("getppid was polled %d times for a worker handed no spawner, want 0", calls)
+	}
+}
+
+// TestASpawnedWorkerWaitsUntilReparented is the load-bearing proof: while
 // getppid still names the spawning command the wait blocks, and as soon as the
 // worker is reparented (getppid changes) it returns true. The injected getppid
 // flips after a few polls, standing in for the parent exiting — no real process
 // tree, no platform sleep binary.
-func TestWaitForParentExitReturnsWhenReparented(t *testing.T) {
+func TestASpawnedWorkerWaitsUntilReparented(t *testing.T) {
 	t.Parallel()
 	const parentPID = 5150
 	polls := 0
@@ -128,37 +147,37 @@ func TestWaitForParentExitReturnsWhenReparented(t *testing.T) {
 		}
 		return 1 // reparented to init: parent exited
 	}
-	if !waitForParentExit(context.Background(), parentPID, getppid, time.Second, time.Millisecond) {
-		t.Fatal("waitForParentExit must report success once getppid stops naming the parent")
+	if !spawnedBy(parentPID).awaitExit(context.Background(), getppid, time.Second, time.Millisecond) {
+		t.Fatal("awaitExit must report success once getppid stops naming the parent")
 	}
 	if polls < 3 {
 		t.Fatalf("expected the wait to poll until reparented, got %d polls", polls)
 	}
 }
 
-// TestWaitForParentExitReportsTimeout pins the other half: when
+// TestASpawnedWorkerReportsASpawnerThatOutlivesTheWait pins the other half: when
 // the parent outlives the wait (getppid never changes), the result is false so
 // the caller aborts instead of opening the store.
-func TestWaitForParentExitReportsTimeout(t *testing.T) {
+func TestASpawnedWorkerReportsASpawnerThatOutlivesTheWait(t *testing.T) {
 	t.Parallel()
 	const parentPID = 5151
-	if waitForParentExit(context.Background(), parentPID, func() int { return parentPID }, 30*time.Millisecond, time.Millisecond) {
-		t.Fatal("waitForParentExit must report false when the parent never exits before the timeout")
+	if spawnedBy(parentPID).awaitExit(context.Background(), func() int { return parentPID }, 30*time.Millisecond, time.Millisecond) {
+		t.Fatal("awaitExit must report false when the parent never exits before the timeout")
 	}
 }
 
-// TestWaitForParentExitEndsOnTeardown pins that a done context ends the wait
+// TestASpawnedWorkersWaitEndsOnTeardown pins that a done context ends the wait
 // immediately (false), long before the deadline: a mirror in its SIGTERM grace
 // window must spend it releasing state, not sleeping toward a timeout it will
 // be killed before reaching.
-func TestWaitForParentExitEndsOnTeardown(t *testing.T) {
+func TestASpawnedWorkersWaitEndsOnTeardown(t *testing.T) {
 	t.Parallel()
 	const parentPID = 5152
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if waitForParentExit(ctx, parentPID, func() int { return parentPID }, time.Minute, time.Millisecond) {
-		t.Fatal("waitForParentExit must report false when torn down mid-wait")
+	if spawnedBy(parentPID).awaitExit(ctx, func() int { return parentPID }, time.Minute, time.Millisecond) {
+		t.Fatal("awaitExit must report false when torn down mid-wait")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("teardown took %s to end the wait; it must not sleep toward the deadline", elapsed)

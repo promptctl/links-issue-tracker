@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // withEnv changes the environment and nothing else. The fixture sets every
@@ -15,12 +16,14 @@ func TestWithEnvKeepsEveryOtherField(t *testing.T) {
 	t.Parallel()
 	var stdout, stderr strings.Builder
 	inv := Invocation{
-		Dir:    WorkingDirOf("/work", nil),
-		Args:   []string{"version"},
-		Env:    environ.Of([]string{"A=1"}),
-		Stdin:  strings.NewReader("in"),
-		Stdout: &stdout,
-		Stderr: &stderr,
+		Dir:       WorkingDirOf("/work", nil),
+		Args:      []string{"version"},
+		Env:       environ.Of([]string{"A=1"}),
+		Stdin:     strings.NewReader("in"),
+		Stdout:    &stdout,
+		Stderr:    &stderr,
+		Workers:   LaunchWorkersAs("/opt/lit", nil),
+		Deadlines: store.ShippedDeadlines(),
 	}
 	replacement := environ.Of([]string{"B=2"})
 	got := inv.withEnv(replacement)

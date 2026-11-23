@@ -180,7 +180,7 @@ func TestLandFetchedHeadCarriesAClonesFetchToTheLiveStore(t *testing.T) {
 	f.push(peer, false)
 
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "master", nil)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -231,7 +231,7 @@ func TestLandFetchedHeadRecordsWhatTheFetchSaw(t *testing.T) {
 	}
 	land := func(f *landFixture, clone TakenClone) LandedFetch {
 		t.Helper()
-		landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "master", nil)
+		landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}
@@ -382,7 +382,7 @@ func TestALandingNeverWindsTheLiveRefBackAcrossACut(t *testing.T) {
 		t.Fatalf("the push past the bound = %+v, collection %+v; want it fired and the store collected", fired, collected)
 	}
 
-	landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), live, clone, remoteName(t, "origin"), "master", nil)
+	landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -409,7 +409,7 @@ func TestLandFetchedHeadLeavesTheLiveStoreAloneForAnAbsentBranch(t *testing.T) {
 	f := newLandFixture(t)
 	before := f.trackingRef()
 	clone := f.fetchedClone()
-	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "no-such-branch", nil)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "no-such-branch", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -508,7 +508,7 @@ func TestLandFetchedHeadCarriesTheClonesPrunes(t *testing.T) {
 	if !slices.Equal(pruned, wantPruned) {
 		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v", pruned, wantPruned)
 	}
-	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -557,7 +557,7 @@ func TestLandFetchedHeadLeavesRefsTheLiveStoreWroteSinceTheTake(t *testing.T) {
 		t.Fatalf("live tracking refs before the landing = %v, want feature at %s and newer", trackedBefore, recreated)
 	}
 
-	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -602,7 +602,7 @@ func TestLandFetchedHeadLeavesARefTheClonesSessionFetchedBack(t *testing.T) {
 		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v", pruned, wantPruned)
 	}
 
-	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -649,7 +649,7 @@ func TestLandFetchedHeadPrunesARefTheClonesSessionMovedFirst(t *testing.T) {
 		t.Fatalf("the clone's PrunedRefs() = %+v, want %+v, pruned past the taken %s", pruned, wantPruned, trackedBefore["feature"])
 	}
 
-	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -685,7 +685,7 @@ func TestLandFetchedHeadKeepsTheSyncBranchsForkPointAcrossARePoint(t *testing.T)
 	f.close(st)
 
 	clone, pruned := f.prunedClone()
-	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, clone, remoteName(t, "origin"), "master", pruned)
+	landed, err := LandFetchedHead(f.ctx, testEnv(), testStderr(), f.live, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", pruned)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}
@@ -736,7 +736,7 @@ func TestLandFetchedHeadKeepsAFollowTheLiveStoreRanDuringTheClonesFetch(t *testi
 		t.Fatalf("the clone's fork point is %q; want the pre-cut head its snapshot shared with the remote", cloneForkPoint)
 	}
 
-	landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), r.bravo, clone, remoteName(t, "origin"), "master", nil)
+	landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), r.bravo, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", nil)
 	if err != nil {
 		t.Fatalf("LandFetchedHead() error = %v", err)
 	}

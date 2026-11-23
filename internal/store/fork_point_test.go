@@ -562,7 +562,7 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 	if err := delta.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
-	pushed, err := delta.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), false, false)
+	pushed, err := delta.SyncPushFromClone(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), false, false)
 	if !errors.Is(err, storage.ErrPushDiverged) {
 		t.Fatalf("SyncPushFromClone() = %+v, %v; want the refusal as %v, since the remote does not carry delta's head", pushed, err, storage.ErrPushDiverged)
 	}
@@ -748,7 +748,7 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 		{FetchedHeadMoved, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.adopted, Outcome: storage.ForkPointRecorded}},
 		{FetchedHeadUnchanged, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.remoteHead, Outcome: storage.ForkPointKept}},
 	} {
-		landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), f.delta, clone, remoteName(t, "origin"), "master", nil)
+		landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), f.delta, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -92,7 +93,7 @@ type Syncer interface {
 	// of it), the result is Superseded rather than an error, because the goal
 	// state holds. A rejection the re-check does not explain is the error.
 	// A push that lands keeps the history bound, as SyncCompactAndPush's does.
-	SyncPushFromClone(ctx, boundLifetime context.Context, remote RemoteName, branch string, window BoundWindow, setUpstream bool, force bool) (SyncPushResult, error)
+	SyncPushFromClone(ctx, boundLifetime context.Context, boundDeadline time.Duration, remote RemoteName, branch string, window BoundWindow, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// SyncRemoteMirrorHolds reports whether this store's local mirror of the
 	// remote's data holds every one of commits — git commit ids as the remote
@@ -133,8 +134,8 @@ type Syncer interface {
 	// branch's history inside window before it returns, whichever of the two
 	// landed it, so no push leaves the remote past the bound with nobody
 	// asked to keep it. [LAW:no-ambient-temporal-coupling] The push runs on
-	// ctx; the bound runs on a deadline of its own taken from boundLifetime,
-	// so a push deadline the push nearly spent never cuts the bound, and a
+	// ctx; the bound runs on a deadline of its own, boundDeadline, taken from
+	// boundLifetime, so a push deadline the push nearly spent never cuts the bound, and a
 	// caller with one lifetime passes it twice. Result.Bound is the bound
 	// kept and its account joins Result.Maintenance. Below the bound it
 	// reads the remote head's height and nothing else; once the height
@@ -145,7 +146,7 @@ type Syncer interface {
 	// Once the push and the bound have followed whatever they followed, it
 	// collects below the cut once, on ctx (Collections), and that account
 	// joins Result.Maintenance too.
-	SyncCompactAndPush(ctx, boundLifetime context.Context, remote RemoteName, branch string, window BoundWindow, setUpstream bool, force bool) (SyncPushResult, error)
+	SyncCompactAndPush(ctx, boundLifetime context.Context, boundDeadline time.Duration, remote RemoteName, branch string, window BoundWindow, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// SyncFollowReRoot brings the local branch into the remote's history when
 	// another checkout re-rooted it, reading the tracking ref as the last fetch

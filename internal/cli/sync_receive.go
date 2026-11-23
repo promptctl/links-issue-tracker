@@ -79,7 +79,8 @@ func receiveBlockPendingPath(ws workspace.Info) string {
 // twice. [LAW:single-enforcer] The debounce marker has one writer — this owner.
 // A workspace with no git remote has nothing to receive from, so it spawns
 // nothing, the same precondition the mirror's spawn checks.
-func scheduleReceive(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) {
+func scheduleReceive(ctx context.Context, inv Invocation, ws workspace.Info) {
+	stderr, env := inv.Stderr, inv.Env
 	if !shouldReceiveNow(ws, time.Now(), receiveDebounceInterval) {
 		return
 	}
@@ -96,7 +97,7 @@ func scheduleReceive(ctx context.Context, stderr io.Writer, env environ.Env, ws 
 	if !hasRemote {
 		return
 	}
-	if err := spawnDetachedWorker(ctx, stderr, ws, backgroundReceiveSubcommand, ReceiveLogName, receiveEnv(env), os.Getpid()); err != nil {
+	if err := spawnDetachedWorker(ctx, inv.withEnv(receiveEnv(env)), ws, backgroundReceiveSubcommand, ReceiveLogName, spawnedBy(os.Getpid())); err != nil {
 		cause := fmt.Errorf("start the background receive: %w", err)
 		fmt.Fprintf(stderr, "lit: automatic receive not started: %v\n", err)
 		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, cause)
@@ -126,11 +127,11 @@ func receiveEnv(parent environ.Env) environ.Env {
 // the mirror-pending claim and the beacon are the ordering witnesses, not a
 // sleep.
 func backgroundReceiveLeaf() bareLeaf {
-	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, parentPID int) error {
+	return detachedWorkerLeaf(backgroundReceiveSubcommand, "PID of the spawning command; the receive waits for it to exit", func(ctx context.Context, inv Invocation, built workerWorkspace, from spawner) error {
 		start := time.Now()
 		pid := os.Getpid()
-		fmt.Fprintf(inv.Stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, store.ReceiveDeadline)
-		mirrorWait := receiveWhenQuiet(ctx, inv.Stderr, inv.Env, built, parentPID)
+		fmt.Fprintf(inv.Stdout, "%s receive start pid=%d deadline=%s\n", start.UTC().Format(time.RFC3339), pid, inv.Deadlines.Receive)
+		mirrorWait := receiveWhenQuiet(ctx, inv, built, from)
 		// The decision is in the receive's sync trace; this line is the worker's
 		// own lifetime, which the trace does not carry.
 		fmt.Fprintf(inv.Stdout, "%s receive end pid=%d mirror_wait=%s elapsed=%s\n", time.Now().UTC().Format(time.RFC3339), pid,
@@ -148,23 +149,23 @@ func backgroundReceiveLeaf() bareLeaf {
 // could-not-attempt failures, so no receive state is written while the
 // spawning command may still be writing its own. [LAW:no-silent-failure]
 // [LAW:no-ambient-temporal-coupling]
-func receiveWhenQuiet(ctx context.Context, stderr io.Writer, env environ.Env, built workerWorkspace, parentPID int) time.Duration {
-	ws := built.ws
-	if !waitForParentExit(ctx, parentPID, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
+func receiveWhenQuiet(ctx context.Context, inv Invocation, built workerWorkspace, from spawner) time.Duration {
+	stderr, env, ws := inv.Stderr, inv.Env, built.ws
+	if !from.awaitExit(ctx, os.Getppid, workerParentWaitTimeout, workerParentPollDelay) {
 		if ctx.Err() != nil {
 			recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the spawning command to exit: %w", ctx.Err()))
 			return 0
 		}
 		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf(
-			"spawning command (pid %d) still running after %s; skipping the receive to avoid racing its engine",
-			parentPID, workerParentWaitTimeout))
+			"spawning command (%s) still running after %s; skipping the receive to avoid racing its engine",
+			from, workerParentWaitTimeout))
 		return 0
 	}
 	if built.failed != nil {
 		recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, built.failed)
 		return 0
 	}
-	waited, err := awaitNoLiveMirror(ctx, ws, receiveMirrorWait())
+	waited, err := awaitNoLiveMirror(ctx, ws, receiveMirrorWait(inv.Deadlines))
 	if err != nil {
 		if ctx.Err() != nil {
 			recordReceiveError(ctx, stderr, env, ws, storage.RemoteName{}, fmt.Errorf("receive torn down while waiting for the mirror: %w", ctx.Err()))
@@ -174,7 +175,7 @@ func receiveWhenQuiet(ctx context.Context, stderr io.Writer, env environ.Env, bu
 		// the ordering, not the receive: say so and receive anyway.
 		fmt.Fprintf(stderr, "lit: receiving without waiting for the mirror: %v\n", err)
 	}
-	receiveOnce(ctx, stderr, env, ws)
+	receiveOnce(ctx, inv, ws)
 	return waited
 }
 
@@ -182,18 +183,17 @@ func receiveWhenQuiet(ctx context.Context, stderr io.Writer, env environ.Env, bu
 // mirror cycles' network work, which covers the cycle the spawning command
 // started and one more it may re-check into. Past it the mirrors are a burst,
 // not the command's own push, and the receive goes ahead. The wait costs no
-// command anything; it only delays the worker. A function because the push
-// deadline the cycle's derives from is the store's variable.
-// [LAW:one-source-of-truth]
-func receiveMirrorWait() time.Duration { return 2 * mirrorNetworkDeadline() }
+// command anything; it only delays the worker. Derived from the run's
+// deadlines, which the cycle's derive from. [LAW:one-source-of-truth]
+func receiveMirrorWait(d store.Deadlines) time.Duration { return 2 * mirrorNetworkDeadline(d) }
 
 // mirrorNetworkDeadline is the longest one mirror cycle's network work runs:
 // the push under its deadline, then a landed push's history bound under its
 // own. The proof's deadline is not added: the proof runs only after a bound
 // that took no re-root to the remote, which reached no network.
 // [LAW:one-source-of-truth]
-func mirrorNetworkDeadline() time.Duration {
-	return store.MirrorPushDeadline + store.HistoryBoundDeadline()
+func mirrorNetworkDeadline(d store.Deadlines) time.Duration {
+	return d.MirrorPush + d.HistoryBound()
 }
 
 // mirrorQuietPoll is how often the receive re-reads the mirror liveness
@@ -261,10 +261,12 @@ func awaitNoLiveMirror(ctx context.Context, ws workspace.Info, bound time.Durati
 //
 // It is best-effort and bounded: gated on a configured remote so a
 // single-machine repo does no network work, and time-boxed so an offline or
-// slow remote cannot keep the worker past store.ReceiveDeadline. A failure is
+// slow remote cannot keep the worker past the run's receive deadline
+// (store.Deadlines.Receive). A failure is
 // recorded as a trace and never reaches a command's exit code.
 // [LAW:no-silent-failure]
-func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) {
+func receiveOnce(ctx context.Context, inv Invocation, ws workspace.Info) {
+	stderr, env := inv.Stderr, inv.Env
 	// Every receive says whether it owes a push; one that settles nothing
 	// owes none. [LAW:nothing-unseen]
 	telemetry.Set(ctx, "receive.push_owed", false)
@@ -285,7 +287,7 @@ func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws work
 	// runs on a clone, so the deadline bounds the worker and nothing else
 	// waits on it; the live store is held only for the clone's copy, the
 	// landing and the settle. [LAW:no-ambient-temporal-coupling]
-	timeoutCtx, cancel := context.WithTimeout(ctx, store.ReceiveDeadline)
+	timeoutCtx, cancel := context.WithTimeout(ctx, inv.Deadlines.Receive)
 	defer cancel()
 
 	observed, askErr := askRemote(timeoutCtx, env, ws)
@@ -337,7 +339,7 @@ func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws work
 			fmt.Fprintf(stderr, "lit: automatic receive lock not released: %v\n", err)
 		}
 	}()
-	outcome, err := receiveAndRecord(timeoutCtx, stderr, env, ws, observed)
+	outcome, err := receiveAndRecord(timeoutCtx, stderr, env, inv.Deadlines, ws, observed)
 	if err != nil {
 		// Could-not-attempt (the clone, or the clone's own target): record and stop.
 		recordReceiveError(ctx, stderr, env, ws, observed.remote, err)
@@ -351,7 +353,7 @@ func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws work
 	// this merge reaches the remote. The mirror waits for this worker to exit.
 	access := outcome.access()
 	telemetry.Set(ctx, "receive.push_owed", access.Writes())
-	mirrorAfterReceive(ctx, stderr, env, access, ws)
+	mirrorAfterReceive(ctx, inv, access, ws)
 }
 
 // receiveAndRecord is the receive proper, run under the receive lock: clone
@@ -361,8 +363,8 @@ func receiveOnce(ctx context.Context, stderr io.Writer, env environ.Env, ws work
 // and the settle — none of them on the network. The error
 // is a could-not-attempt failure; a receive that ran and failed is in the
 // outcome, its trace already written.
-func receiveAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, observed remoteAdvertisement) (syncReceiveOutcome, error) {
-	clone, err := takeReceiveClone(ctx, stderr, env, ws)
+func receiveAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, deadlines store.Deadlines, ws workspace.Info, observed remoteAdvertisement) (syncReceiveOutcome, error) {
+	clone, err := takeReceiveClone(ctx, stderr, env, deadlines.MirrorHold, ws)
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
@@ -371,14 +373,14 @@ func receiveAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, ws
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
-	return landAndRecord(ctx, stderr, env, ws, clone, fetch, observed), nil
+	return landAndRecord(ctx, stderr, env, deadlines.Receive, ws, clone, fetch, observed), nil
 }
 
 // landAndRecord is the receive after its fetch: land the fetch on the live
 // store, settle there, and record what that established. Every step from
 // here touches the live store; nothing before it did.
-func landAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch, observed remoteAdvertisement) syncReceiveOutcome {
-	outcome, closeLive := performSyncReceive(ctx, stderr, env, ws, clone, fetch, ownUnsettledRun(ws.DatabasePath))
+func landAndRecord(ctx context.Context, stderr io.Writer, env environ.Env, landDeadline time.Duration, ws workspace.Info, clone liveClone, fetch receiveFetch, observed remoteAdvertisement) syncReceiveOutcome {
+	outcome, closeLive := performSyncReceive(ctx, stderr, env, landDeadline, ws, clone, fetch, ownUnsettledRun(ws.DatabasePath))
 	// The live store stays open through the record below, so its workspace
 	// hold keeps a rotation of the Dolt directory from landing between the
 	// settle and the record that describes it.
@@ -678,7 +680,8 @@ type reconcileOutcome struct {
 //
 // closeLive closes the live store when the settle opened it and is a no-op
 // otherwise; it is the caller's to run once it has recorded the outcome.
-func performSyncReceive(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch, observeRun observeUnsettledRun) (outcome syncReceiveOutcome, closeLive func() error) {
+// landDeadline is the landing's hold deadline (landFetch).
+func performSyncReceive(ctx context.Context, stderr io.Writer, env environ.Env, landDeadline time.Duration, ws workspace.Info, clone liveClone, fetch receiveFetch, observeRun observeUnsettledRun) (outcome syncReceiveOutcome, closeLive func() error) {
 	closeLive = func() error { return nil }
 	target := fetch.target
 	if target.skip != syncTargetReady {
@@ -700,7 +703,7 @@ func performSyncReceive(ctx context.Context, stderr io.Writer, env environ.Env, 
 	var landed store.LandedFetch
 	if stopped == receiveStepNone {
 		var err error
-		landed, err = landFetch(ctx, stderr, env, ws, clone, fetch)
+		landed, err = landFetch(ctx, stderr, env, landDeadline, ws, clone, fetch)
 		stopAt(receiveStepLand, err)
 	}
 	var session syncSession

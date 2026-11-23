@@ -92,7 +92,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	ws := workspacetest.Resolved(t, runEnv(t), root)
 	ctx := underInvocation(context.Background())
 
-	ensureMirrorCoverage(ctx, testStderr(t), runEnv(t), ws)
+	ensureMirrorCoverage(ctx, workerRun(t, testStderr(t)), ws)
 	info, err := os.Stat(remoteAbsentMarkerPath(ws))
 	if err != nil {
 		t.Fatalf("first remote-less mutation did not stamp the absence marker: %v", err)
@@ -113,7 +113,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	}
 	stamped := info.ModTime()
 
-	ensureMirrorCoverage(ctx, testStderr(t), runEnv(t), ws)
+	ensureMirrorCoverage(ctx, workerRun(t, testStderr(t)), ws)
 	info, err = os.Stat(remoteAbsentMarkerPath(ws))
 	if err != nil {
 		t.Fatalf("absence marker vanished: %v", err)

@@ -1157,9 +1157,9 @@ func unjudgedRefusal(refusal, readErr error) error {
 // whether its retried push or its bound followed (collectOwedCut), and the
 // collection joins the maintenance account, or the error's when the push
 // failed: a pass that ran is reported either way. [LAW:no-silent-failure]
-func (s *Store) SyncCompactAndPush(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+func (s *Store) SyncCompactAndPush(ctx, boundLifetime context.Context, boundDeadline time.Duration, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	pushed, err := s.compactAndPush(ctx, remote, branch, setUpstream, force)
-	pushed, err = s.keepHistoryBoundAfter(boundLifetime, remote, branch, window, pushed, err)
+	pushed, err = s.keepHistoryBoundAfter(boundLifetime, boundDeadline, remote, branch, window, pushed, err)
 	collected := collectionReport(s.collectOwedCut(ctx, storage.SyncEntryPush))
 	if err != nil {
 		return storage.SyncPushResult{}, annotateWithMaintenance(err, collected)
@@ -1383,9 +1383,9 @@ func (s *Store) headCommitWithinLock(ctx context.Context) (string, error) {
 // [LAW:no-silent-failure] [LAW:verifiable-goals] the goal is "the remote
 // carries HEAD", and a rejected push is judged by the goal, not by itself.
 // A push the re-check found superseded landed too, and keeps the bound.
-func (s *Store) SyncPushFromClone(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+func (s *Store) SyncPushFromClone(ctx, boundLifetime context.Context, boundDeadline time.Duration, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	pushed, err := s.pushFromClone(ctx, remote, branch, setUpstream, force)
-	return s.keepHistoryBoundAfter(boundLifetime, remote, branch, window, pushed, err)
+	return s.keepHistoryBoundAfter(boundLifetime, boundDeadline, remote, branch, window, pushed, err)
 }
 
 // pushFromClone is SyncPushFromClone up to the push landing.

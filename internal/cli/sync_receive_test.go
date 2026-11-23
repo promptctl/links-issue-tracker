@@ -24,7 +24,7 @@ func TestASkippedReceiveRecordsItsSkip(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	target := syncTarget{remote: remoteName(t, "origin"), skip: syncTargetRemoteEmpty}
-	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
+	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), suiteDeadlines().Receive, ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
 	if outcome.skip != syncTargetRemoteEmpty {
 		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}
@@ -51,7 +51,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testStderr(t), runEnv(t), workspacetest.Resolved(t, runEnv(t), dir))
+	receiveOnce(ctx, workerRun(t, testStderr(t)), workspacetest.Resolved(t, runEnv(t), dir))
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)
@@ -122,7 +122,7 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 func receiveNow(t *testing.T, dir string) {
 	t.Helper()
 	ws := workspacetest.Resolved(t, runEnv(t), dir)
-	receiveOnce(underInvocation(context.Background()), testStderr(t), runEnv(t), ws)
+	receiveOnce(underInvocation(context.Background()), workerRun(t, testStderr(t)), ws)
 }
 
 // TestTheReceiveBlockWaitsForTheNextCommandUntilAReceiveSettles pins the

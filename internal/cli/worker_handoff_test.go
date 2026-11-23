@@ -11,16 +11,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // workerHandoffStdin is the handoff a command run in dir hands the worker it
-// spawns, built by the launcher's own function.
+// spawns, built by the launcher's own function, under the suite's deadlines.
 func workerHandoffStdin(t testing.TB, dir string) string {
 	t.Helper()
+	return workerHandoffStdinUnder(t, dir, suiteDeadlines())
+}
+
+// workerHandoffStdinUnder is workerHandoffStdin from a run under deadlines.
+func workerHandoffStdinUnder(t testing.TB, dir string, deadlines store.Deadlines) string {
+	t.Helper()
 	ws := workspacetest.Resolved(t, runEnv(t), dir)
-	handoff, err := handoffOf(underInvocation(context.Background()), ws)
+	handoff, err := handoffOf(underInvocation(context.Background()), ws, deadlines)
 	if err != nil {
 		t.Fatalf("handoffOf(%s): %v", dir, err)
 	}
@@ -31,15 +38,15 @@ func workerHandoffStdin(t testing.TB, dir string) string {
 	return string(payload)
 }
 
-// workerArgv is the argv a command run in dir spawns subcommand with, its
-// parent wait skipped.
+// workerArgv is the argv a command run in dir spawns subcommand with, handed
+// no spawner to wait for.
 func workerArgv(t testing.TB, dir, subcommand string) []string {
 	t.Helper()
 	loc, err := workspace.Locate(runEnv(t), dir)
 	if err != nil {
 		t.Fatalf("locate the store for %s: %v", dir, err)
 	}
-	return []string{subcommand, "--store", loc.StorageDir, "--parent-pid", "0"}
+	return []string{subcommand, "--store", loc.StorageDir, "--parent-pid", noSpawnerFlag}
 }
 
 // runWorkerInDirAllowError runs a detached worker in-process against the
@@ -88,7 +95,7 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	root := twoRemoteCheckout(t)
 	ws := workspacetest.Resolved(t, runEnv(t), root)
 	ctx := underInvocation(context.Background())
-	handed, err := handoffOf(ctx, ws)
+	handed, err := handoffOf(ctx, ws, suiteDeadlines())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,14 +106,14 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	built := buildWorkerWorkspace(ctx, testStderr(t), runEnv(t), ws.Location, strings.NewReader(string(payload)))
+	built := buildWorkerWorkspace(ctx, testStderr(t), runEnv(t), ws.Location, strings.NewReader(string(payload)), store.ShippedDeadlines())
 	if built.failed != nil {
 		t.Fatalf("buildWorkerWorkspace failed: %v", built.failed)
 	}
 	if built.ws.WorkspaceID != ws.WorkspaceID || built.ws.Project.Source() != "handed" {
 		t.Fatalf("built workspace id %q source %q; want %q handed", built.ws.WorkspaceID, built.ws.Project.Source(), ws.WorkspaceID)
 	}
-	reHanded, err := handoffOf(ctx, built.ws)
+	reHanded, err := handoffOf(ctx, built.ws, built.deadlines)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +138,7 @@ func TestAHandedWorkspaceAsksNothingOfARemovedCheckout(t *testing.T) {
 	runGit(t, root, "worktree", "remove", "--force", worktree)
 
 	ctx := underInvocation(context.Background())
-	built := buildWorkerWorkspace(ctx, testStderr(t), runEnv(t), loc, strings.NewReader(payload))
+	built := buildWorkerWorkspace(ctx, testStderr(t), runEnv(t), loc, strings.NewReader(payload), suiteDeadlines())
 	if built.failed != nil {
 		t.Fatalf("buildWorkerWorkspace after the checkout was removed: %v", built.failed)
 	}

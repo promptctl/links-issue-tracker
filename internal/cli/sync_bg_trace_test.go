@@ -19,6 +19,7 @@ import (
 // that fails is tied back to the write that caused it. [LAW:nothing-unseen]
 func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.T) {
 	t.Parallel()
+	useRealWorkers(t)
 	isolateEvents(t)
 	dir, _ := litRepoForCadence(t)
 	spawner := telemetry.Begin(telemetry.Event{})
@@ -28,9 +29,9 @@ func TestADetachedWorkersEventJoinsTheTraceOfTheCommandThatSpawnedIt(t *testing.
 	if err != nil {
 		t.Fatalf("resolveWorkspace: %v", err)
 	}
-	// Parent pid 0: the worker has no spawner to wait out, and the spawner
-	// here is this test process, which stays up.
-	if err := spawnBackgroundMirror(ctx, stderr, envInTrace(runEnv(t), spawner), ws, 0); err != nil {
+	// No spawner: the worker has none to wait out, and the spawner here is
+	// this test process, which stays up.
+	if err := spawnBackgroundMirror(ctx, workerRun(t, stderr).withEnv(envInTrace(runEnv(t), spawner)), ws, noSpawner{}); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
 	spawnerEvent := spawner.Finish(telemetry.End{})

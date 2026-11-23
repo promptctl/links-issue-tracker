@@ -136,8 +136,8 @@ type LandedFetch struct {
 // receive asks again and lands over the live writer's ref.
 //
 // The hold is holdForRefWrite's: the workspace shared lock around Dolt's LOCK
-// and the commit lock. Its budget is the receive's own deadline, not the
-// mirror's hold budget: the landing's cost is proportional to how far the
+// and the commit lock. Its budget is holdDeadline, the receive's own deadline
+// (Deadlines.Receive), not the mirror's hold budget: the landing's cost is proportional to how far the
 // remote moved — tens of milliseconds for the usual few commits, more after a
 // long absence — and a budget sized for a ref write would cut a large landing
 // on every attempt, so it would never converge. A landing that outlasts
@@ -159,7 +159,7 @@ type LandedFetch struct {
 // because the chunks and ref they follow are already written and stand. A
 // superseded landing carries none of the plan out, and so none of its
 // failures.
-func LandFetchedHead(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, clone TakenClone, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
+func LandFetchedHead(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDir string, holdDeadline time.Duration, clone TakenClone, remote storage.RemoteName, branch string, pruned []storage.PrunedRef) (landed LandedFetch, err error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return LandedFetch{}, err
@@ -203,7 +203,7 @@ func LandFetchedHead(ctx context.Context, env environ.Env, stderr io.Writer, dol
 	}
 	defer func() { err = errors.Join(err, releaseWorkspace()) }()
 	var cacheErr error
-	err = holdForRefWrite(ctx, stderr, root, engineWrite, ReceiveDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, stderr, root, engineWrite, holdDeadline, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		defer func() { landed.Held = time.Since(start) }()
 		live, err := readRefHead(holdCtx, ddb, trackingRef)

@@ -59,7 +59,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 	if err != nil || observed.record() == nil {
 		t.Fatalf("askRemote() = %+v, %v; want the remote's advertisement", observed, err)
 	}
-	clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), ws)
+	clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), suiteDeadlines().MirrorHold, ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestAReceiveTheLiveStoreSupersededLandsNothingAndTheNextLands(t *testing.T)
 		t.Fatalf("seed received-refs.last: %v", err)
 	}
 
-	outcome := landAndRecord(ctx, testStderr(t), runEnv(t), ws, clone, fetch, observed)
+	outcome := landAndRecord(ctx, testStderr(t), runEnv(t), suiteDeadlines().Receive, ws, clone, fetch, observed)
 	if outcome.err != nil || outcome.landed != store.FetchedHeadSuperseded {
 		t.Fatalf("landAndRecord() landed %s, err %v; want superseded by bravo's pull", outcome.landed, outcome.err)
 	}

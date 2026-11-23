@@ -626,7 +626,7 @@ func pushLiveStore(ctx context.Context, inv Invocation, ws workspace.Info, sessi
 	// backs) compacts atomically with the push; the on-change mirror pushes
 	// without compaction. The choice is the push step passed as a value, so
 	// performSyncPush has no compaction branch and a skipped push never compacts.
-	outcome, err := performSyncPush(ctx, ctx, inv.Stderr, inv.Env, session, ws, remote, options.command, options.setUpstream, options.force, session.syncer.SyncCompactAndPush)
+	outcome, err := performSyncPush(ctx, ctx, inv.Stderr, inv.Env, inv.Deadlines, session, ws, remote, options.command, options.setUpstream, options.force, session.syncer.SyncCompactAndPush)
 	if err != nil {
 		// A could-not-attempt failure (performSyncPush returned before reaching
 		// its own trace-recording push attempt) — traced here, matching the
@@ -691,11 +691,11 @@ type syncPushOutcome struct {
 // syncPushStep is the push the orchestrator runs once it has resolved the
 // remote and branch — store.Store.SyncPushFromClone (the mirror's push from
 // its clone) or store.Store.SyncCompactAndPush (compact + push, atomic). Each
-// keeps the history bound of a push it landed, inside window, on a deadline
-// taken from boundLifetime. [LAW:dataflow-not-control-flow]
+// keeps the history bound of a push it landed, inside window, on
+// boundDeadline taken from boundLifetime. [LAW:dataflow-not-control-flow]
 // The variant is a value the caller supplies, so performSyncPush carries no
 // compaction branch and never compacts a push it skips.
-type syncPushStep func(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream, force bool) (storage.SyncPushResult, error)
+type syncPushStep func(ctx, boundLifetime context.Context, boundDeadline time.Duration, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream, force bool) (storage.SyncPushResult, error)
 
 // syncPushTraceMetadata is everything the durable record says about one push
 // attempt beyond its decision: where it went, what the engine said, what local
@@ -771,7 +771,9 @@ func syncPushTraceMetadata(remoteName storage.RemoteName, syncBranch string, res
 // A foreground caller passes the same context twice: its one lifetime is both.
 // command is the invoking command's argv after `lit`, before the remote
 // (livePushOptions.command); every trace the attempt records names it.
-func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, session syncSession, ws workspace.Info, remote string, command []string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+// deadlines are the run's: the push deadline a cut names, and the history
+// bound's.
+func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env environ.Env, deadlines store.Deadlines, session syncSession, ws workspace.Info, remote string, command []string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
@@ -796,7 +798,7 @@ func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env e
 	// the one that names a cut. [LAW:single-enforcer]
 	target, err := resolveSyncTarget(ctx, stderr, env, session, ws, remote)
 	if err != nil {
-		return syncPushOutcome{}, cutByPushDeadline(ctx, completionCtx, err)
+		return syncPushOutcome{}, cutByPushDeadline(ctx, completionCtx, deadlines.MirrorPush, err)
 	}
 	if target.skip != syncTargetReady {
 		// traceMetadata is nil before a remote was selected, so the no-remote and
@@ -824,8 +826,8 @@ func performSyncPush(ctx, completionCtx context.Context, stderr io.Writer, env e
 	// The bound's deadline is taken from the completion lifetime, as the
 	// proof's below is: the push's deadline is spent, and the bound's
 	// network legs need their own.
-	result, pushErr := push(ctx, completionCtx, remoteName, syncBranch, window, setUpstream, force)
-	pushErr = cutByPushDeadline(ctx, completionCtx, pushErr)
+	result, pushErr := push(ctx, completionCtx, deadlines.HistoryBound(), remoteName, syncBranch, window, setUpstream, force)
+	pushErr = cutByPushDeadline(ctx, completionCtx, deadlines.MirrorPush, pushErr)
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	// A push that landed on its own moved the remote to its own write, and the
 	// next receive would fetch to learn nothing unless the push records that.

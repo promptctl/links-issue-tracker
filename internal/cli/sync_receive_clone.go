@@ -40,14 +40,17 @@ type receiveFetch struct {
 // dead receive's clone safe. The live store is held for the copy alone: the
 // fetch — seconds on the network — runs from the clone with none of the live
 // store's locks held.
-func takeReceiveClone(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info) (liveClone, error) {
-	clone, cut, err := cloneLiveStore(ctx, stderr, env, ws, receiveCloneBase(ws), func() {})
+//
+// holdBudget is the deadline the copy's hold runs under
+// (store.Deadlines.MirrorHold).
+func takeReceiveClone(ctx context.Context, stderr io.Writer, env environ.Env, holdBudget time.Duration, ws workspace.Info) (liveClone, error) {
+	clone, hold, err := cloneLiveStore(ctx, stderr, env, ws, receiveCloneBase(ws), holdBudget, func() {})
 	if err != nil {
 		// The hold's cost travels with the failure, as the mirror's does: a
 		// cut read without it cannot tell a stalled copy from a slow one.
-		err = fmt.Errorf("take the receive's clone (live store held %s): %w", clone.held.Round(time.Millisecond), err)
-		if cut {
-			err = fmt.Errorf("%w: %w", receiveCloneCutExplanation(), err)
+		err = fmt.Errorf("take the receive's clone (live store held %s): %w", hold.held.Round(time.Millisecond), err)
+		if hold.cut {
+			err = fmt.Errorf("%w: %w", receiveCloneCutExplanation(holdBudget), err)
 		}
 		return liveClone{}, err
 	}
@@ -94,8 +97,8 @@ func fetchIntoClone(ctx context.Context, stderr io.Writer, env environ.Env, ws w
 // and not failed: the chunks and the ref landed, which is the receive; what is
 // lost is that the live store's next network operation downloads those
 // objects again.
-func landFetch(ctx context.Context, stderr io.Writer, env environ.Env, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
-	landed, err := store.LandFetchedHead(ctx, env, stderr, ws.DatabasePath, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
+func landFetch(ctx context.Context, stderr io.Writer, env environ.Env, holdDeadline time.Duration, ws workspace.Info, clone liveClone, fetch receiveFetch) (store.LandedFetch, error) {
+	landed, err := store.LandFetchedHead(ctx, env, stderr, ws.DatabasePath, holdDeadline, clone.taken, fetch.target.remote, fetch.target.branch, fetch.pruned)
 	if errors.Is(err, store.ErrRemoteCacheNotLanded) {
 		fmt.Fprintf(stderr, "lit: automatic receive: %v\n", err)
 		return landed, nil
@@ -105,6 +108,6 @@ func landFetch(ctx context.Context, stderr io.Writer, env environ.Env, ws worksp
 
 // receiveCloneCutExplanation is the one wording of "the receive's clone take
 // cut itself loose".
-func receiveCloneCutExplanation() error {
-	return fmt.Errorf("automatic receive's hold exceeded its %s budget cloning the store — a deadline, not a diagnosis; the live store is released as the cut unwinds, and the next receive retries", store.MirrorHoldBudget)
+func receiveCloneCutExplanation(holdBudget time.Duration) error {
+	return fmt.Errorf("automatic receive's hold exceeded its %s budget cloning the store — a deadline, not a diagnosis; the live store is released as the cut unwinds, and the next receive retries", holdBudget)
 }

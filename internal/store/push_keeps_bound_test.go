@@ -21,12 +21,12 @@ type pushVerb struct {
 var pushVerbs = []pushVerb{
 	{"SyncCompactAndPush", func(t *testing.T, ctx, boundLifetime context.Context, root string, window storage.BoundWindow) (*Store, storage.SyncPushResult, error) {
 		st := openSyncOrFatal(t, ctx, root)
-		result, err := st.SyncCompactAndPush(ctx, boundLifetime, remoteName(t, "origin"), "master", window, false, false)
+		result, err := st.SyncCompactAndPush(ctx, boundLifetime, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", window, false, false)
 		return st, result, err
 	}},
 	{"SyncPushFromClone", func(t *testing.T, ctx, boundLifetime context.Context, root string, window storage.BoundWindow) (*Store, storage.SyncPushResult, error) {
 		st := openSyncOrFatal(t, ctx, cloneStoreTree(t, ctx, root, t.TempDir()))
-		result, err := st.SyncPushFromClone(ctx, boundLifetime, remoteName(t, "origin"), "master", window, false, false)
+		result, err := st.SyncPushFromClone(ctx, boundLifetime, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", window, false, false)
 		return st, result, err
 	}},
 }

@@ -18,9 +18,10 @@ import (
 )
 
 // dirInvocation is the invocation t runs lit with in dir. stdin is empty, as
-// /dev/null is to a `go test` process, and its environment is t's (runEnv).
+// /dev/null is to a `go test` process, its environment is t's (runEnv), and
+// so are its workers (runWorkers); its deadlines are the suite's.
 func dirInvocation(t testing.TB, dir string, stdout, stderr io.Writer, args []string) Invocation {
-	return Invocation{Dir: WorkingDirOf(dir, nil), Args: args, Env: runEnv(t), Stdin: strings.NewReader(""), Stdout: stdout, Stderr: stderr}
+	return Invocation{Dir: WorkingDirOf(dir, nil), Args: args, Env: runEnv(t), Stdin: strings.NewReader(""), Stdout: stdout, Stderr: stderr, Workers: runWorkers(t), Deadlines: suiteDeadlines()}
 }
 
 // runEnvs holds each test's own environment entries, keyed by test name, so a
@@ -76,10 +77,9 @@ func runEnv(t testing.TB) environ.Env {
 }
 
 // testEnv is the test process's environment; the rest of the Env is
-// suiteenv.Of's, and its detached workers run suiteLit. A test that sets
-// entries of its own reads runEnv instead.
+// suiteenv.Of's. A test that sets entries of its own reads runEnv instead.
 func testEnv() environ.Env {
-	return suiteenv.Of(os.Environ()).WithExecutable(suiteLitPath)
+	return suiteenv.Of(os.Environ())
 }
 
 // A literal that leaves Env out holds the zero Env. Run refuses it, where the

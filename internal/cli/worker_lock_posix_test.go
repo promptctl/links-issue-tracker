@@ -3,6 +3,9 @@
 package cli
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/process"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
@@ -54,41 +59,21 @@ func TestJoinDetachedWorkersOfAStoreNoWorkerWasSpawnedForReturns(t *testing.T) {
 // the notifier still runs.
 func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 	t.Parallel()
-	setRunEnv(t, DisableAutoSyncEnvVar, "1")
+	useRealWorkers(t)
 	maskGlobalConfig(t)
-	base := t.TempDir()
-	runGit(t, base, "init", "--bare", "remote.git")
-	repo := filepath.Join(base, "solo")
-	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "solo")
-	runGit(t, repo, "config", "user.email", "s@s.co")
-	runGit(t, repo, "config", "user.name", "solo")
-	if err := os.WriteFile(filepath.Join(repo, "readme.md"), []byte("hi\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGit(t, repo, "add", "-A")
-	runGit(t, repo, "commit", "-m", "seed")
-	runGit(t, repo, "push", "origin", "HEAD")
-	runCLIInDir(t, repo, "init", "--skip-hooks")
-	newEpicInDir(t, repo, "pushed-epic")
-	runCLIInDir(t, repo, "sync", "push", "--set-upstream")
+	rig := setupMirrorDeadlineRepo(t)
 
 	// The notifier outlives the join's patience below, so a hold it inherited
 	// would keep the join waiting past it.
-	notifierPIDFile := filepath.Join(base, "notifier.pid")
-	writeOwnerNotifyProjectConfig(t, repo, "[sync]\ncadence = 'on-push'\nreceive = false\n"+
-		ownerHookKey(`sleep 600 >/dev/null 2>&1 & echo $! > `+shPath(notifierPIDFile)))
-	runGit(t, repo, "remote", "set-url", "origin", filepath.Join(base, "gone", "nowhere.git"))
-	newEpicInDir(t, repo, "unpushed-epic")
-	setRunEnv(t, DisableAutoSyncEnvVar, "0")
+	notifierPIDFile := filepath.Join(rig.base, "notifier.pid")
+	notifierLife := int((2 * suiteStallDeadline).Seconds())
+	writeOwnerNotifyProjectConfig(t, rig.root, "[sync]\ncadence = 'on-push'\nreceive = false\n"+
+		ownerHookKey(fmt.Sprintf(`sleep %d >/dev/null 2>&1 & echo $! > %s`, notifierLife, shPath(notifierPIDFile))))
+	// The rig's unpushed commit goes nowhere, so the mirror's push fails and
+	// runs the hook.
+	runGit(t, rig.root, "remote", "set-url", "origin", filepath.Join(rig.base, "gone", "nowhere.git"))
 
-	ws := workspacetest.Resolved(t, runEnv(t), repo)
-	mirrorLog := func() string {
-		log, err := os.ReadFile(filepath.Join(ws.StorageDir, mirrorLogName))
-		if err != nil {
-			return err.Error()
-		}
-		return string(log)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), rig.root)
 	notifier := func() (int, error) {
 		pidText, err := os.ReadFile(notifierPIDFile)
 		if err != nil {
@@ -98,22 +83,44 @@ func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 	}
 	// Whatever the verdict, the notifier the hook started goes with the test.
 	t.Cleanup(func() {
-		if pid, err := notifier(); err == nil {
-			_ = syscall.Kill(pid, syscall.SIGKILL)
+		pid, err := notifier()
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return // the hook never ran, so there is no notifier to end
+		case err != nil:
+			t.Errorf("read the notifier's pid to end it: %v", err)
+		default:
+			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				t.Errorf("end the notifier (pid %d): %v", pid, err)
+			}
 		}
 	})
-	// Parent pid 0: the spawner is this test process, which stays up.
-	if err := spawnBackgroundMirror(underInvocation(t.Context()), testStderr(t), runEnv(t), ws, 0); err != nil {
+	// The spawner is this test process, which stays up, so the mirror is
+	// handed none to wait for. Its owner channel is on: the mirror's run is
+	// the one this test enables automatic sync for.
+	mirror := workerRun(t, testStderr(t))
+	mirror = mirror.withEnv(mirror.Env.With(DisableAutoSyncEnvVar + "=0"))
+	if err := spawnBackgroundMirror(underInvocation(t.Context()), mirror, ws, noSpawner{}); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
 	if err := JoinDetachedWorkers(ws.StorageDir, suiteStallDeadline); err != nil {
-		t.Fatalf("JoinDetachedWorkers() with only the mirror's notifier alive = %v; want nil\n%s:\n%s", err, mirrorLogName, mirrorLog())
+		t.Fatalf("JoinDetachedWorkers() with only the mirror's notifier alive = %v; want nil\n%s", err, workerLog(ws, mirrorLogName))
 	}
 	notifierPID, err := notifier()
 	if err != nil {
-		t.Fatalf("the mirror never ran the hook that backgrounds a notifier (%v), so the join proved nothing\n%s:\n%s", err, mirrorLogName, mirrorLog())
+		t.Fatalf("the mirror never ran the hook that backgrounds a notifier (%v), so the join proved nothing\n%s", err, workerLog(ws, mirrorLogName))
 	}
-	if err := syscall.Kill(notifierPID, 0); err != nil {
-		t.Fatalf("the notifier (pid %d) was gone when the join returned (%v), so the join proved nothing about a child outliving its worker", notifierPID, err)
+	if !process.Alive(notifierPID) {
+		t.Fatalf("the notifier (pid %d) was gone when the join returned, so the join proved nothing about a child outliving its worker", notifierPID)
 	}
+}
+
+// workerLog is a worker's log in ws, headed by its name, or why it could not
+// be read, for a failure message.
+func workerLog(ws workspace.Info, name string) string {
+	log, err := os.ReadFile(filepath.Join(ws.StorageDir, name))
+	if err != nil {
+		return fmt.Sprintf("%s unreadable: %v", name, err)
+	}
+	return name + ":\n" + string(log)
 }
