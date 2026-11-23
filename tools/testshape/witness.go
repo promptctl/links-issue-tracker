@@ -43,9 +43,19 @@ type throughType struct {
 	where entryOrigin
 }
 
+// typeArgument is a reach through a type handed to an outside generic as a
+// type argument; how is the call ("call into strs.Join").
+type typeArgument struct {
+	how string
+	typ types.Type
+}
+
 func (staticCall) text(types.Qualifier) string { return "" }
 func (c converting) text(q types.Qualifier) string {
 	return "converts " + types.TypeString(c.typ, q) + " to an interface"
+}
+func (t typeArgument) text(q types.Qualifier) string {
+	return t.how + " is handed type argument " + types.TypeString(t.typ, q)
 }
 func (t throughFunc) text(types.Qualifier) string {
 	return t.how + " reaches value " + t.where.text()

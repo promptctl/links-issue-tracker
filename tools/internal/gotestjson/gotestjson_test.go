@@ -1,6 +1,7 @@
 package gotestjson
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -113,6 +114,32 @@ func TestReadReadsAMalformedStreamToItsEndBeforeRefusingIt(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "later failure\n") {
 		t.Errorf("replay lacks the failure after the malformed line:\n%s", out.String())
+	}
+	if r.Len() != 0 {
+		t.Errorf("Read left %d bytes of the stream unread", r.Len())
+	}
+}
+
+// failingWriter fails every write after its first n.
+type failingWriter struct{ n int }
+
+func (w *failingWriter) Write(p []byte) (int, error) {
+	if w.n == 0 {
+		return 0, errors.New("disk full")
+	}
+	w.n--
+	return len(p), nil
+}
+
+func TestReadReportsTheFirstReplayWriteFailureAfterReadingToTheEnd(t *testing.T) {
+	r := stream(
+		`not json`,
+		`{"Action":"output","Package":"p","Output":"package line\n"}`,
+		`{"Action":"pass","Package":"p","Elapsed":0}`,
+	)
+	_, err := Read(r, &failingWriter{n: 1})
+	if err == nil || !strings.Contains(err.Error(), "replaying go test's output: disk full") {
+		t.Errorf("error = %v, want the replay write's failure", err)
 	}
 	if r.Len() != 0 {
 		t.Errorf("Read left %d bytes of the stream unread", r.Len())

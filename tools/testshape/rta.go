@@ -17,6 +17,7 @@ package main
 
 import (
 	"go/types"
+	"slices"
 
 	"golang.org/x/tools/go/ssa"
 )
@@ -28,10 +29,14 @@ type store[K comparable, E any] struct {
 	index   map[K]int
 	entries []E
 	groups  map[any][]int
+	// matches: the entries of a finished layer's store matching each
+	// predicate asked of it, by the predicate's key. A finished layer is
+	// never added to, so they stay true.
+	matches map[any][]E
 }
 
 func newStore[K comparable, E any]() *store[K, E] {
-	return &store[K, E]{index: map[K]int{}, groups: map[any][]int{}}
+	return &store[K, E]{index: map[K]int{}, groups: map[any][]int{}, matches: map[any][]E{}}
 }
 
 func (s *store[K, E]) put(g any, k K, e E) {
@@ -100,6 +105,27 @@ func (s set[K, E]) group(g any) func(func(E) bool) {
 	}
 }
 
+// matching is every entry of either layer that keep accepts, the binary's
+// first. key names keep: the binary's matches are found once per key.
+func (s set[K, E]) matching(key any, keep func(E) bool) []E {
+	below, ok := s.binary.matches[key]
+	if !ok {
+		for _, e := range s.binary.entries {
+			if keep(e) {
+				below = append(below, e)
+			}
+		}
+		s.binary.matches[key] = below
+	}
+	out := slices.Clone(below)
+	for _, e := range s.own.entries {
+		if keep(e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // layer is one layer of the RTA state, with what one walk reached.
 type layer struct {
 	steps    *store[*ssa.Function, step] // every reached function, with how
@@ -141,43 +167,16 @@ func newLayer() *layer {
 	}
 }
 
-// reached is every touch the layer holds, with its witness.
-func (l *layer) reached() reached {
-	r := reached{}
-	for _, t := range l.touches.entries {
-		r[t.touch] = t.witness
-	}
-	return r
-}
-
 // finished is a binary's layer once its setup walk has ended: what every
 // test walk of the binary reads beneath its own. Only a setup walk's finish
-// makes one, and it has no way to be added to, so the implementers it
-// caches per interface stay true.
+// makes one, and it has no way to be added to.
 type finished struct {
-	layer        *layer
-	implementers map[int][]typeEntry // by interface
+	layer *layer
 }
 
 // emptyBinary is the finished layer under a setup walk: nothing reached
 // before it.
-func emptyBinary() *finished {
-	return &finished{layer: newLayer(), implementers: map[int][]typeEntry{}}
-}
-
-func (f *finished) implementing(key int, iface *types.Interface) []typeEntry {
-	if cached, ok := f.implementers[key]; ok {
-		return cached
-	}
-	var out []typeEntry
-	for _, e := range f.layer.runtime.entries {
-		if types.Implements(e.typ, iface) {
-			out = append(out, e)
-		}
-	}
-	f.implementers[key] = out
-	return out
-}
+func emptyBinary() *finished { return &finished{layer: newLayer()} }
 
 // touched is a touch with its first witness.
 type touched struct {

@@ -100,9 +100,7 @@ func newWalker(a *analyzer, binary *finished) *walker {
 }
 
 // finish ends a setup walk: its layer becomes the binary's, finished.
-func (w *walker) finish() *finished {
-	return &finished{layer: w.own, implementers: map[int][]typeEntry{}}
-}
+func (w *walker) finish() *finished { return &finished{layer: w.own} }
 
 func (w *walker) stepOf(fn *ssa.Function) step {
 	st, _ := w.steps.get(fn)
@@ -115,13 +113,7 @@ func (w *walker) entryOrigin(from *ssa.Function) entryOrigin {
 
 // implementing is every runtime type of either layer implementing iface.
 func (w *walker) implementing(iface *types.Interface) []typeEntry {
-	out := append([]typeEntry(nil), w.binary.implementing(w.a.typeKey(iface), iface)...)
-	for _, e := range w.own.runtime.entries {
-		if types.Implements(e.typ, iface) {
-			out = append(out, e)
-		}
-	}
-	return out
+	return w.runtime.matching(w.a.typeKey(iface), func(e typeEntry) bool { return types.Implements(e.typ, iface) })
 }
 
 // reached is every touch the walk's reach holds, its binary's setup's
@@ -221,15 +213,15 @@ func (w *walker) enter(fn, from *ssa.Function) {
 		w.queue = append(w.queue, fn)
 		return
 	}
-	w.charge(o.name, o.knows, fn.Signature, fn, from)
+	w.charge(o.name, o.knows, fn.Signature, fn.TypeArgs(), fn, from)
 }
 
 // charge records what the classification says a call of the outside
-// function or interface method name, of signature sig, reached at at from
-// from, can do: it is a call the walk does not follow, and whatever else
-// its class says.
-func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, at, from *ssa.Function) {
-	w.unfollowed(sig, at, "call into "+name.String())
+// function or interface method name, of signature sig and instantiated with
+// typeArgs, reached at at from from, can do: it is a call the walk does not
+// follow, and whatever else its class says.
+func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, typeArgs []types.Type, at, from *ssa.Function) {
+	w.unfollowed(sig, typeArgs, at, "call into "+name.String())
 	switch k := k.(type) {
 	case unclassified:
 		if _, seen := w.a.unclassified[name.String()]; !seen {
@@ -255,8 +247,14 @@ func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, at, fr
 // may be one. Whatever it does, it can call back any address-taken function
 // whose signature its argument types (receiver and parameters, through
 // their structure) can carry; and, handed an interface, any function
-// converted to one, which reflection can call.
-func (w *walker) unfollowed(sig *types.Signature, at *ssa.Function, how string) {
+// converted to one, which reflection can call. Each type argument of an
+// outside generic's instance is a type of the values it is handed, whose
+// methods its constraint lets it call: the type is converted to an
+// interface.
+func (w *walker) unfollowed(sig *types.Signature, typeArgs []types.Type, at *ssa.Function, how string) {
+	for _, t := range typeArgs {
+		w.convert(t, anyInterface, at, typeArgument{how, t})
+	}
 	c := w.a.carried(sig)
 	for _, s := range c.sigs {
 		w.call(s, at, how)
@@ -270,11 +268,16 @@ func (w *walker) unfollowed(sig *types.Signature, at *ssa.Function, how string) 
 	}
 }
 
+// anyInterface is the interface a type argument is converted to: an outside
+// generic calls on it only what its constraint names, which only an outside
+// interface can, and those methods are charged where they are called.
+var anyInterface = types.NewInterfaceType(nil, nil)
+
 // callValue is a call of a function value of signature sig: it reaches every
 // address-taken function of it, and its target may be outside code.
 func (w *walker) callValue(sig *types.Signature, from *ssa.Function) {
 	w.call(sig, from, "dynamic call")
-	w.unfollowed(sig, from, "dynamic call")
+	w.unfollowed(sig, nil, from, "dynamic call")
 }
 
 // call is a call of some function of signature sig: it reaches every
@@ -419,7 +422,7 @@ func (w *walker) invoke(inv invoke, from *ssa.Function) {
 	}
 	if !module {
 		name := interfaceMethodName(inv.method)
-		w.charge(name, w.a.class.Lookup(name.pkg, name.key), inv.method.Signature(), from, from)
+		w.charge(name, w.a.class.Lookup(name.pkg, name.key), inv.method.Signature(), nil, from, from)
 	}
 	for _, e := range w.implementing(inv.iface) {
 		if module || w.a.moduleType(e.typ) {

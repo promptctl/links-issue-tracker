@@ -7,7 +7,8 @@
 // compiled inside go test's run that build contends with every package's
 // tests.
 //
-// It loads the module once per GOOS lit ships for, so the files only one OS
+// It loads the module once per GOOS lit ships for, read from
+// .goreleaser.yml, the one place that list is kept, so the files only one OS
 // builds (internal/cli's _windows.go files, internal/dbsnapshot's
 // _darwin.go) are read wherever it runs. A load for another OS builds with
 // cgo off, so Dolt's cgo-only dependencies fail to type-check there; the
@@ -22,28 +23,61 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 
 	"golang.org/x/tools/go/packages"
+	"gopkg.in/yaml.v3"
 
 	"github.com/promptctl/links-issue-tracker/internal/actionnames"
 )
 
-// targets are the GOOSes lit ships for.
-var targets = []string{"linux", "darwin", "windows"}
-
 func main() {
-	os.Exit(run(os.Stderr))
+	os.Exit(run(".", []string{"./..."}, os.Stderr))
 }
 
-func run(stderr io.Writer) int {
+// shippedGOOS is every GOOS a build in root's .goreleaser.yml targets.
+func shippedGOOS(root string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(root, ".goreleaser.yml"))
+	if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		Builds []struct {
+			GOOS []string `yaml:"goos"`
+		} `yaml:"builds"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf(".goreleaser.yml: %w", err)
+	}
+	var targets []string
+	for _, b := range cfg.Builds {
+		targets = append(targets, b.GOOS...)
+	}
+	slices.Sort(targets)
+	targets = slices.Compact(targets)
+	if len(targets) == 0 {
+		return nil, fmt.Errorf(".goreleaser.yml: no build names a goos")
+	}
+	return targets, nil
+}
+
+// run checks the packages patterns match, in the module at root, once per
+// GOOS root's release builds, and returns the exit code.
+func run(root string, patterns []string, stderr io.Writer) int {
+	targets, err := shippedGOOS(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "actionnames-check: %v\n", err)
+		return 1
+	}
 	var found []string
 	for _, goos := range targets {
 		cfg := &packages.Config{
 			Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+			Dir:  root,
 			Env:  append(os.Environ(), "GOOS="+goos),
 		}
-		pkgs, err := packages.Load(cfg, "./...")
+		pkgs, err := packages.Load(cfg, patterns...)
 		if err != nil {
 			fmt.Fprintf(stderr, "actionnames-check: GOOS=%s: %v\n", goos, err)
 			return 1
@@ -54,10 +88,15 @@ func run(stderr io.Writer) int {
 			fmt.Fprintf(stderr, "actionnames-check: GOOS=%s: packages of the module failed to type-check; the rule cannot read them\n", goos)
 			return 1
 		}
+		var all []actionnames.Package
+		for _, pkg := range pkgs {
+			all = append(all, actionnames.Package{Files: pkg.Syntax, Info: pkg.TypesInfo})
+		}
+		wrappers := actionnames.Wrappers(all)
 		files, allowed := 0, 0
 		for _, pkg := range pkgs {
 			files += len(pkg.Syntax)
-			f, a := actionnames.Check(pkg.Fset, pkg.Syntax, pkg.TypesInfo)
+			f, a := actionnames.Check(pkg.Fset, pkg.Syntax, pkg.TypesInfo, wrappers)
 			for _, x := range f {
 				found = append(found, x.String())
 			}

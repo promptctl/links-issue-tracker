@@ -59,7 +59,9 @@
 //     function type in their structure (fields, elements, pointees), or a
 //     method of an interface there; and, handed an interface (`any`
 //     included), every function converted to one, which reflection can
-//     call. A function stored in a field of a struct handed to outside code
+//     call. A type argument of an outside generic's instance is converted
+//     to an interface, since the generic calls what its constraint names
+//     (`Join[T fmt.Stringer]` calls T's String). A function stored in a field of a struct handed to outside code
 //     (`&cobra.Command{RunE: f}`) is reached as surely as one passed
 //     directly; so is a range-over-func loop's body, which the iterator is
 //     handed, and a fuzz function handed to f.Fuzz. A value with no use

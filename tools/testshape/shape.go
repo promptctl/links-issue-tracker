@@ -76,9 +76,9 @@ func (a *analyzer) measure(b *binary) binaryShape {
 	setup.run()
 	runsCLI := a.reachesCLI(setup.own)
 	setup.settle(runsCLI)
+	shape := binaryShape{Setup: setup.reached()}
 	binary := setup.finish()
 
-	shape := binaryShape{Setup: binary.layer.reached()}
 	for _, t := range b.Tests {
 		w := newWalker(a, binary)
 		for _, fn := range t.Funcs {

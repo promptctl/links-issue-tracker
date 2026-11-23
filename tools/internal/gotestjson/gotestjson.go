@@ -16,6 +16,7 @@ package gotestjson
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -187,6 +188,9 @@ func isTopLevel(test string) bool { return topLevel(test) == test }
 // reader is the state of one stream read.
 type reader struct {
 	replay io.Writer
+	// The first replay write that failed. The stream is still read to its
+	// end, and Read reports it. [LAW:no-silent-failure]
+	replayErr error
 	// Every test between its first event and its verdict. Its output is held
 	// until then: failed tests replay it, passing tests discard it — go
 	// test's non-verbose contract.
@@ -211,7 +215,8 @@ type reader struct {
 // A malformed stream is still read to its end, and its replay printed, before
 // the first malformed line is returned as the error: go test, writing into
 // the pipe, never dies of SIGPIPE, and the failures after that line still
-// print.
+// print. A replay write that fails is an error too, reported with the first
+// one's cause; the stream is still read to its end.
 func Read(r io.Reader, replay io.Writer) (Run, error) {
 	rd := &reader{
 		replay:   replay,
@@ -228,7 +233,7 @@ func Read(r io.Reader, replay io.Writer) (Run, error) {
 	for sc.Scan() {
 		line := sc.Bytes()
 		if !json.Valid(line) {
-			fmt.Fprintf(replay, "%s\n", line)
+			rd.print(string(line) + "\n")
 			continue
 		}
 		var ev event
@@ -243,8 +248,12 @@ func Read(r io.Reader, replay io.Writer) (Run, error) {
 	if err := sc.Err(); err != nil {
 		// The scanner stops at its error; the rest of the stream is still
 		// the producer's output, so it is replayed as it is.
-		io.Copy(replay, r)
-		return Run{}, fmt.Errorf("reading go test -json stream: %w", err)
+		if rd.replayErr == nil {
+			if _, cerr := io.Copy(replay, r); cerr != nil {
+				rd.replayErr = fmt.Errorf("replaying go test's output: %w", cerr)
+			}
+		}
+		return Run{}, errors.Join(fmt.Errorf("reading go test -json stream: %w", err), rd.replayErr)
 	}
 	// A stream cut off before a package's terminal event leaves that
 	// package's tests running with no package result to list them on; their
@@ -256,8 +265,8 @@ func Read(r io.Reader, replay io.Writer) (Run, error) {
 		}
 		rd.run.Cut = append(rd.run.Cut, Cut{ImportPath: pkg, Open: names})
 	}
-	if malformed != nil {
-		return Run{}, malformed
+	if malformed != nil || rd.replayErr != nil {
+		return Run{}, errors.Join(malformed, rd.replayErr)
 	}
 	if len(rd.run.Packages) == 0 && len(rd.run.Cut) == 0 {
 		return Run{}, fmt.Errorf("malformed go test -json stream: it reports no package")
@@ -270,7 +279,7 @@ func (rd *reader) event(ev event) error {
 		return fmt.Errorf("action %q is not one go test emits", ev.Action)
 	}
 	if ev.Action == "build-output" {
-		io.WriteString(rd.replay, ev.Output)
+		rd.print(ev.Output)
 	}
 	if packageless[ev.Action] {
 		// build-fail names its package by ImportPath; the package's own
@@ -306,7 +315,7 @@ func (rd *reader) event(ev event) error {
 		}
 		if ev.Action == "fail" {
 			for _, s := range rt.output {
-				io.WriteString(rd.replay, s)
+				rd.print(s)
 			}
 		}
 		delete(rd.running, k)
@@ -333,7 +342,7 @@ func (rd *reader) packageEvent(ev event) error {
 	verdict, terminal := verdicts[ev.Action]
 	switch {
 	case ev.Action == "output":
-		io.WriteString(rd.replay, ev.Output)
+		rd.print(ev.Output)
 	case terminal:
 		if ev.Elapsed == nil {
 			return fmt.Errorf("package %s's %s has no Elapsed", ev.Package, ev.Action)
@@ -408,12 +417,24 @@ func (rd *reader) drain(pkg, why string) []unfinishedTest {
 	}
 	slices.SortFunc(drained, func(a, b unfinishedTest) int { return strings.Compare(a.test, b.test) })
 	for _, u := range drained {
-		fmt.Fprintf(rd.replay, "--- unfinished: %s %s (%s)\n", pkg, u.test, why)
+		rd.print(fmt.Sprintf("--- unfinished: %s %s (%s)\n", pkg, u.test, why))
 		for _, s := range u.rt.output {
-			io.WriteString(rd.replay, s)
+			rd.print(s)
 		}
 	}
 	return drained
+}
+
+// print is the one replay write. After a write fails, the rest of the replay
+// is not written: the writer has already lost output, and the failure is
+// what Read reports.
+func (rd *reader) print(s string) {
+	if rd.replayErr != nil {
+		return
+	}
+	if _, err := io.WriteString(rd.replay, s); err != nil {
+		rd.replayErr = fmt.Errorf("replaying go test's output: %w", err)
+	}
 }
 
 func seconds(s float64) time.Duration {

@@ -281,6 +281,12 @@ func TestAnInitializerOnlyADependencyImportsRunsInTheSetup(t *testing.T) {
 	})
 }
 
+func TestAModuleTypeHandedToAnOutsideGenericHasItsMethodsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericjoin", "TestNames"), Integration, "fs", map[Touch]string{
+		FS: "genericjoin.TestNames → genericjoin.Names → nested/strs.Join[genericjoin.file] → (genericjoin.file).String [call into example.com/shape/nested/strs.Join is handed type argument genericjoin.file] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
 func TestARangeOverFuncLoopBodyIsCalledBackByTheIterator(t *testing.T) {
 	expectReach(t, reachOf(t, "chunk", "TestSave"), Integration, "fs", map[Touch]string{
 		FS: "chunk.TestSave → chunk.Save → chunk.Save$1 [dynamic call reaches value from TestSave, made in chunk.Save] → os.WriteFile ⇒ os.WriteFile (fs)",
