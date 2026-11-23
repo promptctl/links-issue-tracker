@@ -128,7 +128,7 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	// Malformed TOML, so config.Load returns an error rather than defaults.
-	ws := workspacetest.New(t, runEnv(t)).Checkout(t.TempDir()).Project("this is = = not toml\n").Info()
+	ws := workspacetest.WithProject(workspacetest.New(t, runEnv(t)).Checkout(t.TempDir()).Info(), "this is = = not toml\n")
 
 	maybeAutoSyncAfterCommand(underInvocation(t.Context()), testStderr(t), runEnv(t), app.AccessWrite, ws)
 

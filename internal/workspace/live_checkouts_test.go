@@ -1,3 +1,5 @@
+// [LAW:one-way-deps] these tests sit outside package workspace because they
+// build their workspace with workspacetest, which imports workspace.
 package workspace_test
 
 import (

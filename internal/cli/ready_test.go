@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,11 +22,9 @@ import (
 func newTestCLIApp(t testing.TB) *app.App {
 	t.Helper()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
-	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
 	ctx := context.Background()
-	databasePath := storeTemplate.Copy(t)
-	workspaceRoot := filepath.Dir(databasePath)
-	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, databasePath, "test-workspace-id")
+	ws := withTemplateStore(t, workspacetest.New(t, runEnv(t)).Checkout(t.TempDir()).Info())
+	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("engine.Open() error = %v", err)
 	}
@@ -38,7 +35,6 @@ func newTestCLIApp(t testing.TB) *app.App {
 	if err != nil {
 		t.Fatalf("workspace.EnsureStream() error = %v", err)
 	}
-	ws := workspacetest.New(t, runEnv(t)).Checkout(workspaceRoot).Location(workspace.Location{DatabasePath: databasePath}).Info()
 	return app.New(ws, st, stream)
 }
 
@@ -60,7 +56,7 @@ func newReadyTestHarness(t *testing.T) readyTestHarness {
 // useProjectConfig runs every later command of h under the project config
 // content.
 func (h readyTestHarness) useProjectConfig(content string) {
-	h.ap.Workspace = workspacetest.UnderProject(h.ap.Workspace, content)
+	h.ap.Workspace = workspacetest.WithProject(h.ap.Workspace, content)
 }
 
 func (h readyTestHarness) writeReadyConfig(requiredFields ...string) {

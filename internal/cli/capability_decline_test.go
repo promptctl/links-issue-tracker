@@ -9,7 +9,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
@@ -44,13 +43,6 @@ import (
 type syncOnlyEngine struct {
 	storage.Store
 	storage.Syncer
-}
-
-// declineWorkspace is a workspace with nothing but somewhere to write traces
-// and backups, which is all any of these paths touches before it refuses.
-func declineWorkspace(t *testing.T) workspace.Info {
-	t.Helper()
-	return workspacetest.New(t, runEnv(t)).Info()
 }
 
 // wantUnsupported asserts the error is the contract's typed refusal naming the
@@ -88,7 +80,7 @@ func TestReconcilerForRefusesAnEngineThatDeclinesReconcile(t *testing.T) {
 	} {
 		t.Run(command, func(t *testing.T) {
 			t.Parallel()
-			ws := declineWorkspace(t)
+			ws := workspacetest.New(t, runEnv(t)).Info()
 
 			reconciler, err := reconcilerFor(testStderr(t), runEnv(t), ws, syncSession{engine: syncOnlyEngine{}}, command)
 
@@ -124,7 +116,7 @@ func TestReconcilerForRefusesAnEngineThatDeclinesReconcile(t *testing.T) {
 // place a decline can land. [LAW:no-silent-failure]
 func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 	t.Parallel()
-	ws := declineWorkspace(t)
+	ws := workspacetest.New(t, runEnv(t)).Info()
 
 	outcome, err := performInlineReconcile(context.Background(), testStderr(t), runEnv(t), syncSession{engine: syncOnlyEngine{}}, ws, remoteName(t, "origin"), "lit-sync")
 
@@ -168,7 +160,7 @@ func TestInlineReconcileSurfacesADeclineInsteadOfSettling(t *testing.T) {
 // Store. [LAW:behavior-not-structure]
 func TestRestoreRefusesAnEngineThatCannotImportBeforeTouchingAnything(t *testing.T) {
 	t.Parallel()
-	ws := declineWorkspace(t)
+	ws := workspacetest.New(t, runEnv(t)).Info()
 	ap := &app.App{Workspace: ws, Store: syncOnlyEngine{}}
 
 	_, err := restoreFromExportFile(context.Background(), testStderr(t), runEnv(t), ap, inputFile{path: filepath.Join(t.TempDir(), "export.json"), data: []byte("not an export")}, false)

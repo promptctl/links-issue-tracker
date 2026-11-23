@@ -533,7 +533,16 @@ func locationOf(geo geometry) (Location, error) {
 	if err != nil {
 		return Location{}, fmt.Errorf("canonicalize git-common-dir %q: %w", geo.commonDir, err)
 	}
-	return LocationFromStorageDir(filepath.Join(filepath.Clean(canonicalCommonDir), "links")), nil
+	return LocationFromGitCommonDir(canonicalCommonDir), nil
+}
+
+// LocationFromGitCommonDir is the store geometry of the repository whose
+// git-common-dir is gitCommonDir, already canonical: its store lives in the
+// "links" directory under it. [LAW:single-enforcer] that suffix lives here
+// only, so a test fixture describing a checkout derives its store where
+// Resolve puts one.
+func LocationFromGitCommonDir(gitCommonDir string) Location {
+	return LocationFromStorageDir(filepath.Join(filepath.Clean(gitCommonDir), "links"))
 }
 
 // anchorGitPath makes a path git wrote absolute against the directory it is

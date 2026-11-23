@@ -24,7 +24,7 @@ import (
 func notifyTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
-	return workspacetest.New(t, runEnv(t)).Checkout(root).StorageDir(filepath.Join(root, ".lit")).Info()
+	return workspacetest.New(t, runEnv(t)).Checkout(root).Info()
 }
 
 // shPath spells path for a hook's sh command line: quoted, and with forward
@@ -43,11 +43,16 @@ func enableOwnerNotify(t *testing.T, ws workspace.Info, hook string) workspace.I
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		t.Fatalf("mkdir storage dir: %v", err)
-	}
-	return workspacetest.UnderProject(ws, "[sync]\nowner_notify_cmd = '"+hook+"'\n")
+	return workspacetest.WithProject(ws, ownerHookConfig(hook))
 }
+
+// ownerHookConfig is a project config whose one setting is the owner hook.
+func ownerHookConfig(hook string) string { return "[sync]\n" + ownerHookKey(hook) }
+
+// ownerHookKey is the sync table's owner hook key set to hook: the one
+// spelling of that key every test config uses. hook is a TOML literal string,
+// so it holds no single quote.
+func ownerHookKey(hook string) string { return "owner_notify_cmd = '" + hook + "'\n" }
 
 // TestOwnerNotifyDue pins the dedupe decision: absent marker fires, a fresh
 // marker with the same fingerprint suppresses, a changed fingerprint fires
@@ -183,9 +188,6 @@ func TestForegroundReconcileNotDivergedEndsTheEpisodes(t *testing.T) {
 // end and a pending sync-failure block, the state a settle must clear.
 func plantSettleEndedEpisodes(t *testing.T, ws workspace.Info) {
 	t.Helper()
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		t.Fatalf("mkdir storage dir: %v", err)
-	}
 	for _, kind := range kindsEndedBy(endedBySettle, endedBySchemaRead) {
 		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte("fp"), 0o644); err != nil {
 			t.Fatalf("write %s marker: %v", kind, err)
@@ -507,9 +509,6 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 func TestLandedPushEndsEveryPushEndedKind(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		t.Fatalf("mkdir storage dir: %v", err)
-	}
 	standing := []ownerNotifyKind{ownerNotifyKind(syncFailureSchemaCeilingLift), ownerNotifyKind(syncFailureRemoteSchemaAhead)}
 	for _, kind := range append(kindsEndedBy(endedByPush), standing...) {
 		if err := os.WriteFile(ownerNotifyMarkerPath(ws, kind), []byte(string(kind)+" origin/master\n"), 0o644); err != nil {

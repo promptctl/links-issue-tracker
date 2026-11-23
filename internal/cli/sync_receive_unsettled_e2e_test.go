@@ -216,12 +216,13 @@ func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 }
 
 // addOwnerNotifyHook turns the owner channel on for an initialized workspace:
-// its checkout runs under a project config whose owner hook is hook.
+// its checkout's whole project config becomes one whose only setting is the
+// owner hook hook.
 func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) {
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
-	putProjectConfigInForce(t, ws.RootDir, "[sync]\nowner_notify_cmd = '"+hook+"'\n")
+	writeCheckoutProject(t, ws.RootDir, ownerHookConfig(hook))
 }
 
 // receiveTraceStops is the stopped metadata of every receive trace the

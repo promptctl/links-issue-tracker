@@ -20,16 +20,15 @@ import (
 // and closes it, so a recover run can dump it below the gate and rebuild it.
 func seedWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	root := t.TempDir()
-	canonical := filepath.Join(root, "dolt")
-	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, canonical, "test-workspace-id")
+	ws := workspacetest.New(t, runEnv(t)).Checkout(t.TempDir()).Info()
+	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("close seed workspace: %v", err)
 	}
-	return workspacetest.New(t, runEnv(t)).Checkout(root).Location(workspace.Location{DatabasePath: canonical}).WorkspaceID("test-workspace-id").Info()
+	return ws
 }
 
 // TestRunLifeboatRecoverPromotesRecognizedWorkspace is the CLI acceptance for the
@@ -48,7 +47,7 @@ func TestRunLifeboatRecoverPromotesRecognizedWorkspace(t *testing.T) {
 	}
 
 	// The canonical path still holds a readable workspace, and a backup was kept.
-	entries, err := os.ReadDir(ws.RootDir)
+	entries, err := os.ReadDir(ws.StorageDir)
 	if err != nil {
 		t.Fatalf("read storage dir: %v", err)
 	}

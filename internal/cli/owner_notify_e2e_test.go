@@ -31,7 +31,7 @@ import (
 // and whatever else the test runs under.
 func writeOwnerNotifyProjectConfig(t *testing.T, repo, config string) {
 	t.Helper()
-	putProjectConfigInForce(t, repo, config)
+	writeCheckoutProject(t, repo, config)
 	ws, err := workspace.Resolve(runEnv(t), repo)
 	if err != nil {
 		t.Fatalf("resolve %s: %v", repo, err)
@@ -49,7 +49,7 @@ func writeOwnerNotifyProjectConfig(t *testing.T, repo, config string) {
 // off, and the owner hook appending each notification to sink.
 func ownerNotifyConfig(sink string, receive bool) string {
 	return fmt.Sprintf("[sync]\ncadence = 'on-push'\nreceive = %t\n", receive) +
-		"owner_notify_cmd = 'printf \"%s %s/%s\\n\" \"$LIT_NOTIFY_KIND\" \"$LIT_NOTIFY_REMOTE\" \"$LIT_NOTIFY_BRANCH\" >> " + shPath(sink) + "'\n"
+		ownerHookKey(`printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
 }
 
 // maskGlobalConfig keeps the developer's real ~/.config lit settings — possibly

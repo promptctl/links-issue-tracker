@@ -128,7 +128,7 @@ func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 	t.Parallel()
 	repo, _ := initBootstrapTestRepo(t)
 	ctx := context.Background()
-	ap, err := app.Open(ctx, runEnv(t), testStderr(t), resolvedWorkspace(t, repo), app.AccessRead)
+	ap, err := app.Open(ctx, runEnv(t), testStderr(t), workspacetest.Resolved(t, runEnv(t), repo), app.AccessRead)
 	if err != nil {
 		t.Fatalf("app.Open() error = %v", err)
 	}

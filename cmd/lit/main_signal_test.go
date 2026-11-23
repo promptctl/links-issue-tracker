@@ -333,7 +333,7 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 // verification steps on the store's single read-write engine — a flake these
 // tests are not designed to account for. Both wedge tests pin cadence
 // explicitly instead of depending on whatever value happens to be the shipped
-// default. [LAW:locality-or-seam]
+// default. [LAW:no-ambient-temporal-coupling]
 func pinOnPushCadence(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "wedge-test-config.toml")

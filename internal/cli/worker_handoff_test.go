@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // workerHandoffStdin is the handoff a command run in dir hands the worker it
@@ -78,7 +79,7 @@ func twoRemoteCheckout(t *testing.T) string {
 		runGit(t, root, "push", remote, "HEAD")
 	}
 	runGit(t, root, "branch", "--set-upstream-to", "origin/trunk")
-	putProjectConfigInForce(t, root, "[sync]\nreceive = false\n")
+	writeCheckoutProject(t, root, "[sync]\nreceive = false\n")
 	runCLIInDir(t, root, "init", "--skip-hooks")
 	return root
 }
@@ -208,11 +209,7 @@ func TestTheEventNamesTheProjectLayerItRead(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	runCLIInDir(t, root, "backlog")
-	ws, err := workspace.Resolve(runEnv(t), root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := lastEvent(t).Facts["config.project"], "checkout:"+filepath.Join(ws.RootDir, ".lit", "config.toml"); got != want {
+	if got, want := lastEvent(t).Facts["config.project"], workspacetest.Resolved(t, runEnv(t), root).Project.Source(); got != want {
 		t.Fatalf("backlog's config.project = %v, want %q", got, want)
 	}
 	runWorkerInDir(t, root, backgroundReceiveSubcommand)

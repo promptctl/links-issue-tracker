@@ -50,8 +50,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 		} {
 			t.Run(receive.name+"/"+step.name, func(t *testing.T) {
 				r, base := newSharedCheckouts(t)
-				finishSharedCheckouts(t, r, base, "")
-				putProjectConfigInForce(t, r.bravo, ownerNotifyConfig(r.sink, receive.on))
+				finishSharedCheckouts(t, r, base, func(sink string) string { return ownerNotifyConfig(sink, receive.on) })
 				runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
 				runCLIInDir(t, r.bravo, "update", r.ticket, "--title", "bravo-title")
 				runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)

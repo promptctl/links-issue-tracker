@@ -27,7 +27,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
 
-	putProjectConfigInForce(t, r.alpha, historyWindowConfig(uint64(seeded)+3, 2))
+	writeCheckoutProject(t, r.alpha, historyWindowConfig(uint64(seeded)+3, 2))
 	for _, title := range []string{"one", "two", "three"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
@@ -100,7 +100,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 		t.Fatalf("the seeding push's received-refs record = %q (%v); want the advertisement it proved", proved, err)
 	}
 
-	putProjectConfigInForce(t, r.alpha, historyWindowConfig(uint64(seeded)+1, 2))
+	writeCheckoutProject(t, r.alpha, historyWindowConfig(uint64(seeded)+1, 2))
 	runCLIInDir(t, r.alpha, "new", "--title", "one", "--topic", "demo", "--type", "task", "--parent", r.epic)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	bound := boundRecordOf(t, lastEvent(t))
@@ -210,7 +210,7 @@ func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
 	t.Parallel()
 	r, _ := newSharedCheckouts(t)
 	pushed := extractTicketID(t, runCLIInDir(t, r.alpha, "new", "--title", "pushed", "--topic", "demo", "--type", "task", "--parent", r.epic))
-	putProjectConfigInForce(t, r.alpha, historyWindowConfig(5, 5))
+	writeCheckoutProject(t, r.alpha, historyWindowConfig(5, 5))
 	isolateEvents(t)
 	const refusal = "config: sync.history_bound: a history window keeps at least one commit and fewer than it re-roots at; re_root_at 5, keep 5 is not one"
 	if out := runCLIInDir(t, r.alpha, "sync", "push"); !strings.Contains(out, "history bound not kept: "+refusal) {
@@ -231,5 +231,5 @@ func TestAnIllegalHistoryWindowFailsTheBoundAndNotThePush(t *testing.T) {
 // every push from a checkout running under it keeps its history inside that
 // window.
 func historyWindowConfig(reRootAt, keep uint64) string {
-	return fmt.Sprintf("\n[sync.history_bound]\nre_root_at = %d\nkeep = %d\n", reRootAt, keep)
+	return fmt.Sprintf("[sync.history_bound]\nre_root_at = %d\nkeep = %d\n", reRootAt, keep)
 }

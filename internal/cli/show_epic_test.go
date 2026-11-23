@@ -116,7 +116,7 @@ func TestRunShowTopLevelEpicRendersItsOwnBlock(t *testing.T) {
 // repo's config cannot be loaded, for reasons that have nothing to do with the
 // ready policy".
 func useUnrelatedlyBrokenConfig(ap *app.App) {
-	ap.Workspace = workspacetest.UnderProject(ap.Workspace, "[snapshot]\nretention_budget = -1\n")
+	ap.Workspace = workspacetest.WithProject(ap.Workspace, "[snapshot]\nretention_budget = -1\n")
 }
 
 // The only parentless ticket is a top-level epic, and its plan slice — its

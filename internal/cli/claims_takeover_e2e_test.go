@@ -212,7 +212,7 @@ func waitPastFreshnessWindow(t *testing.T) {
 // expired the moment waitPastFreshnessWindow returns.
 func writeTinyFreshnessWindow(t *testing.T, dir string) {
 	t.Helper()
-	putProjectConfigInForce(t, dir, "[claims]\nfreshness_window = \"1ms\"\n")
+	writeCheckoutProject(t, dir, "[claims]\nfreshness_window = \"1ms\"\n")
 }
 
 // TestStartTakesOverALiveLaneUnderOneSharedIdentity is the takeover that

@@ -23,12 +23,23 @@ import (
 // workspace as already initialized, and two checkouts seeded from one template
 // share history that production checkouts never would.
 var storeTemplate = dirtemplate.New("dolt", func(dir string) error {
-	st, err := engine.Open(context.Background(), testEnv(), os.Stderr, engine.ReadWrite, dir, "test-workspace-id")
+	st, err := engine.Open(context.Background(), testEnv(), os.Stderr, engine.ReadWrite, dir, workspacetest.WorkspaceID)
 	if err != nil {
 		return err
 	}
 	return st.Close()
 })
+
+// withTemplateStore is ws with a copy of storeTemplate as its store, at the
+// database path ws's geometry names, so the store is where every command run
+// against ws looks for it.
+func withTemplateStore(t testing.TB, ws workspace.Info) workspace.Info {
+	t.Helper()
+	if err := storeTemplate.CopyTo(ws.DatabasePath); err != nil {
+		t.Fatal(err)
+	}
+	return ws
+}
 
 // The fixture's whole saving: a copy is already the store this binary's open
 // would build, so opening it neither builds a database nor applies a migration.
@@ -36,7 +47,7 @@ var storeTemplate = dirtemplate.New("dolt", func(dir string) error {
 // migration always commits, so the same head after it proves none ran.
 func TestAStoreTemplateCopyOpensWithoutBuildingOrMigrating(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).Location(workspace.Location{DatabasePath: storeTemplate.Copy(t)}).WorkspaceID("test-workspace-id").Info()
+	ws := withTemplateStore(t, workspacetest.New(t, runEnv(t)).Info())
 	before := doltHead(t, ws)
 
 	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)

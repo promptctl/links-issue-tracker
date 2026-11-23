@@ -67,6 +67,13 @@ func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
+	// suiteenv.Of leaves the config path overrides out of every Env; a child
+	// a test starts from the process environment inherits none either.
+	for _, key := range []string{"LIT_CONFIG_PROJECT_PATH", "LIT_CONFIG_GLOBAL_PATH"} {
+		if err := os.Unsetenv(key); err != nil {
+			panic("unset " + key + ": " + err.Error())
+		}
+	}
 	// Every Run appends its invocation event under XDG_STATE_HOME and reads the
 	// global config layer under XDG_CONFIG_HOME, and Dolt reads its own home
 	// in-process on every store open, from the process environment no run's

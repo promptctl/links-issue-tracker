@@ -323,7 +323,7 @@ type ProjectLayer interface {
 // file LIT_CONFIG_PROJECT_PATH names taking its place. An empty root has no
 // file of its own, but the variable still names one.
 func CheckoutProject(env environ.Env, workspaceRoot pathspec.PathSpec) ProjectLayer {
-	return fileLayer{projectConfigPath(env, workspaceRoot)}
+	return fileLayer{CheckoutProjectPath(env, workspaceRoot)}
 }
 
 // HandedProject is a project layer handed over as content, read from no file.
@@ -454,7 +454,10 @@ func globalConfigPath(env environ.Env) pathspec.PathSpec {
 		Or(pathspec.New(ConfigDir(env)).Join("config.toml"))
 }
 
-func projectConfigPath(env environ.Env, workspaceRoot pathspec.PathSpec) pathspec.PathSpec {
+// CheckoutProjectPath is the file CheckoutProject reads the project config of
+// the checkout at workspaceRoot from: the one LIT_CONFIG_PROJECT_PATH names,
+// or else the checkout's .lit/config.toml.
+func CheckoutProjectPath(env environ.Env, workspaceRoot pathspec.PathSpec) pathspec.PathSpec {
 	return pathspec.New(env.Get(projectConfigPathEnv)).
 		Or(workspaceRoot.Join(".lit", "config.toml"))
 }

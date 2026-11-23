@@ -21,7 +21,7 @@ import (
 // trace name the skip, each once.
 func TestASkippedReceiveRecordsItsSkip(t *testing.T) {
 	t.Parallel()
-	ws := compactWorkspace(t)
+	ws := workspacetest.New(t, runEnv(t)).Info()
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	target := syncTarget{remote: remoteName(t, "origin"), skip: syncTargetRemoteEmpty}
@@ -52,7 +52,7 @@ func TestAReceiveThatSettlesNothingOwesNoPush(t *testing.T) {
 	gitInit(t, dir)
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
-	receiveOnce(ctx, testStderr(t), runEnv(t), workspacetest.New(t, runEnv(t)).Checkout(dir).StorageDir(t.TempDir()).Info())
+	receiveOnce(ctx, testStderr(t), runEnv(t), workspacetest.New(t, runEnv(t)).Checkout(dir).Info())
 	facts := writtenFacts(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	if owed, present := facts["receive.push_owed"]; !present || owed != false {
 		t.Fatalf("receive.push_owed = %#v (present %t); want false", owed, present)

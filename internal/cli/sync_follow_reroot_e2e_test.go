@@ -33,7 +33,7 @@ func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
 		runCLIInDir(t, r.alpha, "sync", "push")
 	}
 	r.root = reRootAlphaAndForcePush(t, r, r.cut)
-	finishSharedCheckouts(t, r, base, "")
+	finishSharedCheckouts(t, r, base, receivingNotifyConfig)
 	return r
 }
 
@@ -88,15 +88,19 @@ func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) stri
 	return reRooted.Root
 }
 
-// finishSharedCheckouts sends each checkout's owner notifications to its own
-// sink, under the rest of the project config more, turns the automatic sync
-// back on, and isolates the events the test reads.
-func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base, more string) {
+// receivingNotifyConfig is the shared checkouts' usual project config: on-push
+// cadence, the receive on, and the owner hook appending to sink.
+func receivingNotifyConfig(sink string) string { return ownerNotifyConfig(sink, true) }
+
+// finishSharedCheckouts runs each checkout under config of its own sink, the
+// whole project config that sends its owner notifications there, turns the
+// automatic sync back on, and isolates the events the test reads.
+func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string, config func(sink string) string) {
 	t.Helper()
-	writeOwnerNotifyProjectConfig(t, r.bravo, ownerNotifyConfig(r.sink, true)+more)
+	writeOwnerNotifyProjectConfig(t, r.bravo, config(r.sink))
 	// alpha gets the same config so its own commands spawn no background
 	// receive; its notifications go elsewhere.
-	writeOwnerNotifyProjectConfig(t, r.alpha, ownerNotifyConfig(filepath.Join(base, "alpha-notifications"), true)+more)
+	writeOwnerNotifyProjectConfig(t, r.alpha, config(filepath.Join(base, "alpha-notifications")))
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	isolateEvents(t)
 }

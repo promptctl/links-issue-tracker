@@ -116,20 +116,20 @@ func TestGuardRestoreVerdicts(t *testing.T) {
 	moved := later
 	moved.Issues = nil
 	recordedIn := func(t *testing.T) workspace.Info {
-		ws := declineWorkspace(t)
+		ws := workspacetest.New(t, runEnv(t)).Info()
 		if err := writeMarkerAtomic(restoreDigestPath(ws), []byte(recorded+"\n")); err != nil {
 			t.Fatalf("record digest: %v", err)
 		}
 		return ws
 	}
 	unreadable := func(t *testing.T) workspace.Info {
-		ws := declineWorkspace(t)
+		ws := workspacetest.New(t, runEnv(t)).Info()
 		if err := os.MkdirAll(filepath.Join(restoreDigestPath(ws), "blocked"), 0o755); err != nil {
 			t.Fatalf("block digest: %v", err)
 		}
 		return ws
 	}
-	unrecorded := declineWorkspace
+	unrecorded := func(t *testing.T) workspace.Info { return workspacetest.New(t, runEnv(t)).Info() }
 	for _, tc := range []struct {
 		name  string
 		ws    func(*testing.T) workspace.Info

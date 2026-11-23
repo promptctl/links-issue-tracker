@@ -24,7 +24,7 @@ import (
 // geometry function so the fixture cannot drift from real stores.
 func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspacetest.New(t, runEnv(t)).StorageDir(filepath.Join(t.TempDir(), ".lit")).Info()
+	return workspacetest.New(t, runEnv(t)).Info()
 }
 
 // mirrorPendingSet is the in-package spelling of mirrorOwed for tests that

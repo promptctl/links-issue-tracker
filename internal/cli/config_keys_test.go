@@ -113,8 +113,7 @@ func writeConfigLayers(t *testing.T, repo, global, project string) (globalFile, 
 	if err := os.WriteFile(globalFile, []byte(global), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	putProjectConfigInForce(t, root, project)
-	return globalFile, filepath.Join(root, ".lit", "config.toml")
+	return globalFile, writeCheckoutProject(t, root, project)
 }
 
 // warningLines is every line of stderr that is a warning, in order.

@@ -170,7 +170,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 
-	got, err := renderQuickstartGuidance(runEnv(t), repo, configtest.Project(""))
+	got, err := renderQuickstartGuidance(runEnv(t), repo, configtest.HandedProject(""))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() error = %v", err)
 	}
@@ -184,7 +184,7 @@ func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
 	// Verify default (no config) does not include the soil section.
 	xdg2 := t.TempDir()
 	setRunEnv(t, "XDG_CONFIG_HOME", xdg2)
-	gotDefault, err := renderQuickstartGuidance(runEnv(t), repo, configtest.Project(""))
+	gotDefault, err := renderQuickstartGuidance(runEnv(t), repo, configtest.HandedProject(""))
 	if err != nil {
 		t.Fatalf("renderQuickstartGuidance() default error = %v", err)
 	}

@@ -17,12 +17,15 @@ var maxVersion = sync.OnceValues(migrations.MaxVersion)
 // own highest migration, so a suite exercises every migration the tree
 // carries, and whose raise policy is a release's, so a suite's stores raise as
 // a released lit's would. Every field a suite's Env needs is added here, once.
+// The two config path overrides are left out, so no test runs under a config
+// file the developer's shell points at; a test of an override sets it itself.
 func Of(entries []string) environ.Env {
 	max, err := maxVersion()
 	if err != nil {
 		panic("read the migration registry: " + err.Error())
 	}
 	return environ.Of(entries).
+		Without("LIT_CONFIG_PROJECT_PATH", "LIT_CONFIG_GLOBAL_PATH").
 		WithReleasedSchema(version.SchemaCeiling{Max: max, Bound: version.BoundReleased, Source: "the test suite runs every migration this tree carries"}).
 		WithRaisePolicy(version.RaisePolicy{Release: true})
 }

@@ -26,8 +26,6 @@ import (
 func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) {
 	t.Helper()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
-	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
-	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 	ctx := context.Background()
 
 	storeDir = filepath.Join(t.TempDir(), "links")

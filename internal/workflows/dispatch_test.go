@@ -19,7 +19,7 @@ import (
 // (Load(ws.RootDir) and the firing trace under ws.StorageDir).
 func testWorkspace(t *testing.T, root string) workspace.Info {
 	t.Helper()
-	return workspacetest.New(t, testEnv()).Checkout(root).StorageDir(filepath.Join(root, ".lit")).Info()
+	return workspacetest.New(t, testEnv()).Checkout(root).Info()
 }
 
 func TestDispatchInjectsMatchingBodyWithIDInterpolated(t *testing.T) {
@@ -189,7 +189,10 @@ func TestDispatchWithEmptyStorageDirNeverWritesRelativeToCWD(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
-	ws := workspacetest.New(t, testEnv()).Checkout(workspaceRoot).Location(workspace.Location{}).Info() // StorageDir deliberately left empty
+	ws := workspacetest.New(t, testEnv()).Checkout(workspaceRoot).Info()
+	// No builder gives a workspace no storage dir; the type still admits one,
+	// so this test sets it by hand.
+	ws.Location = workspace.Location{}
 	var out bytes.Buffer
 	if _, err := Dispatch(testEnv(), &out, io.Discard, ws, Occasion{Event: EventWorkFinished, IssueID: "lit-1"}); err != nil {
 		t.Fatalf("Dispatch() error = %v", err)

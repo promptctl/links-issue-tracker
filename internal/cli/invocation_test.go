@@ -11,7 +11,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
@@ -110,23 +112,24 @@ func TestRunRefusesAnInvocationGivenNoStream(t *testing.T) {
 	}
 }
 
-// putProjectConfigInForce puts toml in force as the project config of the
-// checkout at dir, the way that checkout's owner does: it becomes the whole of
-// the checkout's .lit/config.toml, which every lit run there reads.
+// writeCheckoutProject makes toml the whole checkout project config of the
+// checkout at dir, written where config.CheckoutProject reads it, so every lit
+// run there runs under it. It returns the path it wrote.
 //
-// [LAW:one-source-of-truth] it is the one place a test gives a real checkout
-// its config, used only where the test's subject is that real path, or lit
-// runs in a checkout it resolves from disk (sync between clones, a worker).
-// Every other test holds its config as a value, through configtest.Project.
-func putProjectConfigInForce(t testing.TB, dir, toml string) {
+// [LAW:one-source-of-truth] it is the one place a test writes a checkout's
+// config, used where lit resolves the checkout from disk: the config path
+// itself, sync between clones, a worker. Every other test holds its config as
+// a value, through configtest.HandedProject.
+func writeCheckoutProject(t testing.TB, dir, toml string) string {
 	t.Helper()
-	path := filepath.Join(dir, ".lit", "config.toml")
+	path := config.CheckoutProjectPath(runEnv(t), pathspec.New(dir)).String()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("make %s: %v", filepath.Dir(path), err)
 	}
 	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
 		t.Fatalf("write the project config %s: %v", path, err)
 	}
+	return path
 }
 
 // A run's stderr is written from more than one goroutine — a routine store
