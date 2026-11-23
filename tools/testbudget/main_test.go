@@ -162,7 +162,7 @@ func TestConsumeStampsTerminalPackageResults(t *testing.T) {
 	want := []packageResult{
 		{ImportPath: "example.com/a", Elapsed: 1500 * time.Millisecond},
 		{ImportPath: "example.com/b", Elapsed: 200 * time.Millisecond, Failed: true},
-		{ImportPath: "example.com/c"}, // no Elapsed in the event means zero
+		{ImportPath: "example.com/c", NoElapsed: true}, // no Elapsed in the event is no figure
 	}
 	if !reflect.DeepEqual(results, want) {
 		t.Errorf("results = %+v, want %+v", results, want)

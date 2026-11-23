@@ -1,11 +1,13 @@
 package main
 
 // The markers and spawn programs: the one home of what testshape counts as a
-// touch. [LAW:one-source-of-truth] Every entry is a function's full name as
-// go/types prints it (types.Func.FullName), so it names one declared function,
-// method or interface method, never a spelling at a call site.
-// TestEveryModuleMarkerNamesADeclaredFunction loads this module and fails on
-// an entry that names nothing.
+// touch. [LAW:one-source-of-truth] Every entry names one declared function,
+// method or interface method by its full name as go/types prints it
+// (types.Func.FullName): "pkg.F", "(pkg.T).M", "(*pkg.T).M". A module marker
+// leaves the module path off its package path; every other entry is
+// written whole. A run fails on an entry the loaded program declares
+// nothing for, and TestEveryMarkerNamesADeclaredFunction fails on one this
+// module's program does not.
 
 // moduleMarkers are functions of the module being measured, named with the
 // module path left off: "internal/cli.Run" is <module>/internal/cli.Run.
@@ -17,8 +19,8 @@ var moduleMarkers = []marker{
 
 	// A store on disk: the app and engine openers, which construct the store
 	// a test then reaches only through storage.Store, and the Dolt store's own
-	// openers. database/sql's openers, below, catch any open that goes around
-	// them.
+	// openers. Dolt's loader and database/sql's openers, below, catch any open
+	// that goes around them.
 	{"internal/app.Open", touchStore},
 	{"internal/app.OpenLocationForRead", touchStore},
 	{"internal/engine.Open", touchStore},
@@ -41,6 +43,7 @@ var externalMarkers = []marker{
 	// A store on disk.
 	{"database/sql.Open", touchStore},
 	{"database/sql.OpenDB", touchStore},
+	{"github.com/dolthub/dolt/go/libraries/doltcore/doltdb.LoadDoltDBWithParams", touchStore},
 
 	// git: Dolt's git, which Env.Git wraps.
 	{"github.com/dolthub/dolt/go/libraries/utils/gitcmd.Command", touchGit},
@@ -94,9 +97,11 @@ var externalMarkers = []marker{
 	{"path/filepath.EvalSymlinks", touchFS},
 	{"(*testing.common).TempDir", touchFS},
 	{"(*testing.common).Chdir", touchFS},
-	// testing.TB is the harness's own interface: every implementation of
-	// these methods is the harness's directory, so calling one through TB is
-	// the touch, unlike a call through an interface the module declares.
+	// [LAW:types-are-the-program] exception: an interface method, matched on
+	// the call through the interface, which every other call through an
+	// interface is not. testing.TB is the harness's own interface, and every
+	// implementation of these methods is the harness's directory, so the
+	// call through TB is the touch wherever the TB came from.
 	{"(testing.TB).TempDir", touchFS},
 	{"(testing.TB).Chdir", touchFS},
 
@@ -157,9 +162,10 @@ var externalMarkers = []marker{
 // spawners are the functions that start a process, each with the index of
 // the argument that names the program. A call's program is resolved by
 // value: "git", or a path ending in /git, is git; this test binary itself
-// (os.Executable, os.Args[0]) is decided by the package's TestMain; anything
-// else is another process. Reached as a value instead of called, a spawner's
-// program is unknown, and it is another process.
+// (os.Executable, os.Args[0]) is decided by the package's TestMain; any other
+// constant is another process, and a program no constant names is
+// unresolved, another process too. Reached as a value instead of called, a
+// spawner's program is unresolved.
 var spawners = []spawner{
 	{"os/exec.Command", 0},
 	{"os/exec.CommandContext", 1},
@@ -178,18 +184,3 @@ const (
 	cmdType      = "os/exec.Cmd"
 	cmdPathField = "Path"
 )
-
-// noReturn are the calls after which a function's block goes no further:
-// TestMain's branch that calls one of them before m.Run is a branch a child
-// of the test binary takes.
-var noReturn = []string{
-	"os.Exit",
-	"syscall.Exit",
-	"log.Fatal",
-	"log.Fatalf",
-	"log.Fatalln",
-	"runtime.Goexit",
-}
-
-// mRun is the call that runs a test binary's tests.
-const mRun = "(*testing.M).Run"

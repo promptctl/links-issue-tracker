@@ -7,7 +7,8 @@
 // It reports facts, not verdicts. A package that failed to build, a test with
 // no verdict, a verdict that carried no elapsed time: each is a field of the
 // result, and what a fact means is the consuming tool's decision.
-// [LAW:single-enforcer]
+// [LAW:single-enforcer] What it cannot read is an error: a package-level
+// action go test does not emit, or a replay write that failed.
 package gotestjson
 
 import (
@@ -39,8 +40,10 @@ type Stream struct {
 	// Packages are the packages whose terminal event the stream carried, in
 	// stream order.
 	Packages []Package
-	// Cut are the tests still running when the stream ended, in a package
-	// that never reported its end, in package then test order.
+	// Cut are the tests of the packages that never reported their end, in
+	// package then test order: the tests still running when the stream ended,
+	// and the top-level tests that reached a verdict before it did, which no
+	// package result lists.
 	Cut []TestID
 }
 
@@ -54,7 +57,10 @@ type TestID struct{ Package, Test string }
 type Package struct {
 	ImportPath string
 	Elapsed    time.Duration
-	Failed     bool
+	// NoElapsed: the terminal event carried no elapsed time, so Elapsed is no
+	// figure at all, not a zero-second one.
+	NoElapsed bool
+	Failed    bool
 	// FailedBuild is the build go test reported failing for this package,
 	// empty when its test binary built.
 	FailedBuild string
@@ -67,8 +73,24 @@ func (p Package) MainFailed() bool {
 	if !p.Failed || p.FailedBuild != "" {
 		return false
 	}
-	return !slices.ContainsFunc(p.Tests, func(t Test) bool { return t.Failed || t.Unfinished })
+	return !slices.ContainsFunc(p.Tests, func(t Test) bool { return t.Verdict == Fail || t.Verdict == Unfinished })
 }
+
+// Verdict is how one top-level test ended.
+type Verdict int
+
+const (
+	Pass Verdict = iota
+	Fail
+	Skip
+	// Unfinished: the package ended with no verdict for the test — a
+	// -timeout panic, or a binary that died mid-test — so the package's end
+	// stopped its clock instead.
+	Unfinished
+)
+
+// verdicts are go test's verdict actions, for a test and for a package.
+var verdicts = map[string]Verdict{"pass": Pass, "fail": Fail, "skip": Skip}
 
 // Test is one top-level test of a package that ended. Subtests are never
 // results: their time is already inside their top-level ancestor's, because
@@ -77,11 +99,7 @@ type Test struct {
 	Name     string
 	Elapsed  time.Duration
 	Parallel bool // it called t.Parallel (emitted a pause event)
-	Failed   bool
-	// Unfinished: the package ended with no verdict for this test — a
-	// -timeout panic, or a binary that died mid-test — so the package's end
-	// stopped its clock instead.
-	Unfinished bool
+	Verdict  Verdict
 	// NoElapsed: its verdict carried no elapsed time, so Elapsed is the
 	// clock's reading without go test's own figure.
 	NoElapsed bool
@@ -155,11 +173,29 @@ func track(running map[testKey]*runningTest, k testKey, t time.Time) *runningTes
 	return rt
 }
 
+// replay is the writer output is replayed to. It keeps the first write that
+// failed, which Read returns: a replay that lost output is no replay.
+// [LAW:no-silent-failure]
+type replay struct {
+	w   io.Writer
+	err error
+}
+
+func (r *replay) Write(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	n, err := r.w.Write(p)
+	r.err = err
+	return n, err
+}
+
 // Read reads one `go test -json` stream from r, replaying human-readable
 // output to w, and returns what the stream proved. Lines that are not JSON
 // events (a panic trace, stray build noise) are echoed to w verbatim —
 // surfaced, never swallowed. [LAW:no-silent-failure]
 func Read(r io.Reader, w io.Writer) (Stream, error) {
+	out := &replay{w: w}
 	// Every test between its first event and its verdict. Its output is held
 	// until then: failed tests replay it, passing tests discard it — go
 	// test's non-verbose contract.
@@ -172,37 +208,43 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 	// A single output line can exceed Scanner's 64KB default (a dumped
 	// fixture, a long panic argument); give it room instead of erroring.
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
+	for line := 1; sc.Scan(); line++ {
+		raw := sc.Bytes()
 		var ev event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			fmt.Fprintf(w, "%s\n", line)
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			fmt.Fprintf(out, "%s\n", raw)
 			continue
 		}
 		if ev.Test == "" {
 			switch ev.Action {
+			case "start", "build-fail":
+				// A package starting, and a build failing, which the
+				// package's own terminal event names in FailedBuild.
 			case "output", "build-output":
-				io.WriteString(w, ev.Output)
+				io.WriteString(out, ev.Output)
 			case "pass", "fail", "skip":
 				tests := finished[ev.Package]
 				delete(finished, ev.Package)
-				for _, u := range drain(w, running, ev.Package, "no verdict before its package ended") {
+				for _, u := range drain(out, running, ev.Package, "no verdict before its package ended") {
 					if isTopLevel(u.test) {
 						tests = append(tests, Test{
-							Name:       u.test,
-							Elapsed:    u.rt.elapsedAt(ev.Time),
-							Parallel:   u.rt.parallel,
-							Unfinished: true,
+							Name:     u.test,
+							Elapsed:  u.rt.elapsedAt(ev.Time),
+							Parallel: u.rt.parallel,
+							Verdict:  Unfinished,
 						})
 					}
 				}
 				s.Packages = append(s.Packages, Package{
 					ImportPath:  ev.Package,
 					Elapsed:     seconds(ev.Elapsed),
+					NoElapsed:   ev.Elapsed == nil,
 					Failed:      ev.Action == "fail",
 					FailedBuild: ev.FailedBuild,
 					Tests:       tests,
 				})
+			default:
+				return Stream{}, fmt.Errorf("line %d: package %s: %q is no package action go test emits", line, ev.Package, ev.Action)
 			}
 			continue
 		}
@@ -220,7 +262,7 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 		case "pass", "fail", "skip":
 			if ev.Action == "fail" {
 				for _, s := range rt.output {
-					io.WriteString(w, s)
+					io.WriteString(out, s)
 				}
 			}
 			delete(running, k)
@@ -236,7 +278,7 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 				Name:      ev.Test,
 				Elapsed:   rt.elapsedAt(end),
 				Parallel:  rt.parallel,
-				Failed:    ev.Action == "fail",
+				Verdict:   verdicts[ev.Action],
 				NoElapsed: ev.Elapsed == nil,
 			})
 		}
@@ -245,17 +287,32 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 		return Stream{}, fmt.Errorf("reading go test -json stream: %w", err)
 	}
 	// A stream cut off before a package's terminal event leaves that
-	// package's tests running with no package result to list them on; their
-	// output is still the diagnostic, so it surfaces. [LAW:no-silent-failure]
-	var unreported []string
+	// package's tests, running or finished, with no package result to list
+	// them on; the running ones' output is still the diagnostic, so it
+	// surfaces. [LAW:no-silent-failure]
+	var unended []string
 	for k := range running {
-		unreported = append(unreported, k.pkg)
+		unended = append(unended, k.pkg)
 	}
-	sort.Strings(unreported)
-	for _, pkg := range slices.Compact(unreported) {
-		for _, u := range drain(w, running, pkg, "the stream ended before its package did") {
-			s.Cut = append(s.Cut, TestID{pkg, u.test})
+	for pkg := range finished {
+		unended = append(unended, pkg)
+	}
+	sort.Strings(unended)
+	for _, pkg := range slices.Compact(unended) {
+		var cut []string
+		for _, t := range finished[pkg] {
+			cut = append(cut, t.Name)
 		}
+		for _, u := range drain(out, running, pkg, "the stream ended before its package did") {
+			cut = append(cut, u.test)
+		}
+		sort.Strings(cut)
+		for _, test := range cut {
+			s.Cut = append(s.Cut, TestID{pkg, test})
+		}
+	}
+	if out.err != nil {
+		return Stream{}, fmt.Errorf("replaying go test's output: %w", out.err)
 	}
 	return s, nil
 }
@@ -291,8 +348,8 @@ func drain(w io.Writer, running map[testKey]*runningTest, pkg, why string) []unf
 	return drained
 }
 
-// seconds converts test2json's Elapsed, where nil means the event carries no
-// duration, to a Duration.
+// seconds converts test2json's Elapsed to a Duration; nil, no duration, is
+// the zero its NoElapsed fact qualifies.
 func seconds(elapsed *float64) time.Duration {
 	if elapsed == nil {
 		return 0

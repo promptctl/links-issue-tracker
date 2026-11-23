@@ -133,8 +133,9 @@ func violationLine(v violation) string {
 // writeViolation reports one blown budget: the violation line, carrying the
 // GitHub Actions annotation prefix, then the package's slowest top-level tests
 // — where the time went, read from the run that failed rather than a
-// reproduction on a machine of different speed. [LAW:nothing-unseen] Elapsed
-// prints at go test's own two-decimal precision.
+// reproduction on a machine of different speed. [LAW:nothing-unseen] Each
+// test's elapsed prints at go test's own two-decimal precision, as its
+// `--- PASS` line does; the package's figures print at the table's one.
 func writeViolation(w io.Writer, annotation string, v violation) {
 	fmt.Fprintf(w, "%s%s\n", annotation, violationLine(v))
 	fmt.Fprintf(w, "  slowest top-level tests, %d of %d:\n", len(v.Slowest), v.Ran)
@@ -144,7 +145,7 @@ func writeViolation(w io.Writer, annotation string, v violation) {
 			mode = "parallel"
 		}
 		mark := ""
-		if t.Unfinished {
+		if t.Verdict == gotestjson.Unfinished {
 			mark = "  [unfinished]"
 		}
 		fmt.Fprintf(w, "  %8.2fs  %-8s  %s%s\n", t.Elapsed.Seconds(), mode, t.Name, mark)

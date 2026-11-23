@@ -1,142 +1,79 @@
 package main
 
 import (
+	"fmt"
+	"slices"
+
 	"golang.org/x/tools/go/ssa"
 )
 
 // reach is everything one walk reached, in the order it reached it.
 type reach struct {
-	order   []*ssa.Function
-	parent  map[*ssa.Function]*ssa.Function // nil for a root
-	dynamic map[*ssa.Function]bool          // reached at least once as a value
+	order   []ssa.Member
+	parent  map[ssa.Member]ssa.Member // nil for a root
+	asValue map[ssa.Member]bool       // reached at least once as a value
 }
 
-// walk is everything reachable from roots, breadth first, so each function's
-// parent chain is a shortest path from a root. replaced are the package
-// variables whose initializer is not followed: stored by the test's
-// TestMain. A variable that a reached function other than package init
-// stores into joins them, which is how a test's replaced seam is honored.
-func (g *graph) walk(roots []*ssa.Function, replaced map[*ssa.Global]bool) *reach {
-	r := &reach{parent: make(map[*ssa.Function]*ssa.Function), dynamic: make(map[*ssa.Function]bool)}
-	var queue []*ssa.Function
-	visit := func(to, from *ssa.Function, dynamic bool) {
-		if dynamic {
-			r.dynamic[to] = true
+// walk is everything reachable from roots, breadth first, so each vertex's
+// parent chain is a shortest path from a root.
+func (g *graph) walk(roots []ssa.Member) *reach {
+	r := &reach{parent: make(map[ssa.Member]ssa.Member), asValue: make(map[ssa.Member]bool)}
+	var queue []ssa.Member
+	visit := func(to, from ssa.Member, asValue bool) {
+		if asValue {
+			r.asValue[to] = true
 		}
 		if _, seen := r.parent[to]; seen {
 			return
 		}
 		r.parent[to] = from
 		r.order = append(r.order, to)
-		// A marker is recorded where it is reached and never followed.
-		if _, walked := g.nodes[to]; walked {
-			queue = append(queue, to)
-		}
+		queue = append(queue, to)
 	}
 	for _, root := range roots {
 		visit(root, nil, false)
 	}
-	stored := make(map[*ssa.Global]bool, len(replaced))
-	for gl := range replaced {
-		stored[gl] = true
-	}
-	// Each function-typed variable a reached function reads, with the first
-	// function that read it, in the order they were read.
-	type read struct {
-		gl   *ssa.Global
-		from *ssa.Function
-	}
-	var reads []read
-	readSeen := make(map[*ssa.Global]bool)
-	initFollowed := make(map[*ssa.Global]bool)
-	for {
-		for len(queue) > 0 {
-			fn := queue[0]
-			queue = queue[1:]
-			n := g.nodes[fn]
-			for _, gl := range n.stores {
-				stored[gl] = true
-			}
-			for _, e := range n.edges {
-				if e.to != nil {
-					visit(e.to, fn, e.dynamic)
-				}
-			}
-			for _, gl := range n.loads {
-				if !readSeen[gl] {
-					readSeen[gl] = true
-					reads = append(reads, read{gl, fn})
-				}
-				for _, s := range g.stores[gl] {
-					if !s.init && s.value != nil && g.walkableOrMarker(s.value) {
-						visit(s.value, fn, true)
-					}
-				}
+	for len(queue) > 0 {
+		v := queue[0]
+		queue = queue[1:]
+		for _, e := range g.nodes[v].edges {
+			if f, ok := e.(follow); ok {
+				visit(f.to, v, f.asValue)
 			}
 		}
-		// Only once nothing more is reachable is it known which variables
-		// the walk replaced; an initializer is followed for the rest.
-		progressed := false
-		for _, rd := range reads {
-			if stored[rd.gl] || initFollowed[rd.gl] {
-				continue
-			}
-			initFollowed[rd.gl] = true
-			for _, s := range g.stores[rd.gl] {
-				if s.init && s.value != nil && g.walkableOrMarker(s.value) {
-					visit(s.value, rd.from, true)
-					progressed = true
-				}
-			}
-		}
-		if !progressed {
-			return r
-		}
 	}
+	return r
 }
 
-// walkableOrMarker reports whether the walk visits fn as a node.
-func (g *graph) walkableOrMarker(fn *ssa.Function) bool {
-	_, ok := g.nodes[fn]
-	return ok || g.isMarker(fn)
-}
-
-// hit is one touch a walk found, with the chain that reaches it.
+// hit is one touch a walk found: the vertex that makes it and the calls from
+// there to the touch.
 type hit struct {
-	touch touch // touchSelf: the test binary itself, decided by TestMain
-	chain []string
+	touch touch
+	at    ssa.Member
+	tail  []string
 }
 
-// touchSelf is a spawn of the test binary itself: a CLI run or another
-// process, as the package's TestMain decides. It is never a column.
-const touchSelf = numTouches
-
-// hits are the touches r reached, each with the first chain found, in walk
-// order: marker edges of reached functions, the spawns they make, and a
-// spawner reached as a value, whose program is not known.
-func (g *graph) hits(r *reach) []hit {
+// hits are the touches r reached, in walk order: the markers reached
+// vertices call, the spawns they make, and the spawns of a function reached
+// as a value, whose program no caller resolves. self is the touch of a
+// spawn of the test binary itself.
+func (g *graph) hits(r *reach, self touch) []hit {
 	var hs []hit
-	for _, fn := range r.order {
-		n, ok := g.nodes[fn]
-		if !ok {
-			// A marker reached as a value stored in a variable.
-			name, t, _ := g.markerOf(fn)
-			hs = append(hs, hit{t, append(g.chain(r, r.parent[fn]), name)})
-			continue
-		}
+	for _, v := range r.order {
+		n := g.nodes[v]
 		for _, e := range n.edges {
-			if e.to == nil {
-				hs = append(hs, hit{e.touch, append(g.chain(r, fn), e.marker)})
+			if m, ok := e.(reachTouch); ok {
+				hs = append(hs, hit{m.touch, v, []string{m.name}})
 			}
 		}
 		for _, s := range n.spawns {
-			t := map[progKind]touch{progGit: touchGit, progOther: touchProc, progSelf: touchSelf}[s.kind]
-			hs = append(hs, hit{t, append(g.chain(r, fn), s.tail...)})
+			hs = append(hs, hit{s.program.touch(self), v, slices.Concat(s.tail, s.program.note())})
 		}
-		if r.dynamic[fn] {
+		if r.asValue[v] {
 			for _, h := range n.holes {
-				if h.kind == progParam {
-					hs = append(hs, hit{touchProc, append(g.chain(r, fn), append(h.tail, "(program unknown)")...)})
+				if h.via == viaParam {
+					p := unresolvedProgram{}
+					hs = append(hs, hit{p.touch(self), v, slices.Concat(h.tail, p.note())})
 				}
 			}
 		}
@@ -144,140 +81,15 @@ func (g *graph) hits(r *reach) []hit {
 	return hs
 }
 
-// chain is the path from a root to fn.
-func (g *graph) chain(r *reach, fn *ssa.Function) []string {
-	var c []string
-	for ; fn != nil; fn = r.parent[fn] {
-		c = append(c, g.display(fn))
+// witnessOf is h's witness: the path from r's root to the vertex that makes
+// the touch, then the calls to it.
+func witnessOf(r *reach, h hit) *witness {
+	var path []fmt.Stringer
+	for v := h.at; v != nil; v = r.parent[v] {
+		path = append(path, v)
 	}
-	for i, j := 0, len(c)-1; i < j; i, j = i+1, j-1 {
-		c[i], c[j] = c[j], c[i]
+	for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+		path[i], path[j] = path[j], path[i]
 	}
-	return c
-}
-
-// replacedBy are the package variables that functions r reached store into.
-func (g *graph) replacedBy(r *reach) map[*ssa.Global]bool {
-	out := make(map[*ssa.Global]bool)
-	for _, fn := range r.order {
-		if n := g.nodes[fn]; n != nil {
-			for _, gl := range n.stores {
-				out[gl] = true
-			}
-		}
-	}
-	return out
-}
-
-// runsTests reports whether running fn can run the test binary's tests.
-func (g *graph) runsTests(fn *ssa.Function) bool {
-	if n := g.nodes[fn]; n == nil {
-		return false
-	}
-	for _, f := range g.walk([]*ssa.Function{fn}, nil).order {
-		if n := g.nodes[f]; n != nil && n.runsTests {
-			return true
-		}
-	}
-	return false
-}
-
-// childRunsCLI reports whether a child of the test binary that TestMain
-// sends away from its tests runs the CLI: whether TestMain's blocks that
-// cannot reach m.Run — the branch a child takes, ended by os.Exit — reach a
-// CLI run. Without that branch, a child re-runs the binary's tests: the
-// helper-process idiom, another process.
-func (g *graph) childRunsCLI(testMain *ssa.Function) bool {
-	child := g.childBlocks(testMain)
-	var roots []*ssa.Function
-	for _, e := range g.nodes[testMain].edges {
-		if !child[e.block] {
-			continue
-		}
-		if e.to == nil {
-			if e.touch == touchCLI {
-				return true
-			}
-			continue
-		}
-		roots = append(roots, e.to)
-	}
-	for _, h := range g.hits(g.walk(roots, nil)) {
-		if h.touch == touchCLI {
-			return true
-		}
-	}
-	return false
-}
-
-// childBlocks are testMain's blocks from which no path reaches a call that
-// runs the tests, a block's path ending at a call that does not return.
-func (g *graph) childBlocks(testMain *ssa.Function) map[int]bool {
-	type fate struct{ runs, exits bool }
-	fates := make([]fate, len(testMain.Blocks))
-	for _, b := range testMain.Blocks {
-		fates[b.Index] = g.blockFate(b)
-	}
-	canRun := make([]bool, len(testMain.Blocks))
-	for changed := true; changed; {
-		changed = false
-		for _, b := range testMain.Blocks {
-			if canRun[b.Index] {
-				continue
-			}
-			f := fates[b.Index]
-			run := f.runs
-			if !f.exits {
-				for _, s := range b.Succs {
-					run = run || canRun[s.Index]
-				}
-			}
-			if run {
-				canRun[b.Index], changed = true, true
-			}
-		}
-	}
-	child := make(map[int]bool)
-	for i, run := range canRun {
-		if !run {
-			child[i] = true
-		}
-	}
-	return child
-}
-
-// blockFate reads b in order up to its first call that runs the tests or
-// does not return.
-func (g *graph) blockFate(b *ssa.BasicBlock) (f struct{ runs, exits bool }) {
-	for _, instr := range b.Instrs {
-		var targets []*ssa.Function
-		if c, ok := instr.(ssa.CallInstruction); ok && !c.Common().IsInvoke() {
-			if callee := c.Common().StaticCallee(); callee != nil {
-				name := fullName(callee)
-				if name == mRun {
-					f.runs = true
-					return f
-				}
-				for _, nr := range noReturn {
-					if name == nr {
-						f.exits = true
-						return f
-					}
-				}
-				targets = append(targets, callee)
-			}
-		}
-		for _, op := range instr.Operands(nil) {
-			if fn := funcValue(*op); fn != nil {
-				targets = append(targets, fn)
-			}
-		}
-		for _, t := range targets {
-			if g.runsTests(t) {
-				f.runs = true
-				return f
-			}
-		}
-	}
-	return f
+	return &witness{path: path, tail: h.tail}
 }

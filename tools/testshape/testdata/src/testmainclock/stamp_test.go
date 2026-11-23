@@ -12,6 +12,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func TestStampUnderTestMainsClockTouchesNothing(t *testing.T) {
+// TestMain's store is no initializer's, so it earns the test nothing: now
+// still holds what its initializer stored, the real clock.
+func TestStampUnderTestMainsClockStillTouchesTheClock(t *testing.T) {
 	_ = Stamp()
 }
