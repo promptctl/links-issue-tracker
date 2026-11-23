@@ -3,14 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // showOutput runs `lit show <id>` text rendering and returns the captured
@@ -111,19 +110,13 @@ func TestRunShowTopLevelEpicRendersItsOwnBlock(t *testing.T) {
 	}
 }
 
-// writeUnrelatedlyBrokenConfig writes a repo config whose only defect is in a
-// setting the show path never reads. snapshot.retention_budget is validated by
-// config.Load like every other field, so it stands in for "this repo's config
-// cannot be loaded, for reasons that have nothing to do with the ready policy".
-func writeUnrelatedlyBrokenConfig(t *testing.T, ap *app.App) {
-	t.Helper()
-	configDir := filepath.Join(ap.Workspace.RootDir, ".lit")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(configDir) error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[snapshot]\nretention_budget = -1\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(config.toml) error = %v", err)
-	}
+// useUnrelatedlyBrokenConfig runs ap under a project config whose only defect
+// is in a setting the show path never reads. snapshot.retention_budget is
+// validated by config.Load like every other field, so it stands in for "this
+// repo's config cannot be loaded, for reasons that have nothing to do with the
+// ready policy".
+func useUnrelatedlyBrokenConfig(ap *app.App) {
+	ap.Workspace = workspacetest.UnderProject(ap.Workspace, "[snapshot]\nretention_budget = -1\n")
 }
 
 // The only parentless ticket is a top-level epic, and its plan slice — its
@@ -140,7 +133,7 @@ func TestRunShowTopLevelEpicFailsBeforeWritingBodyOnUnreadableConfig(t *testing.
 	if err != nil {
 		t.Fatalf("CreateIssue(free) error = %v", err)
 	}
-	writeUnrelatedlyBrokenConfig(t, ap)
+	useUnrelatedlyBrokenConfig(ap)
 
 	var buf bytes.Buffer
 	err = runShow(t, context.Background(), &buf, ap, []string{free.ID.Raw()})
@@ -164,7 +157,7 @@ func TestRunShowEpicMemberFailsBeforeWritingBodyOnUnreadableConfig(t *testing.T)
 	t.Parallel()
 	f := newEpicFixture(t, "Plan epic", "the why")
 	child := f.addChild("A child")
-	writeUnrelatedlyBrokenConfig(t, f.ap)
+	useUnrelatedlyBrokenConfig(f.ap)
 
 	var buf bytes.Buffer
 	err := runShow(t, context.Background(), &buf, f.ap, []string{child.Raw()})

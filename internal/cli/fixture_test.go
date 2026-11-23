@@ -8,6 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // storeTemplate is the migrated store newTestCLIApp's workspaces start from,
@@ -35,7 +36,7 @@ var storeTemplate = dirtemplate.New("dolt", func(dir string) error {
 // migration always commits, so the same head after it proves none ran.
 func TestAStoreTemplateCopyOpensWithoutBuildingOrMigrating(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{DatabasePath: storeTemplate.Copy(t)}, WorkspaceID: "test-workspace-id", Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	ws := workspacetest.New(t, runEnv(t)).Location(workspace.Location{DatabasePath: storeTemplate.Copy(t)}).WorkspaceID("test-workspace-id").Info()
 	before := doltHead(t, ws)
 
 	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)

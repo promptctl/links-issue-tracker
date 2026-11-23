@@ -11,11 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // dirInvocation is the invocation t runs lit with in dir. stdin is empty, as
@@ -113,33 +110,23 @@ func TestRunRefusesAnInvocationGivenNoStream(t *testing.T) {
 	}
 }
 
-// checkoutRoot is dir as a workspace.CheckoutRoot, its symlinks resolved as
-// git resolves --show-toplevel (t.TempDir sits under /var -> /private/var on
-// darwin).
-func checkoutRoot(t testing.TB, dir string) workspace.CheckoutRoot {
+// putProjectConfigInForce puts toml in force as the project config of the
+// checkout at dir, the way that checkout's owner does: it becomes the whole of
+// the checkout's .lit/config.toml, which every lit run there reads.
+//
+// [LAW:one-source-of-truth] it is the one place a test gives a real checkout
+// its config, used only where the test's subject is that real path, or lit
+// runs in a checkout it resolves from disk (sync between clones, a worker).
+// Every other test holds its config as a value, through configtest.Project.
+func putProjectConfigInForce(t testing.TB, dir, toml string) {
 	t.Helper()
-	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	path := filepath.Join(dir, ".lit", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("make %s: %v", filepath.Dir(path), err)
 	}
-	root, err := workspace.ParseCheckoutRoot(resolved)
-	if err != nil {
-		t.Fatalf("ParseCheckoutRoot(%q): %v", resolved, err)
+	if err := os.WriteFile(path, []byte(toml), 0o644); err != nil {
+		t.Fatalf("write the project config %s: %v", path, err)
 	}
-	return root
-}
-
-// testProject is the project config layer Resolve gives the checkout at root.
-func testProject(t testing.TB, root workspace.CheckoutRoot) config.ProjectLayer {
-	return config.CheckoutProject(runEnv(t), pathspec.New(root.String()))
-}
-
-// repositoryOf is the repository a standard checkout at dir has, <dir>/.git,
-// named without asking git: a fixture whose dir is no repository gets one
-// whose questions fail, as asking that dir's checkout did.
-func repositoryOf(t testing.TB, dir string) workspace.Repository {
-	t.Helper()
-	return workspace.LocationFromStorageDir(filepath.Join(checkoutRoot(t, dir).String(), ".git", "links")).Repository()
 }
 
 // A run's stderr is written from more than one goroutine — a routine store

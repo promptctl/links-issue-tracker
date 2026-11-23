@@ -94,7 +94,7 @@ func (r removedWorktreeRepo) removeWorktreeThenJoin(t *testing.T) {
 	t.Helper()
 	runGit(t, r.root, "worktree", "remove", "--force", r.worktree)
 	if err := cli.JoinDetachedWorkers(r.storageDir, workerJoinPatience); err != nil {
-		t.Fatalf("%v\n%s\nreceive log:\n%s", err, dumpMirrorLog(r.storageDir), receiveLog(t, workspace.Info{Location: workspace.LocationFromStorageDir(r.storageDir)}))
+		t.Fatalf("%v\n%s\nreceive log:\n%s", err, dumpMirrorLog(r.storageDir), receiveLog(t, r.storageDir))
 	}
 }
 
@@ -163,7 +163,7 @@ func TestAReceiveFromARemovedWorktreeMergesAndItsMirrorPushes(t *testing.T) {
 	r.removeWorktreeThenJoin(t)
 
 	if ls := r.litIn(t, r.root, quiet, "ls", "--parent", r.epic, "--columns", "title"); !strings.Contains(ls, "from-peer") {
-		t.Fatalf("the store lacks the peer's ticket after the receive worker ended:\n%s\nreceive log:\n%s", ls, receiveLog(t, workspace.Info{Location: workspace.LocationFromStorageDir(r.storageDir)}))
+		t.Fatalf("the store lacks the peer's ticket after the receive worker ended:\n%s\nreceive log:\n%s", ls, receiveLog(t, r.storageDir))
 	}
 	r.requireOnRemote(t, "unpushed-in-worktree")
 	r.requireOnRemote(t, "written-in-worktree")

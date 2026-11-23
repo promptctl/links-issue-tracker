@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,13 +17,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/storage/storagetest"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func newTestCLIApp(t testing.TB) *app.App {
 	t.Helper()
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", "")
-	setRunEnv(t, "LIT_CONFIG_PROJECT_PATH", "")
 	ctx := context.Background()
 	databasePath := storeTemplate.Copy(t)
 	workspaceRoot := filepath.Dir(databasePath)
@@ -39,13 +38,8 @@ func newTestCLIApp(t testing.TB) *app.App {
 	if err != nil {
 		t.Fatalf("workspace.EnsureStream() error = %v", err)
 	}
-	return app.New(workspace.Info{
-		Location:    workspace.Location{DatabasePath: databasePath},
-		RootDir:     workspaceRoot,
-		WorkspaceID: "test-workspace-id",
-		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, workspaceRoot), checkoutRoot(t, workspaceRoot)), Project: testProject(t, checkoutRoot(t, workspaceRoot)),
-	}, st, stream)
+	ws := workspacetest.New(t, runEnv(t)).Checkout(workspaceRoot).Location(workspace.Location{DatabasePath: databasePath}).Info()
+	return app.New(ws, st, stream)
 }
 
 type readyTestHarness struct {
@@ -63,15 +57,10 @@ func newReadyTestHarness(t *testing.T) readyTestHarness {
 	}
 }
 
-func (h readyTestHarness) writeProjectConfig(content string) {
-	h.t.Helper()
-	configDir := filepath.Join(h.ap.Workspace.RootDir, ".lit")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		h.t.Fatalf("MkdirAll(configDir) error = %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o644); err != nil {
-		h.t.Fatalf("WriteFile(config.toml) error = %v", err)
-	}
+// useProjectConfig runs every later command of h under the project config
+// content.
+func (h readyTestHarness) useProjectConfig(content string) {
+	h.ap.Workspace = workspacetest.UnderProject(h.ap.Workspace, content)
 }
 
 func (h readyTestHarness) writeReadyConfig(requiredFields ...string) {
@@ -80,7 +69,7 @@ func (h readyTestHarness) writeReadyConfig(requiredFields ...string) {
 	if err != nil {
 		h.t.Fatalf("json.Marshal(requiredFields) error = %v", err)
 	}
-	h.writeProjectConfig(fmt.Sprintf("[ready]\nrequired_fields = %s\n", encodedFields))
+	h.useProjectConfig(fmt.Sprintf("[ready]\nrequired_fields = %s\n", encodedFields))
 }
 
 func (h readyTestHarness) createIssue(input storage.CreateIssueInput) model.Issue {
@@ -927,7 +916,7 @@ func TestRunReadyOrdersLeavesInTreeOrder(t *testing.T) {
 func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	t.Parallel()
 	h := newReadyTestHarness(t)
-	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")
+	h.useProjectConfig("[ready\nrequired_fields = [\"description\"]")
 
 	err := h.runWorkableErr()
 	if err == nil {

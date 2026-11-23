@@ -33,7 +33,7 @@ func newReRootedCheckouts(t *testing.T, concurrent bool) reRootedCheckouts {
 		runCLIInDir(t, r.alpha, "sync", "push")
 	}
 	r.root = reRootAlphaAndForcePush(t, r, r.cut)
-	finishSharedCheckouts(t, r, base)
+	finishSharedCheckouts(t, r, base, "")
 	return r
 }
 
@@ -89,14 +89,14 @@ func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) stri
 }
 
 // finishSharedCheckouts sends each checkout's owner notifications to its own
-// sink, turns the automatic sync back on, and isolates the events the test
-// reads.
-func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string) {
+// sink, under the rest of the project config more, turns the automatic sync
+// back on, and isolates the events the test reads.
+func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base, more string) {
 	t.Helper()
-	writeOwnerNotifyProjectConfig(t, r.bravo, r.sink)
+	writeOwnerNotifyProjectConfig(t, r.bravo, ownerNotifyConfig(r.sink, true)+more)
 	// alpha gets the same config so its own commands spawn no background
 	// receive; its notifications go elsewhere.
-	writeOwnerNotifyProjectConfig(t, r.alpha, filepath.Join(base, "alpha-notifications"))
+	writeOwnerNotifyProjectConfig(t, r.alpha, ownerNotifyConfig(filepath.Join(base, "alpha-notifications"), true)+more)
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	isolateEvents(t)
 }

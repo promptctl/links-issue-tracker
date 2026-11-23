@@ -137,7 +137,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	// below would prove nothing.
 	time.Sleep(2 * time.Second)
 	if !processAlive(pid) {
-		t.Fatalf("receive worker %d ended before the wedge engaged:\n%s", pid, receiveLog(t, ws))
+		t.Fatalf("receive worker %d ended before the wedge engaged:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 	sigtermReceiveWorker(t, ws, pid, 8*time.Second) // comfortably under the receive's 15s deadline
 
@@ -177,8 +177,8 @@ func commandReturnsAheadOfItsReceive(t *testing.T, ws workspace.Info, self, cade
 		t.Fatalf("lit backlog: %v\noutput:\n%s", err, out)
 	}
 	pid := receiveWorkerPID(t, ws)
-	if strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
-		t.Fatalf("the receive had already ended when the command returned, so this wedge did not hold it:\n%s", receiveLog(t, ws))
+	if strings.Contains(receiveLog(t, ws.StorageDir), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("the receive had already ended when the command returned, so this wedge did not hold it:\n%s", receiveLog(t, ws.StorageDir))
 	}
 	return pid
 }
@@ -190,7 +190,7 @@ func receiveWorkerPID(t *testing.T, ws workspace.Info) int {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		for _, line := range strings.Split(receiveLog(t, ws), "\n") {
+		for _, line := range strings.Split(receiveLog(t, ws.StorageDir), "\n") {
 			if _, rest, ok := strings.Cut(line, " receive start pid="); ok {
 				pid, err := strconv.Atoi(strings.Fields(rest)[0])
 				if err != nil {
@@ -200,7 +200,7 @@ func receiveWorkerPID(t *testing.T, ws workspace.Info) int {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no receive worker started within 15s:\n%s", receiveLog(t, ws))
+			t.Fatalf("no receive worker started within 15s:\n%s", receiveLog(t, ws.StorageDir))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -219,12 +219,12 @@ func sigtermReceiveWorker(t *testing.T, ws workspace.Info, pid int, deadline tim
 	for processAlive(pid) {
 		if time.Since(sentAt) > deadline {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
-			t.Fatalf("receive worker %d did not exit within %v of SIGTERM — the receive is not cancellation-responsive:\n%s", pid, deadline, receiveLog(t, ws))
+			t.Fatalf("receive worker %d did not exit within %v of SIGTERM — the receive is not cancellation-responsive:\n%s", pid, deadline, receiveLog(t, ws.StorageDir))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
-		t.Fatalf("receive worker %d exited without its end line — it did not end on the clean path:\n%s", pid, receiveLog(t, ws))
+	if !strings.Contains(receiveLog(t, ws.StorageDir), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("receive worker %d exited without its end line — it did not end on the clean path:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 }
 
@@ -263,9 +263,9 @@ func receiveTraceReasons(t *testing.T, ws workspace.Info) []string {
 	return reasons
 }
 
-func receiveLog(t *testing.T, ws workspace.Info) string {
+func receiveLog(t *testing.T, storageDir string) string {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join(ws.StorageDir, cli.ReceiveLogName))
+	body, err := os.ReadFile(filepath.Join(storageDir, cli.ReceiveLogName))
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read receive log: %v", err)
 	}
@@ -461,11 +461,11 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	select {
 	case <-connected:
 	case <-time.After(15 * time.Second):
-		t.Fatalf("the receive worker never reached the remote:\n%s", receiveLog(t, ws))
+		t.Fatalf("the receive worker never reached the remote:\n%s", receiveLog(t, ws.StorageDir))
 	}
 	time.Sleep(200 * time.Millisecond) // git has sent its request and is waiting on the reply
 	if !processAlive(pid) {
-		t.Fatalf("receive worker %d ended before the git wedge could be signalled:\n%s", pid, receiveLog(t, ws))
+		t.Fatalf("receive worker %d ended before the git wedge could be signalled:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 
 	// Deliberately UNDER interrupt.DefaultGrace: a clean ctx-cancel exit is
@@ -549,13 +549,13 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	// The join reads the worker's exit from the kernel, so once it returns the
 	// worker has made its last write and its end line is already in the log.
 	if err := cli.JoinDetachedWorkers(ws.StorageDir, 60*time.Second); err != nil {
-		t.Fatalf("%v:\n%s", err, receiveLog(t, ws))
+		t.Fatalf("%v:\n%s", err, receiveLog(t, ws.StorageDir))
 	}
-	if !strings.Contains(receiveLog(t, ws), fmt.Sprintf("receive end pid=%d ", pid)) {
-		t.Fatalf("receive worker %d has no end line once the join returned:\n%s", pid, receiveLog(t, ws))
+	if !strings.Contains(receiveLog(t, ws.StorageDir), fmt.Sprintf("receive end pid=%d ", pid)) {
+		t.Fatalf("receive worker %d has no end line once the join returned:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 	if backlog := lit(consumer, quiet, "backlog"); !strings.Contains(backlog, "second-ticket") {
-		t.Fatalf("consumer backlog missing the peer's second-ticket after the receive worker ended:\n%s\nreceive log:\n%s", backlog, receiveLog(t, ws))
+		t.Fatalf("consumer backlog missing the peer's second-ticket after the receive worker ended:\n%s\nreceive log:\n%s", backlog, receiveLog(t, ws.StorageDir))
 	}
 }
 

@@ -79,10 +79,7 @@ func newBoundCheckout(t *testing.T, name, dir, sink string) *boundCheckout {
 
 func driveTheBound(t *testing.T, rounds int) {
 	r, base := newSharedCheckouts(t)
-	finishSharedCheckouts(t, r, base)
-	for _, repo := range []string{r.alpha, r.bravo} {
-		setHistoryWindow(t, repo, checkpointReRootAt, checkpointKeep)
-	}
+	finishSharedCheckouts(t, r, base, historyWindowConfig(checkpointReRootAt, checkpointKeep))
 	remote := filepath.Join(base, "remote.git")
 	alpha := newBoundCheckout(t, "alpha", r.alpha, filepath.Join(base, "alpha-notifications"))
 	bravo := newBoundCheckout(t, "bravo", r.bravo, r.sink)

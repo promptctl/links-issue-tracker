@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // The compaction backstop is wired into maybeAutoSyncAfterCommand behind a
@@ -53,7 +54,7 @@ func litRepoForCadence(t *testing.T) (dir, marker string) {
 	// own command did.
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(dir, ".git", "links")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	ws := workspacetest.New(t, runEnv(t)).StorageDir(filepath.Join(dir, ".git", "links")).Info()
 	marker = compactMarkerPath(ws)
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("probe marker existed before any auto-synced command: %s", marker)
@@ -126,17 +127,10 @@ func TestDisabledAutoSyncSuppressesTheCompactionBackstop(t *testing.T) {
 func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
-	root := t.TempDir()
-	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		t.Fatalf("make storage dir error = %v", err)
-	}
 	// Malformed TOML, so config.Load returns an error rather than defaults.
-	if err := os.WriteFile(filepath.Join(ws.StorageDir, "config.toml"), []byte("this is = = not toml\n"), 0o644); err != nil {
-		t.Fatalf("write broken config error = %v", err)
-	}
+	ws := workspacetest.New(t, runEnv(t)).Checkout(t.TempDir()).Project("this is = = not toml\n").Info()
 
-	maybeAutoSyncAfterCommand(t.Context(), testStderr(t), runEnv(t), app.AccessWrite, ws)
+	maybeAutoSyncAfterCommand(underInvocation(t.Context()), testStderr(t), runEnv(t), app.AccessWrite, ws)
 
 	if _, err := os.Stat(compactMarkerPath(ws)); err != nil {
 		t.Fatalf("the compaction backstop was never reached after a config failure (%v); a config nobody can read must cost the mirror, not the collection", err)

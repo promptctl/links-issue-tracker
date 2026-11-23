@@ -78,12 +78,7 @@ func twoRemoteCheckout(t *testing.T) string {
 		runGit(t, root, "push", remote, "HEAD")
 	}
 	runGit(t, root, "branch", "--set-upstream-to", "origin/trunk")
-	if err := os.MkdirAll(filepath.Join(root, ".lit"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, ".lit", "config.toml"), []byte("[sync]\nreceive = false\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	putProjectConfigInForce(t, root, "[sync]\nreceive = false\n")
 	runCLIInDir(t, root, "init", "--skip-hooks")
 	return root
 }

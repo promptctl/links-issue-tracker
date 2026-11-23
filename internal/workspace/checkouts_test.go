@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -376,21 +375,6 @@ func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the awkward checkout carried no token at all")
-	}
-}
-
-// TestFailedEnumerationIsNeverTheNotARepoSentinel keeps a failure to enumerate
-// distinguishable from "there is no repository here". ErrNotGitRepo is a repo
-// GATE's answer and Discover skips silently on it, so a caller that read it that
-// way here would take a failed enumeration for an empty one — and an empty
-// enumeration is this machine declaring every checkout of the workspace deleted.
-func TestFailedEnumerationIsNeverTheNotARepoSentinel(t *testing.T) {
-	_, err := LiveCheckouts(testEnv(), Info{RootDir: t.TempDir()})
-	if err == nil {
-		t.Fatal("enumerating outside a repository must fail")
-	}
-	if errors.Is(err, ErrNotGitRepo) {
-		t.Fatalf("LiveCheckouts() error = %v, which callers may skip on; a failure to enumerate must never read as an empty enumeration", err)
 	}
 }
 

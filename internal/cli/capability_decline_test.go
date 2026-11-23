@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // Three CLI paths need two capabilities at once, and each one refuses an engine
@@ -49,7 +50,7 @@ type syncOnlyEngine struct {
 // and backups, which is all any of these paths touches before it refuses.
 func declineWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	return workspacetest.New(t, runEnv(t)).Info()
 }
 
 // wantUnsupported asserts the error is the contract's typed refusal naming the

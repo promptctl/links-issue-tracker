@@ -10,7 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func collidingIssue(t *testing.T, id model.ID, title, description string, born time.Time) model.Issue {
@@ -269,7 +269,7 @@ func TestCollisionBlockRendersOrdinaryTicketReadably(t *testing.T) {
 func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	ws := workspacetest.New(t, runEnv(t)).Info()
 	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,
@@ -310,7 +310,7 @@ func TestReportReconcileResultCollisionCarriesBothTickets(t *testing.T) {
 func TestReportReconcileResultCollisionExitsConflict(t *testing.T) {
 	t.Parallel()
 	var sink strings.Builder
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	ws := workspacetest.New(t, runEnv(t)).Info()
 	err := reportReconcileResult(context.Background(), testStderr(t), runEnv(t), &sink, ws, "lit sync reconcile", remoteName(t, "origin"), "master", storage.SyncReconcileResult{
 		State:      storage.SyncReconcileIDCollision,
 		Ahead:      3,

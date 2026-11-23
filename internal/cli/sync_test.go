@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestMapRemotesByName(t *testing.T) {
@@ -604,7 +605,7 @@ func TestTheReconcileRemovesBeforeItAdds(t *testing.T) {
 		{Name: "fork", URL: "git+https://example.com/fork-old.git"},
 	}}
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
-	if err := syncDoltRemotesFromGit(ctx, syncSession{syncer: syncer}, workspace.Info{RootDir: dir, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, dir), checkoutRoot(t, dir)), Project: testProject(t, checkoutRoot(t, dir))}); err != nil {
+	if err := syncDoltRemotesFromGit(ctx, syncSession{syncer: syncer}, workspacetest.New(t, runEnv(t)).Checkout(dir).Info()); err != nil {
 		t.Fatalf("syncDoltRemotesFromGit() error = %v", err)
 	}
 	if want := []string{"remove team/origin", "update fork", "add team"}; !slices.Equal(syncer.calls, want) {

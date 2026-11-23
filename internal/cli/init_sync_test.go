@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // testBuildNote is a fixed sentinel stood in for the real (clock-dependent)
@@ -554,7 +555,7 @@ func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspace.Info{})
+	outcome := adoptRemoteTicketsOnInit(underInvocation(context.Background()), &stderr, runEnv(t), workspacetest.New(t, runEnv(t)).Info())
 
 	<-abandoned
 	if got := stderr.String(); !strings.Contains(got, "while the run waits") || strings.Contains(got, "after the run returned") {

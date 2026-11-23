@@ -42,7 +42,7 @@ func joinDetachedWorkers(t *testing.T, dir string) {
 			// live worker: the RemoveAll error it produces would name the
 			// symptom, and this names the cause. [LAW:no-silent-failure]
 			t.Errorf("%v; the TempDir sweep will race them\nreceive log:\n%s\n%s",
-				err, receiveLog(t, workspace.Info{Location: loc}), dumpMirrorLog(loc.StorageDir))
+				err, receiveLog(t, loc.StorageDir), dumpMirrorLog(loc.StorageDir))
 		}
 	})
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -23,7 +24,7 @@ import (
 // geometry function so the fixture cannot drift from real stores.
 func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	return workspacetest.New(t, runEnv(t)).StorageDir(filepath.Join(t.TempDir(), ".lit")).Info()
 }
 
 // mirrorPendingSet is the in-package spelling of mirrorOwed for tests that
@@ -248,7 +249,7 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 // with ENOTDIR on POSIX only: Windows reports that path not found.
 func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit\x00")), Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	ws := workspacetest.New(t, runEnv(t)).StorageDir(filepath.Join(t.TempDir(), ".lit\x00")).Info()
 
 	owed, err := mirrorOwed(ws)
 	if err == nil {
@@ -290,7 +291,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 
 	claimHeld(t, ws, time.Now())
 
@@ -328,7 +329,7 @@ func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 
 	cause := fmt.Errorf("open sync store: %w", context.Canceled)
 	if err := completeMirrorWithoutAttempt(underInvocation(context.Background()), testStderr(t), runEnv(t), ws, cause, func() {}); err != nil {
@@ -352,7 +353,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 	claimHeld(t, ws, time.Now())
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
@@ -384,7 +385,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 	dir := t.TempDir()
 	stamp := filepath.Join(dir, "stopped")
 	sink := filepath.Join(dir, "sink")
-	enableOwnerNotify(t, ws, `test -f `+shPath(stamp)+` && printf yes >> `+shPath(sink)+` || printf no >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `test -f `+shPath(stamp)+` && printf yes >> `+shPath(sink)+` || printf no >> `+shPath(sink))
 
 	stopAnswering := func() {
 		f, err := os.Create(stamp)

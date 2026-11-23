@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
@@ -198,18 +199,14 @@ func pushedRepoWithoutRemoteHead(t *testing.T) workspace.Info {
 
 func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	t.Helper()
-	checkout := checkoutRoot(t, root)
-	return workspace.Info{
-		RootDir:  checkout.String(),
-		Location: workspace.Location{GitCommonDir: filepath.Join(checkout.String(), ".git"), StorageDir: t.TempDir()},
-		Remotes:  workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkout), Project: testProject(t, checkout),
-	}
+	ws := workspacetest.New(t, runEnv(t)).Checkout(root)
+	return ws.Location(workspace.Location{GitCommonDir: filepath.Join(ws.Info().RootDir, ".git"), StorageDir: t.TempDir()}).Info()
 }
 
 // originRemote is the workspace's one remote, as lit syncs with it.
 func originRemote(t *testing.T, ws workspace.Info) workspace.SyncableRemote {
 	t.Helper()
-	remotes, err := workspace.NewRemotes(runEnv(t), repositoryOf(t, ws.RootDir), checkoutRoot(t, ws.RootDir)).List(underInvocation(context.Background()))
+	remotes, err := ws.Remotes.Reread().List(underInvocation(context.Background()))
 	if err != nil || len(remotes) != 1 {
 		t.Fatalf("Remotes.List() = %v, %v; want one remote", remotes, err)
 	}

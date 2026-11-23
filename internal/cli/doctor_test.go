@@ -17,6 +17,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // The identity header is where prefix provenance becomes observable: the one
@@ -24,12 +25,7 @@ import (
 func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	ws := workspace.Info{
-		Location:    workspace.Location{StorageDir: "/tmp/store", GitCommonDir: "/tmp/repo/.git"},
-		WorkspaceID: "ws-id",
-		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{}),
-	}
+	ws := workspacetest.New(t, runEnv(t)).IssuePrefix("test").Info()
 	if err := printWorkspaceIdentity(&out, ws, idPrefixCensus{}); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)
 	}

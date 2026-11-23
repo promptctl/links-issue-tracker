@@ -215,28 +215,13 @@ func blockTheLanding(t *testing.T, ws workspace.Info) (unblock func()) {
 	return unblock
 }
 
-// addOwnerNotifyHook turns the owner channel on for an initialized workspace,
-// keeping whatever its project config already holds.
+// addOwnerNotifyHook turns the owner channel on for an initialized workspace:
+// its checkout runs under a project config whose owner hook is hook.
 func addOwnerNotifyHook(t *testing.T, ws workspace.Info, hook string) {
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
-	path := filepath.Join(ws.RootDir, ".lit", "config.toml") // where config.Load reads the project layer
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatalf("mkdir project config dir: %v", err)
-	}
-	existing, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatalf("read project config: %v", err)
-	}
-	line := "owner_notify_cmd = '" + hook + "'\n"
-	updated := string(existing) + "\n[sync]\n" + line
-	if strings.Contains(string(existing), "[sync]\n") {
-		updated = strings.Replace(string(existing), "[sync]\n", "[sync]\n"+line, 1)
-	}
-	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
-		t.Fatalf("write project config: %v", err)
-	}
+	putProjectConfigInForce(t, ws.RootDir, "[sync]\nowner_notify_cmd = '"+hook+"'\n")
 }
 
 // receiveTraceStops is the stopped metadata of every receive trace the

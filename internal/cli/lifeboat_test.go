@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // seedWorkspace creates a real current-baseline workspace at the canonical path
@@ -28,13 +29,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 	if err := st.Close(); err != nil {
 		t.Fatalf("close seed workspace: %v", err)
 	}
-	return workspace.Info{
-		Location:    workspace.Location{DatabasePath: canonical},
-		RootDir:     root,
-		WorkspaceID: "test-workspace-id",
-		IssuePrefix: testIssuePrefix(t, "test"),
-		Remotes:     workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root)),
-	}
+	return workspacetest.New(t, runEnv(t)).Checkout(root).Location(workspace.Location{DatabasePath: canonical}).WorkspaceID("test-workspace-id").Info()
 }
 
 // TestRunLifeboatRecoverPromotesRecognizedWorkspace is the CLI acceptance for the

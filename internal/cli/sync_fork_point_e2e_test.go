@@ -36,7 +36,7 @@ func newForkedBelowTheCutAfter(t *testing.T, bravoWrites func(reRootedCheckouts)
 	r.root = reRootAlphaAndForcePush(t, r, r.cut)
 	runCLIInDir(t, r.alpha, "update", r.ticket, "--description", "alpha-description")
 	runCLIInDir(t, r.alpha, "sync", "push")
-	finishSharedCheckouts(t, r, base)
+	finishSharedCheckouts(t, r, base, "")
 	return r, adopted
 }
 

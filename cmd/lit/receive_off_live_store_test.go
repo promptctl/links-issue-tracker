@@ -108,11 +108,11 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 		if _, err := os.Stat(started); err == nil {
 			break
 		}
-		if strings.Contains(receiveLog(t, ws), endLine) {
-			t.Fatalf("the receive worker ended before its fetch started:\n%s", receiveLog(t, ws))
+		if strings.Contains(receiveLog(t, ws.StorageDir), endLine) {
+			t.Fatalf("the receive worker ended before its fetch started:\n%s", receiveLog(t, ws.StorageDir))
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the receive's fetch never started:\n%s", receiveLog(t, ws))
+			t.Fatalf("the receive's fetch never started:\n%s", receiveLog(t, ws.StorageDir))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -126,19 +126,19 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	if _, err := os.Stat(started); err != nil {
 		t.Fatalf("stat fetch marker: %v", err)
 	}
-	if strings.Contains(receiveLog(t, ws), endLine) {
-		t.Fatalf("the receive worker finished before the write did, so the write did not overlap the fetch; the stall is too short to prove anything:\n%s", receiveLog(t, ws))
+	if strings.Contains(receiveLog(t, ws.StorageDir), endLine) {
+		t.Fatalf("the receive worker finished before the write did, so the write did not overlap the fetch; the stall is too short to prove anything:\n%s", receiveLog(t, ws.StorageDir))
 	}
 
-	for deadline := time.Now().Add(fetchStall + 60*time.Second); !strings.Contains(receiveLog(t, ws), endLine); time.Sleep(50 * time.Millisecond) {
+	for deadline := time.Now().Add(fetchStall + 60*time.Second); !strings.Contains(receiveLog(t, ws.StorageDir), endLine); time.Sleep(50 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("the receive worker did not finish:\n%s", receiveLog(t, ws))
+			t.Fatalf("the receive worker did not finish:\n%s", receiveLog(t, ws.StorageDir))
 		}
 	}
 	backlog := mustLit(consumer, quiet, "backlog")
 	for _, title := range []string{"first-ticket", "peer-ticket", "local-ticket"} {
 		if !strings.Contains(backlog, title) {
-			t.Fatalf("consumer backlog after the receive lacks %q:\n%s\nreceive log:\n%s", title, backlog, receiveLog(t, ws))
+			t.Fatalf("consumer backlog after the receive lacks %q:\n%s\nreceive log:\n%s", title, backlog, receiveLog(t, ws.StorageDir))
 		}
 	}
 	if entries, err := os.ReadDir(filepath.Join(consumer, ".git", "links", "receive-clone")); err == nil && len(entries) != 0 {

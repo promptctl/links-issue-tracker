@@ -20,6 +20,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/statusline"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // readStatusline reads the checkout's statusline file the way a statusline
@@ -451,7 +452,7 @@ func TestAFailedStatuslineWriteIsRecordedOnTheEvent(t *testing.T) {
 	fsperm.Deny(t, litDir, fsperm.Write)
 	rec := telemetry.Begin(telemetry.Event{Event: "lit start"})
 	ctx := telemetry.With(context.Background(), rec)
-	ws := workspace.Info{RootDir: root, Location: workspace.Location{GitCommonDir: filepath.Join(root, "git")}, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
+	ws := workspacetest.New(t, runEnv(t)).Checkout(root).Location(workspace.Location{GitCommonDir: filepath.Join(root, "git")}).Info()
 	recordStatusline(ctx, testStderr(t), ws, statusline.Facts{statusline.NewStarted(statusline.Ticket{ID: "t-1", Title: "One"}, statusline.RollupProgress{CompletedCount: 0, TotalCount: 1})})
 	ev := rec.Finish(telemetry.End{At: time.Now(), Outcome: telemetry.OutcomeOK})
 	facts := writtenFacts(t, ev)

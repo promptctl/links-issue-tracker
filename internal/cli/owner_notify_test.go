@@ -18,12 +18,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func notifyTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
-	return workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
+	return workspacetest.New(t, runEnv(t)).Checkout(root).StorageDir(filepath.Join(root, ".lit")).Info()
 }
 
 // shPath spells path for a hook's sh command line: quoted, and with forward
@@ -37,18 +38,15 @@ func shPath(path string) string {
 // TestMain disables all auto-sync side effects (which the hook is one of), and
 // the global-config layer is pointed at an empty temp file so the developer's
 // real config — possibly carrying a real notifier — can never leak into a test
-// run.
-func enableOwnerNotify(t *testing.T, ws workspace.Info, hook string) {
+// run. It returns ws running under a project config whose owner hook is hook.
+func enableOwnerNotify(t *testing.T, ws workspace.Info, hook string) workspace.Info {
 	t.Helper()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	setRunEnv(t, "LIT_CONFIG_GLOBAL_PATH", filepath.Join(t.TempDir(), "global-config.toml"))
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		t.Fatalf("mkdir storage dir: %v", err)
 	}
-	payload := "[sync]\nowner_notify_cmd = '" + hook + "'\n"
-	if err := os.WriteFile(filepath.Join(ws.StorageDir, "config.toml"), []byte(payload), 0o644); err != nil {
-		t.Fatalf("write project config: %v", err)
-	}
+	return workspacetest.UnderProject(ws, "[sync]\nowner_notify_cmd = '"+hook+"'\n")
 }
 
 // TestOwnerNotifyDue pins the dedupe decision: absent marker fires, a fresh
@@ -287,7 +285,7 @@ func TestMaybeNotifyOwnerRunsHookOncePerEpisode(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf "%s %s/%s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
 
 	ev := ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "push failing", Remote: "origin", Branch: "master"}
 	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
@@ -319,7 +317,7 @@ func TestMaybeNotifyOwnerFailedHookRetries(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, "false")
+	ws = enableOwnerNotify(t, ws, "false")
 
 	ev := ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "push failing", Remote: "origin", Branch: "master"}
 	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
@@ -328,7 +326,7 @@ func TestMaybeNotifyOwnerFailedHookRetries(t *testing.T) {
 	}
 
 	// The channel repaired: the very next detection sends.
-	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ev)
 	if _, err := os.Stat(sink); err != nil {
 		t.Fatalf("the detection after a failed hook did not retry: %v", err)
@@ -342,7 +340,7 @@ func TestMaybeNotifyOwnerHonorsAutoSyncKillSwitch(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf sent >> `+shPath(sink))
 	setRunEnv(t, DisableAutoSyncEnvVar, "1")
 
 	maybeNotifyOwner(context.Background(), testStderr(t), runEnv(t), ws, ownerNotifyEvent{Kind: ownerNotifyPushFailed, Summary: "s", Remote: "o", Branch: "m"})
@@ -361,7 +359,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	ctx := context.Background()
 	// The failures here are no schema refusal, which is what the completion
 	// seam would have parsed; TestPushRefusedBySchemaPagesUnderItsClass pins
@@ -425,7 +423,7 @@ func TestPushRefusedBySchemaPagesUnderItsClass(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s %s %s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf "%s %s %s\n" "$LIT_NOTIFY_KIND" "$LIT_NOTIFY_REMOTE" "$LIT_NOTIFY_BRANCH" >> `+shPath(sink))
 	// The completion seam lands the attempt on the invocation's event, so it
 	// runs under one, as every command does.
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
@@ -542,7 +540,7 @@ func TestSurfaceSyncFailurePagesTheOwner(t *testing.T) {
 	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
-	enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
+	ws = enableOwnerNotify(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	ctx := context.Background()
 
 	lift := &store.SchemaCeilingLiftError{Remote: "origin", Branch: "master", Lift: store.SchemaCeilingError{Raise: store.RaiseLift, WorkspaceVersion: 8, TargetVersion: 9}}

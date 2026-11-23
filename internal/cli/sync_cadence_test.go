@@ -11,7 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/store"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // The cadence decision is the load-bearing logic: only a write command under
@@ -50,7 +50,7 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 // errs toward allow.
 func TestShouldReceiveNowDebounce(t *testing.T) {
 	t.Parallel()
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}, Remotes: workspace.NewRemotes(runEnv(t), workspace.Repository{}, workspace.CheckoutRoot{}), Project: testProject(t, workspace.CheckoutRoot{})}
+	ws := workspacetest.New(t, runEnv(t)).Info()
 	now := time.Now()
 	interval := 10 * time.Second
 
@@ -90,7 +90,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit")), Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
+	ws := workspacetest.New(t, runEnv(t)).Checkout(root).StorageDir(filepath.Join(root, ".lit")).Info()
 	ctx := underInvocation(context.Background())
 
 	ensureMirrorCoverage(ctx, testStderr(t), runEnv(t), ws)

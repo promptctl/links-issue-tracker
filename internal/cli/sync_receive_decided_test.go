@@ -9,6 +9,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // receiveEvent runs one automatic receive (receiveOnce) on ws and returns the
@@ -59,7 +60,7 @@ func receiveWorkspace(t *testing.T, doltRefs []string, remotes ...string) worksp
 		}
 		runGit(t, root, "remote", "add", name, bare)
 	}
-	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(base, "storage")), RootDir: root, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
+	return workspacetest.New(t, runEnv(t)).Checkout(root).StorageDir(filepath.Join(base, "storage")).Info()
 }
 
 // Every way the automatic receive ends before it fetches is a decision, and
@@ -75,7 +76,7 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 	}{
 		{"git remotes unreadable", func(t *testing.T) workspace.Info {
 			root := t.TempDir()
-			return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), "storage")), RootDir: root, Remotes: workspace.NewRemotes(runEnv(t), repositoryOf(t, root), checkoutRoot(t, root)), Project: testProject(t, checkoutRoot(t, root))}
+			return workspacetest.New(t, runEnv(t)).Checkout(root).StorageDir(filepath.Join(t.TempDir(), "storage")).Info()
 		}, "error", ""},
 		{"no git remote", func(t *testing.T) workspace.Info {
 			return receiveWorkspace(t, nil)
