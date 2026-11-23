@@ -9,12 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
-)
 
-// stream builds a go test -json stream from raw lines.
-func stream(lines ...string) *strings.Reader {
-	return strings.NewReader(strings.Join(lines, "\n") + "\n")
-}
+	"github.com/promptctl/links-issue-tracker/tools/internal/gotestjson"
+)
 
 // recorded opens a stream that testdata/src/record.sh recorded from a real
 // go test -json run of the package of the same name under testdata/src. Each
@@ -34,12 +31,12 @@ func recorded(t *testing.T, name string) *os.File {
 // budget every package blows, as main writes them to stderr.
 func report(t *testing.T, streams ...io.Reader) string {
 	t.Helper()
-	results, err := consume(io.MultiReader(streams...), io.Discard)
+	run, err := gotestjson.Read(io.MultiReader(streams...), io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var out strings.Builder
-	for _, v := range enforce(results, nil, time.Second) {
+	for _, v := range enforce(run.Packages, nil, time.Second) {
 		writeViolation(&out, "", v)
 	}
 	return out.String()
@@ -105,7 +102,7 @@ func TestHungTestOutputPrintsWhenItsPackageEnds(t *testing.T) {
 	// verdict. It must print as its package ends, not after every package
 	// that finishes later in a concurrent go test ./... stream.
 	var out strings.Builder
-	if _, err := consume(io.MultiReader(recorded(t, "timeout-serial"), recorded(t, "slow")), &out); err != nil {
+	if _, err := gotestjson.Read(io.MultiReader(recorded(t, "timeout-serial"), recorded(t, "slow")), &out); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -124,9 +121,9 @@ func TestHungTestOutputPrintsWhenItsPackageEnds(t *testing.T) {
 func TestSlowestBreaksTiesByNameSoTheCutIsStable(t *testing.T) {
 	// Eleven tests tied at one second: which ten are listed must not
 	// depend on stream order.
-	var tests []testResult
+	var tests []gotestjson.Test
 	for i := 10; i >= 0; i-- {
-		tests = append(tests, testResult{Name: fmt.Sprintf("Test%02d", i), Elapsed: time.Second})
+		tests = append(tests, gotestjson.Test{Name: fmt.Sprintf("Test%02d", i), Elapsed: time.Second})
 	}
 	var got []string
 	for _, r := range slowest(tests) {
@@ -139,118 +136,35 @@ func TestSlowestBreaksTiesByNameSoTheCutIsStable(t *testing.T) {
 }
 
 func TestPackageWithinBudgetHasNoViolation(t *testing.T) {
-	results, err := consume(recorded(t, "slow"), io.Discard)
+	run, err := gotestjson.Read(recorded(t, "slow"), io.Discard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if viols := enforce(results, nil, 5*time.Second); len(viols) != 0 {
+	if viols := enforce(run.Packages, nil, 5*time.Second); len(viols) != 0 {
 		t.Errorf("slow against a 5s budget: got violations %+v", viols)
 	}
 }
 
-func TestConsumeStampsTerminalPackageResults(t *testing.T) {
+func TestPrintTableRendersSlowestFirstWithBudgetsFailureAndCutMarks(t *testing.T) {
 	var out strings.Builder
-	results, err := consume(stream(
-		`{"Action":"start","Package":"example.com/a"}`,
-		`{"Action":"pass","Package":"example.com/a","Elapsed":1.5}`,
-		`{"Action":"fail","Package":"example.com/b","Elapsed":0.2}`,
-		`{"Action":"skip","Package":"example.com/c"}`,
-	), &out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []packageResult{
-		{ImportPath: "example.com/a", Elapsed: 1500 * time.Millisecond},
-		{ImportPath: "example.com/b", Elapsed: 200 * time.Millisecond, Failed: true},
-		{ImportPath: "example.com/c"}, // no Elapsed in the event means zero
-	}
-	if !reflect.DeepEqual(results, want) {
-		t.Errorf("results = %+v, want %+v", results, want)
-	}
-}
-
-func TestConsumeReplaysOutputOnlyForFailingTests(t *testing.T) {
-	var out strings.Builder
-	_, err := consume(stream(
-		`{"Action":"output","Package":"p","Test":"TestGood","Output":"good detail\n"}`,
-		`{"Action":"pass","Package":"p","Test":"TestGood","Elapsed":0.1}`,
-		`{"Action":"output","Package":"p","Test":"TestBad","Output":"--- FAIL: TestBad\n"}`,
-		`{"Action":"output","Package":"p","Test":"TestBad","Output":"    boom\n"}`,
-		`{"Action":"fail","Package":"p","Test":"TestBad","Elapsed":0.1}`,
-		`{"Action":"output","Package":"p","Output":"FAIL\tp\t0.2s\n"}`,
-		`{"Action":"fail","Package":"p","Elapsed":0.2}`,
-	), &out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := out.String()
-	for _, want := range []string{"--- FAIL: TestBad", "    boom", "FAIL\tp\t0.2s"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("replayed output missing %q; got:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "good detail") {
-		t.Errorf("passing test's output should be discarded; got:\n%s", got)
-	}
-}
-
-func TestConsumeEchoesNonJSONAndBuildOutput(t *testing.T) {
-	var out strings.Builder
-	_, err := consume(stream(
-		`panic: something terrible [recovered]`,
-		`{"Action":"build-output","Package":"p","Output":"p: compile error\n"}`,
-	), &out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := out.String()
-	for _, want := range []string{"panic: something terrible", "compile error"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("output missing %q; got:\n%s", want, got)
-		}
-	}
-}
-
-func TestConsumeFlushesStrandedOutputWhenStreamEndsMidTest(t *testing.T) {
-	// A binary that dies mid-test (os.Exit, a hard signal) never emits its
-	// running tests' fail events; their buffered output must surface at end
-	// of stream instead of being silently dropped.
-	var out strings.Builder
-	_, err := consume(stream(
-		`{"Action":"output","Package":"p","Test":"TestDies","Output":"    about to crash\n"}`,
-		`{"Action":"output","Package":"a","Test":"TestAlsoDies","Output":"    sibling detail\n"}`,
-	), &out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := out.String()
-	for _, want := range []string{"unfinished", "about to crash", "sibling detail"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("stranded output missing %q; got:\n%s", want, got)
-		}
-	}
-	// Deterministic order: package "a" before package "p".
-	if strings.Index(got, "sibling detail") > strings.Index(got, "about to crash") {
-		t.Errorf("stranded output not in deterministic package order; got:\n%s", got)
-	}
-}
-
-func TestPrintTableRendersSlowestFirstWithBudgetsAndFailureMarks(t *testing.T) {
-	var out strings.Builder
-	printTable(&out, []packageResult{
-		{ImportPath: "example.com/fast", Elapsed: 1200 * time.Millisecond},
-		{ImportPath: "example.com/slow", Elapsed: 90 * time.Second},
-		{ImportPath: "example.com/red", Elapsed: 3 * time.Second, Failed: true},
+	printTable(&out, gotestjson.Run{
+		Packages: []gotestjson.Package{
+			{ImportPath: "example.com/fast", Elapsed: 1200 * time.Millisecond},
+			{ImportPath: "example.com/slow", Elapsed: 90 * time.Second},
+			{ImportPath: "example.com/red", Elapsed: 3 * time.Second, Verdict: gotestjson.Fail},
+		},
+		Cut: []gotestjson.Cut{{ImportPath: "example.com/killed"}},
 	}, map[string]time.Duration{"example.com/slow": 120 * time.Second}, 30*time.Second)
 	got := out.String()
 	lines := strings.Split(strings.TrimSpace(got), "\n")
-	if len(lines) != 4 { // header + three rows
-		t.Fatalf("got %d lines, want 4:\n%s", len(lines), got)
+	if len(lines) != 5 { // header + four rows
+		t.Fatalf("got %d lines, want 5:\n%s", len(lines), got)
 	}
 	wantRows := []string{
 		"    90.0s /  120s  example.com/slow",
 		"     3.0s /   30s  example.com/red  [FAILED — not a calibration point]",
 		"     1.2s /   30s  example.com/fast",
+		"       - /    -  example.com/killed  [CUT — the stream ended inside it]",
 	}
 	for i, want := range wantRows {
 		if lines[i+1] != want {
@@ -261,7 +175,7 @@ func TestPrintTableRendersSlowestFirstWithBudgetsAndFailureMarks(t *testing.T) {
 
 func TestEnforceFlagsOnlyPackagesOverTheirBudget(t *testing.T) {
 	b := map[string]time.Duration{"listed/slow": 10 * time.Second}
-	viols := enforce([]packageResult{
+	viols := enforce([]gotestjson.Package{
 		{ImportPath: "listed/slow", Elapsed: 12 * time.Second},
 		{ImportPath: "listed/slow2", Elapsed: 9 * time.Second}, // unlisted: default 5s
 		{ImportPath: "fast", Elapsed: time.Second},

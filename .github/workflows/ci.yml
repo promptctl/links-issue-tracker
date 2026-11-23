@@ -283,6 +283,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: go run ./tools/fsnames-check
 
+      # An ActionName formatted into a message renders its persisted event
+      # encoding, not the verb the caller typed. It reads every package's types
+      # once per GOOS lit ships for, so it rides this job too.
+      - name: No ActionName reaches a message as its persisted encoding
+        if: ${{ !cancelled() }}
+        run: go run ./tools/actionnames-check
+
       # [LAW:single-enforcer] the one place .golangci.yml is checked against
       # its schema, so a misspelled key cannot silently switch a rule off.
       # [LAW:one-source-of-truth] the schema is the one built into the pinned

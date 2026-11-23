@@ -103,6 +103,11 @@ before raising one. To check locally:
 (set -o pipefail; go test -short -json ./... | go run ./tools/testbudget)
 ```
 
+The suite's shape is measured by [`tools/testshape`](tools/testshape/main.go),
+which puts every top-level test at the layer its code can reach: unit,
+integration, or end-to-end. Its package doc is the one statement of how to run
+it, its rules, and what it refuses.
+
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
 your PATH.
 
