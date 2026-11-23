@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -43,7 +44,7 @@ func (r row) unitShare() string {
 }
 
 func rowOf(m measuredPackage, modPath string) row {
-	r := row{Name: strings.TrimPrefix(m.ImportPath, modPath+"/"), Setup: m.Setup.set()}
+	r := row{Name: strings.TrimPrefix(m.ImportPath, modPath+"/"), Setup: m.Setup.Reached.set()}
 	for _, t := range m.Tests {
 		l := t.Layer()
 		r.Count[l]++
@@ -101,25 +102,53 @@ func writeRow(w io.Writer, r row) {
 
 func seconds(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
 
+// writeGenerics renders what the reading of outside generics decided
+// beyond the table: the count of type parameters instances withheld, which
+// -tests lists; and the count of instances whose bodies could not be read,
+// each counted as converting every type argument, with why each could not
+// be.
+func writeGenerics(w io.Writer, unread []moduleUnread, withheld int) {
+	var lines []string
+	for _, u := range unread {
+		lines = append(lines, u.text(namer{u.module}))
+	}
+	slices.Sort(lines)
+	fmt.Fprintf(w, "\ntype parameters of outside generic instances withheld, reaching nothing of their type arguments: %d\n", withheld)
+	fmt.Fprintf(w, "outside generic instances whose bodies could not be read, each counted as converting every type argument: %d\n", len(lines))
+	for _, l := range lines {
+		fmt.Fprintf(w, "  %s\n", l)
+	}
+}
+
 // writeListing renders each package's setup touches and each test's layer,
-// its touches, and the chain that reaches each.
-func writeListing(w io.Writer, pkgs []measuredPackage) {
+// its touches, and the chain that reaches each; and, for the setup and each
+// test, the type arguments outside generic instances withheld.
+func writeListing(w io.Writer, pkgs []modulePackage) {
 	for _, m := range pkgs {
+		n := namer{m.module}
 		fmt.Fprintf(w, "\n%s\n", m.ImportPath)
-		writeTouches(w, "    setup ", m.Setup)
+		writeFound(w, "    setup ", m.Setup, n)
 		for _, t := range m.Tests {
 			mark := ""
 			if !t.Ran {
 				mark = "  [not run]"
 			}
 			fmt.Fprintf(w, "  %-11s %s%s\n", t.Layer(), t.Name, mark)
-			writeTouches(w, "    ", t.Reached)
+			writeFound(w, "    ", t.found, n)
 		}
 	}
 }
 
-func writeTouches(w io.Writer, indent string, r reached) {
-	for t := range r.set().Each {
-		fmt.Fprintf(w, "%s%s: %s\n", indent, t, r[t])
+func writeFound(w io.Writer, indent string, f found, n namer) {
+	for t := range f.Reached.set().Each {
+		fmt.Fprintf(w, "%s%s: %s\n", indent, t, f.Reached[t])
+	}
+	var withheld []string
+	for _, wh := range f.Withheld {
+		withheld = append(withheld, wh.text(n))
+	}
+	slices.Sort(withheld)
+	for _, line := range withheld {
+		fmt.Fprintf(w, "%swithheld: %s\n", indent, line)
 	}
 }

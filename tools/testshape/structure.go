@@ -37,14 +37,79 @@ type structure struct {
 	ifaces  []*types.Interface
 }
 
-// eachType calls visit on t and on every type in its structure: a named
-// type's underlying type, a pointer's, slice's, array's or channel's element,
-// a map's key and element, and a struct's fields, each once. visit says
-// whether to descend into the type it is given. A signature's and an
-// interface's types are not its structure: the visitor reads them as it
-// needs. A generic type not instantiated has no structure a value can have,
-// and is never visited.
-func eachType(t types.Type, visit func(types.Type) (descend bool)) {
+// part is how a type is made of another: the parts a walk of a type can
+// descend into.
+type part int
+
+const (
+	underlyingPart part = iota // a named type's underlying type
+	elementPart                // a pointer's, slice's, array's or channel's element, a map's key and element, a struct's field
+	argumentPart               // a named type's type argument
+	signaturePart              // a signature's parameters and results, a tuple's variables
+	methodPart                 // an interface's methods and embedded types, a union's terms
+)
+
+// parts is every type t is made of, with how.
+func parts(t types.Type) []typePart {
+	var ps []typePart
+	add := func(k part, ts ...types.Type) {
+		for _, p := range ts {
+			ps = append(ps, typePart{p, k})
+		}
+	}
+	switch u := t.(type) {
+	case *types.Named:
+		add(underlyingPart, u.Underlying())
+		for a := range u.TypeArgs().Types() {
+			add(argumentPart, a)
+		}
+	case *types.Pointer:
+		add(elementPart, u.Elem())
+	case *types.Slice:
+		add(elementPart, u.Elem())
+	case *types.Array:
+		add(elementPart, u.Elem())
+	case *types.Chan:
+		add(elementPart, u.Elem())
+	case *types.Map:
+		add(elementPart, u.Key(), u.Elem())
+	case *types.Struct:
+		for f := range u.Fields() {
+			add(elementPart, f.Type())
+		}
+	case *types.Signature:
+		add(signaturePart, u.Params(), u.Results())
+	case *types.Tuple:
+		for v := range u.Variables() {
+			add(signaturePart, v.Type())
+		}
+	case *types.Interface:
+		for m := range u.ExplicitMethods() {
+			add(methodPart, m.Type())
+		}
+		for e := range u.EmbeddedTypes() {
+			add(methodPart, e)
+		}
+	case *types.Union:
+		for i := range u.Len() {
+			add(methodPart, u.Term(i).Type())
+		}
+	}
+	return ps
+}
+
+type typePart struct {
+	typ types.Type
+	how part
+}
+
+// eachType calls visit on t and on every type a walk from t reaches, each
+// once: into says which parts of a type the walk descends into, and visit
+// whether to descend into the type it is given at all. A generic type not
+// instantiated has no structure a value can have, and is never visited.
+// [LAW:one-source-of-truth] the one walk of a type's parts; each caller
+// chooses its descent.
+func eachType(t types.Type, into func(types.Type, part) bool, visit func(types.Type) (descend bool)) {
 	var seen typeutil.Map
 	var walk func(types.Type)
 	walk = func(t types.Type) {
@@ -59,28 +124,20 @@ func eachType(t types.Type, visit func(types.Type) (descend bool)) {
 		if !visit(t) {
 			return
 		}
-		switch u := t.(type) {
-		case *types.Named:
-			walk(u.Underlying())
-		case *types.Pointer:
-			walk(u.Elem())
-		case *types.Slice:
-			walk(u.Elem())
-		case *types.Array:
-			walk(u.Elem())
-		case *types.Chan:
-			walk(u.Elem())
-		case *types.Map:
-			walk(u.Key())
-			walk(u.Elem())
-		case *types.Struct:
-			for i := range u.NumFields() {
-				walk(u.Field(i).Type())
+		for _, p := range parts(t) {
+			if into(t, p.how) {
+				walk(p.typ)
 			}
 		}
 	}
 	walk(t)
 }
+
+// structural is the descent into a value's structure: a named type's
+// underlying type, and each element, key and field. A signature's and an
+// interface's types are not its structure: a visitor reads them as it
+// needs.
+func structural(_ types.Type, k part) bool { return k == underlyingPart || k == elementPart }
 
 // structureOf is the structure of t, derived once per type.
 func (a *analyzer) structureOf(t types.Type) *structure {
@@ -89,7 +146,7 @@ func (a *analyzer) structureOf(t types.Type) *structure {
 	}
 	s := &structure{}
 	a.structures.Set(t, s)
-	eachType(t, func(t types.Type) bool {
+	eachType(t, structural, func(t types.Type) bool {
 		switch u := t.(type) {
 		case *types.Named:
 			if iface, ok := u.Underlying().(*types.Interface); ok {
@@ -142,10 +199,10 @@ func (a *analyzer) carried(sig *types.Signature) carriage {
 		return true
 	}
 	if recv := sig.Recv(); recv != nil {
-		eachType(recv.Type(), visit)
+		eachType(recv.Type(), structural, visit)
 	}
 	for i := range sig.Params().Len() {
-		eachType(sig.Params().At(i).Type(), visit)
+		eachType(sig.Params().At(i).Type(), structural, visit)
 	}
 	a.carriages.Set(sig, c)
 	return c
@@ -188,12 +245,39 @@ func (a *analyzer) deriveMethods(t types.Type) []*ssa.Function {
 	return fns
 }
 
-// method is t's method called name, if t has one.
-func (a *analyzer) method(t types.Type, pkg *types.Package, name string) (*ssa.Function, bool) {
+// methodLookup is what a type's method set holds under one name: a
+// concreteMethod, an abstractMethod, or absentMethod.
+// [LAW:types-are-the-program]
+type methodLookup interface{ methodLookup() }
+
+// concreteMethod is a method of a type that is not an interface: the
+// program's function for it.
+type concreteMethod struct{ fn *ssa.Function }
+
+// abstractMethod is a method of an interface: a call of it is the
+// interface call inv.
+type abstractMethod struct{ inv invoke }
+
+// absentMethod is no method of the name.
+type absentMethod struct{}
+
+func (concreteMethod) methodLookup() {}
+func (abstractMethod) methodLookup() {}
+func (absentMethod) methodLookup()   {}
+
+// method is t's method called name.
+func (a *analyzer) method(t types.Type, pkg *types.Package, name string) methodLookup {
 	sel := a.prog.MethodSets.MethodSet(t).Lookup(pkg, name)
 	if sel == nil {
-		return nil, false
+		return absentMethod{}
 	}
-	fn := a.prog.MethodValue(sel)
-	return fn, fn != nil
+	if iface, ok := t.Underlying().(*types.Interface); ok {
+		return abstractMethod{invoke{iface, sel.Obj().(*types.Func)}}
+	}
+	// go/ssa has no function for a generic type's method not instantiated,
+	// which no value has.
+	if fn := a.prog.MethodValue(sel); fn != nil {
+		return concreteMethod{fn}
+	}
+	return absentMethod{}
 }

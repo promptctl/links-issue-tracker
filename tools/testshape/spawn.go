@@ -124,7 +124,7 @@ func (w *walker) programs(v ssa.Value, path map[ssa.Value]bool) sources {
 			s = append(s, w.programs(site.common.Args[i], path))
 		}
 		if how, ok := w.indirect.get(fn); ok {
-			s = append(s, unresolved(fmt.Sprintf("parameter %s of %s, which a call other than a static one may pass anything: %s", v.Name(), w.a.name(fn), how.text(relativeTo(w.a.mod)))))
+			s = append(s, unresolved(fmt.Sprintf("parameter %s of %s, which a call other than a static one may pass anything: %s", v.Name(), w.a.name(fn), how.text(namer{w.a.mod}))))
 		}
 		if len(s) == 0 {
 			return unresolved(fmt.Sprintf("parameter %s of %s, which no call in this reach passes", v.Name(), w.a.name(fn)))

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"go/types"
 	"strings"
 	"testing"
 	"time"
@@ -9,15 +10,16 @@ import (
 func TestTheTableHasARowPerPackageAndATotal(t *testing.T) {
 	disk := reached{FS: witness{}}
 	cli := reached{CLI: witness{}, FS: witness{}}
+	test := func(name string, r reached) testShape { return testShape{Name: name, found: found{Reached: r}} }
 	pkgs := []measuredPackage{
 		{ImportPath: "example.com/m/a", Tests: []measuredTest{
-			{Name: "TestPure", Reached: reached{}, Ran: true, Elapsed: 100 * time.Millisecond},
-			{Name: "TestPure2", Reached: reached{}, Ran: true, Elapsed: 200 * time.Millisecond},
-			{Name: "TestDisk", Reached: disk, Ran: true, Elapsed: 1500 * time.Millisecond},
+			{testShape: test("TestPure", reached{}), Ran: true, Elapsed: 100 * time.Millisecond},
+			{testShape: test("TestPure2", reached{}), Ran: true, Elapsed: 200 * time.Millisecond},
+			{testShape: test("TestDisk", disk), Ran: true, Elapsed: 1500 * time.Millisecond},
 		}},
-		{ImportPath: "example.com/m/cmd", Setup: reached{Clock: witness{}}, Tests: []measuredTest{
-			{Name: "TestRun", Reached: cli, Ran: true, Elapsed: 4 * time.Second},
-			{Name: "TestSkipped", Reached: disk},
+		{ImportPath: "example.com/m/cmd", Setup: found{Reached: reached{Clock: witness{}}}, Tests: []measuredTest{
+			{testShape: test("TestRun", cli), Ran: true, Elapsed: 4 * time.Second},
+			{testShape: test("TestSkipped", disk)},
 		}},
 		{ImportPath: "example.com/m/empty"},
 	}
@@ -43,23 +45,38 @@ func TestTheTableHasARowPerPackageAndATotal(t *testing.T) {
 	}
 }
 
-func TestTheListingGivesEachTestItsLayerAndAWitnessPerTouch(t *testing.T) {
-	pkgs := []measuredPackage{{
+func TestTheListingGivesEachTestItsLayerAWitnessPerTouchAndWhatWasWithheld(t *testing.T) {
+	a := types.NewPackage("example.com/m/a", "a")
+	paths := types.NewNamed(types.NewTypeName(0, a, "paths", nil), types.NewSlice(types.Typ[types.String]), nil)
+	key := types.NewNamed(types.NewTypeName(0, a, "key", nil), types.Typ[types.Int], nil)
+	pkgs := []modulePackage{{module: module{Path: "example.com/m"}, measuredPackage: measuredPackage{
 		ImportPath: "example.com/m/a",
-		Setup:      reached{Clock: witness{chain: []string{"init of a", "time.Now"}, what: "time.Now (clock)"}},
+		Setup: found{
+			Reached:  reached{Clock: witness{chain: []string{"init of a", "time.Now"}, what: "time.Now (clock)"}},
+			Withheld: []withholding{{instance{funcName{"slices", "Clone"}, []types.Type{paths, types.Typ[types.String]}}, 0, "S"}},
+		},
 		Tests: []measuredTest{
-			{Name: "TestPure", Reached: reached{}, Ran: true},
-			{Name: "TestDisk", Reached: reached{
+			{testShape: testShape{Name: "TestPure", found: found{
+				Reached: reached{},
+				Withheld: []withholding{
+					{instance{funcName{"slices", "Sort"}, []types.Type{types.NewSlice(key), key}}, 1, "E"},
+					{instance{funcName{"slices", "Max"}, []types.Type{types.NewSlice(key), key}}, 1, "E"},
+				},
+			}}, Ran: true},
+			{testShape: testShape{Name: "TestDisk", found: found{Reached: reached{
 				FS:  witness{chain: []string{"a.TestDisk", "a.load", "os.ReadFile"}, what: "os.ReadFile (fs)"},
 				Git: witness{chain: []string{"a.TestDisk", "a.git"}, what: `os/exec.Command spawns "git", which is git`},
-			}},
+			}}}},
 		},
-	}}
+	}}}
 	var out strings.Builder
 	writeListing(&out, pkgs)
 	want := "\nexample.com/m/a\n" +
 		"    setup clock: init of a → time.Now ⇒ time.Now (clock)\n" +
+		"    setup withheld: slices.Clone[a.paths, string] neither converts its type parameter S (a.paths) nor calls a method of it\n" +
 		"  unit        TestPure\n" +
+		"    withheld: slices.Max[[]a.key, a.key] neither converts its type parameter E (a.key) nor calls a method of it\n" +
+		"    withheld: slices.Sort[[]a.key, a.key] neither converts its type parameter E (a.key) nor calls a method of it\n" +
 		"  integration TestDisk  [not run]\n" +
 		`    git: a.TestDisk → a.git ⇒ os/exec.Command spawns "git", which is git` + "\n" +
 		"    fs: a.TestDisk → a.load → os.ReadFile ⇒ os.ReadFile (fs)\n"

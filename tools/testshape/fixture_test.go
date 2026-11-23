@@ -62,6 +62,12 @@ func measureFixture(t *testing.T, pkg string) (binaryShape, []string) {
 // reachOf is what one fixture test reaches, the analysis refusing nothing.
 func reachOf(t *testing.T, pkg, test string) reached {
 	t.Helper()
+	return testShapeOf(t, pkg, test).Reached
+}
+
+// testShapeOf is one fixture test's shape, the analysis refusing nothing.
+func testShapeOf(t *testing.T, pkg, test string) testShape {
+	t.Helper()
 	shape, refusals := measureFixture(t, pkg)
 	if len(refusals) > 0 {
 		t.Fatalf("measuring %s refused:\n%s", pkg, strings.Join(refusals, "\n"))
@@ -69,12 +75,12 @@ func reachOf(t *testing.T, pkg, test string) reached {
 	var names []string
 	for _, ts := range shape.Tests {
 		if ts.Name == test {
-			return ts.Reached
+			return ts
 		}
 		names = append(names, ts.Name)
 	}
 	t.Fatalf("%s declares no %s; it declares %v", pkg, test, names)
-	return nil
+	return testShape{}
 }
 
 // expectReach checks a test's layer and touches, and, for each touch given a
@@ -248,7 +254,7 @@ func TestASkippedTestCountsInItsLayerAndIsMarkedNotRun(t *testing.T) {
 		t.Errorf("row counts %v summed %v, want one unit test of 0.2s and one integration test of no time", r.Count, r.Summed)
 	}
 	var listing strings.Builder
-	writeListing(&listing, []measuredPackage{m})
+	writeListing(&listing, []modulePackage{{m, module{Path: "example.com/shape"}}})
 	want := "\nexample.com/shape/skipped\n" +
 		"  unit        TestPure\n" +
 		"  integration TestRead  [not run]\n" +
@@ -263,7 +269,7 @@ func TestWhatTestMainTouchesEveryTestOfItsBinaryTouches(t *testing.T) {
 		FS: "setupmain.TestMain → os.MkdirAll ⇒ os.MkdirAll (fs)",
 	})
 	shape, _ := measureFixture(t, "setupmain")
-	if got := shape.Setup.set(); got != Touches(0).With(FS) {
+	if got := shape.Setup.Reached.set(); got != Touches(0).With(FS) {
 		t.Errorf("setup touches %s, want fs", got)
 	}
 }
@@ -273,7 +279,7 @@ func TestAnInitializerOnlyADependencyImportsRunsInTheSetup(t *testing.T) {
 	if len(refusals) > 0 {
 		t.Fatalf("measuring transitiveinit refused:\n%s", strings.Join(refusals, "\n"))
 	}
-	if got := shape.Setup.set(); got != Touches(0).With(FS) {
+	if got := shape.Setup.Reached.set(); got != Touches(0).With(FS) {
 		t.Errorf("setup touches %s, want fs", got)
 	}
 	expectReach(t, reachOf(t, "transitiveinit", "TestHome"), Integration, "fs", map[Touch]string{
@@ -281,10 +287,199 @@ func TestAnInitializerOnlyADependencyImportsRunsInTheSetup(t *testing.T) {
 	})
 }
 
-func TestAModuleTypeHandedToAnOutsideGenericHasItsMethodsReached(t *testing.T) {
-	expectReach(t, reachOf(t, "genericjoin", "TestNames"), Integration, "fs", map[Touch]string{
-		FS: "genericjoin.TestNames → genericjoin.Names → nested/strs.Join[genericjoin.file] → (genericjoin.file).String [call into example.com/shape/nested/strs.Join is handed type argument genericjoin.file] → os.ReadFile ⇒ os.ReadFile (fs)",
+// What an outside generic does with a type argument is read from its
+// source: a body that neither converts the type nor calls a method of it
+// reaches nothing of it, and the test names the type argument withheld.
+func TestATypeArgumentAGenericNeitherConvertsNorCallsIsWithheld(t *testing.T) {
+	ts := testShapeOf(t, "genericclone", "TestCopy")
+	expectReach(t, ts.Reached, Unit, "none", nil)
+	expectWithheld(t, ts, "slices.Clone[genericclone.paths, string] neither converts its type parameter S (genericclone.paths) nor calls a method of it")
+}
+
+// Withholding is decided per type argument: an instance that converts its
+// first reaches the first's methods, and withholds its second.
+func TestAGenericWithholdsEachTypeArgumentItNeitherConvertsNorCalls(t *testing.T) {
+	ts := testShapeOf(t, "genericpair", "TestPick")
+	expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{
+		FS: "genericpair.TestPick → genericpair.Pick → nested/gen.First[genericpair.doc, genericpair.page] → (genericpair.doc).Close [nested/gen.First[genericpair.doc, genericpair.page] converts genericpair.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
 	})
+	expectWithheld(t, ts, "nested/gen.First[genericpair.doc, genericpair.page] neither converts its type parameter B (genericpair.page) nor calls a method of it")
+}
+
+// Withholding is per type parameter, not per type: one type handed as two
+// type arguments is converted through the first and withheld as the second.
+func TestATypeParameterIsWithheldThoughItsTypeIsAnotherParametersToo(t *testing.T) {
+	ts := testShapeOf(t, "genericpair", "TestPickSame")
+	expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{
+		FS: "genericpair.TestPickSame → genericpair.PickSame → nested/gen.First[genericpair.doc, genericpair.doc] → (genericpair.doc).Close [nested/gen.First[genericpair.doc, genericpair.doc] converts genericpair.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+	expectWithheld(t, ts, "nested/gen.First[genericpair.doc, genericpair.doc] neither converts its type parameter B (genericpair.doc) nor calls a method of it")
+}
+
+// A constraint call reaches one method of its type argument: the other
+// methods of the type it points to are not reached, and a type parameter
+// whose argument is that type is withheld.
+func TestAConstraintCallReachesOneMethodAndLeavesTheOtherParameterWithheld(t *testing.T) {
+	ts := testShapeOf(t, "genericonly", "TestShut")
+	expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{
+		FS: "genericonly.TestShut → genericonly.Shut → nested/gen.CloseFirst[*genericonly.doc, genericonly.doc] → (*genericonly.doc).Close [nested/gen.CloseFirst[*genericonly.doc, genericonly.doc] calls Close of *genericonly.doc through its constraint] → (genericonly.doc).Close → os.Remove ⇒ os.Remove (fs)",
+	})
+	expectWithheld(t, ts, "nested/gen.CloseFirst[*genericonly.doc, genericonly.doc] neither converts its type parameter D (genericonly.doc) nor calls a method of it")
+}
+
+// A promotion wrapper runs the embedded type's method: it is read as an
+// instance of that method, over the embedded type's type arguments.
+func TestAPromotedMethodOfAGenericTypeIsReadAsTheEmbeddedTypesMethod(t *testing.T) {
+	expectReach(t, reachOf(t, "genericpromote", "TestShow"), Integration, "fs", map[Touch]string{
+		FS: "genericpromote.TestShow → genericpromote.Show → (nested/gen.Outer[genericpromote.doc]).Show [converts nested/gen.Outer[genericpromote.doc] to an interface] → (genericpromote.doc).Close [nested/gen.Shelf.Show[genericpromote.doc] converts genericpromote.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+}
+
+// A type made of a type argument, converted, reaches the methods of every
+// module type in its structure; a type over the argument that holds none of
+// it reaches nothing of it, and the argument is not withheld: the body uses
+// it.
+func TestAConvertedTypeMadeOfATypeArgumentReachesWhatItsStructureHolds(t *testing.T) {
+	close := func(test, fn, inst, conv string) string {
+		return "genericshapes." + test + " → genericshapes." + fn + " → " + inst + " → (genericshapes.doc).Close [" + inst + " converts " + conv + " to an interface] → os.Remove ⇒ os.Remove (fs)"
+	}
+	for _, tc := range []struct {
+		test, fn, inst, conv string
+	}{
+		{"TestSlice", "InSlice", "nested/gen.Slice[genericshapes.doc]", "[]genericshapes.doc"},
+		{"TestField", "InField", "nested/gen.Field[genericshapes.doc]", `struct{F genericshapes.doc "json:\"f\""}`},
+		{"TestPointer", "InPointer", "nested/gen.Pointer[genericshapes.doc]", "*genericshapes.doc"},
+		{"TestHolder", "InHolder", "nested/gen.Hold[genericshapes.doc]", "nested/gen.holder[genericshapes.doc]"},
+	} {
+		ts := testShapeOf(t, "genericshapes", tc.test)
+		expectReach(t, ts.Reached, Integration, "fs", map[Touch]string{FS: close(tc.test, tc.fn, tc.inst, tc.conv)})
+		expectWithheld(t, ts)
+	}
+	ts := testShapeOf(t, "genericshapes", "TestMap")
+	m := "nested/gen.Map[genericshapes.doc, genericshapes.page]"
+	expectReach(t, ts.Reached, Integration, "net,fs", map[Touch]string{
+		FS:  close("TestMap", "InMap", m, "map[genericshapes.doc]genericshapes.page"),
+		Net: "genericshapes.TestMap → genericshapes.InMap → " + m + " → (genericshapes.page).Fetch [" + m + " converts map[genericshapes.doc]genericshapes.page to an interface] → net/http.Get ⇒ net/http.Get (net)",
+	})
+	expectWithheld(t, ts)
+	for _, test := range []string{"TestFunc", "TestTag"} {
+		ts := testShapeOf(t, "genericshapes", test)
+		expectReach(t, ts.Reached, Unit, "none", nil)
+		expectWithheld(t, ts)
+	}
+}
+
+func expectWithheld(t *testing.T, ts testShape, want ...string) {
+	t.Helper()
+	var got []string
+	for _, wh := range ts.Withheld {
+		got = append(got, wh.text(namer{module{Path: "example.com/shape"}}))
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("withheld = %q, want %q", got, want)
+	}
+}
+
+// A constraint method called on a type argument that is an interface is an
+// interface call: it reaches the method of each runtime type implementing
+// the interface, here an *os.File that reached it through any.
+func TestAConstraintMethodCalledOnAnInterfaceTypeArgumentIsAnInterfaceCall(t *testing.T) {
+	expectReach(t, reachOf(t, "genericclose", "TestRelease"), Integration, "fs", map[Touch]string{
+		FS: "genericclose.TestRelease → genericclose.Release → nested/gen.Shut[genericclose.Closer] → (*os.File).Close [interface call reaches *os.File from TestRelease, made in genericclose.Release] ⇒ os.File.Close (fs)",
+	})
+}
+
+// A bound method value of an outside generic type is an instance of the
+// method, its type arguments its receiver type's. A call of the closure
+// where it is made is a static call of its wrapper.
+func TestABoundMethodValueOfAGenericTypeIsReadWithItsReceiversTypeArguments(t *testing.T) {
+	expectReach(t, reachOf(t, "genericbound", "TestFill"), Integration, "fs", map[Touch]string{
+		FS: "genericbound.TestFill → genericbound.Fill → (*nested/gen.Bag[genericbound.doc]).Add$bound → (genericbound.doc).Close [nested/gen.Bag.Add[genericbound.doc] converts genericbound.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+}
+
+func TestAConstraintMethodAGenericCallsIsReachedOnItsTypeArgument(t *testing.T) {
+	expectReach(t, reachOf(t, "genericjoin", "TestNames"), Integration, "fs", map[Touch]string{
+		FS: "genericjoin.TestNames → genericjoin.Names → nested/strs.Join[genericjoin.file] → (genericjoin.file).String [nested/strs.Join[genericjoin.file] calls String of genericjoin.file through its constraint] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+// A method expression of a constraint method is a thunk the generic hands
+// out, which calls the method: it is read as part of the body.
+func TestAConstraintMethodAGenericTakesAsAMethodExpressionIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericthunk", "TestName"), Integration, "fs", map[Touch]string{
+		FS: "genericthunk.TestName → genericthunk.Name → nested/gen.Namer[genericthunk.file] → (genericthunk.file).String [nested/gen.Namer[genericthunk.file] calls String of genericthunk.file through its constraint] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+// A type argument the body converts reaches what module code converting it
+// reaches: every method of the type, GoString included, which %#v calls.
+func TestATypeArgumentAGenericConvertsHasEveryMethodReached(t *testing.T) {
+	expectReach(t, reachOf(t, "generickeep", "TestRender"), Integration, "fs", map[Touch]string{
+		FS: "generickeep.TestRender → generickeep.Render → nested/gen.Keep[generickeep.doc] → (generickeep.doc).GoString [nested/gen.Keep[generickeep.doc] converts generickeep.doc to an interface] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+func TestAModuleTypeInAConvertedTypeArgumentsStructureIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericshow", "TestShowSlice"), Integration, "fs", map[Touch]string{
+		FS: "genericshow.TestShowSlice → genericshow.ShowSlice → nested/gen.Show[[]genericshow.file] → (genericshow.file).String [nested/gen.Show[[]genericshow.file] converts []genericshow.file to an interface] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+	expectReach(t, reachOf(t, "genericshow", "TestShowStruct"), Integration, "fs", map[Touch]string{
+		FS: "genericshow.TestShowStruct → genericshow.ShowStruct → nested/gen.Show[genericshow.wrap] → (genericshow.file).String [nested/gen.Show[genericshow.wrap] converts genericshow.wrap to an interface] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+func TestATypeArgumentADispatchingGenericRegistersIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericvisit", "TestRegister"), Integration, "fs", map[Touch]string{
+		FS: "genericvisit.TestRegister → genericvisit.Register → nested/gen.Visit[genericvisit.cleaner] → (genericvisit.cleaner).Visit [nested/gen.Visit[genericvisit.cleaner] converts genericvisit.cleaner to an interface] → os.RemoveAll ⇒ os.RemoveAll (fs)",
+	})
+}
+
+func TestATypeArgumentAnInstantiatedGenericConvertsIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "generictwice", "TestHold"), Integration, "fs", map[Touch]string{
+		FS: "generictwice.TestHold → generictwice.Hold → nested/gen.Twice[generictwice.doc] → (generictwice.doc).Close [nested/gen.Twice[generictwice.doc] instantiates nested/gen.Keep[generictwice.doc], which converts generictwice.doc to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+}
+
+// A body the reading cannot decide converts every type argument, the reach
+// a module conversion gets, and the witness says why it was not read.
+func TestATypeArgumentOfAGenericThatCannotBeReadIsConverted(t *testing.T) {
+	expectReach(t, reachOf(t, "genericaddress", "TestWhere"), Integration, "fs", map[Touch]string{
+		FS: "genericaddress.TestWhere → genericaddress.Where → nested/gen.Address[genericaddress.lock] → (genericaddress.lock).Release [nested/gen.Address[genericaddress.lock] cannot be read (it converts *T to unsafe.Pointer), so it counts as one that converts genericaddress.lock to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+	expectReach(t, reachOf(t, "genericlocal", "TestWrap"), Integration, "fs", map[Touch]string{
+		FS: "genericlocal.TestWrap → genericlocal.Wrap → nested/gen.Box[genericlocal.lock] → (genericlocal.lock).Release [nested/gen.Box[genericlocal.lock] cannot be read (it declares type box in its body), so it counts as one that converts genericlocal.lock to an interface] → os.Remove ⇒ os.Remove (fs)",
+	})
+}
+
+// Each instance whose body could not be read is counted, with why: its
+// conservative reading is in the output, not only in a witness. Beside it,
+// the type parameters withheld are counted.
+func TestTheOutputCountsTheGenericInstancesThatCouldNotBeReadAndWhy(t *testing.T) {
+	l, err := shapeModule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newAnalyzer(l, shapeClassification(t))
+	for _, pkg := range []string{"genericaddress", "genericlocal", "generickeep", "genericclone"} {
+		a.measure(l.Binaries["example.com/shape/"+pkg])
+	}
+	if refusals := analysisRefusals(a); len(refusals) > 0 {
+		t.Fatalf("refused:\n%s", strings.Join(refusals, "\n"))
+	}
+	var unread []moduleUnread
+	for _, u := range a.unreadInstances() {
+		unread = append(unread, moduleUnread{u, l.Module})
+	}
+	var out strings.Builder
+	writeGenerics(&out, unread, len(a.withheldParameters()))
+	want := "\ntype parameters of outside generic instances withheld, reaching nothing of their type arguments: 1\n" +
+		"outside generic instances whose bodies could not be read, each counted as converting every type argument: 2\n" +
+		"  nested/gen.Address[genericaddress.lock]: it converts *T to unsafe.Pointer\n" +
+		"  nested/gen.Box[genericlocal.lock]: it declares type box in its body\n"
+	if out.String() != want {
+		t.Errorf("unread:\n%s\nwant:\n%s", out.String(), want)
+	}
 }
 
 func TestARangeOverFuncLoopBodyIsCalledBackByTheIterator(t *testing.T) {

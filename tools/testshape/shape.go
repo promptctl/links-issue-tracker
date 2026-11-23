@@ -50,13 +50,23 @@ func (r reached) set() Touches {
 // initialization of its packages, and its TestMain) and each declared test,
 // whose reach includes the setup's.
 type binaryShape struct {
-	Setup reached
+	Setup found
 	Tests []testShape // in name order
 }
 
+// found is what one walk found: each touch with its first witness, and
+// each type argument an outside generic instance the walk reached, beyond
+// its binary's setup, withheld: what decided that the touches the type
+// argument's methods make are not the walk's.
+type found struct {
+	Reached  reached
+	Withheld []withholding
+}
+
+// testShape is one test's reach.
 type testShape struct {
-	Name    string
-	Reached reached
+	Name string
+	found
 }
 
 // measure decides the reach of b's setup, and of every test b declares over
@@ -76,7 +86,7 @@ func (a *analyzer) measure(b *binary) binaryShape {
 	setup.run()
 	runsCLI := a.reachesCLI(setup.own)
 	setup.settle(runsCLI)
-	shape := binaryShape{Setup: setup.reached()}
+	shape := binaryShape{Setup: setup.found()}
 	binary := setup.finish()
 
 	for _, t := range b.Tests {
@@ -86,7 +96,7 @@ func (a *analyzer) measure(b *binary) binaryShape {
 		}
 		w.run()
 		w.settle(runsCLI)
-		shape.Tests = append(shape.Tests, testShape{t.Name, w.reached()})
+		shape.Tests = append(shape.Tests, testShape{t.Name, w.found()})
 	}
 	return shape
 }
@@ -103,8 +113,7 @@ func (a *analyzer) reachesCLI(l *layer) bool {
 // measuredTest is one declared top-level test, with what the stream says of
 // it.
 type measuredTest struct {
-	Name    string
-	Reached reached
+	testShape
 	Ran     bool          // false: skipped, or not selected by the run
 	Elapsed time.Duration // zero unless Ran
 }
@@ -114,7 +123,7 @@ func (t measuredTest) Layer() Layer { return layerOf(t.Reached.set()) }
 // measuredPackage is one package of the stream, joined to its binary.
 type measuredPackage struct {
 	ImportPath string
-	Setup      reached
+	Setup      found
 	Tests      []measuredTest
 }
 
@@ -141,7 +150,7 @@ func join(pkg gotestjson.Package, shape binaryShape) (measuredPackage, []string)
 	for _, ts := range shape.Tests {
 		t, ok := ran[ts.Name]
 		didRun := ok && (t.Ending == gotestjson.Passed || t.Ending == gotestjson.Failed)
-		mt := measuredTest{Name: ts.Name, Reached: ts.Reached, Ran: didRun}
+		mt := measuredTest{testShape: ts, Ran: didRun}
 		if didRun {
 			mt.Elapsed = t.Elapsed
 		}
@@ -236,6 +245,9 @@ func analysisRefusals(a *analyzer) []string {
 	}
 	for _, name := range sortedKeys(a.unresolved) {
 		refusals = append(refusals, fmt.Sprintf("called-back interface %s is not in the program, called back by %s", name, a.unresolved[name]))
+	}
+	for _, what := range sortedKeys(a.inconsistencies) {
+		refusals = append(refusals, "testshape is inconsistent, a bug in the tool: "+what)
 	}
 	return refusals
 }

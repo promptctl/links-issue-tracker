@@ -59,6 +59,17 @@ func (a *analyzer) owner(fn *ssa.Function) owner {
 }
 
 func (a *analyzer) nameOf(fn *ssa.Function) (funcName, bool) {
+	name, declared := declaredName(fn)
+	if !declared {
+		return funcName{}, true
+	}
+	return name, a.inModule(name.pkg)
+}
+
+// declaredName is the name of the declaration fn's code belongs to, false
+// for module glue: a wrapper around an interface method, or a method of a
+// type no package declares.
+func declaredName(fn *ssa.Function) (funcName, bool) {
 	for fn.Parent() != nil {
 		fn = fn.Parent()
 	}
@@ -67,32 +78,28 @@ func (a *analyzer) nameOf(fn *ssa.Function) (funcName, bool) {
 	}
 	if recv := fn.Signature.Recv(); recv != nil && fn.Synthetic != "" {
 		// A promotion wrapper: the method belongs to the outer type.
-		return a.methodName(recv.Type(), fn.Name())
+		return methodName(recv.Type(), fn.Name())
 	}
 	if obj, ok := fn.Object().(*types.Func); ok && obj != nil {
 		if recv := obj.Signature().Recv(); recv != nil {
 			if types.IsInterface(recv.Type()) {
-				return funcName{}, true
+				return funcName{}, false
 			}
-			return a.methodName(recv.Type(), obj.Name())
+			return methodName(recv.Type(), obj.Name())
 		}
 		if obj.Pkg() != nil {
-			return a.nameIn(obj.Pkg().Path(), obj.Name())
+			return funcName{obj.Pkg().Path(), obj.Name()}, true
 		}
 	}
-	return a.nameIn(fn.Pkg.Pkg.Path(), fn.Name())
+	return funcName{fn.Pkg.Pkg.Path(), fn.Name()}, true
 }
 
-func (a *analyzer) methodName(recv types.Type, method string) (funcName, bool) {
+func methodName(recv types.Type, method string) (funcName, bool) {
 	named := namedOf(recv)
 	if named == nil || named.Obj().Pkg() == nil {
-		return funcName{}, true
+		return funcName{}, false
 	}
-	return a.nameIn(named.Obj().Pkg().Path(), named.Obj().Name()+"."+method)
-}
-
-func (a *analyzer) nameIn(pkg, key string) (funcName, bool) {
-	return funcName{pkg, key}, a.inModule(pkg)
+	return funcName{named.Obj().Pkg().Path(), named.Obj().Name() + "." + method}, true
 }
 
 // inModule reports whether the package at path is the module's own, as the

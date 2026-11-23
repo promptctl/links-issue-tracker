@@ -14,9 +14,11 @@
 // It prints a table, one row per package: the tests it declares and the
 // tests that ran, the count of declared tests at each layer, the elapsed of
 // those that ran summed per layer, the unit share, per touch the tests that
-// can reach it, and the touches of the package's setup. -tests adds a
-// listing of every test's layer, its touches, and one witness chain per
-// touch.
+// can reach it, and the touches of the package's setup; then the count of
+// type parameters outside generic instances withheld, and of instances
+// whose bodies could not be read, with why. -tests adds a
+// listing of every test's layer, its touches, one witness chain per touch,
+// and each type argument an outside generic instance withheld.
 //
 // THE INVARIANT. The unit share is what the suite's layering is judged
 // by, so a measure that overstates it certifies work that was never done.
@@ -59,9 +61,7 @@
 //     function type in their structure (fields, elements, pointees), or a
 //     method of an interface there; and, handed an interface (`any`
 //     included), every function converted to one, which reflection can
-//     call. A type argument of an outside generic's instance is converted
-//     to an interface, since the generic calls what its constraint names
-//     (`Join[T fmt.Stringer]` calls T's String). A function stored in a field of a struct handed to outside code
+//     call. A function stored in a field of a struct handed to outside code
 //     (`&cobra.Command{RunE: f}`) is reached as surely as one passed
 //     directly; so is a range-over-func loop's body, which the iterator is
 //     handed, and a fuzz function handed to f.Fuzz. A value with no use
@@ -81,6 +81,25 @@
 //     interface method (`testing.TB`'s TempDir, `io.Writer`'s Write) is a
 //     call of an outside method, charged by its classification; the runtime
 //     module types implementing it are reached as well.
+//   - What an outside generic's instance does with its type arguments is
+//     read from the generic's source, the files the build compiles (see
+//     generic.go). A value of a type parameter leaves a body only converted
+//     to an interface, as a type mentioning the parameter, or handed to
+//     another generic instantiated over one, whose body is read in turn. A
+//     type a body converts reaches exactly what module code converting it
+//     reaches; a constraint method a body calls (`Join[T fmt.Stringer]`
+//     calls T's String) is reached on the type argument, an interface call
+//     where the type argument is an interface; a type argument no body
+//     converts or calls a method of reaches nothing, and is listed as
+//     withheld. A method's type arguments are its receiver type's, a bound
+//     method value's included. A body with a construct the reading does
+//     not model (a type parameter's value taken as an unsafe.Pointer, a
+//     type declared in the body) converts every type argument; the witness
+//     says why, and the output counts each such instance with why. Source
+//     the reading cannot square with the build (none listed, none that
+//     type-checks, no Go body, a declaration it lacks, a type that does not
+//     bind) refuses the run. Nothing about a generic is recorded in the
+//     classification.
 //   - Code outside the module is never walked. Every outside function module
 //     code reaches is classified in classification.json: the touches it can
 //     make, none,
@@ -125,7 +144,9 @@
 //     These stop the run before any measuring.
 //   - The analysis: an outside function module code reaches with no
 //     classification, with its first caller; a module function with no Go
-//     body to walk.
+//     body to walk; anything the analysis's own model rules out, a bug in
+//     the tool (a type the source copy of an outside package declares that
+//     its export data does not).
 //
 // A test counts as declared when go test would run it: a Test or Fuzz
 // function, or an Example with an output comment. A name both a package and
@@ -194,7 +215,7 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 		fmt.Fprintf(stderr, "testshape: %v\n", err)
 		return exitMalformed
 	}
-	pkgs, refusals, err := measureSuite(*root, buildFlags, class, stream)
+	s, refusals, err := measureSuite(*root, buildFlags, class, stream)
 	if err != nil {
 		fmt.Fprintf(stderr, "testshape: %v\n", err)
 		return exitLoad
@@ -206,16 +227,13 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 		return exitRefused
 	}
 	var rows []row
-	for _, m := range pkgs {
+	for _, m := range s.packages {
 		rows = append(rows, rowOf(m.measuredPackage, m.module.Path))
 	}
 	writeTable(stdout, rows)
+	writeGenerics(stdout, s.generics.unread, len(s.generics.withheld))
 	if *listTests {
-		var listed []measuredPackage
-		for _, m := range pkgs {
-			listed = append(listed, m.measuredPackage)
-		}
-		writeListing(stdout, listed)
+		writeListing(stdout, s.packages)
 	}
 	return exitMeasured
 }
@@ -253,33 +271,74 @@ type modulePackage struct {
 	module module
 }
 
+// moduleUnread is an outside generic instance one module's analysis read
+// whose body could not be read.
+type moduleUnread struct {
+	unreadInstance
+	module module
+}
+
+// suiteShape is what the suite's measure found: the measured packages, in
+// import-path order, and what the reading of outside generics decided.
+type suiteShape struct {
+	packages []modulePackage
+	generics suiteGenerics
+}
+
+// suiteGenerics is what the reading of outside generics decided across the
+// suite's module analyses, each instance once by its key: every instance
+// whose body could not be read, and every type parameter an instance
+// withheld.
+type suiteGenerics struct {
+	unread   []moduleUnread
+	seen     map[instanceKey]bool
+	withheld map[withheldKey]bool
+}
+
+func newSuiteGenerics() suiteGenerics {
+	return suiteGenerics{seen: map[instanceKey]bool{}, withheld: map[withheldKey]bool{}}
+}
+
+// add takes in what one module's analysis decided.
+func (g *suiteGenerics) add(a *analyzer, m module) {
+	for _, u := range a.unreadInstances() {
+		if !g.seen[u.key] {
+			g.seen[u.key] = true
+			g.unread = append(g.unread, moduleUnread{u, m})
+		}
+	}
+	for _, wh := range a.withheldParameters() {
+		g.withheld[withheldKey{a.instanceKey(wh.in), wh.arg}] = true
+	}
+}
+
 // measureSuite measures every package of stream against the suite under
-// root, returning the measured packages in import-path order and every
-// refusal. err is for a failure to load the suite.
-func measureSuite(root string, buildFlags []string, class *Classification, stream gotestjson.Run) ([]modulePackage, []string, error) {
+// root, returning what it found and every refusal. err is for a failure to
+// load the suite.
+func measureSuite(root string, buildFlags []string, class *Classification, stream gotestjson.Run) (suiteShape, []string, error) {
 	mods, err := suiteModules(root)
 	if err != nil {
-		return nil, nil, err
+		return suiteShape{}, nil, err
 	}
 	loads := make([]*loaded, len(mods))
 	for i, m := range mods {
 		l, err := loadModule(m, buildFlags)
 		if err != nil {
-			return nil, nil, err
+			return suiteShape{}, nil, err
 		}
 		loads[i] = l
 	}
 	s := suiteOf(loads)
 	refusals := append(streamRefusals(stream), strayRefusals(s.moduleOf, s.suite, stream)...)
 	if err := class.Validate(s); err != nil {
-		return nil, append(refusals, err.Error()), nil
+		return suiteShape{}, append(refusals, err.Error()), nil
 	}
 
 	inStream := map[string]gotestjson.Package{}
 	for _, p := range stream.Packages {
 		inStream[p.ImportPath] = p
 	}
-	var out []modulePackage
+	out := suiteShape{generics: newSuiteGenerics()}
 	for _, l := range loads {
 		owned := func(path string) bool { return s.moduleOf[path] == l.Module.Path }
 		refusals = append(refusals, absentRefusals(l.Binaries, inStream, owned)...)
@@ -291,10 +350,11 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 			}
 			mp, rs := join(p, a.measure(l.Binaries[path]))
 			refusals = append(refusals, rs...)
-			out = append(out, modulePackage{mp, l.Module})
+			out.packages = append(out.packages, modulePackage{mp, l.Module})
 		}
+		out.generics.add(a, l.Module)
 		refusals = append(refusals, analysisRefusals(a)...)
 	}
-	slices.SortFunc(out, func(a, b modulePackage) int { return strings.Compare(a.ImportPath, b.ImportPath) })
+	slices.SortFunc(out.packages, func(a, b modulePackage) int { return strings.Compare(a.ImportPath, b.ImportPath) })
 	return out, refusals, nil
 }
