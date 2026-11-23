@@ -117,13 +117,18 @@ func TestAStreamThatMeasuredNothingRefuses(t *testing.T) {
 }
 
 func TestAPackageOfNoModuleRefuses(t *testing.T) {
-	mods := []module{{Dir: "/r", Path: "example.com/r"}, {Dir: "/r/driver", Path: "example.com/r/driver"}}
+	moduleOf := map[string]string{"example.com/r/cmd": "example.com/r", "example.com/dep": "example.com/dep"}
+	suite := map[string]bool{"example.com/r": true}
 	run := gotestjson.Run{Packages: []gotestjson.Package{
 		{ImportPath: "example.com/r/cmd"},
+		{ImportPath: "example.com/dep"},
 		{ImportPath: "example.com/elsewhere"},
 	}}
-	want := []string{"example.com/elsewhere: the package belongs to no module of the suite"}
-	if got := strayRefusals(mods, run); !slices.Equal(got, want) {
+	want := []string{
+		"example.com/dep: the package belongs to no module of the suite",
+		"example.com/elsewhere: the package belongs to no module of the suite",
+	}
+	if got := strayRefusals(moduleOf, suite, run); !slices.Equal(got, want) {
 		t.Errorf("refusals = %q, want %q", got, want)
 	}
 }
@@ -146,23 +151,5 @@ func TestEveryBinaryDeclaringTestsMustBeInTheStream(t *testing.T) {
 	}
 	if got := absentRefusals(binaries, inStream, owned); !slices.Equal(got, want) {
 		t.Errorf("refusals = %q, want %q", got, want)
-	}
-}
-
-func TestANestedModuleOwnsItsPackages(t *testing.T) {
-	mods := []module{{Path: "example.com/r"}, {Path: "example.com/r/driver"}}
-	for path, want := range map[string]int{
-		"example.com/r":                0,
-		"example.com/r/x":              0,
-		"example.com/r/driver":         1,
-		"example.com/r/driver/sub":     1,
-		"example.com/r/driver_test":    1,
-		"example.com/r/x.test":         0,
-		"example.com/rival":            -1,
-		"example.com/r/driverless/pkg": 0,
-	} {
-		if got := moduleIndex(mods, path); got != want {
-			t.Errorf("moduleIndex(%s) = %d, want %d", path, got, want)
-		}
 	}
 }

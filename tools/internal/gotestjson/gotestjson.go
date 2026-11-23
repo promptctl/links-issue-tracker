@@ -5,8 +5,9 @@
 //
 // The reader has one rule for a malformed stream: a line that is JSON but not
 // an event, an action go test does not emit, an event naming no package that
-// is not a build event, a verdict without its Elapsed figure, or a stream with
-// no package in it, is an error, never a guess.
+// is not a build event, a verdict without its Elapsed figure, an event other
+// than run for a test that already has its verdict, or a stream with no
+// package in it, is an error, never a guess.
 // What differs between consumers (one prints an unfinished test, another
 // refuses it) is not decided here: the reader returns those facts as typed
 // values and each tool acts on them.
@@ -192,6 +193,9 @@ type reader struct {
 	running map[testKey]*runningTest
 	// Top-level tests that reached a verdict, held until their package ends.
 	finished map[string][]Test
+	// Every test, subtests included, whose verdict arrived since its last run
+	// event, until its package ends: only a new run of it may follow.
+	decided map[testKey]bool
 	// Packages that emitted an event and have not ended.
 	open map[string]bool
 	run  Run
@@ -203,13 +207,20 @@ type reader struct {
 // package ends without its verdict. Lines that are not JSON (a panic trace,
 // stray build noise) are echoed verbatim — surfaced, never swallowed.
 // [LAW:no-silent-failure]
+//
+// A malformed stream is still read to its end, and its replay printed, before
+// the first malformed line is returned as the error: go test, writing into
+// the pipe, never dies of SIGPIPE, and the failures after that line still
+// print.
 func Read(r io.Reader, replay io.Writer) (Run, error) {
 	rd := &reader{
 		replay:   replay,
 		running:  make(map[testKey]*runningTest),
 		finished: make(map[string][]Test),
+		decided:  make(map[testKey]bool),
 		open:     make(map[string]bool),
 	}
+	var malformed error
 	sc := bufio.NewScanner(r)
 	// A single output line can exceed Scanner's 64KB default (a dumped
 	// fixture, a long panic argument); give it room instead of erroring.
@@ -225,11 +236,14 @@ func Read(r io.Reader, replay io.Writer) (Run, error) {
 		if err == nil {
 			err = rd.event(ev)
 		}
-		if err != nil {
-			return Run{}, fmt.Errorf("malformed go test -json stream at %s: %w", line, err)
+		if err != nil && malformed == nil {
+			malformed = fmt.Errorf("malformed go test -json stream at %s: %w", line, err)
 		}
 	}
 	if err := sc.Err(); err != nil {
+		// The scanner stops at its error; the rest of the stream is still
+		// the producer's output, so it is replayed as it is.
+		io.Copy(replay, r)
 		return Run{}, fmt.Errorf("reading go test -json stream: %w", err)
 	}
 	// A stream cut off before a package's terminal event leaves that
@@ -241,6 +255,9 @@ func Read(r io.Reader, replay io.Writer) (Run, error) {
 			names = append(names, u.test)
 		}
 		rd.run.Cut = append(rd.run.Cut, Cut{ImportPath: pkg, Open: names})
+	}
+	if malformed != nil {
+		return Run{}, malformed
 	}
 	if len(rd.run.Packages) == 0 && len(rd.run.Cut) == 0 {
 		return Run{}, fmt.Errorf("malformed go test -json stream: it reports no package")
@@ -268,6 +285,12 @@ func (rd *reader) event(ev event) error {
 	}
 	rd.open[ev.Package] = true
 	k := testKey{ev.Package, ev.Test}
+	if rd.decided[k] {
+		if ev.Action != "run" {
+			return fmt.Errorf("test %s %s has its verdict, and a %s event follows it", ev.Package, ev.Test, ev.Action)
+		}
+		delete(rd.decided, k)
+	}
 	rt := track(rd.running, k, ev.Time)
 	switch ev.Action {
 	case "output":
@@ -287,6 +310,7 @@ func (rd *reader) event(ev event) error {
 			}
 		}
 		delete(rd.running, k)
+		rd.decided[k] = true
 		end := rt.endGiven(seconds(*ev.Elapsed))
 		if !isTopLevel(ev.Test) {
 			// A subtest's verdict precedes its ancestor's, which is still
@@ -316,6 +340,11 @@ func (rd *reader) packageEvent(ev event) error {
 		}
 		tests := rd.finished[ev.Package]
 		delete(rd.finished, ev.Package)
+		for k := range rd.decided {
+			if k.pkg == ev.Package {
+				delete(rd.decided, k)
+			}
+		}
 		delete(rd.open, ev.Package)
 		for _, u := range rd.drain(ev.Package, "no verdict before its package ended") {
 			if isTopLevel(u.test) {

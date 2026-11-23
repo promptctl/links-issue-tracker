@@ -62,13 +62,6 @@ func suiteModules(root string) ([]module, error) {
 	return mods, err
 }
 
-// contains reports whether the package at path — a package, its external
-// test package, or its test binary's main — belongs to m.
-func (m module) contains(path string) bool {
-	path = strings.TrimSuffix(strings.TrimSuffix(path, ".test"), "_test")
-	return path == m.Path || strings.HasPrefix(path, m.Path+"/")
-}
-
 // binary is one test binary: the package it tests and what the build put in
 // it.
 type binary struct {
@@ -97,8 +90,11 @@ type loaded struct {
 	Module   module
 	Prog     *ssa.Program
 	Binaries map[string]*binary // by the import path of the package under test
-	// ModuleOf is the module of each outside package the build links, by
-	// import path: "std" for the standard library.
+	// ModuleOf is the module of each package the build links, by import
+	// path: "std" for the standard library. [LAW:one-source-of-truth] it is
+	// the go command's answer, and the one place the measure learns which
+	// module a package belongs to: a module nested under another's path is
+	// its own.
 	ModuleOf map[string]string
 }
 
@@ -215,7 +211,7 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 		case p.isTestMain():
 		case p.Module == nil:
 			l.ModuleOf[p.path()] = "std"
-		case p.Module.Path != m.Path:
+		default:
 			l.ModuleOf[p.path()] = p.Module.Path
 		}
 		if p.isTestMain() {

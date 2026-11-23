@@ -73,11 +73,11 @@ func (a *analyzer) measure(b *binary) binaryShape {
 	setup.run()
 	runsCLI := a.reachesCLI(setup.own)
 	setup.settle(runsCLI)
-	setup.own.closed = true
+	binary := setup.finish()
 
-	shape := binaryShape{Setup: setup.own.touches}
+	shape := binaryShape{Setup: binary.layer.touches}
 	for _, t := range b.Tests {
-		w := newWalker(a, setup.own)
+		w := newWalker(a, binary)
 		for _, fn := range t.Funcs {
 			w.root(fn, t.Name)
 		}
@@ -188,11 +188,12 @@ func streamRefusals(run gotestjson.Run) []string {
 }
 
 // strayRefusals names every stream package that belongs to no module of
-// the suite.
-func strayRefusals(mods []module, run gotestjson.Run) []string {
+// the suite, by moduleOf, the module of every package the suite's loads
+// list.
+func strayRefusals(moduleOf map[string]string, suite map[string]bool, run gotestjson.Run) []string {
 	var refusals []string
 	for _, p := range run.Packages {
-		if moduleIndex(mods, p.ImportPath) < 0 {
+		if !suite[moduleOf[p.ImportPath]] {
 			refusals = append(refusals, fmt.Sprintf("%s: the package belongs to no module of the suite", p.ImportPath))
 		}
 	}
@@ -217,18 +218,6 @@ func absentRefusals(binaries map[string]*binary, inStream map[string]gotestjson.
 		}
 	}
 	return refusals
-}
-
-// moduleIndex is the module that owns path: the one with the longest
-// matching module path, so a nested module wins over its parent.
-func moduleIndex(mods []module, path string) int {
-	best := -1
-	for i, m := range mods {
-		if m.contains(path) && (best < 0 || len(m.Path) > len(mods[best].Path)) {
-			best = i
-		}
-	}
-	return best
 }
 
 // analysisRefusals names every outside function module code reaches without

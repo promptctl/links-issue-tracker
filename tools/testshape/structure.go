@@ -11,21 +11,21 @@ import (
 // module declares.
 func (a *analyzer) moduleType(t types.Type) bool {
 	n := namedOf(t)
-	return n != nil && n.Obj().Pkg() != nil && a.mod.contains(n.Obj().Pkg().Path())
+	return n != nil && n.Obj().Pkg() != nil && a.inModule(n.Obj().Pkg().Path())
 }
 
 // outsideType reports whether t, or what t points to, is a named concrete
 // type declared outside the module.
 func (a *analyzer) outsideType(t types.Type) bool {
 	n := namedOf(t)
-	return n != nil && n.Obj().Pkg() != nil && !a.mod.contains(n.Obj().Pkg().Path()) && !types.IsInterface(n)
+	return n != nil && n.Obj().Pkg() != nil && !a.inModule(n.Obj().Pkg().Path()) && !types.IsInterface(n)
 }
 
 // moduleMethod reports whether the module declares the interface method m:
 // a call of it is module code's, and an outside type converted to an
 // interface whose complete method set holds it may have it called.
 func (a *analyzer) moduleMethod(m *types.Func) bool {
-	return m.Pkg() != nil && a.mod.contains(m.Pkg().Path())
+	return m.Pkg() != nil && a.inModule(m.Pkg().Path())
 }
 
 // structure is what a converted value's structure contributes: every method
@@ -37,6 +37,51 @@ type structure struct {
 	ifaces  []*types.Interface
 }
 
+// eachType calls visit on t and on every type in its structure: a named
+// type's underlying type, a pointer's, slice's, array's or channel's element,
+// a map's key and element, and a struct's fields, each once. visit says
+// whether to descend into the type it is given. A signature's and an
+// interface's types are not its structure: the visitor reads them as it
+// needs. A generic type not instantiated has no structure a value can have,
+// and is never visited.
+func eachType(t types.Type, visit func(types.Type) (descend bool)) {
+	var seen typeutil.Map
+	var walk func(types.Type)
+	walk = func(t types.Type) {
+		t = types.Unalias(t)
+		if seen.At(t) != nil {
+			return
+		}
+		seen.Set(t, true)
+		if n, ok := t.(*types.Named); ok && n.TypeParams().Len() > 0 && n.TypeArgs().Len() == 0 {
+			return
+		}
+		if !visit(t) {
+			return
+		}
+		switch u := t.(type) {
+		case *types.Named:
+			walk(u.Underlying())
+		case *types.Pointer:
+			walk(u.Elem())
+		case *types.Slice:
+			walk(u.Elem())
+		case *types.Array:
+			walk(u.Elem())
+		case *types.Chan:
+			walk(u.Elem())
+		case *types.Map:
+			walk(u.Key())
+			walk(u.Elem())
+		case *types.Struct:
+			for i := range u.NumFields() {
+				walk(u.Field(i).Type())
+			}
+		}
+	}
+	walk(t)
+}
+
 // structureOf is the structure of t, derived once per type.
 func (a *analyzer) structureOf(t types.Type) *structure {
 	if s, ok := a.structures.At(t).(*structure); ok {
@@ -44,22 +89,12 @@ func (a *analyzer) structureOf(t types.Type) *structure {
 	}
 	s := &structure{}
 	a.structures.Set(t, s)
-	var seen typeutil.Map
-	var visit func(types.Type)
-	visit = func(t types.Type) {
-		t = types.Unalias(t)
-		if seen.At(t) != nil {
-			return
-		}
-		seen.Set(t, true)
+	eachType(t, func(t types.Type) bool {
 		switch u := t.(type) {
 		case *types.Named:
-			if u.TypeParams().Len() > 0 && u.TypeArgs().Len() == 0 {
-				return
-			}
 			if iface, ok := u.Underlying().(*types.Interface); ok {
 				s.ifaces = append(s.ifaces, iface)
-				return
+				return false
 			}
 			if a.moduleType(u) {
 				s.methods = append(s.methods, a.methodsOf(u)...)
@@ -68,27 +103,11 @@ func (a *analyzer) structureOf(t types.Type) *structure {
 				// counts: this approximation adds methods, never drops one.
 				s.outside = append(s.outside, types.NewPointer(u))
 			}
-			visit(u.Underlying())
-		case *types.Pointer:
-			visit(u.Elem())
-		case *types.Slice:
-			visit(u.Elem())
-		case *types.Array:
-			visit(u.Elem())
-		case *types.Chan:
-			visit(u.Elem())
-		case *types.Map:
-			visit(u.Key())
-			visit(u.Elem())
-		case *types.Struct:
-			for i := range u.NumFields() {
-				visit(u.Field(i).Type())
-			}
 		case *types.Interface:
 			s.ifaces = append(s.ifaces, u)
 		}
-	}
-	visit(t)
+		return true
+	})
 	return s
 }
 
@@ -102,32 +121,8 @@ func (a *analyzer) carried(sig *types.Signature) []*types.Signature {
 		return sigs
 	}
 	sigs := []*types.Signature{}
-	var seen typeutil.Map
-	var visit func(types.Type)
-	visit = func(t types.Type) {
-		t = types.Unalias(t)
-		if seen.At(t) != nil {
-			return
-		}
-		seen.Set(t, true)
+	visit := func(t types.Type) bool {
 		switch u := t.(type) {
-		case *types.Named:
-			visit(u.Underlying())
-		case *types.Pointer:
-			visit(u.Elem())
-		case *types.Slice:
-			visit(u.Elem())
-		case *types.Array:
-			visit(u.Elem())
-		case *types.Chan:
-			visit(u.Elem())
-		case *types.Map:
-			visit(u.Key())
-			visit(u.Elem())
-		case *types.Struct:
-			for i := range u.NumFields() {
-				visit(u.Field(i).Type())
-			}
 		case *types.Signature:
 			sigs = append(sigs, u)
 		case *types.Interface:
@@ -135,12 +130,13 @@ func (a *analyzer) carried(sig *types.Signature) []*types.Signature {
 				sigs = append(sigs, u.Method(i).Signature())
 			}
 		}
+		return true
 	}
 	if recv := sig.Recv(); recv != nil {
-		visit(recv.Type())
+		eachType(recv.Type(), visit)
 	}
 	for i := range sig.Params().Len() {
-		visit(sig.Params().At(i).Type())
+		eachType(sig.Params().At(i).Type(), visit)
 	}
 	a.carriedBy.Set(sig, sigs)
 	return sigs

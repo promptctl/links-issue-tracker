@@ -9,12 +9,14 @@ import (
 )
 
 // analyzer decides reach over one module's SSA program. It holds what every
-// walk shares and no walk changes: each function's summary and owner, each
-// type's structure and methods.
+// walk of the module shares: what is derived once per function or type
+// (summary, owner, structure, methods, carried signatures, called-back
+// interfaces), filled in by the first walk that asks; and the refusals the
+// walks record (unclassified, bodiless, unresolved).
 type analyzer struct {
 	prog     *ssa.Program
 	mod      module
-	moduleOf map[string]string // each outside package's module, "std" for the standard library
+	moduleOf map[string]string // each package's module, "std" for the standard library
 	class    *Classification
 
 	summaries  map[*ssa.Function]*summary
@@ -51,22 +53,32 @@ func newAnalyzer(l *loaded, class *Classification) *analyzer {
 }
 
 // walker is one walk: a binary's setup, over an empty layer, or one test,
-// over its binary's layer. It reads both layers as one set and adds only to
-// its own.
+// over its binary's finished layer. It reads both layers as one set and adds
+// only to its own.
 type walker struct {
 	a      *analyzer
-	layers [2]*layer // the binary's, then the walk's own
+	binary *finished
 	own    *layer
 	queue  []*ssa.Function
 }
 
-func newWalker(a *analyzer, binary *layer) *walker {
-	own := newLayer()
-	return &walker{a: a, layers: [2]*layer{binary, own}, own: own}
+func newWalker(a *analyzer, binary *finished) *walker {
+	return &walker{a: a, binary: binary, own: newLayer()}
+}
+
+// layers is the binary's layer, then the walk's own, for reading.
+func (w *walker) layers() [2]*layer { return [2]*layer{w.binary.layer, w.own} }
+
+// finish ends a setup walk: its layer becomes the binary's, finished.
+func (w *walker) finish() *finished { return &finished{layer: w.own} }
+
+// implementing is every runtime type of either layer implementing iface.
+func (w *walker) implementing(iface *types.Interface) []typeEntry {
+	return append(append([]typeEntry(nil), w.binary.implementing(iface)...), w.own.implementing(iface)...)
 }
 
 func (w *walker) seen(fn *ssa.Function) bool {
-	_, below := w.layers[0].visited[fn]
+	_, below := w.binary.layer.visited[fn]
 	_, mine := w.own.visited[fn]
 	return below || mine
 }
@@ -75,18 +87,18 @@ func (w *walker) stepOf(fn *ssa.Function) step {
 	if st, ok := w.own.visited[fn]; ok {
 		return st
 	}
-	return w.layers[0].visited[fn]
+	return w.binary.layer.visited[fn]
 }
 
 func (w *walker) originOf(fn *ssa.Function) string {
 	if o, ok := w.own.origin[fn]; ok {
 		return o
 	}
-	return w.layers[0].origin[fn]
+	return w.binary.layer.origin[fn]
 }
 
 func (w *walker) sites(fn *ssa.Function) []callSite {
-	return append(append([]callSite(nil), w.layers[0].sitesInto[fn]...), w.own.sitesInto[fn]...)
+	return append(append([]callSite(nil), w.binary.layer.sitesInto[fn]...), w.own.sitesInto[fn]...)
 }
 
 func (w *walker) entryOrigin(from *ssa.Function) entryOrigin {
@@ -97,7 +109,7 @@ func (w *walker) entryOrigin(from *ssa.Function) entryOrigin {
 // included: `go test -run` runs the setup for every test it runs.
 func (w *walker) reached() reached {
 	r := reached{}
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		for t, wit := range l.touches {
 			r[t] = wit
 		}
@@ -164,11 +176,8 @@ func (w *walker) visit(fn *ssa.Function) {
 // reach makes fn reachable from from. Module code joins the walk; code
 // outside the module is never walked, only charged.
 func (w *walker) reach(fn, from *ssa.Function, how via) {
-	o := w.a.owner(fn)
-	if _, spawner := o.knows.(SpawnArg); spawner {
-		if _, static := how.(staticCall); !static {
-			w.own.spawns = append(w.own.spawns, spawnSite{in: from, spawner: o.name.String(), program: programUnknown{"the spawner is reached as a value"}})
-		}
+	if _, static := how.(staticCall); !static {
+		w.indirectly(fn, from, how)
 	}
 	if w.seen(fn) {
 		return
@@ -176,6 +185,22 @@ func (w *walker) reach(fn, from *ssa.Function, how via) {
 	w.own.visited[fn] = step{from: from, via: how}
 	w.own.origin[fn] = w.originOf(from)
 	w.enter(fn, from)
+}
+
+// indirectly records fn reached other than by a static call, the first
+// time either layer sees it so. A spawner reached so runs a program nothing
+// names.
+func (w *walker) indirectly(fn, from *ssa.Function, how via) {
+	for _, l := range w.layers() {
+		if _, ok := l.indirect[fn]; ok {
+			return
+		}
+	}
+	w.own.indirect[fn] = how
+	o := w.a.owner(fn)
+	if _, spawner := o.knows.(SpawnArg); spawner {
+		w.own.spawns = append(w.own.spawns, spawnSite{in: from, spawner: o.name.String(), program: programUnknown{"the spawner is reached as a value"}})
+	}
 }
 
 // enter walks fn if it is module code, and charges it otherwise.
@@ -228,7 +253,7 @@ func (w *walker) caller(at, from *ssa.Function) string {
 // touch records t, reached at fn, with its witness if it is t's first;
 // what names the touch, and is spelled only for a first.
 func (w *walker) touch(t Touch, at *ssa.Function, what func() string) {
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if _, ok := l.touches[t]; ok {
 			return
 		}
@@ -241,7 +266,7 @@ func (w *walker) touch(t Touch, at *ssa.Function, what func() string) {
 // either layer. Taking it runs nothing: an initializer that fills a table
 // of functions makes none of them reachable.
 func (w *walker) take(f, from *ssa.Function) {
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.isAddrTaken[f] {
 			return
 		}
@@ -249,7 +274,7 @@ func (w *walker) take(f, from *ssa.Function) {
 	e := funcEntry{f, w.entryOrigin(from)}
 	w.own.addTaken(e)
 	key := normalize(f.Signature)
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if call, ok := l.dynCalls.At(key).(pendingDynamic); ok {
 			w.reach(f, call.from, throughFunc{call.how, e.where})
 		}
@@ -263,13 +288,13 @@ func (w *walker) take(f, from *ssa.Function) {
 // of its signature.
 func (w *walker) dynamic(d dynamicCall, from *ssa.Function) {
 	key := normalize(d.sig)
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.dynCalls.At(key) != nil {
 			return
 		}
 	}
 	w.own.dynCalls.Set(key, pendingDynamic{from, d.how})
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		for _, e := range l.withSignature(d.sig) {
 			w.reach(e.fn, from, throughFunc{d.how, e.where})
 		}
@@ -294,7 +319,7 @@ func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, 
 			}
 		}
 	}
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.structured.At(t) != nil {
 			return
 		}
@@ -318,14 +343,14 @@ func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, 
 // addRuntimeType records a named type whose values may sit in an interface
 // value, and applies to it every call pending in either layer.
 func (w *walker) addRuntimeType(t types.Type, from *ssa.Function) {
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.isRuntime.At(t) != nil {
 			return
 		}
 	}
 	e := typeEntry{t, w.entryOrigin(from)}
 	w.own.addRuntime(e)
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		for _, p := range l.invokes {
 			if types.Implements(t, p.inv.iface) {
 				w.reachMethod(t, p.inv.method, p.from, throughType{"interface call", t, e.where})
@@ -354,17 +379,15 @@ func (w *walker) addRuntimeType(t types.Type, from *ssa.Function) {
 // reflect: an interface in a converted value's structure stands for every
 // runtime type implementing it, each converted to it.
 func (w *walker) reflect(iface *types.Interface, from *ssa.Function) {
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.isReflected[iface] {
 			return
 		}
 	}
 	w.own.isReflected[iface] = true
 	w.own.reflected = append(w.own.reflected, pendingReflect{iface, from})
-	for _, l := range w.layers {
-		for _, e := range l.implementing(iface) {
-			w.convert(e.typ, iface, from, throughType{"reflection", e.typ, e.where})
-		}
+	for _, e := range w.implementing(iface) {
+		w.convert(e.typ, iface, from, throughType{"reflection", e.typ, e.where})
 	}
 }
 
@@ -373,7 +396,7 @@ func (w *walker) reflect(iface *types.Interface, from *ssa.Function) {
 // method is a call of an outside method, charged by its classification; the
 // runtime module types implementing it are reached as well.
 func (w *walker) invoke(inv invoke, from *ssa.Function) {
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.invoked[inv] {
 			return
 		}
@@ -386,11 +409,9 @@ func (w *walker) invoke(inv invoke, from *ssa.Function) {
 		name := interfaceMethodName(inv.method)
 		w.charge(name, w.a.class.Lookup(name.pkg, name.key), inv.method.Signature(), from, from)
 	}
-	for _, l := range w.layers {
-		for _, e := range l.implementing(inv.iface) {
-			if module || w.a.moduleType(e.typ) {
-				w.reachMethod(e.typ, inv.method, from, throughType{"interface call", e.typ, e.where})
-			}
+	for _, e := range w.implementing(inv.iface) {
+		if module || w.a.moduleType(e.typ) {
+			w.reachMethod(e.typ, inv.method, from, throughType{"interface call", e.typ, e.where})
 		}
 	}
 }
@@ -403,13 +424,13 @@ func (w *walker) invoke(inv invoke, from *ssa.Function) {
 // anything: it reaches the whole set, and what either layer creates later
 // meets it as it is created.
 func (w *walker) dispatch(at *ssa.Function) {
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.dispatcher != nil {
 			return
 		}
 	}
 	w.own.dispatcher = at
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		for _, e := range l.addrTaken {
 			w.reach(e.fn, at, throughFunc{"dispatch", e.where})
 		}
@@ -433,14 +454,14 @@ func (w *walker) callBack(name string, at *ssa.Function) {
 		w.a.unresolved[name] = w.a.name(at)
 		return
 	}
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		if l.isCalledBack[iface] {
 			return
 		}
 	}
 	w.own.isCalledBack[iface] = true
 	w.own.callbacks = append(w.own.callbacks, pendingCallback{iface, name, at})
-	for _, l := range w.layers {
+	for _, l := range w.layers() {
 		for _, e := range l.runtimeTypes {
 			if w.a.outsideType(e.typ) && types.Implements(e.typ, iface) {
 				w.reachMethods(e.typ, iface, at, throughType{name + " callback", e.typ, e.where})

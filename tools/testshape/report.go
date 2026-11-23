@@ -33,7 +33,8 @@ func (r *row) add(o row) {
 func (r row) total() int { return r.Count[Unit] + r.Count[Integration] + r.Count[EndToEnd] }
 
 // unitShare is the unit layer's share of the row's tests by count, the
-// figure the epic's done-when is checked against.
+// figure the suite's layering is judged by: overstating it certifies work
+// that was never done.
 func (r row) unitShare() string {
 	if r.total() == 0 {
 		return "-"

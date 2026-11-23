@@ -92,7 +92,13 @@ func (a *analyzer) methodName(recv types.Type, method string) (funcName, bool) {
 }
 
 func (a *analyzer) nameIn(pkg, key string) (funcName, bool) {
-	return funcName{pkg, key}, a.mod.contains(pkg)
+	return funcName{pkg, key}, a.inModule(pkg)
+}
+
+// inModule reports whether the package at path is the module's own, as the
+// go command says.
+func (a *analyzer) inModule(path string) bool {
+	return a.moduleOf[path] == a.mod.Path
 }
 
 // interfaceMethodName names an interface method by the interface that

@@ -18,11 +18,11 @@
 // listing of every test's layer, its touches, and one witness chain per
 // touch.
 //
-// THE INVARIANT. The unit share is the figure the layered-test epic's
-// done-when is checked against, so a measure that overstates it certifies
-// work that was never done. Every approximation this tool makes errs away
-// from unit: an imprecision may add a touch a test does not have, or move a
-// test between integration and end-to-end; it never removes a touch. A
+// THE INVARIANT. The unit share is what the suite's layering is judged
+// by, so a measure that overstates it certifies work that was never done.
+// Every approximation this tool makes errs away from unit: an imprecision
+// may add a touch a test does not have, or move a test between integration
+// and end-to-end; it never removes a touch. A
 // touch is charged where module code, or a classified outside function, can
 // call it: charging every method of every value that reaches an interface
 // would charge nearly every test with what testing.T can do, since nearly
@@ -87,11 +87,16 @@
 //     bring an initializer in unread; a package's "init" entry overrides
 //     its module's.
 //   - A spawn's program is the one value followed: through parameters (at the
-//     static calls in the test's reach) and closure bindings to a constant,
-//     os.Executable(), os.Args[0], or exec.LookPath of a constant. It is git
-//     when it names git; a CLI run when it is the test binary and the
-//     binary's setup reaches the CLI; any other program, resolved or not, is
-//     another process, and the witness says which.
+//     static calls in the test's reach) and closure bindings, to a constant
+//     or to what the classification says names a program (os.Executable()
+//     and os.Args[0] the test binary, exec.LookPath what its argument
+//     names). A parameter of a function reached other than by a static call
+//     may hold anything, so it is unresolved beside its static calls'
+//     arguments. A program is git when it names git; a CLI run when it is
+//     the test binary and the binary's setup reaches the CLI; another
+//     process otherwise. An unresolved program may be any of them: another
+//     process, and a CLI run where the setup reaches the CLI. The witness
+//     says which program, or why it is unresolved.
 //
 // REFUSALS. A measure that measured nothing, or would mismeasure, names
 // each cause and prints no table:
@@ -104,9 +109,10 @@
 //     go.mod outside testdata, as ./... walks); a package whose test binary
 //     declares tests and that the stream has no result for.
 //   - The classification: an entry naming a package or member the suite does
-//     not load, or a module no measured build links (delete it); a module a
-//     measured build links with no entry; a spawn argument its function does
-//     not have.
+//     not load, a module no measured build links, or a CLI entry point
+//     outside the suite's modules (delete it); a module a measured build
+//     links with no entry; a class its member cannot have (a spawn argument
+//     its function lacks, a program's source whose result is not a string).
 //     These stop the run before any measuring.
 //   - The analysis: an outside function module code reaches with no
 //     classification, with its first caller; a module function with no Go
@@ -205,6 +211,34 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 	return exitMeasured
 }
 
+// loadedSuite is what the suite's loads hold, which the classification is
+// checked against.
+type loadedSuite struct {
+	packages map[string]*types.Package // every package of every load, by path
+	moduleOf map[string]string         // each of those packages' module
+	suite    map[string]bool           // the suite's modules
+	linked   map[string]bool           // each module a load links packages of beyond its own
+}
+
+func suiteOf(loads []*loaded) loadedSuite {
+	s := loadedSuite{packages: map[string]*types.Package{}, moduleOf: map[string]string{}, suite: map[string]bool{}, linked: map[string]bool{}}
+	for _, l := range loads {
+		s.suite[l.Module.Path] = true
+		for pkg, mod := range l.ModuleOf {
+			s.moduleOf[pkg] = mod
+			if mod != l.Module.Path {
+				s.linked[mod] = true
+			}
+		}
+		for _, sp := range l.Prog.AllPackages() {
+			if s.packages[sp.Pkg.Path()] == nil {
+				s.packages[sp.Pkg.Path()] = sp.Pkg
+			}
+		}
+	}
+	return s
+}
+
 type modulePackage struct {
 	measuredPackage
 	module module
@@ -218,26 +252,17 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 	if err != nil {
 		return nil, nil, err
 	}
-	refusals := append(streamRefusals(stream), strayRefusals(mods, stream)...)
 	loads := make([]*loaded, len(mods))
-	universe := map[string]*types.Package{}
-	linked := map[string]bool{}
 	for i, m := range mods {
 		l, err := loadModule(m, buildFlags)
 		if err != nil {
 			return nil, nil, err
 		}
 		loads[i] = l
-		for _, mod := range l.ModuleOf {
-			linked[mod] = true
-		}
-		for _, sp := range l.Prog.AllPackages() {
-			if universe[sp.Pkg.Path()] == nil {
-				universe[sp.Pkg.Path()] = sp.Pkg
-			}
-		}
 	}
-	if err := class.Validate(universe, linked); err != nil {
+	s := suiteOf(loads)
+	refusals := append(streamRefusals(stream), strayRefusals(s.moduleOf, s.suite, stream)...)
+	if err := class.Validate(s); err != nil {
 		return nil, append(refusals, err.Error()), nil
 	}
 
@@ -246,8 +271,8 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 		inStream[p.ImportPath] = p
 	}
 	var out []modulePackage
-	for i, l := range loads {
-		owned := func(path string) bool { return moduleIndex(mods, path) == i }
+	for _, l := range loads {
+		owned := func(path string) bool { return s.moduleOf[path] == l.Module.Path }
 		refusals = append(refusals, absentRefusals(l.Binaries, inStream, owned)...)
 		a := newAnalyzer(l, class)
 		for _, path := range sortedKeys(l.Binaries) {

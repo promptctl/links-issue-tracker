@@ -49,20 +49,43 @@ func TestAClassNamingNoTouchRefuses(t *testing.T) {
 
 func TestAClassificationFileRefusesWhatItCannotParse(t *testing.T) {
 	for name, data := range map[string]string{
-		"an unknown field":       `{"packages": {}, "extra": 1}`,
-		"a bad default":          `{"packages": {"os": {"default": "disk"}}}`,
-		"a field as a default":   `{"packages": {"os/exec": {"default": "spawn:field"}}}`,
-		"a bad function":         `{"packages": {"os": {"default": "fs", "functions": {"Getenv": "nothing"}}}}`,
-		"a cli without a .":      `{"cli": ["nowhere"], "packages": {}}`,
-		"a cli naming a path":    `{"cli": ["example.com/a.b/c"], "packages": {}}`,
-		"not a json object":      `[]`,
-		"an unknown package key": `{"packages": {"os": {"default": "fs", "notes": "x"}}}`,
-		"a bad module init":      `{"modules": {"example.com/m": {"init": "disk"}}, "packages": {}}`,
-		"a field as an init":     `{"modules": {"example.com/m": {"init": "spawn:field"}}, "packages": {}}`,
+		"an unknown field":          `{"packages": {}, "extra": 1}`,
+		"a bad default":             `{"packages": {"os": {"default": "disk"}}}`,
+		"a field as a default":      `{"packages": {"os/exec": {"default": "spawn:field"}}}`,
+		"a bad function":            `{"packages": {"os": {"default": "fs", "functions": {"Getenv": "nothing"}}}}`,
+		"a cli without a .":         `{"cli": ["nowhere"], "packages": {}}`,
+		"a cli naming a path":       `{"cli": ["example.com/a.b/c"], "packages": {}}`,
+		"not a json object":         `[]`,
+		"an unknown package key":    `{"packages": {"os": {"default": "fs", "notes": "x"}}}`,
+		"a bad module init":         `{"modules": {"example.com/m": {"init": "disk"}}, "packages": {}}`,
+		"a field as an init":        `{"modules": {"example.com/m": {"init": "spawn:field"}}, "packages": {}}`,
+		"a spawn as an init":        `{"modules": {"example.com/m": {"init": "spawn:0"}}, "packages": {}}`,
+		"a spawn as a default":      `{"packages": {"os": {"default": "spawn:0"}}}`,
+		"a spawn as a package init": `{"packages": {"os": {"default": "fs", "functions": {"init": "spawn:0"}}}}`,
+		"arg0 as a default":         `{"packages": {"os": {"default": "program:arg0"}}}`,
+		"two programs":              `{"packages": {"os": {"default": "fs", "functions": {"Executable": "program:self,program:lookup"}}}}`,
 	} {
 		if _, err := parseClassification([]byte(data)); err == nil || !strings.HasPrefix(err.Error(), "classification file: ") {
 			t.Errorf("%s: parseClassification error = %v, want a classification file error", name, err)
 		}
+	}
+}
+
+func TestAClassificationFileRefusesWhatDecodingWouldDrop(t *testing.T) {
+	for name, tc := range map[string]struct{ data, want string }{
+		"a second value":          {`{"packages": {}} {"packages": {}}`, "classification file: { follows the top-level value"},
+		"a trailing scalar":       {`{"packages": {}} 1`, "classification file: 1 follows the top-level value"},
+		"a key twice":             {`{"packages": {"os": {"default": "fs"}, "os": {"default": "none"}}}`, `classification file: key "os" appears twice in one object`},
+		"a function key twice":    {`{"packages": {"os": {"default": "fs", "functions": {"Getenv": "none", "Getenv": "fs"}}}}`, `classification file: key "Getenv" appears twice in one object`},
+		"a top-level field twice": {`{"git": ["git"], "packages": {}, "git": []}`, `classification file: key "git" appears twice in one object`},
+	} {
+		if _, err := parseClassification([]byte(tc.data)); err == nil || !strings.HasPrefix(err.Error(), tc.want) {
+			t.Errorf("%s: parseClassification error = %v, want one starting %q", name, err, tc.want)
+		}
+	}
+	// The same key in two objects is two keys.
+	if _, err := parseClassification([]byte(`{"packages": {"os": {"default": "fs", "functions": {"Exit": "none"}}, "os/exec": {"default": "none", "functions": {"Exit": "none"}}}}`)); err != nil {
+		t.Errorf("parseClassification refused one key in two objects: %v", err)
 	}
 }
 
@@ -160,11 +183,13 @@ func TestGitIsMatchedByNameOrPathBase(t *testing.T) {
 	}
 }
 
-// universeOf type-checks each source as the package at its path.
-func universeOf(t *testing.T, sources map[string]string) map[string]*types.Package {
+// suiteFrom type-checks each source as the package at its path, of the
+// module its path begins with ("example.com/app/..." is example.com/app's),
+// the suite being app's module, linking the modules linked.
+func suiteFrom(t *testing.T, linked map[string]bool, sources map[string]string) loadedSuite {
 	t.Helper()
 	fset := token.NewFileSet()
-	universe := map[string]*types.Package{}
+	s := loadedSuite{packages: map[string]*types.Package{}, moduleOf: map[string]string{}, suite: map[string]bool{"example.com/app": true}, linked: linked}
 	for path, src := range sources {
 		f, err := parser.ParseFile(fset, path+".go", src, 0)
 		if err != nil {
@@ -174,14 +199,16 @@ func universeOf(t *testing.T, sources map[string]string) map[string]*types.Packa
 		if err != nil {
 			t.Fatal(err)
 		}
-		universe[path] = pkg
+		s.packages[path] = pkg
+		parts := strings.SplitN(path, "/", 3)
+		s.moduleOf[path] = parts[0] + "/" + parts[1]
 	}
-	return universe
+	return s
 }
 
 func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
-	universe := universeOf(t, map[string]string{
-		"example.com/run":      "package run; type Cmd struct{ Path string }; func Start(name string, args ...string) {}; func (*Cmd) Run() error { return nil }",
+	suite := suiteFrom(t, map[string]bool{"std": true}, map[string]string{
+		"example.com/run":      "package run; type Cmd struct{ Path string }; func Start(name string, args ...string) {}; func (*Cmd) Run() error { return nil }; var Args []string; func Self() (string, error) { return \"\", nil }; func Find(name string) (string, error) { return name, nil }",
 		"example.com/tree/a":   "package a; func Open() {}",
 		"example.com/tree/b":   "package b; type I interface{ Do() }",
 		"example.com/app/main": "package main; func Main() {}",
@@ -191,49 +218,55 @@ func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
 		"modules": {"std": {"init": "none"}},
 		"packages": {
 			"builtin": {"default": "none", "functions": {"error.Error": "calls:error"}},
-			"example.com/run": {"default": "none", "functions": {"Start": "spawn:0", "Cmd.Run": "proc", "Cmd.Path": "spawn:field", "init": "none"}},
+			"example.com/run": {"default": "none", "functions": {"Start": "spawn:0", "Cmd.Run": "proc", "Cmd.Path": "spawn:field", "init": "none", "Args": "program:arg0", "Self": "program:self", "Find": "fs,program:lookup"}},
 			"example.com/tree/...": {"default": "fs", "functions": {"Open": "calls:example.com/tree/b.I", "I.Do": "net"}}
 		}
 	}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := class.Validate(universe, map[string]bool{"std": true}); err != nil {
+	if err := class.Validate(suite); err != nil {
 		t.Errorf("Validate = %v, want nil", err)
 	}
 }
 
 func TestValidateRefusesEveryDeadEntry(t *testing.T) {
-	universe := universeOf(t, map[string]string{
-		"example.com/run":    "package run; type Cmd struct{ Path string }; func Start(name string) {}",
-		"example.com/tree/a": "package a; func Open() {}",
+	suite := suiteFrom(t, map[string]bool{"example.com/linked": true}, map[string]string{
+		"example.com/run":      "package run; type Cmd struct{ Path string }; func Start(name string) {}; var Count int; func Self() error { return nil }; func Find(n int) string { return \"\" }; func Main() {}",
+		"example.com/tree/a":   "package a; func Open() {}",
+		"example.com/app/main": "package main; func Main() {}",
 	})
 	class, err := parseClassification([]byte(`{
-		"cli": ["example.com/gone.Main", "example.com/run.Main"],
+		"cli": ["example.com/gone.Main", "example.com/app/main.Gone", "example.com/run.Main"],
 		"modules": {"example.com/unlinked": {"init": "none"}},
 		"packages": {
 			"example.com/gone": {"default": "none"},
 			"example.com/none/...": {"default": "none"},
-			"example.com/run": {"default": "none", "functions": {"Start": "spawn:1", "Stop": "none", "Cmd.Dir": "spawn:field", "Cmd": "spawn:0"}},
+			"example.com/run": {"default": "none", "functions": {"Start": "spawn:1", "Stop": "none", "Cmd.Dir": "spawn:field", "Cmd": "spawn:0", "Count": "program:arg0", "Start2": "program:arg0", "Self": "program:self", "Find": "program:lookup"}},
 			"example.com/tree/...": {"default": "none", "functions": {"Close": "none", "Open": "calls:example.com/tree/a.Open"}}
 		}
 	}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = class.Validate(universe, map[string]bool{"example.com/linked": true})
+	err = class.Validate(suite)
 	if err == nil {
 		t.Fatal("Validate accepted dead entries")
 	}
 	for _, want := range []string{
 		"cli example.com/gone.Main: the suite loads no package example.com/gone; delete the entry",
-		"cli example.com/run.Main: example.com/run declares no function Main; delete the entry",
+		"cli example.com/app/main.Gone: example.com/app/main declares no function Gone; delete the entry",
+		"cli example.com/run.Main: example.com/run is not a package of the suite's modules, whose code alone a walk reads; delete the entry",
+		"example.com/run.Count: program:arg0 names a []string variable",
+		"example.com/run.Start2: no package it names declares Start2; delete the entry",
+		"example.com/run.Self: Self's first result is not a string, so it names no program",
+		"example.com/run.Find: Find's first parameter is not a string, so it looks no program up",
 		"example.com/gone: the suite loads no package it names; delete the entry",
 		"example.com/none/...: the suite loads no package it names; delete the entry",
 		"example.com/run.Start: spawn argument is not a parameter of Start",
 		"example.com/run.Stop: no package it names declares Stop; delete the entry",
 		"example.com/run.Cmd.Dir: no package it names declares Cmd.Dir; delete the entry",
-		"example.com/run.Cmd: a type is not a spawner",
+		"example.com/run.Cmd: a type is neither a spawner nor a program's source",
 		"example.com/tree/....Close: no package it names declares Close; delete the entry",
 		"example.com/tree/...: calls:example.com/tree/a.Open names no interface the suite loads",
 		"module example.com/unlinked: no measured build links a package of it; delete the entry",

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"go/types"
 	"os"
 	"path/filepath"
 	"slices"
@@ -309,6 +308,22 @@ func TestAFunctionStoredInAStructHandedToOutsideCodeIsReached(t *testing.T) {
 	})
 }
 
+func TestAParameterOfAFunctionReachedDynamicallyMayHoldAnyProgram(t *testing.T) {
+	// spawn's static call hands it git; apply's dynamic call hands it the
+	// test binary, which no static call shows. Under a TestMain that runs the
+	// CLI, a program that may be the test binary is a CLI run.
+	expectReach(t, reachOf(t, "spawnindirect", "TestStatusAndRerun"), EndToEnd, "git,cli,proc", map[Touch]string{
+		Git: "spawnindirect.TestStatusAndRerun → spawnindirect.Status → spawnindirect.spawn ⇒ os/exec.Command spawns \"git\", which is git",
+		CLI: "spawnindirect.TestStatusAndRerun → spawnindirect.Status → spawnindirect.spawn ⇒ os/exec.Command spawns an unresolved program (parameter program of spawnindirect.spawn, which a call other than a static one may pass anything: dynamic call reaches value from TestStatusAndRerun, made in spawnindirect.Rerun), which may be the test binary, whose setup runs the CLI",
+	})
+}
+
+func TestAModuleNestedUnderTheModulesPathIsOutsideIt(t *testing.T) {
+	expectReach(t, reachOf(t, "nesteddep", "TestConnect"), Integration, "net", map[Touch]string{
+		Net: "nesteddep.TestConnect → nesteddep.Connect → nested.Dial ⇒ example.com/shape/nested.Dial (net)",
+	})
+}
+
 func TestAnUnclassifiedOutsideFunctionRefusesNamingItsFirstCaller(t *testing.T) {
 	_, refusals := measureFixture(t, "unclassified")
 	want := []string{"unclassified outside function strings.ToUpper, first called by unclassified.Shout"}
@@ -402,8 +417,8 @@ func TestTheSuiteIsEveryModuleTheGoCommandWalks(t *testing.T) {
 
 func TestAClassificationThatNamesNothingRefuses(t *testing.T) {
 	class, err := parseClassification([]byte(`{
-		"cli": ["example.com/shape/selfcli.Missing"],
-		"modules": {"std": {"init": "none"}, "example.com/gone": {"init": "none"}},
+		"cli": ["example.com/shape/selfcli.Missing", "os.Exit"],
+		"modules": {"std": {"init": "none"}, "example.com/shape/nested": {"init": "none"}, "example.com/gone": {"init": "none"}},
 		"packages": {
 			"os": {"default": "fs", "functions": {"NoSuchFunction": "none", "File.NoSuchMethod": "none", "Getenv": "spawn:3"}},
 			"example.com/nowhere": {"default": "none"},
@@ -417,17 +432,10 @@ func TestAClassificationThatNamesNothingRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	universe := map[string]*types.Package{}
-	for _, sp := range l.Prog.AllPackages() {
-		universe[sp.Pkg.Path()] = sp.Pkg
-	}
-	linked := map[string]bool{}
-	for _, mod := range l.ModuleOf {
-		linked[mod] = true
-	}
-	err = class.Validate(universe, linked)
+	err = class.Validate(suiteOf([]*loaded{l}))
 	want := "the classification names what does not exist:\n" +
 		"  cli example.com/shape/selfcli.Missing: example.com/shape/selfcli declares no function Missing; delete the entry\n" +
+		"  cli os.Exit: os is not a package of the suite's modules, whose code alone a walk reads; delete the entry\n" +
 		"  example.com/nothing/...: the suite loads no package it names; delete the entry\n" +
 		"  example.com/nowhere: the suite loads no package it names; delete the entry\n" +
 		"  module example.com/gone: no measured build links a package of it; delete the entry\n" +

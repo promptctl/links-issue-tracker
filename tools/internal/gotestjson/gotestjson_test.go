@@ -79,6 +79,46 @@ func TestReadRefusesMalformedStreams(t *testing.T) {
 	}
 }
 
+func TestReadRefusesAnEventAfterATestsVerdict(t *testing.T) {
+	for _, action := range []string{"output", "pass", "pause"} {
+		t.Run(action, func(t *testing.T) {
+			_, err := Read(stream(
+				`{"Action":"run","Package":"p","Test":"TestA/sub"}`,
+				`{"Action":"pass","Package":"p","Test":"TestA/sub","Elapsed":0}`,
+				`{"Action":"`+action+`","Package":"p","Test":"TestA/sub","Elapsed":0,"Output":"x\n"}`,
+				`{"Action":"pass","Package":"p","Test":"TestA","Elapsed":0}`,
+				`{"Action":"pass","Package":"p","Elapsed":0}`,
+			), &strings.Builder{})
+			want := "test p TestA/sub has its verdict, and a " + action + " event follows it"
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("error = %v, want one containing %q", err, want)
+			}
+		})
+	}
+}
+
+func TestReadReadsAMalformedStreamToItsEndBeforeRefusingIt(t *testing.T) {
+	var out strings.Builder
+	r := stream(
+		`{"Action":"explode","Package":"p"}`,
+		`{"Action":"explode","Package":"q"}`,
+		`{"Action":"run","Package":"p","Test":"TestLater"}`,
+		`{"Action":"output","Package":"p","Test":"TestLater","Output":"later failure\n"}`,
+		`{"Action":"fail","Package":"p","Test":"TestLater","Elapsed":0}`,
+		`{"Action":"fail","Package":"p","Elapsed":0}`,
+	)
+	_, err := Read(r, &out)
+	if err == nil || !strings.Contains(err.Error(), `"Package":"p"}: action "explode"`) {
+		t.Errorf("error = %v, want the first malformed line's", err)
+	}
+	if !strings.Contains(out.String(), "later failure\n") {
+		t.Errorf("replay lacks the failure after the malformed line:\n%s", out.String())
+	}
+	if r.Len() != 0 {
+		t.Errorf("Read left %d bytes of the stream unread", r.Len())
+	}
+}
+
 func TestReadMarksATestWithNoVerdictAtItsPackagesEndUnfinished(t *testing.T) {
 	run, out := read(t,
 		`{"Time":"2026-11-01T10:00:00Z","Action":"run","Package":"p","Test":"TestHangs"}`,

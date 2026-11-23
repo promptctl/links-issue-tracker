@@ -9,7 +9,7 @@ package main
 // walking every function it reaches. This measure needs one reach per test,
 // each over the setup every test of its binary runs first, and it never
 // walks code outside the module, which the classification charges instead.
-// So the state is layered: the binary's layer is the setup's reach, closed
+// So the state is layered: the binary's layer is the setup's reach, finished
 // when the setup walk ends, and each test's walk adds its own layer over it.
 // A walk reads its two layers as one set, and whatever either creates meets
 // every call either has pending.
@@ -23,11 +23,10 @@ import (
 
 // layer is one layer of the RTA state, with what one walk reached.
 type layer struct {
-	// closed: the layer is a binary's, shared by every test walk, and
-	// nothing adds to it.
-	closed bool
-
-	visited   map[*ssa.Function]step
+	visited map[*ssa.Function]step
+	// indirect: each function reached other than by a static call, with
+	// the first such reach, so its parameters may hold anything.
+	indirect  map[*ssa.Function]via
 	origin    map[*ssa.Function]string // the root each function was reached from
 	touches   reached
 	sitesInto map[*ssa.Function][]callSite // static calls into module functions
@@ -50,10 +49,15 @@ type layer struct {
 	dispatcher   *ssa.Function // the first dispatching function reached
 	callbacks    []pendingCallback
 	isCalledBack map[*types.Interface]bool
+}
 
-	// implementers caches, per interface, the runtime types implementing
-	// it, once the layer is closed.
-	implementers typeutil.Map
+// finished is a binary's layer once its setup walk has ended: what every
+// test walk of the binary reads beneath its own. Only a setup walk's finish
+// makes one, and it has no way to be added to, so the implementers it
+// caches per interface stay true.
+type finished struct {
+	layer        *layer
+	implementers typeutil.Map // *types.Interface -> []typeEntry
 }
 
 // funcEntry is an address-taken function, with where it was made.
@@ -98,6 +102,7 @@ type pendingCallback struct {
 func newLayer() *layer {
 	return &layer{
 		visited:      map[*ssa.Function]step{},
+		indirect:     map[*ssa.Function]via{},
 		origin:       map[*ssa.Function]string{},
 		touches:      reached{},
 		sitesInto:    map[*ssa.Function][]callSite{},
@@ -108,11 +113,10 @@ func newLayer() *layer {
 	}
 }
 
-// emptyBinary is the layer under a setup walk: nothing reached before it.
-func emptyBinary() *layer {
-	l := newLayer()
-	l.closed = true
-	return l
+// emptyBinary is the finished layer under a setup walk: nothing reached
+// before it.
+func emptyBinary() *finished {
+	return &finished{layer: newLayer()}
 }
 
 func normalize(sig *types.Signature) *types.Signature {
@@ -142,17 +146,20 @@ func (l *layer) withSignature(sig *types.Signature) []funcEntry {
 }
 
 func (l *layer) implementing(iface *types.Interface) []typeEntry {
-	if cached, ok := l.implementers.At(iface).([]typeEntry); ok {
-		return cached
-	}
 	var out []typeEntry
 	for _, e := range l.runtimeTypes {
 		if types.Implements(e.typ, iface) {
 			out = append(out, e)
 		}
 	}
-	if l.closed {
-		l.implementers.Set(iface, out)
+	return out
+}
+
+func (f *finished) implementing(iface *types.Interface) []typeEntry {
+	if cached, ok := f.implementers.At(iface).([]typeEntry); ok {
+		return cached
 	}
+	out := f.layer.implementing(iface)
+	f.implementers.Set(iface, out)
 	return out
 }

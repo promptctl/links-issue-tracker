@@ -1,20 +1,20 @@
 package lifecycle
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
-	"maps"
+	"go/types"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
 // An ActionName is a string type, so `%s` interpolates it silently and renders
@@ -23,41 +23,105 @@ import (
 // eight actions, so a wrong site reads correctly almost always and is found by a
 // reader holding a command that does not exist.
 //
-// Treating Go source as text fails open: a scan of one physical line cannot see
-// a call wrapped across lines, and balancing parentheses over raw bytes lets a
-// `)` inside a format string close the call early, so every argument after it
-// goes unexamined — `fmt.Sprintf("cannot :) %s", e.Action)` passes. So this
-// file asks go/parser where the calls and their arguments actually are.
-// [LAW:parse-dont-validate]
+// The gate asks go/types, not the source text, which expressions are
+// ActionNames: a name match cannot see an ActionName held by a local made with
+// `:=` or returned by a call, and flags every unrelated field that happens to
+// share a bearer's name (go test's JSON `Action`, a string). Every package of
+// the module is type-checked and examined; none is skipped for not importing
+// this one, since a package that never names the type can still be handed a
+// value of it. [LAW:parse-dont-validate]
 //
-// THE RULE, which has no exceptions. An expression that produces an ActionName
-// may reach a formatting call only as:
+// THE RULE, which has no exceptions. An expression whose type is ActionName
+// may reach an argument of a formatting call only as:
 //
 //   - `x.Verb()`, the word the caller typed; or
 //   - `string(x)`, written out to say the persisted encoding is meant here.
 //
 // Anything else is a site to look at. Every argument of every fmt call is
-// examined, not the first match, so mixing the two in one call is caught.
+// examined, and every expression inside it, so mixing the two in one call, or
+// wrapping an ActionName in another expression (`any(x)`), is caught.
 //
 // WHAT IT DOES NOT COVER, in full, because an incomplete account of a gate's
 // blind spots is the same defect as a gate that overclaims:
 //
 //   - String building outside fmt. `lit bulk <verb>` builds its usage line by
-//     concatenation. Widening the rule to all expressions was measured, not
-//     assumed: it flags 82 sites, nearly all unrelated fields named Action, and
-//     a gate that cries wolf 82 times gets switched off. That site is pinned
-//     behaviorally by TestBulkUsageNamesTheTypedVerb instead.
-//   - An ActionName reached through a name no declaration introduces: assigned
-//     to a local by `:=`, or returned through an interface. Declared locals,
-//     parameters, struct fields and package vars are all covered, and a
-//     function literal's own parameters count as declared: it is a declaration
-//     site like any other.
+//     concatenation; that site is pinned behaviorally by
+//     TestBulkUsageNamesTheTypedVerb instead.
+//   - An ActionName stored into an interface value before the call that
+//     formats it (`var v any = x; fmt.Sprint(v)`): at the call, its type is
+//     the interface's.
+//   - Files the module's default build does not compile: other build tags,
+//     other GOOS, and test files.
 
 // formatters are the fmt functions whose output a caller can read.
 var formatters = map[string]bool{
 	"Errorf": true, "Sprintf": true, "Fprintf": true, "Printf": true,
 	"Sprint": true, "Fprint": true, "Print": true,
 	"Sprintln": true, "Fprintln": true, "Println": true,
+}
+
+// isActionName reports whether t is this package's ActionName, through any
+// alias of it (model.ActionName). The package's path is read off the type
+// itself, so the gate cannot drift from the type it protects.
+func isActionName(t types.Type) bool {
+	want := reflect.TypeFor[ActionName]()
+	n, ok := types.Unalias(t).(*types.Named)
+	return ok && n.Obj().Pkg() != nil && n.Obj().Pkg().Path() == want.PkgPath() && n.Obj().Name() == want.Name()
+}
+
+// formattedActionNames applies the rule to files, whose types info holds. It
+// returns each argument that breaks it, by position, and how many arguments
+// carry an ActionName the allowed way.
+func formattedActionNames(fset *token.FileSet, files []*ast.File, info *types.Info) (bad []string, allowed int) {
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			fn, ok := info.Uses[sel.Sel].(*types.Func)
+			if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "fmt" || !formatters[fn.Name()] {
+				return true
+			}
+			for _, arg := range call.Args {
+				ast.Inspect(arg, func(n ast.Node) bool {
+					e, ok := n.(ast.Expr)
+					if !ok {
+						return true
+					}
+					if verbOrString(e, info) {
+						allowed++
+						return false
+					}
+					if isActionName(info.TypeOf(e)) {
+						bad = append(bad, fmt.Sprintf("%s: argument to fmt.%s", fset.Position(e.Pos()), fn.Name()))
+						return false
+					}
+					return true
+				})
+			}
+			return true
+		})
+	}
+	return bad, allowed
+}
+
+// verbOrString reports whether e is one of the rule's two allowed shapes.
+func verbOrString(e ast.Expr, info *types.Info) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) > 1 {
+		return false
+	}
+	if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Verb" && len(call.Args) == 0 {
+		return isActionName(info.TypeOf(sel.X))
+	}
+	tv, ok := info.Types[call.Fun]
+	return ok && tv.IsType() && len(call.Args) == 1 &&
+		types.Identical(tv.Type, types.Typ[types.String]) && isActionName(info.TypeOf(call.Args[0]))
 }
 
 func repoRootForVerbTest(t *testing.T) string {
@@ -78,458 +142,103 @@ func repoRootForVerbTest(t *testing.T) string {
 	}
 }
 
-// parsedTree returns every non-test Go file git can see, tracked or newly
-// added, parsed. It fails rather than returning an empty set: a scanner handed
-// nothing to scan reports success, which is indistinguishable from one that
-// found nothing wrong. [LAW:no-silent-failure]
-//
-// --others is not thoroughness for its own sake. A bare ls-files scans only
-// what is already committed, so a brand-new file holding a brand-new site is
-// invisible until it is staged -- and the window in which the author is writing
-// that site is the whole reason this gate exists. CI sees only committed files
-// either way, so this changes nothing about what can merge; it changes when the
-// author hears about it.
-// --exclude-standard keeps ignored files out.
-func parsedTree(t *testing.T) (*token.FileSet, map[string]*ast.File) {
-	t.Helper()
-	root := repoRootForVerbTest(t)
-	out, err := exec.Command("git", "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "*.go").Output()
-	if err != nil {
-		t.Fatalf("git ls-files in %s: %v", root, err)
-	}
-	fset := token.NewFileSet()
-	files := map[string]*ast.File{}
-	for _, rel := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") {
-			continue
-		}
-		f, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
-		if err != nil {
-			// A tracked source file that will not parse is a real fault, not
-			// something to skip past.
-			t.Fatalf("parsing %s: %v", rel, err)
-		}
-		files[rel] = f
-	}
-	if len(files) == 0 {
-		t.Fatal("no non-test Go files parsed — this scan would pass over an empty set")
-	}
-	return fset, files
-}
-
-// filesThatCanHoldAnActionName narrows the gate to the files whose package can
-// hold an ActionName at all. A package's static types come only from what it
-// imports, transitively, so a package that neither declares ActionName nor
-// depends on the package that does cannot produce one, and a field there that
-// shares a bearer's name (go test's JSON `Action`, a string) is somebody else's.
-// The narrowing is by package, as `go list` builds them: a file no listed
-// package compiles (another module, another build tag) stays in, so what the
-// gate cannot place it still examines. [LAW:no-silent-failure]
-func filesThatCanHoldAnActionName(t *testing.T, files map[string]*ast.File) map[string]*ast.File {
-	t.Helper()
-	declaring := ""
-	for rel, f := range files {
-		for _, decl := range f.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok || gd.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range gd.Specs {
-				if ts := spec.(*ast.TypeSpec); ts.Name.Name == "ActionName" && !ts.Assign.IsValid() {
-					declaring = filepath.Dir(rel)
-				}
-			}
-		}
-	}
-	if declaring == "" {
-		t.Fatal("no file declares type ActionName; the gate cannot tell which packages can hold one")
-	}
-	root := repoRootForVerbTest(t)
-	cmd := exec.Command("go", "list", "-e", "-json=Dir,ImportPath,Deps,GoFiles,CgoFiles", "./...")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list in %s: %v", root, err)
-	}
-	type listed struct {
-		Dir, ImportPath         string
-		Deps, GoFiles, CgoFiles []string
-	}
-	var pkgs []listed
-	declaringPath := ""
-	dec := json.NewDecoder(bytes.NewReader(out))
-	for dec.More() {
-		var p listed
-		if err := dec.Decode(&p); err != nil {
-			t.Fatalf("decoding go list: %v", err)
-		}
-		rel, err := filepath.Rel(root, p.Dir)
-		if err != nil {
-			t.Fatalf("go list named %s, outside %s: %v", p.Dir, root, err)
-		}
-		p.Dir = rel
-		if rel == declaring {
-			declaringPath = p.ImportPath
-		}
-		pkgs = append(pkgs, p)
-	}
-	if declaringPath == "" {
-		t.Fatalf("go list lists no package in %s, which declares ActionName", declaring)
-	}
-	examined := maps.Clone(files)
-	for _, p := range pkgs {
-		if p.ImportPath == declaringPath || slices.Contains(p.Deps, declaringPath) {
-			continue
-		}
-		for _, name := range append(p.GoFiles, p.CgoFiles...) {
-			delete(examined, filepath.Join(p.Dir, name))
-		}
-	}
-	return examined
-}
-
-// typeName renders the type of a declaration as its final identifier, so both
-// `ActionName` and `model.ActionName` answer to the same name.
-func typeName(e ast.Expr) string {
-	switch t := e.(type) {
-	case *ast.Ident:
-		return t.Name
-	case *ast.SelectorExpr:
-		return t.Sel.Name
-	case *ast.StarExpr:
-		return typeName(t.X)
-	}
-	return ""
-}
-
-// bearerNames collects the names an ActionName is reached through, kept in
-// three sets because they are matched differently, and a scanner that fires on
-// unrelated code is a scanner that gets deleted.
-//
-//   - fields: struct fields typed ActionName, matched only as `x.<name>`.
-//   - locals: parameters, results, receivers and vars typed ActionName, matched
-//     as a bare identifier WITHIN THE FUNCTION THAT DECLARES THEM. This is what
-//     makes a parameter visible. The scoping is not fastidiousness: a bare
-//     identifier's type is unknowable without go/types, and `n` is a parameter
-//     name throughout this repository, so matching it package-wide would flag
-//     `humanBytes(n int64)`.
-//   - consts: package-level constants typed ActionName, matched anywhere, since
-//     a constant's name is unique in its package.
-//   - values: names declared as an Action, whose `.Name()` produces one.
-//
-// Receivers are collected like any other declaration. What keeps the bare
-// receiver `n` from matching `n.name` in unrelated code lives in the walk
-// below: a selector that is NOT itself a bearer is not descended into, so its
-// receiver is never examined on its own. Excluding receiver names instead would
-// blind the gate to any parameter sharing the name.
-func bearerNames(files map[string]*ast.File) (fields, locals, values []string) {
-	fs, ls, vs := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	add := func(into map[string]bool, names []*ast.Ident, typ ast.Expr) {
-		switch typeName(typ) {
-		case "ActionName":
-			for _, n := range names {
-				into[n.Name] = true
-			}
-		case "Action", "StatusAction", "RetentionAction":
-			for _, n := range names {
-				vs[n.Name] = true
-			}
-		}
-	}
-	for _, f := range files {
-		ast.Inspect(f, func(n ast.Node) bool {
-			switch d := n.(type) {
-			case *ast.StructType:
-				for _, fld := range d.Fields.List {
-					add(fs, fld.Names, fld.Type)
-				}
-			case *ast.FuncDecl:
-				if d.Recv != nil {
-					for _, fld := range d.Recv.List {
-						add(ls, fld.Names, fld.Type)
-					}
-				}
-			case *ast.FuncType:
-				for _, grp := range []*ast.FieldList{d.Params, d.Results} {
-					if grp == nil {
-						continue
-					}
-					for _, fld := range grp.List {
-						add(ls, fld.Names, fld.Type)
-					}
-				}
-			case *ast.ValueSpec:
-				add(ls, d.Names, d.Type)
-			}
-			return true
-		})
-	}
-	for n := range fs {
-		fields = append(fields, n)
-	}
-	for n := range ls {
-		locals = append(locals, n)
-	}
-	for n := range vs {
-		values = append(values, n)
-	}
-	sort.Strings(fields)
-	sort.Strings(locals)
-	sort.Strings(values)
-	return fields, locals, values
-}
-
-// producesActionName reports whether e reaches an ActionName: a selector ending
-// in a field typed ActionName (`w.action`), or Name() called on a value declared
-// as an Action (`action.Name()`, and equally `w.action.Name()`).
-func producesActionName(e ast.Expr, fields, locals, values map[string]bool) bool {
-	switch x := e.(type) {
-	case *ast.SelectorExpr:
-		return fields[x.Sel.Name]
-	case *ast.Ident:
-		return locals[x.Name]
-	case *ast.CallExpr:
-		sel, ok := x.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Name" {
-			return false
-		}
-		// The receiver is whatever denotes the Action, and it is a field as
-		// often as it is a bare name: an action stashed at a plan site and read
-		// back at the write site is such a shape, and requiring a bare
-		// identifier here would let exactly that shape past.
-		// [LAW:dataflow-not-control-flow] the question is where the value came
-		// from, not how the call happens to be spelled.
-		switch recv := sel.X.(type) {
-		case *ast.Ident:
-			return values[recv.Name]
-		case *ast.SelectorExpr:
-			return values[recv.Sel.Name]
-		}
-		return false
-	}
-	return false
-}
-
-// argIsAllowed applies the rule to one argument of one fmt call.
-func argIsAllowed(e ast.Expr, fields, locals, values map[string]bool) (allowed, relevant bool) {
-	if call, ok := e.(*ast.CallExpr); ok {
-		// `x.Verb()` — the word the caller typed.
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Verb" {
-			if producesActionName(sel.X, fields, locals, values) {
-				return true, true
-			}
-		}
-		// `string(x)` — the persisted encoding, said out loud.
-		if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "string" && len(call.Args) == 1 {
-			if producesActionName(call.Args[0], fields, locals, values) {
-				return true, true
-			}
-		}
-	}
-	found := false
-	ast.Inspect(e, func(n ast.Node) bool {
-		if n == nil || found {
-			return false
-		}
-		ex, ok := n.(ast.Expr)
-		if !ok {
-			return true
-		}
-		if producesActionName(ex, fields, locals, values) {
-			found = true
-			return false
-		}
-		// A selector that is not itself a bearer is somebody else's field, and
-		// its receiver is not under discussion: descending into `n.name` to find
-		// a bare `n` would flag `n.license`.
-		if _, isSel := ex.(*ast.SelectorExpr); isSel {
-			return false
-		}
-		return true
-	})
-	return !found, found
-}
-
-// scopedLocals returns, for one file, the byte ranges of each function together
-// with the ActionName-typed names declared inside it.
-type localScope struct {
-	start, end token.Pos
-	names      map[string]bool
-}
-
-func scopedLocals(f *ast.File) []localScope {
-	var out []localScope
-	// The one place that says which ActionName-typed names a function-like node
-	// introduces, so a named function and a literal cannot answer it
-	// differently. [LAW:one-source-of-truth]
-	declared := func(lists ...*ast.FieldList) map[string]bool {
-		names := map[string]bool{}
-		for _, list := range lists {
-			if list == nil {
-				continue
-			}
-			for _, fld := range list.List {
-				if typeName(fld.Type) != "ActionName" {
-					continue
-				}
-				for _, nm := range fld.Names {
-					names[nm.Name] = true
-				}
-			}
-		}
-		return names
-	}
-	add := func(n ast.Node, names map[string]bool) {
-		if len(names) > 0 {
-			out = append(out, localScope{n.Pos(), n.End(), names})
-		}
-	}
-	// Walk the whole file rather than its top-level declarations: a function
-	// literal is a declaration site too, and one can sit in a package-level var
-	// where no FuncDecl encloses it at all. internal/cli is built largely out of
-	// closure factories, so that is where the next site of this class is likeliest
-	// to appear. A literal's scope nests inside its enclosing function's, and
-	// overlapping scopes only ever widen what is examined.
-	ast.Inspect(f, func(n ast.Node) bool {
-		switch fn := n.(type) {
-		case *ast.FuncDecl:
-			var names map[string]bool
-			if fn.Type != nil {
-				names = declared(fn.Recv, fn.Type.Params, fn.Type.Results)
-			} else {
-				names = declared(fn.Recv)
-			}
-			ast.Inspect(fn, func(m ast.Node) bool {
-				if vs, ok := m.(*ast.ValueSpec); ok && typeName(vs.Type) == "ActionName" {
-					for _, nm := range vs.Names {
-						names[nm.Name] = true
-					}
-				}
-				return true
-			})
-			add(fn, names)
-		case *ast.FuncLit:
-			add(fn, declared(fn.Type.Params, fn.Type.Results))
-		}
-		return true
-	})
-	return out
-}
-
 func TestNoActionNameReachesAMessageAsItsPersistedEncoding(t *testing.T) {
-	fset, files := parsedTree(t)
-	fieldDecls, _, valueDecls := bearerNames(files)
-	if len(fieldDecls) == 0 || len(valueDecls) == 0 {
-		t.Fatalf("derived %d ActionName fields and %d Action values; with neither, this test checks nothing", len(fieldDecls), len(valueDecls))
+	root := repoRootForVerbTest(t)
+	pkgs, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		Dir:  root,
+	}, "./...")
+	if err != nil {
+		t.Fatalf("loading the module's packages: %v", err)
 	}
-	fields, values := map[string]bool{}, map[string]bool{}
-	for _, n := range fieldDecls {
-		fields[n] = true
-	}
-	for _, n := range valueDecls {
-		values[n] = true
-	}
-	// Package-level constants typed ActionName: unique names, matched anywhere.
-	consts := map[string]bool{}
-	for _, f := range files {
-		for _, decl := range f.Decls {
-			gd, ok := decl.(*ast.GenDecl)
-			if !ok {
-				continue
-			}
-			for _, spec := range gd.Specs {
-				if vs, ok := spec.(*ast.ValueSpec); ok && typeName(vs.Type) == "ActionName" {
-					for _, nm := range vs.Names {
-						consts[nm.Name] = true
-					}
-				}
-			}
+	// A package that did not type-check is one the gate cannot see into: it
+	// fails, rather than passing over it. [LAW:no-silent-failure]
+	var loadErrs []string
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		for _, e := range p.Errors {
+			loadErrs = append(loadErrs, e.Error())
 		}
+	})
+	if len(loadErrs) > 0 {
+		t.Fatalf("the module did not type-check, so the gate cannot examine it:\n  %s", strings.Join(loadErrs, "\n  "))
 	}
-	bad := []string{}
-	for rel, f := range filesThatCanHoldAnActionName(t, files) {
-		scopes := scopedLocals(f)
-		ast.Inspect(f, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
+	var bad []string
+	allowed := 0
+	for _, p := range pkgs {
+		b, a := formattedActionNames(p.Fset, p.Syntax, p.TypesInfo)
+		for _, s := range b {
+			if rel, err := filepath.Rel(root, s); err == nil {
+				s = rel
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel == nil || !formatters[sel.Sel.Name] {
-				return true
-			}
-			if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "fmt" {
-				return true
-			}
-			locals := map[string]bool{}
-			for k := range consts {
-				locals[k] = true
-			}
-			for _, sc := range scopes {
-				if call.Pos() >= sc.start && call.Pos() < sc.end {
-					for k := range sc.names {
-						locals[k] = true
-					}
-				}
-			}
-			for _, arg := range call.Args {
-				allowed, relevant := argIsAllowed(arg, fields, locals, values)
-				if relevant && !allowed {
-					pos := fset.Position(arg.Pos())
-					bad = append(bad, fmt.Sprintf("%s:%d: argument to fmt.%s", rel, pos.Line, sel.Sel.Name))
-				}
-			}
-			return true
-		})
+			bad = append(bad, s)
+		}
+		allowed += a
 	}
+	// A gate that found no ActionName at any formatting call is not looking
+	// where they are: the tree formats verbs, so it must see them.
+	if allowed == 0 {
+		t.Fatalf("type-checked %d packages and found no ActionName formatted the allowed way; the gate examines nothing", len(pkgs))
+	}
+	slices.Sort(bad)
 	if len(bad) > 0 {
 		t.Fatalf("an action's persisted event encoding reaches a message a caller reads.\nUse x.Verb() for the word the caller typed, or write string(x) to say the persisted encoding is meant:\n  %s", strings.Join(bad, "\n  "))
 	}
 }
 
-// TestActionNameSpellingsAreAccountedFor keeps the gate honest. It derives what
-// it scans for, but a derivation is still a claim about the tree, and the claim
-// is that these are ALL the names an ActionName is reached through. Pinning the
-// sets means a new one fails here and sends someone to re-read the rule, rather
-// than quietly widening the set the scan never looks at.
-func TestActionNameSpellingsAreAccountedFor(t *testing.T) {
-	_, files := parsedTree(t)
-	fields, _, values := bearerNames(files)
-	// The scoped locals are recomputed the way the GATE computes them, not the
-	// way a sibling helper happens to. A tripwire that guards a different
-	// derivation from the one the gate reads guards nothing.
-	scoped := map[string]bool{}
-	for _, f := range files {
-		for _, sc := range scopedLocals(f) {
-			for n := range sc.names {
-				scoped[n] = true
-			}
-		}
-	}
-	got := []string{}
-	for n := range scoped {
-		got = append(got, n)
-	}
-	sort.Strings(got)
+// TestTheGateCatchesEveryShapeOfAFormattedActionName plants each shape the
+// rule names in a package that imports this one, and requires the gate to
+// flag exactly the ones it forbids.
+func TestTheGateCatchesEveryShapeOfAFormattedActionName(t *testing.T) {
+	const src = `package probe
 
-	// ContainerActionError.Action, and the status and retention writers in the
-	// Dolt store, whose fields are both named `action`.
-	wantFields := []string{"Action", "action"}
-	// The parameter every Apply and plan path names its action; FrozenIssueError's
-	// Thaw, the retention action its refusal names; and the conformance case's
-	// freeze, the retention action that puts an issue out of the flow.
-	wantValues := []string{"Action", "Thaw", "action", "freeze"}
-	// Verb()'s own receiver; claims.Establishes' name, the action an event
-	// records; and the hold gate's crossingOf verb, the verb it words a
-	// takeover for.
-	wantScoped := []string{"n", "name", "verb"}
+import (
+	"fmt"
+	f "fmt"
 
-	check := func(what string, got, want []string) {
-		if strings.Join(got, ",") != strings.Join(want, ",") {
-			t.Errorf("%s = %v, want %v -- a surprise here is either a real new spelling to add, or a derivation matching something that is not a declaration; both need reading before this gate can be trusted", what, got, want)
-		}
+	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
+)
+
+type event struct{ Action lifecycle.ActionName }
+
+func name() lifecycle.ActionName { return "" }
+
+func sites(e event, n lifecycle.ActionName) {
+	local := n
+	_ = fmt.Sprintf("%s", e.Action)            // bad: a field
+	_ = fmt.Sprintf("%s %s", n.Verb(), n)      // bad: the second
+	_ = fmt.Errorf("cannot :) %s", local)      // bad: a := local
+	_ = fmt.Sprint(name())                     // bad: a call's result
+	_ = fmt.Sprintf("%v", any(e.Action))       // bad: through any
+	_ = f.Sprintf("%s",
+		n)                                     // bad: an aliased fmt, wrapped
+	_ = fmt.Sprintf("%s", n.Verb())            // allowed
+	_ = fmt.Sprintf("%s", string(e.Action))    // allowed
+	_ = fmt.Sprintf("%s", "unrelated")         // nothing
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "probe.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	check("struct fields typed ActionName", fields, wantFields)
-	check("values typed Action", values, wantValues)
-	check("function-scoped locals typed ActionName", got, wantScoped)
+	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}}
+	conf := types.Config{Importer: importer.ForCompiler(fset, "source", nil)}
+	if _, err := conf.Check("example.com/probe", fset, []*ast.File{file}, info); err != nil {
+		t.Fatal(err)
+	}
+	bad, allowed := formattedActionNames(fset, []*ast.File{file}, info)
+	var lines []int
+	for _, b := range bad {
+		var line, col int
+		if _, err := fmt.Sscanf(strings.TrimPrefix(b, "probe.go:"), "%d:%d", &line, &col); err != nil {
+			t.Fatalf("unreadable position in %q: %v", b, err)
+		}
+		lines = append(lines, line)
+	}
+	if want := []int{16, 17, 18, 19, 20, 22}; !slices.Equal(lines, want) {
+		t.Errorf("flagged lines %v, want %v:\n  %s", lines, want, strings.Join(bad, "\n  "))
+	}
+	if allowed != 3 {
+		t.Errorf("allowed %d arguments, want 3 (n.Verb() twice, string(e.Action) once)", allowed)
+	}
 }
