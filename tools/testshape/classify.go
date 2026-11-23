@@ -143,8 +143,18 @@ type classificationFile struct {
 	CLI []string `json:"cli"`
 	// Git names the programs that are git, matched against a spawned
 	// program's name or the last element of its path.
-	Git      []string                     `json:"git"`
+	Git []string `json:"git"`
+	// Modules classifies each module the measured builds link a package of,
+	// by what its packages' initializers can do: every one must have an
+	// entry, so a dependency added later cannot bring an initializer in
+	// unseen. "std" is the standard library.
+	Modules  map[string]moduleClassEntry  `json:"modules"`
 	Packages map[string]packageClassEntry `json:"packages"`
+}
+
+type moduleClassEntry struct {
+	Note string `json:"note,omitempty"`
+	Init string `json:"init"`
 }
 
 type packageClassEntry struct {
@@ -159,6 +169,7 @@ type packageClassEntry struct {
 type Classification struct {
 	cli      map[funcName]bool
 	git      []string
+	modules  map[string]Call         // each module's initializers, by module path
 	packages map[string]packageClass // by import path, or a path prefix ending "/..."
 }
 
@@ -192,7 +203,18 @@ func parseClassification(data []byte) (*Classification, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("classification file: %w", err)
 	}
-	c := &Classification{cli: map[funcName]bool{}, git: f.Git, packages: map[string]packageClass{}}
+	c := &Classification{cli: map[funcName]bool{}, git: f.Git, modules: map[string]Call{}, packages: map[string]packageClass{}}
+	for path, e := range f.Modules {
+		cl, err := parseClass(e.Init)
+		if err != nil {
+			return nil, fmt.Errorf("classification file: module %s: %w", path, err)
+		}
+		call, ok := cl.(Call)
+		if !ok {
+			return nil, fmt.Errorf("classification file: module %s: spawn:field names a field, never an initializer", path)
+		}
+		c.modules[path] = call
+	}
 	for _, s := range f.CLI {
 		n, err := parseCLIName(s)
 		if err != nil {
@@ -267,6 +289,22 @@ func (c *Classification) Lookup(pkg, key string) knowledge {
 	return pc.def
 }
 
+// initOf is what the classification knows of the initializer of the outside
+// package at pkg, of module mod: its package's own init entry, else its
+// module's, else nothing. A package's default classifies what the package's
+// functions do when called, not what its initializer does.
+func (c *Classification) initOf(pkg, mod string) knowledge {
+	if pc, ok := c.packageFor(pkg); ok {
+		if cl, ok := pc.functions["init"]; ok {
+			return cl
+		}
+	}
+	if cl, ok := c.modules[mod]; ok {
+		return cl
+	}
+	return unclassified{}
+}
+
 // fieldSpawn reports whether storing into field of the named type at pkg
 // spawns a program.
 func (c *Classification) fieldSpawn(pkg, typ, field string) bool {
@@ -324,14 +362,25 @@ func lookupInterface(s string, pkgOf func(path string) *types.Package) (*types.I
 const builtin = "builtin"
 
 // Validate checks every name in the classification against the packages the
-// suite loads, universe, and refuses each that resolves to nothing — a
-// package the suite does not load, a pattern that covers none, a function,
-// type, method or field no package it covers declares — and each spawn
-// argument past its function's parameters. [LAW:no-silent-failure] an entry
-// that names nothing classifies nothing, silently; it is dead, and the
-// refusal says to delete it.
-func (c *Classification) Validate(universe map[string]*types.Package) error {
+// suite loads, universe, and the modules the measured builds link packages
+// of, linked. It refuses each entry that resolves to nothing — a package the
+// suite does not load, a pattern that covers none, a function, type, method
+// or field no package it covers declares, a module no build links — and each
+// spawn argument past its function's parameters; and each linked module with
+// no entry. [LAW:no-silent-failure] an entry that names nothing classifies
+// nothing, silently; it is dead, and the refusal says to delete it.
+func (c *Classification) Validate(universe map[string]*types.Package, linked map[string]bool) error {
 	var problems []string
+	for mod := range c.modules {
+		if !linked[mod] {
+			problems = append(problems, fmt.Sprintf("module %s: no measured build links a package of it; delete the entry", mod))
+		}
+	}
+	for mod := range linked {
+		if _, ok := c.modules[mod]; !ok {
+			problems = append(problems, fmt.Sprintf("module %s: a measured build links its packages, and the classification has no entry for it", mod))
+		}
+	}
 	for path, pc := range c.packages {
 		scopes := scopesOf(path, universe)
 		if len(scopes) == 0 {

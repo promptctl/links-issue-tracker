@@ -92,6 +92,60 @@ func (a *analyzer) structureOf(t types.Type) *structure {
 	return s
 }
 
+// carried is every function signature a call of sig can be handed: each
+// function type in the structure of its receiver and parameters (fields,
+// elements, pointees), and each method of each interface there. It is
+// derived from types alone: a function stored in a field and handed over
+// inside a struct is carried as surely as one passed directly.
+func (a *analyzer) carried(sig *types.Signature) []*types.Signature {
+	if sigs, ok := a.carriedBy.At(sig).([]*types.Signature); ok {
+		return sigs
+	}
+	sigs := []*types.Signature{}
+	var seen typeutil.Map
+	var visit func(types.Type)
+	visit = func(t types.Type) {
+		t = types.Unalias(t)
+		if seen.At(t) != nil {
+			return
+		}
+		seen.Set(t, true)
+		switch u := t.(type) {
+		case *types.Named:
+			visit(u.Underlying())
+		case *types.Pointer:
+			visit(u.Elem())
+		case *types.Slice:
+			visit(u.Elem())
+		case *types.Array:
+			visit(u.Elem())
+		case *types.Chan:
+			visit(u.Elem())
+		case *types.Map:
+			visit(u.Key())
+			visit(u.Elem())
+		case *types.Struct:
+			for i := range u.NumFields() {
+				visit(u.Field(i).Type())
+			}
+		case *types.Signature:
+			sigs = append(sigs, u)
+		case *types.Interface:
+			for i := range u.NumMethods() {
+				sigs = append(sigs, u.Method(i).Signature())
+			}
+		}
+	}
+	if recv := sig.Recv(); recv != nil {
+		visit(recv.Type())
+	}
+	for i := range sig.Params().Len() {
+		visit(sig.Params().At(i).Type())
+	}
+	a.carriedBy.Set(sig, sigs)
+	return sigs
+}
+
 // methodsOf is every method of a concrete type, value and pointer receivers
 // alike, promoted ones included.
 func (a *analyzer) methodsOf(t types.Type) []*ssa.Function {

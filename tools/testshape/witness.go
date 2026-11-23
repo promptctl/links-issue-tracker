@@ -26,7 +26,7 @@ type staticCall struct{}
 type converting struct{ typ types.Type }
 
 // throughFunc is a reach through an address-taken function of the RTA
-// state; how is what reached it ("dynamic call", "call into outside code",
+// state; how is what reached it ("dynamic call", "call into testing.T.Run",
 // "dispatch").
 type throughFunc struct {
 	how   string

@@ -22,13 +22,12 @@ type callSite struct {
 	common *ssa.CallCommon
 }
 
-// dynamicCall is a call of a function value of signature sig, which can
-// call any address-taken function of it. A function value handed to code
-// that is not module code's to walk is such a call too, since that code may
-// call it (t.Run, sort.Slice): how says which.
+// dynamicCall is a call that can call any address-taken function of
+// signature sig: a call of a function value, or a call into outside code
+// whose parameters can carry one; how says which.
 type dynamicCall struct {
 	sig *types.Signature
-	how string // "dynamic call", or "call into outside code"
+	how string
 }
 
 // conversion is a value of a concrete type made into an interface value.
@@ -78,15 +77,6 @@ func (a *analyzer) summary(fn *ssa.Function) *summary {
 					callee = &common.Value
 				case !builtin:
 					s.dynamic = append(s.dynamic, dynamicCall{common.Signature(), "dynamic call"})
-				}
-				// A module function's own body decides what it does with
-				// a function value; a builtin (append) only stores it.
-				if sc := common.StaticCallee(); !builtin && (sc == nil || !a.walked(sc)) {
-					for _, arg := range common.Args {
-						if sig, ok := arg.Type().Underlying().(*types.Signature); ok {
-							s.dynamic = append(s.dynamic, dynamicCall{sig, "call into outside code"})
-						}
-					}
 				}
 			}
 			for _, op := range instr.Operands(nil) {

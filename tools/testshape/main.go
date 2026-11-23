@@ -49,10 +49,14 @@
 //     and interface call of both.
 //   - A static call reaches its callee. A function taken as a value is
 //     address-taken, and taking it runs nothing: a dynamic call reaches every
-//     address-taken function of its signature, and a function value handed
-//     to code the walk does not follow into (t.Run, sort.Slice, an interface
-//     call) is such a call, since that code may call it. A value with no use
-//     creates nothing, so `var _ I = (*T)(nil)` makes no method reachable.
+//     address-taken function of its signature. So does a call of an outside
+//     function or interface method whose receiver or parameters can carry
+//     that signature, decided by their types alone: a function type in their
+//     structure (fields, elements, pointees), or a method of an interface
+//     there. A function stored in a field of a struct handed to outside code
+//     (`&cobra.Command{RunE: f}`) is reached as surely as one passed
+//     directly. A value with no use creates nothing, so `var _ I = (*T)(nil)`
+//     makes no method reachable.
 //   - Converting a module type to an interface makes reachable every method
 //     of it and of every module type reachable from its structure (fields,
 //     elements, pointees), since fmt and encoding/json call them by
@@ -69,15 +73,19 @@
 //     call of an outside method, charged by its classification; the runtime
 //     module types implementing it are reached as well.
 //   - Code outside the module is never walked. Every outside function module
-//     code reaches is classified in classification.json, an outside
-//     package's initializer as "init": the touches it can make, none,
+//     code reaches is classified in classification.json: the touches it can
+//     make, none,
 //     dispatching — it calls back what was registered with it or handed to
 //     it (a command tree's Execute, a server, a database driver), so a call
 //     reaches every address-taken function and every method of every
 //     runtime module type — or the interfaces it calls back on what it is
 //     handed (fmt calls a fmt.Stringer's String), each outside type's method
-//     charged by its own classification. What an outside function does with a value it is
-//     handed is that function's own classification.
+//     charged by its own classification.
+//   - An outside package's initializer is classified by its module's entry,
+//     which every module the measured builds link a package of must have
+//     ("std" for the standard library), so a dependency added later cannot
+//     bring an initializer in unread; a package's "init" entry overrides
+//     its module's.
 //   - A spawn's program is the one value followed: through parameters (at the
 //     static calls in the test's reach) and closure bindings to a constant,
 //     os.Executable(), os.Args[0], or exec.LookPath of a constant. It is git
@@ -96,7 +104,9 @@
 //     go.mod outside testdata, as ./... walks); a package whose test binary
 //     declares tests and that the stream has no result for.
 //   - The classification: an entry naming a package or member the suite does
-//     not load (delete it), or a spawn argument its function does not have.
+//     not load, or a module no measured build links (delete it); a module a
+//     measured build links with no entry; a spawn argument its function does
+//     not have.
 //     These stop the run before any measuring.
 //   - The analysis: an outside function module code reaches with no
 //     classification, with its first caller; a module function with no Go
@@ -211,19 +221,23 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 	refusals := append(streamRefusals(stream), strayRefusals(mods, stream)...)
 	loads := make([]*loaded, len(mods))
 	universe := map[string]*types.Package{}
+	linked := map[string]bool{}
 	for i, m := range mods {
 		l, err := loadModule(m, buildFlags)
 		if err != nil {
 			return nil, nil, err
 		}
 		loads[i] = l
+		for _, mod := range l.ModuleOf {
+			linked[mod] = true
+		}
 		for _, sp := range l.Prog.AllPackages() {
 			if universe[sp.Pkg.Path()] == nil {
 				universe[sp.Pkg.Path()] = sp.Pkg
 			}
 		}
 	}
-	if err := class.Validate(universe); err != nil {
+	if err := class.Validate(universe, linked); err != nil {
 		return nil, append(refusals, err.Error()), nil
 	}
 
@@ -235,7 +249,7 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 	for i, l := range loads {
 		owned := func(path string) bool { return moduleIndex(mods, path) == i }
 		refusals = append(refusals, absentRefusals(l.Binaries, inStream, owned)...)
-		a := newAnalyzer(l.Prog, l.Module, class)
+		a := newAnalyzer(l, class)
 		for _, path := range sortedKeys(l.Binaries) {
 			p, ok := inStream[path]
 			if !ok {

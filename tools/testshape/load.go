@@ -97,6 +97,9 @@ type loaded struct {
 	Module   module
 	Prog     *ssa.Program
 	Binaries map[string]*binary // by the import path of the package under test
+	// ModuleOf is the module of each outside package the build links, by
+	// import path: "std" for the standard library.
+	ModuleOf map[string]string
 }
 
 // listedPackage is the subset of `go list -json` this loader reads.
@@ -206,8 +209,15 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	}
 	prog.Build()
 
-	l := &loaded{Module: m, Prog: prog, Binaries: map[string]*binary{}}
+	l := &loaded{Module: m, Prog: prog, Binaries: map[string]*binary{}, ModuleOf: map[string]string{}}
 	for _, p := range listed {
+		switch {
+		case p.isTestMain():
+		case p.Module == nil:
+			l.ModuleOf[p.path()] = "std"
+		case p.Module.Path != m.Path:
+			l.ModuleOf[p.path()] = p.Module.Path
+		}
 		if p.isTestMain() {
 			b := ld.newBinary(prog, p, ssaByID)
 			l.Binaries[b.ImportPath] = b

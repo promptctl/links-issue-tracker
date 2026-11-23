@@ -12,13 +12,15 @@ import (
 // walk shares and no walk changes: each function's summary and owner, each
 // type's structure and methods.
 type analyzer struct {
-	prog  *ssa.Program
-	mod   module
-	class *Classification
+	prog     *ssa.Program
+	mod      module
+	moduleOf map[string]string // each outside package's module, "std" for the standard library
+	class    *Classification
 
 	summaries  map[*ssa.Function]*summary
 	structures typeutil.Map // types.Type -> *structure
 	methods    typeutil.Map // types.Type -> []*ssa.Function
+	carriedBy  typeutil.Map // *types.Signature -> []*types.Signature
 	owners     map[*ssa.Function]owner
 
 	// unclassified: every outside function module code reaches that the
@@ -33,10 +35,11 @@ type analyzer struct {
 	callbacks  map[string]*types.Interface
 }
 
-func newAnalyzer(prog *ssa.Program, mod module, class *Classification) *analyzer {
+func newAnalyzer(l *loaded, class *Classification) *analyzer {
 	return &analyzer{
-		prog:         prog,
-		mod:          mod,
+		prog:         l.Prog,
+		mod:          l.Module,
+		moduleOf:     l.ModuleOf,
 		class:        class,
 		summaries:    map[*ssa.Function]*summary{},
 		owners:       map[*ssa.Function]owner{},
@@ -182,12 +185,18 @@ func (w *walker) enter(fn, from *ssa.Function) {
 		w.queue = append(w.queue, fn)
 		return
 	}
-	w.charge(o.name, o.knows, fn, from)
+	w.charge(o.name, o.knows, fn.Signature, fn, from)
 }
 
 // charge records what the classification says a call of the outside
-// function or interface method name, reached at at from from, can do.
-func (w *walker) charge(name funcName, k knowledge, at, from *ssa.Function) {
+// function or interface method name, of signature sig, reached at at from
+// from, can do. Whatever its class, it can call any address-taken function
+// its receiver or parameters can carry: a function type in their structure
+// is a dynamic call of that signature.
+func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, at, from *ssa.Function) {
+	for _, s := range w.a.carried(sig) {
+		w.dynamic(dynamicCall{s, "call into " + name.String()}, at)
+	}
 	switch k := k.(type) {
 	case unclassified:
 		if _, seen := w.a.unclassified[name.String()]; !seen {
@@ -375,7 +384,7 @@ func (w *walker) invoke(inv invoke, from *ssa.Function) {
 		w.own.invokes = append(w.own.invokes, pendingInvoke{inv, from})
 	} else {
 		name := interfaceMethodName(inv.method)
-		w.charge(name, w.a.class.Lookup(name.pkg, name.key), from, from)
+		w.charge(name, w.a.class.Lookup(name.pkg, name.key), inv.method.Signature(), from, from)
 	}
 	for _, l := range w.layers {
 		for _, e := range l.implementing(inv.iface) {

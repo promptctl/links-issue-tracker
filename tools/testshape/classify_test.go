@@ -57,6 +57,8 @@ func TestAClassificationFileRefusesWhatItCannotParse(t *testing.T) {
 		"a cli naming a path":    `{"cli": ["example.com/a.b/c"], "packages": {}}`,
 		"not a json object":      `[]`,
 		"an unknown package key": `{"packages": {"os": {"default": "fs", "notes": "x"}}}`,
+		"a bad module init":      `{"modules": {"example.com/m": {"init": "disk"}}, "packages": {}}`,
+		"a field as an init":     `{"modules": {"example.com/m": {"init": "spawn:field"}}, "packages": {}}`,
 	} {
 		if _, err := parseClassification([]byte(data)); err == nil || !strings.HasPrefix(err.Error(), "classification file: ") {
 			t.Errorf("%s: parseClassification error = %v, want a classification file error", name, err)
@@ -113,6 +115,32 @@ func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 	}
 }
 
+func TestAnInitializerIsItsPackagesInitEntryElseItsModules(t *testing.T) {
+	class, err := parseClassification([]byte(`{
+		"modules": {"example.com/m": {"init": "none"}, "std": {"init": "clock"}},
+		"packages": {
+			"os": {"default": "fs"},
+			"example.com/m/reads": {"default": "none", "functions": {"init": "fs"}}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		pkg, mod string
+		want     knowledge
+	}{
+		{"os", "std", Effect{Touches: Touches(0).With(Clock)}},                         // the module's, not the package default
+		{"example.com/m/reads", "example.com/m", Effect{Touches: Touches(0).With(FS)}}, // the package's own init entry
+		{"example.com/m/other", "example.com/m", Effect{}},                             // the module's
+		{"example.com/x", "example.com/x", unclassified{}},                             // nothing names it
+	} {
+		if got := class.initOf(tc.pkg, tc.mod); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("initOf(%s, %s) = %#v, want %#v", tc.pkg, tc.mod, got, tc.want)
+		}
+	}
+}
+
 func TestGitIsMatchedByNameOrPathBase(t *testing.T) {
 	class, err := parseClassification([]byte(`{"git": ["git"], "packages": {}}`))
 	if err != nil {
@@ -160,6 +188,7 @@ func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
 	})
 	class, err := parseClassification([]byte(`{
 		"cli": ["example.com/app/main.Main"],
+		"modules": {"std": {"init": "none"}},
 		"packages": {
 			"builtin": {"default": "none", "functions": {"error.Error": "calls:error"}},
 			"example.com/run": {"default": "none", "functions": {"Start": "spawn:0", "Cmd.Run": "proc", "Cmd.Path": "spawn:field", "init": "none"}},
@@ -169,7 +198,7 @@ func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := class.Validate(universe); err != nil {
+	if err := class.Validate(universe, map[string]bool{"std": true}); err != nil {
 		t.Errorf("Validate = %v, want nil", err)
 	}
 }
@@ -181,6 +210,7 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 	})
 	class, err := parseClassification([]byte(`{
 		"cli": ["example.com/gone.Main", "example.com/run.Main"],
+		"modules": {"example.com/unlinked": {"init": "none"}},
 		"packages": {
 			"example.com/gone": {"default": "none"},
 			"example.com/none/...": {"default": "none"},
@@ -191,7 +221,7 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = class.Validate(universe)
+	err = class.Validate(universe, map[string]bool{"example.com/linked": true})
 	if err == nil {
 		t.Fatal("Validate accepted dead entries")
 	}
@@ -206,6 +236,8 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 		"example.com/run.Cmd: a type is not a spawner",
 		"example.com/tree/....Close: no package it names declares Close; delete the entry",
 		"example.com/tree/...: calls:example.com/tree/a.Open names no interface the suite loads",
+		"module example.com/unlinked: no measured build links a package of it; delete the entry",
+		"module example.com/linked: a measured build links its packages, and the classification has no entry for it",
 	} {
 		if !strings.Contains(err.Error(), "\n  "+want) {
 			t.Errorf("Validate error lacks %q:\n%v", want, err)

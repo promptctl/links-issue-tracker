@@ -1,18 +1,18 @@
-// Package initdispatch registers a handler with an outside dispatcher during
-// initialization.
+// Package initdispatch registers a function with an outside dispatcher during
+// initialization, through a parameter whose type cannot carry it.
 package initdispatch
 
 import (
-	"net/http"
+	"expvar"
 	"os"
 )
 
-func init() { http.Handle("/config", http.HandlerFunc(serveConfig)) }
+func init() { expvar.Publish("config", expvar.Func(config)) }
 
-func serveConfig(w http.ResponseWriter, r *http.Request) {
+func config() any {
 	b, _ := os.ReadFile("config")
-	w.Write(b)
+	return string(b)
 }
 
-// Serve hands a request to whatever was registered.
-func Serve(w http.ResponseWriter, r *http.Request) { http.DefaultServeMux.ServeHTTP(w, r) }
+// Serve renders whatever was registered.
+func Serve() string { return expvar.Get("config").String() }

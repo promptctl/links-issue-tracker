@@ -55,7 +55,7 @@ func measureFixture(t *testing.T, pkg string) (binaryShape, []string) {
 	if b == nil {
 		t.Fatalf("the fixture module has no test binary for %s", pkg)
 	}
-	a := newAnalyzer(l.Prog, l.Module, shapeClassification(t))
+	a := newAnalyzer(l, shapeClassification(t))
 	shape := a.measure(b)
 	return shape, analysisRefusals(a)
 }
@@ -133,7 +133,7 @@ func TestWhatTestMainReachesInOneBranchEveryTestReaches(t *testing.T) {
 
 func TestAnOutsideDispatcherReachesWhatInitRegistered(t *testing.T) {
 	expectReach(t, reachOf(t, "initdispatch", "TestServe"), Integration, "fs", map[Touch]string{
-		FS: "initdispatch.TestServe → initdispatch.Serve → (*net/http.ServeMux).ServeHTTP → initdispatch.serveConfig [dispatch reaches value from init of initdispatch, made in initdispatch.init#1] → os.ReadFile ⇒ os.ReadFile (fs)",
+		FS: "initdispatch.TestServe → initdispatch.Serve → initdispatch.config [dispatch reaches value from init of initdispatch, made in initdispatch.init#1] → os.ReadFile ⇒ os.ReadFile (fs)",
 	})
 }
 
@@ -167,7 +167,7 @@ func TestACompileTimeAssertionMakesNothing(t *testing.T) {
 
 func TestACallbackHandedToTRunIsReached(t *testing.T) {
 	expectReach(t, reachOf(t, "trun", "TestSubtest"), Integration, "fs", map[Touch]string{
-		FS: "trun.TestSubtest → trun.TestSubtest$1 [call into outside code reaches value from TestSubtest, made in trun.TestSubtest] → trun.Write → os.WriteFile ⇒ os.WriteFile (fs)",
+		FS: "trun.TestSubtest → (*testing.T).Run → trun.TestSubtest$1 [call into testing.T.Run reaches value from TestSubtest, made in trun.TestSubtest] → trun.Write → os.WriteFile ⇒ os.WriteFile (fs)",
 	})
 }
 
@@ -295,7 +295,7 @@ func TestACalledBackInterfaceTheProgramLacksRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := newAnalyzer(l.Prog, l.Module, class)
+	a := newAnalyzer(l, class)
 	a.measure(l.Binaries["example.com/shape/callback"])
 	want := []string{"called-back interface example.com/absent.I is not in the program, called back by fmt.Sprint"}
 	if got := analysisRefusals(a); !slices.Equal(got, want) {
@@ -303,13 +303,15 @@ func TestACalledBackInterfaceTheProgramLacksRefuses(t *testing.T) {
 	}
 }
 
+func TestAFunctionStoredInAStructHandedToOutsideCodeIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "funcfield", "TestNew"), Integration, "fs", map[Touch]string{
+		FS: "funcfield.TestNew → funcfield.New → log/slog.NewTextHandler → funcfield.redact [call into log/slog.NewTextHandler reaches value from TestNew, made in funcfield.New] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
 func TestAnUnclassifiedOutsideFunctionRefusesNamingItsFirstCaller(t *testing.T) {
 	_, refusals := measureFixture(t, "unclassified")
-	// strings is unclassified, so its initializer is too.
-	want := []string{
-		"unclassified outside function strings.ToUpper, first called by unclassified.Shout",
-		"unclassified outside function strings.init, first called by unclassified.init",
-	}
+	want := []string{"unclassified outside function strings.ToUpper, first called by unclassified.Shout"}
 	if !slices.Equal(refusals, want) {
 		t.Errorf("refusals = %q, want %q", refusals, want)
 	}
@@ -352,7 +354,6 @@ func TestTheRunExitsOneOnWhatTheAnalysisRefuses(t *testing.T) {
 	code := run(class, []string{"-root", shapeDir, "-tags", "shapetag"}, strings.NewReader(passingStream(t)), &stdout, &stderr)
 	wantErr := "" +
 		"testshape: refused: unclassified outside function strings.ToUpper, first called by unclassified.Shout\n" +
-		"testshape: refused: unclassified outside function strings.init, first called by unclassified.init\n" +
 		"testshape: refused: module function bodiless.nanotime has no Go body to walk, reached from bodiless.Now\n"
 	if code != exitRefused || stdout.String() != "" || stderr.String() != wantErr {
 		t.Errorf("exit %d, stdout %q, stderr %q; want exit 1, no table, stderr %q", code, stdout.String(), stderr.String(), wantErr)
@@ -402,6 +403,7 @@ func TestTheSuiteIsEveryModuleTheGoCommandWalks(t *testing.T) {
 func TestAClassificationThatNamesNothingRefuses(t *testing.T) {
 	class, err := parseClassification([]byte(`{
 		"cli": ["example.com/shape/selfcli.Missing"],
+		"modules": {"std": {"init": "none"}, "example.com/gone": {"init": "none"}},
 		"packages": {
 			"os": {"default": "fs", "functions": {"NoSuchFunction": "none", "File.NoSuchMethod": "none", "Getenv": "spawn:3"}},
 			"example.com/nowhere": {"default": "none"},
@@ -419,11 +421,16 @@ func TestAClassificationThatNamesNothingRefuses(t *testing.T) {
 	for _, sp := range l.Prog.AllPackages() {
 		universe[sp.Pkg.Path()] = sp.Pkg
 	}
-	err = class.Validate(universe)
+	linked := map[string]bool{}
+	for _, mod := range l.ModuleOf {
+		linked[mod] = true
+	}
+	err = class.Validate(universe, linked)
 	want := "the classification names what does not exist:\n" +
 		"  cli example.com/shape/selfcli.Missing: example.com/shape/selfcli declares no function Missing; delete the entry\n" +
 		"  example.com/nothing/...: the suite loads no package it names; delete the entry\n" +
 		"  example.com/nowhere: the suite loads no package it names; delete the entry\n" +
+		"  module example.com/gone: no measured build links a package of it; delete the entry\n" +
 		"  os.File.NoSuchMethod: no package it names declares File.NoSuchMethod; delete the entry\n" +
 		"  os.Getenv: spawn argument is not a parameter of Getenv\n" +
 		"  os.NoSuchFunction: no package it names declares NoSuchFunction; delete the entry"

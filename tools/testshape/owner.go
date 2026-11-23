@@ -47,7 +47,11 @@ func (a *analyzer) owner(fn *ssa.Function) owner {
 	}
 	name, inModule := a.nameOf(fn)
 	o := owner{name: name, knows: moduleCode{}}
-	if !inModule {
+	switch {
+	case inModule:
+	case name.key == "init":
+		o.knows = a.class.initOf(name.pkg, a.moduleOf[name.pkg])
+	default:
 		o.knows = a.class.Lookup(name.pkg, name.key)
 	}
 	a.owners[fn] = o
