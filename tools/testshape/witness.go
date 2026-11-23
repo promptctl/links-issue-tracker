@@ -19,12 +19,22 @@ type step struct {
 // Its text is spelled only when a witness is printed, since a walk reaches
 // far more functions than it reports.
 type via interface {
-	text(q types.Qualifier) string // "" for a static call
+	text(n namer) string // "" for a static call
 }
 
 type staticCall struct{}
 
 type converting struct{ typ types.Type }
+
+// typeArgument is a reach through a type handed to an outside generic as a
+// type argument: path is the instantiations from the instance the walk
+// reached to the one whose body made the use, and use is what that body
+// does with the type ("nested/strs.Join[genericjoin.file] calls String of
+// genericjoin.file through its constraint").
+type typeArgument struct {
+	path []instance
+	use  argUse
+}
 
 // throughFunc is a reach through an address-taken function of the RTA
 // state; how is what reached it ("dynamic call", "call into testing.T.Run",
@@ -43,22 +53,54 @@ type throughType struct {
 	where entryOrigin
 }
 
-// typeArgument is a reach through a type handed to an outside generic as a
-// type argument; why is the instantiation that decided it, and how
-// ("nested/strs.Join[genericjoin.file] calls String of genericjoin.file
-// through its constraint").
-type typeArgument struct{ why string }
-
-func (staticCall) text(types.Qualifier) string { return "" }
-func (c converting) text(q types.Qualifier) string {
-	return "converts " + types.TypeString(c.typ, q) + " to an interface"
-}
-func (t typeArgument) text(types.Qualifier) string { return t.why }
-func (t throughFunc) text(types.Qualifier) string {
+func (staticCall) text(namer) string     { return "" }
+func (c converting) text(n namer) string { return n.converts(c.typ) }
+func (t throughFunc) text(namer) string {
 	return t.how + " reaches value " + t.where.text()
 }
-func (t throughType) text(q types.Qualifier) string {
-	return t.how + " reaches " + types.TypeString(t.typ, q) + " " + t.where.text()
+func (t throughType) text(n namer) string {
+	return t.how + " reaches " + n.typ(t.typ) + " " + t.where.text()
+}
+
+// text names each instantiation from the instance reached to the one
+// whose body made the use, then the use.
+func (t typeArgument) text(n namer) string {
+	s := n.instance(t.path[0])
+	for _, in := range t.path[1:] {
+		s += " instantiates " + n.instance(in) + ", which"
+	}
+	return s + " " + t.use.text(n)
+}
+
+func (c conversion) text(n namer) string { return n.converts(c.typ) }
+func (c constraintCall) text(n namer) string {
+	return "calls " + c.method + " of " + n.typ(c.typ) + " through its constraint"
+}
+func (c unreadConversion) text(n namer) string {
+	return "cannot be read (" + c.why + "), so it counts as one that " + n.converts(c.typ)
+}
+
+func (w withholding) text(n namer) string {
+	return n.instance(w.in) + " neither converts " + n.typ(w.in.args[w.arg]) + " nor calls a method of it"
+}
+
+func (u unreadInstance) text(n namer) string { return n.instance(u.in) + ": " + u.why }
+
+// namer names what a witness shows, relative to the module measured.
+type namer struct{ mod module }
+
+func (n namer) typ(t types.Type) string { return types.TypeString(t, relativeTo(n.mod)) }
+
+// converts is the one rendering of a conversion to an interface.
+func (n namer) converts(t types.Type) string { return "converts " + n.typ(t) + " to an interface" }
+
+// instance names an outside generic's instance.
+func (n namer) instance(in instance) string {
+	args := make([]string, len(in.args))
+	for i, t := range in.args {
+		args[i] = n.typ(t)
+	}
+	return strings.TrimPrefix(in.origin.String(), n.mod.Path+"/") + "[" + strings.Join(args, ", ") + "]"
 }
 
 // entryOrigin is where an entry of the RTA state was made: the setup or the
@@ -82,12 +124,12 @@ func (w witness) String() string {
 // chain is the path the walk took from its root to fn, through the binary's
 // setup when the walk reached fn there.
 func (w *walker) chain(fn *ssa.Function) []string {
-	q := relativeTo(w.a.mod)
+	n := namer{w.a.mod}
 	var rev []string
 	for fn != nil {
 		st := w.stepOf(fn)
 		name := w.a.name(fn)
-		if t := st.via.text(q); t != "" {
+		if t := st.via.text(n); t != "" {
 			name += " [" + t + "]"
 		}
 		rev = append(rev, name)

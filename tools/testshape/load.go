@@ -182,28 +182,16 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	}
 
 	prog := ssa.NewProgram(ld.fset, ssa.InstantiateGenerics)
-	created := map[*types.Package]bool{}
-	var create func(*types.Package)
-	create = func(pkg *types.Package) {
-		if created[pkg] {
-			return
-		}
-		created[pkg] = true
-		for _, imp := range pkg.Imports() {
-			create(imp)
-		}
-		prog.CreatePackage(pkg, nil, nil, true)
-	}
+	pkgs := newProgramPackages(prog)
 	for _, p := range listed {
 		if pkg := ld.exported[p.ImportPath]; pkg != nil {
-			create(pkg)
+			pkgs.exported(pkg)
 		}
 	}
 	ssaByID := map[string]*ssa.Package{}
 	for _, p := range listed {
 		if pkg := ld.checked[p.ImportPath]; pkg != nil {
-			created[pkg] = true
-			ssaByID[p.ImportPath] = prog.CreatePackage(pkg, ld.syntax[p.ImportPath], ld.infos[p.ImportPath], true)
+			ssaByID[p.ImportPath] = pkgs.fromSource(pkg, ld.syntax[p.ImportPath], ld.infos[p.ImportPath], true)
 		}
 	}
 	prog.Build()
@@ -223,6 +211,43 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 		}
 	}
 	return l, nil
+}
+
+// programPackages puts packages into one SSA program, each once and after
+// every package it imports.
+type programPackages struct {
+	prog    *ssa.Program
+	created map[*types.Package]bool
+}
+
+func newProgramPackages(prog *ssa.Program) *programPackages {
+	return &programPackages{prog: prog, created: map[*types.Package]bool{}}
+}
+
+// exported puts in a package read from export data, which has no bodies,
+// and what it imports.
+func (c *programPackages) exported(pkg *types.Package) {
+	if c.created[pkg] {
+		return
+	}
+	c.created[pkg] = true
+	for _, imp := range pkg.Imports() {
+		c.exported(imp)
+	}
+	c.prog.CreatePackage(pkg, nil, nil, true)
+}
+
+// fromSource puts in a package type-checked from source, with its bodies,
+// after what it imports. A package not importable is one no other package
+// of the program imports.
+func (c *programPackages) fromSource(pkg *types.Package, files []*ast.File, info *types.Info, importable bool) *ssa.Package {
+	for _, imp := range pkg.Imports() {
+		c.exported(imp)
+	}
+	if importable {
+		c.created[pkg] = true
+	}
+	return c.prog.CreatePackage(pkg, files, info, importable)
 }
 
 // buildSizes is the type sizes of the architecture the go command in dir

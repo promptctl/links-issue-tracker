@@ -27,8 +27,7 @@ type analyzer struct {
 	typeKeys   typeutil.Map // types.Type -> int
 	owners     map[*ssa.Function]owner
 	generics   *genericSource
-	readings   map[instanceKey]*reading
-	decisions  map[instanceKey]*decision
+	instances  map[instanceKey]*genericInstance
 
 	// unclassified: every outside function module code reaches that the
 	// classification does not cover, with the first function seen reaching
@@ -40,23 +39,32 @@ type analyzer struct {
 	// the first function calling one back.
 	unresolved map[string]string
 	callbacks  map[string]*types.Interface
+	// inconsistencies: what the analysis found that its own model rules
+	// out, each a bug in the tool, never a fact about the suite.
+	inconsistencies map[string]bool
+}
+
+// inconsistent records a bug in the tool, which refuses the run.
+// [LAW:no-silent-failure]
+func (a *analyzer) inconsistent(format string, args ...any) {
+	a.inconsistencies[fmt.Sprintf(format, args...)] = true
 }
 
 func newAnalyzer(l *loaded, class *Classification) *analyzer {
 	return &analyzer{
-		prog:         l.Prog,
-		mod:          l.Module,
-		moduleOf:     l.ModuleOf,
-		class:        class,
-		summaries:    map[*ssa.Function]*summary{},
-		owners:       map[*ssa.Function]owner{},
-		generics:     l.Generics,
-		readings:     map[instanceKey]*reading{},
-		decisions:    map[instanceKey]*decision{},
-		unclassified: map[string]string{},
-		bodiless:     map[string]string{},
-		unresolved:   map[string]string{},
-		callbacks:    map[string]*types.Interface{},
+		prog:            l.Prog,
+		mod:             l.Module,
+		moduleOf:        l.ModuleOf,
+		class:           class,
+		summaries:       map[*ssa.Function]*summary{},
+		owners:          map[*ssa.Function]owner{},
+		generics:        l.Generics,
+		instances:       map[instanceKey]*genericInstance{},
+		unclassified:    map[string]string{},
+		bodiless:        map[string]string{},
+		unresolved:      map[string]string{},
+		callbacks:       map[string]*types.Interface{},
+		inconsistencies: map[string]bool{},
 	}
 }
 
@@ -72,7 +80,7 @@ type walker struct {
 	steps      set[*ssa.Function, step]
 	indirect   set[*ssa.Function, via]
 	touches    set[Touch, touched]
-	withheld   set[string, string]
+	withheld   set[withheldKey, withholding]
 	sites      set[callSite, callSite]
 	spawns     set[spawnSite, spawnSite]
 	taken      set[*ssa.Function, funcEntry]
@@ -93,7 +101,7 @@ func newWalker(a *analyzer, binary *finished) *walker {
 		steps:      set[*ssa.Function, step]{b.steps, own.steps},
 		indirect:   set[*ssa.Function, via]{b.indirect, own.indirect},
 		touches:    set[Touch, touched]{b.touches, own.touches},
-		withheld:   set[string, string]{b.withheld, own.withheld},
+		withheld:   set[withheldKey, withholding]{b.withheld, own.withheld},
 		sites:      set[callSite, callSite]{b.sites, own.sites},
 		spawns:     set[spawnSite, spawnSite]{b.spawns, own.spawns},
 		taken:      set[*ssa.Function, funcEntry]{b.taken, own.taken},
@@ -125,21 +133,16 @@ func (w *walker) implementing(iface *types.Interface) []typeEntry {
 	return w.runtime.matching(w.a.typeKey(iface), func(e typeEntry) bool { return types.Implements(e.typ, iface) })
 }
 
-// reached is every touch the walk's reach holds, its binary's setup's
-// included: `go test -run` runs the setup for every test it runs.
-func (w *walker) reached() reached {
+// found is what the walk found: every touch its reach holds, its binary's
+// setup's included, since `go test -run` runs the setup for every test it
+// runs; and every type argument withheld in its own layer, since what a
+// test's setup withheld is its setup's.
+func (w *walker) found() found {
 	r := reached{}
 	for t := range w.touches.all {
 		r[t.touch] = t.witness
 	}
-	return r
-}
-
-// withholding is every outside generic instance the walk's own layer
-// reached that withheld its type arguments, in name order: what a test's
-// setup withheld is its setup's.
-func (w *walker) withholding() []string {
-	return slices.Sorted(slices.Values(w.own.withheld.entries))
+	return found{Reached: r, Withheld: slices.Clone(w.own.withheld.entries)}
 }
 
 // root starts the walk at fn, made to run by origin.
@@ -267,20 +270,30 @@ func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, at, fr
 // types it is instantiated with is decided from its source (see
 // generic.go). Each type it converts to an interface reaches exactly what
 // module code converting that type reaches; each constraint method it
-// calls is reached on its type argument; a type it does neither with
-// reaches nothing, and the walk records the instance as withholding it.
+// calls is reached on its type argument, an interface call when the type
+// argument is an interface; a type argument it does neither with reaches
+// nothing, and the walk records it as withheld.
 func (w *walker) typeArguments(in instance, at *ssa.Function) {
 	d := w.a.decide(in)
-	for _, c := range d.converts {
-		w.convert(c.what.typ, c.what.to, at, typeArgument{c.why})
-	}
-	for _, c := range d.calls {
-		if fn, ok := w.a.method(c.what.typ, c.what.pkg, c.what.method); ok {
-			w.reach(fn, at, typeArgument{c.why})
+	for _, ta := range d.uses {
+		switch u := ta.use.(type) {
+		case conversion:
+			w.convert(u.typ, u.to, at, ta)
+		case unreadConversion:
+			w.convert(u.typ, anyInterface, at, ta)
+		case constraintCall:
+			switch m := w.a.method(u.typ, u.pkg, u.method).(type) {
+			case concreteMethod:
+				w.reach(m.fn, at, ta)
+			case abstractMethod:
+				w.invoke(m.inv, at)
+			case absentMethod:
+				w.a.inconsistent("%s: its type argument %s has no method %s, which its constraint declares", namer{w.a.mod}.instance(in), u.typ, u.method)
+			}
 		}
 	}
-	for _, name := range d.withheld {
-		w.withheld.add(name, name)
+	for _, wh := range d.withheld {
+		w.withheld.add(withheldKey{w.a.instanceKey(wh.in), wh.arg}, wh)
 	}
 }
 
@@ -384,7 +397,10 @@ func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, 
 	for _, m := range s.methods {
 		w.reach(m, from, how)
 	}
-	if _, isFunc := t.Underlying().(*types.Signature); isFunc || w.a.moduleType(t) || w.a.outsideType(t) {
+	// A value of an interface type converted is the value it holds, already
+	// a runtime type where it was converted to that interface; an outside
+	// generic's type argument can be one.
+	if _, isFunc := t.Underlying().(*types.Signature); !types.IsInterface(t) && (isFunc || w.a.moduleType(t) || w.a.outsideType(t)) {
 		w.addRuntimeType(t, from)
 	}
 	for _, o := range s.outside {
@@ -523,9 +539,16 @@ func (a *analyzer) callbackInterface(name string) (*types.Interface, bool) {
 	return iface, ok
 }
 
+// reachMethod reaches the method m of t, a runtime type implementing an
+// interface that declares m, so a concrete type with the method.
 func (w *walker) reachMethod(t types.Type, m *types.Func, from *ssa.Function, how via) {
-	if fn, ok := w.a.method(t, m.Pkg(), m.Name()); ok {
-		w.reach(fn, from, how)
+	switch l := w.a.method(t, m.Pkg(), m.Name()).(type) {
+	case concreteMethod:
+		w.reach(l.fn, from, how)
+	case abstractMethod:
+		w.a.inconsistent("runtime type %s is an interface", t)
+	case absentMethod:
+		w.a.inconsistent("runtime type %s has no method %s, which an interface it implements declares", t, m.Name())
 	}
 }
 

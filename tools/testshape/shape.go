@@ -50,19 +50,23 @@ func (r reached) set() Touches {
 // initialization of its packages, and its TestMain) and each declared test,
 // whose reach includes the setup's.
 type binaryShape struct {
-	Setup         reached
-	SetupWithheld []string
-	Tests         []testShape // in name order
+	Setup found
+	Tests []testShape // in name order
 }
 
-// testShape is one test's reach. Withheld names each outside generic
-// instance the test reaches, beyond its setup, that withheld every type
-// argument: what decided that the touches the type arguments' methods make
-// are not the test's.
-type testShape struct {
-	Name     string
+// found is what one walk found: each touch with its first witness, and
+// each type argument an outside generic instance the walk reached, beyond
+// its binary's setup, withheld: what decided that the touches the type
+// argument's methods make are not the walk's.
+type found struct {
 	Reached  reached
-	Withheld []string
+	Withheld []withholding
+}
+
+// testShape is one test's reach.
+type testShape struct {
+	Name string
+	found
 }
 
 // measure decides the reach of b's setup, and of every test b declares over
@@ -82,7 +86,7 @@ func (a *analyzer) measure(b *binary) binaryShape {
 	setup.run()
 	runsCLI := a.reachesCLI(setup.own)
 	setup.settle(runsCLI)
-	shape := binaryShape{Setup: setup.reached(), SetupWithheld: setup.withholding()}
+	shape := binaryShape{Setup: setup.found()}
 	binary := setup.finish()
 
 	for _, t := range b.Tests {
@@ -92,7 +96,7 @@ func (a *analyzer) measure(b *binary) binaryShape {
 		}
 		w.run()
 		w.settle(runsCLI)
-		shape.Tests = append(shape.Tests, testShape{t.Name, w.reached(), w.withholding()})
+		shape.Tests = append(shape.Tests, testShape{t.Name, w.found()})
 	}
 	return shape
 }
@@ -109,21 +113,18 @@ func (a *analyzer) reachesCLI(l *layer) bool {
 // measuredTest is one declared top-level test, with what the stream says of
 // it.
 type measuredTest struct {
-	Name     string
-	Reached  reached
-	Withheld []string
-	Ran      bool          // false: skipped, or not selected by the run
-	Elapsed  time.Duration // zero unless Ran
+	testShape
+	Ran     bool          // false: skipped, or not selected by the run
+	Elapsed time.Duration // zero unless Ran
 }
 
 func (t measuredTest) Layer() Layer { return layerOf(t.Reached.set()) }
 
 // measuredPackage is one package of the stream, joined to its binary.
 type measuredPackage struct {
-	ImportPath    string
-	Setup         reached
-	SetupWithheld []string
-	Tests         []measuredTest
+	ImportPath string
+	Setup      found
+	Tests      []measuredTest
 }
 
 // join puts the stream's durations on the binary's declared tests. A test
@@ -145,11 +146,11 @@ func join(pkg gotestjson.Package, shape binaryShape) (measuredPackage, []string)
 			refusals = append(refusals, fmt.Sprintf("%s: the stream ran %s, which its test binary does not declare", pkg.ImportPath, t.Name))
 		}
 	}
-	m := measuredPackage{ImportPath: pkg.ImportPath, Setup: shape.Setup, SetupWithheld: shape.SetupWithheld}
+	m := measuredPackage{ImportPath: pkg.ImportPath, Setup: shape.Setup}
 	for _, ts := range shape.Tests {
 		t, ok := ran[ts.Name]
 		didRun := ok && (t.Ending == gotestjson.Passed || t.Ending == gotestjson.Failed)
-		mt := measuredTest{Name: ts.Name, Reached: ts.Reached, Withheld: ts.Withheld, Ran: didRun}
+		mt := measuredTest{testShape: ts, Ran: didRun}
 		if didRun {
 			mt.Elapsed = t.Elapsed
 		}
@@ -244,6 +245,9 @@ func analysisRefusals(a *analyzer) []string {
 	}
 	for _, name := range sortedKeys(a.unresolved) {
 		refusals = append(refusals, fmt.Sprintf("called-back interface %s is not in the program, called back by %s", name, a.unresolved[name]))
+	}
+	for _, what := range sortedKeys(a.inconsistencies) {
+		refusals = append(refusals, "testshape is inconsistent, a bug in the tool: "+what)
 	}
 	return refusals
 }

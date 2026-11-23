@@ -4,6 +4,7 @@ package gen
 
 import (
 	"fmt"
+	"io"
 	"unsafe"
 )
 
@@ -38,3 +39,23 @@ func Namer[T fmt.Stringer]() func(T) string { return T.String }
 // Address takes what it is handed as an unsafe.Pointer, which the reading
 // does not model.
 func Address[T any](v T) uintptr { return uintptr(unsafe.Pointer(&v)) }
+
+// Box converts what it is handed inside a type its body declares, which
+// the reading cannot bind outside the body.
+func Box[T any](v T) any {
+	type box struct{ v T }
+	return box{v}
+}
+
+// Shut calls its constraint's Close on what it is handed.
+func Shut[T io.Closer](c T) error { return c.Close() }
+
+// First converts its first argument to an interface, and does nothing with
+// its second.
+func First[A, B any](a A, b B) any { return a }
+
+// Bag holds what is added to it, as interfaces.
+type Bag[T any] struct{ items []any }
+
+// Add converts what it is handed to an interface.
+func (b *Bag[T]) Add(v T) { b.items = append(b.items, v) }

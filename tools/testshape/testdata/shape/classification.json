@@ -9,6 +9,7 @@
     "example.com/shape/nested/front": {"default": "none"},
     "example.com/shape/nested/strs": {"default": "none"},
     "example.com/shape/nested/gen": {"default": "none", "functions": {"Visit": "dispatching"}},
+    "internal/poll": {"note": "An *os.File's structure holds a *poll.FD, whose Close an interface call of a module Close reaches.", "default": "fs"},
     "log/slog": {"default": "none"},
     "fmt": {"default": "calls:fmt.Stringer,calls:error"},
     "expvar": {"note": "Rendering a Var can call the function a Func converts.", "default": "none", "functions": {"Var.String": "dispatching"}},
