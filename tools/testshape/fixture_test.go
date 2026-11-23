@@ -453,14 +453,15 @@ func TestATypeArgumentOfAGenericThatCannotBeReadIsConverted(t *testing.T) {
 }
 
 // Each instance whose body could not be read is counted, with why: its
-// conservative reading is in the output, not only in a witness.
+// conservative reading is in the output, not only in a witness. Beside it,
+// the type parameters withheld are counted.
 func TestTheOutputCountsTheGenericInstancesThatCouldNotBeReadAndWhy(t *testing.T) {
 	l, err := shapeModule()
 	if err != nil {
 		t.Fatal(err)
 	}
 	a := newAnalyzer(l, shapeClassification(t))
-	for _, pkg := range []string{"genericaddress", "genericlocal", "generickeep"} {
+	for _, pkg := range []string{"genericaddress", "genericlocal", "generickeep", "genericclone"} {
 		a.measure(l.Binaries["example.com/shape/"+pkg])
 	}
 	if refusals := analysisRefusals(a); len(refusals) > 0 {
@@ -471,8 +472,9 @@ func TestTheOutputCountsTheGenericInstancesThatCouldNotBeReadAndWhy(t *testing.T
 		unread = append(unread, moduleUnread{u, l.Module})
 	}
 	var out strings.Builder
-	writeUnread(&out, unread)
-	want := "\noutside generic instances whose bodies could not be read, each counted as converting every type argument: 2\n" +
+	writeGenerics(&out, unread, len(a.withheldParameters()))
+	want := "\ntype parameters of outside generic instances withheld, reaching nothing of their type arguments: 1\n" +
+		"outside generic instances whose bodies could not be read, each counted as converting every type argument: 2\n" +
 		"  nested/gen.Address[genericaddress.lock]: it converts *T to unsafe.Pointer\n" +
 		"  nested/gen.Box[genericlocal.lock]: it declares type box in its body\n"
 	if out.String() != want {

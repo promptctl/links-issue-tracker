@@ -288,6 +288,8 @@ func (w *walker) typeArguments(in instance, at *ssa.Function) {
 			case absentMethod:
 				w.a.inconsistent("%s: its type argument %s has no method %s, which its constraint declares", namer{w.a.mod}.instance(in), u.typ, u.method)
 			}
+		default:
+			panic(fmt.Sprintf("testshape bug: a type argument use %T", u))
 		}
 	}
 	for _, wh := range d.withheld {

@@ -102,16 +102,19 @@ func writeRow(w io.Writer, r row) {
 
 func seconds(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
 
-// writeUnread renders the count of outside generic instances whose bodies
-// could not be read, each counted as converting every type argument, and
-// why each could not be.
-func writeUnread(w io.Writer, unread []moduleUnread) {
+// writeGenerics renders what the reading of outside generics decided
+// beyond the table: the count of type parameters instances withheld, which
+// -tests lists; and the count of instances whose bodies could not be read,
+// each counted as converting every type argument, with why each could not
+// be.
+func writeGenerics(w io.Writer, unread []moduleUnread, withheld int) {
 	var lines []string
 	for _, u := range unread {
 		lines = append(lines, u.text(namer{u.module}))
 	}
 	slices.Sort(lines)
-	fmt.Fprintf(w, "\noutside generic instances whose bodies could not be read, each counted as converting every type argument: %d\n", len(lines))
+	fmt.Fprintf(w, "\ntype parameters of outside generic instances withheld, reaching nothing of their type arguments: %d\n", withheld)
+	fmt.Fprintf(w, "outside generic instances whose bodies could not be read, each counted as converting every type argument: %d\n", len(lines))
 	for _, l := range lines {
 		fmt.Fprintf(w, "  %s\n", l)
 	}

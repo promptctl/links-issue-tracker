@@ -125,8 +125,14 @@ func (u unread) instantiate(*genericSource, []types.Type) reading        { retur
 func (i inconsistency) instantiate(*genericSource, []types.Type) reading { return i }
 
 // argUse is one use of a type argument's value: a conversion, or a
-// constraintCall. [LAW:types-are-the-program]
-type argUse interface{ text(n namer) string }
+// constraintCall, the only types with its marker. [LAW:types-are-the-program]
+type argUse interface {
+	argUse()
+	text(n namer) string
+}
+
+func (conversion) argUse()     {}
+func (constraintCall) argUse() {}
 
 // constraintCall is a call of the method named method, of package pkg, on
 // a value of type typ through its constraint.
@@ -639,17 +645,25 @@ func instanceOf(fn *ssa.Function) (instance, bool) {
 	if n == nil || types.IsInterface(n) || n.TypeArgs().Len() == 0 {
 		return instance{}, false
 	}
-	return instance{funcName{n.Obj().Pkg().Path(), n.Obj().Name() + "." + obj.Name()}, slices.Collect(n.TypeArgs().Types())}, true
+	name, declared := methodName(n, obj.Name())
+	return instance{name, slices.Collect(n.TypeArgs().Types())}, declared
 }
 
-// String is in's identity across programs: its origin and the full path of
-// each type argument.
-func (in instance) String() string {
+// instanceID is an instance's identity across programs. Each module's
+// analysis reads over its own program, whose named types are its own
+// objects, so a type is identified by its declaration's path and name,
+// spelled in full.
+type instanceID struct {
+	origin funcName
+	args   string
+}
+
+func (in instance) id() instanceID {
 	args := make([]string, len(in.args))
 	for i, t := range in.args {
 		args[i] = types.TypeString(t, nil)
 	}
-	return in.origin.String() + "[" + strings.Join(args, ", ") + "]"
+	return instanceID{in.origin, strings.Join(args, ", ")}
 }
 
 // instanceKey is an instance's key: one per origin and type arguments,
@@ -805,12 +819,34 @@ func (a *analyzer) decide(in instance) *decision {
 // converted to.
 var anyInterface = types.NewInterfaceType(nil, nil)
 
-// couldReachModuleCode reports whether converting t to an interface would
-// reach anything: a method of a module type in its structure, or an
-// interface there, which holds values converted elsewhere.
+// couldReachModuleCode reports whether converting t to an interface could
+// reach anything: a method of a module type in its structure; an interface
+// there, which holds values converted elsewhere; or a function type there,
+// whose values a reflective call can call.
 func (a *analyzer) couldReachModuleCode(t types.Type) bool {
 	s := a.structureOf(t)
-	return len(s.methods) > 0 || len(s.ifaces) > 0
+	if len(s.methods) > 0 || len(s.ifaces) > 0 {
+		return true
+	}
+	funcs := false
+	eachType(t, structural, func(u types.Type) bool {
+		_, isFunc := u.Underlying().(*types.Signature)
+		funcs = funcs || isFunc
+		return !funcs
+	})
+	return funcs
+}
+
+// withheldParameters is every type parameter an instance the analyzer
+// decided withheld, each once.
+func (a *analyzer) withheldParameters() []withholding {
+	var out []withholding
+	for _, gi := range a.instances {
+		if gi.decision != nil {
+			out = append(out, gi.decision.withheld...)
+		}
+	}
+	return out
 }
 
 // unreadInstances is every instance the analyzer read whose body could not

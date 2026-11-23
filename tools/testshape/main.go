@@ -15,7 +15,8 @@
 // tests that ran, the count of declared tests at each layer, the elapsed of
 // those that ran summed per layer, the unit share, per touch the tests that
 // can reach it, and the touches of the package's setup; then the count of
-// outside generic instances whose bodies could not be read. -tests adds a
+// type parameters outside generic instances withheld, and of instances
+// whose bodies could not be read, with why. -tests adds a
 // listing of every test's layer, its touches, one witness chain per touch,
 // and each type argument an outside generic instance withheld.
 //
@@ -91,11 +92,13 @@
 //     where the type argument is an interface; a type argument no body
 //     converts or calls a method of reaches nothing, and is listed as
 //     withheld. A method's type arguments are its receiver type's, a bound
-//     method value's included. A body that cannot be read (no source that
-//     type-checks, no Go body, a type parameter's value taken as an
-//     unsafe.Pointer, a type declared in the body) converts every type
-//     argument; the witness says why, and the output counts each such
-//     instance with why. Nothing about a generic is recorded in the
+//     method value's included. A body with a construct the reading does
+//     not model (a type parameter's value taken as an unsafe.Pointer, a
+//     type declared in the body) converts every type argument; the witness
+//     says why, and the output counts each such instance with why. Source
+//     the reading cannot square with the build (none listed, none that
+//     type-checks, no Go body, a declaration it lacks, a type that does not
+//     bind) refuses the run. Nothing about a generic is recorded in the
 //     classification.
 //   - Code outside the module is never walked. Every outside function module
 //     code reaches is classified in classification.json: the touches it can
@@ -228,7 +231,7 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 		rows = append(rows, rowOf(m.measuredPackage, m.module.Path))
 	}
 	writeTable(stdout, rows)
-	writeUnread(stdout, s.unread)
+	writeGenerics(stdout, s.unread, s.withheld)
 	if *listTests {
 		writeListing(stdout, s.packages)
 	}
@@ -276,11 +279,18 @@ type moduleUnread struct {
 }
 
 // suiteShape is what the suite's measure found: the measured packages, in
-// import-path order, and every outside generic instance whose body could
-// not be read.
+// import-path order; every outside generic instance whose body could not be
+// read; and the count of type parameters outside generic instances withheld.
 type suiteShape struct {
 	packages []modulePackage
 	unread   []moduleUnread
+	withheld int
+}
+
+// withheldID is a withheld type parameter's identity across programs.
+type withheldID struct {
+	instance instanceID
+	arg      int
 }
 
 // measureSuite measures every package of stream against the suite under
@@ -310,7 +320,8 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 		inStream[p.ImportPath] = p
 	}
 	var out suiteShape
-	unread := map[string]bool{}
+	unread := map[instanceID]bool{}
+	withheld := map[withheldID]bool{}
 	for _, l := range loads {
 		owned := func(path string) bool { return s.moduleOf[path] == l.Module.Path }
 		refusals = append(refusals, absentRefusals(l.Binaries, inStream, owned)...)
@@ -325,16 +336,17 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 			out.packages = append(out.packages, modulePackage{mp, l.Module})
 		}
 		for _, u := range a.unreadInstances() {
-			// Each module's analysis reads over its own program, so one
-			// instance two modules read is one by its origin and the full
-			// paths of its type arguments.
-			if id := u.in.String(); !unread[id] {
+			if id := u.in.id(); !unread[id] {
 				unread[id] = true
 				out.unread = append(out.unread, moduleUnread{u, l.Module})
 			}
 		}
+		for _, wh := range a.withheldParameters() {
+			withheld[withheldID{wh.in.id(), wh.arg}] = true
+		}
 		refusals = append(refusals, analysisRefusals(a)...)
 	}
 	slices.SortFunc(out.packages, func(a, b modulePackage) int { return strings.Compare(a.ImportPath, b.ImportPath) })
+	out.withheld = len(withheld)
 	return out, refusals, nil
 }
