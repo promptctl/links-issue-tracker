@@ -33,7 +33,12 @@ import (
 )
 
 func main() {
-	os.Exit(run(".", []string{"./..."}, os.Stderr))
+	targets, err := shippedGOOS(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "actionnames-check: %v\n", err)
+		os.Exit(1)
+	}
+	os.Exit(run(targets, ".", []string{"./..."}, os.Stderr))
 }
 
 // shippedGOOS is every GOOS a build in root's .goreleaser.yml targets.
@@ -63,13 +68,8 @@ func shippedGOOS(root string) ([]string, error) {
 }
 
 // run checks the packages patterns match, in the module at root, once per
-// GOOS root's release builds, and returns the exit code.
-func run(root string, patterns []string, stderr io.Writer) int {
-	targets, err := shippedGOOS(root)
-	if err != nil {
-		fmt.Fprintf(stderr, "actionnames-check: %v\n", err)
-		return 1
-	}
+// GOOS in targets, and returns the exit code.
+func run(targets []string, root string, patterns []string, stderr io.Writer) int {
 	var found []string
 	for _, goos := range targets {
 		cfg := &packages.Config{
