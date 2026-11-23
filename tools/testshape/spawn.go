@@ -228,9 +228,11 @@ func (w *walker) settle(setupRunsCLI bool) {
 
 // programTouches is the one place a program becomes touches: git when it is
 // git; a CLI run when it is the test binary and the binary's setup runs the
-// CLI; another process otherwise. An unresolved program may be any program:
-// another process, and, where the setup runs the CLI, the test binary run as
-// the CLI, so it is charged both, the reading that errs furthest from unit.
+// CLI; another process otherwise. An unresolved program may be any program,
+// a CLI built apart from the test binary included, so it is charged both
+// another process and a CLI run whatever the setup reaches: the reading that
+// errs furthest from unit. [LAW:no-silent-failure] the tool never reads a
+// touch away.
 func (w *walker) programTouches(p program, setupRunsCLI bool) func(yield func(Touch, string) bool) {
 	return func(yield func(Touch, string) bool) {
 		switch p := p.(type) {
@@ -247,10 +249,10 @@ func (w *walker) programTouches(p program, setupRunsCLI bool) func(yield func(To
 			}
 			yield(Proc, fmt.Sprintf("%s, the test binary, whose setup does not reach the CLI: another process", p.name))
 		case programUnresolved:
-			if !yield(Proc, "an unresolved program ("+p.why+"): another process") || !setupRunsCLI {
+			if !yield(Proc, "an unresolved program ("+p.why+"): another process") {
 				return
 			}
-			yield(CLI, "an unresolved program ("+p.why+"), which may be the test binary, whose setup runs the CLI")
+			yield(CLI, "an unresolved program ("+p.why+"), which may be the CLI")
 		}
 	}
 }

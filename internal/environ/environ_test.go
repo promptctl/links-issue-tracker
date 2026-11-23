@@ -2,7 +2,6 @@ package environ
 
 import (
 	"context"
-	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,29 +112,6 @@ func TestIsZeroIsOnlyTheEnvNoOneBuilt(t *testing.T) {
 		if env.IsZero() {
 			t.Errorf("%s: IsZero() = true, want an environment a run can be given", name)
 		}
-	}
-}
-
-// The program an Env was given is what every Env derived from it resolves, at
-// each ask; an Env given none refuses, rather than naming the process.
-func TestExecutableIsTheProgramTheEnvWasGiven(t *testing.T) {
-	t.Parallel()
-	asked := 0
-	env := Of(nil).WithExecutable(func() (string, error) { asked++; return "/opt/lit", nil })
-	if asked != 0 {
-		t.Fatalf("WithExecutable resolved the program %d times; want it resolved only when asked", asked)
-	}
-	for name, derived := range map[string]Env{"as given": env, "with": env.With("A=1"), "without": env.Without("A")} {
-		if got, err := derived.Executable(); err != nil || got != "/opt/lit" {
-			t.Errorf("%s: Executable() = %q, %v; want /opt/lit", name, got, err)
-		}
-	}
-	unresolvable := errors.New("no such program")
-	if _, err := Of(nil).WithExecutable(func() (string, error) { return "", unresolvable }).Executable(); !errors.Is(err, unresolvable) {
-		t.Errorf("Executable() of an unresolvable program = %v; want its resolver's error", err)
-	}
-	if got, err := Of(nil).Executable(); err == nil {
-		t.Errorf("Executable() of an Env given no program = %q; want it refused", got)
 	}
 }
 

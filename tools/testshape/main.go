@@ -122,9 +122,10 @@
 //     may hold anything, so it is unresolved beside its static calls'
 //     arguments. A program is git when it names git; a CLI run when it is
 //     the test binary and the binary's setup reaches the CLI; another
-//     process otherwise. An unresolved program may be any of them: another
-//     process, and a CLI run where the setup reaches the CLI. The witness
-//     says which program, or why it is unresolved.
+//     process otherwise. An unresolved program may be any of them, a CLI
+//     built apart from the test binary included: another process and a CLI
+//     run, whatever the setup reaches. The witness says which program, or
+//     why it is unresolved.
 //
 // REFUSALS. A measure that measured nothing, or would mismeasure, names
 // each cause and prints no table:
