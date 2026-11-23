@@ -705,8 +705,14 @@ jobs:
           target: smoke
           tags: ghcr.io/${{ github.repository_owner }}/lit-release-builder:smoke-${{ steps.imgtag.outputs.tree }}
           push: true
+          # Reads the cache, never writes it. A cache export sends an index of
+          # the stages THIS build walked, and a `--target smoke` build walks only
+          # the smoke path, so exporting here replaces the full build's index
+          # with one that omits the other four ICU cross stages and the darwin
+          # toolchain, and the next release rebuilds them (~10 minutes).
+          # [LAW:single-enforcer] the full `final` build above is the only writer
+          # of the release-builder cache.
           cache-from: type=gha,scope=release-builder
-          cache-to: type=gha,scope=release-builder,mode=max
 
       - name: Upload snapshot dist/ for inspection
         if: always()
