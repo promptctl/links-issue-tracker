@@ -16,7 +16,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
@@ -44,10 +43,7 @@ func TestPrintWorkspaceIdentityReportsDerivedPrefix(t *testing.T) {
 	}
 	// A derived PrefixSpec is only mintable by the workspace resolver itself —
 	// the first resolve of a fresh repo derives the prefix from the repo name.
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	if !ws.IssuePrefix.Derived() {
 		t.Fatalf("first resolve of a fresh repo must derive the prefix")
 	}

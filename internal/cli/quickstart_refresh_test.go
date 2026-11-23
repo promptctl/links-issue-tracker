@@ -10,7 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config/configtest"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
@@ -18,10 +18,7 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
@@ -47,10 +44,7 @@ func TestQuickstartRefreshReportsIncompatibleHookAsSkipped(t *testing.T) {
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
 	if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {

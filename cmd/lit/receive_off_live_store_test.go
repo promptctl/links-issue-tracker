@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestReceiveFetchLeavesTheLiveStoreFree pins that the automatic receive's
@@ -96,10 +96,7 @@ func TestReceiveFetchLeavesTheLiveStoreFree(t *testing.T) {
 	receiving := isolatedEnv(xdgConfigHome, "0")
 	receiving["PATH"] = shimDir + string(os.PathListSeparator) + os.Getenv("PATH")
 	mustLit(consumer, receiving, "backlog")
-	ws, err := workspace.Resolve(testEnv(), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), consumer)
 	pid := receiveWorkerPID(t, ws)
 	endLine := fmt.Sprintf("receive end pid=%d ", pid)
 

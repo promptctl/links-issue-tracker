@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
@@ -76,10 +75,7 @@ func newSharedCheckouts(t *testing.T) (reRootedCheckouts, string) {
 // returns the re-root's parentless root.
 func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) string {
 	t.Helper()
-	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	alphaWS := workspacetest.Resolved(t, runEnv(t), r.alpha)
 	_, branch := syncHeadAndBranch(t, r.alpha)
 	reRooted, err := store.ReRoot(context.Background(), testStderr(t), alphaWS.DatabasePath, branch, cut)
 	if err != nil {
@@ -143,10 +139,7 @@ func (r reRootedCheckouts) assertFollowedCleanly(t *testing.T, entries []string,
 	if !strings.Contains(show, "bravo-title") || strings.Contains(show, "alpha-description") != wantDescription {
 		t.Fatalf("bravo's ticket after the follow (alpha's description expected: %v):\n%s", wantDescription, show)
 	}
-	ws, err := workspace.Resolve(runEnv(t), r.bravo)
-	if err != nil {
-		t.Fatalf("resolve bravo: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), r.bravo)
 	if _, err := os.Stat(receiveBlockPendingPath(ws)); !os.IsNotExist(err) {
 		t.Fatalf("a receive block is pending after the follow (stat err=%v)", err)
 	}
@@ -242,10 +235,7 @@ func TestSyncFetchWithNoKnownSyncBranchFetchesAndFollowsNothing(t *testing.T) {
 
 	runGit(t, remote, "symbolic-ref", "HEAD", "refs/heads/no-such-branch")
 	runGit(t, alpha, "remote", "set-head", "origin", "-d")
-	ws, err := workspace.Resolve(runEnv(t), alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), alpha)
 	if err := os.Remove(advertisedSyncBranchPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("remove the sync branch record: %v", err)
 	}

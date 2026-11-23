@@ -6,17 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	traceRef, err := recordAutomationTrace(ws, automationTraceRecord{
 		Trigger:    "startup-preflight",
@@ -59,10 +56,7 @@ func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	traceRefFile := filepath.Join(t.TempDir(), "trace-ref.txt")
 	setRunEnv(t, automationTriggerEnvVar, "git-pre-push")

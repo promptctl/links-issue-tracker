@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func writeProjectTemplateOverride(t *testing.T, repo, name, content string) {
@@ -84,10 +84,7 @@ func TestAnOpenThatBuildsTheDatabaseSaysSoOnItsEvent(t *testing.T) {
 	dir := t.TempDir()
 	runGit(t, dir, "init")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	for _, step := range []struct {
 		removeDatabase bool
 		args           []string

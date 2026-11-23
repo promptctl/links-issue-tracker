@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAReceiveThatMergesARefusedPushPushesTheMerge is links-storage-3k6u.bzg's
@@ -83,10 +83,7 @@ func TestAReceiveThatMergesARefusedPushPushesTheMerge(t *testing.T) {
 	}
 	// The refusal is classified by bravo's config, which runs the receive,
 	// not by the kill switch the push ran under.
-	bravoWS, err := workspace.Resolve(testEnv(), bravo)
-	if err != nil {
-		t.Fatalf("resolve bravo: %v", err)
-	}
+	bravoWS := workspacetest.Resolved(t, testEnv(), bravo)
 	marker, err := os.ReadFile(filepath.Join(bravoWS.StorageDir, "push-outcome.last"))
 	if err != nil {
 		t.Fatalf("read bravo's push-outcome marker: %v", err)

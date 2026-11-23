@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestWriteRehomedNamesEachMoveAndIsSilentWithoutOne(t *testing.T) {
@@ -163,10 +163,7 @@ func newPreContainmentBackup(t *testing.T) (repo, task, path string) {
 // restoreTraceRecord is the last sync trace record `lit backup restore` left.
 func restoreTraceRecord(t *testing.T, repo string) syncTraceRecord {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	var restore *syncTraceRecord
 	for _, record := range readSyncTraceRecords(t, ws) {
 		if record.Command == "lit backup restore" {

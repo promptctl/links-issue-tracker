@@ -10,7 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAnAutomaticReceivePrunesABranchTheRemoteDeleted drives the ticket's
@@ -55,10 +55,7 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 	runCLIInDir(t, producer, "new", "--title", "after-the-delete", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("resolve workspace %s: %v", consumer, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	recorder := telemetry.Begin(telemetry.Event{})
 	receiveOnce(telemetry.With(context.Background(), recorder), testStderr(t), runEnv(t), ws)
 
@@ -113,10 +110,7 @@ func TestAnAutomaticReceivePrunesABranchTheRemoteDeleted(t *testing.T) {
 // execOnStore runs each statement on the store of the workspace at dir.
 func execOnStore(t *testing.T, dir string, statements ...string) {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve workspace %s: %v", dir, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	ctx := context.Background()
 	st, err := engine.Open(ctx, runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {

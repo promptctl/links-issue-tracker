@@ -13,7 +13,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
@@ -122,10 +121,7 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 // and without the wait for a parent that this test process never lets exit.
 func receiveNow(t *testing.T, dir string) {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve workspace %s: %v", dir, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	receiveOnce(underInvocation(context.Background()), testStderr(t), runEnv(t), ws)
 }
 

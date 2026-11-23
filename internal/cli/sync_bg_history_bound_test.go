@@ -10,7 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestTheMirrorAloneKeepsTheHistoryBound drives alpha's writes past a small
@@ -31,10 +31,7 @@ func TestTheMirrorAloneKeepsTheHistoryBound(t *testing.T) {
 	for _, title := range []string{"one", "two", "three"} {
 		runCLIInDir(t, r.alpha, "new", "--title", title, "--topic", "demo", "--type", "task", "--parent", r.epic)
 	}
-	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	alphaWS := workspacetest.Resolved(t, runEnv(t), r.alpha)
 	before := dirBytes(t, alphaWS.DatabasePath)
 
 	runWorkerInDir(t, r.alpha, backgroundMirrorSubcommand)
@@ -91,10 +88,7 @@ func TestAPushWhoseBoundFiredProvesNothing(t *testing.T) {
 	isolateEvents(t)
 	runCLIInDir(t, r.alpha, "sync", "push")
 	seeded := boundRecordOf(t, lastEvent(t))["history_bound.height"].(float64)
-	alphaWS, err := workspace.Resolve(runEnv(t), r.alpha)
-	if err != nil {
-		t.Fatalf("resolve alpha: %v", err)
-	}
+	alphaWS := workspacetest.Resolved(t, runEnv(t), r.alpha)
 	proved, err := store.ReadReceivedRefs(alphaWS.DatabasePath)
 	if err != nil || proved == nil {
 		t.Fatalf("the seeding push's received-refs record = %q (%v); want the advertisement it proved", proved, err)

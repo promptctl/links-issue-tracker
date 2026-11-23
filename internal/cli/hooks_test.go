@@ -11,17 +11,14 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/templates"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	var stdout bytes.Buffer
 	if err := runWsFamily(t, hooksFamily, context.Background(), &stdout, ws, []string{"install"}); err != nil {
@@ -102,10 +99,7 @@ func TestPrePushHookSurfacesTheFailuresOwnRemedy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := t.TempDir()
 			runGit(t, repo, "init")
-			ws, err := workspace.Resolve(runEnv(t), repo)
-			if err != nil {
-				t.Fatalf("Resolve() error = %v", err)
-			}
+			ws := workspacetest.Resolved(t, runEnv(t), repo)
 			hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")
 			if tc.existing != "" {
 				if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
@@ -157,10 +151,7 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	hooksDir := filepath.Join(ws.GitCommonDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(hooks) error = %v", err)
@@ -192,10 +183,7 @@ func TestHooksInstallMigratesLegacyMarkers(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	hooksDir := filepath.Join(ws.GitCommonDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(hooks) error = %v", err)
@@ -264,10 +252,7 @@ func TestHooksInstallMarkerlessOverrideConverges(t *testing.T) {
 	runGit(t, repo, "init")
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	writeProjectTemplateOverride(t, repo, templates.PrePushHookTemplateName, "echo house-hook\n")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 
 	if _, err := installHooks(runEnv(t), ws); err != nil {
 		t.Fatalf("installHooks() first run error = %v", err)
@@ -305,10 +290,7 @@ func TestHooksInstallRejectsUnbalancedOverride(t *testing.T) {
 	setRunEnv(t, "XDG_CONFIG_HOME", t.TempDir())
 	writeProjectTemplateOverride(t, repo, templates.PrePushHookTemplateName,
 		litHookMarkers.begin+"\necho house-hook\n"+litHookMarkers.end+"\necho trailer\n")
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	hooksDir := filepath.Join(ws.GitCommonDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(hooks) error = %v", err)
@@ -319,7 +301,7 @@ func TestHooksInstallRejectsUnbalancedOverride(t *testing.T) {
 		t.Fatalf("WriteFile(pre-push) error = %v", err)
 	}
 
-	_, err = installHooks(runEnv(t), ws)
+	_, err := installHooks(runEnv(t), ws)
 	if err == nil {
 		t.Fatalf("installHooks() succeeded on an unbalanced override")
 	}

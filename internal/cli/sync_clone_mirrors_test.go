@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // pulledConsumer is a workspace that has pulled from a remote another
@@ -41,10 +42,7 @@ func pulledConsumer(t *testing.T) workspace.Info {
 	runCLIInDir(t, consumer, "init", "--skip-hooks")
 	runCLIInDir(t, consumer, "sync", "pull")
 
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	return ws
 }
 

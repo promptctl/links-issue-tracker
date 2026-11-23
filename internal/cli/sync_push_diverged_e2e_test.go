@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt has alpha and
@@ -71,10 +71,7 @@ func TestAPushRefusedOverAPeersPushNotifiesOnlyWhenNothingMergesIt(t *testing.T)
 				if merges := ev.Occurrences["push.outcomes"][0].(map[string]any)["push.receive_merges"]; merges != receive.on {
 					t.Fatalf("bravo's push.receive_merges = %v; want %t", merges, receive.on)
 				}
-				ws, err := workspace.Resolve(runEnv(t), r.bravo)
-				if err != nil {
-					t.Fatalf("resolve bravo: %v", err)
-				}
+				ws := workspacetest.Resolved(t, runEnv(t), r.bravo)
 				if rec, _, ok := lastPushOutcome(testStderr(t), ws, time.Now()); !ok || rec.Decision != receive.decision {
 					t.Fatalf("bravo's push-outcome marker = %+v (ok=%t); want %s", rec, ok, receive.decision)
 				}

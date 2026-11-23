@@ -27,6 +27,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // reexecEnvVar, when set on a child invocation of this test binary, makes
@@ -313,10 +314,7 @@ func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 
-	ws, err := workspace.Resolve(testEnv(), root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), root)
 	// The remote must carry lit data, or the receive's ask finds nothing to
 	// fetch and ends before it touches the store — there would be nothing to
 	// wedge. The push records the advertisement it left, which would make the
@@ -547,10 +545,7 @@ func TestAPeerPushReachesTheStoreThroughTheReceiveWorker(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	lit(consumer, quiet, "init", "--skip-hooks")
-	ws, err := workspace.Resolve(testEnv(), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), consumer)
 
 	lit(producer, quiet, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epic)
 	lit(producer, quiet, "sync", "push")
@@ -635,10 +630,7 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Inf
 	runGit(t, root, "remote", "add", "origin", remoteURL)
 	runGit(t, root, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
 
-	ws, err := workspace.Resolve(testEnv(), root)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), root)
 	return ws, cadenceConfig
 }
 

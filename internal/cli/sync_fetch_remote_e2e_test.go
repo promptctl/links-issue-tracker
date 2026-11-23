@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord drives
@@ -39,10 +39,7 @@ func TestSyncFetchSelectsTheSyncRemoteAndFailsOnAnUnreadableBranchRecord(t *test
 		t.Fatalf("`lit sync fetch --verbose` = %q, want %q", out, "fetched gh")
 	}
 
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	runGit(t, dir, "remote", "set-head", "gh", "--delete")
 	record := advertisedSyncBranchPath(ws, remoteName(t, "gh"))
 	if err := os.RemoveAll(record); err != nil {

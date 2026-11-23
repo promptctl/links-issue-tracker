@@ -143,10 +143,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
 	t.Parallel()
 	repo, runLit := initRepoForPrefixTest(t)
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)

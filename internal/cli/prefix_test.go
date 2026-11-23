@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // initRepoForPrefixTest stamps a fresh git repo + lit init in a temp dir and
@@ -178,10 +179,7 @@ func TestPrefixSetIdempotentWhenAlreadyCurrent(t *testing.T) {
 func TestPrefixSetApplyReportsThePrefixItReplaced(t *testing.T) {
 	t.Parallel()
 	repo, _ := initRepoForPrefixTest(t)
-	stale, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	stale := workspacetest.Resolved(t, runEnv(t), repo)
 	if _, _, err := workspace.UpdateConfig(stale.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
 		cfg.IssuePrefix = "between"
 		return cfg, nil

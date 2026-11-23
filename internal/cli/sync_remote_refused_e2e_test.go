@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync gives a checkout
@@ -54,10 +54,7 @@ func TestAGitRemoteDoltCannotHoldIsRefusedAndStopsNoOtherSync(t *testing.T) {
 
 	// The automatic receive ends on the refusal before it clones the store,
 	// with the one trace that names it.
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	before := len(readSyncTraceRecords(t, ws))
 	receiveNow(t, dir)
 	records := readSyncTraceRecords(t, ws)[before:]
@@ -90,10 +87,7 @@ func TestARemoteWhoseURLNamesNoOneRepositoryIsRefusedLikeAName(t *testing.T) {
 		t.Fatalf("`lit sync remote ls` = %q, want a refused and its Dolt remote gone", out)
 	}
 
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("workspace.Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	before := len(readSyncTraceRecords(t, ws))
 	receiveNow(t, dir)
 	records := readSyncTraceRecords(t, ws)[before:]

@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface drives the
@@ -56,10 +57,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 	runCLIInDir(t, producer, "new", "--title", "second-ticket", "--topic", "demo", "--type", "task", "--parent", epicID)
 	runCLIInDir(t, producer, "sync", "push")
 
-	ws, err := workspace.Resolve(runEnv(t), consumer)
-	if err != nil {
-		t.Fatalf("resolve consumer workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), consumer)
 	sink := filepath.Join(t.TempDir(), "notifications")
 	addOwnerNotifyHook(t, ws, `printf "%s\n" "$LIT_NOTIFY_KIND" >> `+shPath(sink))
 	if err := os.Remove(fetchRecordPath(ws, remoteName(t, "origin"))); err != nil && !os.IsNotExist(err) {
@@ -273,10 +271,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	runGit(t, dir, "push", "origin", "HEAD")
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve workspace: %v", err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
 	clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), ws)
 	if err != nil {

@@ -199,10 +199,7 @@ func TestFailedIdentityResolutionReleasesTheStore(t *testing.T) {
 	if minted := openStream(t, repo, AccessWrite); !minted.Present() {
 		t.Fatal("write-mode open minted nothing")
 	}
-	ws, err := workspace.Resolve(testEnv(), repo)
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
+	ws := workspacetest.Resolved(t, testEnv(), repo)
 	// The workspace package owns this filename; naming it here couples the two,
 	// but the coupling fails loudly rather than silently — a rename makes the
 	// damaged-token open below succeed, and this test fails.

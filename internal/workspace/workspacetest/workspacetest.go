@@ -1,5 +1,5 @@
-// Package workspacetest holds the one builder through which a test in any
-// package gets the workspace.Info it runs against.
+// Package workspacetest is where a test in any package gets the
+// workspace.Info it runs against.
 package workspacetest
 
 import (
