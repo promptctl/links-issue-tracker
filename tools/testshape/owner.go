@@ -19,6 +19,7 @@ type unclassified struct{}
 func (moduleCode) knowledge()   {}
 func (unclassified) knowledge() {}
 func (Effect) knowledge()       {}
+func (Read) knowledge()         {}
 func (SpawnArg) knowledge()     {}
 
 // owner is where a function's code lives, by the name the classification

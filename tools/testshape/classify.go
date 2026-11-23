@@ -89,7 +89,15 @@ type Effect struct {
 	Calls []string
 	// Names: what the call's first result names as a program to spawn.
 	Names Names
-	// TypeArgs: what a generic does with its type arguments.
+}
+
+// Read is the class of an outside function or method read in its source:
+// what a call of it does, and, for a generic, what it does with its type
+// arguments. Only the read section of the data file makes one, and Validate
+// holds it to the source its module's pin names. [LAW:parse-dont-validate]
+// what only a reading can say exists only here.
+type Read struct {
+	Effect   Effect
 	TypeArgs TypeArgs
 }
 
@@ -98,16 +106,27 @@ type Effect struct {
 type TypeArgs int
 
 const (
-	// TypeArgsConverted, the default: it calls its constraint's methods on
-	// them, and it may convert them to an interface, as any outside code
-	// converting them, so they are runtime types.
+	// TypeArgsConverted, every generic's unless read otherwise: it calls
+	// its constraint's methods on them, and it may convert them to an
+	// interface, as any outside code converting them, so they are runtime
+	// types.
 	TypeArgsConverted TypeArgs = iota
 	// TypeArgsConstraint, "typeargs:constraint": it converts none of them
 	// to an interface, and calls on them only its constraint's methods.
-	// That is read in the function's source, so only an entry under read,
-	// which names the source it was read at, may say it.
 	TypeArgsConstraint
 )
+
+// calls is what the generic does with its type argument's values, as a
+// witness says it.
+func (t TypeArgs) calls() string {
+	switch t {
+	case TypeArgsConverted:
+		return "calls its constraint's methods on"
+	case TypeArgsConstraint:
+		return "calls only its constraint's methods on"
+	}
+	panic(fmt.Sprintf("TypeArgs %d", t))
+}
 
 // Names is what a call's first result names as a program to spawn.
 type Names int
@@ -133,6 +152,7 @@ type SpawnField struct{}
 type ProgramArg0 struct{}
 
 func (Effect) class()      {}
+func (Read) class()        {}
 func (SpawnArg) class()    {}
 func (SpawnField) class()  {}
 func (ProgramArg0) class() {}
@@ -156,11 +176,33 @@ func parseClass(spec string) (Class, error) {
 	return parseEffect(spec)
 }
 
+// parseRead parses a Read: an Effect naming no program, with
+// "typeargs:constraint" in its list or alone.
+func parseRead(spec string) (Read, error) {
+	var r Read
+	var effect []string
+	for _, elem := range strings.Split(spec, ",") {
+		if elem == "typeargs:constraint" {
+			r.TypeArgs = TypeArgsConstraint
+			continue
+		}
+		effect = append(effect, elem)
+	}
+	if len(effect) == 0 {
+		return r, nil
+	}
+	e, err := parseEffect(strings.Join(effect, ","))
+	if err == nil && e.Names != NamesNothing {
+		err = fmt.Errorf("%q: a program's source is classified under functions", spec)
+	}
+	r.Effect = e
+	return r, err
+}
+
 // parseEffect parses an Effect: "none", or a comma-separated list of touch
-// names, "dispatching", "calls:Interface", "typeargs:constraint", and one of
-// "program:self" and "program:lookup". A package's default and an
-// initializer are Effects: a spawn is classified on the one function that
-// makes it.
+// names, "dispatching", "calls:Interface", and one of "program:self" and
+// "program:lookup". A package's default and an initializer are Effects: a
+// spawn is classified on the one function that makes it.
 func parseEffect(spec string) (Effect, error) {
 	if spec == "none" {
 		return Effect{}, nil
@@ -186,12 +228,11 @@ func parseEffect(spec string) (Effect, error) {
 			continue
 		}
 		if elem == "typeargs:constraint" {
-			e.TypeArgs = TypeArgsConstraint
-			continue
+			return Effect{}, fmt.Errorf("classification %q: typeargs:constraint is read in a generic's source, and is classified under read", spec)
 		}
 		i := slices.Index(touchNames[:], elem)
 		if i < 0 || Touch(i) == CLI {
-			return Effect{}, fmt.Errorf("classification %q: %q is not a touch an outside function makes (store, git, proc, net, fs, clock), dispatching, calls:Interface, typeargs:constraint, program:self, program:lookup or none", spec, elem)
+			return Effect{}, fmt.Errorf("classification %q: %q is not a touch an outside function makes (store, git, proc, net, fs, clock), dispatching, calls:Interface, program:self, program:lookup or none", spec, elem)
 		}
 		e.Touches = e.Touches.With(Touch(i))
 	}
@@ -218,48 +259,64 @@ type classificationFile struct {
 type moduleClassEntry struct {
 	Note string `json:"note,omitempty"`
 	Init string `json:"init"`
+	// Pin names each source of the module that the functions read in its
+	// packages were read in, as a build compiles it (see loaded.SourceOf).
+	Pin []string `json:"pin,omitempty"`
 }
 
 // packageClassEntry is one package's classification, or a pattern's. An
-// entry with no default takes the default (and the note) of the longest
-// pattern covering it that states one, so an entry need add only its
-// functions.
+// entry takes the default and the functions of the longest pattern covering
+// it, each of its own keys overriding the pattern's; its note is its own.
 type packageClassEntry struct {
 	Note      string            `json:"note,omitempty"`
-	Default   string            `json:"default,omitempty"`
+	Default   *string           `json:"default,omitempty"`
 	Functions map[string]string `json:"functions,omitempty"`
-	Read      *readEntry        `json:"read,omitempty"`
-}
-
-// readEntry is the functions classified from a reading of their source,
-// below what their package's default would charge: a formatter method a
-// callback reaches, which builds its text from its value; a generic that
-// calls on its type arguments only its constraint's methods. A reading
-// holds for the source it read, so At names it, as the build compiles it
-// (see loaded.SourceOf), and Validate refuses the entry once a measured
-// build compiles the package from any other.
-type readEntry struct {
-	Note      string            `json:"note,omitempty"`
-	At        []string          `json:"at"`
-	Functions map[string]string `json:"functions"`
+	// Read classifies functions and methods read in their source, below
+	// what the package's default would charge, each a Read.
+	Read map[string]string `json:"read,omitempty"`
 }
 
 // Classification is the parsed data file: every outside function's class,
 // the CLI's entry points, and git's names. [LAW:one-source-of-truth] it is
 // the one home of what code outside the module can do.
 type Classification struct {
-	cli      map[funcName]bool
-	git      []string
-	modules  map[string]Effect       // each module's initializers, by module path
-	packages map[string]packageClass // by import path, or a path prefix ending "/..."
+	cli     map[funcName]bool
+	git     []string
+	modules map[string]Effect   // each module's initializers, by module path
+	pins    map[string][]string // each pinned module's pin, sorted
+	// entries holds each entry's own classes, which Validate checks;
+	// packages each entry's classes with what it takes from the patterns
+	// covering it, which Lookup reads. Both by import path, or a path
+	// prefix ending "/...".
+	entries  map[string]packageEntry
+	packages map[string]packageClass
+}
+
+// packageEntry is an entry's own classes: its default, nil where it states
+// none, and its members.
+type packageEntry struct {
+	def *Effect
+	members
 }
 
 type packageClass struct {
-	def       Effect
+	def Effect
+	members
+}
+
+type members struct {
 	functions map[string]Call // "Name", "Type", "Type.Method", or "init", an Effect
 	fields    map[string]bool // "Type.Field" whose store names a spawn's program
 	arg0      map[string]bool // "Name" of a variable whose element 0 names the test binary
-	readAt    []string        // the sources its read functions were read at, sorted
+}
+
+// over is m with base's keys that m does not hold.
+func (m members) over(base members) members {
+	out := members{functions: maps.Clone(base.functions), fields: maps.Clone(base.fields), arg0: maps.Clone(base.arg0)}
+	maps.Copy(out.functions, m.functions)
+	maps.Copy(out.fields, m.fields)
+	maps.Copy(out.arg0, m.arg0)
+	return out
 }
 
 // funcName names a function as importpath + "." + key, where key is "Name"
@@ -289,13 +346,19 @@ func parseClassification(data []byte) (*Classification, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("classification file: %w", err)
 	}
-	c := &Classification{cli: map[funcName]bool{}, git: f.Git, modules: map[string]Effect{}, packages: map[string]packageClass{}}
+	c := &Classification{cli: map[funcName]bool{}, git: f.Git, modules: map[string]Effect{}, pins: map[string][]string{}, entries: map[string]packageEntry{}, packages: map[string]packageClass{}}
 	for path, e := range f.Modules {
 		init, err := parseEffect(e.Init)
 		if err != nil {
 			return nil, fmt.Errorf("classification file: module %s: %w", path, err)
 		}
 		c.modules[path] = init
+		if e.Pin != nil {
+			if len(e.Pin) == 0 {
+				return nil, fmt.Errorf("classification file: module %s: pin names no source", path)
+			}
+			c.pins[path] = slices.Sorted(slices.Values(e.Pin))
+		}
 	}
 	for _, s := range f.CLI {
 		n, err := parseCLIName(s)
@@ -305,106 +368,108 @@ func parseClassification(data []byte) (*Classification, error) {
 		c.cli[n] = true
 	}
 	for path, e := range f.Packages {
-		def, err := defaultOf(path, f.Packages)
+		pe, err := parsePackageEntry(path, e)
 		if err != nil {
-			return nil, fmt.Errorf("classification file: %s: default: %w", path, err)
+			return nil, fmt.Errorf("classification file: %w", err)
 		}
-		pc := packageClass{def: def, functions: map[string]Call{}, fields: map[string]bool{}, arg0: map[string]bool{}}
-		read := map[string]string{}
-		if e.Read != nil {
-			read = e.Read.Functions
-			pc.readAt = slices.Sorted(slices.Values(e.Read.At))
-			if len(pc.readAt) == 0 {
-				return nil, fmt.Errorf("classification file: %s: read names no source it was read at", path)
-			}
+		c.entries[path] = pe
+	}
+	for path := range c.entries {
+		if _, err := c.resolve(path); err != nil {
+			return nil, fmt.Errorf("classification file: %w", err)
 		}
-		for key, spec := range read {
-			if _, both := e.Functions[key]; both {
-				return nil, fmt.Errorf("classification file: %s.%s: classified both under functions and under read", path, key)
-			}
-			cl, err := parseClass(spec)
-			if err != nil {
-				return nil, fmt.Errorf("classification file: %s.%s: %w", path, key, err)
-			}
-			call, ok := cl.(Call)
-			if !ok || key == "init" {
-				return nil, fmt.Errorf("classification file: %s.%s: read classifies what a call of a function does", path, key)
-			}
-			pc.functions[key] = call
-		}
-		for key, spec := range e.Functions {
-			if key == "init" {
-				init, err := parseEffect(spec)
-				if err != nil {
-					return nil, fmt.Errorf("classification file: %s.init: %w", path, err)
-				}
-				if err := unread(init); err != nil {
-					return nil, fmt.Errorf("classification file: %s.init: %w", path, err)
-				}
-				pc.functions[key] = init
-				continue
-			}
-			cl, err := parseClass(spec)
-			if err != nil {
-				return nil, fmt.Errorf("classification file: %s.%s: %w", path, key, err)
-			}
-			switch cl := cl.(type) {
-			case SpawnField:
-				pc.fields[key] = true
-			case ProgramArg0:
-				pc.arg0[key] = true
-			case Effect:
-				if err := unread(cl); err != nil {
-					return nil, fmt.Errorf("classification file: %s.%s: %w", path, key, err)
-				}
-				pc.functions[key] = cl
-			case Call:
-				pc.functions[key] = cl
-			}
-		}
-		c.packages[path] = pc
 	}
 	return c, nil
 }
 
-// unread refuses, outside read, a class only a reading of a function's
-// source can give.
-func unread(e Effect) error {
-	if e.TypeArgs == TypeArgsConstraint {
-		return fmt.Errorf("typeargs:constraint is read in a generic's source, so it is classified under read, with the source it was read at")
+// parsePackageEntry parses the entry at path's own classes.
+func parsePackageEntry(path string, e packageClassEntry) (packageEntry, error) {
+	pe := packageEntry{members: members{functions: map[string]Call{}, fields: map[string]bool{}, arg0: map[string]bool{}}}
+	if e.Default != nil {
+		if *e.Default == "" {
+			return pe, fmt.Errorf("%s: default is empty; name a class, or leave it out to take the covering pattern's", path)
+		}
+		def, err := parseEffect(*e.Default)
+		if err != nil {
+			return pe, fmt.Errorf("%s: default: %w", path, err)
+		}
+		pe.def = &def
 	}
-	return nil
-}
-
-// defaultOf parses the default of the entry at path: its own, else that of
-// the longest pattern covering it that states one.
-func defaultOf(path string, entries map[string]packageClassEntry) (Effect, error) {
-	spec := entries[path].Default
-	if spec == "" {
-		best := ""
-		for pattern, e := range entries {
-			if pattern != path && e.Default != "" && covers(pattern, path) && len(pattern) > len(best) {
-				best, spec = pattern, e.Default
+	if path == builtin && len(e.Read) > 0 {
+		return pe, fmt.Errorf("%s: what the universe declares has no source to read", path)
+	}
+	for key, spec := range e.Read {
+		if _, both := e.Functions[key]; both {
+			return pe, fmt.Errorf("%s.%s: classified both under functions and under read", path, key)
+		}
+		if key == "init" {
+			return pe, fmt.Errorf("%s.init: read classifies what a call of a function or method does", path)
+		}
+		r, err := parseRead(spec)
+		if err != nil {
+			return pe, fmt.Errorf("%s.%s: %w", path, key, err)
+		}
+		pe.functions[key] = r
+	}
+	for key, spec := range e.Functions {
+		if key == "init" {
+			init, err := parseEffect(spec)
+			if err != nil {
+				return pe, fmt.Errorf("%s.init: %w", path, err)
 			}
+			pe.functions[key] = init
+			continue
+		}
+		cl, err := parseClass(spec)
+		if err != nil {
+			return pe, fmt.Errorf("%s.%s: %w", path, key, err)
+		}
+		switch cl := cl.(type) {
+		case SpawnField:
+			pe.fields[key] = true
+		case ProgramArg0:
+			pe.arg0[key] = true
+		case Call:
+			pe.functions[key] = cl
 		}
 	}
-	if spec == "" {
-		return Effect{}, fmt.Errorf("the entry states none, and no pattern covering it states one")
+	return pe, nil
+}
+
+// resolve is the entry at path's classes: its own over those of the
+// longest pattern covering it, resolved first.
+func (c *Classification) resolve(path string) (packageClass, error) {
+	if pc, ok := c.packages[path]; ok {
+		return pc, nil
 	}
-	def, err := parseEffect(spec)
-	if err != nil {
-		return Effect{}, err
+	e := c.entries[path]
+	var pc packageClass
+	if parent, ok := longestCovering(path, c.entries); ok {
+		base, err := c.resolve(parent)
+		if err != nil {
+			return pc, err
+		}
+		pc = packageClass{def: base.def, members: e.members.over(base.members)}
+	} else if e.def == nil {
+		return pc, fmt.Errorf("%s: the entry states no default, and no pattern covering it states one", path)
+	} else {
+		pc.members = e.members
 	}
-	return def, unread(def)
+	if e.def != nil {
+		pc.def = *e.def
+	}
+	c.packages[path] = pc
+	return pc, nil
 }
 
 // strictJSON refuses what decoding accepts without a word: a token after the
 // top-level value, and a key twice in one object, of which decoding keeps
-// the last. [LAW:no-silent-failure] either way an entry someone wrote would
+// the last; two keys are one as decoding matches a field's name, ignoring
+// case. [LAW:no-silent-failure] either way an entry someone wrote would
 // classify nothing.
 func strictJSON(data []byte) error {
 	type frame struct {
-		keys    map[string]bool // nil for an array
+		keys    []string // nil for an array
 		wantKey bool
 	}
 	var stack []*frame
@@ -435,15 +500,15 @@ func strictJSON(data []byte) error {
 				continue
 			}
 			key := tok.(string)
-			if stack[n-1].keys[key] {
-				return fmt.Errorf("key %q appears twice in one object, at byte %d", key, dec.InputOffset())
+			if i := slices.IndexFunc(stack[n-1].keys, func(k string) bool { return strings.EqualFold(k, key) }); i >= 0 {
+				return fmt.Errorf("key %q appears twice in one object, as %q, at byte %d", key, stack[n-1].keys[i], dec.InputOffset())
 			}
-			stack[n-1].keys[key], stack[n-1].wantKey = true, false
+			stack[n-1].keys, stack[n-1].wantKey = append(stack[n-1].keys, key), false
 			continue
 		}
 		switch tok {
 		case json.Delim('{'):
-			stack = append(stack, &frame{keys: map[string]bool{}, wantKey: true})
+			stack = append(stack, &frame{keys: []string{}, wantKey: true})
 		case json.Delim('['):
 			stack = append(stack, &frame{})
 		case json.Delim(']'):
@@ -461,13 +526,20 @@ func (c *Classification) packageFor(path string) (packageClass, bool) {
 	if pc, ok := c.packages[path]; ok {
 		return pc, true
 	}
+	pattern, ok := longestCovering(path, c.packages)
+	return c.packages[pattern], ok
+}
+
+// longestCovering is the longest "/..." pattern among entries' keys, other
+// than path itself, that covers path.
+func longestCovering[V any](path string, entries map[string]V) (string, bool) {
 	best, found := "", false
-	for pattern := range c.packages {
-		if covers(pattern, path) && len(pattern) > len(best) {
+	for pattern := range entries {
+		if pattern != path && covers(pattern, path) && len(pattern) > len(best) {
 			best, found = pattern, true
 		}
 	}
-	return c.packages[best], found
+	return best, found
 }
 
 // covers reports whether the "/..." pattern covers the package at path.
@@ -580,9 +652,10 @@ const builtin = "builtin"
 // field or variable no package it covers declares, a module no build links,
 // a CLI entry point outside the suite's modules, whose code alone a walk
 // reads — and each class its member cannot have; each linked module with no
-// entry; and each package read in its source that a measured build compiles
-// from a source not read. [LAW:no-silent-failure] an entry
-// that names nothing classifies nothing, silently; it is dead, and the
+// entry; each module whose packages hold a read function and that has no
+// pin, or that a measured build compiles from a source its pin does not
+// name; and each pin no read function needs. [LAW:no-silent-failure] an
+// entry that names nothing classifies nothing, silently; it is dead, and the
 // refusal says to delete it. A reading of other source than the build's
 // classifies code nobody read.
 func (c *Classification) Validate(s loadedSuite) error {
@@ -598,7 +671,8 @@ func (c *Classification) Validate(s loadedSuite) error {
 			problems = append(problems, fmt.Sprintf("module %s: a measured build links its packages, and the classification has no entry for it", mod))
 		}
 	}
-	for path, pc := range c.packages {
+	read := map[string]bool{} // the modules whose packages hold a read function
+	for path, pc := range c.entries {
 		scopes := scopesOf(path, universe)
 		if len(scopes) == 0 {
 			problems = append(problems, fmt.Sprintf("%s: the suite loads no package it names; delete the entry", path))
@@ -631,11 +705,19 @@ func (c *Classification) Validate(s loadedSuite) error {
 			check(key, ProgramArg0{})
 		}
 		calls := map[string]bool{}
-		for _, cl := range append([]Call{pc.def}, slices.Collect(maps.Values(pc.functions))...) {
-			if e, ok := cl.(Effect); ok {
-				for _, name := range e.Calls {
-					calls[name] = true
+		effects := slices.Collect(maps.Values(pc.functions))
+		if pc.def != nil {
+			effects = append(effects, *pc.def)
+		}
+		for _, cl := range effects {
+			switch cl := cl.(type) {
+			case Read:
+				for _, sc := range scopes {
+					read[s.moduleOf[sc.pkg.Path()]] = true
 				}
+				cl.Effect.callsInto(calls)
+			case Effect:
+				cl.callsInto(calls)
 			}
 		}
 		for name := range calls {
@@ -643,19 +725,27 @@ func (c *Classification) Validate(s loadedSuite) error {
 				problems = append(problems, fmt.Sprintf("%s: calls:%s names no interface the suite loads", path, name))
 			}
 		}
-		if pc.readAt == nil {
+	}
+	for mod := range read {
+		pin, ok := c.pins[mod]
+		if !ok {
+			problems = append(problems, fmt.Sprintf("module %s: its packages hold functions read in their source, and it has no pin naming the source they were read in", mod))
 			continue
 		}
-		unread := map[string]bool{}
-		for _, sc := range scopes {
-			for src := range linked[s.moduleOf[sc.pkg.Path()]] {
-				if !slices.Contains(pc.readAt, src) {
-					unread[src] = true
-				}
+		var unread []string
+		for src := range linked[mod] {
+			if !slices.Contains(pin, src) {
+				unread = append(unread, src)
 			}
 		}
 		if len(unread) > 0 {
-			problems = append(problems, fmt.Sprintf("%s: read at %s, and a measured build compiles it from %s; re-read the source of each function under read there, and update read.at", path, strings.Join(pc.readAt, ", "), strings.Join(slices.Sorted(maps.Keys(unread)), ", ")))
+			slices.Sort(unread)
+			problems = append(problems, fmt.Sprintf("module %s: pinned at %s, and a measured build compiles it from %s; re-read there the source of each function read in its packages, and update its pin", mod, strings.Join(pin, ", "), strings.Join(unread, ", ")))
+		}
+	}
+	for mod := range c.pins {
+		if !read[mod] {
+			problems = append(problems, fmt.Sprintf("module %s: a pin, and no package of it holds a function read in its source; delete the pin", mod))
 		}
 	}
 	for n := range c.cli {
@@ -727,12 +817,11 @@ func checkMember(s scope, key string, cl Class) (found bool, err error) {
 		case *types.Func:
 			return true, fits(cl, o)
 		case *types.TypeName:
-			e, call := cl.(Effect)
-			if !call || e.Names != NamesNothing {
-				return true, fmt.Errorf("a type is neither a spawner nor a program's source")
+			if _, read := cl.(Read); read {
+				return true, fmt.Errorf("read names each function and method it read, and %s is a type", name)
 			}
-			if n, _ := o.Type().(*types.Named); e.TypeArgs == TypeArgsConstraint && (n == nil || n.TypeParams().Len() == 0) {
-				return true, fmt.Errorf("typeargs:constraint classifies a generic, and %s is none", name)
+			if e, call := cl.(Effect); !call || e.Names != NamesNothing {
+				return true, fmt.Errorf("a type is neither a spawner nor a program's source")
 			}
 			return true, nil
 		default:
@@ -773,7 +862,7 @@ func checkMember(s scope, key string, cl Class) (found bool, err error) {
 
 // fits refuses a spawn argument past fn's parameters; a program's source
 // whose first result is not a string, or, for program:lookup, whose first
-// parameter is not; and typeargs:constraint on a function no generic.
+// parameter is not; and typeargs:constraint on what is no generic.
 func fits(cl Class, fn *types.Func) error {
 	sig := fn.Signature()
 	isString := func(vars *types.Tuple) bool {
@@ -784,10 +873,12 @@ func fits(cl Class, fn *types.Func) error {
 		if cl.Arg >= sig.Params().Len() {
 			return fmt.Errorf("spawn argument is not a parameter of %s", fn.Name())
 		}
-	case Effect:
-		if cl.TypeArgs == TypeArgsConstraint && sig.TypeParams().Len() == 0 && sig.RecvTypeParams().Len() == 0 {
+	case Read:
+		if cl.TypeArgs == TypeArgsConstraint && !isGeneric(fn) {
 			return fmt.Errorf("typeargs:constraint classifies a generic, and %s is none", fn.Name())
 		}
+		return fits(cl.Effect, fn)
+	case Effect:
 		if cl.Names != NamesNothing && !isString(sig.Results()) {
 			return fmt.Errorf("%s's first result is not a string, so it names no program", fn.Name())
 		}
@@ -796,4 +887,29 @@ func fits(cl Class, fn *types.Func) error {
 		}
 	}
 	return nil
+}
+
+// isGeneric reports whether fn is a generic function or a method of a
+// generic type, instantiated or not.
+func isGeneric(fn *types.Func) bool {
+	sig := fn.Signature()
+	if sig.TypeParams().Len() > 0 {
+		return true
+	}
+	if sig.Recv() == nil {
+		return false
+	}
+	recv := types.Unalias(sig.Recv().Type())
+	if p, ok := recv.(*types.Pointer); ok {
+		recv = types.Unalias(p.Elem())
+	}
+	n, ok := recv.(*types.Named)
+	return ok && n.Origin().TypeParams().Len() > 0
+}
+
+// callsInto adds each interface e calls back to calls.
+func (e Effect) callsInto(calls map[string]bool) {
+	for _, name := range e.Calls {
+		calls[name] = true
+	}
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"go/types"
 	"strings"
 
@@ -44,7 +45,8 @@ type throughType struct {
 }
 
 // typeArgument is a reach through a type argument of an outside generic,
-// generic, which calls its constraint's methods on the type's values.
+// generic, which calls its constraint's methods on the type's values, as its
+// class says.
 type typeArgument struct {
 	generic string
 	typ     types.Type
@@ -56,8 +58,7 @@ func (c converting) text(q types.Qualifier) string {
 	return "converts " + types.TypeString(c.typ, q) + " to an interface"
 }
 func (t typeArgument) text(q types.Qualifier) string {
-	calls := map[TypeArgs]string{TypeArgsConverted: " calls its constraint's methods on ", TypeArgsConstraint: " calls only its constraint's methods on "}[t.class]
-	return "outside generic " + t.generic + calls + types.TypeString(t.typ, q)
+	return "outside generic " + t.generic + " " + t.class.calls() + " " + types.TypeString(t.typ, q)
 }
 func (t throughFunc) text(types.Qualifier) string {
 	return t.how + " reaches value " + t.where.text()
@@ -67,14 +68,34 @@ func (t throughType) text(q types.Qualifier) string {
 }
 
 // entryOrigin is where an entry of the RTA state was made: the setup or the
-// test that made it exist, and the function that made it, in its body
-// ("made in"), or, an outside generic, by converting its type argument
-// ("converted by outside generic").
+// test that made it exist, and the function that made it, as how says.
 type entryOrigin struct {
-	origin, made, creator string
+	origin  string
+	how     making
+	creator string
 }
 
-func (o entryOrigin) text() string { return "from " + o.origin + ", " + o.made + " " + o.creator }
+func (o entryOrigin) text() string {
+	return "from " + o.origin + ", " + o.how.text() + " " + o.creator
+}
+
+// making is how a function made an entry of the RTA state.
+type making int
+
+const (
+	madeIn      making = iota // in its body
+	convertedBy               // an outside generic, converting its type argument
+)
+
+func (m making) text() string {
+	switch m {
+	case madeIn:
+		return "made in"
+	case convertedBy:
+		return "converted by outside generic"
+	}
+	panic(fmt.Sprintf("making %d", m))
+}
 
 // witness is one chain of functions from a walk's root to a touch.
 type witness struct {

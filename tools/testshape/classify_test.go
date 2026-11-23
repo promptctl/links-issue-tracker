@@ -5,6 +5,8 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -23,7 +25,6 @@ func TestAClassParsesToAnEffectOrASpawn(t *testing.T) {
 		"spawn:2":                          SpawnArg{Arg: 2},
 		"spawn:field":                      SpawnField{},
 		"git,dispatching,net,proc,fs":      Effect{Touches: Touches(0).With(Git).With(Net).With(Proc).With(FS), Dispatching: true},
-		"typeargs:constraint":              Effect{TypeArgs: TypeArgsConstraint},
 		"store,git,proc,net,fs,clock":      Effect{Touches: Touches(0).With(Store).With(Git).With(Proc).With(Net).With(FS).With(Clock)},
 	} {
 		got, err := parseClass(spec)
@@ -33,6 +34,31 @@ func TestAClassParsesToAnEffectOrASpawn(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("parseClass(%q) = %#v, want %#v", spec, got, want)
+		}
+	}
+}
+
+func TestAReadParsesToAnEffectAndWhatItDoesWithItsTypeArguments(t *testing.T) {
+	for spec, want := range map[string]Read{
+		"none":                      {},
+		"typeargs:constraint":       {TypeArgs: TypeArgsConstraint},
+		"none,typeargs:constraint":  {TypeArgs: TypeArgsConstraint},
+		"fs,typeargs:constraint":    {Effect: Effect{Touches: Touches(0).With(FS)}, TypeArgs: TypeArgsConstraint},
+		"calls:fmt.Stringer":        {Effect: Effect{Calls: []string{"fmt.Stringer"}}},
+		"typeargs:constraint,clock": {Effect: Effect{Touches: Touches(0).With(Clock)}, TypeArgs: TypeArgsConstraint},
+	} {
+		got, err := parseRead(spec)
+		if err != nil {
+			t.Errorf("parseRead(%q) error = %v", spec, err)
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("parseRead(%q) = %#v, want %#v", spec, got, want)
+		}
+	}
+	for _, spec := range []string{"", "spawn:0", "spawn:field", "program:self", "fs,program:lookup", "typeargs:all"} {
+		if _, err := parseRead(spec); err == nil {
+			t.Errorf("parseRead(%q) accepted it", spec)
 		}
 	}
 }
@@ -50,27 +76,33 @@ func TestAClassNamingNoTouchRefuses(t *testing.T) {
 
 func TestAClassificationFileRefusesWhatItCannotParse(t *testing.T) {
 	for name, data := range map[string]string{
-		"an unknown field":          `{"packages": {}, "extra": 1}`,
-		"a bad default":             `{"packages": {"os": {"default": "disk"}}}`,
-		"a field as a default":      `{"packages": {"os/exec": {"default": "spawn:field"}}}`,
-		"a bad function":            `{"packages": {"os": {"default": "fs", "functions": {"Getenv": "nothing"}}}}`,
-		"a cli without a .":         `{"cli": ["nowhere"], "packages": {}}`,
-		"a cli naming a path":       `{"cli": ["example.com/a.b/c"], "packages": {}}`,
-		"not a json object":         `[]`,
-		"an unknown package key":    `{"packages": {"os": {"default": "fs", "notes": "x"}}}`,
-		"a bad module init":         `{"modules": {"example.com/m": {"init": "disk"}}, "packages": {}}`,
-		"a field as an init":        `{"modules": {"example.com/m": {"init": "spawn:field"}}, "packages": {}}`,
-		"a spawn as an init":        `{"modules": {"example.com/m": {"init": "spawn:0"}}, "packages": {}}`,
-		"a spawn as a default":      `{"packages": {"os": {"default": "spawn:0"}}}`,
-		"a spawn as a package init": `{"packages": {"os": {"default": "fs", "functions": {"init": "spawn:0"}}}}`,
-		"arg0 as a default":         `{"packages": {"os": {"default": "program:arg0"}}}`,
-		"two programs":              `{"packages": {"os": {"default": "fs", "functions": {"Executable": "program:self,program:lookup"}}}}`,
-		"no default, no pattern":    `{"packages": {"os": {"functions": {"Getenv": "none"}}}}`,
-		"typeargs unread":           `{"packages": {"slices": {"default": "none", "functions": {"Clone": "typeargs:constraint"}}}}`,
-		"typeargs as a default":     `{"packages": {"slices": {"default": "typeargs:constraint"}}}`,
-		"a read naming no source":   `{"packages": {"slices": {"default": "none", "read": {"at": [], "functions": {"Clone": "typeargs:constraint"}}}}}`,
-		"a key read and not":        `{"packages": {"slices": {"default": "none", "functions": {"Clone": "none"}, "read": {"at": ["std@go1"], "functions": {"Clone": "typeargs:constraint"}}}}}`,
-		"a spawn field read":        `{"packages": {"os/exec": {"default": "none", "read": {"at": ["std@go1"], "functions": {"Cmd.Path": "spawn:field"}}}}}`,
+		"an unknown field":           `{"packages": {}, "extra": 1}`,
+		"a bad default":              `{"packages": {"os": {"default": "disk"}}}`,
+		"a field as a default":       `{"packages": {"os/exec": {"default": "spawn:field"}}}`,
+		"a bad function":             `{"packages": {"os": {"default": "fs", "functions": {"Getenv": "nothing"}}}}`,
+		"a cli without a .":          `{"cli": ["nowhere"], "packages": {}}`,
+		"a cli naming a path":        `{"cli": ["example.com/a.b/c"], "packages": {}}`,
+		"not a json object":          `[]`,
+		"an unknown package key":     `{"packages": {"os": {"default": "fs", "notes": "x"}}}`,
+		"a bad module init":          `{"modules": {"example.com/m": {"init": "disk"}}, "packages": {}}`,
+		"a field as an init":         `{"modules": {"example.com/m": {"init": "spawn:field"}}, "packages": {}}`,
+		"a spawn as an init":         `{"modules": {"example.com/m": {"init": "spawn:0"}}, "packages": {}}`,
+		"a spawn as a default":       `{"packages": {"os": {"default": "spawn:0"}}}`,
+		"a spawn as a package init":  `{"packages": {"os": {"default": "fs", "functions": {"init": "spawn:0"}}}}`,
+		"arg0 as a default":          `{"packages": {"os": {"default": "program:arg0"}}}`,
+		"two programs":               `{"packages": {"os": {"default": "fs", "functions": {"Executable": "program:self,program:lookup"}}}}`,
+		"no default, no pattern":     `{"packages": {"os": {"functions": {"Getenv": "none"}}}}`,
+		"an empty default":           `{"packages": {"os": {"default": ""}}}`,
+		"typeargs unread":            `{"packages": {"slices": {"default": "none", "functions": {"Clone": "typeargs:constraint"}}}}`,
+		"typeargs as a default":      `{"packages": {"slices": {"default": "typeargs:constraint"}}}`,
+		"typeargs as an init":        `{"modules": {"std": {"init": "typeargs:constraint"}}, "packages": {}}`,
+		"typeargs as a package init": `{"packages": {"slices": {"default": "none", "functions": {"init": "typeargs:constraint"}}}}`,
+		"a pin naming no source":     `{"modules": {"std": {"init": "none", "pin": []}}, "packages": {}}`,
+		"a key read and not":         `{"packages": {"slices": {"default": "none", "functions": {"Clone": "none"}, "read": {"Clone": "typeargs:constraint"}}}}`,
+		"a spawn field read":         `{"packages": {"os/exec": {"default": "none", "read": {"Cmd.Path": "spawn:field"}}}}`,
+		"a program read":             `{"packages": {"os": {"default": "fs", "read": {"Executable": "program:self"}}}}`,
+		"an init read":               `{"packages": {"os": {"default": "fs", "read": {"init": "none"}}}}`,
+		"a read under builtin":       `{"packages": {"builtin": {"default": "none", "read": {"error.Error": "none"}}}}`,
 	} {
 		if _, err := parseClassification([]byte(data)); err == nil || !strings.HasPrefix(err.Error(), "classification file: ") {
 			t.Errorf("%s: parseClassification error = %v, want a classification file error", name, err)
@@ -80,11 +112,12 @@ func TestAClassificationFileRefusesWhatItCannotParse(t *testing.T) {
 
 func TestAClassificationFileRefusesWhatDecodingWouldDrop(t *testing.T) {
 	for name, tc := range map[string]struct{ data, want string }{
-		"a second value":          {`{"packages": {}} {"packages": {}}`, "classification file: { follows the top-level value"},
-		"a trailing scalar":       {`{"packages": {}} 1`, "classification file: 1 follows the top-level value"},
-		"a key twice":             {`{"packages": {"os": {"default": "fs"}, "os": {"default": "none"}}}`, `classification file: key "os" appears twice in one object`},
-		"a function key twice":    {`{"packages": {"os": {"default": "fs", "functions": {"Getenv": "none", "Getenv": "fs"}}}}`, `classification file: key "Getenv" appears twice in one object`},
-		"a top-level field twice": {`{"git": ["git"], "packages": {}, "git": []}`, `classification file: key "git" appears twice in one object`},
+		"a second value":             {`{"packages": {}} {"packages": {}}`, "classification file: { follows the top-level value"},
+		"a trailing scalar":          {`{"packages": {}} 1`, "classification file: 1 follows the top-level value"},
+		"a key twice":                {`{"packages": {"os": {"default": "fs"}, "os": {"default": "none"}}}`, `classification file: key "os" appears twice in one object`},
+		"a function key twice":       {`{"packages": {"os": {"default": "fs", "functions": {"Getenv": "none", "Getenv": "fs"}}}}`, `classification file: key "Getenv" appears twice in one object`},
+		"a top-level field twice":    {`{"git": ["git"], "packages": {}, "git": []}`, `classification file: key "git" appears twice in one object`},
+		"a field twice in two cases": {`{"packages": {"os": {"default": "fs", "Default": "none"}}}`, `classification file: key "Default" appears twice in one object, as "default"`},
 	} {
 		if _, err := parseClassification([]byte(tc.data)); err == nil || !strings.HasPrefix(err.Error(), tc.want) {
 			t.Errorf("%s: parseClassification error = %v, want one starting %q", name, err, tc.want)
@@ -111,9 +144,9 @@ func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 			"os": {"default": "fs", "functions": {"Getenv": "none", "Process": "proc", "Process.Pid": "none", "init": "none"}},
 			"os/exec": {"default": "none", "functions": {"Command": "spawn:0", "Cmd.Path": "spawn:field"}},
 			"example.com/dolt/...": {"default": "store,git"},
-			"example.com/dolt/utils/...": {"default": "fs"},
+			"example.com/dolt/utils/...": {"default": "fs", "functions": {"Sum": "none", "Node.String": "clock"}},
 			"example.com/dolt/utils/hash": {"default": "none"},
-			"example.com/dolt/utils/fs/tree": {"read": {"at": ["example.com/dolt@v1"], "functions": {"Node.String": "none", "Map": "typeargs:constraint"}}}
+			"example.com/dolt/utils/fs/tree": {"read": {"Node.String": "none", "Map": "typeargs:constraint"}}
 		}
 	}`))
 	if err != nil {
@@ -135,8 +168,10 @@ func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 		{"example.com/dolt/utils/fs", "Open", fs},                      // the longest pattern wins
 		{"example.com/dolt/utils/hash", "Of", Effect{}},                // an exact entry over any pattern
 		{"example.com/dolt/utils/fs/tree", "Walk", fs},                 // an entry with no default takes its pattern's
-		{"example.com/dolt/utils/fs/tree", "Node.String", Effect{}},    // and adds its read functions
-		{"example.com/dolt/utils/fs/tree", "Map", Effect{TypeArgs: TypeArgsConstraint}},
+		{"example.com/dolt/utils/fs/tree", "Sum", Effect{}},            // and its functions
+		{"example.com/dolt/utils/hash", "Sum", Effect{}},               // with a default of its own too
+		{"example.com/dolt/utils/fs/tree", "Node.String", Read{}},      // its own keys over the pattern's
+		{"example.com/dolt/utils/fs/tree", "Map", Read{TypeArgs: TypeArgsConstraint}},
 		{"strings", "Cut", unclassified{}},           // nothing names it
 		{"example.com/doltish", "F", unclassified{}}, // a pattern covers whole elements
 	} {
@@ -226,10 +261,10 @@ func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
 	})
 	class, err := parseClassification([]byte(`{
 		"cli": ["example.com/app/main.Main"],
-		"modules": {"std": {"init": "none"}, "example.com/tree": {"init": "none"}},
+		"modules": {"std": {"init": "none"}, "example.com/tree": {"init": "none", "pin": ["example.com/tree@v0.9.0", "example.com/tree@v1.0.0"]}},
 		"packages": {
 			"builtin": {"default": "none", "functions": {"error.Error": "calls:error"}},
-			"example.com/tree/a": {"read": {"at": ["example.com/tree@v0.9.0", "example.com/tree@v1.0.0"], "functions": {"Map": "typeargs:constraint", "Set": "typeargs:constraint", "Open": "none"}}},
+			"example.com/tree/a": {"read": {"Map": "typeargs:constraint", "Set.Add": "typeargs:constraint", "Open": "none"}},
 			"example.com/run": {"default": "none", "functions": {"Start": "spawn:0", "Cmd.Run": "proc", "Cmd.Path": "spawn:field", "init": "none", "Args": "program:arg0", "Self": "program:self", "Find": "fs,program:lookup"}},
 			"example.com/tree/...": {"default": "fs", "functions": {"Open": "calls:example.com/tree/b.I", "I.Do": "net"}}
 		}
@@ -243,20 +278,22 @@ func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
 }
 
 func TestValidateRefusesEveryDeadEntry(t *testing.T) {
-	suite := suiteFrom(t, map[string]map[string]bool{"example.com/linked": {"example.com/linked@v1": true}, "example.com/tree": {"example.com/tree@v2": true, "./tree": true}}, map[string]string{
+	suite := suiteFrom(t, map[string]map[string]bool{"example.com/linked": {"example.com/linked@v1": true}, "example.com/tree": {"example.com/tree@v2": true, "./tree@h1:x": true}, "example.com/lone": {"example.com/lone@v1": true}}, map[string]string{
 		"example.com/run":      "package run; type Cmd struct{ Path string }; func Start(name string) {}; var Count int; func Self() error { return nil }; func Find(n int) string { return \"\" }; func Main() {}",
-		"example.com/tree/a":   "package a; func Open() {}; type Node struct{}",
+		"example.com/tree/a":   "package a; func Open() {}; type Node struct{}; type Set[T any] struct{}",
+		"example.com/lone/x":   "package x; func F() {}",
 		"example.com/app/main": "package main; func Main() {}",
 	})
 	class, err := parseClassification([]byte(`{
 		"cli": ["example.com/gone.Main", "example.com/app/main.Gone", "example.com/run.Main"],
-		"modules": {"example.com/unlinked": {"init": "none"}},
+		"modules": {"example.com/unlinked": {"init": "none", "pin": ["example.com/unlinked@v1"]}, "example.com/tree": {"init": "none", "pin": ["example.com/tree@v1"]}, "example.com/lone": {"init": "none"}},
 		"packages": {
 			"example.com/gone": {"default": "none"},
 			"example.com/none/...": {"default": "none"},
 			"example.com/run": {"default": "none", "functions": {"Start": "spawn:1", "Stop": "none", "Cmd.Dir": "spawn:field", "Cmd": "spawn:0", "Count": "program:arg0", "Start2": "program:arg0", "Self": "program:self", "Find": "program:lookup"}},
 			"example.com/tree/...": {"default": "none", "functions": {"Close": "none", "Open": "calls:example.com/tree/a.Open"}},
-			"example.com/tree/a": {"read": {"at": ["example.com/tree@v1"], "functions": {"Open": "typeargs:constraint", "Node": "typeargs:constraint"}}}
+			"example.com/tree/a": {"read": {"Open": "typeargs:constraint", "Node": "none", "Set": "typeargs:constraint"}},
+			"example.com/lone/x": {"default": "none", "read": {"F": "none"}}
 		}
 	}`))
 	if err != nil {
@@ -282,9 +319,12 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 		"example.com/run.Cmd: a type is neither a spawner nor a program's source",
 		"example.com/tree/....Close: no package it names declares Close; delete the entry",
 		"example.com/tree/...: calls:example.com/tree/a.Open names no interface the suite loads",
-		"example.com/tree/a: read at example.com/tree@v1, and a measured build compiles it from ./tree, example.com/tree@v2; re-read the source of each function under read there, and update read.at",
+		"module example.com/tree: pinned at example.com/tree@v1, and a measured build compiles it from ./tree@h1:x, example.com/tree@v2; re-read there the source of each function read in its packages, and update its pin",
+		"module example.com/lone: its packages hold functions read in their source, and it has no pin naming the source they were read in",
+		"module example.com/unlinked: a pin, and no package of it holds a function read in its source; delete the pin",
 		"example.com/tree/a.Open: typeargs:constraint classifies a generic, and Open is none",
-		"example.com/tree/a.Node: typeargs:constraint classifies a generic, and Node is none",
+		"example.com/tree/a.Node: read names each function and method it read, and Node is a type",
+		"example.com/tree/a.Set: read names each function and method it read, and Set is a type",
 		"module example.com/unlinked: no measured build links a package of it; delete the entry",
 		"module example.com/linked: a measured build links its packages, and the classification has no entry for it",
 	} {
@@ -297,5 +337,48 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 func TestTheEmbeddedClassificationParses(t *testing.T) {
 	if _, err := parseClassification(classificationData); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAPinOfADirectoryModuleRefusesOnceAFileInItChanges(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS(filepath.Join(shapeDir, "nested"))); err != nil {
+		t.Fatal(err)
+	}
+	m := &listedModule{Path: "example.com/nested", Replace: &struct{ Path, Version, Dir string }{Path: "./nested", Dir: dir}}
+	read, err := m.source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(read, "./nested@h1:") {
+		t.Fatalf("source = %q, want ./nested@ the hash of its content", read)
+	}
+	class, err := parseClassification([]byte(`{
+		"modules": {"example.com/nested": {"init": "none", "pin": ["` + read + `"]}},
+		"packages": {"example.com/nested/strs": {"default": "none", "read": {"Join": "none"}}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{"example.com/nested/strs": "package strs; func Join() {}"}
+	if err := class.Validate(suiteFrom(t, map[string]map[string]bool{"example.com/nested": {read: true}}, sources)); err != nil {
+		t.Fatalf("Validate at the source read = %v, want nil", err)
+	}
+	f := filepath.Join(dir, "strs", "strs.go")
+	src, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f, append(src, "\n// changed\n"...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := m.source()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = class.Validate(suiteFrom(t, map[string]map[string]bool{"example.com/nested": {changed: true}}, sources))
+	want := "module example.com/nested: pinned at " + read + ", and a measured build compiles it from " + changed + "; re-read there the source of each function read in its packages, and update its pin"
+	if err == nil || !strings.Contains(err.Error(), "\n  "+want) {
+		t.Errorf("Validate after a change = %v\nwant it to say %s", err, want)
 	}
 }

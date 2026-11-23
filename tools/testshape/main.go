@@ -98,10 +98,11 @@
 //     reaches every address-taken function and every method of every
 //     runtime module type — or the interfaces it calls back on what it is
 //     handed (fmt calls a fmt.Stringer's String), each outside type's method
-//     charged by its own classification. Any method a callback reaches may
-//     be classified below its package's default from a reading of its
-//     source, under read, pinned to the source read: a measured build
-//     compiling other source refuses the run.
+//     charged by its own classification. Any function or method may be
+//     classified below its package's default from a reading of its source,
+//     under read, its module pinned to the source read (a directory by the
+//     hash of its content): a measured build compiling other source refuses
+//     the run.
 //   - An outside package's initializer is classified by its module's entry,
 //     which every module the measured builds link a package of must have
 //     ("std" for the standard library), so a dependency added later cannot
@@ -134,8 +135,9 @@
 //     outside the suite's modules (delete it); a module a measured build
 //     links with no entry; a class its member cannot have (a spawn argument
 //     its function lacks, a program's source whose result is not a string,
-//     typeargs:constraint on no generic); a reading of other source than
-//     a measured build compiles. These stop the run before any measuring.
+//     typeargs:constraint on no generic, a type under read); a reading of
+//     other source than a measured build compiles, a read with no pin, a
+//     pin with no read. These stop the run before any measuring.
 //   - The analysis: an outside function module code reaches with no
 //     classification, with its first caller; a module function with no Go
 //     body to walk.

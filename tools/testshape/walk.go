@@ -110,7 +110,7 @@ func (w *walker) stepOf(fn *ssa.Function) step {
 }
 
 func (w *walker) entryOrigin(from *ssa.Function) entryOrigin {
-	return entryOrigin{origin: w.stepOf(from).origin, made: "made in", creator: w.a.name(from)}
+	return entryOrigin{origin: w.stepOf(from).origin, how: madeIn, creator: w.a.name(from)}
 }
 
 // implementing is every runtime type of either layer implementing iface.
@@ -225,7 +225,11 @@ func (w *walker) enter(fn, from *ssa.Function) {
 // else its class says.
 func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, inst instance, at, from *ssa.Function) {
 	w.unfollowed(sig, at, "call into "+name.String())
-	w.typeArgs(inst, k, at)
+	class := TypeArgsConverted
+	if r, ok := k.(Read); ok {
+		class, k = r.TypeArgs, r.Effect
+	}
+	w.typeArgs(inst, class, at)
 	switch k := k.(type) {
 	case unclassified:
 		if _, seen := w.a.unclassified[name.String()]; !seen {
@@ -268,14 +272,10 @@ func (w *walker) unfollowed(sig *types.Signature, at *ssa.Function, how string) 
 
 // typeArgs: an outside generic's instance at calls its type parameter's
 // constraint's methods on the values of each type argument, interface calls
-// on an interface's values. Unless it is classified TypeArgsConstraint, it
-// is outside code converting those values to an interface as well: they are
+// on an interface's values. Unless its class is TypeArgsConstraint, it is
+// outside code converting those values to an interface as well: they are
 // held (see hold), and only what meets a runtime type reaches its methods.
-func (w *walker) typeArgs(inst instance, k knowledge, at *ssa.Function) {
-	class := TypeArgsConverted
-	if e, ok := k.(Effect); ok {
-		class = e.TypeArgs
-	}
+func (w *walker) typeArgs(inst instance, class TypeArgs, at *ssa.Function) {
 	for _, ta := range inst {
 		constraint := ta.param.Constraint().Underlying().(*types.Interface)
 		if iface, ok := ta.arg.Underlying().(*types.Interface); ok {
@@ -287,7 +287,7 @@ func (w *walker) typeArgs(inst instance, k knowledge, at *ssa.Function) {
 			w.reachMethods(ta.arg, constraint, at, typeArgument{w.a.name(at), ta.arg, class})
 		}
 		if class == TypeArgsConverted {
-			w.hold(ta.arg, entryOrigin{origin: w.stepOf(at).origin, made: "converted by outside generic", creator: w.a.name(at)}, at)
+			w.hold(ta.arg, entryOrigin{origin: w.stepOf(at).origin, how: convertedBy, creator: w.a.name(at)}, at)
 		}
 	}
 }

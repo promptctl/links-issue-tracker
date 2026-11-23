@@ -484,6 +484,19 @@ func TestTheSuiteIsEveryModuleTheGoCommandWalks(t *testing.T) {
 	}
 }
 
+// The fixture's classification names what the fixture module's build
+// loads, at the source it compiles: its std pin is the toolchain the
+// repository builds with, so a host on another fails here, naming the pin.
+func TestTheFixtureClassificationNamesWhatTheFixtureBuildLoads(t *testing.T) {
+	l, err := shapeModule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := shapeClassification(t).Validate(suiteOf([]*loaded{l})); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestAClassificationThatNamesNothingRefuses(t *testing.T) {
 	class, err := parseClassification([]byte(`{
 		"cli": ["example.com/shape/selfcli.Missing", "os.Exit"],

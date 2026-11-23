@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/sumdb/dirhash"
 	"golang.org/x/tools/go/gcexportdata"
 	"golang.org/x/tools/go/ssa"
 )
@@ -99,7 +100,8 @@ type loaded struct {
 	// SourceOf is the source each module the build links is compiled from:
 	// the module, or its replacement, at the version the build uses, as
 	// path@version; a replacement by a directory, which has no version, as
-	// its directory; the standard library as std@ the toolchain's version.
+	// its directory @ the hash of its content (see dirSource); the standard
+	// library as std@ the toolchain's version.
 	SourceOf map[string]string
 }
 
@@ -118,19 +120,32 @@ type listedPackage struct {
 
 type listedModule struct {
 	Path, Version, GoVersion string
-	Replace                  *struct{ Path, Version string }
+	Replace                  *struct{ Path, Version, Dir string }
 }
 
 // source is what the build compiles the module from.
-func (m *listedModule) source() string {
-	path, version := m.Path, m.Version
-	if m.Replace != nil {
-		path, version = m.Replace.Path, m.Replace.Version
+func (m *listedModule) source() (string, error) {
+	switch {
+	case m.Replace == nil && m.Version == "":
+		return m.Path, nil // a main module
+	case m.Replace == nil:
+		return m.Path + "@" + m.Version, nil
+	case m.Replace.Version == "":
+		return dirSource(m.Path, m.Replace.Path, m.Replace.Dir)
 	}
-	if version == "" {
-		return path
+	return m.Replace.Path + "@" + m.Replace.Version, nil
+}
+
+// dirSource is the source of module mod replaced by the directory path,
+// at dir: path@ the hash of every file under dir, as go's sum database
+// hashes a module's files, named under mod. [LAW:no-silent-failure] a
+// directory has no version, so its content is what says that it changed.
+func dirSource(mod, path, dir string) (string, error) {
+	h, err := dirhash.HashDir(dir, mod, dirhash.Hash1)
+	if err != nil {
+		return "", fmt.Errorf("hashing module %s's directory %s: %w", mod, dir, err)
 	}
-	return path + "@" + version
+	return path + "@" + h, nil
 }
 
 // path is the package's import path, without the test binary it was
@@ -236,7 +251,14 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 			l.SourceOf["std"] = "std@" + env.version
 		default:
 			l.ModuleOf[p.path()] = p.Module.Path
-			l.SourceOf[p.Module.Path] = p.Module.source()
+			if _, ok := l.SourceOf[p.Module.Path]; ok {
+				break
+			}
+			src, err := p.Module.source()
+			if err != nil {
+				return nil, err
+			}
+			l.SourceOf[p.Module.Path] = src
 		}
 		if p.isTestMain() {
 			b := ld.newBinary(prog, p, ssaByID)
@@ -261,7 +283,10 @@ func goEnv(dir string) (buildEnv, error) {
 	if err != nil {
 		return buildEnv{}, fmt.Errorf("go env GOARCH GOVERSION in %s: %w", dir, err)
 	}
-	arch, version, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	arch, version, ok := strings.Cut(strings.TrimSpace(string(out)), "\n")
+	if !ok || version == "" {
+		return buildEnv{}, fmt.Errorf("go env GOARCH GOVERSION in %s printed no GOVERSION: %q", dir, out)
+	}
 	sizes := types.SizesFor("gc", arch)
 	if sizes == nil {
 		return buildEnv{}, fmt.Errorf("go env GOARCH in %s: gc has no sizes for %q", dir, arch)
