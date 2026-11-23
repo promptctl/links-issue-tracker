@@ -539,8 +539,7 @@ func locationOf(geo geometry) (Location, error) {
 // LocationFromGitCommonDir is the store geometry of the repository whose
 // git-common-dir is gitCommonDir, already canonical: its store lives in the
 // "links" directory under it. [LAW:single-enforcer] that suffix lives here
-// only, so a test fixture describing a checkout derives its store where
-// Resolve puts one.
+// only.
 func LocationFromGitCommonDir(gitCommonDir string) Location {
 	return LocationFromStorageDir(filepath.Join(filepath.Clean(gitCommonDir), "links"))
 }

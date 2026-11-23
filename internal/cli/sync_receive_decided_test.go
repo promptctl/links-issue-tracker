@@ -75,8 +75,7 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 		remote   string
 	}{
 		{"git remotes unreadable", func(t *testing.T) workspace.Info {
-			root := t.TempDir()
-			return workspacetest.Checkout(t, runEnv(t), root).Info()
+			return workspacetest.Handed(t, runEnv(t), t.TempDir()).Info()
 		}, "error", ""},
 		{"no git remote", func(t *testing.T) workspace.Info {
 			return receiveWorkspace(t, nil)

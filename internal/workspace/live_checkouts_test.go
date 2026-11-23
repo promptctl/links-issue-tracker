@@ -19,7 +19,7 @@ import (
 // enumeration is this machine declaring every checkout of the workspace deleted.
 func TestFailedEnumerationIsNeverTheNotARepoSentinel(t *testing.T) {
 	env := suiteenv.Of(os.Environ())
-	_, err := workspace.LiveCheckouts(env, workspacetest.Checkout(t, env, t.TempDir()).Info())
+	_, err := workspace.LiveCheckouts(env, workspacetest.Handed(t, env, t.TempDir()).Info())
 	if err == nil {
 		t.Fatal("enumerating outside a repository must fail")
 	}
