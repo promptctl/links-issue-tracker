@@ -169,7 +169,7 @@ func (w *walker) visit(fn *ssa.Function) {
 		w.take(f, fn)
 	}
 	for _, c := range s.converted {
-		w.convert(c.typ, c.to, fn, converting{c.typ})
+		w.convert(c.typ, c.to, fn, converting{c.typ}, w.entryOrigin(fn))
 	}
 	for _, sig := range s.dynamic {
 		w.callValue(sig, fn)
@@ -272,9 +272,10 @@ func (w *walker) unfollowed(sig *types.Signature, at *ssa.Function, how string) 
 
 // typeArgs: an outside generic's instance at calls its type parameter's
 // constraint's methods on the values of each type argument, interface calls
-// on an interface's values. Unless its class is TypeArgsConstraint, it is
-// outside code converting those values to an interface as well: they are
-// held (see hold), and only what meets a runtime type reaches its methods.
+// on an interface's values. Unless its class is TypeArgsConstraint, it
+// converts those values to an interface as well, as module code converting
+// them to any (see convert): a module value entering outside code has one
+// reach, whether as a type argument or as an interface value.
 func (w *walker) typeArgs(inst instance, class TypeArgs, at *ssa.Function) {
 	for _, ta := range inst {
 		constraint := ta.param.Constraint().Underlying().(*types.Interface)
@@ -287,7 +288,7 @@ func (w *walker) typeArgs(inst instance, class TypeArgs, at *ssa.Function) {
 			w.reachMethods(ta.arg, constraint, at, typeArgument{w.a.name(at), ta.arg, class})
 		}
 		if class == TypeArgsConverted {
-			w.hold(ta.arg, entryOrigin{origin: w.stepOf(at).origin, how: convertedBy, creator: w.a.name(at)}, at)
+			w.convert(ta.arg, anyInterface, at, genericConversion{w.a.name(at), ta.arg}, entryOrigin{origin: w.stepOf(at).origin, how: convertedBy, creator: w.a.name(at)})
 		}
 	}
 }
@@ -371,8 +372,9 @@ func (w *walker) take(f, from *ssa.Function) {
 // structure, contributes only what module code can call on it: the module
 // interface methods of to, and those module code invokes (see invoke). What
 // an outside function does with a value it is handed is that function's own
-// classification. Either way the converted value is held (see hold).
-func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, how via) {
+// classification. Either way the converted value is held (see hold), made as
+// where says.
+func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, how via, where entryOrigin) {
 	if w.a.outsideType(t) {
 		for i := range to.NumMethods() {
 			if m := to.Method(i); w.a.moduleMethod(m) {
@@ -385,8 +387,12 @@ func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, 
 			w.reach(m, from, how)
 		}
 	}
-	w.hold(t, w.entryOrigin(from), from)
+	w.hold(t, where, from)
 }
+
+// anyInterface is any: the interface an outside generic may convert its type
+// arguments' values to.
+var anyInterface = types.Universe.Lookup("any").Type().Underlying().(*types.Interface)
 
 // hold: a value of type t, made as where says, sits in an interface value. It
 // and every named type in its structure are runtime types: t as it is, a
@@ -430,7 +436,7 @@ func (w *walker) addRuntimeType(t types.Type, where entryOrigin) {
 	}
 	for r := range w.reflected.all {
 		if types.Implements(t, r.iface) {
-			w.convert(t, r.iface, r.from, throughType{"reflection", t, e.where})
+			w.convert(t, r.iface, r.from, throughType{"reflection", t, e.where}, w.entryOrigin(r.from))
 		}
 	}
 	if d, ok := w.dispatched.get(struct{}{}); ok && w.a.moduleType(t) {
@@ -452,7 +458,7 @@ func (w *walker) reflect(iface *types.Interface, from *ssa.Function) {
 		return
 	}
 	for _, e := range w.implementing(iface) {
-		w.convert(e.typ, iface, from, throughType{"reflection", e.typ, e.where})
+		w.convert(e.typ, iface, from, throughType{"reflection", e.typ, e.where}, w.entryOrigin(from))
 	}
 }
 

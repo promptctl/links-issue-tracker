@@ -47,6 +47,21 @@ type record struct{ path string }
 
 func (r *record) MarshalJSON() ([]byte, error) { return os.ReadFile(r.path) }
 
+// ShownPath: an outside type is a runtime type once the generic converts
+// it, so the String callback meets it.
+func ShownPath() string { return strs.Show(strs.Path("j")) }
+
+type doc string
+
+func (d doc) GoString() string {
+	b, _ := os.ReadFile(string(d))
+	return string(b)
+}
+
+// Documented: the unread generic converts the doc to an interface, as module
+// code would, so every method of it is reachable; %#v calls GoString.
+func Documented() string { return fmt.Sprintf("%#v", strs.Keep(doc("i"))) }
+
 // Encoded: a slice's element is addressable, so encoding calls the
 // element's pointer-receiver MarshalJSON.
 func Encoded() ([]byte, error) { return strs.Encode([]record{{"h"}}) }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"go/token"
@@ -227,9 +228,6 @@ func parseEffect(spec string) (Effect, error) {
 			e.Dispatching = true
 			continue
 		}
-		if elem == "typeargs:constraint" {
-			return Effect{}, fmt.Errorf("classification %q: typeargs:constraint is read in a generic's source, and is classified under read", spec)
-		}
 		i := slices.Index(touchNames[:], elem)
 		if i < 0 || Touch(i) == CLI {
 			return Effect{}, fmt.Errorf("classification %q: %q is not a touch an outside function makes (store, git, proc, net, fs, clock), dispatching, calls:Interface, program:self, program:lookup or none", spec, elem)
@@ -264,9 +262,8 @@ type moduleClassEntry struct {
 	Pin []string `json:"pin,omitempty"`
 }
 
-// packageClassEntry is one package's classification, or a pattern's. An
-// entry takes the default and the functions of the longest pattern covering
-// it, each of its own keys overriding the pattern's; its note is its own.
+// packageClassEntry is one package's classification, or a pattern's; how a
+// package's entry and the patterns covering it combine is Lookup's.
 type packageClassEntry struct {
 	Note      string            `json:"note,omitempty"`
 	Default   *string           `json:"default,omitempty"`
@@ -284,12 +281,11 @@ type Classification struct {
 	git     []string
 	modules map[string]Effect   // each module's initializers, by module path
 	pins    map[string][]string // each pinned module's pin, sorted
-	// entries holds each entry's own classes, which Validate checks;
-	// packages each entry's classes with what it takes from the patterns
-	// covering it, which Lookup reads. Both by import path, or a path
-	// prefix ending "/...".
+	// entries holds each entry's own classes, by import path, or a path
+	// prefix ending "/...", a pattern; patterns every pattern, longest
+	// first.
 	entries  map[string]packageEntry
-	packages map[string]packageClass
+	patterns []string
 }
 
 // packageEntry is an entry's own classes: its default, nil where it states
@@ -299,24 +295,10 @@ type packageEntry struct {
 	members
 }
 
-type packageClass struct {
-	def Effect
-	members
-}
-
 type members struct {
 	functions map[string]Call // "Name", "Type", "Type.Method", or "init", an Effect
 	fields    map[string]bool // "Type.Field" whose store names a spawn's program
 	arg0      map[string]bool // "Name" of a variable whose element 0 names the test binary
-}
-
-// over is m with base's keys that m does not hold.
-func (m members) over(base members) members {
-	out := members{functions: maps.Clone(base.functions), fields: maps.Clone(base.fields), arg0: maps.Clone(base.arg0)}
-	maps.Copy(out.functions, m.functions)
-	maps.Copy(out.fields, m.fields)
-	maps.Copy(out.arg0, m.arg0)
-	return out
 }
 
 // funcName names a function as importpath + "." + key, where key is "Name"
@@ -346,7 +328,7 @@ func parseClassification(data []byte) (*Classification, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("classification file: %w", err)
 	}
-	c := &Classification{cli: map[funcName]bool{}, git: f.Git, modules: map[string]Effect{}, pins: map[string][]string{}, entries: map[string]packageEntry{}, packages: map[string]packageClass{}}
+	c := &Classification{cli: map[funcName]bool{}, git: f.Git, modules: map[string]Effect{}, pins: map[string][]string{}, entries: map[string]packageEntry{}}
 	for path, e := range f.Modules {
 		init, err := parseEffect(e.Init)
 		if err != nil {
@@ -373,10 +355,14 @@ func parseClassification(data []byte) (*Classification, error) {
 			return nil, fmt.Errorf("classification file: %w", err)
 		}
 		c.entries[path] = pe
+		if strings.HasSuffix(path, "/...") {
+			c.patterns = append(c.patterns, path)
+		}
 	}
+	slices.SortFunc(c.patterns, func(a, b string) int { return cmp.Compare(len(b), len(a)) })
 	for path := range c.entries {
-		if _, err := c.resolve(path); err != nil {
-			return nil, fmt.Errorf("classification file: %w", err)
+		if !slices.ContainsFunc(c.entriesFor(path), func(e packageEntry) bool { return e.def != nil }) {
+			return nil, fmt.Errorf("classification file: %s: the entry states no default, and no pattern covering it states one", path)
 		}
 	}
 	return c, nil
@@ -434,32 +420,6 @@ func parsePackageEntry(path string, e packageClassEntry) (packageEntry, error) {
 		}
 	}
 	return pe, nil
-}
-
-// resolve is the entry at path's classes: its own over those of the
-// longest pattern covering it, resolved first.
-func (c *Classification) resolve(path string) (packageClass, error) {
-	if pc, ok := c.packages[path]; ok {
-		return pc, nil
-	}
-	e := c.entries[path]
-	var pc packageClass
-	if parent, ok := longestCovering(path, c.entries); ok {
-		base, err := c.resolve(parent)
-		if err != nil {
-			return pc, err
-		}
-		pc = packageClass{def: base.def, members: e.members.over(base.members)}
-	} else if e.def == nil {
-		return pc, fmt.Errorf("%s: the entry states no default, and no pattern covering it states one", path)
-	} else {
-		pc.members = e.members
-	}
-	if e.def != nil {
-		pc.def = *e.def
-	}
-	c.packages[path] = pc
-	return pc, nil
 }
 
 // strictJSON refuses what decoding accepts without a word: a token after the
@@ -520,26 +480,20 @@ func strictJSON(data []byte) error {
 	}
 }
 
-// packageFor is the classification of the package at path: its own entry,
-// else the longest "/..." pattern that covers it.
-func (c *Classification) packageFor(path string) (packageClass, bool) {
-	if pc, ok := c.packages[path]; ok {
-		return pc, true
+// entriesFor is every entry classifying the package (or pattern) at path,
+// most specific first: its own, then each other pattern covering it,
+// longest first.
+func (c *Classification) entriesFor(path string) []packageEntry {
+	var out []packageEntry
+	if e, ok := c.entries[path]; ok {
+		out = append(out, e)
 	}
-	pattern, ok := longestCovering(path, c.packages)
-	return c.packages[pattern], ok
-}
-
-// longestCovering is the longest "/..." pattern among entries' keys, other
-// than path itself, that covers path.
-func longestCovering[V any](path string, entries map[string]V) (string, bool) {
-	best, found := "", false
-	for pattern := range entries {
-		if pattern != path && covers(pattern, path) && len(pattern) > len(best) {
-			best, found = pattern, true
+	for _, pattern := range c.patterns {
+		if pattern != path && covers(pattern, path) {
+			out = append(out, c.entries[pattern])
 		}
 	}
-	return best, found
+	return out
 }
 
 // covers reports whether the "/..." pattern covers the package at path.
@@ -549,22 +503,29 @@ func covers(pattern, path string) bool {
 }
 
 // Lookup is what the classification knows of the outside function named by
-// pkg and key ("Name", "Type.Method" or "init"): its own entry, else its
-// type's, else its package's default, else nothing, which is unclassified.
+// pkg and key ("Name", "Type.Method" or "init"). Each entry classifying the
+// package is asked in turn, most specific first (see entriesFor): its key,
+// then, for a method, its type's key. The first that holds one is the
+// class; else the default of the most specific entry that states one; else
+// nothing, which is unclassified. A spawner field and the test binary's
+// variable are found the same way; a note is its entry's alone.
 func (c *Classification) Lookup(pkg, key string) knowledge {
-	pc, ok := c.packageFor(pkg)
-	if !ok {
-		return unclassified{}
-	}
-	if cl, ok := pc.functions[key]; ok {
-		return cl
-	}
-	if typ, _, isMethod := strings.Cut(key, "."); isMethod {
-		if cl, ok := pc.functions[typ]; ok {
+	entries := c.entriesFor(pkg)
+	typ, _, isMethod := strings.Cut(key, ".")
+	for _, e := range entries {
+		if cl, ok := e.functions[key]; ok {
+			return cl
+		}
+		if cl, ok := e.functions[typ]; ok && isMethod {
 			return cl
 		}
 	}
-	return pc.def
+	for _, e := range entries {
+		if e.def != nil {
+			return *e.def
+		}
+	}
+	return unclassified{}
 }
 
 // initOf is what the classification knows of the initializer of the outside
@@ -572,8 +533,8 @@ func (c *Classification) Lookup(pkg, key string) knowledge {
 // module's, else nothing. A package's default classifies what the package's
 // functions do when called, not what its initializer does.
 func (c *Classification) initOf(pkg, mod string) knowledge {
-	if pc, ok := c.packageFor(pkg); ok {
-		if cl, ok := pc.functions["init"]; ok {
+	for _, e := range c.entriesFor(pkg) {
+		if cl, ok := e.functions["init"]; ok {
 			return cl
 		}
 	}
@@ -586,15 +547,13 @@ func (c *Classification) initOf(pkg, mod string) knowledge {
 // fieldSpawn reports whether storing into field of the named type at pkg
 // spawns a program.
 func (c *Classification) fieldSpawn(pkg, typ, field string) bool {
-	pc, ok := c.packageFor(pkg)
-	return ok && pc.fields[typ+"."+field]
+	return slices.ContainsFunc(c.entriesFor(pkg), func(e packageEntry) bool { return e.fields[typ+"."+field] })
 }
 
 // isArg0 reports whether element 0 of the variable name at pkg names the
 // running test binary.
 func (c *Classification) isArg0(pkg, name string) bool {
-	pc, ok := c.packageFor(pkg)
-	return ok && pc.arg0[name]
+	return slices.ContainsFunc(c.entriesFor(pkg), func(e packageEntry) bool { return e.arg0[name] })
 }
 
 func (c *Classification) isCLI(n funcName) bool { return c.cli[n] }
@@ -741,6 +700,11 @@ func (c *Classification) Validate(s loadedSuite) error {
 		if len(unread) > 0 {
 			slices.Sort(unread)
 			problems = append(problems, fmt.Sprintf("module %s: pinned at %s, and a measured build compiles it from %s; re-read there the source of each function read in its packages, and update its pin", mod, strings.Join(pin, ", "), strings.Join(unread, ", ")))
+		}
+		for _, src := range pin {
+			if !linked[mod][src] {
+				problems = append(problems, fmt.Sprintf("module %s: pinned at %s, and no measured build compiles it from there; delete it from the pin", mod, src))
+			}
 		}
 	}
 	for mod := range c.pins {
@@ -899,12 +863,8 @@ func isGeneric(fn *types.Func) bool {
 	if sig.Recv() == nil {
 		return false
 	}
-	recv := types.Unalias(sig.Recv().Type())
-	if p, ok := recv.(*types.Pointer); ok {
-		recv = types.Unalias(p.Elem())
-	}
-	n, ok := recv.(*types.Named)
-	return ok && n.Origin().TypeParams().Len() > 0
+	n := namedOf(sig.Recv().Type())
+	return n != nil && n.Origin().TypeParams().Len() > 0
 }
 
 // callsInto adds each interface e calls back to calls.

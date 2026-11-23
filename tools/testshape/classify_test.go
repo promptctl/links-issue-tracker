@@ -184,6 +184,33 @@ func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 	}
 }
 
+func TestAnEntrysTypeKeyIsMoreSpecificThanItsPatternsMethodKey(t *testing.T) {
+	// Each entry is asked for the key, then for its type, before the next,
+	// less specific entry is asked: the entry's own keys win either way.
+	class, err := parseClassification([]byte(`{
+		"packages": {
+			"example.com/a/...": {"default": "none", "functions": {"Node.String": "fs", "Leaf": "net"}},
+			"example.com/a/tree": {"functions": {"Node": "clock", "Leaf.String": "proc"}}
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		key  string
+		want knowledge
+	}{
+		{"Node.String", Effect{Touches: Touches(0).With(Clock)}}, // the entry's type over the pattern's method
+		{"Leaf.String", Effect{Touches: Touches(0).With(Proc)}},  // the entry's method over the pattern's type
+		{"Leaf.Close", Effect{Touches: Touches(0).With(Net)}},    // the pattern's type, which the entry does not hold
+		{"Other", Effect{}}, // the pattern's default
+	} {
+		if got := class.Lookup("example.com/a/tree", tc.key); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("Lookup(example.com/a/tree, %s) = %#v, want %#v", tc.key, got, tc.want)
+		}
+	}
+}
+
 func TestAnInitializerIsItsPackagesInitEntryElseItsModules(t *testing.T) {
 	class, err := parseClassification([]byte(`{
 		"modules": {"example.com/m": {"init": "none"}, "std": {"init": "clock"}},
@@ -253,7 +280,7 @@ func suiteFrom(t *testing.T, linked map[string]map[string]bool, sources map[stri
 }
 
 func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
-	suite := suiteFrom(t, map[string]map[string]bool{"std": {"std@go1.26": true}, "example.com/tree": {"example.com/tree@v1.0.0": true}}, map[string]string{
+	suite := suiteFrom(t, map[string]map[string]bool{"std": {"std@go1.26": true}, "example.com/tree": {"example.com/tree@v0.9.0": true, "example.com/tree@v1.0.0": true}}, map[string]string{
 		"example.com/run":      "package run; type Cmd struct{ Path string }; func Start(name string, args ...string) {}; func (*Cmd) Run() error { return nil }; var Args []string; func Self() (string, error) { return \"\", nil }; func Find(name string) (string, error) { return name, nil }",
 		"example.com/tree/a":   "package a; func Open() {}; func Map[T any](x T) T { return x }; type Set[T comparable] map[T]bool; func (Set[T]) Add(T) {}",
 		"example.com/tree/b":   "package b; type I interface{ Do() }",
@@ -320,6 +347,7 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 		"example.com/tree/....Close: no package it names declares Close; delete the entry",
 		"example.com/tree/...: calls:example.com/tree/a.Open names no interface the suite loads",
 		"module example.com/tree: pinned at example.com/tree@v1, and a measured build compiles it from ./tree@h1:x, example.com/tree@v2; re-read there the source of each function read in its packages, and update its pin",
+		"module example.com/tree: pinned at example.com/tree@v1, and no measured build compiles it from there; delete it from the pin",
 		"module example.com/lone: its packages hold functions read in their source, and it has no pin naming the source they were read in",
 		"module example.com/unlinked: a pin, and no package of it holds a function read in its source; delete the pin",
 		"example.com/tree/a.Open: typeargs:constraint classifies a generic, and Open is none",

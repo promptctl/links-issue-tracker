@@ -288,22 +288,32 @@ func TestAModuleTypeHandedToAnOutsideGenericHasItsMethodsReached(t *testing.T) {
 }
 
 func TestAnOutsideGenericsTypeArgumentIsConvertedForWhatMeetsIt(t *testing.T) {
-	// The generic converts what it is handed, so its type argument, and each
-	// named type in its structure, by its pointer, are runtime types: a
-	// callback, dispatch and reflection each meet them.
+	// The generic converts what it is handed as module code converting it to
+	// any: every method of each module type in its type argument's structure
+	// is reachable, whatever the generic then does with the value (%#v's
+	// GoString is no callback fmt is classified to make).
 	for _, tc := range []struct{ pkg, test, witness string }{
-		{"genericjoin", "TestShown", "genericjoin.TestShown → genericjoin.Shown → nested/strs.Show[genericjoin.file] → (genericjoin.file).String [fmt.Stringer callback reaches genericjoin.file from TestShown, converted by outside generic nested/strs.Show[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)"},
-		{"genericjoin", "TestShownSlice", "genericjoin.TestShownSlice → genericjoin.ShownSlice → nested/strs.Show[[]genericjoin.file] → (*genericjoin.file).String [fmt.Stringer callback reaches *genericjoin.file from TestShownSlice, converted by outside generic nested/strs.Show[[]genericjoin.file]] → (genericjoin.file).String → os.ReadFile ⇒ os.ReadFile (fs)"},
-		{"genericjoin", "TestShownField", "genericjoin.TestShownField → genericjoin.ShownField → nested/strs.Show[genericjoin.wrap] → (*genericjoin.file).String [fmt.Stringer callback reaches *genericjoin.file from TestShownField, converted by outside generic nested/strs.Show[genericjoin.wrap]] → (genericjoin.file).String → os.ReadFile ⇒ os.ReadFile (fs)"},
-		{"genericjoin", "TestVisited", "genericjoin.TestVisited → genericjoin.Visited → nested/strs.Visit[genericjoin.file] → (genericjoin.file).String [dispatch reaches genericjoin.file from TestVisited, converted by outside generic nested/strs.Visit[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)"},
-		{"genericjoin", "TestKeptCalled", "genericjoin.TestKeptCalled → genericjoin.KeptCalled → (reflect.Value).Call → (genericjoin.file).String [dispatch reaches genericjoin.file from TestKeptCalled, converted by outside generic nested/strs.Keep[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)"},
-		{"genericjoin", "TestEncoded", "genericjoin.TestEncoded → genericjoin.Encoded → nested/strs.Encode[[]genericjoin.record] → (*genericjoin.record).MarshalJSON [encoding/json.Marshaler callback reaches *genericjoin.record from TestEncoded, converted by outside generic nested/strs.Encode[[]genericjoin.record]] → os.ReadFile ⇒ os.ReadFile (fs)"},
-		{"genericclone", "TestKept", "genericclone.TestKept → genericclone.Kept → (genericclone.omission).removeFrom [reflection reaches *genericclone.omission from TestKept, converted by outside generic nested/strs.Keep[[]genericclone.omission]] → os.RemoveAll ⇒ os.RemoveAll (fs)"},
+		{"genericjoin", "TestShown", "genericjoin.TestShown → genericjoin.Shown → nested/strs.Show[genericjoin.file] → (genericjoin.file).String [outside generic nested/strs.Show[genericjoin.file] converts genericjoin.file to an interface] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestShownSlice", "genericjoin.TestShownSlice → genericjoin.ShownSlice → nested/strs.Show[[]genericjoin.file] → (genericjoin.file).String [outside generic nested/strs.Show[[]genericjoin.file] converts []genericjoin.file to an interface] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestShownField", "genericjoin.TestShownField → genericjoin.ShownField → nested/strs.Show[genericjoin.wrap] → (genericjoin.file).String [outside generic nested/strs.Show[genericjoin.wrap] converts genericjoin.wrap to an interface] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestVisited", "genericjoin.TestVisited → genericjoin.Visited → nested/strs.Visit[genericjoin.file] → (genericjoin.file).String [outside generic nested/strs.Visit[genericjoin.file] converts genericjoin.file to an interface] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestKeptCalled", "genericjoin.TestKeptCalled → genericjoin.KeptCalled → nested/strs.Keep[genericjoin.file] → (genericjoin.file).String [outside generic nested/strs.Keep[genericjoin.file] converts genericjoin.file to an interface] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestEncoded", "genericjoin.TestEncoded → genericjoin.Encoded → nested/strs.Encode[[]genericjoin.record] → (*genericjoin.record).MarshalJSON [outside generic nested/strs.Encode[[]genericjoin.record] converts []genericjoin.record to an interface] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestDocumented", "genericjoin.TestDocumented → genericjoin.Documented → nested/strs.Keep[genericjoin.doc] → (genericjoin.doc).GoString [outside generic nested/strs.Keep[genericjoin.doc] converts genericjoin.doc to an interface] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericclone", "TestKept", "genericclone.TestKept → genericclone.Kept → nested/strs.Keep[[]genericclone.omission] → (genericclone.omission).removeFrom [outside generic nested/strs.Keep[[]genericclone.omission] converts []genericclone.omission to an interface] → os.RemoveAll ⇒ os.RemoveAll (fs)"},
 	} {
 		t.Run(tc.test, func(t *testing.T) {
 			expectReach(t, reachOf(t, tc.pkg, tc.test), Integration, "fs", map[Touch]string{FS: tc.witness})
 		})
 	}
+}
+
+func TestAnOutsideTypeAGenericConvertsIsARuntimeType(t *testing.T) {
+	// An outside type has no method reachable by its conversion alone; held,
+	// it meets the generic's own String callback.
+	expectReach(t, reachOf(t, "genericjoin", "TestShownPath"), Integration, "fs", map[Touch]string{
+		FS: "genericjoin.TestShownPath → genericjoin.ShownPath → nested/strs.Show[nested/strs.Path] → (nested/strs.Path).String [fmt.Stringer callback reaches nested/strs.Path from TestShownPath, converted by outside generic nested/strs.Show[nested/strs.Path]] ⇒ example.com/shape/nested/strs.Path.String (fs)",
+	})
 }
 
 func TestAnInterfaceTypeArgumentsConstraintMethodsAreInterfaceCalls(t *testing.T) {

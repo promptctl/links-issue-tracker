@@ -27,6 +27,13 @@ type staticCall struct{}
 
 type converting struct{ typ types.Type }
 
+// genericConversion is a reach through an outside generic converting a
+// value of its type argument typ to an interface.
+type genericConversion struct {
+	generic string
+	typ     types.Type
+}
+
 // throughFunc is a reach through an address-taken function of the RTA
 // state; how is what reached it ("dynamic call", "call into testing.T.Run",
 // "dispatch").
@@ -56,6 +63,9 @@ type typeArgument struct {
 func (staticCall) text(types.Qualifier) string { return "" }
 func (c converting) text(q types.Qualifier) string {
 	return "converts " + types.TypeString(c.typ, q) + " to an interface"
+}
+func (g genericConversion) text(q types.Qualifier) string {
+	return "outside generic " + g.generic + " converts " + types.TypeString(g.typ, q) + " to an interface"
 }
 func (t typeArgument) text(q types.Qualifier) string {
 	return "outside generic " + t.generic + " " + t.class.calls() + " " + types.TypeString(t.typ, q)

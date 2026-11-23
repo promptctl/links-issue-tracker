@@ -17,3 +17,7 @@ func TestKeptCalled(t *testing.T) { KeptCalled() }
 func TestStringers(t *testing.T) { _ = Stringers() }
 
 func TestEncoded(t *testing.T) { _, _ = Encoded() }
+
+func TestShownPath(t *testing.T) { _ = ShownPath() }
+
+func TestDocumented(t *testing.T) { _ = Documented() }

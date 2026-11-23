@@ -66,20 +66,18 @@
 //     creates nothing, so `var _ I = (*T)(nil)` makes no method reachable.
 //   - An outside generic's instance calls its type parameter's constraint's
 //     methods on the values of each type argument (`Join[T fmt.Stringer]`
-//     calls T's String), interface calls on an interface's values. And it is
-//     outside code converting those values to an interface: the type
-//     argument and each named type in its structure are runtime types, which
-//     interface calls, callbacks, reflection and dispatch meet as they meet
-//     any. A generic classified typeargs:constraint, read in its source to
-//     do nothing else (`slices.Clone`), makes no runtime type.
+//     calls T's String), interface calls on an interface's values. And it
+//     converts those values to an interface, as module code converting them
+//     to any does, by the next rule. A generic classified
+//     typeargs:constraint, read in its source to do nothing else
+//     (`slices.Clone`), converts none.
 //   - A value converted to an interface is held: its type, and each named
 //     type in its structure (fields, elements, pointees) by its pointer,
 //     since such a value is addressable, are runtime types; an interface in
-//     that structure stands for every runtime type implementing it. Module
-//     code converting a module type makes reachable, as well, every method
-//     of it and of every module type in its structure, since fmt and
-//     encoding/json call them by reflection; outside code's conversion
-//     makes none reachable by itself.
+//     that structure stands for every runtime type implementing it. A module
+//     type's conversion makes reachable, as well, every method of it and of
+//     every module type in its structure, since fmt and encoding/json call
+//     them by reflection.
 //   - An outside type, converted or found in such a structure, contributes
 //     only what module code can call on it: the methods implementing a
 //     module interface method it is converted to, and each module interface
