@@ -30,10 +30,11 @@ func (a *analyzer) moduleMethod(m *types.Func) bool {
 
 // structure is what a converted value's structure contributes: every method
 // of each module type among the type, its fields, elements and pointees;
-// each outside named type among them; and each interface among them.
+// each named concrete type among them, by its pointer; and each interface
+// among them.
 type structure struct {
 	methods []*ssa.Function
-	outside []types.Type
+	named   []types.Type
 	ifaces  []*types.Interface
 }
 
@@ -98,11 +99,10 @@ func (a *analyzer) structureOf(t types.Type) *structure {
 			}
 			if a.moduleType(u) {
 				s.methods = append(s.methods, a.methodsOf(u)...)
-			} else {
-				// Its pointer's method set, so a method on either receiver
-				// counts: this approximation adds methods, never drops one.
-				s.outside = append(s.outside, types.NewPointer(u))
 			}
+			// Its pointer's method set, so a method on either receiver
+			// counts: this approximation adds methods, never drops one.
+			s.named = append(s.named, types.NewPointer(u))
 		case *types.Interface:
 			s.ifaces = append(s.ifaces, u)
 		}

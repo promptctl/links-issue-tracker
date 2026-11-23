@@ -96,6 +96,11 @@ type loaded struct {
 	// module a package belongs to: a module nested under another's path is
 	// its own.
 	ModuleOf map[string]string
+	// SourceOf is the source each module the build links is compiled from:
+	// the module, or its replacement, at the version the build uses, as
+	// path@version; a replacement by a directory, which has no version, as
+	// its directory; the standard library as std@ the toolchain's version.
+	SourceOf map[string]string
 }
 
 // listedPackage is the subset of `go list -json` this loader reads.
@@ -107,8 +112,25 @@ type listedPackage struct {
 	CompiledGoFiles []string
 	Imports         []string // IDs, after ImportMap
 	ImportMap       map[string]string
-	Module          *struct{ Path, GoVersion string }
+	Module          *listedModule
 	Error           *struct{ Err string }
+}
+
+type listedModule struct {
+	Path, Version, GoVersion string
+	Replace                  *struct{ Path, Version string }
+}
+
+// source is what the build compiles the module from.
+func (m *listedModule) source() string {
+	path, version := m.Path, m.Version
+	if m.Replace != nil {
+		path, version = m.Replace.Path, m.Replace.Version
+	}
+	if version == "" {
+		return path
+	}
+	return path + "@" + version
 }
 
 // path is the package's import path, without the test binary it was
@@ -142,7 +164,7 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	if err != nil {
 		return nil, fmt.Errorf("go list in %s: %v\n%s", m.Dir, err, stderr.String())
 	}
-	sizes, err := buildSizes(m.Dir)
+	env, err := goEnv(m.Dir)
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +189,7 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 		checked:  map[string]*types.Package{},
 		syntax:   map[string][]*ast.File{},
 		infos:    map[string]*types.Info{},
-		sizes:    sizes,
+		sizes:    env.sizes,
 	}
 	// go list -deps prints every package after its dependencies, so each
 	// package's imports are loaded before it.
@@ -205,14 +227,16 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	}
 	prog.Build()
 
-	l := &loaded{Module: m, Prog: prog, Binaries: map[string]*binary{}, ModuleOf: map[string]string{}}
+	l := &loaded{Module: m, Prog: prog, Binaries: map[string]*binary{}, ModuleOf: map[string]string{}, SourceOf: map[string]string{}}
 	for _, p := range listed {
 		switch {
 		case p.isTestMain():
 		case p.Module == nil:
 			l.ModuleOf[p.path()] = "std"
+			l.SourceOf["std"] = "std@" + env.version
 		default:
 			l.ModuleOf[p.path()] = p.Module.Path
+			l.SourceOf[p.Module.Path] = p.Module.source()
 		}
 		if p.isTestMain() {
 			b := ld.newBinary(prog, p, ssaByID)
@@ -222,21 +246,27 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	return l, nil
 }
 
-// buildSizes is the type sizes of the architecture the go command in dir
-// builds for, which go test's binaries are built for.
-func buildSizes(dir string) (types.Sizes, error) {
-	cmd := exec.Command("go", "env", "GOARCH")
+// buildEnv is what the go command in a directory builds with, which go
+// test's binaries are built with: the type sizes of the architecture it
+// builds for, and the toolchain's version, whose standard library it links.
+type buildEnv struct {
+	sizes   types.Sizes
+	version string
+}
+
+func goEnv(dir string) (buildEnv, error) {
+	cmd := exec.Command("go", "env", "GOARCH", "GOVERSION")
 	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("go env GOARCH in %s: %w", dir, err)
+		return buildEnv{}, fmt.Errorf("go env GOARCH GOVERSION in %s: %w", dir, err)
 	}
-	arch := strings.TrimSpace(string(out))
+	arch, version, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
 	sizes := types.SizesFor("gc", arch)
 	if sizes == nil {
-		return nil, fmt.Errorf("go env GOARCH in %s: gc has no sizes for %q", dir, arch)
+		return buildEnv{}, fmt.Errorf("go env GOARCH in %s: gc has no sizes for %q", dir, arch)
 	}
-	return sizes, nil
+	return buildEnv{sizes, version}, nil
 }
 
 // loader type-checks one module's packages from source and reads the rest

@@ -136,8 +136,8 @@ type layer struct {
 
 	taken      *store[*ssa.Function, funcEntry] // grouped by normalized signature
 	runtime    *store[int, typeEntry]           // by type
-	handed     *store[int, typeEntry]           // by type: handed to outside generics, not converted
-	structured *store[int, struct{}]            // the types whose structure a conversion followed
+	structured *store[int, struct{}]            // the types whose structure a held value's walk followed
+	converted  *store[int, struct{}]            // the types module code converted, whose methods it reached
 
 	// The pending calls: each applies again to what either layer creates
 	// after it.
@@ -158,8 +158,8 @@ func newLayer() *layer {
 		spawns:     newStore[spawnSite, spawnSite](),
 		taken:      newStore[*ssa.Function, funcEntry](),
 		runtime:    newStore[int, typeEntry](),
-		handed:     newStore[int, typeEntry](),
 		structured: newStore[int, struct{}](),
+		converted:  newStore[int, struct{}](),
 		called:     newStore[int, pendingCall](),
 		invoked:    newStore[invoke, pendingInvoke](),
 		reflected:  newStore[int, pendingReflect](),

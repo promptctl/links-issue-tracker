@@ -69,8 +69,8 @@ type walker struct {
 	spawns     set[spawnSite, spawnSite]
 	taken      set[*ssa.Function, funcEntry]
 	runtime    set[int, typeEntry]
-	handed     set[int, typeEntry]
 	structured set[int, struct{}]
+	converted  set[int, struct{}]
 	called     set[int, pendingCall]
 	invoked    set[invoke, pendingInvoke]
 	reflected  set[int, pendingReflect]
@@ -90,8 +90,8 @@ func newWalker(a *analyzer, binary *finished) *walker {
 		spawns:     set[spawnSite, spawnSite]{b.spawns, own.spawns},
 		taken:      set[*ssa.Function, funcEntry]{b.taken, own.taken},
 		runtime:    set[int, typeEntry]{b.runtime, own.runtime},
-		handed:     set[int, typeEntry]{b.handed, own.handed},
 		structured: set[int, struct{}]{b.structured, own.structured},
+		converted:  set[int, struct{}]{b.converted, own.converted},
 		called:     set[int, pendingCall]{b.called, own.called},
 		invoked:    set[invoke, pendingInvoke]{b.invoked, own.invoked},
 		reflected:  set[int, pendingReflect]{b.reflected, own.reflected},
@@ -110,7 +110,7 @@ func (w *walker) stepOf(fn *ssa.Function) step {
 }
 
 func (w *walker) entryOrigin(from *ssa.Function) entryOrigin {
-	return entryOrigin{origin: w.stepOf(from).origin, creator: w.a.name(from)}
+	return entryOrigin{origin: w.stepOf(from).origin, made: "made in", creator: w.a.name(from)}
 }
 
 // implementing is every runtime type of either layer implementing iface.
@@ -221,9 +221,11 @@ func (w *walker) enter(fn, from *ssa.Function) {
 // charge records what the classification says a call of the outside
 // function or interface method name, of signature sig and instantiated as
 // inst, reached at at from from, can do: it is a call the walk does not
-// follow, and whatever else its class says.
+// follow, which is handed the values of its type arguments, and whatever
+// else its class says.
 func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, inst instance, at, from *ssa.Function) {
-	w.unfollowed(sig, inst, at, "call into "+name.String())
+	w.unfollowed(sig, at, "call into "+name.String())
+	w.typeArgs(inst, k, at)
 	switch k := k.(type) {
 	case unclassified:
 		if _, seen := w.a.unclassified[name.String()]; !seen {
@@ -249,27 +251,8 @@ func (w *walker) charge(name funcName, k knowledge, sig *types.Signature, inst i
 // may be one. Whatever it does, it can call back any address-taken function
 // whose signature its argument types (receiver and parameters, through
 // their structure) can carry; and, handed an interface, any function
-// converted to one, which reflection can call. Each type argument of an
-// outside generic's instance is the type of values it is handed: it can call
-// on them the methods of its type parameter's constraint, and only those;
-// and, converting them to an interface, it can hand them to what interface
-// calls and declared callbacks reach (see hand).
-func (w *walker) unfollowed(sig *types.Signature, inst instance, at *ssa.Function, how string) {
-	for i, t := range inst.args {
-		constraint := inst.params.At(i).Constraint().Underlying().(*types.Interface)
-		if iface, ok := t.Underlying().(*types.Interface); ok {
-			// The values are already in interface values: the generic's
-			// calls of the constraint's methods are interface calls.
-			for m := range constraint.Methods() {
-				if obj, ok := types.NewMethodSet(t).Lookup(m.Pkg(), m.Name()).Obj().(*types.Func); ok {
-					w.invoke(invoke{iface, obj}, at)
-				}
-			}
-			continue
-		}
-		w.reachMethods(t, constraint, at, typeArgument{how, t})
-		w.hand(t, at)
-	}
+// converted to one, which reflection can call.
+func (w *walker) unfollowed(sig *types.Signature, at *ssa.Function, how string) {
 	c := w.a.carried(sig)
 	for _, s := range c.sigs {
 		w.call(s, at, how)
@@ -283,23 +266,54 @@ func (w *walker) unfollowed(sig *types.Signature, inst instance, at *ssa.Functio
 	}
 }
 
-// instance is how a callee is instantiated: its type parameters and the
-// type arguments given them. A callee that is no generic's instance has
-// none.
-type instance struct {
-	params *types.TypeParamList
-	args   []types.Type
+// typeArgs: an outside generic's instance at calls its type parameter's
+// constraint's methods on the values of each type argument, interface calls
+// on an interface's values. Unless it is classified TypeArgsConstraint, it
+// is outside code converting those values to an interface as well: they are
+// held (see hold), and only what meets a runtime type reaches its methods.
+func (w *walker) typeArgs(inst instance, k knowledge, at *ssa.Function) {
+	class := TypeArgsConverted
+	if e, ok := k.(Effect); ok {
+		class = e.TypeArgs
+	}
+	for _, ta := range inst {
+		constraint := ta.param.Constraint().Underlying().(*types.Interface)
+		if iface, ok := ta.arg.Underlying().(*types.Interface); ok {
+			for m := range constraint.Methods() {
+				// An interface satisfying the constraint has its methods.
+				w.invoke(invoke{iface, types.NewMethodSet(ta.arg).Lookup(m.Pkg(), m.Name()).Obj().(*types.Func)}, at)
+			}
+		} else {
+			w.reachMethods(ta.arg, constraint, at, typeArgument{w.a.name(at), ta.arg, class})
+		}
+		if class == TypeArgsConverted {
+			w.hold(ta.arg, entryOrigin{origin: w.stepOf(at).origin, made: "converted by outside generic", creator: w.a.name(at)}, at)
+		}
+	}
+}
+
+// instance is how a callee is instantiated: each type parameter with the
+// type argument given it. A callee that is no generic's instance has none.
+type instance []typeArg
+
+type typeArg struct {
+	param *types.TypeParam
+	arg   types.Type
 }
 
 func instanceOf(fn *ssa.Function) instance {
-	return instance{fn.TypeParams(), fn.TypeArgs()}
+	var inst instance
+	for i, arg := range fn.TypeArgs() {
+		inst = append(inst, typeArg{fn.TypeParams().At(i), arg})
+	}
+	return inst
 }
 
 // callValue is a call of a function value of signature sig: it reaches every
 // address-taken function of it, and its target may be outside code.
 func (w *walker) callValue(sig *types.Signature, from *ssa.Function) {
 	w.call(sig, from, "dynamic call")
-	w.unfollowed(sig, instance{}, from, "dynamic call")
+	w.unfollowed(sig, from, "dynamic call")
 }
 
 // call is a call of some function of signature sig: it reaches every
@@ -348,7 +362,8 @@ func (w *walker) take(f, from *ssa.Function) {
 	}
 }
 
-// convert: a value of type t made into an interface value of type to.
+// convert: module code makes a value of type t into an interface value of
+// type to.
 //
 // A module type has every method reachable, together with the methods of
 // every module type reachable from its structure, since reflection (fmt,
@@ -356,10 +371,7 @@ func (w *walker) take(f, from *ssa.Function) {
 // structure, contributes only what module code can call on it: the module
 // interface methods of to, and those module code invokes (see invoke). What
 // an outside function does with a value it is handed is that function's own
-// classification. An interface in the structure holds values converted
-// elsewhere: each runtime type implementing it is converted to it here. A
-// function value converted is a runtime type too, which reflection can
-// call.
+// classification. Either way the converted value is held (see hold).
 func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, how via) {
 	if w.a.outsideType(t) {
 		for i := range to.NumMethods() {
@@ -368,18 +380,31 @@ func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, 
 			}
 		}
 	}
+	if w.converted.add(w.a.typeKey(t), struct{}{}) {
+		for _, m := range w.a.structureOf(t).methods {
+			w.reach(m, from, how)
+		}
+	}
+	w.hold(t, w.entryOrigin(from), from)
+}
+
+// hold: a value of type t, made as where says, sits in an interface value. It
+// and every named type in its structure are runtime types: t as it is, a
+// function value included, which reflection can call; and each named type
+// there by its pointer, whose method set holds a method on either receiver,
+// since a value reached through a pointer, a slice or a variable is
+// addressable. An interface in the structure holds values converted
+// elsewhere: each runtime type implementing it is converted to it here.
+func (w *walker) hold(t types.Type, where entryOrigin, from *ssa.Function) {
 	if !w.structured.add(w.a.typeKey(t), struct{}{}) {
 		return
 	}
 	s := w.a.structureOf(t)
-	for _, m := range s.methods {
-		w.reach(m, from, how)
-	}
 	if _, isFunc := t.Underlying().(*types.Signature); isFunc || w.a.moduleType(t) || w.a.outsideType(t) {
-		w.addRuntimeType(t, from)
+		w.addRuntimeType(t, where)
 	}
-	for _, o := range s.outside {
-		w.addRuntimeType(o, from)
+	for _, n := range s.named {
+		w.addRuntimeType(n, where)
 	}
 	for _, iface := range s.ifaces {
 		w.reflect(iface, from)
@@ -388,12 +413,21 @@ func (w *walker) convert(t types.Type, to *types.Interface, from *ssa.Function, 
 
 // addRuntimeType records a type whose values may sit in an interface value,
 // and applies to it every call pending in either layer.
-func (w *walker) addRuntimeType(t types.Type, from *ssa.Function) {
-	e := typeEntry{t, w.entryOrigin(from)}
+func (w *walker) addRuntimeType(t types.Type, where entryOrigin) {
+	e := typeEntry{t, where}
 	if !w.runtime.add(w.a.typeKey(t), e) {
 		return
 	}
-	w.declaredCallsOn(e)
+	for p := range w.invoked.all {
+		if (p.module || w.a.moduleType(t)) && types.Implements(t, p.inv.iface) {
+			w.reachMethod(t, p.inv.method, p.from, throughType{"interface call", t, e.where})
+		}
+	}
+	for c := range w.callbacks.all {
+		if types.Implements(t, c.iface) {
+			w.reachMethods(t, c.iface, c.from, throughType{c.name + " callback", t, e.where})
+		}
+	}
 	for r := range w.reflected.all {
 		if types.Implements(t, r.iface) {
 			w.convert(t, r.iface, r.from, throughType{"reflection", t, e.where})
@@ -409,46 +443,6 @@ func (w *walker) addRuntimeType(t types.Type, from *ssa.Function) {
 			w.call(s, p.from, p.how)
 		}
 	}
-}
-
-// hand records a type handed to outside generic code as a type argument and
-// not converted by module code. The generic may convert its values to an
-// interface and pass them on, so the declared calls a converted value meets
-// reach it: interface calls and callbacks, each of the methods it names. It
-// is no converted value of the module's: reflection and dispatch, which
-// reach every method of what module code converts, do not reach it.
-func (w *walker) hand(t types.Type, from *ssa.Function) {
-	key := w.a.typeKey(t)
-	e := typeEntry{t, w.entryOrigin(from)}
-	if w.runtime.has(key) || !w.handed.add(key, e) {
-		return
-	}
-	w.declaredCallsOn(e)
-}
-
-// declaredCallsOn applies to a type whose values may sit in an interface
-// value every interface call and callback pending in either layer.
-func (w *walker) declaredCallsOn(e typeEntry) {
-	t := e.typ
-	for p := range w.invoked.all {
-		if (p.module || w.a.moduleType(t)) && types.Implements(t, p.inv.iface) {
-			w.reachMethod(t, p.inv.method, p.from, throughType{"interface call", t, e.where})
-		}
-	}
-	for c := range w.callbacks.all {
-		if types.Implements(t, c.iface) {
-			w.reachMethods(t, c.iface, c.from, throughType{c.name + " callback", t, e.where})
-		}
-	}
-}
-
-// meetingDeclaredCalls is every type of either layer that interface calls
-// and callbacks reach implementing iface: the runtime types, and the types
-// handed to outside generics.
-func (w *walker) meetingDeclaredCalls(iface *types.Interface) []typeEntry {
-	keep := func(e typeEntry) bool { return types.Implements(e.typ, iface) }
-	key := w.a.typeKey(iface)
-	return append(w.runtime.matching(key, keep), w.handed.matching(key, keep)...)
 }
 
 // reflect: an interface in a converted value's structure stands for every
@@ -475,7 +469,7 @@ func (w *walker) invoke(inv invoke, from *ssa.Function) {
 		name := interfaceMethodName(inv.method)
 		w.charge(name, w.a.class.Lookup(name.pkg, name.key), inv.method.Signature(), instance{}, from, from)
 	}
-	for _, e := range w.meetingDeclaredCalls(inv.iface) {
+	for _, e := range w.implementing(inv.iface) {
 		if module || w.a.moduleType(e.typ) {
 			w.reachMethod(e.typ, inv.method, from, throughType{"interface call", e.typ, e.where})
 		}
@@ -509,19 +503,19 @@ func (w *walker) dispatch(at *ssa.Function) {
 // callBack: an outside function that calls back the interface named name on
 // the values handed to it reaches its methods on every runtime type
 // implementing it: an outside type's charged by its classification, a
-// module type's walked. A module type converted to an interface has every
-// method reached already; one handed to an outside generic as a type
-// argument has only these.
+// module type's walked.
 func (w *walker) callBack(name string, at *ssa.Function) {
 	iface, ok := w.a.callbackInterface(name)
 	if !ok {
-		w.a.unresolved[name] = w.a.name(at)
+		if _, seen := w.a.unresolved[name]; !seen {
+			w.a.unresolved[name] = w.a.name(at)
+		}
 		return
 	}
 	if !w.callbacks.add(w.a.typeKey(iface), pendingCallback{iface, name, at}) {
 		return
 	}
-	for _, e := range w.meetingDeclaredCalls(iface) {
+	for _, e := range w.implementing(iface) {
 		w.reachMethods(e.typ, iface, at, throughType{name + " callback", e.typ, e.where})
 	}
 }

@@ -64,18 +64,22 @@
 //     directly; so is a range-over-func loop's body, which the iterator is
 //     handed, and a fuzz function handed to f.Fuzz. A value with no use
 //     creates nothing, so `var _ I = (*T)(nil)` makes no method reachable.
-//   - A type argument of an outside generic's instance reaches the methods
-//     its type parameter's constraint names, and no others
-//     (`Join[T fmt.Stringer]` calls T's String; `slices.Clone` calls none).
-//     The generic may convert its values to an interface and pass them on,
-//     so interface calls and callbacks reach them as they reach a converted
-//     value; reflection and dispatch, which reach every method of what
-//     module code converts, do not.
-//   - Converting a module type to an interface makes reachable every method
-//     of it and of every module type reachable from its structure (fields,
-//     elements, pointees), since fmt and encoding/json call them by
-//     reflection; an interface in that structure stands for every runtime
-//     type implementing it.
+//   - An outside generic's instance calls its type parameter's constraint's
+//     methods on the values of each type argument (`Join[T fmt.Stringer]`
+//     calls T's String), interface calls on an interface's values. And it is
+//     outside code converting those values to an interface: the type
+//     argument and each named type in its structure are runtime types, which
+//     interface calls, callbacks, reflection and dispatch meet as they meet
+//     any. A generic classified typeargs:constraint, read in its source to
+//     do nothing else (`slices.Clone`), makes no runtime type.
+//   - A value converted to an interface is held: its type, and each named
+//     type in its structure (fields, elements, pointees) by its pointer,
+//     since such a value is addressable, are runtime types; an interface in
+//     that structure stands for every runtime type implementing it. Module
+//     code converting a module type makes reachable, as well, every method
+//     of it and of every module type in its structure, since fmt and
+//     encoding/json call them by reflection; outside code's conversion
+//     makes none reachable by itself.
 //   - An outside type, converted or found in such a structure, contributes
 //     only what module code can call on it: the methods implementing a
 //     module interface method it is converted to, and each module interface
@@ -94,10 +98,10 @@
 //     reaches every address-taken function and every method of every
 //     runtime module type — or the interfaces it calls back on what it is
 //     handed (fmt calls a fmt.Stringer's String), each outside type's method
-//     charged by its own classification. A formatter method a callback
-//     reaches (String, Error, Format, MarshalJSON, UnmarshalJSON) is
-//     classified from its source, not by its package's default: none, or
-//     the callbacks it makes, unless its source shows I/O.
+//     charged by its own classification. Any method a callback reaches may
+//     be classified below its package's default from a reading of its
+//     source, under read, pinned to the source read: a measured build
+//     compiling other source refuses the run.
 //   - An outside package's initializer is classified by its module's entry,
 //     which every module the measured builds link a package of must have
 //     ("std" for the standard library), so a dependency added later cannot
@@ -129,8 +133,9 @@
 //     not load, a module no measured build links, or a CLI entry point
 //     outside the suite's modules (delete it); a module a measured build
 //     links with no entry; a class its member cannot have (a spawn argument
-//     its function lacks, a program's source whose result is not a string).
-//     These stop the run before any measuring.
+//     its function lacks, a program's source whose result is not a string,
+//     typeargs:constraint on no generic); a reading of other source than
+//     a measured build compiles. These stop the run before any measuring.
 //   - The analysis: an outside function module code reaches with no
 //     classification, with its first caller; a module function with no Go
 //     body to walk.
@@ -234,17 +239,22 @@ type loadedSuite struct {
 	packages map[string]*types.Package // every package of every load, by path
 	moduleOf map[string]string         // each of those packages' module
 	suite    map[string]bool           // the suite's modules
-	linked   map[string]bool           // each module a load links packages of beyond its own
+	// linked: each module a load links packages of beyond its own, with
+	// every source a load compiles it from (see loaded.SourceOf).
+	linked map[string]map[string]bool
 }
 
 func suiteOf(loads []*loaded) loadedSuite {
-	s := loadedSuite{packages: map[string]*types.Package{}, moduleOf: map[string]string{}, suite: map[string]bool{}, linked: map[string]bool{}}
+	s := loadedSuite{packages: map[string]*types.Package{}, moduleOf: map[string]string{}, suite: map[string]bool{}, linked: map[string]map[string]bool{}}
 	for _, l := range loads {
 		s.suite[l.Module.Path] = true
 		for pkg, mod := range l.ModuleOf {
 			s.moduleOf[pkg] = mod
 			if mod != l.Module.Path {
-				s.linked[mod] = true
+				if s.linked[mod] == nil {
+					s.linked[mod] = map[string]bool{}
+				}
+				s.linked[mod][l.SourceOf[mod]] = true
 			}
 		}
 		for _, sp := range l.Prog.AllPackages() {

@@ -23,6 +23,7 @@ func TestAClassParsesToAnEffectOrASpawn(t *testing.T) {
 		"spawn:2":                          SpawnArg{Arg: 2},
 		"spawn:field":                      SpawnField{},
 		"git,dispatching,net,proc,fs":      Effect{Touches: Touches(0).With(Git).With(Net).With(Proc).With(FS), Dispatching: true},
+		"typeargs:constraint":              Effect{TypeArgs: TypeArgsConstraint},
 		"store,git,proc,net,fs,clock":      Effect{Touches: Touches(0).With(Store).With(Git).With(Proc).With(Net).With(FS).With(Clock)},
 	} {
 		got, err := parseClass(spec)
@@ -64,6 +65,12 @@ func TestAClassificationFileRefusesWhatItCannotParse(t *testing.T) {
 		"a spawn as a package init": `{"packages": {"os": {"default": "fs", "functions": {"init": "spawn:0"}}}}`,
 		"arg0 as a default":         `{"packages": {"os": {"default": "program:arg0"}}}`,
 		"two programs":              `{"packages": {"os": {"default": "fs", "functions": {"Executable": "program:self,program:lookup"}}}}`,
+		"no default, no pattern":    `{"packages": {"os": {"functions": {"Getenv": "none"}}}}`,
+		"typeargs unread":           `{"packages": {"slices": {"default": "none", "functions": {"Clone": "typeargs:constraint"}}}}`,
+		"typeargs as a default":     `{"packages": {"slices": {"default": "typeargs:constraint"}}}`,
+		"a read naming no source":   `{"packages": {"slices": {"default": "none", "read": {"at": [], "functions": {"Clone": "typeargs:constraint"}}}}}`,
+		"a key read and not":        `{"packages": {"slices": {"default": "none", "functions": {"Clone": "none"}, "read": {"at": ["std@go1"], "functions": {"Clone": "typeargs:constraint"}}}}}`,
+		"a spawn field read":        `{"packages": {"os/exec": {"default": "none", "read": {"at": ["std@go1"], "functions": {"Cmd.Path": "spawn:field"}}}}}`,
 	} {
 		if _, err := parseClassification([]byte(data)); err == nil || !strings.HasPrefix(err.Error(), "classification file: ") {
 			t.Errorf("%s: parseClassification error = %v, want a classification file error", name, err)
@@ -105,7 +112,8 @@ func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 			"os/exec": {"default": "none", "functions": {"Command": "spawn:0", "Cmd.Path": "spawn:field"}},
 			"example.com/dolt/...": {"default": "store,git"},
 			"example.com/dolt/utils/...": {"default": "fs"},
-			"example.com/dolt/utils/hash": {"default": "none"}
+			"example.com/dolt/utils/hash": {"default": "none"},
+			"example.com/dolt/utils/fs/tree": {"read": {"at": ["example.com/dolt@v1"], "functions": {"Node.String": "none", "Map": "typeargs:constraint"}}}
 		}
 	}`))
 	if err != nil {
@@ -126,8 +134,11 @@ func TestLookupTakesTheMostSpecificEntry(t *testing.T) {
 		{"example.com/dolt/sql", "Open", storeGit},                     // and what is under it
 		{"example.com/dolt/utils/fs", "Open", fs},                      // the longest pattern wins
 		{"example.com/dolt/utils/hash", "Of", Effect{}},                // an exact entry over any pattern
-		{"strings", "Cut", unclassified{}},                             // nothing names it
-		{"example.com/doltish", "F", unclassified{}},                   // a pattern covers whole elements
+		{"example.com/dolt/utils/fs/tree", "Walk", fs},                 // an entry with no default takes its pattern's
+		{"example.com/dolt/utils/fs/tree", "Node.String", Effect{}},    // and adds its read functions
+		{"example.com/dolt/utils/fs/tree", "Map", Effect{TypeArgs: TypeArgsConstraint}},
+		{"strings", "Cut", unclassified{}},           // nothing names it
+		{"example.com/doltish", "F", unclassified{}}, // a pattern covers whole elements
 	} {
 		if got := class.Lookup(tc.pkg, tc.key); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("Lookup(%s, %s) = %#v, want %#v", tc.pkg, tc.key, got, tc.want)
@@ -186,7 +197,7 @@ func TestGitIsMatchedByNameOrPathBase(t *testing.T) {
 // suiteFrom type-checks each source as the package at its path, of the
 // module its path begins with ("example.com/app/..." is example.com/app's),
 // the suite being app's module, linking the modules linked.
-func suiteFrom(t *testing.T, linked map[string]bool, sources map[string]string) loadedSuite {
+func suiteFrom(t *testing.T, linked map[string]map[string]bool, sources map[string]string) loadedSuite {
 	t.Helper()
 	fset := token.NewFileSet()
 	s := loadedSuite{packages: map[string]*types.Package{}, moduleOf: map[string]string{}, suite: map[string]bool{"example.com/app": true}, linked: linked}
@@ -207,17 +218,18 @@ func suiteFrom(t *testing.T, linked map[string]bool, sources map[string]string) 
 }
 
 func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
-	suite := suiteFrom(t, map[string]bool{"std": true}, map[string]string{
+	suite := suiteFrom(t, map[string]map[string]bool{"std": {"std@go1.26": true}, "example.com/tree": {"example.com/tree@v1.0.0": true}}, map[string]string{
 		"example.com/run":      "package run; type Cmd struct{ Path string }; func Start(name string, args ...string) {}; func (*Cmd) Run() error { return nil }; var Args []string; func Self() (string, error) { return \"\", nil }; func Find(name string) (string, error) { return name, nil }",
-		"example.com/tree/a":   "package a; func Open() {}",
+		"example.com/tree/a":   "package a; func Open() {}; func Map[T any](x T) T { return x }; type Set[T comparable] map[T]bool; func (Set[T]) Add(T) {}",
 		"example.com/tree/b":   "package b; type I interface{ Do() }",
 		"example.com/app/main": "package main; func Main() {}",
 	})
 	class, err := parseClassification([]byte(`{
 		"cli": ["example.com/app/main.Main"],
-		"modules": {"std": {"init": "none"}},
+		"modules": {"std": {"init": "none"}, "example.com/tree": {"init": "none"}},
 		"packages": {
 			"builtin": {"default": "none", "functions": {"error.Error": "calls:error"}},
+			"example.com/tree/a": {"read": {"at": ["example.com/tree@v0.9.0", "example.com/tree@v1.0.0"], "functions": {"Map": "typeargs:constraint", "Set": "typeargs:constraint", "Open": "none"}}},
 			"example.com/run": {"default": "none", "functions": {"Start": "spawn:0", "Cmd.Run": "proc", "Cmd.Path": "spawn:field", "init": "none", "Args": "program:arg0", "Self": "program:self", "Find": "fs,program:lookup"}},
 			"example.com/tree/...": {"default": "fs", "functions": {"Open": "calls:example.com/tree/b.I", "I.Do": "net"}}
 		}
@@ -231,9 +243,9 @@ func TestValidateAcceptsEveryNameTheSuiteLoads(t *testing.T) {
 }
 
 func TestValidateRefusesEveryDeadEntry(t *testing.T) {
-	suite := suiteFrom(t, map[string]bool{"example.com/linked": true}, map[string]string{
+	suite := suiteFrom(t, map[string]map[string]bool{"example.com/linked": {"example.com/linked@v1": true}, "example.com/tree": {"example.com/tree@v2": true, "./tree": true}}, map[string]string{
 		"example.com/run":      "package run; type Cmd struct{ Path string }; func Start(name string) {}; var Count int; func Self() error { return nil }; func Find(n int) string { return \"\" }; func Main() {}",
-		"example.com/tree/a":   "package a; func Open() {}",
+		"example.com/tree/a":   "package a; func Open() {}; type Node struct{}",
 		"example.com/app/main": "package main; func Main() {}",
 	})
 	class, err := parseClassification([]byte(`{
@@ -243,7 +255,8 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 			"example.com/gone": {"default": "none"},
 			"example.com/none/...": {"default": "none"},
 			"example.com/run": {"default": "none", "functions": {"Start": "spawn:1", "Stop": "none", "Cmd.Dir": "spawn:field", "Cmd": "spawn:0", "Count": "program:arg0", "Start2": "program:arg0", "Self": "program:self", "Find": "program:lookup"}},
-			"example.com/tree/...": {"default": "none", "functions": {"Close": "none", "Open": "calls:example.com/tree/a.Open"}}
+			"example.com/tree/...": {"default": "none", "functions": {"Close": "none", "Open": "calls:example.com/tree/a.Open"}},
+			"example.com/tree/a": {"read": {"at": ["example.com/tree@v1"], "functions": {"Open": "typeargs:constraint", "Node": "typeargs:constraint"}}}
 		}
 	}`))
 	if err != nil {
@@ -269,6 +282,9 @@ func TestValidateRefusesEveryDeadEntry(t *testing.T) {
 		"example.com/run.Cmd: a type is neither a spawner nor a program's source",
 		"example.com/tree/....Close: no package it names declares Close; delete the entry",
 		"example.com/tree/...: calls:example.com/tree/a.Open names no interface the suite loads",
+		"example.com/tree/a: read at example.com/tree@v1, and a measured build compiles it from ./tree, example.com/tree@v2; re-read the source of each function under read there, and update read.at",
+		"example.com/tree/a.Open: typeargs:constraint classifies a generic, and Open is none",
+		"example.com/tree/a.Node: typeargs:constraint classifies a generic, and Node is none",
 		"module example.com/unlinked: no measured build links a package of it; delete the entry",
 		"module example.com/linked: a measured build links its packages, and the classification has no entry for it",
 	} {

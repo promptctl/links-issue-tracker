@@ -283,17 +283,39 @@ func TestAnInitializerOnlyADependencyImportsRunsInTheSetup(t *testing.T) {
 
 func TestAModuleTypeHandedToAnOutsideGenericHasItsMethodsReached(t *testing.T) {
 	expectReach(t, reachOf(t, "genericjoin", "TestNames"), Integration, "fs", map[Touch]string{
-		FS: "genericjoin.TestNames → genericjoin.Names → nested/strs.Join[genericjoin.file] → (genericjoin.file).String [call into example.com/shape/nested/strs.Join is handed type argument genericjoin.file] → os.ReadFile ⇒ os.ReadFile (fs)",
+		FS: "genericjoin.TestNames → genericjoin.Names → nested/strs.Join[genericjoin.file] → (genericjoin.file).String [outside generic nested/strs.Join[genericjoin.file] calls its constraint's methods on genericjoin.file] → os.ReadFile ⇒ os.ReadFile (fs)",
 	})
 }
 
-func TestAModuleTypeAGenericCallsBackAfterConvertingItStillTouches(t *testing.T) {
-	expectReach(t, reachOf(t, "genericjoin", "TestShown"), Integration, "fs", map[Touch]string{
-		FS: "genericjoin.TestShown → genericjoin.Shown → nested/strs.Show[genericjoin.file] → (genericjoin.file).String [fmt.Stringer callback reaches genericjoin.file from TestShown, made in nested/strs.Show[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)",
+func TestAnOutsideGenericsTypeArgumentIsConvertedForWhatMeetsIt(t *testing.T) {
+	// The generic converts what it is handed, so its type argument, and each
+	// named type in its structure, by its pointer, are runtime types: a
+	// callback, dispatch and reflection each meet them.
+	for _, tc := range []struct{ pkg, test, witness string }{
+		{"genericjoin", "TestShown", "genericjoin.TestShown → genericjoin.Shown → nested/strs.Show[genericjoin.file] → (genericjoin.file).String [fmt.Stringer callback reaches genericjoin.file from TestShown, converted by outside generic nested/strs.Show[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestShownSlice", "genericjoin.TestShownSlice → genericjoin.ShownSlice → nested/strs.Show[[]genericjoin.file] → (*genericjoin.file).String [fmt.Stringer callback reaches *genericjoin.file from TestShownSlice, converted by outside generic nested/strs.Show[[]genericjoin.file]] → (genericjoin.file).String → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestShownField", "genericjoin.TestShownField → genericjoin.ShownField → nested/strs.Show[genericjoin.wrap] → (*genericjoin.file).String [fmt.Stringer callback reaches *genericjoin.file from TestShownField, converted by outside generic nested/strs.Show[genericjoin.wrap]] → (genericjoin.file).String → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestVisited", "genericjoin.TestVisited → genericjoin.Visited → nested/strs.Visit[genericjoin.file] → (genericjoin.file).String [dispatch reaches genericjoin.file from TestVisited, converted by outside generic nested/strs.Visit[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestKeptCalled", "genericjoin.TestKeptCalled → genericjoin.KeptCalled → (reflect.Value).Call → (genericjoin.file).String [dispatch reaches genericjoin.file from TestKeptCalled, converted by outside generic nested/strs.Keep[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericjoin", "TestEncoded", "genericjoin.TestEncoded → genericjoin.Encoded → nested/strs.Encode[[]genericjoin.record] → (*genericjoin.record).MarshalJSON [encoding/json.Marshaler callback reaches *genericjoin.record from TestEncoded, converted by outside generic nested/strs.Encode[[]genericjoin.record]] → os.ReadFile ⇒ os.ReadFile (fs)"},
+		{"genericclone", "TestKept", "genericclone.TestKept → genericclone.Kept → (genericclone.omission).removeFrom [reflection reaches *genericclone.omission from TestKept, converted by outside generic nested/strs.Keep[[]genericclone.omission]] → os.RemoveAll ⇒ os.RemoveAll (fs)"},
+	} {
+		t.Run(tc.test, func(t *testing.T) {
+			expectReach(t, reachOf(t, tc.pkg, tc.test), Integration, "fs", map[Touch]string{FS: tc.witness})
+		})
+	}
+}
+
+func TestAnInterfaceTypeArgumentsConstraintMethodsAreInterfaceCalls(t *testing.T) {
+	expectReach(t, reachOf(t, "genericjoin", "TestStringers"), Integration, "fs", map[Touch]string{
+		FS: "genericjoin.TestStringers → genericjoin.Stringers → nested/strs.Join[fmt.Stringer] → (nested/strs.Path).String [fmt.Stringer callback reaches nested/strs.Path from TestStringers, made in genericjoin.Stringers] ⇒ example.com/shape/nested/strs.Path.String (fs)",
 	})
 }
 
 func TestAMethodAnOutsideGenericsConstraintCannotCallIsNotReached(t *testing.T) {
+	// slices.Clone is classified typeargs:constraint: the omission it is
+	// handed is no runtime type, so the reflection that reaches TestKept's
+	// does not reach it.
 	expectReach(t, reachOf(t, "genericclone", "TestCopy"), Unit, "none", nil)
 }
 
@@ -311,7 +333,7 @@ func TestAFuzzFunctionHandedToFFuzzIsReached(t *testing.T) {
 
 func TestAClosureCalledThroughReflectionIsReached(t *testing.T) {
 	expectReach(t, reachOf(t, "reflectcall", "TestSave"), Integration, "fs", map[Touch]string{
-		FS: "reflectcall.TestSave → reflectcall.Save → reflect.ValueOf → reflectcall.Save$1 [call into reflect.ValueOf reaches value from TestSave, made in reflectcall.Save] → os.WriteFile ⇒ os.WriteFile (fs)",
+		FS: "reflectcall.TestSave → reflectcall.Save → (*text/template.Template).Funcs → reflectcall.Save$1 [call into text/template.Template.Funcs reaches value from TestSave, made in reflectcall.Save] → os.WriteFile ⇒ os.WriteFile (fs)",
 	})
 }
 

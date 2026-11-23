@@ -1,12 +1,16 @@
-// Package reflectcall calls a closure through reflect.Value.Call.
+// Package reflectcall hands a closure to text/template in an interface
+// value; a template calls the functions it is given by reflection.
 package reflectcall
 
 import (
 	"os"
-	"reflect"
+	"text/template"
 )
 
 func Save() {
-	save := func(name string) { _ = os.WriteFile(name, nil, 0o600) }
-	reflect.ValueOf(save).Call([]reflect.Value{reflect.ValueOf("saved")})
+	save := func(name string) string {
+		_ = os.WriteFile(name, nil, 0o600)
+		return name
+	}
+	_ = template.New("t").Funcs(template.FuncMap{"save": save})
 }

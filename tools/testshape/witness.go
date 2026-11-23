@@ -43,11 +43,12 @@ type throughType struct {
 	where entryOrigin
 }
 
-// typeArgument is a reach through a type handed to an outside generic as a
-// type argument; how is the call ("call into strs.Join").
+// typeArgument is a reach through a type argument of an outside generic,
+// generic, which calls its constraint's methods on the type's values.
 type typeArgument struct {
-	how string
-	typ types.Type
+	generic string
+	typ     types.Type
+	class   TypeArgs
 }
 
 func (staticCall) text(types.Qualifier) string { return "" }
@@ -55,7 +56,8 @@ func (c converting) text(q types.Qualifier) string {
 	return "converts " + types.TypeString(c.typ, q) + " to an interface"
 }
 func (t typeArgument) text(q types.Qualifier) string {
-	return t.how + " is handed type argument " + types.TypeString(t.typ, q)
+	calls := map[TypeArgs]string{TypeArgsConverted: " calls its constraint's methods on ", TypeArgsConstraint: " calls only its constraint's methods on "}[t.class]
+	return "outside generic " + t.generic + calls + types.TypeString(t.typ, q)
 }
 func (t throughFunc) text(types.Qualifier) string {
 	return t.how + " reaches value " + t.where.text()
@@ -65,12 +67,14 @@ func (t throughType) text(q types.Qualifier) string {
 }
 
 // entryOrigin is where an entry of the RTA state was made: the setup or the
-// test that made it exist, and the function in whose body it was made.
+// test that made it exist, and the function that made it, in its body
+// ("made in"), or, an outside generic, by converting its type argument
+// ("converted by outside generic").
 type entryOrigin struct {
-	origin, creator string
+	origin, made, creator string
 }
 
-func (o entryOrigin) text() string { return "from " + o.origin + ", made in " + o.creator }
+func (o entryOrigin) text() string { return "from " + o.origin + ", " + o.made + " " + o.creator }
 
 // witness is one chain of functions from a walk's root to a touch.
 type witness struct {
