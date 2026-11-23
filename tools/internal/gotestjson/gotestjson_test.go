@@ -30,9 +30,9 @@ func TestReadStampsTerminalPackageResults(t *testing.T) {
 		`{"Action":"skip","Package":"example.com/c","Elapsed":0}`,
 	)
 	want := Run{Packages: []Package{
-		{ImportPath: "example.com/a", Elapsed: 1500 * time.Millisecond, Verdict: Pass},
-		{ImportPath: "example.com/b", Elapsed: 200 * time.Millisecond, Verdict: Fail, FailedBuild: "example.com/b [example.com/b.test]"},
-		{ImportPath: "example.com/c", Verdict: Skip},
+		{ImportPath: "example.com/a", Elapsed: 1500 * time.Millisecond, Verdict: Pass, Build: Built{}},
+		{ImportPath: "example.com/b", Elapsed: 200 * time.Millisecond, Verdict: Fail, Build: BuildFailed{Package: "example.com/b [example.com/b.test]"}},
+		{ImportPath: "example.com/c", Verdict: Skip, Build: Built{}},
 	}}
 	if !reflect.DeepEqual(run, want) {
 		t.Errorf("run = %+v, want %+v", run, want)
@@ -52,7 +52,7 @@ func TestReadAcceptsAttrAndArtifactsEvents(t *testing.T) {
 		`{"Time":"2026-11-01T10:00:00.5Z","Action":"pass","Package":"p","Test":"TestA","Elapsed":0.5}`,
 		`{"Time":"2026-11-01T10:00:00.6Z","Action":"pass","Package":"p","Elapsed":0.6}`,
 	)
-	want := []Test{{Name: "TestA", Elapsed: 500 * time.Millisecond, Verdict: Pass}}
+	want := []Test{{Name: "TestA", Elapsed: 500 * time.Millisecond, Ending: Passed}}
 	if len(run.Packages) != 1 || !reflect.DeepEqual(run.Packages[0].Tests, want) {
 		t.Errorf("packages = %+v, want one with tests %+v", run.Packages, want)
 	}
@@ -65,6 +65,10 @@ func TestReadRefusesMalformedStreams(t *testing.T) {
 		{"unknown action", `{"Action":"explode","Package":"p"}`, `action "explode"`},
 		{"package verdict without Elapsed", `{"Action":"pass","Package":"p"}`, "package p's pass has no Elapsed"},
 		{"test verdict without Elapsed", `{"Action":"fail","Package":"p","Test":"TestX"}`, "test p TestX has no Elapsed"},
+		{"an event naming no package", `{"Action":"output","Output":"x\n"}`, "a output event names no package"},
+		{"JSON that is not an event", `["pass","p"]`, "cannot unmarshal array"},
+		{"a field of the wrong type", `{"Action":"pass","Package":"p","Elapsed":"soon"}`, "cannot unmarshal string"},
+		{"no package at all", `{"ImportPath":"p [p.test]","Action":"build-output","Output":"x\n"}`, "it reports no package"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Read(stream(tc.line), &strings.Builder{})
@@ -81,7 +85,7 @@ func TestReadMarksATestWithNoVerdictAtItsPackagesEndUnfinished(t *testing.T) {
 		`{"Time":"2026-11-01T10:00:00Z","Action":"output","Package":"p","Test":"TestHangs","Output":"panic: test timed out\n"}`,
 		`{"Time":"2026-11-01T10:00:02Z","Action":"fail","Package":"p","Elapsed":2}`,
 	)
-	want := []Test{{Name: "TestHangs", Elapsed: 2 * time.Second, Verdict: Unfinished}}
+	want := []Test{{Name: "TestHangs", Elapsed: 2 * time.Second, Ending: Unfinished}}
 	if !reflect.DeepEqual(run.Packages[0].Tests, want) {
 		t.Errorf("tests = %+v, want %+v", run.Packages[0].Tests, want)
 	}
@@ -104,8 +108,16 @@ func TestReadReportsPackagesTheStreamEndedInside(t *testing.T) {
 	if !reflect.DeepEqual(run.Cut, want) {
 		t.Errorf("cut = %+v, want %+v", run.Cut, want)
 	}
-	if a, p := strings.Index(out, "sibling detail"), strings.Index(out, "about to crash"); a < 0 || p < 0 || a > p {
-		t.Errorf("stranded output missing or not in package order:\n%s", out)
+	for _, want := range []string{
+		"--- unfinished: a TestAlsoDies (the stream ended before its package did)\n    sibling detail\n",
+		"--- unfinished: p TestDies (the stream ended before its package did)\n    about to crash\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("replay lacks %q:\n%s", want, out)
+		}
+	}
+	if a, p := strings.Index(out, "sibling detail"), strings.Index(out, "about to crash"); a > p {
+		t.Errorf("stranded output not in package order:\n%s", out)
 	}
 }
 
@@ -147,6 +159,7 @@ func TestReadEchoesNonJSONAndBuildOutput(t *testing.T) {
 		`panic: something terrible [recovered]`,
 		`{"ImportPath":"p [p.test]","Action":"build-output","Output":"p: compile error\n"}`,
 		`{"ImportPath":"p [p.test]","Action":"build-fail"}`,
+		`{"Action":"fail","Package":"p","Elapsed":0,"FailedBuild":"p [p.test]"}`,
 	)
 	for _, want := range []string{"panic: something terrible", "compile error"} {
 		if !strings.Contains(got, want) {
@@ -168,7 +181,7 @@ func TestReadTimesAParentOfParallelSubtestsToItsLastSubtestsEnd(t *testing.T) {
 		`{"Time":"2026-11-01T10:00:01Z","Action":"pass","Package":"p","Test":"TestParent","Elapsed":0}`,
 		`{"Time":"2026-11-01T10:00:01Z","Action":"pass","Package":"p","Elapsed":1}`,
 	)
-	want := []Test{{Name: "TestParent", Elapsed: 400 * time.Millisecond, Verdict: Pass}}
+	want := []Test{{Name: "TestParent", Elapsed: 400 * time.Millisecond, Ending: Passed}}
 	if !reflect.DeepEqual(run.Packages[0].Tests, want) {
 		t.Errorf("tests = %+v, want %+v", run.Packages[0].Tests, want)
 	}

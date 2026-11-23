@@ -18,10 +18,11 @@
 //
 // Test success is not this tool's job: the step runs under bash's pipefail, so
 // `go test`'s own exit code remains the one enforcer of the suite being green.
-// [LAW:single-enforcer] testbudget exits nonzero only for a blown budget or a
-// stream it could not read. A stream it cannot read includes a malformed one,
-// under the reader's rule: an action go test does not emit, or a package's or
-// test's verdict without its Elapsed figure, exits 2 naming the line.
+// [LAW:single-enforcer] testbudget exits nonzero only for a blown budget (1) or
+// a stream it could not read (2): a malformed one under the reader's rule,
+// which includes a stream that reports no package. A stream that ends inside a
+// package, when go test was killed, is printed as cut and measured no
+// further; go test's own exit already fails the step.
 package main
 
 import (
@@ -89,8 +90,8 @@ func slowest(tests []gotestjson.Test) []gotestjson.Test {
 // printTable renders every package's elapsed against its budget, slowest
 // first. It prints on success too: each CI log is the calibration record the
 // next re-baseline of budgets.go reads its numbers from.
-func printTable(w io.Writer, results []gotestjson.Package, budgets map[string]time.Duration, def time.Duration) {
-	sorted := slices.Clone(results)
+func printTable(w io.Writer, run gotestjson.Run, budgets map[string]time.Duration, def time.Duration) {
+	sorted := slices.Clone(run.Packages)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Elapsed > sorted[j].Elapsed })
 	fmt.Fprintf(w, "\ntestbudget: per-package wall clock vs budget (budgets: tools/testbudget/budgets.go)\n")
 	for _, r := range sorted {
@@ -103,6 +104,9 @@ func printTable(w io.Writer, results []gotestjson.Package, budgets map[string]ti
 		}
 		budget := budgetFor(r.ImportPath, budgets, def)
 		fmt.Fprintf(w, "%8.1fs / %4ds  %s%s\n", r.Elapsed.Seconds(), int(budget.Seconds()), r.ImportPath, note)
+	}
+	for _, c := range run.Cut {
+		fmt.Fprintf(w, "%8s / %4s  %s  [CUT — the stream ended inside it]\n", "-", "-", c.ImportPath)
 	}
 }
 
@@ -130,7 +134,7 @@ func writeViolation(w io.Writer, annotation string, v violation) {
 			mode = "parallel"
 		}
 		mark := ""
-		if t.Verdict == gotestjson.Unfinished {
+		if t.Ending == gotestjson.Unfinished {
 			mark = "  [unfinished]"
 		}
 		fmt.Fprintf(w, "  %8.2fs  %-8s  %s%s\n", t.Elapsed.Seconds(), mode, t.Name, mark)
@@ -143,9 +147,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "testbudget: %v\n", err)
 		os.Exit(2)
 	}
-	results := run.Packages
-	printTable(os.Stdout, results, budgets, defaultBudget)
-	viols := enforce(results, budgets, defaultBudget)
+	printTable(os.Stdout, run, budgets, defaultBudget)
+	viols := enforce(run.Packages, budgets, defaultBudget)
 	// On GitHub Actions the same line doubles as an inline annotation; the
 	// prefix is workflow-command syntax, not part of the message.
 	prefix := ""

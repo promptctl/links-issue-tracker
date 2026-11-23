@@ -11,6 +11,7 @@ import (
 // row is one package's line of the table.
 type row struct {
 	Name    string
+	Ran     int // declared tests the stream ran
 	Count   [numLayers]int
 	Summed  [numLayers]time.Duration // elapsed of the tests that ran, summed
 	Touched [numTouches]int          // tests reaching each touch
@@ -18,6 +19,7 @@ type row struct {
 }
 
 func (r *row) add(o row) {
+	r.Ran += o.Ran
 	for l := range numLayers {
 		r.Count[l] += o.Count[l]
 		r.Summed[l] += o.Summed[l]
@@ -44,6 +46,9 @@ func rowOf(m measuredPackage, modPath string) row {
 	for _, t := range m.Tests {
 		l := t.Layer()
 		r.Count[l]++
+		if t.Ran {
+			r.Ran++
+		}
 		r.Summed[l] += t.Elapsed
 		for touch := range t.Reached {
 			r.Touched[touch]++
@@ -55,7 +60,7 @@ func rowOf(m measuredPackage, modPath string) row {
 // writeTable renders one row per package and a TOTAL row.
 func writeTable(w io.Writer, rows []row) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', tabwriter.AlignRight)
-	header := []string{"package", "unit", "integ", "e2e", "unit%", "Σunit", "Σinteg", "Σe2e"}
+	header := []string{"package", "tests", "ran", "unit", "integ", "e2e", "unit%", "Σunit", "Σinteg", "Σe2e"}
 	for t := range numTouches {
 		header = append(header, t.String())
 	}
@@ -69,14 +74,15 @@ func writeTable(w io.Writer, rows []row) {
 	}
 	writeRow(tw, total)
 	tw.Flush()
-	fmt.Fprintln(w, "\nunit/integ/e2e: top-level tests at each layer. Σ: the elapsed of the tests that ran, summed, waits included,")
+	fmt.Fprintln(w, "\ntests: the top-level tests the package declares; ran: those the stream ran. unit/integ/e2e: declared tests")
+	fmt.Fprintln(w, "at each layer. Σ: the elapsed of the tests that ran, summed, waits included,")
 	fmt.Fprintln(w, "so a package's sums can exceed its wall time.")
 	fmt.Fprintln(w, "touch columns: tests that can reach the touch. setup: touches of the package's initialization and TestMain.")
 }
 
 func writeRow(w io.Writer, r row) {
 	cells := []string{
-		r.Name,
+		r.Name, fmt.Sprint(r.total()), fmt.Sprint(r.Ran),
 		fmt.Sprint(r.Count[Unit]), fmt.Sprint(r.Count[Integration]), fmt.Sprint(r.Count[EndToEnd]),
 		r.unitShare(),
 		seconds(r.Summed[Unit]), seconds(r.Summed[Integration]), seconds(r.Summed[EndToEnd]),

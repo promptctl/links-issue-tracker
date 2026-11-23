@@ -1,13 +1,17 @@
 package lifecycle
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -111,6 +115,77 @@ func parsedTree(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 		t.Fatal("no non-test Go files parsed — this scan would pass over an empty set")
 	}
 	return fset, files
+}
+
+// filesThatCanHoldAnActionName narrows the gate to the files whose package can
+// hold an ActionName at all. A package's static types come only from what it
+// imports, transitively, so a package that neither declares ActionName nor
+// depends on the package that does cannot produce one, and a field there that
+// shares a bearer's name (go test's JSON `Action`, a string) is somebody else's.
+// The narrowing is by package, as `go list` builds them: a file no listed
+// package compiles (another module, another build tag) stays in, so what the
+// gate cannot place it still examines. [LAW:no-silent-failure]
+func filesThatCanHoldAnActionName(t *testing.T, files map[string]*ast.File) map[string]*ast.File {
+	t.Helper()
+	declaring := ""
+	for rel, f := range files {
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				if ts := spec.(*ast.TypeSpec); ts.Name.Name == "ActionName" && !ts.Assign.IsValid() {
+					declaring = filepath.Dir(rel)
+				}
+			}
+		}
+	}
+	if declaring == "" {
+		t.Fatal("no file declares type ActionName; the gate cannot tell which packages can hold one")
+	}
+	root := repoRootForVerbTest(t)
+	cmd := exec.Command("go", "list", "-e", "-json=Dir,ImportPath,Deps,GoFiles,CgoFiles", "./...")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list in %s: %v", root, err)
+	}
+	type listed struct {
+		Dir, ImportPath         string
+		Deps, GoFiles, CgoFiles []string
+	}
+	var pkgs []listed
+	declaringPath := ""
+	dec := json.NewDecoder(bytes.NewReader(out))
+	for dec.More() {
+		var p listed
+		if err := dec.Decode(&p); err != nil {
+			t.Fatalf("decoding go list: %v", err)
+		}
+		rel, err := filepath.Rel(root, p.Dir)
+		if err != nil {
+			t.Fatalf("go list named %s, outside %s: %v", p.Dir, root, err)
+		}
+		p.Dir = rel
+		if rel == declaring {
+			declaringPath = p.ImportPath
+		}
+		pkgs = append(pkgs, p)
+	}
+	if declaringPath == "" {
+		t.Fatalf("go list lists no package in %s, which declares ActionName", declaring)
+	}
+	examined := maps.Clone(files)
+	for _, p := range pkgs {
+		if p.ImportPath == declaringPath || slices.Contains(p.Deps, declaringPath) {
+			continue
+		}
+		for _, name := range append(p.GoFiles, p.CgoFiles...) {
+			delete(examined, filepath.Join(p.Dir, name))
+		}
+	}
+	return examined
 }
 
 // typeName renders the type of a declaration as its final identifier, so both
@@ -372,7 +447,7 @@ func TestNoActionNameReachesAMessageAsItsPersistedEncoding(t *testing.T) {
 		}
 	}
 	bad := []string{}
-	for rel, f := range files {
+	for rel, f := range filesThatCanHoldAnActionName(t, files) {
 		scopes := scopedLocals(f)
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)

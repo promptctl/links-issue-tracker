@@ -3,100 +3,126 @@
 // layer it sits at, decided by what its code can reach outside the process,
 // and how long the tests at each layer took.
 //
-//	set -o pipefail
-//	{ go test -short -json ./... && go -C internal/vendor/dolthub-driver test -short -json ./...; } > shape.json
+//	go test -short -json ./... > shape.json
+//	go -C internal/vendor/dolthub-driver test -short -json ./... >> shape.json
 //	go run ./tools/testshape [-tests] [-tags list] < shape.json
 //
-// It prints a table, one row per package: the count of top-level tests at
-// each layer, their elapsed summed per layer, the unit share, and per touch
-// the tests that can reach it. -tests adds a listing of every test's layer,
-// its touches, and one witness chain per touch.
+// Each module's stream is its own run, so one module's failing test does
+// not keep the other's results out of the measure. -tags names the build
+// tags the measured runs passed, which the stream does not carry.
+//
+// It prints a table, one row per package: the tests it declares and the
+// tests that ran, the count of declared tests at each layer, the elapsed of
+// those that ran summed per layer, the unit share, per touch the tests that
+// can reach it, and the touches of the package's setup. -tests adds a
+// listing of every test's layer, its touches, and one witness chain per
+// touch.
 //
 // THE INVARIANT. The unit share is the figure the layered-test epic's
 // done-when is checked against, so a measure that overstates it certifies
 // work that was never done. Every approximation this tool makes errs away
 // from unit: an imprecision may add a touch a test does not have, or move a
-// test between integration and end-to-end; it never removes a touch.
-//
-// A touch is charged where module code, or a classified outside function,
-// can call it. Charging every method of every value that reaches an
-// interface would charge nearly every test with what testing.T can do,
-// since nearly every test hands t to a helper, and the measure would stop
-// telling tests apart.
+// test between integration and end-to-end; it never removes a touch. A
+// touch is charged where module code, or a classified outside function, can
+// call it: charging every method of every value that reaches an interface
+// would charge nearly every test with what testing.T can do, since nearly
+// every test hands t to a helper, and the measure would stop telling tests
+// apart.
 //
 // TOUCHES. A store on disk, git, a CLI run, any other process, the network,
 // the filesystem, and the real clock. A test that can reach none is unit; one
-// that can reach a CLI run is end-to-end; any other is integration.
+// that can reach a CLI run is end-to-end; any other is integration. A test's
+// touches include its binary's setup's — the initialization of every package
+// in the binary, and its TestMain — since `go test -run` runs the setup for
+// every test it runs; the witness of such a touch starts at the setup.
 //
 // REACH. What a test can run is decided without following values to where
 // they are stored: stores into package variables, pointers, fields, maps and
 // initializer contents have unbounded shapes, and an analysis that follows
 // some of them silently drops a touch on every other one. Instead reach is
-// decided by which function values and concrete types exist, in the manner of
-// rapid type analysis:
+// rapid type analysis, over the address-taken functions and runtime types
+// that exist (see rta.go):
 //
-//   - The binary level of a test binary is the reach of the initialization of
-//     every package the binary contains, and of its TestMain, which run before
-//     every test. The function values they take and the concrete types they
-//     convert to an interface are the possible targets of a test's dynamic and
-//     interface calls, each carrying its origin: the initializer or TestMain
-//     that made it exist. Their own touches print on the package's row.
-//   - From each test: a static call reaches its callee. A function value that
-//     is taken is reachable. A dynamic call reaches every binary-level
-//     function value of its signature. A value with no use creates nothing,
-//     so `var _ I = (*T)(nil)` makes no method reachable.
+//   - A binary's setup is walked first, from every module package's
+//     initializer and its TestMain; each test is walked over it, so the
+//     address-taken functions and runtime types of both meet every dynamic
+//     and interface call of both.
+//   - A static call reaches its callee. A function taken as a value is
+//     address-taken, and taking it runs nothing: a dynamic call reaches every
+//     address-taken function of its signature, and a function value handed
+//     to code the walk does not follow into (t.Run, sort.Slice, an interface
+//     call) is such a call, since that code may call it. A value with no use
+//     creates nothing, so `var _ I = (*T)(nil)` makes no method reachable.
 //   - Converting a module type to an interface makes reachable every method
 //     of it and of every module type reachable from its structure (fields,
 //     elements, pointees), since fmt and encoding/json call them by
-//     reflection; an interface in that structure stands for every
-//     binary-level type implementing it.
+//     reflection; an interface in that structure stands for every runtime
+//     type implementing it.
 //   - An outside type, converted or found in such a structure, contributes
 //     only what module code can call on it: the methods implementing a
-//     module interface it is converted to, and, through a call of a module
-//     interface method, that method of every such type implementing the
-//     interface (`*http.Client` behind a module interface reaches its Do).
-//   - A call through a module interface reaches that method of every
-//     binary-level type implementing it. A call through an outside interface
-//     (`testing.TB`'s TempDir, `io.Writer`'s Write) is a call of an outside
-//     method, charged by the classification of the interface method; the
+//     module interface method it is converted to, and each module interface
+//     method module code calls (`*http.Client` behind a module interface
+//     reaches its Do).
+//   - A call of a module interface method reaches that method of every
+//     runtime type implementing the interface. A call of an outside
+//     interface method (`testing.TB`'s TempDir, `io.Writer`'s Write) is a
+//     call of an outside method, charged by its classification; the runtime
 //     module types implementing it are reached as well.
 //   - Code outside the module is never walked. Every outside function module
-//     code reaches is classified in classification.json: the touches it can
-//     make, none, or dispatching — it calls back what was registered with it
-//     or handed to it (a command tree's Execute, a server, a database driver),
-//     so a call reaches every binary-level function value and every method of
-//     every binary-level module type. What an outside function does with a
-//     value it is handed is that function's own classification. An outside
-//     function with no classification refuses the run, naming it and its
-//     first caller.
+//     code reaches is classified in classification.json, an outside
+//     package's initializer as "init": the touches it can make, none,
+//     dispatching — it calls back what was registered with it or handed to
+//     it (a command tree's Execute, a server, a database driver), so a call
+//     reaches every address-taken function and every method of every
+//     runtime module type — or the interfaces it calls back on what it is
+//     handed (fmt calls a fmt.Stringer's String), each outside type's method
+//     charged by its own classification. What an outside function does with a value it is
+//     handed is that function's own classification.
 //   - A spawn's program is the one value followed: through parameters (at the
 //     static calls in the test's reach) and closure bindings to a constant,
 //     os.Executable(), os.Args[0], or exec.LookPath of a constant. It is git
-//     when it names git; a CLI run when it is the test binary and the binary's
-//     TestMain reaches the CLI; any other program, resolved or not, is another
-//     process, and the witness says which.
+//     when it names git; a CLI run when it is the test binary and the
+//     binary's setup reaches the CLI; any other program, resolved or not, is
+//     another process, and the witness says which.
 //
-// REFUSALS. A measure that measured nothing fails loudly, exiting 1 and
-// naming each cause: an empty stream; a package that failed to build, whose
-// binary died outside any test, or that ended with a test still running; a
-// stream that ended inside a package; a test or package the stream ran
-// twice; a test the stream ran that its binary does not declare; a module of
-// the suite (every go.mod outside testdata, as ./... walks) whose tests are
-// absent from the stream; a classification that names nothing; an outside
-// function with no classification; a module function with no Go body to walk.
-// A malformed stream exits 2.
+// REFUSALS. A measure that measured nothing, or would mismeasure, names
+// each cause and prints no table:
+//
+//   - The stream: a package that failed to build, failed outside any test
+//     (in its initialization, or in TestMain before or after the tests), or
+//     ended with a test still running; a stream that ended inside a package;
+//     a package or test the stream ran twice; a test the stream ran that its
+//     binary does not declare; a package of no module of the suite (every
+//     go.mod outside testdata, as ./... walks); a package whose test binary
+//     declares tests and that the stream has no result for.
+//   - The classification: an entry naming a package or member the suite does
+//     not load (delete it), or a spawn argument its function does not have.
+//     These stop the run before any measuring.
+//   - The analysis: an outside function module code reaches with no
+//     classification, with its first caller; a module function with no Go
+//     body to walk.
+//
+// A test counts as declared when go test would run it: a Test or Fuzz
+// function, or an Example with an output comment. A name both a package and
+// its external test package declare is one test, reaching what both reach.
+//
+// EXIT CODES. 0: measured. 1: refused, as above. 2: a flag it does not
+// take. 3: the stream is malformed, under gotestjson's rule. 4: the suite,
+// or the classification file, did not load.
 //
 // THE STREAM is read through tools/internal/gotestjson, the reader and clock
 // tools/testbudget uses, so the two never report different durations for one
-// test. Every declared top-level test counts in its layer, since its layer
-// comes from its static reach; a test the run skipped or did not select
-// contributes no duration and is listed as not run.
+// test; the reader's replay of go test's output goes to stderr. Every
+// declared top-level test counts in its layer, since its layer comes from
+// its static reach; a test the run skipped or did not select contributes no
+// duration and is listed as not run.
 package main
 
 import (
 	_ "embed"
 	"flag"
 	"fmt"
+	"go/types"
 	"io"
 	"os"
 	"slices"
@@ -108,6 +134,14 @@ import (
 //go:embed classification.json
 var classificationData []byte
 
+const (
+	exitMeasured  = 0
+	exitRefused   = 1
+	exitUsage     = 2
+	exitMalformed = 3
+	exitLoad      = 4
+)
+
 func main() {
 	os.Exit(run(classificationData, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
@@ -116,10 +150,10 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 	fs := flag.NewFlagSet("testshape", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	listTests := fs.Bool("tests", false, "list each test's layer, touches, and a witness per touch")
-	tags := fs.String("tags", "", "the -tags the measured run passed to go test")
+	tags := fs.String("tags", "", "the -tags the measured runs passed to go test")
 	root := fs.String("root", ".", "the repository whose suite the stream measured")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return exitUsage
 	}
 	var buildFlags []string
 	if *tags != "" {
@@ -128,23 +162,23 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 	class, err := parseClassification(classData)
 	if err != nil {
 		fmt.Fprintf(stderr, "testshape: %v\n", err)
-		return 2
+		return exitLoad
 	}
-	stream, err := gotestjson.Read(stdin, io.Discard)
+	stream, err := gotestjson.Read(stdin, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "testshape: %v\n", err)
-		return 2
+		return exitMalformed
 	}
 	pkgs, refusals, err := measureSuite(*root, buildFlags, class, stream)
 	if err != nil {
 		fmt.Fprintf(stderr, "testshape: %v\n", err)
-		return 2
+		return exitLoad
 	}
 	if len(refusals) > 0 {
 		for _, r := range refusals {
 			fmt.Fprintf(stderr, "testshape: refused: %s\n", r)
 		}
-		return 1
+		return exitRefused
 	}
 	var rows []row
 	for _, m := range pkgs {
@@ -158,7 +192,7 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 		}
 		writeListing(stdout, listed)
 	}
-	return 0
+	return exitMeasured
 }
 
 type modulePackage struct {
@@ -168,45 +202,48 @@ type modulePackage struct {
 
 // measureSuite measures every package of stream against the suite under
 // root, returning the measured packages in import-path order and every
-// refusal. err is for a failure to measure at all.
+// refusal. err is for a failure to load the suite.
 func measureSuite(root string, buildFlags []string, class *Classification, stream gotestjson.Run) ([]modulePackage, []string, error) {
-	refusals := streamRefusals(stream)
 	mods, err := suiteModules(root)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := class.Validate(mods, buildFlags); err != nil {
-		refusals = append(refusals, err.Error())
-	}
-	refusals = append(refusals, moduleRefusals(mods, stream)...)
-
-	var out []modulePackage
+	refusals := append(streamRefusals(stream), strayRefusals(mods, stream)...)
+	loads := make([]*loaded, len(mods))
+	universe := map[string]*types.Package{}
 	for i, m := range mods {
-		var mine []gotestjson.Package
-		for _, p := range stream.Packages {
-			if moduleIndex(mods, p.ImportPath) == i {
-				mine = append(mine, p)
-			}
-		}
-		if len(mine) == 0 {
-			continue
-		}
 		l, err := loadModule(m, buildFlags)
 		if err != nil {
 			return nil, nil, err
 		}
-		a := newAnalyzer(l.Prog, m, class)
-		for _, p := range mine {
-			b := l.Binaries[p.ImportPath]
-			if b == nil {
-				if len(p.Tests) > 0 {
-					refusals = append(refusals, fmt.Sprintf("%s: the stream ran tests in a package with no test binary", p.ImportPath))
-				}
+		loads[i] = l
+		for _, sp := range l.Prog.AllPackages() {
+			if universe[sp.Pkg.Path()] == nil {
+				universe[sp.Pkg.Path()] = sp.Pkg
+			}
+		}
+	}
+	if err := class.Validate(universe); err != nil {
+		return nil, append(refusals, err.Error()), nil
+	}
+
+	inStream := map[string]gotestjson.Package{}
+	for _, p := range stream.Packages {
+		inStream[p.ImportPath] = p
+	}
+	var out []modulePackage
+	for i, l := range loads {
+		owned := func(path string) bool { return moduleIndex(mods, path) == i }
+		refusals = append(refusals, absentRefusals(l.Binaries, inStream, owned)...)
+		a := newAnalyzer(l.Prog, l.Module, class)
+		for _, path := range sortedKeys(l.Binaries) {
+			p, ok := inStream[path]
+			if !ok {
 				continue
 			}
-			mp, rs := join(p, a.measure(b))
+			mp, rs := join(p, a.measure(l.Binaries[path]))
 			refusals = append(refusals, rs...)
-			out = append(out, modulePackage{mp, m})
+			out = append(out, modulePackage{mp, l.Module})
 		}
 		refusals = append(refusals, analysisRefusals(a)...)
 	}

@@ -47,52 +47,50 @@ func (r reached) set() Touches {
 }
 
 // binaryShape is what one test binary's code can reach: its setup (the
-// initialization of its packages, and its TestMain) and each declared test.
+// initialization of its packages, and its TestMain) and each declared test,
+// whose reach includes the setup's.
 type binaryShape struct {
 	Setup reached
-	Tests map[string]reached
-	Order []string // declared tests, in name order
+	Tests []testShape // in name order
 }
 
-// measure decides the reach of every test b declares.
+type testShape struct {
+	Name    string
+	Reached reached
+}
+
+// measure decides the reach of b's setup, and of every test b declares over
+// it. Whether the setup runs the CLI is decided once, from the setup's whole
+// reach: a spawn of the test binary runs the CLI exactly when it does.
 func (a *analyzer) measure(b *binary) binaryShape {
-	p := newPool()
-	setup := newWalker(a, p, true)
+	setup := newWalker(a, emptyBinary())
 	for _, sp := range b.Packages {
-		if init := sp.Func("init"); init != nil {
-			setup.root(init, "init of "+strings.TrimPrefix(sp.Pkg.Path(), a.mod.Path+"/"))
-		}
+		setup.root(sp.Func("init"), "init of "+strings.TrimPrefix(sp.Pkg.Path(), a.mod.Path+"/"))
 	}
 	if b.TestMain != nil {
 		setup.root(b.TestMain, "TestMain")
 	}
 	setup.run()
-	p.final = true
+	runsCLI := a.reachesCLI(setup.own)
+	setup.settle(runsCLI)
+	setup.own.closed = true
 
-	testMainRunsCLI := false
-	if b.TestMain != nil {
-		tm := newWalker(a, p, false)
-		tm.root(b.TestMain, "TestMain")
-		tm.run()
-		testMainRunsCLI = a.reachesCLI(tm)
-	}
-	setup.settleSpawns(testMainRunsCLI)
-
-	shape := binaryShape{Setup: setup.touches, Tests: map[string]reached{}}
-	for _, test := range b.Tests {
-		w := newWalker(a, p, false)
-		w.root(test, test.Name())
+	shape := binaryShape{Setup: setup.own.touches}
+	for _, t := range b.Tests {
+		w := newWalker(a, setup.own)
+		for _, fn := range t.Funcs {
+			w.root(fn, t.Name)
+		}
 		w.run()
-		w.settleSpawns(testMainRunsCLI)
-		shape.Tests[test.Name()] = w.touches
-		shape.Order = append(shape.Order, test.Name())
+		w.settle(runsCLI)
+		shape.Tests = append(shape.Tests, testShape{t.Name, w.reached()})
 	}
 	return shape
 }
 
-func (a *analyzer) reachesCLI(w *walker) bool {
-	for fn := range w.visited {
-		if o := a.owner(fn); o.inModule && a.class.isCLI(o.pkg, o.key) {
+func (a *analyzer) reachesCLI(l *layer) bool {
+	for fn := range l.visited {
+		if a.walked(fn) && a.class.isCLI(a.owner(fn).name) {
 			return true
 		}
 	}
@@ -122,21 +120,25 @@ type measuredPackage struct {
 // twice, are refusals: the stream and the measure disagree about what ran.
 func join(pkg gotestjson.Package, shape binaryShape) (measuredPackage, []string) {
 	var refusals []string
+	declared := map[string]bool{}
+	for _, t := range shape.Tests {
+		declared[t.Name] = true
+	}
 	ran := map[string]gotestjson.Test{}
 	for _, t := range pkg.Tests {
 		if _, twice := ran[t.Name]; twice {
 			refusals = append(refusals, fmt.Sprintf("%s: the stream ran %s twice", pkg.ImportPath, t.Name))
 		}
 		ran[t.Name] = t
-		if _, declared := shape.Tests[t.Name]; !declared {
+		if !declared[t.Name] {
 			refusals = append(refusals, fmt.Sprintf("%s: the stream ran %s, which its test binary does not declare", pkg.ImportPath, t.Name))
 		}
 	}
 	m := measuredPackage{ImportPath: pkg.ImportPath, Setup: shape.Setup}
-	for _, name := range shape.Order {
-		t, ok := ran[name]
-		didRun := ok && (t.Verdict == gotestjson.Pass || t.Verdict == gotestjson.Fail)
-		mt := measuredTest{Name: name, Reached: shape.Tests[name], Ran: didRun}
+	for _, ts := range shape.Tests {
+		t, ok := ran[ts.Name]
+		didRun := ok && (t.Ending == gotestjson.Passed || t.Ending == gotestjson.Failed)
+		mt := measuredTest{Name: ts.Name, Reached: ts.Reached, Ran: didRun}
 		if didRun {
 			mt.Elapsed = t.Elapsed
 		}
@@ -149,23 +151,20 @@ func join(pkg gotestjson.Package, shape binaryShape) (measuredPackage, []string)
 // measured nothing. [LAW:no-silent-failure]
 func streamRefusals(run gotestjson.Run) []string {
 	var refusals []string
-	if len(run.Packages) == 0 && len(run.Cut) == 0 {
-		refusals = append(refusals, "the stream is empty")
-	}
 	seen := map[string]bool{}
 	for _, p := range run.Packages {
 		if seen[p.ImportPath] {
 			refusals = append(refusals, fmt.Sprintf("%s: the stream ran the package twice", p.ImportPath))
 		}
 		seen[p.ImportPath] = true
-		if p.FailedBuild != "" {
-			refusals = append(refusals, fmt.Sprintf("%s: its test binary failed to build (%s)", p.ImportPath, p.FailedBuild))
+		if b, failed := p.Build.(gotestjson.BuildFailed); failed {
+			refusals = append(refusals, fmt.Sprintf("%s: its test binary failed to build (%s)", p.ImportPath, b.Package))
 			continue
 		}
 		var failed, unfinished []string
 		for _, t := range p.Tests {
-			switch t.Verdict {
-			case gotestjson.Fail:
+			switch t.Ending {
+			case gotestjson.Failed:
 				failed = append(failed, t.Name)
 			case gotestjson.Unfinished:
 				unfinished = append(unfinished, t.Name)
@@ -175,7 +174,7 @@ func streamRefusals(run gotestjson.Run) []string {
 			refusals = append(refusals, fmt.Sprintf("%s: the package ended with %s still running", p.ImportPath, strings.Join(unfinished, ", ")))
 		}
 		if p.Verdict == gotestjson.Fail && len(failed) == 0 && len(unfinished) == 0 {
-			refusals = append(refusals, fmt.Sprintf("%s: its test binary died outside any test", p.ImportPath))
+			refusals = append(refusals, fmt.Sprintf("%s: the package failed outside any test: in its initialization, or in TestMain before or after the tests", p.ImportPath))
 		}
 	}
 	for _, c := range run.Cut {
@@ -188,22 +187,33 @@ func streamRefusals(run gotestjson.Run) []string {
 	return refusals
 }
 
-// moduleRefusals names every module of the suite the stream has no package
-// of, and every stream package that belongs to no module of the suite.
-func moduleRefusals(mods []module, run gotestjson.Run) []string {
+// strayRefusals names every stream package that belongs to no module of
+// the suite.
+func strayRefusals(mods []module, run gotestjson.Run) []string {
 	var refusals []string
-	covered := make([]bool, len(mods))
 	for _, p := range run.Packages {
-		i := moduleIndex(mods, p.ImportPath)
-		if i < 0 {
+		if moduleIndex(mods, p.ImportPath) < 0 {
 			refusals = append(refusals, fmt.Sprintf("%s: the package belongs to no module of the suite", p.ImportPath))
-			continue
 		}
-		covered[i] = true
 	}
-	for i, m := range mods {
-		if !covered[i] {
-			refusals = append(refusals, fmt.Sprintf("module %s (%s): its tests are absent from the stream", m.Path, m.Dir))
+	return refusals
+}
+
+// absentRefusals names every package one module's loader built a test binary
+// declaring tests for that the stream has no result for, and every package of
+// the module the stream ran tests in that has no test binary: either way, the
+// stream and the measure disagree about what ran. owned reports whether the
+// module owns a stream package.
+func absentRefusals(binaries map[string]*binary, inStream map[string]gotestjson.Package, owned func(string) bool) []string {
+	var refusals []string
+	for _, path := range sortedKeys(binaries) {
+		if _, ok := inStream[path]; !ok && len(binaries[path].Tests) > 0 {
+			refusals = append(refusals, fmt.Sprintf("%s: its test binary declares tests, and the stream has no result for the package", path))
+		}
+	}
+	for _, path := range sortedKeys(inStream) {
+		if owned(path) && binaries[path] == nil && len(inStream[path].Tests) > 0 {
+			refusals = append(refusals, fmt.Sprintf("%s: the stream ran tests in a package with no test binary", path))
 		}
 	}
 	return refusals
@@ -222,8 +232,8 @@ func moduleIndex(mods []module, path string) int {
 }
 
 // analysisRefusals names every outside function module code reaches without
-// a classification, with its first caller, and every module function with
-// no body to walk.
+// a classification, with its first caller; every module function with no
+// body to walk; and every called-back interface the program does not hold.
 func analysisRefusals(a *analyzer) []string {
 	var refusals []string
 	for _, name := range sortedKeys(a.unclassified) {
@@ -231,6 +241,9 @@ func analysisRefusals(a *analyzer) []string {
 	}
 	for _, name := range sortedKeys(a.bodiless) {
 		refusals = append(refusals, fmt.Sprintf("module function %s has no Go body to walk, reached from %s", name, a.bodiless[name]))
+	}
+	for _, name := range sortedKeys(a.unresolved) {
+		refusals = append(refusals, fmt.Sprintf("called-back interface %s is not in the program, called back by %s", name, a.unresolved[name]))
 	}
 	return refusals
 }

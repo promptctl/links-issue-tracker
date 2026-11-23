@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-func init() { http.HandleFunc("/config", serveConfig) }
+func init() { http.Handle("/config", http.HandlerFunc(serveConfig)) }
 
 func serveConfig(w http.ResponseWriter, r *http.Request) {
 	b, _ := os.ReadFile("config")

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"go/types"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,11 +20,12 @@ import (
 
 const shapeDir = "testdata/shape"
 
-// shapeModule is the fixture module, loaded once for every case: the load
-// builds export data for its imports, the costly step, and no case changes
-// what was loaded. [LAW:no-shared-mutable-globals] each case measures with
-// its own analyzer; the loaded program is only read. It loads under the
-// fixture's build tag, which is how -tags passing through is proven.
+// shapeModule is the fixture module, loaded once for every case, since the
+// load builds export data for its imports, the costly step. Each case
+// measures with its own analyzer; the program they share builds method
+// wrappers on demand under its own lock, and no case runs in parallel. It
+// loads under the fixture's build tag, which is how -tags passing through is
+// proven.
 var shapeModule = sync.OnceValues(func() (*loaded, error) {
 	return loadModule(module{Dir: shapeDir, Path: "example.com/shape"}, []string{"-tags=shapetag"})
 })
@@ -64,11 +67,15 @@ func reachOf(t *testing.T, pkg, test string) reached {
 	if len(refusals) > 0 {
 		t.Fatalf("measuring %s refused:\n%s", pkg, strings.Join(refusals, "\n"))
 	}
-	r, ok := shape.Tests[test]
-	if !ok {
-		t.Fatalf("%s declares no %s; it declares %v", pkg, test, shape.Order)
+	var names []string
+	for _, ts := range shape.Tests {
+		if ts.Name == test {
+			return ts.Reached
+		}
+		names = append(names, ts.Name)
 	}
-	return r
+	t.Fatalf("%s declares no %s; it declares %v", pkg, test, names)
+	return nil
 }
 
 // expectReach checks a test's layer and touches, and, for each touch given a
@@ -116,9 +123,11 @@ func TestAModeTableReachesEveryOpenerOfItsSignature(t *testing.T) {
 	})
 }
 
-func TestAnInterfaceTheCLIImplementsReachesItFromTestMain(t *testing.T) {
+func TestWhatTestMainReachesInOneBranchEveryTestReaches(t *testing.T) {
+	// TestMain runs the CLI only when re-run as it, but its reach is the
+	// setup of every test.
 	expectReach(t, reachOf(t, "climain", "TestThroughThePort"), Integration, "fs", map[Touch]string{
-		FS: "climain.TestThroughThePort → (climain.Command).Execute [interface call reaches climain.Command from TestMain, made in climain.TestMain] → climain.Run → os.ReadFile ⇒ os.ReadFile (fs)",
+		FS: "climain.TestMain → climain.Run → os.ReadFile ⇒ os.ReadFile (fs)",
 	})
 }
 
@@ -134,9 +143,9 @@ func TestAFunctionValueTestMainStoresIsReached(t *testing.T) {
 	})
 }
 
-func TestAValueInitBuildsIsReachedThroughAMap(t *testing.T) {
+func TestAModuleTypeInitConvertsHasEveryMethodInTheSetup(t *testing.T) {
 	expectReach(t, reachOf(t, "initmap", "TestOpen"), Integration, "fs", map[Touch]string{
-		FS: "initmap.TestOpen → initmap.Open → (initmap.disk).Open [interface call reaches initmap.disk from init of initmap, made in initmap.init#1] → os.MkdirAll ⇒ os.MkdirAll (fs)",
+		FS: "initmap.init → initmap.init#1 → (initmap.disk).Open [converts initmap.disk to an interface] → os.MkdirAll ⇒ os.MkdirAll (fs)",
 	})
 }
 
@@ -146,9 +155,9 @@ func TestAValueInitBuildsIsReachedThroughAStructField(t *testing.T) {
 	})
 }
 
-func TestAValueInitBuildsIsReachedThroughAPointer(t *testing.T) {
+func TestAModuleTypeInitConvertsThroughAPointerHasEveryMethodInTheSetup(t *testing.T) {
 	expectReach(t, reachOf(t, "initpointer", "TestOpen"), Integration, "fs", map[Touch]string{
-		FS: "initpointer.TestOpen → initpointer.Open → (initpointer.disk).Open [interface call reaches initpointer.disk from init of initpointer, made in initpointer.init#1] → os.MkdirAll ⇒ os.MkdirAll (fs)",
+		FS: "initpointer.init → initpointer.init#1 → (initpointer.disk).Open [converts initpointer.disk to an interface] → os.MkdirAll ⇒ os.MkdirAll (fs)",
 	})
 }
 
@@ -158,7 +167,7 @@ func TestACompileTimeAssertionMakesNothing(t *testing.T) {
 
 func TestACallbackHandedToTRunIsReached(t *testing.T) {
 	expectReach(t, reachOf(t, "trun", "TestSubtest"), Integration, "fs", map[Touch]string{
-		FS: "trun.TestSubtest → trun.TestSubtest$1 [takes it as a value] → trun.Write → os.WriteFile ⇒ os.WriteFile (fs)",
+		FS: "trun.TestSubtest → trun.TestSubtest$1 [call into outside code reaches value from TestSubtest, made in trun.TestSubtest] → trun.Write → os.WriteFile ⇒ os.WriteFile (fs)",
 	})
 }
 
@@ -169,24 +178,26 @@ func TestGitThroughTwoHelpersIsGit(t *testing.T) {
 }
 
 func TestTheTestBinaryRerunUnderACLITestMainIsEndToEnd(t *testing.T) {
-	expectReach(t, reachOf(t, "selfcli", "TestRerun"), EndToEnd, "cli", map[Touch]string{
-		CLI: "selfcli.TestRerun ⇒ os/exec.Command spawns os.Args[0], the test binary, whose TestMain runs the CLI",
+	expectReach(t, reachOf(t, "selfcli", "TestRerun"), EndToEnd, "cli,fs", map[Touch]string{
+		CLI: "selfcli.TestRerun ⇒ os/exec.Command spawns os.Args[0], the test binary, whose setup runs the CLI",
+		FS:  "selfcli.TestMain → selfcli.Run → os.ReadFile ⇒ os.ReadFile (fs)",
 	})
 }
 
 func TestTheTestBinaryRerunUnderAPlainTestMainIsAnotherProcess(t *testing.T) {
 	expectReach(t, reachOf(t, "selfplain", "TestRerun"), Integration, "proc", map[Touch]string{
-		Proc: "selfplain.TestRerun ⇒ os/exec.Command spawns os.Args[0], the test binary, whose TestMain does not reach the CLI: another process",
+		Proc: "selfplain.TestRerun ⇒ os/exec.Command spawns os.Args[0], the test binary, whose setup does not reach the CLI: another process",
 	})
 }
 
 func TestAMainPackageRunsItselfAndGitThroughOneHelper(t *testing.T) {
-	expectReach(t, reachOf(t, "cmdshape", "TestRunsItself"), EndToEnd, "cli", map[Touch]string{
-		CLI: "cmdshape.TestRunsItself → cmdshape.runProgram ⇒ os/exec.Command spawns os.Executable(), the test binary, whose TestMain runs the CLI",
+	// TestMain runs main when asked, so main's reach is every test's.
+	expectReach(t, reachOf(t, "cmdshape", "TestRunsItself"), EndToEnd, "cli,fs", map[Touch]string{
+		CLI: "cmdshape.TestRunsItself → cmdshape.runProgram ⇒ os/exec.Command spawns os.Executable(), the test binary, whose setup runs the CLI",
 	})
 	expectReach(t, reachOf(t, "cmdshape", "TestRunsGit"), Integration, "git,fs", map[Touch]string{
 		Git: `cmdshape.TestRunsGit → cmdshape.runProgram ⇒ os/exec.Command spawns "git", which is git`,
-		FS:  "cmdshape.TestRunsGit → os/exec.LookPath ⇒ os/exec.LookPath (fs)",
+		FS:  "cmdshape.TestMain → cmdshape.main → os.ReadFile ⇒ os.ReadFile (fs)",
 	})
 }
 
@@ -225,9 +236,9 @@ func TestASkippedTestCountsInItsLayerAndIsMarkedNotRun(t *testing.T) {
 	if len(refusals) > 0 {
 		t.Fatalf("refused: %v", refusals)
 	}
-	pkg := gotestjson.Package{ImportPath: "example.com/shape/skipped", Verdict: gotestjson.Pass, Tests: []gotestjson.Test{
-		{Name: "TestPure", Elapsed: 200 * time.Millisecond, Verdict: gotestjson.Pass},
-		{Name: "TestRead", Verdict: gotestjson.Skip},
+	pkg := gotestjson.Package{ImportPath: "example.com/shape/skipped", Tests: []gotestjson.Test{
+		{Name: "TestPure", Elapsed: 200 * time.Millisecond, Ending: gotestjson.Passed},
+		{Name: "TestRead", Ending: gotestjson.Skipped},
 	}}
 	m, refusals := join(pkg, shape)
 	if len(refusals) > 0 {
@@ -248,9 +259,57 @@ func TestASkippedTestCountsInItsLayerAndIsMarkedNotRun(t *testing.T) {
 	}
 }
 
+func TestWhatTestMainTouchesEveryTestOfItsBinaryTouches(t *testing.T) {
+	expectReach(t, reachOf(t, "setupmain", "TestAdd"), Integration, "fs", map[Touch]string{
+		FS: "setupmain.TestMain → os.MkdirAll ⇒ os.MkdirAll (fs)",
+	})
+	shape, _ := measureFixture(t, "setupmain")
+	if got := shape.Setup.set(); got != Touches(0).With(FS) {
+		t.Errorf("setup touches %s, want fs", got)
+	}
+}
+
+func TestAProgramStoredIntoACmdsPathIsSpawned(t *testing.T) {
+	expectReach(t, reachOf(t, "cmdfield", "TestStatus"), Integration, "git", map[Touch]string{
+		Git: `cmdfield.TestStatus → cmdfield.Status ⇒ os/exec.Cmd.Path spawns "/usr/bin/git", which is git`,
+	})
+}
+
+func TestAMethodAnOutsideFunctionCallsBackIsChargedByItsClassification(t *testing.T) {
+	expectReach(t, reachOf(t, "callback", "TestPrint"), Integration, "net", map[Touch]string{
+		Net: "callback.TestPrint → callback.Print → fmt.Sprint → (*net/url.URL).String [fmt.Stringer callback reaches *net/url.URL from TestPrint, made in callback.Print] ⇒ net/url.URL.String (net)",
+	})
+}
+
+func TestACalledBackInterfaceTheProgramLacksRefuses(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(shapeDir, "classification.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = []byte(strings.Replace(string(data), `"calls:fmt.Stringer,calls:error"`, `"calls:example.com/absent.I"`, 1))
+	class, err := parseClassification(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := shapeModule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newAnalyzer(l.Prog, l.Module, class)
+	a.measure(l.Binaries["example.com/shape/callback"])
+	want := []string{"called-back interface example.com/absent.I is not in the program, called back by fmt.Sprint"}
+	if got := analysisRefusals(a); !slices.Equal(got, want) {
+		t.Errorf("refusals = %q, want %q", got, want)
+	}
+}
+
 func TestAnUnclassifiedOutsideFunctionRefusesNamingItsFirstCaller(t *testing.T) {
 	_, refusals := measureFixture(t, "unclassified")
-	want := []string{"unclassified outside function strings.ToUpper, first called by unclassified.Shout"}
+	// strings is unclassified, so its initializer is too.
+	want := []string{
+		"unclassified outside function strings.ToUpper, first called by unclassified.Shout",
+		"unclassified outside function strings.init, first called by unclassified.init",
+	}
 	if !slices.Equal(refusals, want) {
 		t.Errorf("refusals = %q, want %q", refusals, want)
 	}
@@ -264,29 +323,65 @@ func TestAModuleFunctionWithNoBodyRefuses(t *testing.T) {
 	}
 }
 
-func TestTheRunExitsOneOnAnUnclassifiedOutsideFunction(t *testing.T) {
+// passingStream is a go test -json stream in which every test the fixture
+// module declares passed.
+func passingStream(t *testing.T) string {
+	t.Helper()
+	l, err := shapeModule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, path := range sortedKeys(l.Binaries) {
+		fmt.Fprintf(&b, `{"Action":"start","Package":%q}`+"\n", path)
+		for _, test := range l.Binaries[path].Tests {
+			fmt.Fprintf(&b, `{"Action":"run","Package":%q,"Test":%q}`+"\n", path, test.Name)
+			fmt.Fprintf(&b, `{"Action":"pass","Package":%q,"Test":%q,"Elapsed":0}`+"\n", path, test.Name)
+		}
+		fmt.Fprintf(&b, `{"Action":"pass","Package":%q,"Elapsed":0.1}`+"\n", path)
+	}
+	return b.String()
+}
+
+func TestTheRunExitsOneOnWhatTheAnalysisRefuses(t *testing.T) {
 	class, err := os.ReadFile(filepath.Join(shapeDir, "classification.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream := `{"Action":"start","Package":"example.com/shape/unclassified"}
-{"Action":"run","Package":"example.com/shape/unclassified","Test":"TestShout"}
-{"Action":"pass","Package":"example.com/shape/unclassified","Test":"TestShout","Elapsed":0}
-{"Action":"pass","Package":"example.com/shape/unclassified","Elapsed":0.1}
-`
 	var stdout, stderr strings.Builder
-	code := run(class, []string{"-root", shapeDir}, strings.NewReader(stream), &stdout, &stderr)
-	wantErr := "testshape: refused: unclassified outside function strings.ToUpper, first called by unclassified.Shout\n"
-	if code != 1 || stdout.String() != "" || stderr.String() != wantErr {
+	code := run(class, []string{"-root", shapeDir, "-tags", "shapetag"}, strings.NewReader(passingStream(t)), &stdout, &stderr)
+	wantErr := "" +
+		"testshape: refused: unclassified outside function strings.ToUpper, first called by unclassified.Shout\n" +
+		"testshape: refused: unclassified outside function strings.init, first called by unclassified.init\n" +
+		"testshape: refused: module function bodiless.nanotime has no Go body to walk, reached from bodiless.Now\n"
+	if code != exitRefused || stdout.String() != "" || stderr.String() != wantErr {
 		t.Errorf("exit %d, stdout %q, stderr %q; want exit 1, no table, stderr %q", code, stdout.String(), stderr.String(), wantErr)
 	}
 }
 
-func TestTheRunExitsTwoOnAMalformedStream(t *testing.T) {
+func TestTheRunRefusesAPackageAbsentFromTheStream(t *testing.T) {
+	stream := `{"Action":"start","Package":"example.com/shape/twodeep"}
+{"Action":"run","Package":"example.com/shape/twodeep","Test":"TestLoad"}
+{"Action":"pass","Package":"example.com/shape/twodeep","Test":"TestLoad","Elapsed":0}
+{"Action":"pass","Package":"example.com/shape/twodeep","Elapsed":0.1}
+`
+	class, err := os.ReadFile(filepath.Join(shapeDir, "classification.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	code := run(class, []string{"-root", shapeDir, "-tags", "shapetag"}, strings.NewReader(stream), &stdout, &stderr)
+	want := "testshape: refused: example.com/shape/selfcli: its test binary declares tests, and the stream has no result for the package\n"
+	if code != exitRefused || !strings.Contains(stderr.String(), want) {
+		t.Errorf("exit %d, stderr %q; want exit 1 naming each absent package", code, stderr.String())
+	}
+}
+
+func TestTheRunExitsThreeOnAMalformedStream(t *testing.T) {
 	var stdout, stderr strings.Builder
 	code := run(classificationData, nil, strings.NewReader(`{"Action":"explode","Package":"p"}`+"\n"), &stdout, &stderr)
-	if code != 2 || !strings.Contains(stderr.String(), "malformed go test -json stream at") {
-		t.Errorf("exit %d, stderr %q; want exit 2 naming the malformed line", code, stderr.String())
+	if code != exitMalformed || !strings.Contains(stderr.String(), "malformed go test -json stream at") {
+		t.Errorf("exit %d, stderr %q; want exit 3 naming the malformed line", code, stderr.String())
 	}
 }
 
@@ -316,14 +411,22 @@ func TestAClassificationThatNamesNothingRefuses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = class.Validate([]module{{Dir: shapeDir, Path: "example.com/shape"}}, nil)
+	l, err := shapeModule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	universe := map[string]*types.Package{}
+	for _, sp := range l.Prog.AllPackages() {
+		universe[sp.Pkg.Path()] = sp.Pkg
+	}
+	err = class.Validate(universe)
 	want := "the classification names what does not exist:\n" +
-		"  cli example.com/shape/selfcli.Missing: example.com/shape/selfcli declares no Missing\n" +
-		"  os.File.NoSuchMethod: File has no method NoSuchMethod\n" +
+		"  cli example.com/shape/selfcli.Missing: example.com/shape/selfcli declares no function Missing; delete the entry\n" +
+		"  example.com/nothing/...: the suite loads no package it names; delete the entry\n" +
+		"  example.com/nowhere: the suite loads no package it names; delete the entry\n" +
+		"  os.File.NoSuchMethod: no package it names declares File.NoSuchMethod; delete the entry\n" +
 		"  os.Getenv: spawn argument is not a parameter of Getenv\n" +
-		"  os.NoSuchFunction: os declares no NoSuchFunction\n" +
-		"  package example.com/nowhere does not load from any module of the suite\n" +
-		"  pattern example.com/nothing/... covers no module of the build"
+		"  os.NoSuchFunction: no package it names declares NoSuchFunction; delete the entry"
 	if err == nil || err.Error() != want {
 		t.Errorf("Validate = %v\nwant %s", err, want)
 	}

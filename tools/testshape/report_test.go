@@ -28,13 +28,14 @@ func TestTheTableHasARowPerPackageAndATotal(t *testing.T) {
 	var out strings.Builder
 	writeTable(&out, rows)
 	want := "" +
-		"  package  unit  integ  e2e  unit%  Σunit  Σinteg  Σe2e  store  git  cli  proc  net  fs  clock  setup\n" +
-		"        a     2      1    0    67%   0.3s    1.5s  0.0s      0    0    0     0    0   1      0      -\n" +
-		"      cmd     0      1    1     0%   0.0s    0.0s  4.0s      0    0    1     0    0   2      0  clock\n" +
-		"    empty     0      0    0      -   0.0s    0.0s  0.0s      0    0    0     0    0   0      0      -\n" +
-		"    TOTAL     2      2    1    40%   0.3s    1.5s  4.0s      0    0    1     0    0   3      0  clock\n" +
+		"  package  tests  ran  unit  integ  e2e  unit%  Σunit  Σinteg  Σe2e  store  git  cli  proc  net  fs  clock  setup\n" +
+		"        a      3    3     2      1    0    67%   0.3s    1.5s  0.0s      0    0    0     0    0   1      0      -\n" +
+		"      cmd      2    1     0      1    1     0%   0.0s    0.0s  4.0s      0    0    1     0    0   2      0  clock\n" +
+		"    empty      0    0     0      0    0      -   0.0s    0.0s  0.0s      0    0    0     0    0   0      0      -\n" +
+		"    TOTAL      5    4     2      2    1    40%   0.3s    1.5s  4.0s      0    0    1     0    0   3      0  clock\n" +
 		"\n" +
-		"unit/integ/e2e: top-level tests at each layer. Σ: the elapsed of the tests that ran, summed, waits included,\n" +
+		"tests: the top-level tests the package declares; ran: those the stream ran. unit/integ/e2e: declared tests\n" +
+		"at each layer. Σ: the elapsed of the tests that ran, summed, waits included,\n" +
 		"so a package's sums can exceed its wall time.\n" +
 		"touch columns: tests that can reach the touch. setup: touches of the package's initialization and TestMain.\n"
 	if out.String() != want {

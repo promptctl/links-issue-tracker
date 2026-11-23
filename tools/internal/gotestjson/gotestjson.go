@@ -3,8 +3,10 @@
 // of that stream in this repository's tools, so two tools fed one stream can
 // never report different durations for one test. [LAW:one-source-of-truth]
 //
-// The reader has one rule for a malformed stream: an action go test does not
-// emit, or a verdict without its Elapsed figure, is an error, never a guess.
+// The reader has one rule for a malformed stream: a line that is JSON but not
+// an event, an action go test does not emit, an event naming no package that
+// is not a build event, a verdict without its Elapsed figure, or a stream with
+// no package in it, is an error, never a guess.
 // What differs between consumers (one prints an unfinished test, another
 // refuses it) is not decided here: the reader returns those facts as typed
 // values and each tool acts on them.
@@ -21,21 +23,30 @@ import (
 	"time"
 )
 
-// Verdict is how a test or a package ended.
+// Verdict is the verdict go test reported for a package.
 type Verdict int
 
 const (
 	Pass Verdict = iota
 	Fail
 	Skip
+)
+
+// Ending is how a top-level test ended: with go test's verdict, or with none.
+type Ending int
+
+const (
+	Passed Ending = iota
+	Failed
+	Skipped
 	// Unfinished: the test's package ended with no verdict for it — a
 	// -timeout panic, or a binary that died mid-test — so the package's end
 	// stopped its clock.
 	Unfinished
 )
 
-func (v Verdict) String() string {
-	return [...]string{"pass", "fail", "skip", "unfinished"}[v]
+func (e Ending) String() string {
+	return [...]string{"pass", "fail", "skip", "unfinished"}[e]
 }
 
 // Test is one top-level test of a package that ended. Subtests are never
@@ -44,8 +55,21 @@ type Test struct {
 	Name     string
 	Elapsed  time.Duration
 	Parallel bool // it called t.Parallel (emitted a pause event)
-	Verdict  Verdict
+	Ending   Ending
 }
+
+// Build is whether a package's test binary built: Built, or BuildFailed.
+type Build interface{ build() }
+
+// Built: the test binary built, and its run is the package's verdict.
+type Built struct{}
+
+// BuildFailed: the test binary did not build; Package names the package
+// whose build failed.
+type BuildFailed struct{ Package string }
+
+func (Built) build()       {}
+func (BuildFailed) build() {}
 
 // Package is the stamped fact a package's terminal event proves: this import
 // path finished, took this long, ended with this verdict, and ran these
@@ -55,11 +79,9 @@ type Test struct {
 type Package struct {
 	ImportPath string
 	Elapsed    time.Duration
-	Verdict    Verdict // Pass, Fail or Skip
-	// FailedBuild names the package whose build failure failed this one; it
-	// is empty when the test binary built.
-	FailedBuild string
-	Tests       []Test
+	Verdict    Verdict
+	Build      Build
+	Tests      []Test
 }
 
 // Cut is a package the stream ended inside: it never reached its terminal
@@ -100,6 +122,12 @@ var actions = map[string]bool{
 }
 
 var verdicts = map[string]Verdict{"pass": Pass, "fail": Fail, "skip": Skip}
+
+var endings = map[string]Ending{"pass": Passed, "fail": Failed, "skip": Skipped}
+
+// packageless are the actions that name their package by ImportPath, not
+// Package: cmd/go's build events.
+var packageless = map[string]bool{"build-output": true, "build-fail": true}
 
 // testKey identifies one running test.
 type testKey struct{ pkg, test string }
@@ -172,8 +200,8 @@ type reader struct {
 // Read reads one `go test -json` stream from r and replays go test's
 // human-readable output to replay while it reads: package output as it
 // arrives, a test's accumulated output only when that test fails or its
-// package ends without its verdict. Lines that are not JSON events (a panic
-// trace, stray build noise) are echoed verbatim — surfaced, never swallowed.
+// package ends without its verdict. Lines that are not JSON (a panic trace,
+// stray build noise) are echoed verbatim — surfaced, never swallowed.
 // [LAW:no-silent-failure]
 func Read(r io.Reader, replay io.Writer) (Run, error) {
 	rd := &reader{
@@ -188,12 +216,16 @@ func Read(r io.Reader, replay io.Writer) (Run, error) {
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
 		line := sc.Bytes()
-		var ev event
-		if err := json.Unmarshal(line, &ev); err != nil {
+		if !json.Valid(line) {
 			fmt.Fprintf(replay, "%s\n", line)
 			continue
 		}
-		if err := rd.event(ev); err != nil {
+		var ev event
+		err := json.Unmarshal(line, &ev)
+		if err == nil {
+			err = rd.event(ev)
+		}
+		if err != nil {
 			return Run{}, fmt.Errorf("malformed go test -json stream at %s: %w", line, err)
 		}
 	}
@@ -210,6 +242,9 @@ func Read(r io.Reader, replay io.Writer) (Run, error) {
 		}
 		rd.run.Cut = append(rd.run.Cut, Cut{ImportPath: pkg, Open: names})
 	}
+	if len(rd.run.Packages) == 0 && len(rd.run.Cut) == 0 {
+		return Run{}, fmt.Errorf("malformed go test -json stream: it reports no package")
+	}
 	return rd.run, nil
 }
 
@@ -219,12 +254,14 @@ func (rd *reader) event(ev event) error {
 	}
 	if ev.Action == "build-output" {
 		io.WriteString(rd.replay, ev.Output)
-		return nil
 	}
-	if ev.Package == "" {
+	if packageless[ev.Action] {
 		// build-fail names its package by ImportPath; the package's own
 		// terminal event carries the fact as FailedBuild.
 		return nil
+	}
+	if ev.Package == "" {
+		return fmt.Errorf("a %s event names no package", ev.Action)
 	}
 	if ev.Test == "" {
 		return rd.packageEvent(ev)
@@ -262,7 +299,7 @@ func (rd *reader) event(ev event) error {
 			Name:     ev.Test,
 			Elapsed:  rt.elapsedAt(end),
 			Parallel: rt.parallel,
-			Verdict:  verdicts[ev.Action],
+			Ending:   endings[ev.Action],
 		})
 	}
 	return nil
@@ -286,16 +323,20 @@ func (rd *reader) packageEvent(ev event) error {
 					Name:     u.test,
 					Elapsed:  u.rt.elapsedAt(ev.Time),
 					Parallel: u.rt.parallel,
-					Verdict:  Unfinished,
+					Ending:   Unfinished,
 				})
 			}
 		}
+		var build Build = Built{}
+		if ev.FailedBuild != "" {
+			build = BuildFailed{Package: ev.FailedBuild}
+		}
 		rd.run.Packages = append(rd.run.Packages, Package{
-			ImportPath:  ev.Package,
-			Elapsed:     seconds(*ev.Elapsed),
-			Verdict:     verdict,
-			FailedBuild: ev.FailedBuild,
-			Tests:       tests,
+			ImportPath: ev.Package,
+			Elapsed:    seconds(*ev.Elapsed),
+			Verdict:    verdict,
+			Build:      build,
+			Tests:      tests,
 		})
 	default:
 		rd.open[ev.Package] = true

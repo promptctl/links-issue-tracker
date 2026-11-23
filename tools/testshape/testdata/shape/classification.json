@@ -3,9 +3,11 @@
   "cli": ["example.com/shape/selfcli.Run", "example.com/shape/cmdshape.main"],
   "git": ["git"],
   "packages": {
-    "fmt": {"default": "none"},
-    "net/http": {"default": "net", "functions": {"HandleFunc": "none", "ResponseWriter": "none","ServeMux.ServeHTTP": "dispatching"}},
-    "os": {"default": "fs", "functions": {"Getenv": "none", "Environ": "none", "Exit": "none", "Executable": "none"}},
+    "fmt": {"default": "calls:fmt.Stringer,calls:error", "functions": {"init": "none"}},
+    "unsafe": {"default": "none"},
+    "net/http": {"default": "net", "functions": {"init": "none", "Handle": "none", "HandlerFunc": "none", "ResponseWriter": "none", "ServeMux.ServeHTTP": "dispatching"}},
+    "net/url": {"note": "URL.String touches nothing; it is charged net here so the callback fixture shows a called-back method charged by its own classification.", "default": "none", "functions": {"URL.String": "net"}},
+    "os": {"default": "fs", "functions": {"init": "none", "Getenv": "none", "Environ": "none", "Exit": "none", "Executable": "none"}},
     "os/exec": {"default": "none", "functions": {"Command": "spawn:0", "CommandContext": "spawn:1", "Cmd.Path": "spawn:field", "LookPath": "fs"}},
     "testing": {"default": "none", "functions": {"TB.TempDir": "fs"}},
     "time": {"default": "none"}

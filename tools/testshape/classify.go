@@ -3,14 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"go/token"
 	"go/types"
-	"os/exec"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
-
-	"golang.org/x/tools/go/packages"
 )
 
 // Touch is one thing outside the process a test can reach. Any touch takes a
@@ -32,8 +31,11 @@ var touchNames = [numTouches]string{"store", "git", "cli", "proc", "net", "fs", 
 
 func (t Touch) String() string { return touchNames[t] }
 
-// Touches is a set of touches.
+// Touches is a set of touches, one bit per touch.
 type Touches uint8
+
+// The set holds every touch: one past its width does not compile.
+const _ Touches = 1 << (numTouches - 1)
 
 func (s Touches) Has(t Touch) bool        { return s&(1<<t) != 0 }
 func (s Touches) With(t Touch) Touches    { return s | 1<<t }
@@ -57,61 +59,87 @@ func (s Touches) String() string {
 	return strings.Join(names, ",")
 }
 
-// Class is what a call to one function outside the module can do.
-// [LAW:types-are-the-program] touch-free is the empty set; a spawner is a
-// spawn spec, decided by its program, not by a touch it always makes.
-type Class struct {
+// Class is what the classification says of one outside function, type or
+// field: an Effect, a SpawnArg or a SpawnField. [LAW:types-are-the-program]
+type Class interface{ class() }
+
+// Call is the class of a function: an Effect or a SpawnArg.
+type Call interface {
+	Class
+	knowledge
+}
+
+// Effect is what a call can do: the touches it can make, and what it calls
+// back. The empty Effect is a call that touches nothing.
+type Effect struct {
 	Touches Touches
 	// Dispatching: it calls back what was registered with it or handed to
-	// it, so a call reaches every binary-level function value and type.
+	// it, so a call reaches every address-taken function and every method of
+	// every runtime module type.
 	Dispatching bool
-	// Spawn, when set, says where the spawned program comes from.
-	Spawn *Spawn
+	// Calls: the interfaces whose methods it calls back on the values
+	// handed to it that implement them (fmt calls a fmt.Stringer's String),
+	// each named importpath.Name, or error. A called-back method of an
+	// outside type is charged by that type's own classification; a module
+	// type's methods are reachable already.
+	Calls []string
 }
 
-// Spawn locates a spawner's program: argument Arg of the call, or, for a
-// field spawner (exec.Cmd's Path), the value stored into the field.
-type Spawn struct {
-	Arg   int
-	Field bool
-}
+// SpawnArg: a call spawns the program passed as its argument Arg.
+type SpawnArg struct{ Arg int }
 
-// parseClass parses one classification: "none", "dispatching", "spawn:N",
-// "spawn:field", or a comma-separated list of touch names that may also
-// include "dispatching".
+// SpawnField: storing into the field names the program a spawn runs
+// (exec.Cmd's Path).
+type SpawnField struct{}
+
+func (Effect) class()     {}
+func (SpawnArg) class()   {}
+func (SpawnField) class() {}
+
+// parseClass parses one classification: "spawn:N", "spawn:field", "none", or
+// a comma-separated list of touch names, "dispatching", and
+// "calls:Interface".
 func parseClass(spec string) (Class, error) {
-	switch {
-	case spec == "none":
-		return Class{}, nil
-	case spec == "spawn:field":
-		return Class{Spawn: &Spawn{Field: true}}, nil
-	case strings.HasPrefix(spec, "spawn:"):
-		n, err := strconv.Atoi(strings.TrimPrefix(spec, "spawn:"))
-		if err != nil || n < 0 {
-			return Class{}, fmt.Errorf("classification %q: spawn takes an argument index or \"field\"", spec)
+	if arg, ok := strings.CutPrefix(spec, "spawn:"); ok {
+		if arg == "field" {
+			return SpawnField{}, nil
 		}
-		return Class{Spawn: &Spawn{Arg: n}}, nil
+		n, err := strconv.Atoi(arg)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("classification %q: spawn takes an argument index or \"field\"", spec)
+		}
+		return SpawnArg{Arg: n}, nil
 	}
-	var c Class
-	for _, name := range strings.Split(spec, ",") {
-		if name == "dispatching" {
-			c.Dispatching = true
+	if spec == "none" {
+		return Effect{}, nil
+	}
+	var e Effect
+	for _, elem := range strings.Split(spec, ",") {
+		if iface, ok := strings.CutPrefix(elem, "calls:"); ok {
+			if _, _, err := splitInterfaceName(iface); err != nil {
+				return nil, fmt.Errorf("classification %q: %w", spec, err)
+			}
+			e.Calls = append(e.Calls, iface)
 			continue
 		}
-		i := slices.Index(touchNames[:], name)
-		if i < 0 || Touch(i) == CLI {
-			return Class{}, fmt.Errorf("classification %q: %q is not a touch an outside function makes (store, git, proc, net, fs, clock), dispatching, none or spawn", spec, name)
+		if elem == "dispatching" {
+			e.Dispatching = true
+			continue
 		}
-		c.Touches = c.Touches.With(Touch(i))
+		i := slices.Index(touchNames[:], elem)
+		if i < 0 || Touch(i) == CLI {
+			return nil, fmt.Errorf("classification %q: %q is not a touch an outside function makes (store, git, proc, net, fs, clock), dispatching, calls:Interface, none or spawn", spec, elem)
+		}
+		e.Touches = e.Touches.With(Touch(i))
 	}
-	return c, nil
+	return e, nil
 }
 
 // classificationFile is the data file's shape.
 type classificationFile struct {
 	Note string `json:"note"`
 	// CLI names the functions whose reach is the CLI, as importpath.Name: a
-	// TestMain that reaches one re-runs the test binary as the CLI.
+	// binary whose setup reaches one re-runs the test binary as the CLI.
 	CLI []string `json:"cli"`
 	// Git names the programs that are git, matched against a spawned
 	// program's name or the last element of its path.
@@ -135,8 +163,9 @@ type Classification struct {
 }
 
 type packageClass struct {
-	def       Class
-	functions map[string]Class // "Name", "Type", "Type.Method", or "Type.Field"
+	def       Call
+	functions map[string]Call // "Name", "Type", "Type.Method", or "init"
+	fields    map[string]bool // "Type.Field" whose store names a spawn's program
 }
 
 // funcName names a function as importpath + "." + key, where key is "Name"
@@ -145,14 +174,15 @@ type funcName struct{ pkg, key string }
 
 func (f funcName) String() string { return f.pkg + "." + f.key }
 
-func parseFuncName(s string) (funcName, error) {
-	// The key starts after the import path's last slash, at its first dot.
-	slash := strings.LastIndex(s, "/")
-	dot := strings.Index(s[slash+1:], ".")
-	if dot < 0 {
+// parseCLIName parses a CLI entry point, importpath.Name: the name is after
+// the last dot, since an import path's last element may hold one
+// (gopkg.in/yaml.v3).
+func parseCLIName(s string) (funcName, error) {
+	dot := strings.LastIndex(s, ".")
+	if dot < 0 || strings.Contains(s[dot+1:], "/") {
 		return funcName{}, fmt.Errorf("%q is not importpath.Name", s)
 	}
-	return funcName{s[:slash+1+dot], s[slash+1+dot+1:]}, nil
+	return funcName{s[:dot], s[dot+1:]}, nil
 }
 
 func parseClassification(data []byte) (*Classification, error) {
@@ -164,7 +194,7 @@ func parseClassification(data []byte) (*Classification, error) {
 	}
 	c := &Classification{cli: map[funcName]bool{}, git: f.Git, packages: map[string]packageClass{}}
 	for _, s := range f.CLI {
-		n, err := parseFuncName(s)
+		n, err := parseCLIName(s)
 		if err != nil {
 			return nil, fmt.Errorf("classification file: cli: %w", err)
 		}
@@ -175,13 +205,22 @@ func parseClassification(data []byte) (*Classification, error) {
 		if err != nil {
 			return nil, fmt.Errorf("classification file: %s: %w", path, err)
 		}
-		pc := packageClass{def: def, functions: map[string]Class{}}
+		defCall, ok := def.(Call)
+		if !ok {
+			return nil, fmt.Errorf("classification file: %s: spawn:field names a field, never a package's default", path)
+		}
+		pc := packageClass{def: defCall, functions: map[string]Call{}, fields: map[string]bool{}}
 		for key, spec := range e.Functions {
 			cl, err := parseClass(spec)
 			if err != nil {
 				return nil, fmt.Errorf("classification file: %s.%s: %w", path, key, err)
 			}
-			pc.functions[key] = cl
+			switch cl := cl.(type) {
+			case SpawnField:
+				pc.fields[key] = true
+			case Call:
+				pc.functions[key] = cl
+			}
 		}
 		c.packages[path] = pc
 	}
@@ -196,45 +235,46 @@ func (c *Classification) packageFor(path string) (packageClass, bool) {
 	}
 	best, found := "", false
 	for pattern := range c.packages {
-		prefix, ok := strings.CutSuffix(pattern, "/...")
-		if ok && (path == prefix || strings.HasPrefix(path, prefix+"/")) && len(pattern) > len(best) {
+		if covers(pattern, path) && len(pattern) > len(best) {
 			best, found = pattern, true
 		}
 	}
 	return c.packages[best], found
 }
 
-// Lookup is the class of the outside function named by pkg and key ("Name"
-// or "Type.Method"): its own entry, else its type's, else its package's
-// default. ok is false when nothing classifies it.
-func (c *Classification) Lookup(pkg, key string) (Class, bool) {
+// covers reports whether the "/..." pattern covers the package at path.
+func covers(pattern, path string) bool {
+	prefix, ok := strings.CutSuffix(pattern, "/...")
+	return ok && (path == prefix || strings.HasPrefix(path, prefix+"/"))
+}
+
+// Lookup is what the classification knows of the outside function named by
+// pkg and key ("Name", "Type.Method" or "init"): its own entry, else its
+// type's, else its package's default, else nothing, which is unclassified.
+func (c *Classification) Lookup(pkg, key string) knowledge {
 	pc, ok := c.packageFor(pkg)
 	if !ok {
-		return Class{}, false
+		return unclassified{}
 	}
 	if cl, ok := pc.functions[key]; ok {
-		return cl, true
+		return cl
 	}
 	if typ, _, isMethod := strings.Cut(key, "."); isMethod {
 		if cl, ok := pc.functions[typ]; ok {
-			return cl, true
+			return cl
 		}
 	}
-	return pc.def, true
+	return pc.def
 }
 
 // fieldSpawn reports whether storing into field of the named type at pkg
 // spawns a program.
 func (c *Classification) fieldSpawn(pkg, typ, field string) bool {
 	pc, ok := c.packageFor(pkg)
-	if !ok {
-		return false
-	}
-	cl, ok := pc.functions[typ+"."+field]
-	return ok && cl.Spawn != nil && cl.Spawn.Field
+	return ok && pc.fields[typ+"."+field]
 }
 
-func (c *Classification) isCLI(pkg, key string) bool { return c.cli[funcName{pkg, key}] }
+func (c *Classification) isCLI(n funcName) bool { return c.cli[n] }
 
 // isGit reports whether a program named name is git.
 func (c *Classification) isGit(name string) bool {
@@ -242,77 +282,107 @@ func (c *Classification) isGit(name string) bool {
 	return slices.Contains(c.git, base)
 }
 
-// Validate loads every package the classification names, from each module
-// of the suite, and refuses any name that resolves to nothing in all of them:
-// a package that does not load, a "/..." pattern no module of the build
-// covers, a function, type, method or field its package does not declare, a
-// spawn argument past the function's parameters. [LAW:no-silent-failure] a
-// classification that names nothing would classify nothing, silently.
-func (c *Classification) Validate(mods []module, buildFlags []string) error {
-	var exact, patterns []string
-	for path := range c.packages {
-		if strings.HasSuffix(path, "/...") {
-			patterns = append(patterns, path)
-		} else {
-			exact = append(exact, path)
-		}
+// splitInterfaceName splits a called-back interface's name, importpath.Name
+// or error, into its package path ("" for the universe) and name.
+func splitInterfaceName(s string) (path, name string, err error) {
+	if s == "error" {
+		return "", s, nil
 	}
-	for n := range c.cli {
-		exact = append(exact, n.pkg)
+	dot := strings.LastIndex(s, ".")
+	if dot <= 0 || strings.Contains(s[dot+1:], "/") || !token.IsExported(s[dot+1:]) {
+		return "", "", fmt.Errorf("%q names no interface as importpath.Name or error", s)
 	}
-	slices.Sort(exact)
-	exact = slices.Compact(exact)
-	sort.Strings(patterns)
+	return s[:dot], s[dot+1:], nil
+}
 
-	var modulePaths []string
-	byPath := map[string]*packages.Package{}
-	for _, m := range mods {
-		cmd := exec.Command("go", append([]string{"list", "-m", "-f", "{{.Path}}"}, append(buildFlags, "all")...)...)
-		cmd.Dir = m.Dir
-		out, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("listing the modules of %s: %w", m.Path, err)
-		}
-		modulePaths = append(modulePaths, strings.Fields(string(out))...)
-		// From source, so unexported names (a main package's main) resolve.
-		mode := packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo
-		pkgs, err := packages.Load(&packages.Config{Dir: m.Dir, Mode: mode, BuildFlags: buildFlags}, exact...)
-		if err != nil {
-			return fmt.Errorf("loading classified packages from %s: %w", m.Path, err)
-		}
-		for _, p := range pkgs {
-			if len(p.Errors) == 0 && p.Types != nil && byPath[p.PkgPath] == nil {
-				byPath[p.PkgPath] = p
-			}
-		}
+// lookupInterface resolves a called-back interface's name in the packages
+// pkgOf finds.
+func lookupInterface(s string, pkgOf func(path string) *types.Package) (*types.Interface, bool) {
+	path, name, err := splitInterfaceName(s)
+	if err != nil {
+		return nil, false
 	}
+	names := types.Universe
+	if path != "" {
+		pkg := pkgOf(path)
+		if pkg == nil {
+			return nil, false
+		}
+		names = pkg.Scope()
+	}
+	tn, ok := names.Lookup(name).(*types.TypeName)
+	if !ok {
+		return nil, false
+	}
+	iface, ok := tn.Type().Underlying().(*types.Interface)
+	return iface, ok
+}
 
+// builtin is the entry for what the universe declares: error's Error method,
+// keyed "error.Error", as Go's documentation of the predeclared identifiers
+// names them.
+const builtin = "builtin"
+
+// Validate checks every name in the classification against the packages the
+// suite loads, universe, and refuses each that resolves to nothing — a
+// package the suite does not load, a pattern that covers none, a function,
+// type, method or field no package it covers declares — and each spawn
+// argument past its function's parameters. [LAW:no-silent-failure] an entry
+// that names nothing classifies nothing, silently; it is dead, and the
+// refusal says to delete it.
+func (c *Classification) Validate(universe map[string]*types.Package) error {
 	var problems []string
-	for _, pattern := range patterns {
-		prefix := strings.TrimSuffix(pattern, "/...")
-		if !slices.ContainsFunc(modulePaths, func(mp string) bool {
-			return mp == prefix || strings.HasPrefix(mp, prefix+"/") || strings.HasPrefix(prefix, mp+"/")
-		}) {
-			problems = append(problems, fmt.Sprintf("pattern %s covers no module of the build", pattern))
-		}
-	}
-	for _, path := range exact {
-		p := byPath[path]
-		if p == nil {
-			problems = append(problems, fmt.Sprintf("package %s does not load from any module of the suite", path))
+	for path, pc := range c.packages {
+		scopes := scopesOf(path, universe)
+		if len(scopes) == 0 {
+			problems = append(problems, fmt.Sprintf("%s: the suite loads no package it names; delete the entry", path))
 			continue
 		}
-		for key, cl := range c.packages[path].functions {
-			if err := checkMember(p.Types, key, cl); err != nil {
-				problems = append(problems, fmt.Sprintf("%s.%s: %v", path, key, err))
+		check := func(key string, cl Class) {
+			var wrong error
+			for _, s := range scopes {
+				found, err := checkMember(s, key, cl)
+				if found && err == nil {
+					return
+				}
+				if found {
+					wrong = err
+				}
+			}
+			if wrong != nil {
+				problems = append(problems, fmt.Sprintf("%s.%s: %v", path, key, wrong))
+				return
+			}
+			problems = append(problems, fmt.Sprintf("%s.%s: no package it names declares %s; delete the entry", path, key, key))
+		}
+		for key, cl := range pc.functions {
+			check(key, cl)
+		}
+		for key := range pc.fields {
+			check(key, SpawnField{})
+		}
+		calls := map[string]bool{}
+		for _, cl := range append([]Call{pc.def}, slices.Collect(maps.Values(pc.functions))...) {
+			if e, ok := cl.(Effect); ok {
+				for _, name := range e.Calls {
+					calls[name] = true
+				}
+			}
+		}
+		for name := range calls {
+			if _, ok := lookupInterface(name, func(p string) *types.Package { return universe[p] }); !ok {
+				problems = append(problems, fmt.Sprintf("%s: calls:%s names no interface the suite loads", path, name))
 			}
 		}
 	}
 	for n := range c.cli {
-		if p := byPath[n.pkg]; p != nil {
-			if err := checkMember(p.Types, n.key, Class{}); err != nil {
-				problems = append(problems, fmt.Sprintf("cli %s: %v", n, err))
-			}
+		p := universe[n.pkg]
+		if p == nil {
+			problems = append(problems, fmt.Sprintf("cli %s: the suite loads no package %s; delete the entry", n, n.pkg))
+			continue
+		}
+		if _, ok := p.Scope().Lookup(n.key).(*types.Func); !ok {
+			problems = append(problems, fmt.Sprintf("cli %s: %s declares no function %s; delete the entry", n, n.pkg, n.key))
 		}
 	}
 	if len(problems) > 0 {
@@ -322,60 +392,88 @@ func (c *Classification) Validate(mods []module, buildFlags []string) error {
 	return nil
 }
 
-// checkMember resolves key ("Name", "Type", "Type.Method", "Type.Field") in
-// pkg, and checks a spawn spec against what it names.
-func checkMember(pkg *types.Package, key string, cl Class) error {
+// scope is where a classification key resolves: a package, or the universe.
+type scope struct {
+	pkg   *types.Package // nil for the universe
+	names *types.Scope
+}
+
+// scopesOf is every loaded scope the entry at path covers.
+func scopesOf(path string, universe map[string]*types.Package) []scope {
+	if path == builtin {
+		return []scope{{names: types.Universe}}
+	}
+	var out []scope
+	for p, pkg := range universe {
+		if p == path || covers(path, p) {
+			out = append(out, scope{pkg: pkg, names: pkg.Scope()})
+		}
+	}
+	return out
+}
+
+// checkMember resolves key ("Name", "Type", "Type.Method", "Type.Field" or
+// "init") in s. found is false when s declares no such member; err says how
+// a found member contradicts cl.
+func checkMember(s scope, key string, cl Class) (found bool, err error) {
+	if key == "init" {
+		// Every package has an initializer, and nothing can name it.
+		return s.pkg != nil, nil
+	}
 	name, member, hasMember := strings.Cut(key, ".")
-	obj := pkg.Scope().Lookup(name)
+	obj := s.names.Lookup(name)
 	if obj == nil {
-		return fmt.Errorf("%s declares no %s", pkg.Path(), name)
+		return false, nil
 	}
 	if !hasMember {
+		if _, field := cl.(SpawnField); field {
+			return true, fmt.Errorf("spawn:field names a field, as Type.Field")
+		}
 		switch o := obj.(type) {
 		case *types.Func:
-			if cl.Spawn != nil && (cl.Spawn.Field || cl.Spawn.Arg >= o.Signature().Params().Len()) {
-				return fmt.Errorf("spawn argument is not a parameter of %s", name)
-			}
+			return true, spawnArgFits(cl, o)
 		case *types.TypeName:
-			if cl.Spawn != nil {
-				return fmt.Errorf("a type is not a spawner")
+			if _, call := cl.(Effect); !call {
+				return true, fmt.Errorf("a type is not a spawner")
 			}
+			return true, nil
 		default:
-			return fmt.Errorf("%s is neither a function nor a type", name)
+			return true, fmt.Errorf("%s is neither a function nor a type", name)
 		}
-		return nil
 	}
 	tn, ok := obj.(*types.TypeName)
 	if !ok {
-		return fmt.Errorf("%s is not a type", name)
+		return true, fmt.Errorf("%s is not a type", name)
 	}
-	if cl.Spawn != nil && cl.Spawn.Field {
+	if _, field := cl.(SpawnField); field {
 		st, ok := tn.Type().Underlying().(*types.Struct)
-		if !ok || !slices.ContainsFunc(structFields(st), func(f *types.Var) bool { return f.Name() == member }) {
-			return fmt.Errorf("%s has no field %s", name, member)
+		if !ok {
+			return false, nil
 		}
-		return nil
+		for i := range st.NumFields() {
+			if st.Field(i).Name() == member {
+				return true, nil
+			}
+		}
+		return false, nil
 	}
 	// An interface's methods are not in its pointer's method set.
 	recv := tn.Type()
 	if !types.IsInterface(recv) {
 		recv = types.NewPointer(recv)
 	}
-	m, _, _ := types.LookupFieldOrMethod(recv, true, pkg, member)
+	m, _, _ := types.LookupFieldOrMethod(recv, true, s.pkg, member)
 	fn, ok := m.(*types.Func)
 	if !ok {
-		return fmt.Errorf("%s has no method %s", name, member)
+		return false, nil
 	}
-	if cl.Spawn != nil && cl.Spawn.Arg >= fn.Signature().Params().Len() {
-		return fmt.Errorf("spawn argument is not a parameter of %s", key)
-	}
-	return nil
+	return true, spawnArgFits(cl, fn)
 }
 
-func structFields(st *types.Struct) []*types.Var {
-	fields := make([]*types.Var, st.NumFields())
-	for i := range fields {
-		fields[i] = st.Field(i)
+// spawnArgFits refuses a spawn argument past fn's parameters.
+func spawnArgFits(cl Class, fn *types.Func) error {
+	if sa, ok := cl.(SpawnArg); ok && sa.Arg >= fn.Signature().Params().Len() {
+		return fmt.Errorf("spawn argument is not a parameter of %s", fn.Name())
 	}
-	return fields
+	return nil
 }

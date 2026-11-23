@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -14,9 +15,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/gcexportdata"
@@ -78,7 +80,16 @@ type binary struct {
 	// TestMain is the package's TestMain, nil when it has none.
 	TestMain *ssa.Function
 	// Tests are the top-level tests the binary declares, in name order.
-	Tests []*ssa.Function
+	Tests []declaredTest
+}
+
+// declaredTest is one name go test runs as a top-level test: a test, a fuzz
+// target's seed corpus, or an example with an output comment. A name both the
+// package and its external test package declare is one entry of the stream,
+// so it is one test whose reach is both functions'.
+type declaredTest struct {
+	Name  string
+	Funcs []*ssa.Function
 }
 
 // loaded is one module loaded and built to SSA.
@@ -132,6 +143,10 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	if err != nil {
 		return nil, fmt.Errorf("go list in %s: %v\n%s", m.Dir, err, stderr.String())
 	}
+	sizes, err := buildSizes(m.Dir)
+	if err != nil {
+		return nil, err
+	}
 	var listed []*listedPackage
 	byID := map[string]*listedPackage{}
 	for dec := json.NewDecoder(bytes.NewReader(out)); ; {
@@ -153,7 +168,7 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 		checked:  map[string]*types.Package{},
 		syntax:   map[string][]*ast.File{},
 		infos:    map[string]*types.Info{},
-		sizes:    types.SizesFor("gc", runtime.GOARCH),
+		sizes:    sizes,
 	}
 	// go list -deps prints every package after its dependencies, so each
 	// package's imports are loaded before it.
@@ -194,11 +209,28 @@ func loadModule(m module, buildFlags []string) (*loaded, error) {
 	l := &loaded{Module: m, Prog: prog, Binaries: map[string]*binary{}}
 	for _, p := range listed {
 		if p.isTestMain() {
-			b := newBinary(prog, p, byID, ssaByID)
+			b := ld.newBinary(prog, p, ssaByID)
 			l.Binaries[b.ImportPath] = b
 		}
 	}
 	return l, nil
+}
+
+// buildSizes is the type sizes of the architecture the go command in dir
+// builds for, which go test's binaries are built for.
+func buildSizes(dir string) (types.Sizes, error) {
+	cmd := exec.Command("go", "env", "GOARCH")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("go env GOARCH in %s: %w", dir, err)
+	}
+	arch := strings.TrimSpace(string(out))
+	sizes := types.SizesFor("gc", arch)
+	if sizes == nil {
+		return nil, fmt.Errorf("go env GOARCH in %s: gc has no sizes for %q", dir, arch)
+	}
+	return sizes, nil
 }
 
 // loader type-checks one module's packages from source and reads the rest
@@ -261,7 +293,9 @@ func (ld *loader) check(p *listedPackage) {
 		if !filepath.IsAbs(name) {
 			name = filepath.Join(p.Dir, name)
 		}
-		f, err := parser.ParseFile(ld.fset, name, nil, parser.SkipObjectResolution)
+		// Comments too: an example's output comment decides whether go test
+		// runs it.
+		f, err := parser.ParseFile(ld.fset, name, nil, parser.SkipObjectResolution|parser.ParseComments)
 		if err != nil {
 			ld.problems = append(ld.problems, err.Error())
 			return
@@ -312,8 +346,8 @@ type importerFunc func(path string) (*types.Package, error)
 func (f importerFunc) Import(path string) (*types.Package, error) { return f(path) }
 
 // newBinary is the test binary whose generated main is p: the module
-// packages it links, its TestMain, and its top-level tests.
-func newBinary(prog *ssa.Program, p *listedPackage, byID map[string]*listedPackage, ssaByID map[string]*ssa.Package) *binary {
+// packages it links, its TestMain, and the top-level tests it declares.
+func (ld *loader) newBinary(prog *ssa.Program, p *listedPackage, ssaByID map[string]*ssa.Package) *binary {
 	b := &binary{ImportPath: strings.TrimSuffix(p.ImportPath, ".test")}
 	seen := map[string]bool{}
 	var visit func(id string)
@@ -325,7 +359,7 @@ func newBinary(prog *ssa.Program, p *listedPackage, byID map[string]*listedPacka
 		if sp := ssaByID[id]; sp != nil {
 			b.Packages = append(b.Packages, sp)
 		}
-		for _, imp := range byID[id].Imports {
+		for _, imp := range ld.byID[id].Imports {
 			// Code outside the module never imports the module, so the
 			// module packages are those the module packages import.
 			if ssaByID[imp] != nil {
@@ -335,32 +369,59 @@ func newBinary(prog *ssa.Program, p *listedPackage, byID map[string]*listedPacka
 	}
 	visit(p.ImportPath)
 	slices.SortFunc(b.Packages, func(x, y *ssa.Package) int { return strings.Compare(x.Pkg.Path(), y.Pkg.Path()) })
-	for _, sp := range b.Packages {
-		if path := sp.Pkg.Path(); path != b.ImportPath && path != b.ImportPath+"_test" {
+
+	byName := map[string][]*ssa.Function{}
+	for id, sp := range ssaByID {
+		path := sp.Pkg.Path()
+		if (path != b.ImportPath && path != b.ImportPath+"_test") || !seen[id] {
 			continue
 		}
-		for _, mem := range sp.Members {
-			fn, ok := mem.(*ssa.Function)
-			if !ok || !strings.HasSuffix(prog.Fset.Position(fn.Pos()).Filename, "_test.go") {
-				continue
+		var testFiles []*ast.File
+		for _, f := range ld.syntax[id] {
+			if strings.HasSuffix(prog.Fset.Position(f.Pos()).Filename, "_test.go") {
+				testFiles = append(testFiles, f)
 			}
-			switch {
-			case fn.Name() == "TestMain" && takesOne(fn, "M"):
-				b.TestMain = fn
-			case isTestName(fn.Name()) && takesOne(fn, "T"):
-				b.Tests = append(b.Tests, fn)
+		}
+		for _, f := range testFiles {
+			for _, decl := range f.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Recv != nil {
+					continue
+				}
+				fn := sp.Func(fd.Name.Name)
+				switch name := fd.Name.Name; {
+				case name == "TestMain" && takesOne(fn, "M"):
+					b.TestMain = fn
+				case isTest(name, "Test") && takesOne(fn, "T"), isTest(name, "Fuzz") && takesOne(fn, "F"):
+					byName[name] = append(byName[name], fn)
+				}
+			}
+		}
+		// go test runs an example only when it has an output comment.
+		for _, ex := range doc.Examples(testFiles...) {
+			if ex.Output != "" || ex.EmptyOutput {
+				name := "Example" + ex.Name
+				byName[name] = append(byName[name], sp.Func(name))
 			}
 		}
 	}
-	slices.SortFunc(b.Tests, func(a, c *ssa.Function) int { return strings.Compare(a.Name(), c.Name()) })
+	for _, name := range sortedKeys(byName) {
+		funcs := byName[name]
+		slices.SortFunc(funcs, func(x, y *ssa.Function) int { return strings.Compare(x.Pkg.Pkg.Path(), y.Pkg.Pkg.Path()) })
+		b.Tests = append(b.Tests, declaredTest{Name: name, Funcs: funcs})
+	}
 	return b
 }
 
-// isTestName is go test's rule for a test function's name: Test, then
-// nothing or a character that is not a lower-case letter.
-func isTestName(name string) bool {
-	rest, ok := strings.CutPrefix(name, "Test")
-	return ok && (rest == "" || !('a' <= rest[0] && rest[0] <= 'z'))
+// isTest is go test's rule for a test function's name: the prefix, then
+// nothing or a rune that is not lower case.
+func isTest(name, prefix string) bool {
+	rest, ok := strings.CutPrefix(name, prefix)
+	if !ok {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return rest == "" || !unicode.IsLower(r)
 }
 
 // takesOne reports whether fn's signature is func(*testing.<typ>).

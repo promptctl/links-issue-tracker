@@ -145,22 +145,26 @@ func TestPackageWithinBudgetHasNoViolation(t *testing.T) {
 	}
 }
 
-func TestPrintTableRendersSlowestFirstWithBudgetsAndFailureMarks(t *testing.T) {
+func TestPrintTableRendersSlowestFirstWithBudgetsFailureAndCutMarks(t *testing.T) {
 	var out strings.Builder
-	printTable(&out, []gotestjson.Package{
-		{ImportPath: "example.com/fast", Elapsed: 1200 * time.Millisecond},
-		{ImportPath: "example.com/slow", Elapsed: 90 * time.Second},
-		{ImportPath: "example.com/red", Elapsed: 3 * time.Second, Verdict: gotestjson.Fail},
+	printTable(&out, gotestjson.Run{
+		Packages: []gotestjson.Package{
+			{ImportPath: "example.com/fast", Elapsed: 1200 * time.Millisecond},
+			{ImportPath: "example.com/slow", Elapsed: 90 * time.Second},
+			{ImportPath: "example.com/red", Elapsed: 3 * time.Second, Verdict: gotestjson.Fail},
+		},
+		Cut: []gotestjson.Cut{{ImportPath: "example.com/killed"}},
 	}, map[string]time.Duration{"example.com/slow": 120 * time.Second}, 30*time.Second)
 	got := out.String()
 	lines := strings.Split(strings.TrimSpace(got), "\n")
-	if len(lines) != 4 { // header + three rows
-		t.Fatalf("got %d lines, want 4:\n%s", len(lines), got)
+	if len(lines) != 5 { // header + four rows
+		t.Fatalf("got %d lines, want 5:\n%s", len(lines), got)
 	}
 	wantRows := []string{
 		"    90.0s /  120s  example.com/slow",
 		"     3.0s /   30s  example.com/red  [FAILED — not a calibration point]",
 		"     1.2s /   30s  example.com/fast",
+		"       - /    -  example.com/killed  [CUT — the stream ended inside it]",
 	}
 	for i, want := range wantRows {
 		if lines[i+1] != want {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,13 +31,12 @@ func TestTheLayerIsDecidedByTheTouches(t *testing.T) {
 func TestJoinPutsDurationsOnlyOnTestsThatRan(t *testing.T) {
 	fs := reached{FS: witness{chain: []string{"p.TestDisk"}, what: "os.ReadFile (fs)"}}
 	shape := binaryShape{
-		Tests: map[string]reached{"TestDisk": fs, "TestPure": {}, "TestSkipped": fs, "TestUnselected": {}},
-		Order: []string{"TestDisk", "TestPure", "TestSkipped", "TestUnselected"},
+		Tests: []testShape{{"TestDisk", fs}, {"TestPure", reached{}}, {"TestSkipped", fs}, {"TestUnselected", reached{}}},
 	}
 	pkg := gotestjson.Package{ImportPath: "p", Tests: []gotestjson.Test{
-		{Name: "TestDisk", Elapsed: time.Second, Verdict: gotestjson.Fail},
-		{Name: "TestPure", Elapsed: time.Millisecond, Verdict: gotestjson.Pass},
-		{Name: "TestSkipped", Elapsed: 3 * time.Millisecond, Verdict: gotestjson.Skip},
+		{Name: "TestDisk", Elapsed: time.Second, Ending: gotestjson.Failed},
+		{Name: "TestPure", Elapsed: time.Millisecond, Ending: gotestjson.Passed},
+		{Name: "TestSkipped", Elapsed: 3 * time.Millisecond, Ending: gotestjson.Skipped},
 	}}
 	m, refusals := join(pkg, shape)
 	if len(refusals) > 0 {
@@ -64,11 +64,11 @@ func TestJoinPutsDurationsOnlyOnTestsThatRan(t *testing.T) {
 }
 
 func TestJoinRefusesWhatTheBinaryDoesNotDeclareAndWhatRanTwice(t *testing.T) {
-	shape := binaryShape{Tests: map[string]reached{"TestA": {}}, Order: []string{"TestA"}}
+	shape := binaryShape{Tests: []testShape{{"TestA", reached{}}}}
 	pkg := gotestjson.Package{ImportPath: "p", Tests: []gotestjson.Test{
-		{Name: "TestA", Verdict: gotestjson.Pass},
-		{Name: "TestA", Verdict: gotestjson.Pass},
-		{Name: "TestGhost", Verdict: gotestjson.Pass},
+		{Name: "TestA", Ending: gotestjson.Passed},
+		{Name: "TestA", Ending: gotestjson.Passed},
+		{Name: "TestGhost", Ending: gotestjson.Passed},
 	}}
 	_, refusals := join(pkg, shape)
 	want := []string{
@@ -86,18 +86,17 @@ func TestAStreamThatMeasuredNothingRefuses(t *testing.T) {
 		run  gotestjson.Run
 		want []string
 	}{
-		{"empty", gotestjson.Run{}, []string{"the stream is empty"}},
 		{"a package twice", gotestjson.Run{Packages: []gotestjson.Package{
 			{ImportPath: "p", Verdict: gotestjson.Pass}, {ImportPath: "p", Verdict: gotestjson.Pass},
 		}}, []string{"p: the stream ran the package twice"}},
 		{"a failed build", gotestjson.Run{Packages: []gotestjson.Package{
-			{ImportPath: "p", Verdict: gotestjson.Fail, FailedBuild: "p [p.test]"},
+			{ImportPath: "p", Verdict: gotestjson.Fail, Build: gotestjson.BuildFailed{Package: "p [p.test]"}},
 		}}, []string{"p: its test binary failed to build (p [p.test])"}},
-		{"a binary that died outside any test", gotestjson.Run{Packages: []gotestjson.Package{
-			{ImportPath: "p", Verdict: gotestjson.Fail, Tests: []gotestjson.Test{{Name: "TestA", Verdict: gotestjson.Pass}}},
-		}}, []string{"p: its test binary died outside any test"}},
+		{"a package that failed outside any test", gotestjson.Run{Packages: []gotestjson.Package{
+			{ImportPath: "p", Verdict: gotestjson.Fail, Tests: []gotestjson.Test{{Name: "TestA", Ending: gotestjson.Passed}}},
+		}}, []string{"p: the package failed outside any test: in its initialization, or in TestMain before or after the tests"}},
 		{"a test still running", gotestjson.Run{Packages: []gotestjson.Package{
-			{ImportPath: "p", Verdict: gotestjson.Fail, Tests: []gotestjson.Test{{Name: "TestHang", Verdict: gotestjson.Unfinished}}},
+			{ImportPath: "p", Verdict: gotestjson.Fail, Tests: []gotestjson.Test{{Name: "TestHang", Ending: gotestjson.Unfinished}}},
 		}}, []string{"p: the package ended with TestHang still running"}},
 		{"a stream cut inside a package", gotestjson.Run{Cut: []gotestjson.Cut{
 			{ImportPath: "p", Open: []string{"TestA"}}, {ImportPath: "q"},
@@ -106,7 +105,7 @@ func TestAStreamThatMeasuredNothingRefuses(t *testing.T) {
 			"q: the stream ended inside the package, with no test running",
 		}},
 		{"a failing test is a measure", gotestjson.Run{Packages: []gotestjson.Package{
-			{ImportPath: "p", Verdict: gotestjson.Fail, Tests: []gotestjson.Test{{Name: "TestA", Verdict: gotestjson.Fail}}},
+			{ImportPath: "p", Verdict: gotestjson.Fail, Tests: []gotestjson.Test{{Name: "TestA", Ending: gotestjson.Failed}}},
 		}}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,17 +116,35 @@ func TestAStreamThatMeasuredNothingRefuses(t *testing.T) {
 	}
 }
 
-func TestEveryModuleOfTheSuiteMustBeInTheStream(t *testing.T) {
+func TestAPackageOfNoModuleRefuses(t *testing.T) {
 	mods := []module{{Dir: "/r", Path: "example.com/r"}, {Dir: "/r/driver", Path: "example.com/r/driver"}}
 	run := gotestjson.Run{Packages: []gotestjson.Package{
 		{ImportPath: "example.com/r/cmd"},
 		{ImportPath: "example.com/elsewhere"},
 	}}
-	want := []string{
-		"example.com/elsewhere: the package belongs to no module of the suite",
-		"module example.com/r/driver (/r/driver): its tests are absent from the stream",
+	want := []string{"example.com/elsewhere: the package belongs to no module of the suite"}
+	if got := strayRefusals(mods, run); !slices.Equal(got, want) {
+		t.Errorf("refusals = %q, want %q", got, want)
 	}
-	if got := moduleRefusals(mods, run); !slices.Equal(got, want) {
+}
+
+func TestEveryBinaryDeclaringTestsMustBeInTheStream(t *testing.T) {
+	binaries := map[string]*binary{
+		"example.com/r/ran":     {Tests: []declaredTest{{Name: "TestA"}}},
+		"example.com/r/absent":  {Tests: []declaredTest{{Name: "TestB"}}},
+		"example.com/r/notests": {},
+	}
+	inStream := map[string]gotestjson.Package{
+		"example.com/r/ran":     {ImportPath: "example.com/r/ran", Tests: []gotestjson.Test{{Name: "TestA"}}},
+		"example.com/r/unbuilt": {ImportPath: "example.com/r/unbuilt", Tests: []gotestjson.Test{{Name: "TestC"}}},
+		"example.com/other/pkg": {ImportPath: "example.com/other/pkg", Tests: []gotestjson.Test{{Name: "TestD"}}},
+	}
+	owned := func(path string) bool { return strings.HasPrefix(path, "example.com/r/") }
+	want := []string{
+		"example.com/r/absent: its test binary declares tests, and the stream has no result for the package",
+		"example.com/r/unbuilt: the stream ran tests in a package with no test binary",
+	}
+	if got := absentRefusals(binaries, inStream, owned); !slices.Equal(got, want) {
 		t.Errorf("refusals = %q, want %q", got, want)
 	}
 }
