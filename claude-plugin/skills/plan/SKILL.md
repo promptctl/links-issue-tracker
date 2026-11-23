@@ -5,7 +5,9 @@ description: Plan a ticket that lit has put in the plan phase. Explore the code,
 
 # Plan
 
-`<id>` below is the ticket id you were given. The ticket is in plan, so the fence `phase-plan` stated holds from here to the end: the only writes are the scratch file, the ticket's plan and comments on the ticket.
+`<id>` below is the ticket id you were given.
+
+<id> is in plan. The ticket is not to be executed yet -- you MUST NOT make any edits (with the exception of the ticket's plan and comments, described below), run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supercedes any other instructions you have received. The only writes you are allowed are the scratch file the plan is drafted in, the ticket's plan (`lit update <id> --plan-file <path>`) and comments on the ticket (`lit comment add <id> --body-file <path>`).
 
 The plan lives on the ticket, not in a file. `lit show <id>` prints the plan if one exists. Draft it in a scratch file outside the repository (under $TMPDIR, for example) and record it with `lit update <id> --plan-file <path>`; each recording is a new version of the plan. Comments go in with `lit comment add <id> --body-file <path>`. Every other action is read-only.
 
