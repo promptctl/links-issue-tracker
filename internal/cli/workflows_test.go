@@ -607,3 +607,21 @@ func TestWorkflowsHelpNamesThePhasesAndEveryEvent(t *testing.T) {
 		}
 	}
 }
+
+// TestWorkflowsOverviewPrintsLeastToMostSpecificFirst pins the print order at a
+// shared point: the embedded default is listed before the project definition
+// bound to the same event, even though the project id sorts first.
+func TestWorkflowsOverviewPrintsLeastToMostSpecificFirst(t *testing.T) {
+	t.Parallel()
+	root := tempRepo(t)
+	writeCLIWorkflow(t, root, "closing.md", "---\nid: close-note\nevents: [work_finished]\n---\nNote it.")
+
+	output, err := runLit(t, root, "workflows")
+	if err != nil {
+		t.Fatalf("Run(workflows) error = %v", err)
+	}
+	want := `work_finished  [done "Post-close capture reminder" (embedded), close-note (project)]`
+	if !strings.Contains(output, want) {
+		t.Fatalf("workflows output = %q, want %q", output, want)
+	}
+}

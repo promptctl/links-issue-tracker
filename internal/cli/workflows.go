@@ -146,6 +146,9 @@ func spineLabels(set workflows.Set) []string {
 // definitions active at each point, then any loaded-but-never-fires files so
 // "why isn't my file firing" is answerable from this one view.
 func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
+	// Every point lists its definitions least specific first, so a project
+	// file reads last at the point it shares with the defaults.
+	defs := set.DefinitionsByLayer()
 	if _, err := fmt.Fprintln(w, "lit workflows — work lifecycle guidance (project > global > embedded)"); err != nil {
 		return err
 	}
@@ -155,7 +158,7 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 	}
 	for _, event := range workflows.Catalog() {
 		var at []workflows.Definition
-		for _, def := range set.Definitions {
+		for _, def := range defs {
 			for _, e := range def.Events {
 				if e == event {
 					at = append(at, def)
@@ -177,7 +180,7 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 		}
 		for _, when := range []workflows.When{workflows.WhenEnter, workflows.WhenExit} {
 			var at []workflows.Definition
-			for _, def := range set.Definitions {
+			for _, def := range defs {
 				for _, activation := range def.States {
 					if activation.State == state && activation.When == when {
 						at = append(at, def)
@@ -202,7 +205,7 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 	}
 	for _, label := range labels {
 		var at []workflows.Definition
-		for _, def := range set.Definitions {
+		for _, def := range defs {
 			for _, l := range def.Labels {
 				if l == label {
 					at = append(at, def)
@@ -215,7 +218,7 @@ func renderWorkflowsOverview(w io.Writer, set workflows.Set) error {
 		}
 	}
 
-	return printWorkflowWarnings(w, set.Warnings)
+	return printWorkflowWarnings(w, set.WarningsByLayer())
 }
 
 // printSpinePoint renders one lifecycle point's label followed by every
