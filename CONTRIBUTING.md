@@ -103,6 +103,17 @@ before raising one. To check locally:
 (set -o pipefail; go test -short -json ./... | go run ./tools/testbudget)
 ```
 
+The suite's shape is measured by [`tools/testshape`](tools/testshape/main.go),
+which prints, per package, how many top-level tests sit at each layer and how
+long they took, and with `-tests` lists each test's touches and the calls that
+reach them. Its package doc is the one statement of the layer rule. To
+measure:
+
+```sh
+(set -o pipefail; go test -short -json ./... > shape.json)
+go run ./tools/testshape < shape.json
+```
+
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
 your PATH.
 
