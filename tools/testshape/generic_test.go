@@ -62,6 +62,38 @@ func TestABindTheExportDataCannotHoldRefusesTheRun(t *testing.T) {
 	}
 }
 
+// Two types of one name and package, each declared in its own function
+// body, are two type arguments: their instances are two, within the
+// program and across the suite's modules, which gather by the same key.
+func TestTwoFunctionLocalTypesOfOneNameAreTwoInstances(t *testing.T) {
+	l, err := shapeModule()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newAnalyzer(l, shapeClassification(t))
+	a.measure(l.Binaries["example.com/shape/genericlocals"])
+	if refusals := analysisRefusals(a); len(refusals) > 0 {
+		t.Fatalf("refused:\n%s", strings.Join(refusals, "\n"))
+	}
+	g := newSuiteGenerics()
+	g.add(a, l.Module)
+	g.add(a, l.Module) // a second module's analysis reading the same instances
+	var got []string
+	for _, u := range g.unread {
+		got = append(got, u.text(namer{l.Module}))
+	}
+	want := []string{
+		"nested/gen.Address[genericlocals.file]: it converts *T to unsafe.Pointer",
+		"nested/gen.Address[genericlocals.file]: it converts *T to unsafe.Pointer",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("unread = %q, want %q", got, want)
+	}
+	if g.unread[0].key == g.unread[1].key {
+		t.Errorf("both instances have key %v", g.unread[0].key)
+	}
+}
+
 // A constraint method its type argument lacks cannot come from a body that
 // compiled, so the reading is put in place by hand.
 func TestAConstraintMethodItsTypeArgumentLacksRefusesTheRun(t *testing.T) {

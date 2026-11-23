@@ -231,7 +231,7 @@ func run(classData []byte, args []string, stdin io.Reader, stdout, stderr io.Wri
 		rows = append(rows, rowOf(m.measuredPackage, m.module.Path))
 	}
 	writeTable(stdout, rows)
-	writeGenerics(stdout, s.unread, s.withheld)
+	writeGenerics(stdout, s.generics.unread, len(s.generics.withheld))
 	if *listTests {
 		writeListing(stdout, s.packages)
 	}
@@ -279,18 +279,37 @@ type moduleUnread struct {
 }
 
 // suiteShape is what the suite's measure found: the measured packages, in
-// import-path order; every outside generic instance whose body could not be
-// read; and the count of type parameters outside generic instances withheld.
+// import-path order, and what the reading of outside generics decided.
 type suiteShape struct {
 	packages []modulePackage
-	unread   []moduleUnread
-	withheld int
+	generics suiteGenerics
 }
 
-// withheldID is a withheld type parameter's identity across programs.
-type withheldID struct {
-	instance instanceID
-	arg      int
+// suiteGenerics is what the reading of outside generics decided across the
+// suite's module analyses, each instance once by its key: every instance
+// whose body could not be read, and every type parameter an instance
+// withheld.
+type suiteGenerics struct {
+	unread   []moduleUnread
+	seen     map[instanceKey]bool
+	withheld map[withheldKey]bool
+}
+
+func newSuiteGenerics() suiteGenerics {
+	return suiteGenerics{seen: map[instanceKey]bool{}, withheld: map[withheldKey]bool{}}
+}
+
+// add takes in what one module's analysis decided.
+func (g *suiteGenerics) add(a *analyzer, m module) {
+	for _, u := range a.unreadInstances() {
+		if !g.seen[u.key] {
+			g.seen[u.key] = true
+			g.unread = append(g.unread, moduleUnread{u, m})
+		}
+	}
+	for _, wh := range a.withheldParameters() {
+		g.withheld[withheldKey{a.instanceKey(wh.in), wh.arg}] = true
+	}
 }
 
 // measureSuite measures every package of stream against the suite under
@@ -319,9 +338,7 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 	for _, p := range stream.Packages {
 		inStream[p.ImportPath] = p
 	}
-	var out suiteShape
-	unread := map[instanceID]bool{}
-	withheld := map[withheldID]bool{}
+	out := suiteShape{generics: newSuiteGenerics()}
 	for _, l := range loads {
 		owned := func(path string) bool { return s.moduleOf[path] == l.Module.Path }
 		refusals = append(refusals, absentRefusals(l.Binaries, inStream, owned)...)
@@ -335,18 +352,9 @@ func measureSuite(root string, buildFlags []string, class *Classification, strea
 			refusals = append(refusals, rs...)
 			out.packages = append(out.packages, modulePackage{mp, l.Module})
 		}
-		for _, u := range a.unreadInstances() {
-			if id := u.in.id(); !unread[id] {
-				unread[id] = true
-				out.unread = append(out.unread, moduleUnread{u, l.Module})
-			}
-		}
-		for _, wh := range a.withheldParameters() {
-			withheld[withheldID{wh.in.id(), wh.arg}] = true
-		}
+		out.generics.add(a, l.Module)
 		refusals = append(refusals, analysisRefusals(a)...)
 	}
 	slices.SortFunc(out.packages, func(a, b modulePackage) int { return strings.Compare(a.ImportPath, b.ImportPath) })
-	out.withheld = len(withheld)
 	return out, refusals, nil
 }

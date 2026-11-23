@@ -649,36 +649,55 @@ func instanceOf(fn *ssa.Function) (instance, bool) {
 	return instance{name, slices.Collect(n.TypeArgs().Types())}, declared
 }
 
-// instanceID is an instance's identity across programs. Each module's
-// analysis reads over its own program, whose named types are its own
-// objects, so a type is identified by its declaration's path and name,
-// spelled in full.
-type instanceID struct {
-	origin funcName
-	args   string
-}
-
-func (in instance) id() instanceID {
-	args := make([]string, len(in.args))
-	for i, t := range in.args {
-		args[i] = types.TypeString(t, nil)
-	}
-	return instanceID{in.origin, strings.Join(args, ", ")}
-}
-
-// instanceKey is an instance's key: one per origin and type arguments,
-// identical types sharing it.
+// instanceKey is an instance's identity, within one program and across the
+// programs of the suite's modules, each of which loads the same files: its
+// origin, and each type argument's spelling.
 type instanceKey struct {
 	origin funcName
 	args   string
 }
 
 func (a *analyzer) instanceKey(in instance) instanceKey {
-	keys := make([]string, len(in.args))
+	args := make([]string, len(in.args))
 	for i, t := range in.args {
-		keys[i] = fmt.Sprint(a.typeKey(t))
+		args[i] = a.spelling(t)
 	}
-	return instanceKey{in.origin, strings.Join(keys, ",")}
+	return instanceKey{in.origin, strings.Join(args, ", ")}
+}
+
+// spelling spells t so that types spell alike exactly when they are
+// identical, in any program loading the same files: each named type by its
+// declaration's path and name, and, for what a path and name do not
+// identify, the position of each type a function body declares and the
+// package of each unexported field and method t's literal types name.
+func (a *analyzer) spelling(t types.Type) string {
+	var marks []string
+	eachType(t, inBody, func(u types.Type) bool {
+		switch u := u.(type) {
+		case *types.Named:
+			if obj := u.Obj(); declaredInBody(obj) {
+				marks = append(marks, obj.Name()+" at "+a.prog.Fset.Position(obj.Pos()).String())
+			}
+		case *types.Struct:
+			for f := range u.Fields() {
+				if !f.Exported() {
+					marks = append(marks, "field "+f.Name()+" of "+f.Pkg().Path())
+				}
+			}
+		case *types.Interface:
+			for m := range u.ExplicitMethods() {
+				if !m.Exported() {
+					marks = append(marks, "method "+m.Name()+" of "+m.Pkg().Path())
+				}
+			}
+		}
+		return true
+	})
+	s := types.TypeString(t, nil)
+	if len(marks) > 0 {
+		s += " {" + strings.Join(marks, "; ") + "}"
+	}
+	return s
 }
 
 // reading is an instance's own body in the module program's types: its
@@ -855,7 +874,7 @@ func (a *analyzer) unreadInstances() []unreadInstance {
 	var out []unreadInstance
 	for _, gi := range a.instances {
 		if u, ok := gi.reading.(unread); ok {
-			out = append(out, unreadInstance{gi.in, u.why})
+			out = append(out, unreadInstance{gi.in, gi.key, u.why})
 		}
 	}
 	return out
@@ -865,5 +884,6 @@ func (a *analyzer) unreadInstances() []unreadInstance {
 // type argument counts as converted.
 type unreadInstance struct {
 	in  instance
+	key instanceKey
 	why string
 }
