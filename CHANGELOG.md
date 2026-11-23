@@ -5,6 +5,19 @@ All notable changes to `links-issue-tracker` (the `lit` CLI) are documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] - 2026-11-23
+
+### Added
+
+- The Claude Code plugin carries a `/lit:plan <id>` skill that holds the procedure for planning a ticket in the plan phase: explore, design, review, and record the plan on the ticket. It states the no-edits fence that holds while a ticket is in plan.
+- `testshape` measures the test suite's shape per layer.
+
+### Changed
+
+- The `phase-plan` workflow states the order: run `/lit:plan <id>`, record the plan, then `lit phase <id> --to impl`, with any guidance printed on leaving plan read before the code is written.
+- A failed command prints only its message.
+- Dependency updates: the go-safe group and `go-jose/v4` 4.1.6.
+
 ## [0.27.0] - 2026-11-14
 
 ### Changed
