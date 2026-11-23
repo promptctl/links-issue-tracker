@@ -179,9 +179,11 @@ func detachedWorkerLeaf(subcommand, parentPIDUsage string, work func(ctx context
 // lives exactly as long as the store, and reads the handoff (workerHandoff)
 // from its stdin. [LAW:one-type-per-behavior] the mirror and the receive are
 // two instances of one detached worker; what differs is the subcommand, the
-// log and the environment, all values.
+// log and the environment, all values. The program the worker runs is the
+// environment's too (environ.Env.Executable): cmd/lit names itself there.
+// [LAW:effects-at-boundaries]
 func spawnDetachedWorker(ctx context.Context, stderr io.Writer, ws workspace.Info, subcommand, logName string, env environ.Env, parentPID int) error {
-	self, err := os.Executable()
+	self, err := env.Executable()
 	if err != nil {
 		return fmt.Errorf("resolve lit binary: %w", err)
 	}

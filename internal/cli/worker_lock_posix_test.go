@@ -3,15 +3,15 @@
 package cli
 
 import (
-	"context"
-	"fmt"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // TestJoinDetachedWorkersWaitsForEveryHoldToBeReleased pins the join's meaning:
@@ -47,65 +47,73 @@ func TestJoinDetachedWorkersOfAStoreNoWorkerWasSpawnedForReturns(t *testing.T) {
 	}
 }
 
-// workerOutlivedByChildEnv makes this test binary run as a detached worker
-// whose child outlives it (runWorkerOutlivedByChild).
-const workerOutlivedByChildEnv = "LIT_TEST_WORKER_OUTLIVED_BY_CHILD"
-
-// init runs this test binary as that worker when a test spawned it so, before
-// TestMain sets up a suite the worker never runs.
-func init() {
-	if storageDir := os.Getenv(workerOutlivedByChildEnv); storageDir != "" {
-		runWorkerOutlivedByChild(storageDir)
-	}
-}
-
-// runWorkerOutlivedByChild is a worker that starts a child it never waits for,
-// prints the child's pid and exits — the shape of a backgrounded owner-notify
-// hook.
-func runWorkerOutlivedByChild(storageDir string) {
-	leaf := detachedWorkerLeaf("worker-outlived-by-child", "", func(context.Context, Invocation, workerWorkspace, int) error {
-		child := exec.Command("sleep", "60")
-		if err := child.Start(); err != nil {
-			return err
-		}
-		fmt.Println(child.Process.Pid)
-		return nil
-	})
-	// Under an invocation, as Run runs every leaf: the leaf records its event.
-	// This is a child process with no test, so its invocation is the process's.
-	inv := Invocation{Dir: WorkingDirOf(os.Getwd()), Env: testEnv(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}
-	if _, err := recordLeaf(leaf, underInvocation(context.Background()), inv, struct{}{}, []string{"--store", storageDir}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	os.Exit(0)
-}
-
 // TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren pins that a worker's
-// hold is its own: a child the worker started and left running does not keep
-// the join waiting once the worker has exited.
+// hold is its own, in the production shape that needs it: a mirror whose push
+// fails runs the owner-notify hook, the hook backgrounds a notifier and
+// returns, and the mirror exits. The join then ends with the mirror, though
+// the notifier still runs.
 func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 	t.Parallel()
-	storageDir := t.TempDir()
-	holds, err := holdWorkerLock(storageDir)
-	if err != nil {
-		t.Fatalf("holdWorkerLock() = %v", err)
+	setRunEnv(t, DisableAutoSyncEnvVar, "1")
+	maskGlobalConfig(t)
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	repo := filepath.Join(base, "solo")
+	runGit(t, base, "clone", filepath.Join(base, "remote.git"), "solo")
+	runGit(t, repo, "config", "user.email", "s@s.co")
+	runGit(t, repo, "config", "user.name", "solo")
+	if err := os.WriteFile(filepath.Join(repo, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	worker := exec.Command(os.Args[0])
-	worker.Env = append(os.Environ(), workerOutlivedByChildEnv+"="+storageDir)
-	worker.ExtraFiles = holds
-	out, err := worker.Output()
-	_ = holds[0].Close()
-	if err != nil {
-		t.Fatalf("worker: %v\n%s", err, out)
-	}
-	childPID, err := strconv.Atoi(strings.TrimSpace(string(out)))
-	if err != nil {
-		t.Fatalf("worker printed %q, want the child's pid", out)
-	}
-	t.Cleanup(func() { _ = syscall.Kill(childPID, syscall.SIGKILL) })
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-m", "seed")
+	runGit(t, repo, "push", "origin", "HEAD")
+	runCLIInDir(t, repo, "init", "--skip-hooks")
+	newEpicInDir(t, repo, "pushed-epic")
+	runCLIInDir(t, repo, "sync", "push", "--set-upstream")
 
-	if err := JoinDetachedWorkers(storageDir, 5*time.Second); err != nil {
-		t.Fatalf("JoinDetachedWorkers() with only the worker's child alive = %v; want nil", err)
+	// The notifier outlives the join's patience below, so a hold it inherited
+	// would keep the join waiting past it.
+	notifierPIDFile := filepath.Join(base, "notifier.pid")
+	writeOwnerNotifyProjectConfig(t, repo, "[sync]\ncadence = 'on-push'\nreceive = false\n"+
+		ownerHookKey(`sleep 600 >/dev/null 2>&1 & echo $! > `+shPath(notifierPIDFile)))
+	runGit(t, repo, "remote", "set-url", "origin", filepath.Join(base, "gone", "nowhere.git"))
+	newEpicInDir(t, repo, "unpushed-epic")
+	setRunEnv(t, DisableAutoSyncEnvVar, "0")
+
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
+	mirrorLog := func() string {
+		log, err := os.ReadFile(filepath.Join(ws.StorageDir, mirrorLogName))
+		if err != nil {
+			return err.Error()
+		}
+		return string(log)
+	}
+	notifier := func() (int, error) {
+		pidText, err := os.ReadFile(notifierPIDFile)
+		if err != nil {
+			return 0, err
+		}
+		return strconv.Atoi(strings.TrimSpace(string(pidText)))
+	}
+	// Whatever the verdict, the notifier the hook started goes with the test.
+	t.Cleanup(func() {
+		if pid, err := notifier(); err == nil {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	// Parent pid 0: the spawner is this test process, which stays up.
+	if err := spawnBackgroundMirror(underInvocation(t.Context()), testStderr(t), runEnv(t), ws, 0); err != nil {
+		t.Fatalf("spawnBackgroundMirror: %v", err)
+	}
+	if err := JoinDetachedWorkers(ws.StorageDir, suiteStallDeadline); err != nil {
+		t.Fatalf("JoinDetachedWorkers() with only the mirror's notifier alive = %v; want nil\n%s:\n%s", err, mirrorLogName, mirrorLog())
+	}
+	notifierPID, err := notifier()
+	if err != nil {
+		t.Fatalf("the mirror never ran the hook that backgrounds a notifier (%v), so the join proved nothing\n%s:\n%s", err, mirrorLogName, mirrorLog())
+	}
+	if err := syscall.Kill(notifierPID, 0); err != nil {
+		t.Fatalf("the notifier (pid %d) was gone when the join returned (%v), so the join proved nothing about a child outliving its worker", notifierPID, err)
 	}
 }

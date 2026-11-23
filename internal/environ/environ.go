@@ -53,6 +53,13 @@ type Env struct {
 	// here for the reason releasedSchema does, and Of leaves it the zero
 	// policy, which raises no remote: an Env nobody gave a policy fails closed.
 	raisePolicy version.RaisePolicy
+	// executable resolves the lit program this run's detached workers run as:
+	// cmd/lit hands os.Executable, so a worker is the binary that spawned it,
+	// and a test suite hands the lit it built for its workers. It rides here
+	// for the reason releasedSchema does. A resolver and not a path, so a run
+	// that spawns no worker never resolves one. Of leaves it nil, which
+	// Executable refuses: an Env nobody gave a program spawns nothing.
+	executable func() (string, error)
 }
 
 // IsZero reports whether e is the zero Env, which no Env built by Of or
@@ -186,6 +193,22 @@ func (e Env) WithRaisePolicy(policy version.RaisePolicy) Env {
 // raises nothing, when none was.
 func (e Env) RaisePolicy() version.RaisePolicy {
 	return e.raisePolicy
+}
+
+// WithExecutable is the environment whose detached workers run the program
+// resolve names.
+func (e Env) WithExecutable(resolve func() (string, error)) Env {
+	e.executable = resolve
+	return e
+}
+
+// Executable is the program WithExecutable named, resolved now, or why there
+// is none to run.
+func (e Env) Executable() (string, error) {
+	if e.executable == nil {
+		return "", errors.New("the run was given no lit executable to run its detached workers as")
+	}
+	return e.executable()
 }
 
 // List is the environment as a KEY=VALUE list, a copy of the Env's own. It is

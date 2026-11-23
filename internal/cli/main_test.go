@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -36,35 +37,45 @@ import (
 const suiteStallDeadline = time.Minute
 
 // testMirrorPushDeadlineEnvVar carries a test's push deadline to a mirror it
-// runs as a child of this binary, where store.MirrorPushDeadline is the
-// child's own and no other test reads it.
+// runs as a child (suiteLit), where store.MirrorPushDeadline is the child's
+// own and no other test reads it.
 const testMirrorPushDeadlineEnvVar = "LIT_TEST_MIRROR_PUSH_DEADLINE"
+
+// suiteLit holds the lit this suite's detached workers run
+// (internal/cli/suitelit), built once per test binary by the first spawn that
+// asks for it and stamped with the suite's stall deadline and the push
+// deadline's variable. testEnv hands it to every run as the program a worker
+// runs, so a worker a test spawns is a process of its own, and this binary's
+// setup never runs the CLI. [LAW:one-source-of-truth]
+var suiteLit = dirtemplate.New("bin", func(dir string) error {
+	ldflags := "-X main.stallDeadline=" + suiteStallDeadline.String() + " -X main.pushDeadlineEnvVar=" + testMirrorPushDeadlineEnvVar
+	// Run in this package's directory, where go test runs a test binary. An
+	// -o ending in a separator is a directory go build makes and names the
+	// program in, with the suffix Windows wants, which os/exec finds again.
+	build := environ.Of(os.Environ()).Command("", "go", "build", "-ldflags", ldflags, "-o", dir+string(filepath.Separator), "./suitelit")
+	if out, err := build.CombinedOutput(); err != nil {
+		return fmt.Errorf("go build ./suitelit: %w\n%s", err, out)
+	}
+	return nil
+})
+
+// suiteLitPath is suiteLit's program, built if it is not yet.
+func suiteLitPath() (string, error) {
+	dir, err := suiteLit.Dir()
+	if err != nil {
+		return "", fmt.Errorf("build the suite's lit: %w", err)
+	}
+	return filepath.Join(dir, "suitelit"), nil
+}
 
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
-// would spawn the on-change push mirror (via os.Executable(), which under
-// `go test` is the test binary) and the receive worker (a real network fetch)
-// as a side effect of unrelated tests. The receive path is exercised explicitly,
-// by tests that run the receive worker's body in-process (receiveNow), so
-// disabling it package-wide loses no coverage.
+// would spawn the on-change push mirror (suiteLit) and the receive worker (a
+// real network fetch) as a side effect of unrelated tests. The receive path is
+// exercised explicitly, by tests that run the receive worker's body in-process
+// (receiveNow), so disabling it package-wide loses no coverage.
 func TestMain(m *testing.M) {
 	store.MirrorHoldBudget, store.ReceiveDeadline = suiteStallDeadline, suiteStallDeadline
-	// A detached worker spawns os.Executable(), which here is this test binary.
-	// Run as that worker rather than as a second copy of the whole suite; the
-	// suite's tests call the receive body directly and never mean to spawn one.
-	if len(os.Args) > 1 && (os.Args[1] == backgroundReceiveSubcommand || os.Args[1] == backgroundMirrorSubcommand) {
-		if deadline, ok := os.LookupEnv(testMirrorPushDeadlineEnvVar); ok {
-			d, err := time.ParseDuration(deadline)
-			if err != nil {
-				panic(testMirrorPushDeadlineEnvVar + ": " + err.Error())
-			}
-			store.MirrorPushDeadline = d
-		}
-		if err := Run(context.Background(), Invocation{Dir: WorkingDirOf(os.Getwd()), Args: os.Args[1:], Env: testEnv(), Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}); err != nil {
-			os.Exit(WriteCommandError(os.Stderr, err))
-		}
-		os.Exit(0)
-	}
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
@@ -117,7 +128,7 @@ func TestMain(m *testing.M) {
 			panic("set " + key + ": " + err.Error())
 		}
 	}
-	code := dirtemplate.Run(m, storeTemplate)
+	code := dirtemplate.Run(m, storeTemplate, suiteLit)
 	for _, dir := range suiteDirs {
 		_ = os.RemoveAll(dir)
 	}

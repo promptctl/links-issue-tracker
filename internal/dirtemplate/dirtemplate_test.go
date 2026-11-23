@@ -142,6 +142,32 @@ func TestTheTemplateRefusesWrites(t *testing.T) {
 	requireHolds(t, dir, seed)
 }
 
+// A program the build made is frozen still runnable: only its write bits go.
+func TestTheTemplateKeepsAProgramRunnable(t *testing.T) {
+	tpl := New("bin", func(dir string) error {
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "prog"), []byte("#!/bin/sh\n"), 0o755)
+	})
+	t.Cleanup(func() {
+		if err := tpl.remove(); err != nil {
+			t.Error(err)
+		}
+	})
+	dir, err := tpl.Dir()
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(dir, "prog"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := info.Mode().Perm(), fsperm.FileModeAsStored(t, 0o555); got != want {
+		t.Fatalf("frozen program mode = %v, want %v", got, want)
+	}
+}
+
 // A build that fails reports its error to every caller and leaves nothing on
 // disk: no later run inherits half a template.
 func TestAFailedBuildLeavesNothing(t *testing.T) {

@@ -152,7 +152,8 @@ func (tp *Template) buildFrozen() (_ string, err error) {
 }
 
 // freeze makes every file under root read-only and every directory
-// unwritable.
+// unwritable. A file keeps its execute bits, so a program the build made still
+// runs.
 func freeze(root string) error {
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -161,7 +162,11 @@ func freeze(root string) error {
 		if d.IsDir() {
 			return os.Chmod(path, 0o555)
 		}
-		return os.Chmod(path, 0o444)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.Chmod(path, 0o444|info.Mode().Perm()&0o111)
 	})
 }
 

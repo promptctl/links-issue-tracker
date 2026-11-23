@@ -29,10 +29,12 @@ linters:
       rules:
         # The suite Env lifts the released-schema ceiling and raises as a
         # release would; a non-test importer would ship that to users.
+        # suitelit is the lit internal/cli's tests build for their workers.
         suiteenv-tests-only:
           list-mode: lax
           files:
             - "!$test"
+            - "!**/internal/cli/suitelit/**"
           deny:
             - pkg: "github.com/promptctl/links-issue-tracker/internal/suiteenv"
               desc: "suiteenv is the test suites' Env; production reads the stamped ceiling"

@@ -76,9 +76,10 @@ func runEnv(t testing.TB) environ.Env {
 }
 
 // testEnv is the test process's environment; the rest of the Env is
-// suiteenv.Of's. A test that sets entries of its own reads runEnv instead.
+// suiteenv.Of's, and its detached workers run suiteLit. A test that sets
+// entries of its own reads runEnv instead.
 func testEnv() environ.Env {
-	return suiteenv.Of(os.Environ())
+	return suiteenv.Of(os.Environ()).WithExecutable(suiteLitPath)
 }
 
 // A literal that leaves Env out holds the zero Env. Run refuses it, where the

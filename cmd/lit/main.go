@@ -36,7 +36,8 @@ func main() {
 	// below is handed everything it would otherwise read from it.
 	// The released-schema ceiling and the raise policy are read from this
 	// binary's build stamp here and nowhere below: they ride the run's Env to
-	// every store open.
+	// every store open. So does this binary's own path, which the run's
+	// detached workers are spawned as.
 	released, err := version.ReadReleasedSchemaCeiling()
 	if err != nil {
 		fail(err)
@@ -44,7 +45,7 @@ func main() {
 	inv := cli.Invocation{
 		Dir:    cli.WorkingDirOf(os.Getwd()),
 		Args:   os.Args[1:],
-		Env:    environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(version.Origin)),
+		Env:    environ.Of(os.Environ()).WithReleasedSchema(released).WithRaisePolicy(version.RaisePolicyOf(version.Origin)).WithExecutable(os.Executable),
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,

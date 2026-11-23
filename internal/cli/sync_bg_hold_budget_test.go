@@ -326,10 +326,11 @@ func (r mirrorRun) wait(t *testing.T) mirrorResult {
 // knobs a test turns on the mirror runs it starts: the push deadline they run
 // under and the git shim they resolve git through.
 //
-// The mirror runs as a child of the test binary (TestMain's worker branch),
-// the shape production gives it, because both knobs are process-level in the
-// mirror: Dolt resolves git through the process PATH, and the push deadline is
-// store.MirrorPushDeadline. Set in a child, neither reaches any other test.
+// The mirror runs as a process of its own, the worker program its runs are
+// handed (suiteLit), the shape production gives it, because both knobs are
+// process-level in the mirror: Dolt resolves git through the process PATH,
+// and the push deadline is store.MirrorPushDeadline. Set in a child, neither
+// reaches any other test.
 // Every other command runs in-process, in root, with the test's environment.
 type mirrorRig struct {
 	t                   *testing.T
@@ -379,11 +380,11 @@ func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []stri
 			return ctx.Err()
 		}
 	}
-	self, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("locate the test binary: %w", err)
-	}
 	env := runEnv(r.t)
+	self, err := env.Executable()
+	if err != nil {
+		return fmt.Errorf("locate the worker program: %w", err)
+	}
 	if r.gitShim != "" {
 		env = env.With("PATH=" + r.gitShim + string(os.PathListSeparator) + env.Get("PATH"))
 	}
