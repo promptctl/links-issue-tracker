@@ -214,3 +214,48 @@ func TestLoadInertFileLoadsWithWarningAndNeverFires(t *testing.T) {
 		}
 	}
 }
+
+// TestDefinitionsByLayerPrintsLeastToMostSpecificFirst pins the print order:
+// the embedded defaults, then the user's global layer, then the project's own.
+// Dispatch keeps the Set's ID order (pinned by TestSetMatchingKeepsIDOrder), so
+// this order is a display view only.
+func TestDefinitionsByLayerPrintsLeastToMostSpecificFirst(t *testing.T) {
+	workspaceRoot, globalWorkflows := isolate(t)
+	project := filepath.Join(workspaceRoot, ".lit", "workflows")
+	writeWorkflow(t, project, "a.md", "---\nevents: [show_ticket]\n---\nproject")
+	writeWorkflow(t, globalWorkflows, "b.md", "---\nevents: [show_ticket]\n---\nglobal")
+
+	set := Load(testEnv(), workspaceRoot)
+	// The embedded layer carries several defaults, so compare the sequence of
+	// layers with consecutive repeats collapsed: each layer's run appears once,
+	// in order.
+	var layers []string
+	for _, def := range set.DefinitionsByLayer() {
+		if name := string(def.Source); len(layers) == 0 || layers[len(layers)-1] != name {
+			layers = append(layers, name)
+		}
+	}
+	want := []string{"embedded", "global", "project"}
+	if strings.Join(layers, ",") != strings.Join(want, ",") {
+		t.Fatalf("DefinitionsByLayer layers = %v, want %v", layers, want)
+	}
+}
+
+// TestWarningsByLayerPrintsLeastToMostSpecificFirst applies the same print
+// order to warnings, so a broken project file is listed after a broken global one.
+func TestWarningsByLayerPrintsLeastToMostSpecificFirst(t *testing.T) {
+	workspaceRoot, globalWorkflows := isolate(t)
+	project := filepath.Join(workspaceRoot, ".lit", "workflows")
+	writeWorkflow(t, project, "p.md", "---\nlabels: 17\n---\nbad")
+	writeWorkflow(t, globalWorkflows, "g.md", "---\nlabels: 17\n---\nbad")
+
+	set := Load(testEnv(), workspaceRoot)
+	var got []string
+	for _, w := range set.WarningsByLayer() {
+		got = append(got, string(w.Source))
+	}
+	want := []string{"global", "project"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("WarningsByLayer sources = %v, want %v", got, want)
+	}
+}

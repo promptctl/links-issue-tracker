@@ -24,6 +24,10 @@
 package workflows
 
 import (
+	"cmp"
+	"fmt"
+	"slices"
+
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
@@ -92,9 +96,50 @@ type Warning struct {
 // for a workspace, plus every warning produced while loading it.
 type Set struct {
 	// Definitions holds one definition per ID, nearest layer winning,
-	// sorted by ID for stable iteration and display order.
+	// sorted by ID. Dispatch iterates this order; display reads
+	// DefinitionsByLayer.
 	Definitions []Definition
 	Warnings    []Warning
+}
+
+// layerRank is the one statement of layer specificity, least specific first:
+// the defaults the binary ships, then the user's global definitions, then the
+// project's own. Load's claim order (nearest first) is precedence; this rank is
+// the reading order. [LAW:one-source-of-truth]
+func layerRank(source templates.Source) int {
+	switch source {
+	case templates.SourceEmbedded:
+		return 0
+	case templates.SourceGlobal:
+		return 1
+	case templates.SourceProject:
+		return 2
+	}
+	// Load only ever stamps the three layers above; any other source is a
+	// broken invariant, reported where it is found. [LAW:no-silent-failure]
+	panic(fmt.Sprintf("workflows: no specificity rank for layer %q", source))
+}
+
+// DefinitionsByLayer returns the definitions least specific first: embedded
+// defaults, then global, then project, each layer in ID order. It is a display
+// view; Matching keeps the Set's ID order, so what fires and in what order is
+// unchanged.
+func (s Set) DefinitionsByLayer() []Definition {
+	out := slices.Clone(s.Definitions)
+	slices.SortStableFunc(out, func(a, b Definition) int {
+		return cmp.Compare(layerRank(a.Source), layerRank(b.Source))
+	})
+	return out
+}
+
+// WarningsByLayer returns the warnings in the same least-specific-first order
+// as DefinitionsByLayer, keeping load order within each layer.
+func (s Set) WarningsByLayer() []Warning {
+	out := slices.Clone(s.Warnings)
+	slices.SortStableFunc(out, func(a, b Warning) int {
+		return cmp.Compare(layerRank(a.Source), layerRank(b.Source))
+	})
+	return out
 }
 
 // Lookup returns the definition with the given ID, if one is loaded. IDs are
