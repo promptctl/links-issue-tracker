@@ -356,7 +356,12 @@ func checkMember(pkg *types.Package, key string, cl Class) error {
 		}
 		return nil
 	}
-	m, _, _ := types.LookupFieldOrMethod(types.NewPointer(tn.Type()), true, pkg, member)
+	// An interface's methods are not in its pointer's method set.
+	recv := tn.Type()
+	if !types.IsInterface(recv) {
+		recv = types.NewPointer(recv)
+	}
+	m, _, _ := types.LookupFieldOrMethod(recv, true, pkg, member)
 	fn, ok := m.(*types.Func)
 	if !ok {
 		return fmt.Errorf("%s has no method %s", name, member)

@@ -123,7 +123,7 @@ func namedOf(t types.Type) *types.Named {
 type summary struct {
 	static      []callSite
 	taken       []*ssa.Function
-	converted   []types.Type
+	converted   []conversion
 	dynamic     []*types.Signature
 	invokes     []invoke
 	spawnFields []spawnField
@@ -134,7 +134,15 @@ type callSite struct {
 	common *ssa.CallCommon
 }
 
+// conversion is a value of a concrete type made into an interface value.
+type conversion struct {
+	typ types.Type // the concrete type
+	to  types.Type // the interface type
+}
+
+// invoke is a call of an interface method.
 type invoke struct {
+	recv   types.Type // the interface type the call is made through
 	iface  *types.Interface
 	method *types.Func
 }
@@ -167,7 +175,8 @@ func (a *analyzer) summary(fn *ssa.Function) *summary {
 				common := c.Common()
 				switch {
 				case common.IsInvoke():
-					s.invokes = append(s.invokes, invoke{common.Value.Type().Underlying().(*types.Interface), common.Method})
+					recv := common.Value.Type()
+					s.invokes = append(s.invokes, invoke{recv, recv.Underlying().(*types.Interface), common.Method})
 				case common.StaticCallee() != nil:
 					s.static = append(s.static, callSite{fn, common})
 					callee = &common.Value
@@ -184,7 +193,7 @@ func (a *analyzer) summary(fn *ssa.Function) *summary {
 			}
 			switch v := instr.(type) {
 			case *ssa.MakeInterface:
-				s.converted = append(s.converted, v.X.Type())
+				s.converted = append(s.converted, conversion{v.X.Type(), v.Type()})
 			case *ssa.Store:
 				if sf, ok := a.spawnFieldOf(v); ok {
 					s.spawnFields = append(s.spawnFields, sf)
@@ -217,12 +226,43 @@ func (a *analyzer) spawnFieldOf(st *ssa.Store) (spawnField, bool) {
 	return spawnField{spawner: pkg + "." + typ + "." + field, program: st.Val}, true
 }
 
-// structure is every method reachable from a type's structure — its own,
-// and those of every named type among its fields, elements and pointees,
-// outside types included — and every interface type in that structure.
+// moduleType reports whether t, or what t points to, is a named type the
+// module declares.
+func (a *analyzer) moduleType(t types.Type) bool {
+	n := namedOf(t)
+	return n != nil && n.Obj().Pkg() != nil && a.mod.contains(n.Obj().Pkg().Path())
+}
+
+// outsideType reports whether t, or what t points to, is a named concrete
+// type declared outside the module.
+func (a *analyzer) outsideType(t types.Type) bool {
+	n := namedOf(t)
+	return n != nil && n.Obj().Pkg() != nil && !a.mod.contains(n.Obj().Pkg().Path()) && !types.IsInterface(n)
+}
+
+// moduleInterface reports whether the interface type t belongs to the
+// module: a named interface the module declares, or an interface literal
+// that declares a method of the module's.
+func (a *analyzer) moduleInterface(t types.Type) bool {
+	if n, ok := types.Unalias(t).(*types.Named); ok {
+		return n.Obj().Pkg() != nil && a.mod.contains(n.Obj().Pkg().Path())
+	}
+	iface := t.Underlying().(*types.Interface)
+	for i := range iface.NumExplicitMethods() {
+		if p := iface.ExplicitMethod(i).Pkg(); p != nil && a.mod.contains(p.Path()) {
+			return true
+		}
+	}
+	return false
+}
+
+// structure is what a converted value's structure contributes: every method
+// of each module type among the type, its fields, elements and pointees;
+// each outside named type among them; and each interface type among them.
 type structure struct {
 	methods []*ssa.Function
-	ifaces  []*types.Interface
+	outside []types.Type
+	ifaces  []types.Type
 }
 
 // structureOf is the structure of t, derived once per type.
@@ -245,11 +285,17 @@ func (a *analyzer) structureOf(t types.Type) *structure {
 			if u.TypeParams().Len() > 0 && u.TypeArgs().Len() == 0 {
 				return
 			}
-			if iface, ok := u.Underlying().(*types.Interface); ok {
-				s.ifaces = append(s.ifaces, iface)
+			if types.IsInterface(u) {
+				s.ifaces = append(s.ifaces, u)
 				return
 			}
-			s.methods = append(s.methods, a.methodsOf(u)...)
+			if a.moduleType(u) {
+				s.methods = append(s.methods, a.methodsOf(u)...)
+			} else {
+				// Its pointer's method set, so a method on either receiver
+				// counts: this approximation adds methods, never drops one.
+				s.outside = append(s.outside, types.NewPointer(u))
+			}
 			visit(u.Underlying())
 		case *types.Pointer:
 			visit(u.Elem())
@@ -312,10 +358,10 @@ func (a *analyzer) deriveMethods(t types.Type) []*ssa.Function {
 }
 
 // pool is the binary level of one test binary: every function value and
-// every concrete type converted to an interface in the reach of the
-// initialization of the binary's packages and of its TestMain, each with its
-// origin. These are the possible targets of a test's dynamic and interface
-// calls.
+// every concrete named type that may sit in an interface value in the reach
+// of the initialization of the binary's packages and of its TestMain, each
+// with its origin. These are the possible targets of a test's dynamic and
+// interface calls.
 type pool struct {
 	funcs []poolEntry[*ssa.Function]
 	types []poolEntry[types.Type]
@@ -330,7 +376,7 @@ type pool struct {
 
 type poolEntry[T any] struct {
 	value   T
-	origin  string // the initializer or TestMain that made it exist
+	origin  string // the initializer, TestMain or test that made it exist
 	creator string // the function in whose body it was made
 }
 
@@ -382,14 +428,19 @@ func (p *pool) implementing(iface *types.Interface) []poolEntry[types.Type] {
 			return cached
 		}
 	}
+	out := implementing(p.types, iface)
+	if p.final {
+		p.implementers.Set(iface, out)
+	}
+	return out
+}
+
+func implementing(entries []poolEntry[types.Type], iface *types.Interface) []poolEntry[types.Type] {
 	var out []poolEntry[types.Type]
-	for _, e := range p.types {
+	for _, e := range entries {
 		if types.Implements(e.value, iface) {
 			out = append(out, e)
 		}
-	}
-	if p.final {
-		p.implementers.Set(iface, out)
 	}
 	return out
 }
@@ -421,23 +472,41 @@ type walker struct {
 	collect bool
 
 	visited map[*ssa.Function]step
-	origin  map[*ssa.Function]string // collect: the seed each function was reached from
+	origin  map[*ssa.Function]string // the seed each function was reached from
 	queue   []*ssa.Function
 	touches map[Touch]witness
 
 	sitesInto map[*ssa.Function][]callSite
 	spawns    []spawnSite
 
+	// invokes: the module-interface calls the walk reached, applied again
+	// to every outside type that may sit in an interface value after them.
+	invokes []pendingInvoke
+	// local, outside a collecting walk: the outside named types this walk
+	// put in an interface value, which the pool does not hold.
+	local      []poolEntry[types.Type]
+	localTyped typeutil.Map
+	// invoked: the interface calls the walk has made. A second call of the
+	// same method through the same interface reaches nothing the first did
+	// not: a type that may sit in an interface later meets it in invokes.
+	invoked map[invokeKey]bool
+	// outsideCalls: the outside interface methods the walk has charged.
+	outsideCalls map[string]bool
+
 	// Dispatches reached while collecting, applied again to every value
 	// that joins the pool after them.
 	dynSigs       typeutil.Map // normalized signature -> *ssa.Function (first caller)
-	invokes       []pendingInvoke
 	structIfaces  []pendingInvoke
 	dispatchingBy *ssa.Function
 	converted     typeutil.Map
 	// dispatched: the walk has reached a dispatching function. Once the
 	// pool is final, a second dispatch reaches nothing the first did not.
 	dispatched bool
+}
+
+type invokeKey struct {
+	iface  *types.Interface
+	method *types.Func
 }
 
 type pendingInvoke struct {
@@ -454,13 +523,15 @@ type spawnSite struct {
 
 func newWalker(a *analyzer, p *pool, collect bool) *walker {
 	return &walker{
-		a:         a,
-		pool:      p,
-		collect:   collect,
-		visited:   map[*ssa.Function]step{},
-		origin:    map[*ssa.Function]string{},
-		touches:   map[Touch]witness{},
-		sitesInto: map[*ssa.Function][]callSite{},
+		a:            a,
+		pool:         p,
+		collect:      collect,
+		visited:      map[*ssa.Function]step{},
+		origin:       map[*ssa.Function]string{},
+		touches:      map[Touch]witness{},
+		sitesInto:    map[*ssa.Function][]callSite{},
+		invoked:      map[invokeKey]bool{},
+		outsideCalls: map[string]bool{},
 	}
 }
 
@@ -499,8 +570,8 @@ func (w *walker) visit(fn *ssa.Function) {
 			continue
 		}
 		if !o.inModule {
-			if cl, ok := w.a.class.Lookup(o.pkg, o.key); ok && cl.Spawn != nil && !cl.Spawn.Field {
-				arg := cl.Spawn.Arg
+			if o.classified && o.class.Spawn != nil && !o.class.Spawn.Field {
+				arg := o.class.Spawn.Arg
 				if callee.Signature.Recv() != nil {
 					arg++
 				}
@@ -514,8 +585,8 @@ func (w *walker) visit(fn *ssa.Function) {
 	for _, f := range s.taken {
 		w.take(f, fn)
 	}
-	for _, t := range s.converted {
-		w.convert(t, fn, via{})
+	for _, c := range s.converted {
+		w.convert(c.typ, c.to, fn, via{})
 	}
 	for _, sig := range s.dynamic {
 		w.dynamic(sig, fn)
@@ -544,6 +615,12 @@ func (w *walker) reach(fn, from *ssa.Function, how via, static bool) {
 		w.queue = append(w.queue, fn)
 		return
 	}
+	w.classified(o, fn, from)
+}
+
+// classified charges what the classification says an outside function or
+// interface method can do, called at at, whose caller is from.
+func (w *walker) classified(o owner, at, from *ssa.Function) {
 	if !o.classified {
 		name := o.pkg + "." + o.key
 		if _, seen := w.a.unclassified[name]; !seen {
@@ -552,10 +629,10 @@ func (w *walker) reach(fn, from *ssa.Function, how via, static bool) {
 		return
 	}
 	for t := range o.class.Touches.Each {
-		w.touch(t, fn, func() string { return fmt.Sprintf("%s.%s (%s)", o.pkg, o.key, o.class.Touches) })
+		w.touch(t, at, func() string { return fmt.Sprintf("%s.%s (%s)", o.pkg, o.key, o.class.Touches) })
 	}
 	if o.class.Dispatching {
-		w.dispatchAll(fn)
+		w.dispatchAll(at)
 	}
 }
 
@@ -607,49 +684,90 @@ func (w *walker) take(f, from *ssa.Function) {
 	w.reach(f, from, via{what: "takes it as a value"}, false)
 }
 
-// convert: a type converted to an interface in the walk's reach has every
-// method reachable, together with the methods of every type reachable from
-// its structure, since reflection (fmt, encoding/json) calls them. An
-// interface in that structure holds values converted elsewhere: each
-// binary-level type implementing it is treated as converted here.
-func (w *walker) convert(t types.Type, from *ssa.Function, how via) {
-	if w.collect && w.pool.typed.At(t) == nil {
-		w.pool.typed.Set(t, true)
-		e := poolEntry[types.Type]{t, w.origin[from], w.a.name(from)}
-		w.pool.types = append(w.pool.types, e)
-		for _, p := range w.invokes {
-			if types.Implements(t, p.inv.iface) {
-				w.reachMethod(e, p.inv.method, p.from)
-			}
-		}
-		for _, p := range w.structIfaces {
-			if types.Implements(t, p.inv.iface) {
-				w.convert(t, p.from, e.describe("reflection reaches type", nil))
-			}
-		}
-		if w.dispatchingBy != nil {
-			for _, m := range w.a.methodsOf(t) {
-				w.reach(m, w.dispatchingBy, e.describe("dispatch reaches type", nil), false)
-			}
+// convert: a value of type t made into an interface value of type to.
+//
+// A module type has every method reachable, together with the methods of
+// every module type reachable from its structure, since reflection (fmt,
+// encoding/json) calls them. An outside type, converted or found in that
+// structure, contributes only what module code can call on it: the methods
+// implementing a module interface it is converted to, and the module
+// interface methods module code invokes (see invoke). What an outside
+// function does with a value it is handed is that function's own
+// classification. An interface in the structure holds values converted
+// elsewhere: each binary-level type implementing it is treated as converted
+// to it here.
+func (w *walker) convert(t, to types.Type, from *ssa.Function, how via) {
+	if how.what == "" {
+		how = via{what: "converts %s to an interface", typ: t}
+	}
+	if w.a.outsideType(t) && w.a.moduleInterface(to) {
+		iface := to.Underlying().(*types.Interface)
+		for i := range iface.NumMethods() {
+			w.reachMethod(t, iface.Method(i), from, how)
 		}
 	}
 	if w.converted.At(t) != nil {
 		return
 	}
 	w.converted.Set(t, true)
-	if how.what == "" {
-		how = via{what: "converts %s to an interface", typ: t}
-	}
 	s := w.a.structureOf(t)
 	for _, m := range s.methods {
 		w.reach(m, from, how, false)
 	}
-	for _, iface := range s.ifaces {
+	if w.a.moduleType(t) || w.a.outsideType(t) {
+		w.mayBeInInterface(t, from)
+	}
+	for _, o := range s.outside {
+		w.mayBeInInterface(o, from)
+	}
+	for _, it := range s.ifaces {
+		iface := it.Underlying().(*types.Interface)
 		if w.collect {
-			w.structIfaces = append(w.structIfaces, pendingInvoke{invoke{iface: iface}, from})
+			w.structIfaces = append(w.structIfaces, pendingInvoke{invoke{recv: it, iface: iface}, from})
 		}
 		for _, e := range w.pool.implementing(iface) {
-			w.convert(e.value, from, e.describe("reflection reaches type", nil))
+			w.convert(e.value, it, from, e.describe("reflection reaches type", nil))
+		}
+	}
+}
+
+// mayBeInInterface records a named type whose values may sit in an
+// interface value: while collecting, it joins the binary level; otherwise,
+// an outside type joins this walk's own list. Either way the module
+// interface calls already reached are applied to it.
+func (w *walker) mayBeInInterface(t types.Type, from *ssa.Function) {
+	e := poolEntry[types.Type]{t, w.origin[from], w.a.name(from)}
+	switch {
+	case w.collect:
+		if w.pool.typed.At(t) != nil {
+			return
+		}
+		w.pool.typed.Set(t, true)
+		w.pool.types = append(w.pool.types, e)
+		for _, p := range w.structIfaces {
+			if types.Implements(t, p.inv.iface) {
+				w.convert(t, p.inv.recv, p.from, e.describe("reflection reaches type", nil))
+			}
+		}
+		if w.dispatchingBy != nil && w.a.moduleType(t) {
+			for _, m := range w.a.methodsOf(t) {
+				w.reach(m, w.dispatchingBy, e.describe("dispatch reaches type", nil), false)
+			}
+		}
+	case w.a.outsideType(t):
+		if w.localTyped.At(t) != nil {
+			return
+		}
+		w.localTyped.Set(t, true)
+		w.local = append(w.local, e)
+	default:
+		// A module type converted in this walk already has every method
+		// reachable.
+		return
+	}
+	for _, p := range w.invokes {
+		if types.Implements(t, p.inv.iface) {
+			w.reachMethod(t, p.inv.method, p.from, e.describe("interface call reaches %s", t))
 		}
 	}
 }
@@ -663,27 +781,68 @@ func (w *walker) dynamic(sig *types.Signature, from *ssa.Function) {
 	}
 }
 
+// invoke: a call through a module interface reaches that method of every
+// type that may sit in one. A call through an outside interface is a call
+// of an outside method, charged by the classification of the interface
+// method; the module types implementing it are reached as well.
 func (w *walker) invoke(inv invoke, from *ssa.Function) {
-	if w.collect {
-		w.invokes = append(w.invokes, pendingInvoke{inv, from})
+	k := invokeKey{inv.iface, inv.method}
+	if w.invoked[k] {
+		return
 	}
+	w.invoked[k] = true
+	if w.a.moduleInterface(inv.recv) {
+		w.invokes = append(w.invokes, pendingInvoke{inv, from})
+		for _, e := range w.pool.implementing(inv.iface) {
+			w.reachMethod(e.value, inv.method, from, e.describe("interface call reaches %s", e.value))
+		}
+		for _, e := range implementing(w.local, inv.iface) {
+			w.reachMethod(e.value, inv.method, from, e.describe("interface call reaches %s", e.value))
+		}
+		return
+	}
+	w.outsideInvoke(inv, from)
 	for _, e := range w.pool.implementing(inv.iface) {
-		w.reachMethod(e, inv.method, from)
+		if w.a.moduleType(e.value) {
+			w.reachMethod(e.value, inv.method, from, e.describe("interface call reaches %s", e.value))
+		}
 	}
 }
 
-func (w *walker) reachMethod(e poolEntry[types.Type], method *types.Func, from *ssa.Function) {
-	sel := w.a.prog.MethodSets.MethodSet(e.value).Lookup(method.Pkg(), method.Name())
+// outsideInvoke charges a call of an outside interface method, named by the
+// interface that declares it ("TB.TempDir", "Writer.Write"). The universe
+// declares one interface method, error's Error, which formats a message.
+func (w *walker) outsideInvoke(inv invoke, from *ssa.Function) {
+	m := inv.method
+	if m.Pkg() == nil {
+		return
+	}
+	o := w.a.methodOwner(m.Signature().Recv().Type(), m.Name())
+	if o.key == "" {
+		o = w.a.ownerIn(m.Pkg().Path(), m.Name())
+	}
+	name := o.pkg + "." + o.key
+	if w.outsideCalls[name] {
+		return
+	}
+	w.outsideCalls[name] = true
+	o.class, o.classified = w.a.class.Lookup(o.pkg, o.key)
+	w.classified(o, from, from)
+}
+
+func (w *walker) reachMethod(t types.Type, method *types.Func, from *ssa.Function, how via) {
+	sel := w.a.prog.MethodSets.MethodSet(t).Lookup(method.Pkg(), method.Name())
 	if sel == nil {
 		return
 	}
 	if fn := w.a.prog.MethodValue(sel); fn != nil {
-		w.reach(fn, from, e.describe("interface call reaches %s", e.value), false)
+		w.reach(fn, from, how, false)
 	}
 }
 
 // dispatchAll: a dispatching outside function reaches every binary-level
-// function value and every method of every binary-level type.
+// function value and every method of every binary-level module type. What
+// it does with an outside value is its own classification.
 //
 // The first dispatch in a walk is the only one that can reach anything: it
 // reaches the whole pool, and a value that joins the pool later, while
@@ -700,6 +859,9 @@ func (w *walker) dispatchAll(at *ssa.Function) {
 		w.reach(e.value, at, e.describe("dispatch reaches value", nil), false)
 	}
 	for _, e := range w.pool.types {
+		if !w.a.moduleType(e.value) {
+			continue
+		}
 		for _, m := range w.a.methodsOf(e.value) {
 			w.reach(m, at, e.describe("dispatch reaches type", nil), false)
 		}

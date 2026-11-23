@@ -18,6 +18,12 @@
 // from unit: an imprecision may add a touch a test does not have, or move a
 // test between integration and end-to-end; it never removes a touch.
 //
+// A touch is charged where module code, or a classified outside function,
+// can call it. Charging every method of every value that reaches an
+// interface would charge nearly every test with what testing.T can do,
+// since nearly every test hands t to a helper, and the measure would stop
+// telling tests apart.
+//
 // TOUCHES. A store on disk, git, a CLI run, any other process, the network,
 // the filesystem, and the real clock. A test that can reach none is unit; one
 // that can reach a CLI run is end-to-end; any other is integration.
@@ -36,22 +42,33 @@
 //     interface calls, each carrying its origin: the initializer or TestMain
 //     that made it exist. Their own touches print on the package's row.
 //   - From each test: a static call reaches its callee. A function value that
-//     is taken is reachable. A conversion to an interface makes reachable every
-//     method of the converted type and of every type reachable from its
-//     structure (fields, elements, pointees), outside types included, since
-//     fmt and encoding/json call them by reflection; an interface in that
-//     structure stands for every binary-level type implementing it. A dynamic
-//     call reaches every binary-level function value of its signature; an
-//     interface call reaches that method of every binary-level type that
-//     implements the interface. A value with no use creates nothing, so
-//     `var _ I = (*T)(nil)` makes no method reachable.
+//     is taken is reachable. A dynamic call reaches every binary-level
+//     function value of its signature. A value with no use creates nothing,
+//     so `var _ I = (*T)(nil)` makes no method reachable.
+//   - Converting a module type to an interface makes reachable every method
+//     of it and of every module type reachable from its structure (fields,
+//     elements, pointees), since fmt and encoding/json call them by
+//     reflection; an interface in that structure stands for every
+//     binary-level type implementing it.
+//   - An outside type, converted or found in such a structure, contributes
+//     only what module code can call on it: the methods implementing a
+//     module interface it is converted to, and, through a call of a module
+//     interface method, that method of every such type implementing the
+//     interface (`*http.Client` behind a module interface reaches its Do).
+//   - A call through a module interface reaches that method of every
+//     binary-level type implementing it. A call through an outside interface
+//     (`testing.TB`'s TempDir, `io.Writer`'s Write) is a call of an outside
+//     method, charged by the classification of the interface method; the
+//     module types implementing it are reached as well.
 //   - Code outside the module is never walked. Every outside function module
 //     code reaches is classified in classification.json: the touches it can
 //     make, none, or dispatching — it calls back what was registered with it
 //     or handed to it (a command tree's Execute, a server, a database driver),
 //     so a call reaches every binary-level function value and every method of
-//     every binary-level type. An outside function with no classification
-//     refuses the run, naming it and its first caller.
+//     every binary-level module type. What an outside function does with a
+//     value it is handed is that function's own classification. An outside
+//     function with no classification refuses the run, naming it and its
+//     first caller.
 //   - A spawn's program is the one value followed: through parameters (at the
 //     static calls in the test's reach) and closure bindings to a constant,
 //     os.Executable(), os.Args[0], or exec.LookPath of a constant. It is git

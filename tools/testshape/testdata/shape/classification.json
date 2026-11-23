@@ -4,10 +4,10 @@
   "git": ["git"],
   "packages": {
     "fmt": {"default": "none"},
-    "net/http": {"default": "net", "functions": {"HandleFunc": "none", "ServeMux.ServeHTTP": "dispatching"}},
+    "net/http": {"default": "net", "functions": {"HandleFunc": "none", "ResponseWriter": "none","ServeMux.ServeHTTP": "dispatching"}},
     "os": {"default": "fs", "functions": {"Getenv": "none", "Environ": "none", "Exit": "none", "Executable": "none"}},
     "os/exec": {"default": "none", "functions": {"Command": "spawn:0", "CommandContext": "spawn:1", "Cmd.Path": "spawn:field", "LookPath": "fs"}},
-    "testing": {"default": "none"},
+    "testing": {"default": "none", "functions": {"TB.TempDir": "fs"}},
     "time": {"default": "none"}
   }
 }

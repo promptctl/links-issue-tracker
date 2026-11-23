@@ -208,6 +208,13 @@ func TestAnOutsideClientBehindAModulePortIsTheNetwork(t *testing.T) {
 	expectReach(t, reachOf(t, "httpclient", "TestFetch"), Integration, "net", nil)
 }
 
+func TestHandingTToAHelperChargesOnlyWhatTheHelperCalls(t *testing.T) {
+	expectReach(t, reachOf(t, "tbhelper", "TestCheck"), Unit, "none", nil)
+	expectReach(t, reachOf(t, "tbhelper", "TestScratch"), Integration, "fs", map[Touch]string{
+		FS: "tbhelper.TestScratch → tbhelper.Scratch ⇒ testing.TB.TempDir (fs)",
+	})
+}
+
 func TestABuildTagReachesTheTestsItSelects(t *testing.T) {
 	expectReach(t, reachOf(t, "tagged", "TestTagged"), Integration, "fs", nil)
 	expectReach(t, reachOf(t, "tagged", "TestPure"), Unit, "none", nil)
