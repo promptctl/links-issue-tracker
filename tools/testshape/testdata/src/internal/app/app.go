@@ -10,11 +10,16 @@ type Store interface{ Get() string }
 // App holds the store as its contract only.
 type App struct{ Store Store }
 
-// Open builds the store on disk and erases its type.
-func Open(dir string) (*App, error) {
+// New builds the store on disk and erases its type. It is no marker, so the
+// walk enters it.
+func New(dir string) (*App, error) {
 	st, err := store.Open(dir)
 	if err != nil {
 		return nil, err
 	}
 	return &App{Store: st}, nil
 }
+
+// Open and OpenLocationForRead are the openers markers.go names.
+func Open(dir string) (*App, error)                { return New(dir) }
+func OpenLocationForRead(dir string) (*App, error) { return New(dir) }

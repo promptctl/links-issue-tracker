@@ -5,10 +5,10 @@
 // test. [LAW:one-source-of-truth]
 //
 // It reports facts, not verdicts. A package that failed to build, a test with
-// no verdict, a verdict that carried no elapsed time: each is a field of the
-// result, and what a fact means is the consuming tool's decision.
-// [LAW:single-enforcer] What it cannot read is an error: a package-level
-// action go test does not emit, or a replay write that failed.
+// no verdict, a package end that carried no elapsed figure: each is a field of
+// the result, and what a fact means is the consuming tool's decision.
+// [LAW:single-enforcer] What it cannot read is an error: an action go test
+// does not emit, or a replay write that failed.
 package gotestjson
 
 import (
@@ -56,11 +56,8 @@ type TestID struct{ Package, Test string }
 // never from raw stream lines.
 type Package struct {
 	ImportPath string
-	Elapsed    time.Duration
-	// NoElapsed: the terminal event carried no elapsed time, so Elapsed is no
-	// figure at all, not a zero-second one.
-	NoElapsed bool
-	Failed    bool
+	Elapsed    Elapsed
+	Failed     bool
 	// FailedBuild is the build go test reported failing for this package,
 	// empty when its test binary built.
 	FailedBuild string
@@ -76,11 +73,34 @@ func (p Package) MainFailed() bool {
 	return !slices.ContainsFunc(p.Tests, func(t Test) bool { return t.Verdict == Fail || t.Verdict == Unfinished })
 }
 
-// Verdict is how one top-level test ended.
+// Elapsed is go test's figure for how long a package ran, which its terminal
+// event may not carry. [LAW:types-are-the-program] no figure is no duration,
+// not a zero-second one, and Figure is the one way to read it; the zero
+// Elapsed is no figure.
+type Elapsed struct {
+	d  time.Duration
+	ok bool
+}
+
+// Took is the figure d.
+func Took(d time.Duration) Elapsed { return Elapsed{d, true} }
+
+// Figure is the duration, and whether there is one.
+func (e Elapsed) Figure() (time.Duration, bool) { return e.d, e.ok }
+
+func elapsedOf(seconds *float64) Elapsed {
+	if seconds == nil {
+		return Elapsed{}
+	}
+	return Took(duration(*seconds))
+}
+
+// Verdict is how one top-level test ended. Its zero value is no verdict, so
+// a Test nobody gave one cannot read as passing. [LAW:types-are-the-program]
 type Verdict int
 
 const (
-	Pass Verdict = iota
+	Pass Verdict = iota + 1
 	Fail
 	Skip
 	// Unfinished: the package ended with no verdict for the test — a
@@ -100,9 +120,6 @@ type Test struct {
 	Elapsed  time.Duration
 	Parallel bool // it called t.Parallel (emitted a pause event)
 	Verdict  Verdict
-	// NoElapsed: its verdict carried no elapsed time, so Elapsed is the
-	// clock's reading without go test's own figure.
-	NoElapsed bool
 }
 
 // testKey identifies one running test.
@@ -136,14 +153,19 @@ func (rt *runningTest) elapsedAt(end time.Time) time.Duration {
 	return rt.ran + end.Sub(rt.since)
 }
 
-// endGiven is when a test that go test timed at elapsed ended, or its
-// subtests did, whichever is later. A verdict event's Time is no witness:
-// test2json holds each verdict until the stream's next line, so a parallel
-// test that ends in a quiet stretch is stamped late. The resume (or start)
-// it counts from is an update line, which test2json stamps on arrival.
+// endAt is when the test whose verdict is ev ended, or its subtests did,
+// whichever is later. A verdict event's Time is a poor witness: test2json
+// holds each verdict until the stream's next line, so a parallel test that
+// ends in a quiet stretch is stamped late. So the end is go test's elapsed
+// counted from the resume (or start), an update line test2json stamps on
+// arrival, and only a verdict with no elapsed falls back to its own Time.
 // Cleanup that runs after a test's parallel subtests is the one span lost.
-func (rt *runningTest) endGiven(elapsed time.Duration) time.Time {
-	return later(rt.since.Add(elapsed-rt.ran), rt.subEnd)
+func (rt *runningTest) endAt(ev event) time.Time {
+	end := ev.Time
+	if ev.Elapsed != nil {
+		end = rt.since.Add(duration(*ev.Elapsed) - rt.ran)
+	}
+	return later(end, rt.subEnd)
 }
 
 func later(a, b time.Time) time.Time {
@@ -222,7 +244,10 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 				// package's own terminal event names in FailedBuild.
 			case "output", "build-output":
 				io.WriteString(out, ev.Output)
-			case "pass", "fail", "skip":
+			default:
+				if _, ok := verdicts[ev.Action]; !ok {
+					return Stream{}, fmt.Errorf("line %d: package %s: %q is no package action go test emits", line, ev.Package, ev.Action)
+				}
 				tests := finished[ev.Package]
 				delete(finished, ev.Package)
 				for _, u := range drain(out, running, ev.Package, "no verdict before its package ended") {
@@ -237,14 +262,11 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 				}
 				s.Packages = append(s.Packages, Package{
 					ImportPath:  ev.Package,
-					Elapsed:     seconds(ev.Elapsed),
-					NoElapsed:   ev.Elapsed == nil,
+					Elapsed:     elapsedOf(ev.Elapsed),
 					Failed:      ev.Action == "fail",
 					FailedBuild: ev.FailedBuild,
 					Tests:       tests,
 				})
-			default:
-				return Stream{}, fmt.Errorf("line %d: package %s: %q is no package action go test emits", line, ev.Package, ev.Action)
 			}
 			continue
 		}
@@ -252,21 +274,28 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 		k := testKey{ev.Package, ev.Test}
 		rt := track(running, k, ev.Time)
 		switch ev.Action {
-		case "output":
+		case "run":
+			// The test's first event, which track started its clock at.
+		case "output", "bench":
+			// A benchmark's result line is output too.
 			rt.output = append(rt.output, ev.Output)
 		case "pause":
 			rt.ran += ev.Time.Sub(rt.since)
 			rt.paused, rt.parallel = true, true
 		case "cont":
 			rt.since, rt.paused = ev.Time, false
-		case "pass", "fail", "skip":
-			if ev.Action == "fail" {
+		default:
+			verdict, ok := verdicts[ev.Action]
+			if !ok {
+				return Stream{}, fmt.Errorf("line %d: %s %s: %q is no test action go test emits", line, ev.Package, ev.Test, ev.Action)
+			}
+			if verdict == Fail {
 				for _, s := range rt.output {
 					io.WriteString(out, s)
 				}
 			}
 			delete(running, k)
-			end := rt.endGiven(seconds(ev.Elapsed))
+			end := rt.endAt(ev)
 			if !isTopLevel(ev.Test) {
 				// A subtest's verdict precedes its ancestor's, which is
 				// still running.
@@ -275,11 +304,10 @@ func Read(r io.Reader, w io.Writer) (Stream, error) {
 				continue
 			}
 			finished[ev.Package] = append(finished[ev.Package], Test{
-				Name:      ev.Test,
-				Elapsed:   rt.elapsedAt(end),
-				Parallel:  rt.parallel,
-				Verdict:   verdicts[ev.Action],
-				NoElapsed: ev.Elapsed == nil,
+				Name:     ev.Test,
+				Elapsed:  rt.elapsedAt(end),
+				Parallel: rt.parallel,
+				Verdict:  verdict,
 			})
 		}
 	}
@@ -348,11 +376,7 @@ func drain(w io.Writer, running map[testKey]*runningTest, pkg, why string) []unf
 	return drained
 }
 
-// seconds converts test2json's Elapsed to a Duration; nil, no duration, is
-// the zero its NoElapsed fact qualifies.
-func seconds(elapsed *float64) time.Duration {
-	if elapsed == nil {
-		return 0
-	}
-	return time.Duration(*elapsed * float64(time.Second))
+// duration converts test2json's Elapsed, in seconds, to a Duration.
+func duration(seconds float64) time.Duration {
+	return time.Duration(seconds * float64(time.Second))
 }

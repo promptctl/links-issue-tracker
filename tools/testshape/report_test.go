@@ -64,15 +64,15 @@ func TestTheTableCountsLayeredTestsAndSkippedOnesApart(t *testing.T) {
 			importPath: "example.com/m/p",
 			init:       touched(touchFS),
 			tests: []testShape{
-				{Test: gotestjson.Test{Name: "TestUnit", Elapsed: time.Second}},
-				{Test: gotestjson.Test{Name: "TestClock", Elapsed: 2 * time.Second}, touches: touched(touchClock)},
+				{Test: gotestjson.Test{Name: "TestUnit", Elapsed: time.Second, Verdict: gotestjson.Pass}},
+				{Test: gotestjson.Test{Name: "TestClock", Elapsed: 2 * time.Second, Verdict: gotestjson.Pass}, touches: touched(touchClock)},
 				{Test: gotestjson.Test{Name: "TestSkip", Elapsed: time.Second, Verdict: gotestjson.Skip}},
 			},
 		},
 		{
 			importPath: "example.com/m",
 			testMain:   &touches{},
-			tests:      []testShape{{Test: gotestjson.Test{Name: "TestCLI", Elapsed: 4 * time.Second}, touches: touched(touchCLI, touchFS)}},
+			tests:      []testShape{{Test: gotestjson.Test{Name: "TestCLI", Elapsed: 4 * time.Second, Verdict: gotestjson.Pass}, touches: touched(touchCLI, touchFS)}},
 		},
 	}
 	var out strings.Builder
@@ -120,6 +120,7 @@ func TestAStreamThatMeasuredNothingFailsNamingWhy(t *testing.T) {
 	pkg := `"Package":"p"`
 	run := `{"Time":"2026-01-01T00:00:00Z","Action":"run",` + pkg + `,"Test":"TestA"}`
 	pass := `{"Time":"2026-01-01T00:00:01Z","Action":"pass",` + pkg + `,"Test":"TestA","Elapsed":1}`
+	end := `{"Time":"2026-01-01T00:00:01Z","Action":"pass",` + pkg + `,"Elapsed":1}`
 	for _, c := range []struct {
 		name  string
 		lines []string
@@ -138,13 +139,12 @@ func TestAStreamThatMeasuredNothingFailsNamingWhy(t *testing.T) {
 		}, "p TestA has no verdict: its package ended before it did"},
 		{"a test open when the stream ended", []string{run}, "p TestA was cut: the stream ended before its package did"},
 		{"a test finished before the stream ended", []string{run, pass}, "p TestA was cut: the stream ended before its package did"},
-		{"a verdict with no elapsed time", []string{
-			run, `{"Time":"2026-01-01T00:00:01Z","Action":"pass",` + pkg + `,"Test":"TestA"}`,
-			`{"Time":"2026-01-01T00:00:01Z","Action":"pass",` + pkg + `,"Elapsed":1}`,
-		}, "p TestA has a verdict with no elapsed time"},
 		{"a test run twice", []string{
-			run, pass, run, pass, `{"Time":"2026-01-01T00:00:01Z","Action":"pass",` + pkg + `,"Elapsed":1}`,
+			run, pass, run, pass, end,
 		}, "p ran TestA more than once"},
+		{"a package run twice", []string{
+			run, pass, end, run, pass, end,
+		}, "p ended more than once"},
 		{"a package action go test does not emit", []string{`{"Action":"explode",` + pkg + `}`}, `"explode" is no package action go test emits`},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -1,13 +1,9 @@
 package main
 
 import (
-	"go/types"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
-
-	"golang.org/x/tools/go/packages"
 
 	"github.com/promptctl/links-issue-tracker/tools/internal/gotestjson"
 )
@@ -20,21 +16,20 @@ var fixtureDir = filepath.Join("testdata", "src")
 // fixtureModule is the fixture module's path.
 const fixtureModule = "example.com/fixtures"
 
-// fixtureMarkers are the fixture module's own markers, its CLI and its store,
-// as moduleMarkers are this module's.
-var fixtureMarkers = []marker{
-	{"internal/cli.Run", touchCLI},
-	{"internal/store.Open", touchStore},
-}
-
-// loadFixtures loads the fixture module and builds its graph.
+// loadFixtures loads the fixture module and builds its graph, by the real
+// marker data: the fixture module declares every module marker, and its
+// stubs every third-party one.
 func loadFixtures(t *testing.T) (*graph, *loaded) {
 	t.Helper()
+	ms, err := resolveMarkers(fixtureDir, moduleMarkers)
+	if err != nil {
+		t.Fatal(err)
+	}
 	l, err := load(fixtureDir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return buildGraph(l, newMarkerSet(l.module, fixtureMarkers, externalMarkers, spawners)), l
+	return buildGraph(l, ms), l
 }
 
 // classifyFixtures classifies one stream that ran each named test once, in
@@ -43,7 +38,7 @@ func classifyFixtures(t *testing.T, g *graph, l *loaded, tests ...[2]string) []p
 	t.Helper()
 	var pkgs []gotestjson.Package
 	for _, pt := range tests {
-		pkgs = append(pkgs, gotestjson.Package{ImportPath: fixtureModule + "/" + pt[0], Tests: []gotestjson.Test{{Name: pt[1]}}})
+		pkgs = append(pkgs, gotestjson.Package{ImportPath: fixtureModule + "/" + pt[0], Tests: []gotestjson.Test{{Name: pt[1], Verdict: gotestjson.Pass}}})
 	}
 	shapes, err := classify(g, l, pkgs)
 	if err != nil {
@@ -69,7 +64,7 @@ func TestClassifiesEachFixtureByWhatItTouches(t *testing.T) {
 		{"localnamedlikemarker", "TestLocalsSpelledLikeMarkersTouchNothing", "-", layerUnit},
 		{"helpernamedlikemarker", "TestHelpersNamedLikeMarkersTouchNothing", "-", layerUnit},
 		{"storeopen", "TestOpenTouchesTheStore", "store", layerIntegration},
-		{"storethroughinterface", "TestAppOpenCarriesTheStore", "store", layerIntegration},
+		{"storethroughinterface", "TestTheConstructorCarriesTheStore", "store", layerIntegration},
 		{"storethroughinterface", "TestAnAppOnAMemoryStoreTouchesNothing", "-", layerUnit},
 		{"programconstant", "TestGitNamedByAConstantIsGit", "git", layerIntegration},
 		{"programconstant", "TestAPathEndingInGitIsGit", "git", layerIntegration},
@@ -100,7 +95,15 @@ func TestClassifiesEachFixtureByWhatItTouches(t *testing.T) {
 		{"programfromacall", "TestAProgramNamedByACallIsUnresolved", "proc", layerIntegration},
 		{"escapedalloc", "TestAProgramFilledThroughAPointerIsUnresolved", "proc", layerIntegration},
 		{"interfacevarininit", "TestAClockAnInitFunctionBuiltReadsTheClock", "clock", layerIntegration},
-		{"initreadsafile", "TestReadingWhatInitReadTouchesNothing", "-", layerUnit},
+		{"initreadsafile", "TestUsingWhatInitReadReachesTheRead", "fs", layerIntegration},
+		{"openedatinit", "TestAMethodOfAVariableOpenedAtInitTouchesTheFilesystem", "fs", layerIntegration},
+		{"funcmap", "TestAMapOfFuncsReachesEveryEntry", "git", layerIntegration},
+		{"funcinstruct", "TestAFuncInAStructFieldIsReached", "fs", layerIntegration},
+		{"installedhook", "TestAHookAHelperInstalledRunsGit", "git", layerIntegration},
+		{"externalinterface", "TestAnHTTPClientBehindAnInterfaceTouchesTheNetwork", "network", layerIntegration},
+		{"externalvarhandedon", "TestUsingAVariableAnInitHandsOnTouchesNothing", "-", layerUnit},
+		{"environgit", "TestEnvGitIsGit", "git", layerIntegration},
+		{"doltload", "TestLoadingADoltDatabaseTouchesTheStore", "store", layerIntegration},
 	} {
 		t.Run(c.pkg+"/"+c.test, func(t *testing.T) {
 			s := classifyFixtures(t, g, l, [2]string{c.pkg, c.test})[0].tests[0]
@@ -123,18 +126,28 @@ func TestAWitnessChainIsTheCallsFromTheTestToTheTouch(t *testing.T) {
 	}{
 		// The store is reached through app.Store; the chain runs through
 		// the constructor that built it, and stops at the marker.
-		{"storethroughinterface", "TestAppOpenCarriesTheStore", touchStore,
-			"storethroughinterface.TestAppOpenCarriesTheStore → internal/app.Open → internal/store.Open"},
-		// The program "git" is resolved through both helpers' parameters.
+		{"storethroughinterface", "TestTheConstructorCarriesTheStore", touchStore,
+			"storethroughinterface.TestTheConstructorCarriesTheStore → internal/app.New → internal/store.Open"},
+		// The program "git" is resolved through both helpers' parameters,
+		// and named on the spawning call.
 		{"gitthroughtwohelpers", "TestGitThroughTwoHelpersIsGit", touchGit,
-			"gitthroughtwohelpers.TestGitThroughTwoHelpersIsGit → gitthroughtwohelpers.run → gitthroughtwohelpers.runIn → os/exec.Command"},
+			"gitthroughtwohelpers.TestGitThroughTwoHelpersIsGit → gitthroughtwohelpers.run → gitthroughtwohelpers.runIn → os/exec.Command (git)"},
+		{"programconstant", "TestAnyOtherProgramIsAnotherProcess", touchProc,
+			"programconstant.TestAnyOtherProgramIsAnotherProcess → os/exec.Command (make)"},
 		// The variable's initializer resolves the program its constructor
 		// carries into the closure it builds.
 		{"callbuiltinitializer", "TestAHookBuiltByACallRunsGit", touchGit,
-			"callbuiltinitializer.TestAHookBuiltByACallRunsGit → callbuiltinitializer.Run → callbuiltinitializer.hook → callbuiltinitializer.gitHook → callbuiltinitializer.gitHook$1 → os/exec.Command"},
+			"callbuiltinitializer.TestAHookBuiltByACallRunsGit → callbuiltinitializer.Run → callbuiltinitializer.hook → callbuiltinitializer.gitHook → callbuiltinitializer.gitHook$1 → os/exec.Command (git)"},
+		// The hook's slice is the init function that calls install, which
+		// resolves install's parameter.
+		{"installedhook", "TestAHookAHelperInstalledRunsGit", touchGit,
+			"installedhook.TestAHookAHelperInstalledRunsGit → installedhook.Run → installedhook.hook → installedhook.init#1 → installedhook.install → installedhook.install$1 → os/exec.Command (git)"},
+		// db's slice calls openStore.
+		{"openedatinit", "TestAMethodOfAVariableOpenedAtInitTouchesTheFilesystem", touchFS,
+			"openedatinit.TestAMethodOfAVariableOpenedAtInitTouchesTheFilesystem → openedatinit.db → openedatinit.openStore → os.Open"},
 		// No constant names the program where it enters the spawn.
 		{"escapedalloc", "TestAProgramFilledThroughAPointerIsUnresolved", touchProc,
-			"escapedalloc.TestAProgramFilledThroughAPointerIsUnresolved → os/exec.Command → (program unresolved)"},
+			"escapedalloc.TestAProgramFilledThroughAPointerIsUnresolved → os/exec.Command (program unresolved)"},
 		{"programconstant", "TestASpawnerHandedOnAsAValueIsAnotherProcess", touchProc,
 			"programconstant.TestASpawnerHandedOnAsAValueIsAnotherProcess → os/exec.Command (program unresolved)"},
 	} {
@@ -157,7 +170,7 @@ func TestAPackagesInitializerAndTestMainTouchesAreItsRowsNotItsTests(t *testing.
 		[2]string{"helperprocess", "TestHelper"},
 		[2]string{"network", "TestAListenerTouchesTheNetwork"},
 		[2]string{"testmainchildstore", "TestAHookTestMainReplacesStillTouchesTheFilesystem"},
-		[2]string{"initreadsafile", "TestReadingWhatInitReadTouchesNothing"},
+		[2]string{"initreadsafile", "TestUsingWhatInitReadReachesTheRead"},
 	)
 	// reexeccli's TestMain calls main; helperprocess's only runs the tests;
 	// network has none; testmainchildstore's runs hook, which opens a file.
@@ -212,7 +225,7 @@ func TestAMeasuredStreamPrintsTheTableAndTheListing(t *testing.T) {
 	lines = append(lines, passing("subtestnamedlikeprogram", "TestASubtestNamedGitIsUnit", "0.5")...)
 	lines = append(lines, passing("cliinprocess", "TestRunningTheCLIInProcessIsEndToEnd", "2")...)
 	lines = append(lines, ended("skipped", "TestSkipsBeforeItTouchesTheFilesystem", "skip", "0")...)
-	code, out, errOut := runFixture(config{dir: fixtureDir, moduleMarkers: fixtureMarkers, listTests: true}, lines...)
+	code, out, errOut := runFixture(config{dir: fixtureDir, moduleMarkers: moduleMarkers, listTests: true}, lines...)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0; stderr:\n%s", code, errOut)
 	}
@@ -252,57 +265,29 @@ func refused(t *testing.T, cfg config, want string, lines ...string) {
 }
 
 func TestAMarkerThatNamesNoFunctionFailsTheRun(t *testing.T) {
-	markers := append([]marker{{"internal/store.Gone", touchStore}}, fixtureMarkers...)
+	markers := append([]markerGroup{{"internal/store", touchStore, []string{"Gone"}}}, moduleMarkers...)
 	refused(t, config{dir: fixtureDir, moduleMarkers: markers},
-		"marker "+fixtureModule+"/internal/store.Gone names no function the loaded program declares",
+		"marker "+fixtureModule+"/internal/store.Gone names nothing package "+fixtureModule+"/internal/store declares",
 		passing("network", "TestAListenerTouchesTheNetwork", "1")...)
 }
 
 func TestATestTheProgramDoesNotDeclareFailsTheRun(t *testing.T) {
-	refused(t, config{dir: fixtureDir, moduleMarkers: fixtureMarkers},
+	refused(t, config{dir: fixtureDir, moduleMarkers: moduleMarkers},
 		fixtureModule+"/network ran TestNobodyWrote, and the loaded module declares no such function",
 		passing("network", "TestNobodyWrote", "1")...)
 }
 
 func TestATestDeclaredInBothTestPackagesFailsTheRun(t *testing.T) {
-	refused(t, config{dir: fixtureDir, moduleMarkers: fixtureMarkers},
+	refused(t, config{dir: fixtureDir, moduleMarkers: moduleMarkers},
 		fixtureModule+"/declaredtwice declares TestDeclaredTwice in both its package and its external test package",
 		passing("declaredtwice", "TestDeclaredTwice", "1")...)
 }
 
-// TestEveryMarkerNamesADeclaredFunction loads the packages markers.go names
-// from this module and fails on an entry that names nothing: a renamed
-// opener, or a dependency that dropped a function, would otherwise count no
-// touch, and its tests would read as unit.
+// TestEveryMarkerNamesADeclaredFunction holds this module to the run's own
+// check: a renamed opener, or a dependency that dropped a function, would
+// otherwise count no touch, and its tests would read as unit.
 func TestEveryMarkerNamesADeclaredFunction(t *testing.T) {
-	var patterns []string
-	add := func(p string) {
-		if !slices.Contains(patterns, p) {
-			patterns = append(patterns, p)
-		}
-	}
-	for _, m := range moduleMarkers {
-		add("./" + packageOf(m.name))
-	}
-	for _, name := range fullNames("", nil) {
-		add(packageOf(name))
-	}
-	pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedTypes | packages.NeedModule, Dir: filepath.Join("..", "..")}, patterns...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := loadErrors(pkgs); err != nil {
-		t.Fatal(err)
-	}
-	module := ""
-	var declared []*types.Package
-	for _, p := range pkgs {
-		declared = append(declared, p.Types)
-		if p.Module != nil && p.Module.Main {
-			module = p.Module.Path
-		}
-	}
-	for _, name := range unresolved(fullNames(module, moduleMarkers), declared) {
-		t.Errorf("marker %s names no function its package declares", name)
+	if _, err := resolveMarkers(filepath.Join("..", ".."), moduleMarkers); err != nil {
+		t.Error(err)
 	}
 }

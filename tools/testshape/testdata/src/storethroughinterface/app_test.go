@@ -11,10 +11,10 @@ type memStore struct{}
 
 func (memStore) Get() string { return "" }
 
-// The store is reached through the interface; app.Open, which built it,
+// The store is reached through the interface; app.New, which built it,
 // carries the touch.
-func TestAppOpenCarriesTheStore(t *testing.T) {
-	ap, err := app.Open("unused")
+func TestTheConstructorCarriesTheStore(t *testing.T) {
+	ap, err := app.New("unused")
 	if err != nil {
 		t.Fatal(err)
 	}

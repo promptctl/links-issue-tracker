@@ -31,36 +31,29 @@ var touchNames = [numTouches]string{"network", "fs", "clock", "git", "store", "p
 
 func (t touch) String() string { return touchNames[t] }
 
-// marker is one function whose call is a touch.
-type marker struct {
-	name  string
+// decl is one declaration of one package: its import path and its name
+// within the package.
+type decl struct{ pkg, name string }
+
+// markerGroup is functions of one package whose call is one touch.
+type markerGroup struct {
+	pkg   string
 	touch touch
+	names []string
 }
 
 // spawner is one function that starts the program its argument names.
 type spawner struct {
-	name    string
+	fn      decl
 	program int // the index of the argument naming the program
 }
 
-// markerSet is the marker data resolved against one module: every name full.
+// markerSet is the marker data checked against the packages it names, every
+// name full. Only resolveMarkers builds one.
 type markerSet struct {
+	module   string
 	touches  map[string]touch
 	spawners map[string]int
-}
-
-func newMarkerSet(module string, moduleMarkers, external []marker, spawns []spawner) markerSet {
-	ms := markerSet{touches: make(map[string]touch), spawners: make(map[string]int)}
-	for _, m := range moduleMarkers {
-		ms.touches[qualify(module, m.name)] = m.touch
-	}
-	for _, m := range external {
-		ms.touches[m.name] = m.touch
-	}
-	for _, s := range spawns {
-		ms.spawners[s.name] = s.program
-	}
-	return ms
 }
 
 // program is what a spawn's program argument resolved to. Each kind decides
@@ -69,17 +62,17 @@ type program interface {
 	// touch is the spawn's touch; self is the package's spawn of its own
 	// test binary.
 	touch(self touch) touch
-	// note is what the witness adds after the spawning call.
-	note() []string
+	// String is the program as its witness names it.
+	String() string
 }
 
-// gitProgram is git, named "git" or by a path ending in /git.
+// gitProgram is git, named so or by a path ending in /git.
 type gitProgram struct{ name string }
 
 // namedProgram is any other program, named by a constant.
 type namedProgram struct{ name string }
 
-// selfProgram is this test binary (os.Executable, os.Args[0]).
+// selfProgram is this test binary (selfExecutable, selfArgs[0]).
 type selfProgram struct{}
 
 // unresolvedProgram is a program no constant names where it enters: a
@@ -91,17 +84,23 @@ func (gitProgram) touch(touch) touch        { return touchGit }
 func (namedProgram) touch(touch) touch      { return touchProc }
 func (selfProgram) touch(self touch) touch  { return self }
 func (unresolvedProgram) touch(touch) touch { return touchProc }
-func (gitProgram) note() []string           { return nil }
-func (namedProgram) note() []string         { return nil }
-func (selfProgram) note() []string          { return nil }
-func (unresolvedProgram) note() []string    { return []string{unresolvedNote} }
+func (p gitProgram) String() string         { return p.name }
+func (p namedProgram) String() string       { return p.name }
+func (selfProgram) String() string          { return "this test binary" }
+func (unresolvedProgram) String() string    { return "program unresolved" }
 
-const unresolvedNote = "(program unresolved)"
+// spawnTail is a spawn's calls with its program named on the spawning call,
+// the last of them.
+func spawnTail(tail []string, p program) []string {
+	out := slices.Clone(tail)
+	out[len(out)-1] += " (" + p.String() + ")"
+	return out
+}
 
-// spawn is a process a function starts, its program resolved.
+// spawn is a process a vertex starts, its program resolved.
 type spawn struct {
 	program program
-	tail    []string // the calls from the function to the spawning call
+	tail    []string // the calls from the vertex to the spawning call
 }
 
 // entry is how a program enters a function from outside it.
@@ -133,8 +132,8 @@ type hole struct {
 // follows; nothing can be both.
 type edge interface{ isEdge() }
 
-// follow enters a module function, or a package variable's initializer
-// value. asValue: the function was taken as a value, not called.
+// follow enters a module function or a package variable. asValue: the
+// function was taken as a value, not called.
 type follow struct {
 	to      ssa.Member
 	asValue bool
@@ -170,25 +169,16 @@ type helperCall struct {
 func (spawnerCall) isCallSite() {}
 func (helperCall) isCallSite()  {}
 
-// node is one vertex's facts: a module function's, read from its SSA once,
-// or a package variable's, read from the values its initializer stores.
+// node is one vertex's facts, read once from its instructions: a module
+// function's body, or the slice of the package initializer that computes a
+// package variable.
 type node struct {
-	// at is the function whose values the node's instructions are: the
-	// function itself, or the initializer that stores the variable.
-	at       *ssa.Function
 	edges    []edge
 	calls    []callSite
 	closures []*ssa.MakeClosure
 	cmdPaths []ssa.Value // values stored into an exec.Cmd's Path
 	spawns   []spawn
 	holes    []hole
-}
-
-// initStore is one store into a package variable made by its package's
-// initializer.
-type initStore struct {
-	fn  *ssa.Function
-	val ssa.Value
 }
 
 // graph is the module's vertices and their edges: computed once from the
@@ -198,20 +188,16 @@ type graph struct {
 	module  string
 	markers markerSet
 	nodes   map[ssa.Member]*node
-	inits   map[*ssa.Global][]initStore
+	// held is, per package variable, the values its initializer stores into
+	// it whole.
+	held map[*ssa.Global][]ssa.Value
 }
 
-// buildGraph reads every package initializer's stores, every seam variable's
-// initializer value, and every module function, then resolves spawned
-// programs through helpers until no new spawner appears.
+// buildGraph reads every module function and every package variable's
+// initializer slice, then resolves spawned programs through helpers until no
+// new spawner appears.
 func buildGraph(l *loaded, ms markerSet) *graph {
-	g := &graph{module: l.module, markers: ms, nodes: make(map[ssa.Member]*node), inits: make(map[*ssa.Global][]initStore)}
-	for _, p := range l.prog.AllPackages() {
-		if inModule(g.module, p.Pkg.Path()) {
-			g.readInitializer(p)
-		}
-	}
-	var order []ssa.Member
+	g := &graph{module: l.module, markers: ms, nodes: make(map[ssa.Member]*node), held: make(map[*ssa.Global][]ssa.Value)}
 	var fns []*ssa.Function
 	for fn := range ssautil.AllFunctions(l.prog) {
 		if g.walkable(fn) {
@@ -220,22 +206,28 @@ func buildGraph(l *loaded, ms markerSet) *graph {
 	}
 	// A stable order, so every witness chain is the same on every run.
 	sort.Slice(fns, func(i, j int) bool { return memberLess(fns[i], fns[j]) })
-	for _, fn := range fns {
-		g.nodes[fn] = nil
-	}
+	initSlices := g.readInitializers(l.prog, writers(fns))
 	var globals []*ssa.Global
-	for gl := range g.inits {
-		if isSeam(gl) {
-			globals = append(globals, gl)
-		}
+	for gl := range initSlices {
+		globals = append(globals, gl)
 	}
 	sort.Slice(globals, func(i, j int) bool { return memberLess(globals[i], globals[j]) })
 	for _, gl := range globals {
 		g.nodes[gl] = nil
 	}
+	for _, fn := range fns {
+		g.nodes[fn] = nil
+	}
+	var order []ssa.Member
 	// Reading a vertex can materialize a method wrapper nothing else named;
 	// it is read in turn, so every edge's target has a node.
-	enqueue := func(n *node) {
+	read := func(v ssa.Member, instrs []ssa.Instruction) {
+		n := &node{}
+		for _, instr := range instrs {
+			g.readInstr(n, instr)
+		}
+		g.nodes[v] = n
+		order = append(order, v)
 		for _, e := range n.edges {
 			if f, ok := e.(follow); ok {
 				if _, seen := g.nodes[f.to]; !seen {
@@ -246,16 +238,10 @@ func buildGraph(l *loaded, ms markerSet) *graph {
 		}
 	}
 	for _, gl := range globals {
-		n := g.readValue(gl)
-		g.nodes[gl] = n
-		order = append(order, gl)
-		enqueue(n)
+		read(gl, initSlices[gl])
 	}
 	for i := 0; i < len(fns); i++ {
-		n := g.readFunc(fns[i])
-		g.nodes[fns[i]] = n
-		order = append(order, fns[i])
-		enqueue(n)
+		read(fns[i], body(fns[i]))
 	}
 	g.resolveSpawns(order)
 	return g
@@ -268,43 +254,194 @@ func memberLess(a, b ssa.Member) bool {
 	return a.String() < b.String()
 }
 
-// readInitializer records every store into a package variable that p's
-// initializer makes: the package's init function, which holds the
-// variables' initializers, and the init functions it calls, which the
-// package declares.
-func (g *graph) readInitializer(p *ssa.Package) {
-	init := p.Func("init")
-	initFns := []*ssa.Function{init}
-	for _, b := range init.Blocks {
-		for _, instr := range b.Instrs {
-			if c, ok := instr.(*ssa.Call); ok {
-				if callee := c.Call.StaticCallee(); callee != nil && callee.Pkg == p {
-					initFns = append(initFns, callee)
+// body is fn's instructions, in block order.
+func body(fn *ssa.Function) []ssa.Instruction {
+	var instrs []ssa.Instruction
+	for _, b := range fn.Blocks {
+		instrs = append(instrs, b.Instrs...)
+	}
+	return instrs
+}
+
+// rootOf is the variable or allocation whose memory v reaches into: through
+// field and element addresses, slicing, and loads of the reference a
+// variable holds.
+func rootOf(v ssa.Value) ssa.Value {
+	for {
+		switch x := v.(type) {
+		case *ssa.FieldAddr:
+			v = x.X
+		case *ssa.IndexAddr:
+			v = x.X
+		case *ssa.Slice:
+			v = x.X
+		case *ssa.UnOp:
+			if x.Op != token.MUL {
+				return v
+			}
+			v = x.X
+		default:
+			return v
+		}
+	}
+}
+
+// writesInto are, per variable or allocation, the instructions of instrs
+// that can write into its memory: a store or map update through it, and a
+// call handed a reference into it, which can fill it.
+func writesInto(instrs []ssa.Instruction) map[ssa.Value][]ssa.Instruction {
+	w := make(map[ssa.Value][]ssa.Instruction)
+	for _, instr := range instrs {
+		switch instr := instr.(type) {
+		case *ssa.Store:
+			w[rootOf(instr.Addr)] = append(w[rootOf(instr.Addr)], instr)
+		case *ssa.MapUpdate:
+			w[rootOf(instr.Map)] = append(w[rootOf(instr.Map)], instr)
+		case ssa.CallInstruction:
+			for _, a := range instr.Common().Args {
+				if refersInto(a.Type()) {
+					w[rootOf(a)] = append(w[rootOf(a)], instr)
 				}
 			}
 		}
 	}
-	for _, fn := range initFns {
-		for _, b := range fn.Blocks {
-			for _, instr := range b.Instrs {
-				if st, ok := instr.(*ssa.Store); ok {
-					if gl, ok := st.Addr.(*ssa.Global); ok {
-						g.inits[gl] = append(g.inits[gl], initStore{fn: fn, val: st.Val})
+	return w
+}
+
+// refersInto reports whether a value of t refers to memory it does not
+// hold: a pointer, map, slice or channel, through which a callee writes.
+func refersInto(t types.Type) bool {
+	switch t.Underlying().(type) {
+	case *types.Pointer, *types.Map, *types.Slice, *types.Chan:
+		return true
+	}
+	return false
+}
+
+// writers are, per module function, the package variables it writes or a
+// function it statically calls writes, through as many calls as it takes.
+func writers(fns []*ssa.Function) map[*ssa.Function]map[*ssa.Global]bool {
+	ws := make(map[*ssa.Function]map[*ssa.Global]bool)
+	callees := make(map[*ssa.Function][]*ssa.Function)
+	for _, fn := range fns {
+		instrs := body(fn)
+		ws[fn] = make(map[*ssa.Global]bool)
+		for v := range writesInto(instrs) {
+			if gl, ok := v.(*ssa.Global); ok {
+				ws[fn][gl] = true
+			}
+		}
+		for _, instr := range instrs {
+			if c, ok := instr.(ssa.CallInstruction); ok {
+				if callee := c.Common().StaticCallee(); callee != nil {
+					callees[fn] = append(callees[fn], callee)
+				}
+			}
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, fn := range fns {
+			for _, callee := range callees[fn] {
+				for gl := range ws[callee] {
+					if !ws[fn][gl] {
+						ws[fn][gl], changed = true, true
 					}
 				}
 			}
 		}
 	}
+	return ws
 }
 
-// isSeam reports whether loading gl can run code: it holds a function or an
-// interface value.
-func isSeam(gl *ssa.Global) bool {
-	switch gl.Type().(*types.Pointer).Elem().Underlying().(type) {
-	case *types.Signature, *types.Interface:
-		return true
+// declares reports whether the module declares the package variable gl.
+func (g *graph) declares(gl *ssa.Global) bool { return inModule(g.module, gl.Pkg.Pkg.Path()) }
+
+// isPackageInit reports whether fn is a package's initializer.
+func isPackageInit(fn *ssa.Function) bool {
+	return fn.Pkg != nil && fn == fn.Pkg.Func("init")
+}
+
+// readInitializers is the one reader of what the module's package
+// initializers store. For each package variable it is the slice of an
+// initializer that computes the variable: the writes into it, every value
+// they depend on, followed back through operands, and every write into an
+// allocation in the slice. A write is a store or map update through the
+// variable, a call handed a reference into it, or a call of a function that
+// writes it. Only the module's variables have slices.
+// The slice over-reaches rather than falls short: what it calls or takes as
+// a value is reachable from every load of the variable, as the code that
+// made the value. Another package's initializer, which an initializer calls,
+// is that package's, and is read as its own.
+func (g *graph) readInitializers(prog *ssa.Program, ws map[*ssa.Function]map[*ssa.Global]bool) map[*ssa.Global][]ssa.Instruction {
+	var inits []*ssa.Function
+	for _, p := range prog.AllPackages() {
+		if inModule(g.module, p.Pkg.Path()) {
+			inits = append(inits, p.Func("init"))
+		}
 	}
-	return false
+	sort.SliceStable(inits, func(i, j int) bool { return inits[i].Pkg.Pkg.Path() < inits[j].Pkg.Pkg.Path() })
+	out := make(map[*ssa.Global][]ssa.Instruction)
+	for _, init := range inits {
+		instrs := body(init)
+		w := writesInto(instrs)
+		roots := make(map[*ssa.Global][]ssa.Instruction)
+		for v, writes := range w {
+			if gl, ok := v.(*ssa.Global); ok && g.declares(gl) {
+				roots[gl] = append(roots[gl], writes...)
+			}
+		}
+		for _, instr := range instrs {
+			if st, ok := instr.(*ssa.Store); ok {
+				if gl, ok := st.Addr.(*ssa.Global); ok {
+					g.held[gl] = append(g.held[gl], st.Val)
+				}
+			}
+			c, ok := instr.(ssa.CallInstruction)
+			if !ok {
+				continue
+			}
+			if callee := c.Common().StaticCallee(); callee != nil && !isPackageInit(callee) {
+				for gl := range ws[callee] {
+					if g.declares(gl) {
+						roots[gl] = append(roots[gl], instr)
+					}
+				}
+			}
+		}
+		for gl, rs := range roots {
+			in := make(map[ssa.Instruction]bool)
+			var add func(ssa.Instruction)
+			add = func(instr ssa.Instruction) {
+				if in[instr] {
+					return
+				}
+				in[instr] = true
+				for _, op := range instr.Operands(nil) {
+					if v, ok := (*op).(ssa.Instruction); ok {
+						add(v)
+					}
+				}
+				switch a := instr.(type) {
+				case *ssa.Alloc, *ssa.MakeMap, *ssa.MakeSlice, *ssa.MakeChan:
+					for _, wr := range w[a.(ssa.Value)] {
+						add(wr)
+					}
+				}
+			}
+			for _, r := range rs {
+				add(r)
+			}
+			// In the initializer's order, so the node reads the same on every
+			// run.
+			for _, instr := range instrs {
+				if in[instr] {
+					out[gl] = append(out[gl], instr)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // declaredIn is the import path of the package that declares fn: a wrapper's
@@ -344,18 +481,19 @@ func fullName(fn *ssa.Function) string {
 }
 
 // markerOf is the touch reaching fn makes, if fn is a marker: a listed
-// function, an external spawner reached as a value, or a main package's main.
+// function, an external spawner reached as a value, or the main function of
+// a module main package.
 func (g *graph) markerOf(fn *ssa.Function) (reachTouch, bool) {
 	name := fullName(fn)
 	if t, ok := g.markers.touches[name]; ok {
 		return reachTouch{t, name}, true
 	}
 	if _, ok := g.markers.spawners[name]; ok {
-		return reachTouch{touchProc, name + " " + unresolvedNote}, true
+		return reachTouch{touchProc, spawnTail([]string{name}, unresolvedProgram{})[0]}, true
 	}
 	if f, ok := fn.Object().(*types.Func); ok && f.Name() == "main" && f.Pkg() != nil &&
 		f.Pkg().Name() == "main" && f.Parent() == f.Pkg().Scope() && inModule(g.module, f.Pkg().Path()) {
-		return reachTouch{touchCLI, name}, true
+		return reachTouch{mainTouch, name}, true
 	}
 	return reachTouch{}, false
 }
@@ -415,49 +553,6 @@ func onlyLoaded(v ssa.Value) bool {
 	return true
 }
 
-// readFunc is fn's node: every edge out of its body and the call sites that
-// can name a spawned program.
-func (g *graph) readFunc(fn *ssa.Function) *node {
-	n := &node{at: fn}
-	for _, b := range fn.Blocks {
-		for _, instr := range b.Instrs {
-			g.readInstr(n, instr)
-		}
-	}
-	return n
-}
-
-// readValue is gl's node: what its package initializer stored in it, and
-// the instructions that computed it, so `var now = makeClock()` reaches
-// makeClock and whatever makeClock builds.
-func (g *graph) readValue(gl *ssa.Global) *node {
-	stores := g.inits[gl]
-	n := &node{at: stores[0].fn}
-	seen := make(map[ssa.Instruction]bool)
-	var read func(instr ssa.Instruction)
-	read = func(instr ssa.Instruction) {
-		if seen[instr] {
-			return
-		}
-		seen[instr] = true
-		g.readInstr(n, instr)
-		for _, op := range instr.Operands(nil) {
-			if computed, ok := (*op).(ssa.Instruction); ok {
-				read(computed)
-			}
-		}
-	}
-	for _, s := range stores {
-		switch v := s.val.(type) {
-		case *ssa.Function:
-			g.addEdge(n, v, true)
-		case ssa.Instruction:
-			read(v)
-		}
-	}
-	return n
-}
-
 // readInstr adds instr's edges and call sites to n.
 func (g *graph) readInstr(n *node, instr ssa.Instruction) {
 	var callee *ssa.Function
@@ -490,43 +585,39 @@ func (g *graph) readInstr(n *node, instr ssa.Instruction) {
 		}
 	case *ssa.MakeInterface:
 		// Whoever converts a value to an interface carries every method the
-		// value could then be called by.
-		for _, m := range g.methods(instr.Parent().Prog, instr.X.Type()) {
+		// value could then be called by: a module type's, walked, and any
+		// type's markers.
+		for _, m := range methods(instr.Parent().Prog, instr.X.Type()) {
 			g.addEdge(n, m, true)
 		}
-	case *ssa.UnOp:
-		if gl, ok := instr.X.(*ssa.Global); ok && instr.Op == token.MUL {
-			if _, ok := g.nodes[gl]; ok {
-				n.edges = append(n.edges, follow{to: gl})
-			}
-		}
 	case *ssa.Store:
-		if isCmdPath(instr.Addr) {
+		if g.isCmdPath(instr.Addr) {
 			n.cmdPaths = append(n.cmdPaths, instr.Val)
 		}
 	}
-	// Every other function this one takes as a value.
-	if _, isClosure := instr.(*ssa.MakeClosure); !isClosure {
-		for _, op := range instr.Operands(nil) {
-			if f, ok := (*op).(*ssa.Function); ok && f != callee {
-				g.addEdge(n, f, true)
+	for _, op := range instr.Operands(nil) {
+		switch v := (*op).(type) {
+		case *ssa.Function:
+			// Every other function this one takes as a value.
+			if _, isClosure := instr.(*ssa.MakeClosure); !isClosure && v != callee {
+				g.addEdge(n, v, true)
+			}
+		case *ssa.Global:
+			// A use of a package variable reaches its initializer's slice;
+			// storing into the variable whole does not read it.
+			if st, ok := instr.(*ssa.Store); ok && op == &st.Addr {
+				continue
+			}
+			if _, ok := g.nodes[v]; ok {
+				n.edges = append(n.edges, follow{to: v})
 			}
 		}
 	}
 }
 
-// methods are the module-declared methods in t's method set: those a value
-// of t converted to an interface can be called by. A type declared outside
-// the module brings none, as no call outside the module is followed.
-func (g *graph) methods(prog *ssa.Program, t types.Type) []*ssa.Function {
-	base := t
-	if p, ok := base.(*types.Pointer); ok {
-		base = p.Elem()
-	}
-	named, ok := base.(*types.Named)
-	if !ok || named.Obj().Pkg() == nil || !inModule(g.module, named.Obj().Pkg().Path()) {
-		return nil
-	}
+// methods are the methods in t's method set: those a value of t converted
+// to an interface can be called by.
+func methods(prog *ssa.Program, t types.Type) []*ssa.Function {
 	mset := prog.MethodSets.MethodSet(t)
 	var fns []*ssa.Function
 	for i := range mset.Len() {
@@ -537,8 +628,8 @@ func (g *graph) methods(prog *ssa.Program, t types.Type) []*ssa.Function {
 	return fns
 }
 
-// isCmdPath reports whether addr is the Path field of an exec.Cmd.
-func isCmdPath(addr ssa.Value) bool {
+// isCmdPath reports whether addr is the address of the field cmdPath names.
+func (g *graph) isCmdPath(addr ssa.Value) bool {
 	fa, ok := addr.(*ssa.FieldAddr)
 	if !ok {
 		return false
@@ -548,10 +639,11 @@ func isCmdPath(addr ssa.Value) bool {
 		return false
 	}
 	named, ok := st.Elem().(*types.Named)
-	if !ok || named.Obj().Pkg() == nil || named.Obj().Pkg().Path()+"."+named.Obj().Name() != cmdType {
+	if !ok || named.Obj().Pkg() == nil {
 		return false
 	}
-	return named.Underlying().(*types.Struct).Field(fa.Field).Name() == cmdPathField
+	field := named.Underlying().(*types.Struct).Field(fa.Field)
+	return (decl{named.Obj().Pkg().Path(), named.Obj().Name() + "." + field.Name()}) == cmdPath
 }
 
 // resolveSpawns resolves every spawn's program to a fixed point: a function
@@ -568,7 +660,7 @@ func (g *graph) resolveSpawns(order []ssa.Member) {
 				if f.atAddr {
 					resolve = g.resolveAddr
 				}
-				programs, slots := resolve(f.value, n.at, map[ssa.Value]bool{})
+				programs, slots := resolve(f.value, map[ssa.Value]bool{})
 				for _, p := range programs {
 					n.addSpawn(spawn{p, f.tail})
 				}
@@ -612,7 +704,7 @@ func (g *graph) flows(n *node) []flow {
 		}
 	}
 	for _, v := range n.cmdPaths {
-		fs = append(fs, flow{v, false, []string{cmdType + "." + cmdPathField}})
+		fs = append(fs, flow{v, false, []string{cmdPath.String()}})
 	}
 	return fs
 }
@@ -633,9 +725,9 @@ func (n *node) addHole(h hole) bool {
 	return true
 }
 
-// resolve is what programs v names in fn, and the slots of fn it names them
-// through. seen stops a cycle of phis.
-func (g *graph) resolve(v ssa.Value, fn *ssa.Function, seen map[ssa.Value]bool) ([]program, []slot) {
+// resolve is what programs v names, and the slots of its function it names
+// them through. seen stops a cycle of phis.
+func (g *graph) resolve(v ssa.Value, seen map[ssa.Value]bool) ([]program, []slot) {
 	if seen[v] {
 		return nil, nil
 	}
@@ -644,28 +736,28 @@ func (g *graph) resolve(v ssa.Value, fn *ssa.Function, seen map[ssa.Value]bool) 
 	case *ssa.Const:
 		if v.Value != nil && v.Value.Kind() == constant.String {
 			name := constant.StringVal(v.Value)
-			if name == "git" || strings.HasSuffix(name, "/git") {
+			if name == gitName || strings.HasSuffix(name, "/"+gitName) {
 				return []program{gitProgram{name}}, nil
 			}
 			return []program{namedProgram{name}}, nil
 		}
 	case *ssa.Parameter:
-		return nil, []slot{{viaParam, slices.Index(fn.Params, v)}}
+		return nil, []slot{{viaParam, slices.Index(v.Parent().Params, v)}}
 	case *ssa.FreeVar:
-		return nil, []slot{{viaFreeVar, slices.Index(fn.FreeVars, v)}}
+		return nil, []slot{{viaFreeVar, slices.Index(v.Parent().FreeVars, v)}}
 	case *ssa.UnOp:
 		if v.Op == token.MUL {
-			return g.resolveAddr(v.X, fn, seen)
+			return g.resolveAddr(v.X, seen)
 		}
 	case *ssa.ChangeType:
-		return g.resolve(v.X, fn, seen)
+		return g.resolve(v.X, seen)
 	case *ssa.Convert:
-		return g.resolve(v.X, fn, seen)
+		return g.resolve(v.X, seen)
 	case *ssa.Phi:
 		var ps []program
 		var ss []slot
 		for _, e := range v.Edges {
-			p, s := g.resolve(e, fn, seen)
+			p, s := g.resolve(e, seen)
 			ps, ss = append(ps, p...), append(ss, s...)
 		}
 		return ps, ss
@@ -673,10 +765,10 @@ func (g *graph) resolve(v ssa.Value, fn *ssa.Function, seen map[ssa.Value]bool) 
 		if call, ok := v.Tuple.(*ssa.Call); ok && v.Index == 0 {
 			if callee := call.Call.StaticCallee(); callee != nil {
 				switch fullName(callee) {
-				case selfExecutable:
+				case selfExecutable.String():
 					return []program{selfProgram{}}, nil
-				case lookPath:
-					return g.resolve(call.Call.Args[0], fn, seen)
+				case lookPath.String():
+					return g.resolve(call.Call.Args[0], seen)
 				}
 			}
 		}
@@ -684,13 +776,13 @@ func (g *graph) resolve(v ssa.Value, fn *ssa.Function, seen map[ssa.Value]bool) 
 	return []program{unresolvedProgram{}}, nil
 }
 
-// resolveAddr is what programs the variable at addr holds in fn.
-func (g *graph) resolveAddr(addr ssa.Value, fn *ssa.Function, seen map[ssa.Value]bool) ([]program, []slot) {
+// resolveAddr is what programs the variable at addr holds.
+func (g *graph) resolveAddr(addr ssa.Value, seen map[ssa.Value]bool) ([]program, []slot) {
 	switch a := addr.(type) {
 	case *ssa.Alloc:
-		// A local whose address never leaves fn, but to closures that only
-		// read it, holds what fn stores in it; one whose address escapes can
-		// be filled anywhere.
+		// A local whose address never leaves its function, but to closures
+		// that only read it, holds what the function stores in it; one whose
+		// address escapes can be filled anywhere.
 		var ps []program
 		var ss []slot
 		for _, r := range *a.Referrers() {
@@ -699,7 +791,7 @@ func (g *graph) resolveAddr(addr ssa.Value, fn *ssa.Function, seen map[ssa.Value
 				if r.Addr != a {
 					return []program{unresolvedProgram{}}, nil
 				}
-				p, s := g.resolve(r.Val, fn, seen)
+				p, s := g.resolve(r.Val, seen)
 				ps, ss = append(ps, p...), append(ss, s...)
 			case *ssa.MakeClosure:
 				if !onlyRead(r, a) {
@@ -715,23 +807,23 @@ func (g *graph) resolveAddr(addr ssa.Value, fn *ssa.Function, seen map[ssa.Value
 		}
 	case *ssa.FreeVar:
 		if onlyLoaded(a) {
-			return nil, []slot{{viaCaptured, slices.Index(fn.FreeVars, a)}}
+			return nil, []slot{{viaCaptured, slices.Index(a.Parent().FreeVars, a)}}
 		}
 	case *ssa.Global:
-		// A package variable holds what its initializer stored.
+		// A package variable holds what its initializer stored in it whole.
 		var ps []program
-		for _, s := range g.inits[a] {
-			p, _ := g.resolve(s.val, s.fn, seen)
+		for _, v := range g.held[a] {
+			p, _ := g.resolve(v, seen)
 			ps = append(ps, p...)
 		}
 		if len(ps) > 0 {
 			return ps, nil
 		}
 	case *ssa.IndexAddr:
-		// os.Args[0] is this binary.
+		// selfArgs[0] is this binary.
 		if load, ok := a.X.(*ssa.UnOp); ok && load.Op == token.MUL {
 			if gl, ok := load.X.(*ssa.Global); ok && gl.Object() != nil && gl.Object().Pkg() != nil &&
-				gl.Object().Pkg().Path()+"."+gl.Object().Name() == selfArgs {
+				(decl{gl.Object().Pkg().Path(), gl.Object().Name()}) == selfArgs {
 				if c, ok := a.Index.(*ssa.Const); ok && c.Int64() == 0 {
 					return []program{selfProgram{}}, nil
 				}

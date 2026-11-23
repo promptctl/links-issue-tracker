@@ -19,8 +19,9 @@
 //
 // Test success is not this tool's job: the step runs under bash's pipefail, so
 // `go test`'s own exit code remains the one enforcer of the suite being green.
-// [LAW:single-enforcer] testbudget exits nonzero only for a blown budget or a
-// stream it could not read.
+// [LAW:single-enforcer] testbudget exits nonzero only for a blown budget, a
+// package that reported no elapsed figure to check, or a stream it could not
+// read.
 package main
 
 import (
@@ -46,9 +47,11 @@ type (
 	testResult    = gotestjson.Test
 )
 
+// violation is a package whose budget its run did not keep: it ran over, or
+// it reported no elapsed figure to check.
 type violation struct {
 	ImportPath string
-	Elapsed    time.Duration
+	Elapsed    gotestjson.Elapsed
 	Budget     time.Duration
 	Ran        int          // top-level tests the package ran
 	Slowest    []testResult // its slowestListed slowest, slowest first
@@ -75,12 +78,13 @@ func consume(r io.Reader, w io.Writer) ([]packageResult, error) {
 // enforce checks every result against its budget — a listed number or the
 // default, so no package is ever exempt and a new slow package cannot creep in
 // unnamed. [LAW:dataflow-not-control-flow] the check always runs; only the
-// budget value varies.
+// budget value varies. A package with no elapsed figure fails it: a budget
+// nobody could check is not a budget kept. [LAW:no-silent-failure]
 func enforce(results []packageResult, budgets map[string]time.Duration, def time.Duration) []violation {
 	var viols []violation
 	for _, r := range results {
 		budget := budgetFor(r.ImportPath, budgets, def)
-		if r.Elapsed > budget {
+		if d, ok := r.Elapsed.Figure(); !ok || d > budget {
 			viols = append(viols, violation{r.ImportPath, r.Elapsed, budget, len(r.Tests), slowest(r.Tests)})
 		}
 	}
@@ -101,11 +105,19 @@ func slowest(tests []testResult) []testResult {
 }
 
 // printTable renders every package's elapsed against its budget, slowest
-// first. It prints on success too: each CI log is the calibration record the
-// next re-baseline of budgets.go reads its numbers from.
+// first, after the packages with no figure. It prints on success too: each CI
+// log is the calibration record the next re-baseline of budgets.go reads its
+// numbers from.
 func printTable(w io.Writer, results []packageResult, budgets map[string]time.Duration, def time.Duration) {
 	sorted := append([]packageResult(nil), results...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Elapsed > sorted[j].Elapsed })
+	sort.SliceStable(sorted, func(i, j int) bool {
+		di, iok := sorted[i].Elapsed.Figure()
+		dj, jok := sorted[j].Elapsed.Figure()
+		if iok != jok {
+			return !iok
+		}
+		return di > dj
+	})
 	fmt.Fprintf(w, "\ntestbudget: per-package wall clock vs budget (budgets: tools/testbudget/budgets.go)\n")
 	for _, r := range sorted {
 		// A failed package's elapsed is however far it got before dying, not
@@ -116,17 +128,32 @@ func printTable(w io.Writer, results []packageResult, budgets map[string]time.Du
 			note = "  [FAILED — not a calibration point]"
 		}
 		budget := budgetFor(r.ImportPath, budgets, def)
-		fmt.Fprintf(w, "%8.1fs / %4ds  %s%s\n", r.Elapsed.Seconds(), int(budget.Seconds()), r.ImportPath, note)
+		fmt.Fprintf(w, "%9s / %4ds  %s%s\n", figure(r.Elapsed), int(budget.Seconds()), r.ImportPath, note)
 	}
+}
+
+// figure is an elapsed figure at the table's precision, or "no figure".
+func figure(e gotestjson.Elapsed) string {
+	d, ok := e.Figure()
+	if !ok {
+		return "no figure"
+	}
+	return fmt.Sprintf("%.1fs", d.Seconds())
 }
 
 // violationLine names the package, the overage, and where the budget lives —
 // everything the person whose build just went red needs, in one line.
 func violationLine(v violation) string {
-	over := v.Elapsed - v.Budget
+	d, ok := v.Elapsed.Figure()
+	if !ok {
+		return fmt.Sprintf(
+			"test runtime budget unchecked: %s reported no elapsed figure, so its %ds budget could not be checked — see tools/testbudget/budgets.go",
+			v.ImportPath, int(v.Budget.Seconds()))
+	}
+	over := d - v.Budget
 	return fmt.Sprintf(
 		"test runtime budget exceeded: %s took %.1fs, budget is %ds (over by %.1fs, +%.0f%%) — see tools/testbudget/budgets.go before raising the number",
-		v.ImportPath, v.Elapsed.Seconds(), int(v.Budget.Seconds()),
+		v.ImportPath, d.Seconds(), int(v.Budget.Seconds()),
 		over.Seconds(), 100*float64(over)/float64(v.Budget))
 }
 

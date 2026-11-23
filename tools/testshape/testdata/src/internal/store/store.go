@@ -12,5 +12,11 @@ func Open(dir string) (*Store, error) {
 	return &Store{dir}, os.MkdirAll(dir, 0o755)
 }
 
+// The other openers markers.go names.
+func OpenRoutine(dir string) (*Store, error)     { return Open(dir) }
+func OpenForRead(dir string) (*Store, error)     { return Open(dir) }
+func OpenSync(dir string) (*Store, error)        { return Open(dir) }
+func OpenMaintenance(dir string) (*Store, error) { return Open(dir) }
+
 // Get reads nothing past what Open opened.
 func (s *Store) Get() string { return s.dir }

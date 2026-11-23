@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/types"
-	"sort"
+	"slices"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -30,9 +30,6 @@ type loaded struct {
 	// compiles it (with its _test.go files) and its external _test package,
 	// whichever exist.
 	tests map[string][]*ssa.Package
-	// types are every package of the program, the module's and its
-	// dependencies', as go/types declares them.
-	types []*types.Package
 }
 
 // load is the one read of the module: go list, the type checker and the SSA
@@ -50,15 +47,9 @@ func load(dir string, buildFlags []string) (*loaded, error) {
 	if err := loadErrors(pkgs); err != nil {
 		return nil, err
 	}
-	module := ""
-	for _, p := range pkgs {
-		if p.Module != nil && p.Module.Main {
-			module = p.Module.Path
-			break
-		}
-	}
-	if module == "" {
-		return nil, fmt.Errorf("no package in %s belongs to a main module; run testshape from the module's root", dir)
+	module, err := mainModule(dir, pkgs)
+	if err != nil {
+		return nil, err
 	}
 
 	// Only the module's functions are walked, so only the module's packages
@@ -71,7 +62,6 @@ func load(dir string, buildFlags []string) (*loaded, error) {
 			files, info = p.Syntax, p.TypesInfo
 		}
 		sp := l.prog.CreatePackage(p.Types, files, info, true)
-		l.types = append(l.types, p.Types)
 		// The test binary's own packages: the package under test recompiled
 		// with its _test.go files, and its external _test package.
 		if inModule(module, p.PkgPath) && p.ForTest != "" && (p.PkgPath == p.ForTest || p.PkgPath == p.ForTest+"_test") {
@@ -80,6 +70,17 @@ func load(dir string, buildFlags []string) (*loaded, error) {
 	})
 	l.prog.Build()
 	return l, nil
+}
+
+// mainModule is the path of the main module the packages loaded in dir
+// belong to.
+func mainModule(dir string, pkgs []*packages.Package) (string, error) {
+	for _, p := range pkgs {
+		if p.Module != nil && p.Module.Main {
+			return p.Module.Path, nil
+		}
+	}
+	return "", fmt.Errorf("no package in %s belongs to a main module; run testshape from the module's root", dir)
 }
 
 // loadErrors is every package's load error, each naming its package.
@@ -104,84 +105,112 @@ func short(module, s string) string {
 	return strings.ReplaceAll(s, module+"/", "")
 }
 
-// cutReceiver splits a full name as go/types prints it — "pkg.F",
-// "(pkg.T).M" or "(*pkg.T).M" — into its receiver's opening and the rest,
-// which starts with the package path.
-func cutReceiver(name string) (open, rest string) {
+// String is d's full name as go/types prints it: "pkg.F", "(pkg.T).M",
+// "(*pkg.T).M", or "pkg.T.F" for a field.
+func (d decl) String() string {
 	for _, open := range []string{"(*", "("} {
-		if rest, ok := strings.CutPrefix(name, open); ok {
-			return open, rest
+		if rest, ok := strings.CutPrefix(d.name, open); ok {
+			return open + d.pkg + "." + rest
 		}
 	}
-	return "", name
+	return d.pkg + "." + d.name
 }
 
-// qualify is a module marker's full name: its package path under module.
-func qualify(module, name string) string {
-	open, rest := cutReceiver(name)
-	return open + module + "/" + rest
-}
-
-// packageOf is the import path of the package that declares the function a
-// full name names.
-func packageOf(name string) string {
-	_, rest := cutReceiver(name)
-	if typ, _, ok := strings.Cut(rest, ")"); ok {
-		rest = typ
-	}
-	return rest[:strings.LastIndex(rest, ".")]
-}
-
-// fullNames is every full name the marker data names: the markers, the
-// spawners, and the functions a spawned program is resolved through.
-func fullNames(module string, moduleMarkers []marker) []string {
-	names := []string{selfExecutable, lookPath}
-	for _, m := range moduleMarkers {
-		names = append(names, qualify(module, m.name))
-	}
-	for _, m := range externalMarkers {
-		names = append(names, m.name)
-	}
-	for _, s := range spawners {
-		names = append(names, s.name)
+// declared is every name p declares, each as decl.String writes it: its
+// functions, variables and types, its types' methods and interface methods,
+// and its structs' fields.
+func declared(p *types.Package) map[string]bool {
+	names := make(map[string]bool)
+	scope := p.Scope()
+	for _, n := range scope.Names() {
+		names[decl{p.Path(), n}.String()] = true
+		tn, ok := scope.Lookup(n).(*types.TypeName)
+		if !ok {
+			continue
+		}
+		named, ok := tn.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		for m := range named.Methods() {
+			names[m.FullName()] = true
+		}
+		switch u := named.Underlying().(type) {
+		case *types.Interface:
+			for m := range u.Methods() {
+				names[m.FullName()] = true
+			}
+		case *types.Struct:
+			for f := range u.Fields() {
+				names[decl{p.Path(), n + "." + f.Name()}.String()] = true
+			}
+		}
 	}
 	return names
 }
 
-// unresolved returns, sorted, each of names that no function, method or
-// interface method of pkgs has as its full name. A marker that names nothing
-// would count no touch, and its tests would look like unit tests.
-// [LAW:no-silent-failure]
-func unresolved(names []string, pkgs []*types.Package) []string {
-	declared := make(map[string]bool)
+// resolveMarkers checks the marker data against the packages it names, each
+// loaded in dir by its own path, whatever the module imports, and returns it
+// as full names under the module. A name its package does not declare would
+// count no touch, and its tests would read as unit, so each one fails the
+// run, naming it. [LAW:no-silent-failure] [LAW:parse-dont-validate]
+func resolveMarkers(dir string, module []markerGroup) (markerSet, error) {
+	var patterns []string
+	add := func(pattern string) {
+		if !slices.Contains(patterns, pattern) {
+			patterns = append(patterns, pattern)
+		}
+	}
+	for _, g := range module {
+		add("./" + g.pkg)
+	}
+	for _, g := range externalMarkers {
+		add(g.pkg)
+	}
+	for _, s := range spawners {
+		add(s.fn.pkg)
+	}
+	for _, d := range resolvedThrough {
+		add(d.pkg)
+	}
+	pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedTypes | packages.NeedModule, Dir: dir}, patterns...)
+	if err != nil {
+		return markerSet{}, fmt.Errorf("load the marker packages in %s: %w", dir, err)
+	}
+	if err := loadErrors(pkgs); err != nil {
+		return markerSet{}, err
+	}
+	mod, err := mainModule(dir, pkgs)
+	if err != nil {
+		return markerSet{}, err
+	}
+	names := make(map[string]map[string]bool)
 	for _, p := range pkgs {
-		scope := p.Scope()
-		for _, name := range scope.Names() {
-			switch obj := scope.Lookup(name).(type) {
-			case *types.Func:
-				declared[obj.FullName()] = true
-			case *types.TypeName:
-				named, ok := obj.Type().(*types.Named)
-				if !ok {
-					continue
-				}
-				for m := range named.Methods() {
-					declared[m.FullName()] = true
-				}
-				if iface, ok := named.Underlying().(*types.Interface); ok {
-					for m := range iface.Methods() {
-						declared[m.FullName()] = true
-					}
-				}
-			}
+		names[p.PkgPath] = declared(p.Types)
+	}
+	ms := markerSet{module: mod, touches: make(map[string]touch), spawners: make(map[string]int)}
+	var errs []error
+	check := func(d decl) string {
+		if !names[d.pkg][d.String()] {
+			errs = append(errs, fmt.Errorf("marker %s names nothing package %s declares (tools/testshape/markers.go)", d, d.pkg))
+		}
+		return d.String()
+	}
+	for _, g := range module {
+		for _, n := range g.names {
+			ms.touches[check(decl{mod + "/" + g.pkg, n})] = g.touch
 		}
 	}
-	var missing []string
-	for _, name := range names {
-		if !declared[name] {
-			missing = append(missing, name)
+	for _, g := range externalMarkers {
+		for _, n := range g.names {
+			ms.touches[check(decl{g.pkg, n})] = g.touch
 		}
 	}
-	sort.Strings(missing)
-	return missing
+	for _, s := range spawners {
+		ms.spawners[check(s.fn)] = s.program
+	}
+	for _, d := range resolvedThrough {
+		check(d)
+	}
+	return ms, errors.Join(errs...)
 }

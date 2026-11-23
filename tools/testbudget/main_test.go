@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/tools/internal/gotestjson"
 )
 
 // stream builds a go test -json stream from raw lines.
@@ -160,9 +162,9 @@ func TestConsumeStampsTerminalPackageResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []packageResult{
-		{ImportPath: "example.com/a", Elapsed: 1500 * time.Millisecond},
-		{ImportPath: "example.com/b", Elapsed: 200 * time.Millisecond, Failed: true},
-		{ImportPath: "example.com/c", NoElapsed: true}, // no Elapsed in the event is no figure
+		{ImportPath: "example.com/a", Elapsed: gotestjson.Took(1500 * time.Millisecond)},
+		{ImportPath: "example.com/b", Elapsed: gotestjson.Took(200 * time.Millisecond), Failed: true},
+		{ImportPath: "example.com/c"}, // no Elapsed in the event is no figure
 	}
 	if !reflect.DeepEqual(results, want) {
 		t.Errorf("results = %+v, want %+v", results, want)
@@ -238,16 +240,18 @@ func TestConsumeFlushesStrandedOutputWhenStreamEndsMidTest(t *testing.T) {
 func TestPrintTableRendersSlowestFirstWithBudgetsAndFailureMarks(t *testing.T) {
 	var out strings.Builder
 	printTable(&out, []packageResult{
-		{ImportPath: "example.com/fast", Elapsed: 1200 * time.Millisecond},
-		{ImportPath: "example.com/slow", Elapsed: 90 * time.Second},
-		{ImportPath: "example.com/red", Elapsed: 3 * time.Second, Failed: true},
+		{ImportPath: "example.com/fast", Elapsed: gotestjson.Took(1200 * time.Millisecond)},
+		{ImportPath: "example.com/slow", Elapsed: gotestjson.Took(90 * time.Second)},
+		{ImportPath: "example.com/red", Elapsed: gotestjson.Took(3 * time.Second), Failed: true},
+		{ImportPath: "example.com/untimed"},
 	}, map[string]time.Duration{"example.com/slow": 120 * time.Second}, 30*time.Second)
 	got := out.String()
 	lines := strings.Split(strings.TrimSpace(got), "\n")
-	if len(lines) != 4 { // header + three rows
-		t.Fatalf("got %d lines, want 4:\n%s", len(lines), got)
+	if len(lines) != 5 { // header + four rows
+		t.Fatalf("got %d lines, want 5:\n%s", len(lines), got)
 	}
 	wantRows := []string{
+		"no figure /   30s  example.com/untimed",
 		"    90.0s /  120s  example.com/slow",
 		"     3.0s /   30s  example.com/red  [FAILED — not a calibration point]",
 		"     1.2s /   30s  example.com/fast",
@@ -262,9 +266,9 @@ func TestPrintTableRendersSlowestFirstWithBudgetsAndFailureMarks(t *testing.T) {
 func TestEnforceFlagsOnlyPackagesOverTheirBudget(t *testing.T) {
 	b := map[string]time.Duration{"listed/slow": 10 * time.Second}
 	viols := enforce([]packageResult{
-		{ImportPath: "listed/slow", Elapsed: 12 * time.Second},
-		{ImportPath: "listed/slow2", Elapsed: 9 * time.Second}, // unlisted: default 5s
-		{ImportPath: "fast", Elapsed: time.Second},
+		{ImportPath: "listed/slow", Elapsed: gotestjson.Took(12 * time.Second)},
+		{ImportPath: "listed/slow2", Elapsed: gotestjson.Took(9 * time.Second)}, // unlisted: default 5s
+		{ImportPath: "fast", Elapsed: gotestjson.Took(time.Second)},
 	}, b, 5*time.Second)
 	if len(viols) != 2 {
 		t.Fatalf("got %d violations, want 2: %+v", len(viols), viols)
@@ -277,10 +281,20 @@ func TestEnforceFlagsOnlyPackagesOverTheirBudget(t *testing.T) {
 	}
 }
 
+func TestAPackageWithNoElapsedFigureFailsItsBudget(t *testing.T) {
+	viols := enforce([]packageResult{{ImportPath: "untimed"}}, nil, time.Hour)
+	if len(viols) != 1 {
+		t.Fatalf("got %d violations, want 1: %+v", len(viols), viols)
+	}
+	if line := violationLine(viols[0]); !strings.Contains(line, "untimed reported no elapsed figure") {
+		t.Errorf("violation line does not say the package has no figure: %s", line)
+	}
+}
+
 func TestViolationLineNamesPackageOverageAndBudgetHome(t *testing.T) {
 	line := violationLine(violation{
 		ImportPath: "example.com/store",
-		Elapsed:    330 * time.Second,
+		Elapsed:    gotestjson.Took(330 * time.Second),
 		Budget:     300 * time.Second,
 	})
 	for _, want := range []string{

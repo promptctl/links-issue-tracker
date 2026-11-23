@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"slices"
 
 	"golang.org/x/tools/go/ssa"
 )
@@ -67,13 +66,13 @@ func (g *graph) hits(r *reach, self touch) []hit {
 			}
 		}
 		for _, s := range n.spawns {
-			hs = append(hs, hit{s.program.touch(self), v, slices.Concat(s.tail, s.program.note())})
+			hs = append(hs, hit{s.program.touch(self), v, spawnTail(s.tail, s.program)})
 		}
 		if r.asValue[v] {
 			for _, h := range n.holes {
 				if h.via == viaParam {
 					p := unresolvedProgram{}
-					hs = append(hs, hit{p.touch(self), v, slices.Concat(h.tail, p.note())})
+					hs = append(hs, hit{p.touch(self), v, spawnTail(h.tail, p)})
 				}
 			}
 		}

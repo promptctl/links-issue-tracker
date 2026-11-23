@@ -42,18 +42,23 @@
 //   - A static call reaches its callee.
 //   - A function or closure whose value is taken in the test's reach is
 //     reachable, whoever calls it.
-//   - A load of a package variable reaches what the package's initializer
-//     stored in it, and the code that computed it: `var now = makeClock()`
-//     reaches makeClock, and a variable of interface type reaches the methods
-//     of the value stored. A store made anywhere else is code that is in the
-//     test's reach or not, so a test that overwrites a package variable earns
-//     no layer for it: a seam that moves a test down is a value passed in.
+//   - A use of a package variable, of any type, reaches the slice of the
+//     package initializers that computes it: the writes into the variable,
+//     every value they depend on, every write into what the slice allocates
+//     (a map's entries, a struct's fields), and every function the slice
+//     calls or takes as a value. `var db = openStore()` reaches openStore,
+//     a map of funcs reaches each func, and a hook a helper installs reaches
+//     the helper, its program resolved at the initializer's call. A store
+//     made anywhere else is code that is in the test's reach or not, so a
+//     test that overwrites a package variable earns no layer for it: a seam
+//     that moves a test down is a value passed in.
 //     [LAW:no-shared-mutable-globals]
 //   - A call through an interface reaches no implementation. Converting a
-//     value of a module type to an interface reaches every method of the
-//     type, so whoever builds the value carries its touch: a test whose store
-//     is reached through storage.Store carries the store at the opener that
-//     built it.
+//     value to an interface reaches every method of its type: a module
+//     type's are walked, and any type's markers are touches, so whoever
+//     builds the value carries its touch. A test whose store is reached
+//     through storage.Store carries the store at the opener that built it,
+//     and an *http.Client stored as an interface carries the network.
 //   - Only the module's functions are walked. A call out of the module is a
 //     touch if it is a marker and is otherwise not followed, so the testing
 //     package's own clock reads are never charged.
@@ -61,24 +66,24 @@
 // The markers, the spawners and how a spawned program is resolved are data,
 // in markers.go. A spawn's program is resolved from a constant where it
 // enters: through the parameters and captured variables of as many helpers
-// as carry it, and through a package variable's initializer. Any other
-// program is unresolved, another process, and its witness says so. A spawn
-// of the test binary itself (os.Executable, os.Args[0]) is a CLI run when the
-// package's TestMain can reach a CLI run, and another process otherwise. That
-// is decided per package, so in a package whose TestMain runs the CLI, a
-// helper process that re-runs one test counts as end-to-end too. The touches
-// of a package's initializer and of its TestMain print on its row and are
-// charged to no test.
+// as carry it, and through a package variable's initializer. The witness
+// names the program on the spawning call; a program no constant names is
+// unresolved, another process. A spawn of the test binary itself
+// (os.Executable, os.Args[0]) is a CLI run when the package's TestMain can
+// reach a CLI run, and another process otherwise. That is decided per
+// package, so in a package whose TestMain runs the CLI, a helper process
+// that re-runs one test counts as end-to-end too. The touches of a package's
+// initializer and of its TestMain print on its row and are charged to no
+// test.
 //
 // A MEASURE THAT MEASURED NOTHING FAILS. testshape exits 1, naming the
 // package or test, on a stream that ran no test, a package that failed to
 // build, a test binary that failed outside any test, a test with no verdict,
-// a verdict with no elapsed time, a test the stream ran twice, a package
-// that does not load, a test the loaded program does not declare or declares
-// in both test packages, or a marker that names no function of the loaded
-// program. A failed test is still measured: it is counted at its layer and
-// marked in -tests. Test output and go test's own lines are replayed to
-// stderr, so stdout is the report.
+// a package or a test the stream ran twice, a package that does not load, a
+// test the loaded program does not declare or declares in both test
+// packages, or a marker its package does not declare. A failed test is still
+// measured: it is counted at its layer and marked in -tests. Test output and
+// go test's own lines are replayed to stderr, so stdout is the report.
 //
 // -tags passes the measured run's build tags to the load, so the files
 // classified are the files that run compiled.
@@ -99,7 +104,7 @@ import (
 type config struct {
 	dir           string
 	buildFlags    []string
-	moduleMarkers []marker
+	moduleMarkers []markerGroup
 	listTests     bool
 }
 
@@ -130,18 +135,15 @@ func run(cfg config, stdin io.Reader, stdout, stderr io.Writer) int {
 	if refused := refusals(s); len(refused) > 0 {
 		return fail(refused...)
 	}
+	ms, err := resolveMarkers(cfg.dir, cfg.moduleMarkers)
+	if err != nil {
+		return fail(members(err)...)
+	}
 	l, err := load(cfg.dir, cfg.buildFlags)
 	if err != nil {
 		return fail(members(err)...)
 	}
-	if missing := unresolved(fullNames(l.module, cfg.moduleMarkers), l.types); len(missing) > 0 {
-		errs := make([]error, len(missing))
-		for i, m := range missing {
-			errs[i] = fmt.Errorf("marker %s names no function the loaded program declares (tools/testshape/markers.go)", m)
-		}
-		return fail(errs...)
-	}
-	g := buildGraph(l, newMarkerSet(l.module, cfg.moduleMarkers, externalMarkers, spawners))
+	g := buildGraph(l, ms)
 	shapes, err := classify(g, l, s.Packages)
 	if err != nil {
 		return fail(members(err)...)
@@ -170,7 +172,12 @@ func members(err error) []error {
 func refusals(s gotestjson.Stream) []error {
 	var out []error
 	ran := len(s.Cut) > 0
+	ended := make(map[string]bool)
 	for _, p := range s.Packages {
+		if ended[p.ImportPath] {
+			out = append(out, fmt.Errorf("%s ended more than once; measure a run of each package once", p.ImportPath))
+		}
+		ended[p.ImportPath] = true
 		if p.FailedBuild != "" {
 			out = append(out, fmt.Errorf("%s failed to build (%s); its tests were not measured", p.ImportPath, p.FailedBuild))
 		} else if p.MainFailed() {
@@ -185,8 +192,6 @@ func refusals(s gotestjson.Stream) []error {
 			seen[t.Name] = true
 			if t.Verdict == gotestjson.Unfinished {
 				out = append(out, fmt.Errorf("%s %s has no verdict: its package ended before it did", p.ImportPath, t.Name))
-			} else if t.NoElapsed {
-				out = append(out, fmt.Errorf("%s %s has a verdict with no elapsed time", p.ImportPath, t.Name))
 			}
 		}
 	}

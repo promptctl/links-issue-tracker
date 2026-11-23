@@ -1,5 +1,6 @@
-// Package initreadsafile reads a file while the package initializes: that
-// touch is the package's, not its test's.
+// Package initreadsafile reads a file while the package initializes: the
+// package's row carries it, and so does a test that uses what was read, as
+// the code that computed it.
 package initreadsafile
 
 import (
@@ -9,4 +10,4 @@ import (
 
 var config, _ = os.ReadFile("x")
 
-func TestReadingWhatInitReadTouchesNothing(t *testing.T) { _ = len(config) }
+func TestUsingWhatInitReadReachesTheRead(t *testing.T) { _ = len(config) }
