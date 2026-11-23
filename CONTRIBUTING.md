@@ -103,6 +103,19 @@ before raising one. To check locally:
 (set -o pipefail; go test -short -json ./... | go run ./tools/testbudget)
 ```
 
+The suite's shape is measured by [`tools/testshape`](tools/testshape/main.go).
+It reads the same stream and puts every top-level test at the layer its code
+can reach: unit, integration, or end-to-end. Per package, it prints the count
+and summed elapsed at each layer, and how many tests can reach each touch: a
+store, git, a CLI run, another process, the network, the filesystem, the
+clock. Its package doc states the rules; `-tests` lists each test with one
+witness chain per touch. It needs the stream of every module of the suite:
+
+```sh
+(set -o pipefail; { go test -short -json ./... && go -C internal/vendor/dolthub-driver test -short -json ./...; } > shape.json)
+go run ./tools/testshape -tests < shape.json
+```
+
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
 your PATH.
 
