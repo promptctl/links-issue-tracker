@@ -132,7 +132,7 @@ func TestWhatTestMainReachesInOneBranchEveryTestReaches(t *testing.T) {
 
 func TestAnOutsideDispatcherReachesWhatInitRegistered(t *testing.T) {
 	expectReach(t, reachOf(t, "initdispatch", "TestServe"), Integration, "fs", map[Touch]string{
-		FS: "initdispatch.TestServe → initdispatch.Serve → initdispatch.config [dispatch reaches value from init of initdispatch, made in initdispatch.init#1] → os.ReadFile ⇒ os.ReadFile (fs)",
+		FS: "initdispatch.TestServe → initdispatch.Serve → initdispatch.config [dispatch reaches value from init of initdispatch, made in initdispatch.init] → os.ReadFile ⇒ os.ReadFile (fs)",
 	})
 }
 
@@ -266,6 +266,37 @@ func TestWhatTestMainTouchesEveryTestOfItsBinaryTouches(t *testing.T) {
 	if got := shape.Setup.set(); got != Touches(0).With(FS) {
 		t.Errorf("setup touches %s, want fs", got)
 	}
+}
+
+func TestAnInitializerOnlyADependencyImportsRunsInTheSetup(t *testing.T) {
+	shape, refusals := measureFixture(t, "transitiveinit")
+	if len(refusals) > 0 {
+		t.Fatalf("measuring transitiveinit refused:\n%s", strings.Join(refusals, "\n"))
+	}
+	if got := shape.Setup.set(); got != Touches(0).With(FS) {
+		t.Errorf("setup touches %s, want fs", got)
+	}
+	expectReach(t, reachOf(t, "transitiveinit", "TestHome"), Integration, "fs", map[Touch]string{
+		FS: "nested/deep.init ⇒ example.com/shape/nested/deep.init (fs)",
+	})
+}
+
+func TestARangeOverFuncLoopBodyIsCalledBackByTheIterator(t *testing.T) {
+	expectReach(t, reachOf(t, "chunk", "TestSave"), Integration, "fs", map[Touch]string{
+		FS: "chunk.TestSave → chunk.Save → chunk.Save$1 [dynamic call reaches value from TestSave, made in chunk.Save] → os.WriteFile ⇒ os.WriteFile (fs)",
+	})
+}
+
+func TestAFuzzFunctionHandedToFFuzzIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "fuzzsave", "FuzzSave"), Integration, "fs", map[Touch]string{
+		FS: "fuzzsave.FuzzSave → (*testing.F).Fuzz → fuzzsave.FuzzSave$1 [call into testing.F.Fuzz reaches value from FuzzSave, made in fuzzsave.FuzzSave] → os.WriteFile ⇒ os.WriteFile (fs)",
+	})
+}
+
+func TestAClosureCalledThroughReflectionIsReached(t *testing.T) {
+	expectReach(t, reachOf(t, "reflectcall", "TestSave"), Integration, "fs", map[Touch]string{
+		FS: "reflectcall.TestSave → reflectcall.Save → reflect.ValueOf → reflectcall.Save$1 [call into reflect.ValueOf reaches value from TestSave, made in reflectcall.Save] → os.WriteFile ⇒ os.WriteFile (fs)",
+	})
 }
 
 func TestAProgramStoredIntoACmdsPathIsSpawned(t *testing.T) {

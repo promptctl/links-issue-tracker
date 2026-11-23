@@ -43,20 +43,27 @@
 // rapid type analysis, over the address-taken functions and runtime types
 // that exist (see rta.go):
 //
-//   - A binary's setup is walked first, from every module package's
-//     initializer and its TestMain; each test is walked over it, so the
+//   - A binary's setup is walked first, from the initializer of every
+//     package the binary links, the module's and every outside one, and
+//     from its TestMain; each test is walked over it, so the
 //     address-taken functions and runtime types of both meet every dynamic
 //     and interface call of both.
 //   - A static call reaches its callee. A function taken as a value is
 //     address-taken, and taking it runs nothing: a dynamic call reaches every
-//     address-taken function of its signature. So does a call of an outside
-//     function or interface method whose receiver or parameters can carry
-//     that signature, decided by their types alone: a function type in their
-//     structure (fields, elements, pointees), or a method of an interface
-//     there. A function stored in a field of a struct handed to outside code
+//     address-taken function of its signature. A function value converted to
+//     an interface is a runtime type as well.
+//   - One rule holds at every callee the walk does not follow: an outside
+//     function or method, and the target of every dynamic call, which may
+//     be one. It can call back every address-taken function of a signature
+//     its receiver or parameters can carry, decided by their types alone: a
+//     function type in their structure (fields, elements, pointees), or a
+//     method of an interface there; and, handed an interface (`any`
+//     included), every function converted to one, which reflection can
+//     call. A function stored in a field of a struct handed to outside code
 //     (`&cobra.Command{RunE: f}`) is reached as surely as one passed
-//     directly. A value with no use creates nothing, so `var _ I = (*T)(nil)`
-//     makes no method reachable.
+//     directly; so is a range-over-func loop's body, which the iterator is
+//     handed, and a fuzz function handed to f.Fuzz. A value with no use
+//     creates nothing, so `var _ I = (*T)(nil)` makes no method reachable.
 //   - Converting a module type to an interface makes reachable every method
 //     of it and of every module type reachable from its structure (fields,
 //     elements, pointees), since fmt and encoding/json call them by

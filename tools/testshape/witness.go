@@ -9,8 +9,9 @@ import (
 
 // step is how a walk first reached a function.
 type step struct {
-	from *ssa.Function // nil at the walk's root
-	via  via
+	from   *ssa.Function // nil at the walk's root
+	via    via
+	origin string // the root the function was reached from: a test, TestMain, an initializer
 }
 
 // via is how a walk reached a function: a static call, a type converted to

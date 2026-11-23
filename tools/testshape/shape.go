@@ -64,6 +64,9 @@ type testShape struct {
 // reach: a spawn of the test binary runs the CLI exactly when it does.
 func (a *analyzer) measure(b *binary) binaryShape {
 	setup := newWalker(a, emptyBinary())
+	// Every linked package's initializer is a root: the module's, walked,
+	// and each outside one, charged by its classification, which runs
+	// whether or not a module package imports its package directly.
 	for _, sp := range b.Packages {
 		setup.root(sp.Func("init"), "init of "+strings.TrimPrefix(sp.Pkg.Path(), a.mod.Path+"/"))
 	}
@@ -75,7 +78,7 @@ func (a *analyzer) measure(b *binary) binaryShape {
 	setup.settle(runsCLI)
 	binary := setup.finish()
 
-	shape := binaryShape{Setup: binary.layer.touches}
+	shape := binaryShape{Setup: binary.layer.reached()}
 	for _, t := range b.Tests {
 		w := newWalker(a, binary)
 		for _, fn := range t.Funcs {
@@ -89,7 +92,7 @@ func (a *analyzer) measure(b *binary) binaryShape {
 }
 
 func (a *analyzer) reachesCLI(l *layer) bool {
-	for fn := range l.visited {
+	for fn := range l.steps.index {
 		if a.walked(fn) && a.class.isCLI(a.owner(fn).name) {
 			return true
 		}

@@ -12,7 +12,7 @@ type summary struct {
 	static      []callSite
 	taken       []*ssa.Function
 	converted   []conversion
-	dynamic     []dynamicCall
+	dynamic     []*types.Signature // calls of function values
 	invokes     []invoke
 	spawnFields []spawnField
 }
@@ -20,14 +20,6 @@ type summary struct {
 type callSite struct {
 	caller *ssa.Function
 	common *ssa.CallCommon
-}
-
-// dynamicCall is a call that can call any address-taken function of
-// signature sig: a call of a function value, or a call into outside code
-// whose parameters can carry one; how says which.
-type dynamicCall struct {
-	sig *types.Signature
-	how string
 }
 
 // conversion is a value of a concrete type made into an interface value.
@@ -76,7 +68,7 @@ func (a *analyzer) summary(fn *ssa.Function) *summary {
 					s.static = append(s.static, callSite{fn, common})
 					callee = &common.Value
 				case !builtin:
-					s.dynamic = append(s.dynamic, dynamicCall{common.Signature(), "dynamic call"})
+					s.dynamic = append(s.dynamic, common.Signature())
 				}
 			}
 			for _, op := range instr.Operands(nil) {

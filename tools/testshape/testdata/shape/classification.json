@@ -5,12 +5,16 @@
   "modules": {"std": {"init": "none"}, "example.com/shape/nested": {"init": "none"}},
   "packages": {
     "example.com/shape/nested": {"note": "Dial reads a file; it is charged net so the nested-module fixture shows its own module is not walked.", "default": "net"},
+    "example.com/shape/nested/deep": {"note": "No module package imports it; its initializer is charged fs so the transitive-init fixture shows it runs in the setup.", "default": "none", "functions": {"init": "fs"}},
+    "example.com/shape/nested/front": {"default": "none"},
     "log/slog": {"default": "none"},
     "fmt": {"default": "calls:fmt.Stringer,calls:error"},
     "expvar": {"note": "Rendering a Var can call the function a Func converts.", "default": "none", "functions": {"Var.String": "dispatching"}},
     "net/http": {"default": "net"},
     "net/url": {"note": "URL.String touches nothing; it is charged net here so the callback fixture shows a called-back method charged by its own classification.", "default": "none", "functions": {"URL.String": "net"}},
     "os": {"default": "fs", "functions": {"Getenv": "none", "Environ": "none", "Exit": "none", "Executable": "program:self", "Args": "program:arg0"}},
+    "reflect": {"default": "none"},
+    "slices": {"default": "none"},
     "os/exec": {"default": "none", "functions": {"Command": "spawn:0", "CommandContext": "spawn:1", "Cmd.Path": "spawn:field", "LookPath": "fs,program:lookup"}},
     "testing": {"default": "none", "functions": {"TB.TempDir": "fs"}},
     "time": {"default": "none"}

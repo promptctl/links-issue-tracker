@@ -66,9 +66,9 @@ func suiteModules(root string) ([]module, error) {
 // it.
 type binary struct {
 	ImportPath string
-	// Packages: every module package the binary contains, test variants
-	// included, in import-path order. Their initialization runs before every
-	// test.
+	// Packages: every package the binary links, the module's (test
+	// variants included) and every one outside it, in import-path order.
+	// Their initialization runs before every test.
 	Packages []*ssa.Package
 	// TestMain is the package's TestMain, nil when it has none.
 	TestMain *ssa.Function
@@ -351,8 +351,8 @@ type importerFunc func(path string) (*types.Package, error)
 
 func (f importerFunc) Import(path string) (*types.Package, error) { return f(path) }
 
-// newBinary is the test binary whose generated main is p: the module
-// packages it links, its TestMain, and the top-level tests it declares.
+// newBinary is the test binary whose generated main is p: the packages it
+// links, its TestMain, and the top-level tests it declares.
 func (ld *loader) newBinary(prog *ssa.Program, p *listedPackage, ssaByID map[string]*ssa.Package) *binary {
 	b := &binary{ImportPath: strings.TrimSuffix(p.ImportPath, ".test")}
 	seen := map[string]bool{}
@@ -362,13 +362,17 @@ func (ld *loader) newBinary(prog *ssa.Program, p *listedPackage, ssaByID map[str
 			return
 		}
 		seen[id] = true
-		if sp := ssaByID[id]; sp != nil {
+		sp := ssaByID[id]
+		if pkg := ld.exported[id]; pkg != nil {
+			sp = prog.Package(pkg)
+		}
+		if sp != nil {
 			b.Packages = append(b.Packages, sp)
 		}
 		for _, imp := range ld.byID[id].Imports {
-			// Code outside the module never imports the module, so the
-			// module packages are those the module packages import.
-			if ssaByID[imp] != nil {
+			// "C" is cgo's pseudo-package, which go list names among the
+			// imports and never lists: no package of it is linked.
+			if imp != "C" {
 				visit(imp)
 			}
 		}

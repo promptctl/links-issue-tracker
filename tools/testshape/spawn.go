@@ -120,14 +120,11 @@ func (w *walker) programs(v ssa.Value, path map[ssa.Value]bool) sources {
 		fn := v.Parent()
 		i := slices.Index(fn.Params, v)
 		var s []sources
-		for _, site := range w.sites(fn) {
+		for site := range w.sites.group(fn) {
 			s = append(s, w.programs(site.common.Args[i], path))
 		}
-		for _, l := range w.layers() {
-			if how, ok := l.indirect[fn]; ok {
-				s = append(s, unresolved(fmt.Sprintf("parameter %s of %s, which a call other than a static one may pass anything: %s", v.Name(), w.a.name(fn), how.text(relativeTo(w.a.mod)))))
-				break
-			}
+		if how, ok := w.indirect.get(fn); ok {
+			s = append(s, unresolved(fmt.Sprintf("parameter %s of %s, which a call other than a static one may pass anything: %s", v.Name(), w.a.name(fn), how.text(relativeTo(w.a.mod)))))
 		}
 		if len(s) == 0 {
 			return unresolved(fmt.Sprintf("parameter %s of %s, which no call in this reach passes", v.Name(), w.a.name(fn)))
@@ -220,12 +217,10 @@ func (w *walker) arg0(v *ssa.UnOp) (string, bool) {
 // included, into touches, each resolved through every call site the walk
 // holds — the witness saying which program, or why it is unresolved.
 func (w *walker) settle(setupRunsCLI bool) {
-	for _, l := range w.layers() {
-		for _, s := range l.spawns {
-			for p := range s.program.sources(w).all {
-				for t, what := range w.programTouches(p, setupRunsCLI) {
-					w.touch(t, s.in, func() string { return fmt.Sprintf("%s spawns %s", s.spawner, what) })
-				}
+	for s := range w.spawns.all {
+		for p := range s.program.sources(w).all {
+			for t, what := range w.programTouches(p, setupRunsCLI) {
+				w.touch(t, s.in, func() string { return fmt.Sprintf("%s spawns %s", s.spawner, what) })
 			}
 		}
 	}

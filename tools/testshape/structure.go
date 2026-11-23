@@ -111,23 +111,32 @@ func (a *analyzer) structureOf(t types.Type) *structure {
 	return s
 }
 
-// carried is every function signature a call of sig can be handed: each
-// function type in the structure of its receiver and parameters (fields,
-// elements, pointees), and each method of each interface there. It is
-// derived from types alone: a function stored in a field and handed over
-// inside a struct is carried as surely as one passed directly.
-func (a *analyzer) carried(sig *types.Signature) []*types.Signature {
-	if sigs, ok := a.carriedBy.At(sig).([]*types.Signature); ok {
-		return sigs
+// carriage is what a call of a signature hands its callee, read off its
+// argument types (receiver and parameters) and their structure (fields,
+// elements, pointees): each function type there, and each method of each
+// interface there, is a signature the callee can call; and an interface
+// there can hold a function value, which reflection can call.
+type carriage struct {
+	sigs  []*types.Signature
+	iface bool
+}
+
+// carried is the carriage of a call of sig, derived from types alone: a
+// function stored in a field and handed over inside a struct is carried as
+// surely as one passed directly.
+func (a *analyzer) carried(sig *types.Signature) carriage {
+	if c, ok := a.carriages.At(sig).(carriage); ok {
+		return c
 	}
-	sigs := []*types.Signature{}
+	c := carriage{}
 	visit := func(t types.Type) bool {
 		switch u := t.(type) {
 		case *types.Signature:
-			sigs = append(sigs, u)
+			c.sigs = append(c.sigs, u)
 		case *types.Interface:
+			c.iface = true
 			for i := range u.NumMethods() {
-				sigs = append(sigs, u.Method(i).Signature())
+				c.sigs = append(c.sigs, u.Method(i).Signature())
 			}
 		}
 		return true
@@ -138,8 +147,8 @@ func (a *analyzer) carried(sig *types.Signature) []*types.Signature {
 	for i := range sig.Params().Len() {
 		eachType(sig.Params().At(i).Type(), visit)
 	}
-	a.carriedBy.Set(sig, sigs)
-	return sigs
+	a.carriages.Set(sig, c)
+	return c
 }
 
 // methodsOf is every method of a concrete type, value and pointer receivers
