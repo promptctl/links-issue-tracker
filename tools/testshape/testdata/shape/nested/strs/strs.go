@@ -15,3 +15,6 @@ func Join[T fmt.Stringer](xs []T) string {
 	}
 	return b.String()
 }
+
+// Show formats x, which calls its String if it has one.
+func Show[T any](x T) string { return fmt.Sprint(x) }

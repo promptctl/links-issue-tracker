@@ -59,13 +59,18 @@
 //     function type in their structure (fields, elements, pointees), or a
 //     method of an interface there; and, handed an interface (`any`
 //     included), every function converted to one, which reflection can
-//     call. A type argument of an outside generic's instance is converted
-//     to an interface, since the generic calls what its constraint names
-//     (`Join[T fmt.Stringer]` calls T's String). A function stored in a field of a struct handed to outside code
+//     call. A function stored in a field of a struct handed to outside code
 //     (`&cobra.Command{RunE: f}`) is reached as surely as one passed
 //     directly; so is a range-over-func loop's body, which the iterator is
 //     handed, and a fuzz function handed to f.Fuzz. A value with no use
 //     creates nothing, so `var _ I = (*T)(nil)` makes no method reachable.
+//   - A type argument of an outside generic's instance reaches the methods
+//     its type parameter's constraint names, and no others
+//     (`Join[T fmt.Stringer]` calls T's String; `slices.Clone` calls none).
+//     The generic may convert its values to an interface and pass them on,
+//     so interface calls and callbacks reach them as they reach a converted
+//     value; reflection and dispatch, which reach every method of what
+//     module code converts, do not.
 //   - Converting a module type to an interface makes reachable every method
 //     of it and of every module type reachable from its structure (fields,
 //     elements, pointees), since fmt and encoding/json call them by
@@ -89,7 +94,10 @@
 //     reaches every address-taken function and every method of every
 //     runtime module type — or the interfaces it calls back on what it is
 //     handed (fmt calls a fmt.Stringer's String), each outside type's method
-//     charged by its own classification.
+//     charged by its own classification. A formatter method a callback
+//     reaches (String, Error, Format, MarshalJSON, UnmarshalJSON) is
+//     classified from its source, not by its package's default: none, or
+//     the callbacks it makes, unless its source shows I/O.
 //   - An outside package's initializer is classified by its module's entry,
 //     which every module the measured builds link a package of must have
 //     ("std" for the standard library), so a dependency added later cannot

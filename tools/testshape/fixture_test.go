@@ -287,6 +287,16 @@ func TestAModuleTypeHandedToAnOutsideGenericHasItsMethodsReached(t *testing.T) {
 	})
 }
 
+func TestAModuleTypeAGenericCallsBackAfterConvertingItStillTouches(t *testing.T) {
+	expectReach(t, reachOf(t, "genericjoin", "TestShown"), Integration, "fs", map[Touch]string{
+		FS: "genericjoin.TestShown → genericjoin.Shown → nested/strs.Show[genericjoin.file] → (genericjoin.file).String [fmt.Stringer callback reaches genericjoin.file from TestShown, made in nested/strs.Show[genericjoin.file]] → os.ReadFile ⇒ os.ReadFile (fs)",
+	})
+}
+
+func TestAMethodAnOutsideGenericsConstraintCannotCallIsNotReached(t *testing.T) {
+	expectReach(t, reachOf(t, "genericclone", "TestCopy"), Unit, "none", nil)
+}
+
 func TestARangeOverFuncLoopBodyIsCalledBackByTheIterator(t *testing.T) {
 	expectReach(t, reachOf(t, "chunk", "TestSave"), Integration, "fs", map[Touch]string{
 		FS: "chunk.TestSave → chunk.Save → chunk.Save$1 [dynamic call reaches value from TestSave, made in chunk.Save] → os.WriteFile ⇒ os.WriteFile (fs)",

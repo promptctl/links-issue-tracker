@@ -16,3 +16,7 @@ func (f file) String() string {
 }
 
 func Names() string { return strs.Join([]file{"a"}) }
+
+// Shown hands a file to a generic whose constraint names no method, which
+// calls String back by converting it to an interface.
+func Shown() string { return strs.Show(file("b")) }
