@@ -21,10 +21,17 @@ const WorkspaceID = "test-workspace-id"
 // default here and in no test file. [LAW:one-source-of-truth]
 // [LAW:composability]
 //
-// Its geometry is derived as workspace.Resolve derives it, which this
-// package's tests check against Resolve itself. Its project config is handed
-// as a value rather than read from the checkout, and its issue prefix is
-// "test" rather than one derived from a repository name.
+// Its geometry is fixed by the construction that made it, whole: New, StoreAt
+// or Checkout. No method changes it, so no workspace has a checkout that
+// describes one repository and a store that describes another.
+// [LAW:types-are-the-program] A checkout's geometry is derived as
+// workspace.Resolve derives it, which this package's tests check against
+// Resolve itself. The project config is handed as a value rather than read
+// from the checkout, and the issue prefix is "test" rather than one derived
+// from a repository name.
+//
+// The builder creates a storage directory it derives, as Resolve does before
+// any command reads it, and takes one a test names as the test found it.
 //
 // Each method returns a new Workspace and leaves its receiver as it was, so a
 // helper can hand back a partly built one for each caller to finish its own
@@ -46,46 +53,45 @@ type Workspace struct {
 // ask git under.
 func New(t testing.TB, env environ.Env) Workspace {
 	t.Helper()
-	w := Workspace{t: t, env: env, info: workspace.Info{
-		Location:    workspace.LocationFromGitCommonDir(t.TempDir()),
+	w := StoreAt(t, env, workspace.LocationFromGitCommonDir(canonical(t, t.TempDir())).StorageDir)
+	makeStorageDir(t, w.info.StorageDir)
+	return w
+}
+
+// StoreAt is a workspace with no checkout whose store is the one found at
+// storageDir, its whole geometry derived from it; otherwise it is New's.
+// Nothing is created: storageDir is the store as the test found it, which may
+// be one that does not exist or cannot.
+func StoreAt(t testing.TB, env environ.Env, storageDir string) Workspace {
+	t.Helper()
+	return Workspace{t: t, env: env, info: workspace.Info{
+		Location:    workspace.LocationFromStorageDir(storageDir),
 		WorkspaceID: WorkspaceID,
 		IssuePrefix: prefixState(t, "test"),
 		Project:     configtest.HandedProject(""),
 	}}
-	w.makeStorageDir()
-	return w
 }
 
-// Checkout is w as run from the primary clone at dir, whose git directory is
-// dir/.git: its root, its store where Resolve puts that clone's store, whose
-// storage directory exists, and the remotes git reports there. dir's
-// symlinks are resolved, as git resolves --show-toplevel and
-// --git-common-dir. Nothing is asked of git until a test asks the remotes, so
-// dir need not be a repository. A linked worktree's geometry is not a primary
-// clone's; a test that needs one gets it from Resolved.
-func (w Workspace) Checkout(dir string) Workspace {
-	w.t.Helper()
-	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil {
-		w.t.Fatalf("resolve checkout %q: %v", dir, err)
-	}
+// Checkout is the workspace a command run in the primary clone at dir works
+// on, whose git directory is dir/.git: its root, its store where Resolve puts
+// that clone's store, whose storage directory exists, and the remotes git
+// reports there; otherwise it is New's. dir's symlinks are resolved, as git
+// resolves --show-toplevel and --git-common-dir. Nothing is asked of git
+// until a test asks the remotes, so dir need not be a repository. A linked
+// worktree's geometry is not a primary clone's; a test that needs one gets it
+// from Resolved.
+func Checkout(t testing.TB, env environ.Env, dir string) Workspace {
+	t.Helper()
+	resolved := canonical(t, dir)
 	root, err := workspace.ParseCheckoutRoot(resolved)
 	if err != nil {
-		w.t.Fatalf("checkout root %q: %v", resolved, err)
+		t.Fatalf("checkout root %q: %v", resolved, err)
 	}
 	gitDir := filepath.Join(resolved, ".git")
+	w := StoreAt(t, env, workspace.LocationFromGitCommonDir(gitDir).StorageDir)
 	w.root = root
-	w.info.Location = workspace.LocationFromGitCommonDir(gitDir)
 	w.info.PrivateGitDir = gitDir
-	w.makeStorageDir()
-	return w
-}
-
-// StorageDir is w with its store's whole geometry derived from dir, as a
-// store found at dir has it. Nothing is created: dir is the store as the test
-// found it, which may be one that does not exist or cannot.
-func (w Workspace) StorageDir(dir string) Workspace {
-	w.info.Location = workspace.LocationFromStorageDir(dir)
+	makeStorageDir(t, w.info.StorageDir)
 	return w
 }
 
@@ -111,8 +117,7 @@ func WithProject(ws workspace.Info, toml string) workspace.Info {
 }
 
 // Info is the workspace w describes. Its root and remotes are derived from
-// its checkout and its store's repository on every call, so no override can
-// leave them describing another. [LAW:one-source-of-truth]
+// its checkout and its store's repository on every call.
 func (w Workspace) Info() workspace.Info {
 	info := w.info
 	info.RootDir = w.root.String()
@@ -121,8 +126,8 @@ func (w Workspace) Info() workspace.Info {
 }
 
 // Resolved is the workspace a command run in dir resolves: workspace.Resolve
-// itself, for a test whose subject is resolution or a real checkout's own
-// config, identity or geometry.
+// itself, for a test where lit has initialized dir, or whose subject is
+// resolution or a real checkout's own config, identity or geometry.
 func Resolved(t testing.TB, env environ.Env, dir string) workspace.Info {
 	t.Helper()
 	ws, err := workspace.Resolve(env, dir)
@@ -132,12 +137,21 @@ func Resolved(t testing.TB, env environ.Env, dir string) workspace.Info {
 	return ws
 }
 
-// makeStorageDir creates w's storage directory, as Resolve does before any
-// command reads it.
-func (w Workspace) makeStorageDir() {
-	w.t.Helper()
-	if err := os.MkdirAll(w.info.StorageDir, 0o755); err != nil {
-		w.t.Fatalf("make the workspace's storage dir: %v", err)
+// canonical is dir with its symlinks resolved, the physical path Resolve
+// derives every store path from.
+func canonical(t testing.TB, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve %q: %v", dir, err)
+	}
+	return resolved
+}
+
+func makeStorageDir(t testing.TB, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("make the workspace's storage dir: %v", err)
 	}
 }
 

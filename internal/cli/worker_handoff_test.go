@@ -209,7 +209,8 @@ func TestTheEventNamesTheProjectLayerItRead(t *testing.T) {
 	t.Parallel()
 	root := twoRemoteCheckout(t)
 	runCLIInDir(t, root, "backlog")
-	if got, want := lastEvent(t).Facts["config.project"], workspacetest.Resolved(t, runEnv(t), root).Project.Source(); got != want {
+	checkoutFile := filepath.Join(workspacetest.Resolved(t, runEnv(t), root).RootDir, ".lit", "config.toml")
+	if got, want := lastEvent(t).Facts["config.project"], "checkout:"+checkoutFile; got != want {
 		t.Fatalf("backlog's config.project = %v, want %q", got, want)
 	}
 	runWorkerInDir(t, root, backgroundReceiveSubcommand)

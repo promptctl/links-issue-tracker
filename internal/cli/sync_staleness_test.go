@@ -224,7 +224,7 @@ func TestFetchRecordRoundTrip(t *testing.T) {
 // which a permission fixture is not.
 func TestReadFetchRecordSurfacesNonNotExistErrorsToStderr(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).StorageDir(filepath.Join(t.TempDir(), "storage\x00")).Info()
+	ws := workspacetest.StoreAt(t, runEnv(t), filepath.Join(t.TempDir(), "storage\x00")).Info()
 
 	var stderr bytes.Buffer
 	if fetch, missing := readFetchRecord(&stderr, ws, remoteName(t, "origin"), time.Now()); fetch != nil || missing {
@@ -317,7 +317,7 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 // across workspaces).
 func TestFetchSuccessMarkerPathLivesUnderStorageDir(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).StorageDir("/tmp/some-workspace/.lit").Info()
+	ws := workspacetest.StoreAt(t, runEnv(t), "/tmp/some-workspace/.lit").Info()
 	got := fetchRecordPath(ws, remoteName(t, "origin"))
 	want := filepath.Join("/tmp/some-workspace/.lit", "fetched.origin")
 	if got != want {

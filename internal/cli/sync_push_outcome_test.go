@@ -374,7 +374,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 		dir := t.TempDir()
 		runGit(t, dir, "init")
 		runGit(t, dir, "remote", "add", "origin", filepath.Join(t.TempDir(), "remote.git"))
-		return workspacetest.New(t, runEnv(t)).Checkout(dir).Info()
+		return workspacetest.Checkout(t, runEnv(t), dir).Info()
 	}
 
 	t.Run("failed last push warns", func(t *testing.T) {

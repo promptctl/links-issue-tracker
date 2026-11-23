@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -18,8 +18,8 @@ import (
 // way here would take a failed enumeration for an empty one — and an empty
 // enumeration is this machine declaring every checkout of the workspace deleted.
 func TestFailedEnumerationIsNeverTheNotARepoSentinel(t *testing.T) {
-	env := environ.Of(os.Environ())
-	_, err := workspace.LiveCheckouts(env, workspacetest.New(t, env).Checkout(t.TempDir()).Info())
+	env := suiteenv.Of(os.Environ())
+	_, err := workspace.LiveCheckouts(env, workspacetest.Checkout(t, env, t.TempDir()).Info())
 	if err == nil {
 		t.Fatal("enumerating outside a repository must fail")
 	}

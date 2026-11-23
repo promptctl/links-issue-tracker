@@ -60,7 +60,7 @@ func receiveWorkspace(t *testing.T, doltRefs []string, remotes ...string) worksp
 		}
 		runGit(t, root, "remote", "add", name, bare)
 	}
-	return workspacetest.New(t, runEnv(t)).Checkout(root).Info()
+	return workspacetest.Checkout(t, runEnv(t), root).Info()
 }
 
 // Every way the automatic receive ends before it fetches is a decision, and
@@ -76,7 +76,7 @@ func TestAReceiveThatEndsBeforeItFetchesSaysWhy(t *testing.T) {
 	}{
 		{"git remotes unreadable", func(t *testing.T) workspace.Info {
 			root := t.TempDir()
-			return workspacetest.New(t, runEnv(t)).Checkout(root).Info()
+			return workspacetest.Checkout(t, runEnv(t), root).Info()
 		}, "error", ""},
 		{"no git remote", func(t *testing.T) workspace.Info {
 			return receiveWorkspace(t, nil)

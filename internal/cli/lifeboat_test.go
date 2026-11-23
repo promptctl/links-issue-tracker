@@ -20,7 +20,7 @@ import (
 // and closes it, so a recover run can dump it below the gate and rebuild it.
 func seedWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	ws := workspacetest.New(t, runEnv(t)).Checkout(t.TempDir()).Info()
+	ws := workspacetest.Checkout(t, runEnv(t), t.TempDir()).Info()
 	st, err := engine.Open(context.Background(), runEnv(t), testStderr(t), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("seed workspace: %v", err)

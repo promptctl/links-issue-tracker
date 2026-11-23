@@ -249,7 +249,7 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 // with ENOTDIR on POSIX only: Windows reports that path not found.
 func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
 	t.Parallel()
-	ws := workspacetest.New(t, runEnv(t)).StorageDir(filepath.Join(t.TempDir(), ".lit\x00")).Info()
+	ws := workspacetest.StoreAt(t, runEnv(t), filepath.Join(t.TempDir(), ".lit\x00")).Info()
 
 	owed, err := mirrorOwed(ws)
 	if err == nil {

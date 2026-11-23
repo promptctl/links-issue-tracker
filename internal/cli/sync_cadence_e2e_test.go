@@ -54,7 +54,7 @@ func litRepoForCadence(t *testing.T) (dir, marker string) {
 	// own command did.
 	runCLIInDir(t, dir, "init", "--skip-hooks")
 
-	ws := workspacetest.New(t, runEnv(t)).StorageDir(filepath.Join(dir, ".git", "links")).Info()
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	marker = compactMarkerPath(ws)
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatalf("probe marker existed before any auto-synced command: %s", marker)
@@ -128,7 +128,7 @@ func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
 	t.Parallel()
 	setRunEnv(t, DisableAutoSyncEnvVar, "0")
 	// Malformed TOML, so config.Load returns an error rather than defaults.
-	ws := workspacetest.WithProject(workspacetest.New(t, runEnv(t)).Checkout(t.TempDir()).Info(), "this is = = not toml\n")
+	ws := workspacetest.WithProject(workspacetest.Checkout(t, runEnv(t), t.TempDir()).Info(), "this is = = not toml\n")
 
 	maybeAutoSyncAfterCommand(underInvocation(t.Context()), testStderr(t), runEnv(t), app.AccessWrite, ws)
 

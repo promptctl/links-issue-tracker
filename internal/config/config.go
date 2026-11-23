@@ -193,6 +193,10 @@ const (
 	projectConfigPathEnv = "LIT_CONFIG_PROJECT_PATH"
 )
 
+// PathEnvVars is every environment variable that names a config file in
+// place of the one lit would otherwise read.
+func PathEnvVars() []string { return []string{globalConfigPathEnv, projectConfigPathEnv} }
+
 // appDirName is lit's directory under each XDG base directory.
 // [LAW:one-source-of-truth]
 const appDirName = "links-issue-tracker"

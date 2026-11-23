@@ -9,6 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // reRootedCheckouts is two checkouts over one git remote after alpha re-rooted
@@ -108,10 +109,7 @@ func finishSharedCheckouts(t *testing.T, r reRootedCheckouts, base string, confi
 // syncHeadAndBranch reads the workspace's head commit and active branch.
 func syncHeadAndBranch(t *testing.T, dir string) (head, branch string) {
 	t.Helper()
-	ws, err := workspace.Resolve(runEnv(t), dir)
-	if err != nil {
-		t.Fatalf("resolve %s: %v", dir, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	session, closeStore, err := openSyncSession(underInvocation(context.Background()), runEnv(t), testStderr(t), ws)
 	if err != nil {
 		t.Fatalf("open sync session at %s: %v", dir, err)

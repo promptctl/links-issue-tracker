@@ -20,7 +20,7 @@ func TestACheckoutHasTheGeometryResolveGivesIt(t *testing.T) {
 		t.Fatalf("git init %s: %v\n%s", dir, err, out)
 	}
 
-	built := workspacetest.New(t, env).Checkout(dir).Info()
+	built := workspacetest.Checkout(t, env, dir).Info()
 	resolved := workspacetest.Resolved(t, env, dir)
 
 	if built.Location != resolved.Location {

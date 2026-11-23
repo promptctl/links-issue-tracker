@@ -89,7 +89,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspacetest.New(t, runEnv(t)).Checkout(root).Info()
+	ws := workspacetest.Checkout(t, runEnv(t), root).Info()
 	ctx := underInvocation(context.Background())
 
 	ensureMirrorCoverage(ctx, testStderr(t), runEnv(t), ws)

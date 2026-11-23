@@ -24,7 +24,7 @@ import (
 func notifyTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
-	return workspacetest.New(t, runEnv(t)).Checkout(root).Info()
+	return workspacetest.Checkout(t, runEnv(t), root).Info()
 }
 
 // shPath spells path for a hook's sh command line: quoted, and with forward

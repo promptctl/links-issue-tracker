@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
 // These are the end-to-end proofs of links-sync-pgct.4's acceptance criteria:
@@ -18,24 +18,19 @@ import (
 // step exits refusing with nothing destroyed; and a failing push reaches the
 // owner the day it happens.
 
-// writeOwnerNotifyProjectConfig points the repo's project config at a
-// file-appending hook, so a test can re-enable LIT_DISABLE_AUTO_SYNC=0 — which
-// the notify path requires — without the mirror or a background receive
-// reconciling state out from under its assertions. Cadence is on-push, so no
-// command spawns a mirror. The receive is on, as a checkout whose refused
-// pushes a receive merges is configured, and not yet due: the debounce marker
-// is dated a day ahead, so no command spawns one and the test runs each
-// receive itself.
+// writeOwnerNotifyProjectConfig makes config the whole project config of the
+// checkout at repo and holds its automatic receive off, so a test can
+// re-enable LIT_DISABLE_AUTO_SYNC=0, which the notify path requires, without
+// a background receive reconciling state out from under its assertions. The
+// receive is held off by its debounce marker, dated a day ahead, so no
+// command spawns one and the test runs each receive itself.
 //
-// config is the project config put in force, ownerNotifyConfig(sink, true)
-// and whatever else the test runs under.
+// config is usually ownerNotifyConfig: on-push cadence, so no command spawns
+// a mirror, and the owner hook appending to a sink the test reads.
 func writeOwnerNotifyProjectConfig(t *testing.T, repo, config string) {
 	t.Helper()
 	writeCheckoutProject(t, repo, config)
-	ws, err := workspace.Resolve(runEnv(t), repo)
-	if err != nil {
-		t.Fatalf("resolve %s: %v", repo, err)
-	}
+	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	if err := markReceiveAttempt(ws); err != nil {
 		t.Fatalf("mark the receive attempted in %s: %v", repo, err)
 	}

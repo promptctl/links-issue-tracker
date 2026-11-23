@@ -199,7 +199,7 @@ func pushedRepoWithoutRemoteHead(t *testing.T) workspace.Info {
 
 func branchTestWorkspace(t *testing.T, root string) workspace.Info {
 	t.Helper()
-	return workspacetest.New(t, runEnv(t)).Checkout(root).Info()
+	return workspacetest.Checkout(t, runEnv(t), root).Info()
 }
 
 // originRemote is the workspace's one remote, as lit syncs with it.

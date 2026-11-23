@@ -60,7 +60,7 @@ func TestResolveRestoreSourceCap(t *testing.T) {
 
 	t.Run("latest reads the newest snapshot", func(t *testing.T) {
 		dir := t.TempDir()
-		ap := &app.App{Workspace: workspacetest.New(t, runEnv(t)).StorageDir(dir).Info()}
+		ap := &app.App{Workspace: workspacetest.StoreAt(t, runEnv(t), dir).Info()}
 		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
 		taken, err := backup.Take(context.Background(), dir, backup.Budget, func() (model.Export, error) { return export, nil })
 		if err != nil {

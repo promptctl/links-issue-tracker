@@ -17,6 +17,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
@@ -498,7 +499,7 @@ func runOutput(t *testing.T, dir string, name string, args ...string) string {
 
 // testEnv is the test process's environment, read when it is called, so a
 // test's t.Setenv reaches the git it runs.
-func testEnv() environ.Env { return environ.Of(os.Environ()) }
+func testEnv() environ.Env { return suiteenv.Of(os.Environ()) }
 
 // testRoot is dir as a CheckoutRoot, its symlinks resolved as git resolves
 // --show-toplevel (t.TempDir sits under /var -> /private/var on darwin).

@@ -63,6 +63,7 @@ func TestMain(m *testing.M) {
 	// XDG_STATE_HOME, and the child processes inherit this environment: point
 	// it at a directory the suite owns, never the developer's own events file.
 	stateHome := isolateXDGHome("XDG_STATE_HOME", "lit-cmd-state-")
+	suiteenv.UnsetConfigPaths()
 	// Every git remote a lit here opens keeps its mirror under the mirror
 	// root, never the developer's user cache directory.
 	mirrorRoot := isolateXDGHome(store.MirrorRootEnvVar, "lit-cmd-mirrors-")

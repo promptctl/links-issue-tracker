@@ -650,13 +650,13 @@ func TestLoadInvalidTOMLReturnsError(t *testing.T) {
 	}
 }
 
-// testEnv is the test process's environment, read when it is called, so a
-// test's t.Setenv reaches the Load it runs.
-// testEnv is the process environment without the two config path overrides,
-// so no layer a test loads is the file a developer's shell points at; a test
-// of an override sets it on the Env it hands Load.
+// testEnv is the test process's environment, read when it is called so a
+// test's t.Setenv reaches the Load it runs, without the config path
+// overrides: no layer a test loads is the file a developer's shell points at,
+// and a test of an override sets it on the Env it hands Load. This package
+// cannot import suiteenv, which imports it.
 func testEnv() environ.Env {
-	return environ.Of(os.Environ()).Without(projectConfigPathEnv, globalConfigPathEnv)
+	return environ.Of(os.Environ()).Without(PathEnvVars()...)
 }
 
 // A handed project layer is read from its content, never from a file, and
