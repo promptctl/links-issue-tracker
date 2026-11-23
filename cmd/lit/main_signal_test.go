@@ -22,6 +22,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/process"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/trace"
@@ -149,7 +150,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	// remote. A worker already gone never engaged the wedge, and its clean end
 	// below would prove nothing.
 	time.Sleep(2 * time.Second)
-	if !processAlive(pid) {
+	if !process.Alive(pid) {
 		t.Fatalf("receive worker %d ended before the wedge engaged:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 	sigtermReceiveWorker(t, ws, pid, 8*time.Second) // comfortably under the receive's 15s deadline
@@ -229,7 +230,7 @@ func sigtermReceiveWorker(t *testing.T, ws workspace.Info, pid int, deadline tim
 	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM to receive worker %d: %v", pid, err)
 	}
-	for processAlive(pid) {
+	for process.Alive(pid) {
 		if time.Since(sentAt) > deadline {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatalf("receive worker %d did not exit within %v of SIGTERM — the receive is not cancellation-responsive:\n%s", pid, deadline, receiveLog(t, ws.StorageDir))
@@ -239,13 +240,6 @@ func sigtermReceiveWorker(t *testing.T, ws workspace.Info, pid int, deadline tim
 	if !strings.Contains(receiveLog(t, ws.StorageDir), fmt.Sprintf("receive end pid=%d ", pid)) {
 		t.Fatalf("receive worker %d exited without its end line — it did not end on the clean path:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
-}
-
-// processAlive reports whether pid names a live process. The detached worker
-// is reparented when its command exits, and its new parent reaps it, so a
-// finished worker stops answering rather than lingering as a zombie.
-func processAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
 }
 
 // receiveTraceReasons returns the reason of every sync trace the automatic
@@ -476,7 +470,7 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 		t.Fatalf("the receive worker never reached the remote:\n%s", receiveLog(t, ws.StorageDir))
 	}
 	time.Sleep(200 * time.Millisecond) // git has sent its request and is waiting on the reply
-	if !processAlive(pid) {
+	if !process.Alive(pid) {
 		t.Fatalf("receive worker %d ended before the git wedge could be signalled:\n%s", pid, receiveLog(t, ws.StorageDir))
 	}
 

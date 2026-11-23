@@ -135,6 +135,33 @@ func TestFreezeTreeRefusesAFileWriteUntilTheTestEnds(t *testing.T) {
 	}
 }
 
+// A frozen tree's link is passed over, so what it points at outside the tree
+// keeps its mode.
+func TestFreezeTreeLeavesALinksTargetAlone(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("not the tree's"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "file"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Skipf("this process cannot make a symlink: %v", err)
+	}
+	want := FileModeAsStored(t, 0o644)
+	t.Run("frozen", func(t *testing.T) {
+		FreezeTree(t, root)
+		info, err := os.Stat(outside)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != want {
+			t.Fatalf("the link's target outside the frozen tree has mode %v; want %v, as it was", got, want)
+		}
+	})
+}
+
 // A tree with no file has nothing whose freeze every platform enforces.
 func TestFreezeTreeFailsOnATreeWithNoFile(t *testing.T) {
 	root := t.TempDir()

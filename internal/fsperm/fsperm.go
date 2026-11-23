@@ -155,24 +155,45 @@ func RequireReadOnly(t testing.TB, file string) {
 	}
 }
 
-// FreezeTree makes the tree at root read-only until the test ends: every
-// directory 0o555 and every file 0o444. It is measured on a file, whose
-// read-only bit every platform enforces and root bypasses; the directories
-// refuse new entries too on POSIX, and do not on Windows, so a test of a
-// frozen tree asserts only that a write into it fails.
-func FreezeTree(t testing.TB, root string) {
-	t.Helper()
-	var file string
-	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// WalkFreeze hands apply every entry of the tree at root with the mode
+// freezing gives it: a directory 0o555, and a file 0o444 with its execute bits
+// kept, so a program in a frozen tree still runs. A symlink is passed over:
+// chmod follows a link, so freezing one would freeze its target, which the
+// walk reaches on its own when the tree holds it and which the tree does not
+// own when it does not. [LAW:single-enforcer] the one freeze rule, for a
+// test's frozen tree (FreezeTree) and a frozen template alike.
+func WalkFreeze(root string, apply func(path string, d fs.DirEntry, perm fs.FileMode) error) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			set(t, path, 0o555)
+		switch {
+		case d.Type()&fs.ModeSymlink != 0:
 			return nil
+		case d.IsDir():
+			return apply(path, d, 0o555)
 		}
-		set(t, path, 0o444)
-		file = path
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return apply(path, d, 0o444|info.Mode().Perm()&0o111)
+	})
+}
+
+// FreezeTree makes the tree at root read-only until the test ends, as
+// WalkFreeze freezes it. It is measured on a file, whose read-only bit every
+// platform enforces and root bypasses; the directories refuse new entries too
+// on POSIX, and do not on Windows, so a test of a frozen tree asserts only
+// that a write into it fails.
+func FreezeTree(t testing.TB, root string) {
+	t.Helper()
+	var file string
+	if err := WalkFreeze(root, func(path string, d fs.DirEntry, perm fs.FileMode) error {
+		set(t, path, perm)
+		if !d.IsDir() {
+			file = path
+		}
 		return nil
 	}); err != nil {
 		t.Fatalf("freeze %s: %v", root, err)
