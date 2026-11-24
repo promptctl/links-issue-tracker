@@ -387,7 +387,7 @@ Test evidence:
 `store.go`. Pre-transaction (pure/validation) phase:
 1. `in.Title.Text()` and `in.Lane.Text()` — the parsed `storage.Title` / `storage.Lane` (`internal/storage/title.go`); a zero `Title` → `model.ValidationError{Message: "title is required"}`, a `Lane` no parser made → an error (`store.go`).
 2. `issueType := in.IssueType`; if `""` → `model.TypeTask` (`store.go`).
-3. `now := time.Now().UTC()` (`store.go`).
+3. Under the commit lock, `at := s.stamps.Stamp(s.clock, filed)`, the stamp past the history the issue is filed under (`store.go`).
 4. `canonicalizeLabels(in.Labels)` (`store.go`; `internal/store/labels.go`) — error propagated.
 5. `issueid.NormalizeTopicForCreate(in.Topic)` (`store.go`) — error propagated. Missing topic yields an error containing `"topic is required"` (`store_test.go`).
 6. `createdBy := storage.Actor(in.Actor)` — the event actor, the label creator, the parent-edge creator, and the id hash's creator (`store.go`).
@@ -433,7 +433,7 @@ Defaults, restated as a table for every column the create path touches:
 | `assignee` | trimmed input via `AssigneeValue()` |
 | `item_rank` | `nextRankForPlacement` |
 | `lane` | trimmed input |
-| `created_at`/`updated_at` | same `time.Now().UTC()` `model.StampText` |
+| `created_at`/`updated_at` | the one stamp `at` (`CreatedAt: at.Time()`, then `Stamped(at)`), `model.StampText` |
 | `closed_at` | literal `NULL` |
 | `archived_at`/`deleted_at` | `retentionColumns` of a Live issue → both `NULL` |
 | `resolution`/`redirect_target` | not written |
@@ -779,12 +779,12 @@ Evidence: a field plan taken against a stale snapshot lands its title change whi
 
 ### 7. Event / attribution rows
 
-`recordEvent(ctx, tx, issueID, action, reason, actor string, changes []model.FieldChange) error` — a mutation's history: `insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, changes))` (`store.go`). `newEvent(issueID, action, reason, actor, changes) model.IssueEvent` mints every event the store writes (`store.go`); `stampEdit(issue, reason, actor, changes) (model.Issue, model.IssueEvent)` mints an edit's event with an empty action and sets `issue.UpdatedAt = event.CreatedAt`, for `applyFieldsTx` and for the events a resolved reconcile's settled export carries (`landProse`, `sync_reconcile.go`). `insertEventTx` (`import_export.go`) is the one writer of `issue_events` and `issue_event_changes`.
+`recordEvent(ctx, tx, issueID, action, reason, actor string, at stamp.Instant, changes []model.FieldChange) error` — a mutation's history: `insertEventTx(ctx, tx, s.newEvent(issueID, action, reason, actor, at, changes))` (`store.go`). `newEvent(issueID, action, reason, actor, at, changes) model.IssueEvent` mints every event the store writes (`store.go`); `stampEdit(issue, at, reason, actor, changes) (model.Issue, model.IssueEvent)` mints an edit's event with an empty action and returns `issue.Stamped(at)`, so the event and the row share the stamp, for `applyFieldsTx` and for the events a resolved reconcile's settled export carries (`landProse`, `sync_reconcile.go`). `insertEventTx` (`import_export.go`) is the one writer of `issue_events` and `issue_event_changes`.
 
 Constructed event (`store.go`):
 - `ID = "evt-" + uuid.NewString()`;
 - `Action`, `Reason` each `strings.TrimSpace`d; `Actor = storage.Actor(actor)`;
-- `CreatedAt = time.Now().UTC()`;
+- `CreatedAt = at.Time()`, the write's stamp;
 - `Attribution = s.attribution` — read off the store, never passed in;
 - `Changes = changes`.
 
@@ -2677,7 +2677,7 @@ Bucketing convention, `bucketRelations(focalID, relations, issuesByID, ancestry)
 `Store.AddRelation(ctx, storage.AddRelationInput{SrcID, DstID, Type, CreatedBy})` — `internal/store/relations.go`:
 1. Pre-tx: `in.Type == model.RelRelatedTo && in.SrcID == in.DstID` → `model.ValidationError{Message: "related-to cannot target itself"}`. Note this self-check is only for related-to at this point.
 2. `srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)` — related-to endpoints get sorted.
-3. `now := time.Now().UTC()`; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `storage.Actor(in.CreatedBy)` (empty → `"unknown"`).
+3. `now := s.clock.Now()`, UTC by the clock; the returned `model.Relation` is built with the canonical endpoints, the type, `now`, and `storage.Actor(in.CreatedBy)` (empty → `"unknown"`).
 4. Inside `s.withMutation(ctx, "add relation", ...)`:
    - `requireIssueExistsTx(ctx, tx, in.SrcID)` then `issueTypeTx(ctx, tx, in.DstID)` — note these use the **input** ids, not the canonicalized ones. `requireIssueExistsTx` runs `SELECT 1 FROM issues WHERE id = ?` and maps `sql.ErrNoRows` to `storage.NotFoundError{Entity: "issue", ID: issueID}`, other errors to `fmt.Errorf("check issue exists: %w", err)` — `internal/store/store.go`. It deliberately does not filter on `deleted_at`, so archived/soft-deleted rows count as existing (`internal/store/store.go` comment).
    - `issueTypeTx` (`relations.go`) is the dst's existence proof and its type in one read (`SELECT issue_type FROM issues WHERE id = ?`, `ErrNoRows` → `storage.NotFoundError{Entity: "issue"}`, other errors → `fmt.Errorf("read issue type: %w", err)`); then `rejectHeldRelationTx` (see Duplicate handling below); then `storage.RejectNonContainerParentEdge(rel.Type, rel.DstID, dstType)` (`internal/storage/containment.go`, shared with the memory engine): for `parent-child` only, `storage.RejectParentThatIsNotAContainer` → `model.ValidationError` for a parent that is not an epic; other types pass.
@@ -2758,7 +2758,7 @@ Tests: `TestAddRelationRejectsBlocksCycle` (A→B then B→A rejected) — `inte
 `Store.SetParent(ctx, storage.SetParentInput{ChildID, ParentID, CreatedBy})` — `internal/store/relations.go`:
 - Blank check: either id empty after `strings.TrimSpace` → `model.ValidationError{Message: "child and parent ids are required"}`.
 - `in.ChildID == in.ParentID` → `model.ValidationError{Message: "child and parent cannot be the same issue"}`.
-- Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: time.Now().UTC(), CreatedBy: trimmed}`; empty CreatedBy → `"unknown"`.
+- Builds `model.Relation{SrcID: ChildID, DstID: ParentID, Type: RelParentChild, CreatedAt: s.clock.Now(), CreatedBy: trimmed}`, UTC by the clock; empty CreatedBy → `"unknown"`.
 - In `s.withMutation(ctx, "set parent"...)`: `addRelationTx`, the same write `lit dep add` uses — endpoint existence, the refusal of a parent that is not an epic (`storage.RejectNonContainerParentEdge`, `model.ValidationError`), the parent-cycle refusal (`model.ValidationError`), and the single-parent clear-then-insert.
 - Returns the relation value.
 
@@ -2907,7 +2907,7 @@ Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unc
 - In `mutationValue(ctx, s, "rank to "+edge.name, …)`, so the frame and its edge are read under the same commit lock as the write:
   - `frameOfTx` resolves the issue's own frame; the end is that frame's, not the workspace's.
   - `frameEdgeHolderTx(ctx, tx, f, edge)` names the issue holding the frame's edge. If that is this issue, returns `storage.RankEnd{Frame: f, Moved: false}` with no write.
-  - Otherwise its new rank is `edge.ranksBeyondTx(ctx, tx, f, 1, issueID)`, which measures room beside the edge holder's rank; error → `fmt.Errorf("rank to %s: %w", edge.name, err)`. Then `writeRankTx(ctx, tx, issueID, newRank, now)`, with `now` from the store's clock in RFC3339Nano, and `smoothRanksIfNeededTx(ctx, tx, newRank)`.
+  - Otherwise its new rank is `edge.ranksBeyondTx(ctx, tx, f, 1, issueID)`, which measures room beside the edge holder's rank; error → `fmt.Errorf("rank to %s: %w", edge.name, err)`. Then `writeRankTx(ctx, tx, issueID, newRank)` and `smoothRanksIfNeededTx(ctx, tx, newRank)`.
 
 **RankAbove(issueID, targetID)** — `internal/store/ranking.go`:
 - `resolveRankPair` first (all its errors propagate).
@@ -2919,7 +2919,7 @@ Pinned pair cases — `internal/store/ranking_frame_test.go`: top-level pair unc
   bound `(anchorRank)` and read through `rankRows`; `item_rank < ? ORDER BY item_rank DESC` is `topEdge.outside`. Error → `fmt.Errorf("query the key outside the %s: %w", e.name, err)`, with `e.name` `"top"`, which the `rank-above: %w` wrap prefixes. The read is **not** scoped to the pair's frame — it searches the whole workspace. The frame's say in the move is choosing the anchor, which `rankPairTx` already did. The nearest of the two rows that is not `move.MovedID` is the key outside: the moving issue holds at most one of the two, which leaves the key it is about to vacate out of its own bounds with the same read every time, and `item_rank != ''` keeps unranked rows out.
 - `topEdge.beside` orders the pair `(outsideRank, anchorRank)`, so the key found is the lower bound and the anchor the upper. No such row reads as `""`, which happens only when nothing in the whole workspace but the moving issue sorts before the anchor; the lower bound is then open and the new rank is `rank.Between("", anchorRank, 1)`.
 - The anchor's rank is read through `anchorRankTx` (`internal/store/ranking.go`): `SELECT item_rank FROM issues WHERE id = ? AND deleted_at IS NULL AND item_rank != ''`, so only a live, ranked anchor returns a row. No row → `fmt.Errorf("cannot rank against %s: it was deleted while the move was being applied, or it has no rank", anchorID)`, which `bounds` and `rankBetweenTx` return unwrapped, so the `rank-above: %w` wrap prefixes it. An unranked or deleted anchor therefore fails the move.
-- `writeRankTx(ctx, tx, move.MovedID, newRank, now)` with `now` from `s.clock`; after `requireLiveTx` it writes the key and the timestamp through `writeRanksTx` with one touched `rankWrite`, the same batched statement rank set runs, so the `deleted_at IS NULL` predicate on the key write lives in one place.
+- `writeRankTx(ctx, tx, move.MovedID, newRank)`; after `requireLiveTx` it writes the key through `writeRanksTx` with one `rankWrite`, the same batched statement rank set runs, so the `deleted_at IS NULL` predicate on the key write lives in one place.
 - `smoothRanksIfNeededTx(ctx, tx, newRank)`. Returns the `RankMove` regardless of which id the caller named.
 
 **RankBelow(issueID, targetID)** — `internal/store/ranking.go`: mirror image — the `bounds` closure returns `bottomEdge.roomBesideTx(ctx, tx, anchorRank, move.MovedID)`, whose `outside` fragment is `item_rank > ? ORDER BY item_rank ASC` and whose `e.name` is `"bottom"`; `bottomEdge.beside` orders the pair `(anchorRank, outsideRank)`, so the anchor is the lower bound and the key found the upper. The closure's error → `fmt.Errorf("rank-below: %w", err)`; the write is the same `writeRankTx` and the smoothing the same `smoothRanksIfNeededTx`. This read is likewise unscoped to the frame, so it reads `""` only when nothing in the whole workspace sorts after the anchor, and the new rank is then `rank.Between(anchorRank, "", 1)`. The anchor's rank is read through the same `anchorRankTx`, so an unranked or deleted anchor fails the move with `"rank-below: cannot rank against %s: it was deleted while the move was being applied, or it has no rank"`.
@@ -2945,7 +2945,7 @@ Frame behavior pinned by tests — `internal/store/ranking_frame_test.go`:
 - `refuseReversedTie(places, ranked)` reads the first `len(ranked)` rows of the head. Where two adjacent names both stand there on one key and the later name's id sorts before the earlier one's, the set is refused with a `model.ValidationError`: ``fmt.Sprintf("rank set: %s and %s share the key %q, which a listing breaks by id, so %s cannot be written above %s; separate them first with `lit rank %s --above %s`", …)``.
 - `rankSetLeadingRun(head, ranked)` is the rows ahead of the head's first unnamed row, up to the first key two rows share: a listing breaks a tie by id, so a shared key cannot pass to another issue. The run stops there, so it stays the frame's first rows. Every other representative joins, an unranked one included.
 - `topEdge.ranksBeyondTx(ctx, tx, f, n, "")` places one key per joining issue past the frame's top, once for the whole set, and the run's keys are read again through `frameHeadTx`, because making room rewrites keys. The slots are those keys and then the run's, ascending, and the representatives take them in the order named.
-- A representative moved if its index in the head differs from its index in the order named, or it was not in the head. A representative is written if it moved or its key changes. `writeRanksTx` writes them in one statement per `idChunks` chunk of at most `idChunkSize` ids (a write cannot join an `idSet`: Dolt checks an UPDATE ... JOIN's constraints against the joined row) — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END, updated_at = COALESCE(CASE id WHEN ? THEN ? … END, updated_at) WHERE deleted_at IS NULL AND id IN (…)`, error → `fmt.Errorf("rewrite the keys of %v: %w", chunk, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. A write is `touched` only for a representative that moved; it takes one shared `now`, and every other write is bound NULL, so it keeps its `updated_at`. An issue the set does not name is never written. `smoothRanksIfNeededTx` then runs over each minted key.
+- A representative moved if its index in the head differs from its index in the order named, or it was not in the head. A representative is written if it moved or its key changes. `writeRanksTx` writes them in one statement per `idChunks` chunk of at most `idChunkSize` ids (a write cannot join an `idSet`: Dolt checks an UPDATE ... JOIN's constraints against the joined row) — `UPDATE issues SET item_rank = CASE id WHEN ? THEN ? … END WHERE deleted_at IS NULL AND id IN (…)`, the key and nothing else, so no rank write moves `updated_at`; error → `fmt.Errorf("rewrite the keys of %v: %w", chunk, err)`, wrapped `fmt.Errorf("rank set: %w", err)`. The representatives that moved are counted as `RankSetAccount.Touched`. An issue the set does not name is never written. `smoothRanksIfNeededTx` then runs over each minted key.
 - Atomic: all assignments in one mutation.
 - On error the zero `RankSetResult` is returned (`mutationValue`), so no resolutions come back with a failed write.
 
@@ -2973,7 +2973,7 @@ SELECT id, item_rank FROM issues WHERE deleted_at IS NULL AND item_rank = ?
 
 `smoothRanksTx(ctx, tx, triggerRank)` — `internal/store/ranking.go`:
 1. `rank.Respace(triggerRank, read)`, with `read` calling `rankWindowTx`; error → `fmt.Errorf("smooth: %w", err)`. A `whole` result takes every ranked row in place of the window's.
-2. Each row whose new key differs from the old is written through `writeRanksTx` as an untouched `rankWrite`, so `updated_at` is **not** changed; error → `fmt.Errorf("smooth: %w", err)`. No window read admits an unranked row, so a respace never ranks an issue.
+2. Each row whose new key differs from the old is written through `writeRanksTx`; error → `fmt.Errorf("smooth: %w", err)`. No window read admits an unranked row, so a respace never ranks an issue.
 3. The respace is owed to the `RankObserver` as a `Respace{Rows, Rewritten, LongestKey, Ceiling}`.
 
 `rankRows(ctx, q, query, args…)` — `internal/store/ranking.go`, over a `rowQueryer` (`*sql.DB` or `*sql.Tx`): runs a rank query and returns every row it matches, in the order the query asks for. A respace's reads bound themselves by `LIMIT` and cost the window, and a rank set's reads the frame it reorders.
@@ -3037,7 +3037,7 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
 
 `rankRewrites(sequence []placement)` — `internal/store/rank_repair.go`: walks `sequence` as runs of movers delimited by the placements marked `anchored`, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a sequence with no anchors at all — needs no special case. A run with no room inside `rank.MaxLength` widens: `withoutBound(sequence, start, at)` makes the anchor bounding it a mover marked `respaced`, the upper one, or the lower at the open end, and the rewrite starts over, so a landing or repair is not stopped by a gap. With no anchors left the run is the whole sequence between open ends, which always has room, and the walk stays pure, so two clones landing one export write the same rows (`TestRankRewritesWidenPastAGapWithNoRoom`). Any other error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)`.
 
-`anchorRun(target []rankedIssue) []placement` — `internal/store/rank_repair.go`: marks `anchored` a longest subsequence of `target` strictly increasing by `rank.Anchor` of the stored rank, by patience sort (`keys` computed once, `tails` + `prev`, `sort.Search` over `tails`). The repair does not write issues in the run, so they keep their place and their `updated_at`, and the rewrite count is the count of issues the new order actually moved; smoothing may still re-space their rank strings (see `FixRankInversions`). Movers are spaced into the gap two anchors bound, and two ranks with the same `rank.Anchor` (`"V"` and `"V0"`, or two keys tied on the index prefix) leave none or read in the wrong order, so an anchor's `rank.Anchor` must sort strictly above the one before it, and tied keys come out with one holder and the rest spaced past it (`TestARepairSeparatesKeysTiedOnTheIndexPrefix`). It must also satisfy `rank.Valid`, which the empty `rank.Anchor` of an unranked, malformed or all-zero issue does not; those issues are therefore always movers, which hands them a real rank on the way past.
+`anchorRun(target []rankedIssue) []placement` — `internal/store/rank_repair.go`: marks `anchored` a longest subsequence of `target` strictly increasing by `rank.Anchor` of the stored rank, by patience sort (`keys` computed once, `tails` + `prev`, `sort.Search` over `tails`). The repair does not write issues in the run, so they keep their place, and the rewrite count is the count of issues the new order actually moved; smoothing may still re-space their rank strings (see `FixRankInversions`). Movers are spaced into the gap two anchors bound, and two ranks with the same `rank.Anchor` (`"V"` and `"V0"`, or two keys tied on the index prefix) leave none or read in the wrong order, so an anchor's `rank.Anchor` must sort strictly above the one before it, and tied keys come out with one holder and the rest spaced past it (`TestARepairSeparatesKeysTiedOnTheIndexPrefix`). It must also satisfy `rank.Valid`, which the empty `rank.Anchor` of an unranked, malformed or all-zero issue does not; those issues are therefore always movers, which hands them a real rank on the way past.
 
 `holdKeys(sequence, held)` — `internal/store/rank_repair.go`: merges each `held` issue with a non-empty rank, in key order, into `sequence` before the first anchor whose `rank.Anchor` is above its own, as an anchor when its significant rank is `rank.Valid` and above the latest anchor's and as a mover otherwise; so a held issue keeps its key unless an anchor or an earlier held issue holds it or the key is malformed or all zeros, and one holder of a shared key keeps it. A held issue with an empty rank is left out and never written.
 
@@ -3065,10 +3065,10 @@ Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` suppli
    - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocked-by edges: %w", err)`.
    - `live := liveEdges(edges, liveIDs)`; `blocksCycle(order, live)` non-empty → `fmt.Errorf("fix rank inversions: %w", &blocksCycleError{path})`, before any write.
    - `constraints := storage.NewDependencyOrder(ancestry, live).Constraints()`; `ordered, held := splitRankOrder(order, liveIDs, constraints)`; `repairRankOrder(ordered, held, constraints)`; error → `fmt.Errorf("fix rank inversions: %w", err)`. Edges inside a group constrain nothing.
-   - Every rewrite goes through `writeRanksTx` as a `rankWrite`, touched unless it is `respaced`, which kept its place and only gave a gap room, stamped `model.StampText(s.clock.Now())`; error → `fmt.Errorf("fix rank inversions: %w", err)`.
+   - Every rewrite goes through `writeRanksTx` as a `rankWrite`, and is counted as moved unless it is `respaced`, which kept its place and only gave a gap room; error → `fmt.Errorf("fix rank inversions: %w", err)`.
    - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)`.
    - `rerankedCount` is the rewrites that are not `respaced`, assigned rather than accumulated, because `withStampedMutation` may re-run the function after a transient failure rolls its writes back.
-3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues the repair moved, one per issue. Smoothing may rewrite further ranks, anchors included, without changing order or `updated_at`, and those are not counted.
+3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues the repair moved, one per issue. Smoothing may rewrite further ranks, anchors included, without changing order, and those are not counted.
 
 Test-pinned behavior in `internal/store/store_test.go`:
 - One dependency blocking two dependents: Doctor reports 2 inversions before, `FixRankInversions` reports 1, 0 after —.

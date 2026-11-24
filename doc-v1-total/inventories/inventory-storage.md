@@ -706,7 +706,7 @@ These types live in the contract, not in an engine, because a capability interfa
 
 **`AttributeTo(streamToken string)`** (`internal/storage/memory/engine.go`) — locks, then sets `e.attribution = model.NewAttribution(streamToken, e.workspaceID)`. An empty token leaves it unattributed rather than half-attributed (`internal/storage/memory/engine.go`).
 
-**`e.now()`** returns `time.Now().UTC()` — the engine's clock, read at the write boundary (`internal/storage/memory/engine.go`).
+**`e.clock.Now()`** is the engine's clock, read at the write boundary. `storage.Clock.Now` returns the reading in UTC whatever zone the injected function reads in, so a writer that records a reading straight off it (a comment, a relation, a purge, a plan review, an export) never normalizes it again (`internal/storage/clock.go`; `a_clock_read_in_another_zone_records_utc`, conformance).
 
 ### 2.4 Internal derivations
 

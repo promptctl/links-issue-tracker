@@ -667,7 +667,8 @@ for a start, the parsed `Take{Assignee Text, Reclaim bool}`.
   `TestWriteStartTakesTheTicketForTheCanonicalAssignee` (`model_test.go`).
 
 `(Issue).Stamped(at stamp.Instant) Issue` (`model.go`) — the issue with `at` as
-its `UpdatedAt`; every write that moves a row sets updated_at through it.
+its `UpdatedAt`; every write that moves an existing row sets updated_at through
+it, and a rank move sets none.
 
 `RetentionChanges(before, after Retention) []FieldChange` (`model.go`) — the
 `archived_at` / `deleted_at` rows a retention move records, spelled like every
