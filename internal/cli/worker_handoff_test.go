@@ -146,7 +146,7 @@ func TestAHandedWorkspaceIsTheLaunchersAndReHandsItself(t *testing.T) {
 // so a worker can only run under them by being handed them.
 func launcherDeadlines(t testing.TB) deadline.Deadlines {
 	t.Helper()
-	d, err := deadline.Of(deadline.Figures{MirrorHold: time.Second, MirrorPush: 2 * time.Second, Receive: 3 * time.Second, PushProof: 4 * time.Second, Compaction: 5 * time.Second})
+	d, err := deadline.Of(deadline.Figures{MirrorHold: time.Second, MirrorPush: 2 * time.Second, Receive: 3 * time.Second, PushProof: 4 * time.Second, Compaction: 5 * time.Second, ReRootHold: 6 * time.Second, EngineCloseReserve: 7 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}

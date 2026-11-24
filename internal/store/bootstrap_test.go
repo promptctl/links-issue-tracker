@@ -154,7 +154,7 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 // the builder lets go, and its wait reports acquired.
 func TestARacerWaitsOutABuilderPastTheStandStillWait(t *testing.T) {
 	t.Parallel()
-	shortest := suiteenv.WithHold(suiteenv.ContentionHold).HolderWait()
+	shortest := suiteenv.Contention().HolderWait()
 	root := filepath.Join(t.TempDir(), "dolt")
 	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
 	if err != nil {

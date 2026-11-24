@@ -21,13 +21,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-// ReRootHoldBudget bounds a re-root's work under the live store's hold. The
-// work is proportional to the history it walks: a 1,000-commit window over a
-// 5,127-commit store rewrote in 130 ms (links-storage-3k6u.8ka), so the budget
-// is two orders of magnitude above the largest window the bound keeps, and a
-// re-root still running at it is a stalled one.
-const ReRootHoldBudget = 15 * time.Second
-
 // ErrSideLineAcrossCut marks a cut that some line of history goes around: a
 // commit the branch reaches that neither descends from the cut nor is one of
 // its ancestors, which is a side line that forked below the cut and merged
@@ -73,7 +66,7 @@ var reRootRef = ref.NewInternalRef("reroot")
 // line that went around it.
 //
 // It contacts no network and opens no SQL engine; the hold is
-// holdForRefWrite's, under ReRootHoldBudget. Deciding when to re-root, and
+// holdForRefWrite's, under the run's re-root hold deadline (d.ReRootHold). Deciding when to re-root, and
 // where, is the caller's.
 func ReRoot(ctx context.Context, stderr io.Writer, d deadline.Deadlines, doltRootDir, branch, cut string) (storage.ReRooted, error) {
 	root, err := validateDoltRootDir(doltRootDir)
@@ -101,7 +94,7 @@ func reRootUnderHold(ctx context.Context, stderr io.Writer, d deadline.Deadlines
 		return storage.ReRooted{}, err
 	}
 	defer func() { err = errors.Join(err, release()) }()
-	err = holdForRefWrite(ctx, stderr, d, root, engineWrite, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, stderr, d, root, engineWrite, d.ReRootHold(), func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		var rewriteErr error
 		reRooted, rewriteErr = reRootBranch(holdCtx, ddb, ref.NewBranchRef(branch), hash.Parse(cut))

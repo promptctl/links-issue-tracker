@@ -927,15 +927,9 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 // other coverage feeds wrapCommitLockContention a bare sentinel that carries
 // no account at all. Dropping the %w in either wrap would leave that coverage
 // green while every commit-contention message stopped naming its holder.
-//
-// Serial by construction: it zeroes the close reserve the commit lock's
-// budget adds, which is package state; the holder wait the budget derives
-// from comes from the short hold its run is handed. [LAW:no-shared-mutable-globals]
 func TestCommitContentionNamesTheHolder(t *testing.T) {
-	env := envWithHold(suiteenv.ContentionHold)
-	closeReserve := rotationCloseReserve
-	rotationCloseReserve = 0
-	t.Cleanup(func() { rotationCloseReserve = closeReserve })
+	t.Parallel()
+	env := envWithDeadlines(suiteenv.Contention())
 
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -978,7 +972,7 @@ func TestBeaconContentionNamesTheSquatter(t *testing.T) {
 		}
 	}()
 
-	release, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.WithHold(suiteenv.ContentionHold), doltRoot)
+	release, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.Contention(), doltRoot)
 	if err == nil {
 		t.Fatalf("HoldMirrorBeacon() succeeded against an exclusive squatter; release = %v", release())
 	}

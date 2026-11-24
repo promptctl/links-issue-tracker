@@ -117,15 +117,17 @@ func TestOfRefusesAFigureThatIsNotPositive(t *testing.T) {
 		t.Fatalf("Of(the shipped figures) = %v", err)
 	}
 	for name, unset := range map[string]func(*Figures){
-		"mirror hold": func(f *Figures) { f.MirrorHold = 0 },
-		"mirror push": func(f *Figures) { f.MirrorPush = -time.Second },
-		"receive":     func(f *Figures) { f.Receive = 0 },
-		"push proof":  func(f *Figures) { f.PushProof = 0 },
-		"compaction":  func(f *Figures) { f.Compaction = 0 },
+		"mirror hold deadline":  func(f *Figures) { f.MirrorHold = 0 },
+		"mirror push deadline":  func(f *Figures) { f.MirrorPush = -time.Second },
+		"receive deadline":      func(f *Figures) { f.Receive = 0 },
+		"push proof deadline":   func(f *Figures) { f.PushProof = 0 },
+		"compaction deadline":   func(f *Figures) { f.Compaction = 0 },
+		"re-root hold deadline": func(f *Figures) { f.ReRootHold = 0 },
+		"engine close reserve":  func(f *Figures) { f.EngineCloseReserve = 0 },
 	} {
 		f := whole
 		unset(&f)
-		if _, err := Of(f); err == nil || !strings.Contains(err.Error(), "the "+name+" deadline must be positive") {
+		if _, err := Of(f); err == nil || !strings.Contains(err.Error(), "the "+name+" must be positive") {
 			t.Errorf("Of with no %s = %v, want it refused by name", name, err)
 		}
 	}

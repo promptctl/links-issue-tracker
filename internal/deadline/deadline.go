@@ -194,6 +194,26 @@ const (
 // (Figures.Receive says what it bounds).
 const receiveDeadline = 15 * time.Second
 
+// reRootHoldDeadline is the shipped deadline a re-root's work under the live
+// store's hold runs under. The work is proportional to the history it walks:
+// a 1,000-commit window over a 5,127-commit store rewrote in 130 ms, so the
+// deadline is two orders of magnitude above the largest window the bound
+// keeps, and a re-root still running at it is a stalled one.
+const reRootHoldDeadline = 15 * time.Second
+
+// engineCloseReserve is the shipped reserve a GC-contention rotation sets
+// aside for the one part of it nothing can bound: the old engine's close,
+// since `*sql.DB.Close()` takes no context (Figures.EngineCloseReserve).
+//
+// Measured 2026-09-12 rather than guessed, off the same sample the mirror's
+// sizing uses: three `lit sync status` runs, each a whole process that opens a
+// sync session and closes it with no push, took 0.26s, 0.31s and 0.39s end to
+// end. That bounds open AND close together at under 0.4s in the healthy case,
+// so a second is comfortable headroom over the close alone, and a reservation
+// that assumed it was zero would be asserting something nobody had measured.
+// [FRAMING:representation]
+const engineCloseReserve = time.Second
+
 // pushProofDeadline is the shipped deadline a push's proof runs under: one
 // `git ls-remote` (1.2-1.7s measured over ssh, 2026-09-27) and one local `git
 // cat-file`. The push has already landed, so a proof cut short costs only the
@@ -216,11 +236,12 @@ const pushProofDeadline = 10 * time.Second
 // marking; a collection past marking finishes its local disk work first.
 const compactionDeadline = 45 * time.Second
 
-// Figures are a run's deadlines as numbers, the one list of them: what Of
-// builds a Deadlines from, and what a Deadlines is written as when a command
-// hands its run's deadlines to the worker it spawns. A Figures may hold any
-// number; only Of reads one, and it admits none that is not positive.
-// [LAW:parse-dont-validate]
+// Figures are a run's deadlines as numbers, the one list of them: every
+// figure a hold, a wait or a deadline of the run's work on its store and its
+// sync derives from. They are what Of builds a Deadlines from, and what a
+// Deadlines is written as when a command hands its run's deadlines to the
+// worker it spawns. A Figures may hold any number; only Of reads one, and it
+// admits none that is not positive. [LAW:parse-dont-validate]
 type Figures struct {
 	// MirrorHold is the deadline each background-mirror hold on the live store
 	// runs under: the clone step before the push, and the pushed-head record
@@ -252,6 +273,15 @@ type Figures struct {
 	// runs after it has spawned its mirror: a term in the spawner's tail, which
 	// the worker's wait for its spawner derives from.
 	Compaction time.Duration `json:"compaction"`
+	// ReRootHold bounds a re-root's work under the live store's hold of
+	// Dolt's LOCK and the commit lock: a landed push's history bound, and a
+	// follow of a remote that re-rooted.
+	ReRootHold time.Duration `json:"re_root_hold"`
+	// EngineCloseReserve is what a GC-contention rotation sets aside, under
+	// the commit lock, for the previous engine's close, which takes no context
+	// and so no deadline: a term of every commit-lock holder's allowance
+	// (the store's commitLockWaiterBudget).
+	EngineCloseReserve time.Duration `json:"engine_close_reserve"`
 }
 
 // Deadlines is the set of deadlines one run's background sync work runs
@@ -275,14 +305,16 @@ func Of(f Figures) (Deadlines, error) {
 		name  string
 		value time.Duration
 	}{
-		{"mirror hold", f.MirrorHold},
-		{"mirror push", f.MirrorPush},
-		{"receive", f.Receive},
-		{"push proof", f.PushProof},
-		{"compaction", f.Compaction},
+		{"mirror hold deadline", f.MirrorHold},
+		{"mirror push deadline", f.MirrorPush},
+		{"receive deadline", f.Receive},
+		{"push proof deadline", f.PushProof},
+		{"compaction deadline", f.Compaction},
+		{"re-root hold deadline", f.ReRootHold},
+		{"engine close reserve", f.EngineCloseReserve},
 	} {
 		if figure.value <= 0 {
-			return Deadlines{}, fmt.Errorf("the %s deadline must be positive, got %s", figure.name, figure.value)
+			return Deadlines{}, fmt.Errorf("the %s must be positive, got %s", figure.name, figure.value)
 		}
 	}
 	return Deadlines{f: f}, nil
@@ -291,7 +323,7 @@ func Of(f Figures) (Deadlines, error) {
 // Shipped is the deadlines lit ships with, each derived above from what it
 // bounds. [LAW:one-source-of-truth]
 func Shipped() Deadlines {
-	return Deadlines{f: Figures{MirrorHold: mirrorHoldBudget, MirrorPush: mirrorPushDeadline, Receive: receiveDeadline, PushProof: pushProofDeadline, Compaction: compactionDeadline}}
+	return Deadlines{f: Figures{MirrorHold: mirrorHoldBudget, MirrorPush: mirrorPushDeadline, Receive: receiveDeadline, PushProof: pushProofDeadline, Compaction: compactionDeadline, ReRootHold: reRootHoldDeadline, EngineCloseReserve: engineCloseReserve}}
 }
 
 // IsZero reports whether d is the zero Deadlines, which Of never builds.
@@ -323,6 +355,12 @@ func (d Deadlines) PushProof() time.Duration { return d.figures().PushProof }
 
 // Compaction is Figures.Compaction.
 func (d Deadlines) Compaction() time.Duration { return d.figures().Compaction }
+
+// ReRootHold is Figures.ReRootHold.
+func (d Deadlines) ReRootHold() time.Duration { return d.figures().ReRootHold }
+
+// EngineCloseReserve is Figures.EngineCloseReserve.
+func (d Deadlines) EngineCloseReserve() time.Duration { return d.figures().EngineCloseReserve }
 
 // HistoryBound is the deadline a landed push's history bound runs under. The
 // bound crosses the network three times — the re-root's lease push, the

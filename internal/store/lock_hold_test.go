@@ -344,7 +344,7 @@ func envWithHold(hold time.Duration) environ.Env {
 func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 	// serial: no t.Parallel — asserts a wall-clock bound against the holder
 	// wait, which parallel load would move.
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 	statement := 5 * env.Deadlines().HolderWait()
 	reports := &heldReports{}
 	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
@@ -379,7 +379,7 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 func TestAWriterWaitsOutAMaintenanceHold(t *testing.T) {
 	// serial: no t.Parallel — its holder must outlast the holder wait by a
 	// wall-clock margin, which parallel load would eat.
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 	reports := &heldReports{}
 	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
 		return OpenMaintenance(ctx, env, testStderr(), root, "test-workspace-id")
@@ -399,7 +399,7 @@ func TestAWriterWaitsOutAMaintenanceHold(t *testing.T) {
 func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
 	// serial: no t.Parallel — asserts a wall-clock bound against the holder
 	// wait, which parallel load would move.
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 	wait := env.Deadlines().HolderWait()
 	reports := &heldReports{}
 	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
@@ -498,7 +498,7 @@ func TestABootstrapEnginesHoldIsReported(t *testing.T) {
 func TestAWriterBehindARoutineHolderOutsideItsEngineFails(t *testing.T) {
 	// serial: no t.Parallel — its holder must outlast the holder wait by a
 	// wall-clock margin, which parallel load would eat.
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 	reports := &heldReports{}
 	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
 		return OpenRoutine(WithHolderCommand(ctx, "lit purge"), env, testStderr(), root, "test-workspace-id")

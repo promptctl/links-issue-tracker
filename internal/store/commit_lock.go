@@ -150,30 +150,13 @@ func (s *Store) attemptMutation(ctx context.Context, stamp commitStamp, fn func(
 	return nil
 }
 
-// rotationCloseReserve is what the retry sets aside for the one part of a
-// connection rotation nothing can bound: Store.reconnect closes the previous,
-// live engine before opening the next, and `*sql.DB.Close()` takes no context,
-// so HolderWait — which bounds only the new engine's ping —
-// says nothing about it.
-//
-// Measured 2026-09-12 rather than guessed, off the same sample the mirror's
-// sizing uses: three `lit sync status` runs, each a whole process that opens a
-// sync session and closes it with no push, took 0.26s, 0.31s and 0.39s end to
-// end. That bounds open AND close together at under 0.4s in the healthy case,
-// so a second is comfortable headroom over the close alone, and a reservation
-// that assumed it was zero would be asserting something nobody had measured.
-// [FRAMING:representation]
-//
-// A variable, by the same convention the other budgets in this package follow:
-// a pin whose premise is that the reservation covers this term has to be able
-// to set it.
-var rotationCloseReserve = time.Second
-
 // rotationReserve is the longest one connection rotation can hold the commit
 // lock while the holder in front of its re-open stands still: the new
 // engine's open, waited out against a co-resident holder for
-// HolderWait, plus the old engine's unbounded close
-// (rotationCloseReserve). The retry reserves it before its rotation.
+// HolderWait, plus the old engine's close, which Store.reconnect runs before
+// the open and which takes no context, so HolderWait — bounding only the new
+// engine's ping — says nothing about it: the run's engine close reserve
+// (d.EngineCloseReserve). The retry reserves it before its rotation.
 //
 // It bounds the stand-still part, not the wall time. A routine holder that
 // took LOCK in the rotation's gap heartbeats through its own open
@@ -189,7 +172,7 @@ var rotationCloseReserve = time.Second
 // rotating writer when a rotation meets a slow gap-taker's open: a named
 // long operation failing the way it already fails.
 func rotationReserve(d deadline.Deadlines) time.Duration {
-	return d.HolderWait() + rotationCloseReserve
+	return d.HolderWait() + d.EngineCloseReserve()
 }
 
 // commitLockWaiterBudget is how long a commit-lock waiter lets the holder in
@@ -247,7 +230,7 @@ func commitLockWaiterBudget(d deadline.Deadlines) time.Duration {
 // from when the commit lock was taken (commitLockHeldSince), not from this
 // call, because callers do work under the lock before they get here. The
 // check reserves what runs after it: the new engine's open (bounded by
-// HolderWait), the PREVIOUS engine's close (rotationCloseReserve),
+// HolderWait), the PREVIOUS engine's close (d.EngineCloseReserve),
 // and the second run, projected at what the first one cost, since it is the
 // same operation. The close is the term to be careful about: Store.reconnect
 // closes the old engine before pinging the new one, `*sql.DB.Close()` takes

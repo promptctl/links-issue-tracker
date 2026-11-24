@@ -53,7 +53,7 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 
 	start := time.Now()
 	opened, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")
@@ -143,7 +143,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 	}
 	defer func() { _ = releaseLock() }()
 
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 
 	opened, err := OpenSync(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
@@ -333,7 +333,7 @@ func TestAWriteOpensBesideAnOpenReader(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 
 	reader, err := OpenForRead(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -383,7 +383,7 @@ func TestWriteOpenNamesTheJournalHolder(t *testing.T) {
 	}
 	defer func() { _ = releaseJournal() }()
 
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 
 	start := time.Now()
 	opened, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")

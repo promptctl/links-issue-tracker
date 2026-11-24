@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
@@ -421,12 +422,12 @@ func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 // The open is the run's holder wait W, derived from the contention hold, so
 // the budget is 2W plus the close and the reserve W plus the close. The check refuses when the hold
 // before the retry plus both runs reaches W; each row's arithmetic is in
-// hundredths of W.
-//
-// Not parallel: it mutates the package's close reserve.
+// hundredths of W. Each row hands its run the close cost as the run's engine
+// close reserve.
 func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *testing.T) {
-	d := suiteenv.WithHold(suiteenv.ContentionHold)
-	w := d.HolderWait()
+	// serial: no t.Parallel — asserts a wall-clock hold against the budget,
+	// which a loaded machine stretches.
+	w := suiteenv.Contention().HolderWait()
 	of := func(hundredths int64) time.Duration { return w * time.Duration(hundredths) / 100 }
 	for _, tc := range []struct {
 		name          string
@@ -451,9 +452,12 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 		{name: "a hold with room left gets its rotation", closeCost: of(7), work: of(4), wantRotations: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			restoreClose := rotationCloseReserve
-			rotationCloseReserve = tc.closeCost
-			t.Cleanup(func() { rotationCloseReserve = restoreClose })
+			figures := suiteenv.Contention().Figures()
+			figures.EngineCloseReserve = tc.closeCost
+			d, err := deadline.Of(figures)
+			if err != nil {
+				t.Fatal(err)
+			}
 			waiterBudget := commitLockWaiterBudget(d)
 
 			// Contended forever, shaped through wrapCommitWorkingSetError so
@@ -471,13 +475,13 @@ func TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters(t *tes
 			// weights it could not fail.
 			rotate := func(context.Context) error {
 				rotations++
-				time.Sleep(w + rotationCloseReserve)
+				time.Sleep(w + d.EngineCloseReserve())
 				return nil
 			}
 
 			ctx := heldCommitLock(context.Background(), tc.heldBefore)
 			heldSince, _ := commitLockHeldSince(ctx)
-			err := retryTransientGCContention(ctx, testStderr(), d, op, rotate)
+			err = retryTransientGCContention(ctx, testStderr(), d, op, rotate)
 			hold := time.Since(heldSince)
 
 			var blocked WorkspaceWriteBlockedError

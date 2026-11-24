@@ -204,7 +204,7 @@ func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
 		}
 	}()
 	// A short hold, so the refusal arrives one short holder wait in.
-	if _, err := EnsureDatabase(ctx, envWithHold(suiteenv.ContentionHold), testStderr(), root, "ws"); !errors.Is(err, ErrWorkspaceBusy) {
+	if _, err := EnsureDatabase(ctx, envWithDeadlines(suiteenv.Contention()), testStderr(), root, "ws"); !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("EnsureDatabase under exclusive hold = %v, want ErrWorkspaceBusy", err)
 	}
 }
@@ -230,7 +230,7 @@ func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
 		t.Fatalf("LockWorkspaceExclusive: %v", err)
 	}
 	// A short hold, so the refusal arrives one short holder wait in.
-	_, openErr := OpenForRead(ctx, envWithHold(suiteenv.ContentionHold), testStderr(), root, "ws")
+	_, openErr := OpenForRead(ctx, envWithDeadlines(suiteenv.Contention()), testStderr(), root, "ws")
 	if !errors.Is(openErr, ErrWorkspaceBusy) {
 		t.Fatalf("OpenForRead during live hold = %v, want ErrWorkspaceBusy", openErr)
 	}

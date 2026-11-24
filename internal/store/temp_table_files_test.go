@@ -23,7 +23,7 @@ func TestAWriteOpenCollectsOnlyWhatADeadWriterStaged(t *testing.T) {
 	// The refused open below exhausts its holder wait by design, so the run is
 	// handed a short hold.
 	t.Parallel()
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)

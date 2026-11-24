@@ -33,7 +33,7 @@ const StallBound = time.Minute
 // bound. The cli and store suites both read it, through Of or directly, so
 // the suites' deadline policy has this one home. [LAW:one-source-of-truth]
 func Deadlines() deadline.Deadlines {
-	d, err := deadline.Of(deadline.Figures{MirrorHold: StallBound, MirrorPush: StallBound, Receive: StallBound, PushProof: StallBound, Compaction: StallBound})
+	d, err := deadline.Of(deadline.Figures{MirrorHold: StallBound, MirrorPush: StallBound, Receive: StallBound, PushProof: StallBound, Compaction: StallBound, ReRootHold: StallBound, EngineCloseReserve: StallBound})
 	if err != nil {
 		panic("build the suite's deadlines: " + err.Error())
 	}
@@ -46,6 +46,19 @@ func Deadlines() deadline.Deadlines {
 // the refusal arrives in about a second and a half rather than after the
 // stall bound's minute.
 const ContentionHold = 100 * time.Millisecond
+
+// Contention is the suite's deadlines with every figure a holder's stand-still
+// allowance derives from at its shortest: the mirror hold and the engine close
+// reserve at ContentionHold, for a test whose subject is a busy refusal.
+func Contention() deadline.Deadlines {
+	figures := WithHold(ContentionHold).Figures()
+	figures.EngineCloseReserve = ContentionHold
+	d, err := deadline.Of(figures)
+	if err != nil {
+		panic("build the suite's contention deadlines: " + err.Error())
+	}
+	return d
+}
 
 // WithHold is the suite's deadlines with the mirror hold at hold, for a test
 // whose subject is the holder wait or a refusal that waits it out: every open

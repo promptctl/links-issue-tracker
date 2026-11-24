@@ -55,7 +55,7 @@ func contend(t testing.TB) {
 			delete(runDeadlines, name)
 		})
 	}
-	runDeadlines[name] = suiteenv.WithHold(suiteenv.ContentionHold)
+	runDeadlines[name] = suiteenv.Contention()
 }
 
 // setRunEnv gives every run t and its subtests start the entry key=value,

@@ -58,7 +58,7 @@ func chunkJournalPath(doltRoot string) string {
 // about the exhausted error's shape, not the wait's size.
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 	t.Parallel()
-	env := envWithHold(suiteenv.ContentionHold)
+	env := envWithDeadlines(suiteenv.Contention())
 
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
