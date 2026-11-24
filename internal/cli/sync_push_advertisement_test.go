@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -101,7 +100,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 	// head now (it just fetched), so a landed push step proves and a
 	// superseded one, identical in every other respect, must not.
 	pushStep := func(superseded error) syncPushStep {
-		return func(context.Context, context.Context, time.Duration, storage.RemoteName, string, storage.BoundWindow, bool, bool) (storage.SyncPushResult, error) {
+		return func(context.Context, context.Context, storage.RemoteName, string, storage.BoundWindow, bool, bool) (storage.SyncPushResult, error) {
 			return storage.SyncPushResult{Head: "unused", Superseded: superseded}, nil
 		}
 	}
@@ -114,7 +113,7 @@ func TestAPushRecordsTheAdvertisementItLeft(t *testing.T) {
 			t.Fatalf("open consumer sync session: %v", err)
 		}
 		ctx := underInvocation(context.Background())
-		outcome, err := performSyncPush(ctx, ctx, testStderr(t), runEnv(t), suiteDeadlines(), session, resolved, "", syncPushCommand, false, false, pushStep(tc.superseded))
+		outcome, err := performSyncPush(ctx, ctx, testStderr(t), runEnv(t), session, resolved, "", syncPushCommand, false, false, pushStep(tc.superseded))
 		if closeErr := closeStore(); closeErr != nil {
 			t.Fatalf("close consumer sync session: %v", closeErr)
 		}

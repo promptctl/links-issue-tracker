@@ -21,6 +21,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // reRootedRemote is two checkouts sharing a remote after one of them re-rooted
@@ -84,7 +85,7 @@ func newReRootedRemote(t *testing.T, ctx context.Context, concurrent bool) reRoo
 		updateAndPush(t, ctx, r.alpha, r.ticket, storage.UpdateIssueInput{Description: strptr(alphaDescription)})
 	}
 
-	r.alphaReRoot, err = ReRoot(ctx, testStderr(), r.alpha, "master", r.cut)
+	r.alphaReRoot, err = ReRoot(ctx, testStderr(), suiteenv.Deadlines(), r.alpha, "master", r.cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -411,7 +412,7 @@ func TestACompactingPushReportsItsFollowsCollection(t *testing.T) {
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
 
-	pushed, err := bravo.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), false, false)
+	pushed, err := bravo.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(bravo) error = %v", err)
 	}
@@ -438,7 +439,7 @@ func TestACompactingPushCollectsOnceForItsRetryAndItsBound(t *testing.T) {
 	bravo := openSyncOrFatal(t, ctx, r.bravo)
 	defer func() { _ = bravo.Close() }()
 
-	pushed, err := bravo.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", storage.BoundWindowRead(windowOf(t, 2, 1), nil), false, false)
+	pushed, err := bravo.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", storage.BoundWindowRead(windowOf(t, 2, 1), nil), false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(bravo) error = %v", err)
 	}
@@ -533,7 +534,7 @@ func TestSyncPushFromCloneFollowsAReRootedRemote(t *testing.T) {
 	r.bravo = clone
 	st := openSyncOrFatal(t, ctx, clone)
 	defer func() { _ = st.Close() }()
-	pushed, err := st.SyncPushFromClone(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), false, false)
+	pushed, err := st.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), false, false)
 	if err != nil {
 		t.Fatalf("SyncPushFromClone error = %v", err)
 	}
@@ -645,12 +646,12 @@ func TestSyncFollowsARemoteReRootedAboveItsOwnCut(t *testing.T) {
 		lowCut = firstParentBelowHead(t, ctx, ddb, 4)
 		highCut = firstParentBelowHead(t, ctx, ddb, 1)
 	})
-	if _, err := ReRoot(ctx, testStderr(), bravo, "master", lowCut.String()); err != nil {
+	if _, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), bravo, "master", lowCut.String()); err != nil {
 		t.Fatalf("ReRoot(bravo, low cut) error = %v", err)
 	}
 	updateLocal(t, ctx, bravo, ticket, storage.UpdateIssueInput{Title: strptr(bravoTitle)})
 	updateAndPush(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr(alphaDescription)})
-	alphaReRoot, err := ReRoot(ctx, testStderr(), alpha, "master", highCut.String())
+	alphaReRoot, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), alpha, "master", highCut.String())
 	if err != nil {
 		t.Fatalf("ReRoot(alpha, high cut) error = %v", err)
 	}

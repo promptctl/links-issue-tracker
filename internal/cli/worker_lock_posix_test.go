@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/process"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -59,14 +60,13 @@ func TestJoinDetachedWorkersOfAStoreNoWorkerWasSpawnedForReturns(t *testing.T) {
 // the notifier still runs.
 func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 	t.Parallel()
-	useRealWorkers(t)
 	maskGlobalConfig(t)
 	rig := setupMirrorDeadlineRepo(t)
 
 	// The notifier outlives the join's patience below, so a hold it inherited
 	// would keep the join waiting past it.
 	notifierPIDFile := filepath.Join(rig.base, "notifier.pid")
-	notifierLife := int((2 * suiteStallDeadline).Seconds())
+	notifierLife := int((2 * suiteenv.StallBound).Seconds())
 	writeOwnerNotifyProjectConfig(t, rig.root, "[sync]\ncadence = 'on-push'\nreceive = false\n"+
 		ownerHookKey(fmt.Sprintf(`sleep %d >/dev/null 2>&1 & echo $! > %s`, notifierLife, shPath(notifierPIDFile))))
 	// The rig's unpushed commit goes nowhere, so the mirror's push fails and
@@ -96,14 +96,16 @@ func TestJoinDetachedWorkersEndsWithTheWorkerNotItsChildren(t *testing.T) {
 		}
 	})
 	// The spawner is this test process, which stays up, so the mirror is
-	// handed none to wait for. Its owner channel is on: the mirror's run is
-	// the one this test enables automatic sync for.
+	// handed one that has exited, and waits for none. Its owner channel is on:
+	// the mirror's run is the one this test enables automatic sync for, and
+	// the one run it hands the real launcher.
 	mirror := workerRun(t, testStderr(t))
 	mirror = mirror.withEnv(mirror.Env.With(DisableAutoSyncEnvVar + "=0"))
-	if err := spawnBackgroundMirror(underInvocation(t.Context()), mirror, ws, noSpawner{}); err != nil {
+	mirror.Workers = LaunchWorkersAs(rig.lit)
+	if err := spawnBackgroundMirror(underInvocation(t.Context()), mirror, ws, exitedSpawner(t)); err != nil {
 		t.Fatalf("spawnBackgroundMirror: %v", err)
 	}
-	if err := JoinDetachedWorkers(ws.StorageDir, suiteStallDeadline); err != nil {
+	if err := JoinDetachedWorkers(ws.StorageDir, suiteenv.StallBound); err != nil {
 		t.Fatalf("JoinDetachedWorkers() with only the mirror's notifier alive = %v; want nil\n%s", err, workerLog(ws, mirrorLogName))
 	}
 	notifierPID, err := notifier()

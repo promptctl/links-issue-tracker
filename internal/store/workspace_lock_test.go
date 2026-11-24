@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -129,7 +130,7 @@ func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 	// Constrain the shared-side wait so this test stays bounded.
 	shortCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	_, err = acquireWorkspaceShared(shortCtx, testStderr(), doltRoot)
+	_, err = acquireWorkspaceShared(shortCtx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err == nil {
 		t.Fatal("acquireWorkspaceShared succeeded while exclusive held; expected refusal or context deadline")
 	}
@@ -193,7 +194,7 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 	}
 	shortCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
-	_, sharedErr := acquireWorkspaceShared(shortCtx, testStderr(), doltRoot)
+	_, sharedErr := acquireWorkspaceShared(shortCtx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if sharedErr == nil {
 		t.Fatal("acquireWorkspaceShared succeeded under exclusive hold; expected refusal")
 	}
@@ -394,11 +395,11 @@ func TestMirrorBeaconLivenessProof(t *testing.T) {
 		t.Fatalf("nobody ever held the beacon; want BeaconUnheld, got %v", verdict)
 	}
 
-	release1, err := HoldMirrorBeacon(ctx, testStderr(), dbPath)
+	release1, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.Deadlines(), dbPath)
 	if err != nil {
 		t.Fatalf("first shared hold: %v", err)
 	}
-	release2, err := HoldMirrorBeacon(ctx, testStderr(), dbPath)
+	release2, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.Deadlines(), dbPath)
 	if err != nil {
 		t.Fatalf("second shared hold: %v (concurrent answerers are legal and must coexist)", err)
 	}
@@ -451,7 +452,7 @@ func TestMirrorBeaconLivenessProof(t *testing.T) {
 
 	// The probe took (and released) holds to answer; an answerer starting
 	// right after must still be able to take the beacon.
-	release3, err := HoldMirrorBeacon(ctx, testStderr(), dbPath)
+	release3, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.Deadlines(), dbPath)
 	if err != nil {
 		t.Fatalf("hold after a completed probe: %v", err)
 	}

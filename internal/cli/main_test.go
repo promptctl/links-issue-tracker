@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
@@ -21,29 +20,6 @@ import (
 // from changing the process's.
 // [LAW:no-shared-mutable-globals] the process cwd/env is exactly such a global.
 
-// suiteStallDeadline is the deadline this suite runs the mirror's hold and the
-// automatic receive under, in this process and in the detached workers it
-// spawns. Both shipped figures sit close enough to the local work these tests
-// really do that a busy machine reaches them: the hold bounds a clone, and a
-// receive that follows a re-root measures about a third of its deadline. So a
-// test with no interest in either would take its verdict from the load.
-// [LAW:no-ambient-temporal-coupling] The push deadline stays as shipped: a whole
-// mirror cycle against these tests' file remotes measures about a twelfth of it.
-// A minute is still a stall detector: over ten times that work, and far below
-// go test's timeout, so a hang ends inside the test that met it and the
-// package's other verdicts stand. A test about either deadline hands its runs
-// its own figure.
-const suiteStallDeadline = time.Minute
-
-// suiteDeadlines is the deadlines every run this suite starts is handed, and
-// so every worker those runs spawn (workerHandoff): the shipped ones, with the
-// hold and the receive at the suite's stall deadline.
-func suiteDeadlines() store.Deadlines {
-	d := store.ShippedDeadlines()
-	d.MirrorHold, d.Receive = suiteStallDeadline, suiteStallDeadline
-	return d
-}
-
 // TestMain disables automatic sync for the whole cli test package. Many cli
 // tests drive the real CLI in-process; without this, a command's post-run hook
 // would spawn the on-change push mirror and the receive worker (a real network
@@ -51,7 +27,7 @@ func suiteDeadlines() store.Deadlines {
 // explicitly, by tests that run the receive worker's body in-process
 // (receiveNow), so disabling it package-wide loses no coverage. A test that
 // starts a worker anyway, autosync off or on, is refused by the launcher its
-// runs are handed (runWorkers).
+// runs are handed (refusedWorkers).
 func TestMain(m *testing.M) {
 	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
 		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())

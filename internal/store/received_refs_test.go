@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestExclusiveWorkspaceLockForgetsReceivedRefs pins the record's lifecycle:
@@ -26,7 +28,7 @@ func TestExclusiveWorkspaceLockForgetsReceivedRefs(t *testing.T) {
 		t.Fatalf("WriteReceivedRefs() error = %v", err)
 	}
 
-	releaseShared, err := LockWorkspaceShared(ctx, testStderr(), doltRoot)
+	releaseShared, err := LockWorkspaceShared(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockWorkspaceShared() error = %v", err)
 	}

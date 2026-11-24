@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
@@ -65,7 +67,7 @@ func TestRunNewCompletesWithoutDeadlock(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Run(new) error = %v", err)
 		}
-	case <-time.After(suiteStallDeadline):
+	case <-time.After(suiteenv.StallBound):
 		t.Fatal("Run(new) timed out; likely mutation lock context regression")
 	}
 }

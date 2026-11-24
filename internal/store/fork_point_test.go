@@ -14,6 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // forkBelowTheCut is two checkouts sharing a remote after one of them
@@ -62,7 +63,7 @@ func newForkBelowTheCutAfter(t *testing.T, ctx context.Context, deltaWrites func
 		createAndPush(t, ctx, f.alpha, f.epic, title)
 	}
 	var err error
-	f.alphaReRoot, err = ReRoot(ctx, testStderr(), f.alpha, "master", headAt(t, ctx, f.alpha))
+	f.alphaReRoot, err = ReRoot(ctx, testStderr(), suiteenv.Deadlines(), f.alpha, "master", headAt(t, ctx, f.alpha))
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
@@ -273,7 +274,7 @@ func TestARemoteMissingAnEditAtTheForkPointStaysUnrelated(t *testing.T) {
 	updateLocal(t, ctx, delta, ticket, storage.UpdateIssueInput{Description: strptr("delta-description")})
 
 	updateLocal(t, ctx, alpha, ticket, storage.UpdateIssueInput{Description: strptr("alpha-description")})
-	if _, err := ReRoot(ctx, testStderr(), alpha, "master", headAt(t, ctx, alpha)); err != nil {
+	if _, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), alpha, "master", headAt(t, ctx, alpha)); err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}
 	sync := openSyncOrFatal(t, ctx, alpha)
@@ -562,7 +563,7 @@ func TestAQuietForksRefusedPushIsNotSuperseded(t *testing.T) {
 	if err := delta.SyncFetch(ctx, remoteName(t, "origin")); err != nil {
 		t.Fatalf("SyncFetch(delta) error = %v", err)
 	}
-	pushed, err := delta.SyncPushFromClone(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), false, false)
+	pushed, err := delta.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), false, false)
 	if !errors.Is(err, storage.ErrPushDiverged) {
 		t.Fatalf("SyncPushFromClone() = %+v, %v; want the refusal as %v, since the remote does not carry delta's head", pushed, err, storage.ErrPushDiverged)
 	}
@@ -748,7 +749,7 @@ func TestTheReceiveRecordsTheForkPointOnTheLiveStore(t *testing.T) {
 		{FetchedHeadMoved, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.adopted, Outcome: storage.ForkPointRecorded}},
 		{FetchedHeadUnchanged, storage.ForkPointRecord{Remote: "origin", Branch: "master", Head: f.remoteHead, Outcome: storage.ForkPointKept}},
 	} {
-		landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), f.delta, testDeadlines().Receive, clone, remoteName(t, "origin"), "master", nil)
+		landed, err := LandFetchedHead(ctx, testEnv(), testStderr(), f.delta, clone, remoteName(t, "origin"), "master", nil)
 		if err != nil {
 			t.Fatalf("LandFetchedHead() error = %v", err)
 		}

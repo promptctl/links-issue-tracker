@@ -977,14 +977,14 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 // The subject is what the rotation does, not whether it fits the budget: on a
 // loaded machine the replay's first run alone can outlast the production
 // budget, which refuses the rotation and fails this test for a reason it does
-// not pin, so the test lifts the budget well past any first run. A minute, not
-// more, so a hold that never releases still fails fast and named.
+// not pin, so the test runs under the suite's deadlines, whose budget is well
+// past any first run and still fails a hold that never releases inside the
+// test, named.
 // TestRetryTransientGCContentionStopsBeforeOutlastingCommitLockWaiters pins
 // the budget.
 func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T) {
-	// serial: no t.Parallel — rewrites the package-level coResidentHolderWait
-	// budget.
-	shrinkWait(t, time.Minute)
+	// serial: no t.Parallel — a loaded machine stretches its first run
+	// toward the budget it must stay inside.
 	for _, tc := range []struct {
 		name   string
 		failAt int

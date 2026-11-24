@@ -14,7 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -65,7 +66,7 @@ func TestMirrorPushHoldsNothingOnTheLiveStore(t *testing.T) {
 	wedgeMarker := installGitWedge(t, rig, "push")
 
 	// The mirror's own entrypoint, in the foreground of its own goroutine:
-	// handed no spawner it waits for no parent, then the cycle clones,
+	// handed a spawner that has exited it waits for no parent, then the cycle clones,
 	// releases, and pushes into the wedge.
 	mirror := rig.start(unboundedRunTripwire(healthyCycle, wedgedDeadline), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	wedgedAt := awaitWedge(t, wedgeMarker, unboundedRunTripwire(healthyCycle, wedgedDeadline), mirror)
@@ -202,9 +203,9 @@ func TestMirrorPushDeadlineCutsHungResolveJoinsOneTrace(t *testing.T) {
 func TestMirrorPushDeadlineCutsTheOpen(t *testing.T) {
 	t.Parallel()
 	rig := setupMirrorDeadlineRepo(t)
-	rig.pushDeadline = time.Nanosecond
+	rig.pushUnder(time.Nanosecond)
 
-	out, err := rig.run(unboundedRunTripwire(0, store.ShippedDeadlines().MirrorPush), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
+	out, err := rig.run(unboundedRunTripwire(0, rig.deadlines.MirrorPush()), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	if err != nil {
 		t.Fatalf("mirror run returned error (the mirror is best-effort and must exit 0): %v\noutput:\n%s", err, out.String())
 	}
@@ -238,7 +239,7 @@ func TestMirrorCycleSweepsADeadMirrorsClone(t *testing.T) {
 		t.Fatalf("plant residue: %v", err)
 	}
 
-	out, err := rig.run(unboundedRunTripwire(0, store.ShippedDeadlines().MirrorPush), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
+	out, err := rig.run(unboundedRunTripwire(0, rig.deadlines.MirrorPush()), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	if err != nil {
 		t.Fatalf("mirror cycle: %v\noutput:\n%s", err, out.String())
 	}
@@ -323,7 +324,7 @@ func (r mirrorRun) wait(t *testing.T) mirrorResult {
 }
 
 // mirrorRig is the field topology of the mirror deadline tests and the two
-// knobs a test turns on the mirror runs it starts: the push deadline they run
+// knobs a test turns on the mirror runs it starts: the deadlines they run
 // under and the git shim they resolve git through.
 //
 // The mirror runs as lit itself (realLit), a process of its own, the shape
@@ -337,9 +338,9 @@ type mirrorRig struct {
 	// lit is the real lit the mirror runs as, built before the rig times
 	// anything.
 	lit string
-	// pushDeadline is the mirror runs' push deadline; zero runs them under
-	// the production one.
-	pushDeadline time.Duration
+	// deadlines is what the mirror runs are handed: the suite's, until a
+	// test whose subject is the push deadline sets its own (pushUnder).
+	deadlines deadline.Deadlines
 	// gitShim is a directory put ahead of PATH for the mirror runs; empty
 	// puts nothing there.
 	gitShim string
@@ -371,6 +372,19 @@ func (r *mirrorRig) run(timeout time.Duration, args ...string) (*lockedBuffer, e
 	return res.out, res.err
 }
 
+// pushUnder hands the rig's mirror runs push as their push deadline, and the
+// suite's for every other figure.
+func (r *mirrorRig) pushUnder(push time.Duration) {
+	r.t.Helper()
+	figures := suiteenv.Deadlines().Figures()
+	figures.MirrorPush = push
+	d, err := deadline.Of(figures)
+	if err != nil {
+		r.t.Fatalf("hand the mirror runs a push deadline of %s: %v", push, err)
+	}
+	r.deadlines = d
+}
+
 func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []string) error {
 	if len(args) == 0 || args[0] != backgroundMirrorSubcommand {
 		errCh := make(chan error, 1)
@@ -386,13 +400,9 @@ func (r *mirrorRig) runUnder(ctx context.Context, out *lockedBuffer, args []stri
 	if r.gitShim != "" {
 		env = env.With("PATH=" + r.gitShim + string(os.PathListSeparator) + env.Get("PATH"))
 	}
-	deadlines := suiteDeadlines()
-	if r.pushDeadline != 0 {
-		deadlines.MirrorPush = r.pushDeadline
-	}
 	cmd := exec.CommandContext(ctx, r.lit, args...)
 	cmd.Dir, cmd.Env = r.root, env.List()
-	cmd.Stdin = strings.NewReader(workerHandoffStdinUnder(r.t, r.root, deadlines))
+	cmd.Stdin = strings.NewReader(workerHandoffStdinUnder(r.t, r.root, r.deadlines))
 	cmd.Stdout, cmd.Stderr = out, out
 	// A descendant that outlives the kill holds the output pipes open; without
 	// a bound on that, Run never returns and the tripwire never fires.
@@ -434,7 +444,7 @@ func setupMirrorDeadlineRepo(t *testing.T) *mirrorRig {
 	runGit(t, root, "push", "-u", "origin", "HEAD")
 	setRunEnv(t, "HOME", base)
 
-	rig := &mirrorRig{t: t, base: base, root: root, gitPath: gitPath, lit: lit}
+	rig := &mirrorRig{t: t, base: base, root: root, gitPath: gitPath, lit: lit, deadlines: suiteenv.Deadlines()}
 	if out, err := rig.run(60*time.Second, "init", "--skip-hooks"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out.String())
 	}
@@ -492,11 +502,11 @@ exec %q "$@"
 // asking for it. [LAW:one-source-of-truth] [LAW:no-ambient-temporal-coupling]
 func shrinkMirrorPushDeadline(t *testing.T, rig *mirrorRig, healthyCycle time.Duration) time.Duration {
 	t.Helper()
-	deadline := wedgeDeadlineMargin * healthyCycle
-	rig.pushDeadline = deadline
+	wedged := wedgeDeadlineMargin * healthyCycle
+	rig.pushUnder(wedged)
 	t.Logf("healthy mirror cycle measured at %s; wedged run's push deadline %s",
-		healthyCycle.Round(time.Millisecond), deadline.Round(time.Millisecond))
-	return deadline
+		healthyCycle.Round(time.Millisecond), wedged.Round(time.Millisecond))
+	return wedged
 }
 
 // wedgeDeadlineMargin is how far above a measured healthy cycle the shrunk
@@ -542,7 +552,7 @@ func measureHealthyMirrorCycle(t *testing.T, rig *mirrorRig) time.Duration {
 	started := time.Now()
 	// The sample runs under the production deadline, so its hung bound is that
 	// deadline's, not a figure of this test's choosing. [LAW:one-source-of-truth]
-	out, err := rig.run(unboundedRunTripwire(0, store.ShippedDeadlines().MirrorPush), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
+	out, err := rig.run(unboundedRunTripwire(0, rig.deadlines.MirrorPush()), workerArgv(t, rig.root, backgroundMirrorSubcommand)...)
 	healthyCycle := time.Since(started)
 	if err != nil {
 		t.Fatalf("unwedged mirror cycle failed, so there is no healthy cost to size the wedged run against: %v\noutput:\n%s", err, out.String())
@@ -569,7 +579,7 @@ func measureHealthyMirrorCycle(t *testing.T, rig *mirrorRig) time.Duration {
 // takes to unwind — then the same margin again, because a tripwire that lands
 // on legal work reports the wrong failure.
 func unboundedRunTripwire(healthyCycle, wedgedDeadline time.Duration) time.Duration {
-	return wedgeDeadlineMargin * (healthyCycle + wedgedDeadline + store.MirrorPushCancelLagObserved)
+	return wedgeDeadlineMargin * (healthyCycle + wedgedDeadline + deadline.MirrorPushCancelLagObserved)
 }
 
 // awaitWedge waits for the shim to stamp its marker — the instant the wedged
@@ -614,10 +624,10 @@ func wedgeEngagedAt(t *testing.T, wedgeMarker, wedged string, out *lockedBuffer)
 // would be a wall-clock bet.
 //
 // The bound is the deadline plus the lag cancellation takes to unwind — the
-// store's own MirrorPushCancelLagObserved. [LAW:one-source-of-truth]
+// deadline package's own MirrorPushCancelLagObserved. [LAW:one-source-of-truth]
 func assertPushEndedWithinItsCeiling(t *testing.T, wedgedAt, cycleEnded time.Time, wedgedDeadline time.Duration, out *lockedBuffer) {
 	t.Helper()
-	ceiling := wedgedDeadline + store.MirrorPushCancelLagObserved
+	ceiling := wedgedDeadline + deadline.MirrorPushCancelLagObserved
 	if held := cycleEnded.Sub(wedgedAt); held > ceiling {
 		t.Fatalf("the mirror's push ran %s past the wedge (deadline %s, ceiling %s) — the deadline is not working:\noutput:\n%s",
 			held.Round(time.Millisecond), wedgedDeadline, ceiling, out.String())
@@ -643,8 +653,10 @@ func TestDeadlineCutFramingSurvivesTheBanner(t *testing.T) {
 		blame   string
 	}{
 		{"push deadline", pushDeadlineCutExplanation, "before blaming the remote"},
-		{"hold budget, clone step", func(d time.Duration) error { return holdBudgetCutExplanation("cloning the store", d) }, "before blaming the disk"},
-		{"hold budget, record step", func(d time.Duration) error { return holdBudgetCutExplanation("recording the pushed head", d) }, "before blaming the disk"},
+		{"hold budget, clone step", func(hold time.Duration) error { return holdBudgetCutExplanation("cloning the store", heldFor(t, hold)) }, "before blaming the disk"},
+		{"hold budget, record step", func(hold time.Duration) error {
+			return holdBudgetCutExplanation("recording the pushed head", heldFor(t, hold))
+		}, "before blaming the disk"},
 	}
 	for _, tc := range cases {
 		for _, value := range []time.Duration{time.Second, 100 * time.Minute} {
@@ -664,4 +676,16 @@ func TestDeadlineCutFramingSurvivesTheBanner(t *testing.T) {
 			}
 		}
 	}
+}
+
+// heldFor is the shipped deadlines with hold as the mirror's hold budget.
+func heldFor(t *testing.T, hold time.Duration) deadline.Deadlines {
+	t.Helper()
+	figures := deadline.Shipped().Figures()
+	figures.MirrorHold = hold
+	d, err := deadline.Of(figures)
+	if err != nil {
+		t.Fatalf("deadlines with a hold of %s: %v", hold, err)
+	}
+	return d
 }

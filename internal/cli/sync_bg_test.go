@@ -3,11 +3,12 @@ package cli
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 )
 
 // TestCutByPushDeadline pins the one verdict every step the push deadline
@@ -31,14 +32,14 @@ func TestCutByPushDeadline(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := cutByPushDeadline(tc.ctx, tc.completionCtx, time.Minute, tc.err)
+			got := cutByPushDeadline(tc.ctx, tc.completionCtx, deadline.Shipped(), tc.err)
 			if pushDeadlineCutOf(got) != tc.wantCut {
 				t.Fatalf("cutByPushDeadline() = %v, cut = %t; want cut = %t", got, pushDeadlineCutOf(got), tc.wantCut)
 			}
 			if !errors.Is(got, tc.err) {
 				t.Fatalf("cutByPushDeadline() = %v; it must keep the step's error %v readable", got, tc.err)
 			}
-			if tc.wantCut && !strings.HasPrefix(got.Error(), pushDeadlineCutExplanation(time.Minute).Error()+": ") {
+			if tc.wantCut && !strings.HasPrefix(got.Error(), pushDeadlineCutExplanation(deadline.Shipped().MirrorPush()).Error()+": ") {
 				t.Fatalf("cut error %q does not lead with the deadline's explanation", got)
 			}
 		})
@@ -57,7 +58,7 @@ func endedContext() context.Context {
 // ended under a live completion lifetime: through cutByPushDeadline, the one
 // constructor of the verdict.
 func cutAtTheDeadline(err error) error {
-	return cutByPushDeadline(endedContext(), context.Background(), store.ShippedDeadlines().MirrorPush, err)
+	return cutByPushDeadline(endedContext(), context.Background(), deadline.Shipped(), err)
 }
 
 // TestMirrorEnvStripsInheritedTraceRefFile pins that the detached mirror never
@@ -99,35 +100,46 @@ func TestMirrorEnvStripsInheritedTraceRefFile(t *testing.T) {
 	}
 }
 
-// --parent-pid names the spawner as its pid or as "none", and nothing else:
-// a worker handed a zero, a negative, or no spawner at all is refused, so no
-// worker skips its wait by omission.
-func TestParseSpawnerNamesAPidOrNone(t *testing.T) {
+// --parent-pid names the spawner as its pid, and nothing else: a worker
+// handed a zero, a negative, "none", or no spawner at all is refused, so no
+// worker skips its wait by omission, and the pid a spawner is handed on is
+// the one it was parsed from.
+func TestParseSpawnerTakesOnlyAPositivePid(t *testing.T) {
 	t.Parallel()
-	for flag, want := range map[string]spawner{"none": noSpawner{}, "4242": spawnedBy(4242)} {
-		if got, err := parseSpawner(flag); err != nil || got != want {
-			t.Errorf("parseSpawner(%q) = %v, %v; want %v", flag, got, err, want)
-		}
-		if got, _ := parseSpawner(want.flag()); got != want {
-			t.Errorf("parseSpawner(%v.flag()) = %v; want %v back", want, got, want)
-		}
+	got, err := parseSpawner("4242")
+	if err != nil || got.flag() != "4242" {
+		t.Fatalf("parseSpawner(\"4242\") = %v, %v; want pid 4242", got, err)
 	}
-	for _, flag := range []string{"", "0", "-1", "pid"} {
+	if back, err := parseSpawner(got.flag()); err != nil || back != got {
+		t.Errorf("parseSpawner(%v.flag()) = %v, %v; want %v back", got, back, err, got)
+	}
+	for _, flag := range []string{"", "0", "-1", "none", "pid"} {
 		if got, err := parseSpawner(flag); err == nil {
 			t.Errorf("parseSpawner(%q) = %v; want it refused", flag, got)
 		}
 	}
 }
 
-// A worker handed no spawner proceeds at once, without polling.
-func TestAWorkerHandedNoSpawnerWaitsForNone(t *testing.T) {
+// spawnerOf is the spawner --parent-pid=pid names, as the worker parses it.
+func spawnerOf(t *testing.T, pid int) spawner {
+	t.Helper()
+	from, err := parseSpawner(strconv.Itoa(pid))
+	if err != nil {
+		t.Fatalf("parseSpawner(%d) error = %v", pid, err)
+	}
+	return from
+}
+
+// A worker whose spawner is no longer its parent proceeds at once, waiting
+// out nothing.
+func TestAWorkerWhoseSpawnerHasExitedWaitsForNone(t *testing.T) {
 	t.Parallel()
 	calls := 0
-	if !(noSpawner{}).awaitExit(context.Background(), func() int { calls++; return 4242 }, time.Second, time.Millisecond) {
-		t.Fatal("noSpawner.awaitExit must report success without waiting")
+	if !spawnerOf(t, 5149).awaitExit(context.Background(), func() int { calls++; return 1 }, time.Second, time.Millisecond) {
+		t.Fatal("awaitExit must report success for a spawner that is no longer the parent")
 	}
-	if calls != 0 {
-		t.Fatalf("getppid was polled %d times for a worker handed no spawner, want 0", calls)
+	if calls != 1 {
+		t.Fatalf("getppid was polled %d times for a spawner already gone, want once", calls)
 	}
 }
 
@@ -147,7 +159,7 @@ func TestASpawnedWorkerWaitsUntilReparented(t *testing.T) {
 		}
 		return 1 // reparented to init: parent exited
 	}
-	if !spawnedBy(parentPID).awaitExit(context.Background(), getppid, time.Second, time.Millisecond) {
+	if !spawnerOf(t, parentPID).awaitExit(context.Background(), getppid, time.Second, time.Millisecond) {
 		t.Fatal("awaitExit must report success once getppid stops naming the parent")
 	}
 	if polls < 3 {
@@ -161,7 +173,7 @@ func TestASpawnedWorkerWaitsUntilReparented(t *testing.T) {
 func TestASpawnedWorkerReportsASpawnerThatOutlivesTheWait(t *testing.T) {
 	t.Parallel()
 	const parentPID = 5151
-	if spawnedBy(parentPID).awaitExit(context.Background(), func() int { return parentPID }, 30*time.Millisecond, time.Millisecond) {
+	if spawnerOf(t, parentPID).awaitExit(context.Background(), func() int { return parentPID }, 30*time.Millisecond, time.Millisecond) {
 		t.Fatal("awaitExit must report false when the parent never exits before the timeout")
 	}
 }
@@ -176,7 +188,7 @@ func TestASpawnedWorkersWaitEndsOnTeardown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if spawnedBy(parentPID).awaitExit(ctx, func() int { return parentPID }, time.Minute, time.Millisecond) {
+	if spawnerOf(t, parentPID).awaitExit(ctx, func() int { return parentPID }, time.Minute, time.Millisecond) {
 		t.Fatal("awaitExit must report false when torn down mid-wait")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {

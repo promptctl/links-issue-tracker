@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -926,10 +928,11 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 // no account at all. Dropping the %w in either wrap would leave that coverage
 // green while every commit-contention message stopped naming its holder.
 //
-// Serial by construction: it shrinks the production waits the commit lock's
-// budget is derived from, which are package state. [LAW:no-shared-mutable-globals]
+// Serial by construction: it zeroes the close reserve the commit lock's
+// budget adds, which is package state; the holder wait the budget derives
+// from comes from the short hold its run is handed. [LAW:no-shared-mutable-globals]
 func TestCommitContentionNamesTheHolder(t *testing.T) {
-	shrinkWait(t, 0)
+	env := envWithHold(suiteenv.ContentionHold)
 	closeReserve := rotationCloseReserve
 	rotationCloseReserve = 0
 	t.Cleanup(func() { rotationCloseReserve = closeReserve })
@@ -947,7 +950,7 @@ func TestCommitContentionNamesTheHolder(t *testing.T) {
 		}
 	}()
 
-	_, err = LockCommitPath(ctx, testStderr(), doltRoot)
+	_, err = LockCommitPath(ctx, testStderr(), env.Deadlines(), doltRoot)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("LockCommitPath() error = %v, want ErrWorkspaceBusy", err)
 	}
@@ -975,7 +978,7 @@ func TestBeaconContentionNamesTheSquatter(t *testing.T) {
 		}
 	}()
 
-	release, err := HoldMirrorBeacon(ctx, testStderr(), doltRoot)
+	release, err := HoldMirrorBeacon(ctx, testStderr(), suiteenv.WithHold(suiteenv.ContentionHold), doltRoot)
 	if err == nil {
 		t.Fatalf("HoldMirrorBeacon() succeeded against an exclusive squatter; release = %v", release())
 	}
@@ -999,7 +1002,7 @@ func TestLockRecordsStayOutOfDoltsTree(t *testing.T) {
 	doltRoot := migratedDoltDir(t)
 	before := treeUnder(t, doltRoot)
 
-	release, err := LockDoltJournalExclusive(ctx, testStderr(), doltRoot)
+	release, err := LockDoltJournalExclusive(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
@@ -1036,7 +1039,7 @@ func treeUnder(t *testing.T, root string) []string {
 // stepClock is a lockClock a test owns for one wait. Reading it never moves
 // it; only a sleep does, by exactly the duration the retry loop asked for, so
 // every instant the policy measures is the sum of the intervals it chose —
-// an interval that drifts from storeLockPollInterval moves every instant a
+// an interval that drifts from deadline.LockPollInterval moves every instant a
 // test asserts. tick runs with the instant each sleep reaches before the
 // attempt after it, so whatever a test does at a tick lands exactly between
 // two of the policy's polls. The contender sleeps on its own goroutine, which
@@ -1130,7 +1133,7 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 		}
 	}()
 	clock := newStepClock(t, func(at time.Duration) {
-		if at > steps*storeLockPollInterval {
+		if at > steps*deadline.LockPollInterval {
 			return
 		}
 		handOver(t, &holder, arriveShared(t, testStderr(), lockPath, at), at)
@@ -1140,9 +1143,9 @@ func TestWaitOutlastsHoldersThatKeepChanging(t *testing.T) {
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the last holder stood still", err)
 	}
-	lastArrival := steps * storeLockPollInterval
+	lastArrival := steps * deadline.LockPollInterval
 	if got := clock.elapsed(); got < lastArrival {
-		t.Fatalf("the contender gave up %s in, with a new holder arriving every %s against a %s wait; it gave up on holders that were making progress", got, storeLockPollInterval, wait)
+		t.Fatalf("the contender gave up %s in, with a new holder arriving every %s against a %s wait; it gave up on holders that were making progress", got, deadline.LockPollInterval, wait)
 	}
 	if got := clock.elapsed(); got != lastArrival+wait {
 		t.Fatalf("the contender gave up %s in, want %s: one %s wait after the last holder arrived at %s", got, lastArrival+wait, wait, lastArrival)
@@ -1177,8 +1180,8 @@ func TestWaitEndsInTheLockOnceTheQueueDrains(t *testing.T) {
 			t.Errorf("release last holder: %v", err)
 		}
 	}()
-	lastArrival := steps * storeLockPollInterval
-	drained := lastArrival + storeLockPollInterval
+	lastArrival := steps * deadline.LockPollInterval
+	drained := lastArrival + deadline.LockPollInterval
 	clock := newStepClock(t, func(at time.Duration) {
 		if at > drained {
 			t.Fatalf("the contender was still waiting at %s, after the last holder left at %s", at, drained)
@@ -1234,7 +1237,7 @@ func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
 	defer func() { _ = release() }()
 
 	clock := newStepClock(t, func(at time.Duration) {
-		if at > steps*storeLockPollInterval {
+		if at > steps*deadline.LockPollInterval {
 			return
 		}
 		if err := arriveShared(t, testStderr(), lockPath, at)(); err != nil {
@@ -1246,7 +1249,7 @@ func TestWaitSeesHoldersThatComeAndGoBetweenPolls(t *testing.T) {
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
 	}
-	lastArrival := steps * storeLockPollInterval
+	lastArrival := steps * deadline.LockPollInterval
 	if got := clock.elapsed(); got != lastArrival+wait {
 		t.Fatalf("the contender gave up %s in, want %s: one %s wait after the last of %d holders that each came and went between two polls", got, lastArrival+wait, wait, steps)
 	}
@@ -1314,7 +1317,7 @@ func TestWaitSeesHoldersThatAnnounceNoArrival(t *testing.T) {
 	defer func() { _ = release() }()
 
 	clock := newStepClock(t, func(at time.Duration) {
-		if at > steps*storeLockPollInterval {
+		if at > steps*deadline.LockPollInterval {
 			return
 		}
 		_, recordPath := lockHolderRecordNames(dir)
@@ -1327,7 +1330,7 @@ func TestWaitSeesHoldersThatAnnounceNoArrival(t *testing.T) {
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("contended acquireStoreLockOn() error = %v, want ErrWorkspaceBusy once the holders stopped arriving", err)
 	}
-	lastArrival := steps * storeLockPollInterval
+	lastArrival := steps * deadline.LockPollInterval
 	if got := clock.elapsed(); got != lastArrival+wait {
 		t.Fatalf("the contender gave up %s in, want %s: one %s wait after the last of %d recorded holders that announced nothing", got, lastArrival+wait, wait, steps)
 	}
@@ -1343,7 +1346,7 @@ func TestAWaitsFirstReadableReadingIsItsBaseline(t *testing.T) {
 	dir := lockHolderDir(storageDir, lockPath)
 	blockHolderDir(t, lockPath)
 
-	w := newHoldWait(testStderr(), storageDir, lockPath, func() time.Duration { return time.Second }, time.Now)
+	w := newHoldWait(testStderr(), storageDir, lockPath, time.Second, time.Now)
 	w.Reset()
 
 	if err := os.Remove(dir); err != nil {
@@ -1507,11 +1510,11 @@ func TestASweepDoesNotRestartTheWait(t *testing.T) {
 	// refusal's own holder account at the end.
 	clock := newStepClock(t, func(at time.Duration) {
 		switch at {
-		case storeLockPollInterval:
+		case deadline.LockPollInterval:
 			if err := dies(); err != nil {
 				t.Fatalf("release the planted record: %v", err)
 			}
-		case 2 * storeLockPollInterval:
+		case 2 * deadline.LockPollInterval:
 			if _, statErr := os.Stat(dying); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("the dead holder's record was not swept during the wait (stat: %v); the test did not exercise a sweep", statErr)
 			}

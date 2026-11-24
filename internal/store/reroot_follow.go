@@ -267,7 +267,7 @@ func (s *Store) withEngineClosed(ctx context.Context, write func(holdCtx context
 	if err := s.closeEngine(); err != nil {
 		return errors.Join(fmt.Errorf("close the engine: %w", err), s.reopenEngine(reopenCtx))
 	}
-	holdErr := holdForRefWrite(ctx, s.stderr, s.doltRootDir, engineWrite, ReRootHoldBudget, write)
+	holdErr := holdForRefWrite(ctx, s.stderr, s.env.Deadlines(), s.doltRootDir, engineWrite, ReRootHoldBudget, write)
 	return errors.Join(holdErr, s.reopenEngine(reopenCtx))
 }
 

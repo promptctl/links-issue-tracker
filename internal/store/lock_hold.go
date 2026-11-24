@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
+
 	"github.com/dolthub/dolt/go/store/nbs"
 	embedded "github.com/dolthub/driver"
 )
@@ -20,7 +22,7 @@ import (
 // (lock_holder.go) is the waiter's half, and it reads only names.
 //
 // A waiter gives up once the holders in front of it have shown no progress
-// for coResidentHolderWait. An acquisition is progress, so a queue of short
+// for HolderWait. An acquisition is progress, so a queue of short
 // holds is waited out however long it runs. A single hold showed progress
 // once, at its arrival, and under a loaded machine one routine `lit new`
 // stretches past the wait: Dolt's open after it takes LOCK, and the engine
@@ -142,11 +144,11 @@ func lockObserverFrom(ctx context.Context) LockObserver {
 }
 
 // holdHeartbeatInterval is how often a working routine hold says so: four
-// times per coResidentHolderWait, so three heartbeats in a row can be lost to
-// scheduling before a working holder looks still. Read live, like the wait,
-// so a test that shrinks the wait shrinks the heartbeat with it.
+// times per HolderWait, so three heartbeats in a row can be lost to scheduling
+// before a working holder looks still. Derived from the run's deadlines, so a
+// test that hands a short hold shrinks the heartbeat with the wait.
 // [LAW:one-source-of-truth] derived, never a second figure.
-func holdHeartbeatInterval() time.Duration { return coResidentHolderWait / 4 }
+func holdHeartbeatInterval(d deadline.Deadlines) time.Duration { return d.HolderWait() / 4 }
 
 // holdState is where a hold is in its one life: before Dolt took LOCK, while
 // it holds it, and after it let it go (or the open failed). A hold never
@@ -186,6 +188,7 @@ type lockHold struct {
 	access      engineAccess
 	phase       *longPhase
 	wait        *holdWait
+	heartbeat   time.Duration
 	now         func() time.Time
 	held        func(LockHold)
 	waited      func(LockWait)
@@ -211,10 +214,10 @@ type lockHold struct {
 }
 
 // newLockHold builds the hold for one engine open of the store at doltRootDir,
-// inside the store's long phase (phase). The observer it reports to is read
+// inside the store's long phase (phase), under the run's deadlines (d). The observer it reports to is read
 // from the opener's context now, since the hold ends in a close that carries
 // none.
-func newLockHold(ctx context.Context, stderr io.Writer, doltRootDir string, access engineAccess, phase *longPhase) *lockHold {
+func newLockHold(ctx context.Context, stderr io.Writer, d deadline.Deadlines, doltRootDir string, access engineAccess, phase *longPhase) *lockHold {
 	observer := lockObserverFrom(ctx)
 	storageDir, lockPath := workspaceStorageDir(doltRootDir), DoltJournalLockPath(doltRootDir)
 	privatePath, recordPath := lockHolderRecordNames(lockHolderDir(storageDir, lockPath))
@@ -231,10 +234,11 @@ func newLockHold(ctx context.Context, stderr io.Writer, doltRootDir string, acce
 		// same holder the same wait and read the same progress. One per open:
 		// backoff state is per-open, and the connector Resets it before each.
 		// [LAW:one-source-of-truth]
-		wait:   newHoldWait(stderr, storageDir, lockPath, coResidentHolderWaitNow, time.Now),
-		now:    time.Now,
-		held:   observer.Held,
-		waited: observer.Waited,
+		wait:      newHoldWait(stderr, storageDir, lockPath, d.HolderWait(), time.Now),
+		heartbeat: holdHeartbeatInterval(d),
+		now:       time.Now,
+		held:      observer.Held,
+		waited:    observer.Waited,
 	}
 }
 
@@ -303,7 +307,7 @@ func (h *lockHold) taken() {
 // instants. [LAW:effects-at-boundaries]
 func (h *lockHold) beat(stop <-chan struct{}, stopped chan<- struct{}) {
 	defer close(stopped)
-	ticker := time.NewTicker(holdHeartbeatInterval())
+	ticker := time.NewTicker(h.heartbeat)
 	defer ticker.Stop()
 	for {
 		select {

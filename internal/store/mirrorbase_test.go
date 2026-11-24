@@ -59,7 +59,7 @@ func TestASyncFromADeepRepositoryKeepsItsMirrorUnderTheMirrorRoot(t *testing.T) 
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), GitBackedRemoteURL(remote)); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 	if err := sync.SyncFetch(ctx, remoteName(t, "origin")); err != nil {

@@ -21,6 +21,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/process"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -132,7 +133,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 
 	seizeCtx, cancelSeize := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelSeize()
-	releaseSeize, err := store.LockCommitPath(seizeCtx, os.Stderr, ws.DatabasePath)
+	releaseSeize, err := store.LockCommitPath(seizeCtx, os.Stderr, deadline.Shipped(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("seize commit lock: %v", err)
 	}

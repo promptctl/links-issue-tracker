@@ -127,24 +127,12 @@ var doltWorkspaceMachinery = map[string][]string{
 	// answer, which the CLI classifies through model.StateRequestError and
 	// its tests match by type.
 	"migration quarantine recovery": {"Unquarantine", "NoQuarantineError"},
-	// The detached mirror's clone-and-push machinery: the deadlines a run's
-	// background sync work runs under (Deadlines, whose shipped figures
-	// ShippedDeadlines is — each hold on the live store, the push from the
-	// clone, the receive), the lag a push's cut takes to unwind, and the ref
-	// write that carries a landed push's head back onto the live store. None of it can
-	// go through the contract because none of it is storage behavior: the
-	// deadlines are links of the store's sizing chains, pinned in-package by
-	// TestMirrorHoldBudgetExceedsObservedCloneCost,
-	// TestMirrorPushDeadlineExceedsObservedPushCost and
-	// TestCoResidentWaitIsSizedToTheMirrorHold, and the ref write opens the
+	// The detached mirror's clone-and-push machinery: the ref write that
+	// carries a landed push's head back onto the live store. It cannot go
+	// through the contract because it is not storage behavior: it opens the
 	// chunk store with no engine at all — all mirror machinery, deleted at S4
-	// with the rest.
-	//
-	// The cli reaches for the lag because the push-deadline regression tests
-	// assert where a cut push ENDS, which is the deadline plus that lag and
-	// not the deadline alone. Restating it as a bare 30s would be a second,
-	// unattributed copy of a measured figure, which a re-measurement in store
-	// would leave behind. [LAW:one-source-of-truth]
+	// with the rest. The deadlines that machinery runs under are no longer
+	// the store's: they are internal/deadline's, a leaf both layers import.
 	//
 	// PushedHeadRecord, ErrHoldCut and ErrReceivedRefsNotRecorded are
 	// RecordPushedHead's answers the mirror's trail has to tell apart — which
@@ -196,7 +184,6 @@ var doltWorkspaceMachinery = map[string][]string{
 	"mirror clone and push": {
 		"MirrorRootOf", "MirrorRootEnvVar", "MirrorBase",
 		"SeedCloneMirrors", "SweepMirrorBasesUnder", "RemoveCloneMirrors",
-		"Deadlines", "ShippedDeadlines", "MirrorPushCancelLagObserved",
 		"RecordPushedHead", "PushedHeadRecord", "ErrHoldCut", "ErrReceivedRefsNotRecorded",
 		"ReadReceivedRefs", "WriteReceivedRefs", "ReceivedRefsPath",
 		"LandFetchedHead", "LandedFetch", "ErrRemoteCacheNotLanded", "TempTableFilesDir",

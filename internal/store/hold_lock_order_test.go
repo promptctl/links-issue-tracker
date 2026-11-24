@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestHoldForRefWriteRefusesUnderTheCommitLock pins the lock order where
@@ -18,7 +19,7 @@ func TestHoldForRefWriteRefusesUnderTheCommitLock(t *testing.T) {
 	root := migratedDoltDir(t)
 	lockedCtx := context.WithValue(context.Background(), commitLockContextKey{}, time.Now())
 	wrote := false
-	err := holdForRefWrite(lockedCtx, testStderr(), root, engineWrite, time.Minute, func(context.Context, *doltdb.DoltDB) error {
+	err := holdForRefWrite(lockedCtx, testStderr(), suiteenv.Deadlines(), root, engineWrite, time.Minute, func(context.Context, *doltdb.DoltDB) error {
 		wrote = true
 		return nil
 	})

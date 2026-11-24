@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 const (
@@ -147,18 +148,19 @@ func TestRacingFirstOpensBuildOneDatabase(t *testing.T) {
 }
 
 // A racer waits out a builder however long the build runs, since a build's
-// length is the machine's load: with the stand-still wait shrunk far below
-// the builder's hold, the racer still takes the lock once the builder lets
-// go, and its wait reports acquired.
+// length is the machine's load: the bootstrap lock is handed no deadlines, so
+// no holder wait can cut its racer, and with the builder holding past the
+// shortest holder wait a run can derive, the racer still takes the lock once
+// the builder lets go, and its wait reports acquired.
 func TestARacerWaitsOutABuilderPastTheStandStillWait(t *testing.T) {
-	// serial: rewrites the package-level coResidentHolderWait.
-	shrinkWait(t, 100*time.Millisecond)
+	t.Parallel()
+	shortest := suiteenv.WithHold(suiteenv.ContentionHold).HolderWait()
 	root := filepath.Join(t.TempDir(), "dolt")
 	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
 	if err != nil {
 		t.Fatalf("builder acquireBootstrapLock() error = %v", err)
 	}
-	hold := 15 * coResidentHolderWait
+	hold := 2 * shortest
 	released := make(chan error, 1)
 	go func() {
 		time.Sleep(hold)
@@ -173,7 +175,7 @@ func TestARacerWaitsOutABuilderPastTheStandStillWait(t *testing.T) {
 		t.Fatalf("release error = %v", err)
 	}
 	wait := lockWaitOn(reports, filepath.Base(bootstrapLockPath(root)))
-	if wait == nil || wait.Outcome != LockWaitAcquired || wait.Waited < 10*coResidentHolderWait {
+	if wait == nil || wait.Outcome != LockWaitAcquired || wait.Waited < shortest {
 		t.Fatalf("the racer's bootstrap wait was reported as %+v, want acquired after waiting most of the builder's %s hold", wait, hold)
 	}
 }
@@ -182,8 +184,7 @@ func TestARacerWaitsOutABuilderPastTheStandStillWait(t *testing.T) {
 // context's own error, naming the builder it waited on, and is reported
 // cancelled, never refused as busy.
 func TestARacersContextEndsItsWaitNamingTheBuilder(t *testing.T) {
-	// serial: rewrites the package-level coResidentHolderWait.
-	shrinkWait(t, 100*time.Millisecond)
+	t.Parallel()
 	root := filepath.Join(t.TempDir(), "dolt")
 	builder, err := acquireBootstrapLock(WithHolderCommand(context.Background(), "lit init"), testStderr(), root)
 	if err != nil {
@@ -195,7 +196,7 @@ func TestARacersContextEndsItsWaitNamingTheBuilder(t *testing.T) {
 		}
 	})
 	reports := &heldReports{}
-	ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 5*coResidentHolderWait)
+	ctx, cancel := context.WithTimeout(WithLockObserver(context.Background(), reports.observer()), 500*time.Millisecond)
 	defer cancel()
 	racer, err := acquireBootstrapLock(ctx, testStderr(), root)
 	if err == nil {

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
+
 	"github.com/dolthub/dolt/go/libraries/doltcore/doltdb"
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 	"github.com/dolthub/dolt/go/store/datas"
@@ -73,7 +75,7 @@ var reRootRef = ref.NewInternalRef("reroot")
 // It contacts no network and opens no SQL engine; the hold is
 // holdForRefWrite's, under ReRootHoldBudget. Deciding when to re-root, and
 // where, is the caller's.
-func ReRoot(ctx context.Context, stderr io.Writer, doltRootDir, branch, cut string) (storage.ReRooted, error) {
+func ReRoot(ctx context.Context, stderr io.Writer, d deadline.Deadlines, doltRootDir, branch, cut string) (storage.ReRooted, error) {
 	root, err := validateDoltRootDir(doltRootDir)
 	if err != nil {
 		return storage.ReRooted{}, err
@@ -86,20 +88,20 @@ func ReRoot(ctx context.Context, stderr io.Writer, doltRootDir, branch, cut stri
 	if !isDoltCommitHash(trimmedCut) {
 		return storage.ReRooted{}, fmt.Errorf("re-root %s: %q is not a Dolt commit hash", trimmedBranch, cut)
 	}
-	reRooted, err := reRootUnderHold(ctx, stderr, root, trimmedBranch, trimmedCut)
+	reRooted, err := reRootUnderHold(ctx, stderr, d, root, trimmedBranch, trimmedCut)
 	return settleReRoot(reRooted, err, trimmedBranch, trimmedCut)
 }
 
 // reRootUnderHold is ReRoot's work under the live store's holds, both
 // released before it returns. Its result's Head is set exactly when the
 // branch moved, whatever the error.
-func reRootUnderHold(ctx context.Context, stderr io.Writer, root, branch, cut string) (reRooted storage.ReRooted, err error) {
-	release, err := acquireLiveStoreHold(ctx, stderr, root)
+func reRootUnderHold(ctx context.Context, stderr io.Writer, d deadline.Deadlines, root, branch, cut string) (reRooted storage.ReRooted, err error) {
+	release, err := acquireLiveStoreHold(ctx, stderr, d, root)
 	if err != nil {
 		return storage.ReRooted{}, err
 	}
 	defer func() { err = errors.Join(err, release()) }()
-	err = holdForRefWrite(ctx, stderr, root, engineWrite, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
+	err = holdForRefWrite(ctx, stderr, d, root, engineWrite, ReRootHoldBudget, func(holdCtx context.Context, ddb *doltdb.DoltDB) error {
 		start := time.Now()
 		var rewriteErr error
 		reRooted, rewriteErr = reRootBranch(holdCtx, ddb, ref.NewBranchRef(branch), hash.Parse(cut))

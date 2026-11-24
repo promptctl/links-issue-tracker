@@ -49,7 +49,7 @@ import (
 //
 // A package variable (the delays stay const) so tests whose premise makes
 // exhaustion CERTAIN can shrink the budget instead of sleeping through the
-// production one — the same convention coResidentHolderWait serves.
+// production one — the same convention HolderWait serves.
 var remoteIORetryMaxAttempts = 4
 
 const (

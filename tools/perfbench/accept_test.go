@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,8 +12,8 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // The plan is only a plan if lit carries it out: every generation step must
@@ -109,14 +108,13 @@ func runLitIn(t *testing.T, dir string, env []string, budget time.Duration, args
 	defer cancel()
 	var stdout, stderr bytes.Buffer
 	// hermeticEnv disables automatic sync, so no step spawns a worker, and one
-	// that did fails rather than start a lit nobody measured. It is made here,
-	// in the one test that runs lit, so no other test can reach a launcher.
-	// [LAW:no-silent-failure] [LAW:locality-or-seam]
-	noWorkers := cli.LaunchWorkersAs("", errors.New("the plan's lit runs with automatic sync disabled, so it starts no worker"))
+	// that did fails the test rather than start a lit nobody measured.
+	// [LAW:no-silent-failure]
+	noWorkers := cli.RefuseWorkers("the plan's lit runs with automatic sync disabled, so it starts no worker", func(err error) { t.Error(err) })
 	inv := cli.Invocation{
-		Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: environ.Of(env),
+		Dir: cli.WorkingDirOf(dir, nil), Args: args, Env: environ.Of(env).WithDeadlines(deadline.Shipped()),
 		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr,
-		Workers: noWorkers, Deadlines: store.ShippedDeadlines(),
+		Workers: noWorkers,
 	}
 	if err := cli.Run(ctx, inv); err != nil {
 		return cli.WriteCommandError(&stderr, err), stdout.String(), stderr.String()

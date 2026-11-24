@@ -22,6 +22,7 @@ import (
 
 	"github.com/dolthub/dolt/go/libraries/utils/gitcmd"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
@@ -53,6 +54,14 @@ type Env struct {
 	// here for the reason releasedSchema does, and Of leaves it the zero
 	// policy, which raises no remote: an Env nobody gave a policy fails closed.
 	raisePolicy version.RaisePolicy
+	// deadlines are what the run's background sync work runs under, as
+	// cmd/lit handed them (deadline.Shipped) or a worker's spawner handed it.
+	// They ride here for the reason releasedSchema does: every store open,
+	// every lock it waits on and every worker the run spawns is handed this
+	// Env. Of leaves them the zero Deadlines, which no figure can be read
+	// from: an Env nobody gave deadlines fails where it is asked for one, and
+	// cli.Run refuses it before that.
+	deadlines deadline.Deadlines
 }
 
 // IsZero reports whether e is the zero Env, which no Env built by Of or
@@ -186,6 +195,18 @@ func (e Env) WithRaisePolicy(policy version.RaisePolicy) Env {
 // raises nothing, when none was.
 func (e Env) RaisePolicy() version.RaisePolicy {
 	return e.raisePolicy
+}
+
+// WithDeadlines is the environment with the run's deadlines set to d.
+func (e Env) WithDeadlines(d deadline.Deadlines) Env {
+	e.deadlines = d
+	return e
+}
+
+// Deadlines is the run's deadlines WithDeadlines set; the zero Deadlines
+// when none were.
+func (e Env) Deadlines() deadline.Deadlines {
+	return e.deadlines
 }
 
 // List is the environment as a KEY=VALUE list, a copy of the Env's own. It is

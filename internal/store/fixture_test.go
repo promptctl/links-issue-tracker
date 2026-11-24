@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
 	"github.com/promptctl/links-issue-tracker/internal/environ"
@@ -72,18 +71,6 @@ func buildStoreTemplate(dir string) error {
 		return fmt.Errorf("template Open: %w", err)
 	}
 	return st.Close()
-}
-
-// testDeadlines is the deadlines this package's tests hand the store. The
-// hold budget and the receive's deadline bound local holds here, the work a
-// busy machine slows, so a test with no interest in them would take its
-// verdict from the load. A minute still cuts a hung hold inside the test that
-// met it. A test about a deadline hands its own figure.
-// [LAW:no-ambient-temporal-coupling]
-func testDeadlines() Deadlines {
-	d := ShippedDeadlines()
-	d.MirrorHold, d.Receive = time.Minute, time.Minute
-	return d
 }
 
 func TestMain(m *testing.M) {

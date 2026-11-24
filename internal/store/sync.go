@@ -56,7 +56,7 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 	// EnsureDatabase so the bootstrap and the long-lived sync connection
 	// are both protected against a concurrent `lit snapshots restore`
 	// rotating the Dolt directory — the same invariant store.Open enforces.
-	release, err := acquireWorkspaceShared(ctx, stderr, doltRootDir)
+	release, err := acquireWorkspaceShared(ctx, stderr, env.Deadlines(), doltRootDir)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +86,7 @@ func openSync(ctx context.Context, env environ.Env, stderr io.Writer, doltRootDi
 	// the call site that must wait out an earlier foreground command's (or
 	// earlier mirror's) still-live engine instead of colliding with it — the
 	// wait happens inside the eager engine open, on Dolt's own journal lock,
-	// bounded by coResidentHolderWait.
+	// bounded by HolderWait.
 	s, err := openStoreConnection(ctx, env, stderr, doltRootDir, workspaceID, access)
 	if err != nil {
 		return nil, err
@@ -1157,9 +1157,9 @@ func unjudgedRefusal(refusal, readErr error) error {
 // whether its retried push or its bound followed (collectOwedCut), and the
 // collection joins the maintenance account, or the error's when the push
 // failed: a pass that ran is reported either way. [LAW:no-silent-failure]
-func (s *Store) SyncCompactAndPush(ctx, boundLifetime context.Context, boundDeadline time.Duration, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+func (s *Store) SyncCompactAndPush(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	pushed, err := s.compactAndPush(ctx, remote, branch, setUpstream, force)
-	pushed, err = s.keepHistoryBoundAfter(boundLifetime, boundDeadline, remote, branch, window, pushed, err)
+	pushed, err = s.keepHistoryBoundAfter(boundLifetime, remote, branch, window, pushed, err)
 	collected := collectionReport(s.collectOwedCut(ctx, storage.SyncEntryPush))
 	if err != nil {
 		return storage.SyncPushResult{}, annotateWithMaintenance(err, collected)
@@ -1383,9 +1383,9 @@ func (s *Store) headCommitWithinLock(ctx context.Context) (string, error) {
 // [LAW:no-silent-failure] [LAW:verifiable-goals] the goal is "the remote
 // carries HEAD", and a rejected push is judged by the goal, not by itself.
 // A push the re-check found superseded landed too, and keeps the bound.
-func (s *Store) SyncPushFromClone(ctx, boundLifetime context.Context, boundDeadline time.Duration, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+func (s *Store) SyncPushFromClone(ctx, boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	pushed, err := s.pushFromClone(ctx, remote, branch, setUpstream, force)
-	return s.keepHistoryBoundAfter(boundLifetime, boundDeadline, remote, branch, window, pushed, err)
+	return s.keepHistoryBoundAfter(boundLifetime, remote, branch, window, pushed, err)
 }
 
 // pushFromClone is SyncPushFromClone up to the push landing.
@@ -1631,7 +1631,7 @@ func parseUnixSeconds(raw sql.NullString) (sql.NullInt64, error) {
 
 func (s *Store) runSyncMutation(ctx context.Context, operation retryOperation) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, s.stderr, operation, s.reconnect)
+		return retryTransientGCContention(ctx, s.stderr, s.env.Deadlines(), operation, s.reconnect)
 	})
 }
 

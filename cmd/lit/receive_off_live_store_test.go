@@ -17,7 +17,8 @@ import (
 // TestReceiveFetchLeavesTheLiveStoreFree pins that the automatic receive's
 // fetch runs on a clone, so a write that lands on the live store while the
 // fetch is on the network goes straight through rather than waiting out
-// coResidentHolderWait and failing with the receive worker named.
+// the holder wait (deadline.Deadlines.HolderWait) and failing with the
+// receive worker named.
 //
 // The network round trip is made long and observable with a git shim on the
 // PATH of the command whose receive is due, which the receive worker it

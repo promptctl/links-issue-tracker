@@ -106,6 +106,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 // an unrelated one.
 func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 	t.Parallel()
+	contend(t)
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 	loc := workspace.LocationFromStorageDir(storeDir)
 
@@ -142,6 +143,7 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 // under the workspace app.Open resolved, carried out on the open's error.
 func TestStarvedOpenTraceFilesUnderCwdWorkspace(t *testing.T) {
 	t.Parallel()
+	contend(t)
 	repo, runLit := initRepoForPrefixTest(t)
 	ws := workspacetest.Resolved(t, runEnv(t), repo)
 	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)

@@ -9,7 +9,6 @@ import (
 	"sync"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
-	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // Invocation is what one lit run takes from the process that started it: the
@@ -31,9 +30,6 @@ type Invocation struct {
 	Stderr io.Writer
 	// Workers starts the detached workers the run spawns.
 	Workers WorkerLauncher
-	// Deadlines are what the run's background sync work runs under, and what
-	// it hands every worker it spawns (workerHandoff).
-	Deadlines store.Deadlines
 }
 
 // withEnv is inv with env as its environment. It is a literal and not an
@@ -41,7 +37,7 @@ type Invocation struct {
 // process's Env; a field added to Invocation must be carried here
 // (TestWithEnvKeepsEveryOtherField fails until it is).
 func (inv Invocation) withEnv(env environ.Env) Invocation {
-	return Invocation{Dir: inv.Dir, Args: inv.Args, Env: env, Stdin: inv.Stdin, Stdout: inv.Stdout, Stderr: inv.Stderr, Workers: inv.Workers, Deadlines: inv.Deadlines}
+	return Invocation{Dir: inv.Dir, Args: inv.Args, Env: env, Stdin: inv.Stdin, Stdout: inv.Stdout, Stderr: inv.Stderr, Workers: inv.Workers}
 }
 
 // WorkingDir is the absolute directory an invocation ran in, or the error

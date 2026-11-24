@@ -13,6 +13,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -85,7 +86,7 @@ func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot string) {
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
-	bootstrap, err := openDoltPool(testEnv(), doltRoot, "test-workspace-id", "", newLockHold(context.Background(), testStderr(), doltRoot, engineWrite, &longPhase{}))
+	bootstrap, err := openDoltPool(testEnv(), doltRoot, "test-workspace-id", "", newLockHold(context.Background(), testStderr(), suiteenv.Deadlines(), doltRoot, engineWrite, &longPhase{}))
 	if err != nil {
 		t.Fatalf("openDoltPool() bootstrap error = %v", err)
 	}
@@ -135,7 +136,7 @@ func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}
@@ -276,7 +277,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 		{
 			name: "compacting push requires branch",
 			run: func() error {
-				_, err := syncStore.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "   ", unfiredBound(t), false, false)
+				_, err := syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "   ", unfiredBound(t), false, false)
 				return err
 			},
 			wantErr: "branch is required",
@@ -327,7 +328,7 @@ func TestSyncCompactAndPushRefusesABlankBranchBeforeAnyWork(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	canceled, cancel := context.WithCancel(ctx)
 	cancel()
-	_, err := st.SyncCompactAndPush(canceled, canceled, testDeadlines().HistoryBound(), remoteName(t, "origin"), "   ", unfiredBound(t), false, false)
+	_, err := st.SyncCompactAndPush(canceled, canceled, remoteName(t, "origin"), "   ", unfiredBound(t), false, false)
 	if err == nil || err.Error() != "branch is required" {
 		t.Fatalf("SyncCompactAndPush(blank branch) error = %v, want only %q", err, "branch is required")
 	}
@@ -875,7 +876,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	if err := sync.SyncAddRemote(ctx, remoteName(t, "origin"), remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
-	if _, err := sync.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), true, false); err != nil {
+	if _, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), true, false); err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
 	got, err := sync.SyncFreshness(ctx, remoteName(t, "origin"), "master")
@@ -946,7 +947,7 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
 
-	result, err := syncStore.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", unfiredBound(t), true, false)
+	result, err := syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", unfiredBound(t), true, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
@@ -1005,7 +1006,7 @@ func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
 	}
 	defer syncStore.Close()
 
-	_, err = syncStore.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "no-such-remote"), "master", unfiredBound(t), false, false)
+	_, err = syncStore.SyncCompactAndPush(ctx, ctx, remoteName(t, "no-such-remote"), "master", unfiredBound(t), false, false)
 	if err == nil {
 		t.Fatal("SyncCompactAndPush() to a remote that does not exist succeeded; this test cannot say anything unless the push fails")
 	}
@@ -1045,7 +1046,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 	dbBefore := st.db
 	attempts := 0
 	err = st.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientGCContention(ctx, testStderr(), func(context.Context) error {
+		return retryTransientGCContention(ctx, testStderr(), suiteenv.Deadlines(), func(context.Context) error {
 			attempts++
 			if attempts == 1 {
 				return gcReset

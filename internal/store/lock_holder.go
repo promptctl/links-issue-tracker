@@ -16,6 +16,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
+
 	"github.com/cenkalti/backoff/v4"
 	"github.com/promptctl/primitives/filelock"
 )
@@ -675,7 +677,7 @@ func renderHolderCommand(command string) string {
 // holdWait is the one retry policy every contender for a store lock waits
 // with — the lit-minted locks through acquireStoreLock, and Dolt's LOCK
 // through the engine connector and the chunk-store open, which take
-// backoff.BackOff. It polls every storeLockPollInterval and stops once the
+// backoff.BackOff. It polls every deadline.LockPollInterval and stops once the
 // holders in front of the contender have stood still for the wait: the clock
 // starts at Reset, and restarts whenever the lock's latest arrival
 // (lockHolderArrivalName) names a holder other than the one it named at the
@@ -741,7 +743,7 @@ type holdWait struct {
 	stderr     io.Writer
 	storageDir string
 	lockPath   string
-	wait       func() time.Duration
+	wait       time.Duration
 	now        func() time.Time
 	// known is every holder name this wait has seen; nil until its first
 	// readable reading, which is the baseline every later one is judged
@@ -776,7 +778,7 @@ type holdWait struct {
 // passes time.Now beside Dolt's own real timer. time.Now's readings carry the
 // monotonic clock, so a wall-clock step cannot shorten or stretch a wait.
 // [LAW:effects-at-boundaries]
-func newHoldWait(stderr io.Writer, storageDir, lockPath string, wait func() time.Duration, now func() time.Time) *holdWait {
+func newHoldWait(stderr io.Writer, storageDir, lockPath string, wait time.Duration, now func() time.Time) *holdWait {
 	return &holdWait{stderr: stderr, storageDir: storageDir, lockPath: lockPath, wait: wait, now: now}
 }
 
@@ -802,7 +804,7 @@ func (w *holdWait) NextBackOff() time.Duration {
 	if w.arrived() {
 		w.since = now
 	}
-	if now.Sub(w.since) >= w.wait() {
+	if now.Sub(w.since) >= w.wait {
 		w.stoodStill = true
 		return backoff.Stop
 	}
@@ -811,7 +813,7 @@ func (w *holdWait) NextBackOff() time.Duration {
 			w.lockPath, now.Sub(w.started).Round(time.Second), describeLockHolders(w.storageDir, w.lockPath))
 		w.noticeDue = now.Add(lockWaitNoticeInterval)
 	}
-	return storeLockPollInterval
+	return deadline.LockPollInterval
 }
 
 // arrived takes one reading of the holder names and reports whether any is
@@ -911,7 +913,7 @@ var (
 	// lockWaitNoticeGrace is how long a wait stays quiet before it is worth
 	// reporting: long enough that the ordinary case — two lit commands
 	// overlapping for a few milliseconds — prints nothing, short enough to
-	// land inside coResidentHolderWait, the stand-still budget of every wait
+	// land inside HolderWait, the stand-still budget of every wait
 	// that gives up, so a contender that is about to fail has
 	// already said who it is waiting on. A grace under a second would report
 	// the overlaps this one exists to ignore. lockWaitNoticeInterval then
@@ -920,7 +922,7 @@ var (
 	// indistinguishable from the hang this notice exists to rule out.
 	//
 	// Package variables, not constants, by the convention
-	// coResidentHolderWait already sets:
+	// HolderWait already sets:
 	// tests whose premise is a wait must shrink the budget rather than sleep
 	// through the production one.
 	lockWaitNoticeGrace    = 2 * time.Second

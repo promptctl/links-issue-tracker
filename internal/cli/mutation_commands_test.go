@@ -5,6 +5,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 func TestMutationCommandsDoNotDeadlock(t *testing.T) {
@@ -33,29 +35,29 @@ func TestMutationCommandsDoNotDeadlock(t *testing.T) {
 		}
 	}
 
-	if _, err := runWithTimeout([]string{"init", "--skip-hooks"}, suiteStallDeadline); err != nil {
+	if _, err := runWithTimeout([]string{"init", "--skip-hooks"}, suiteenv.StallBound); err != nil {
 		t.Fatalf("Run(init --skip-hooks) error = %v", err)
 	}
 
-	epicOut, err := runWithTimeout([]string{"new", "--type", "epic", "--title", "deadlock regression epic", "--topic", "deadlock"}, suiteStallDeadline)
+	epicOut, err := runWithTimeout([]string{"new", "--type", "epic", "--title", "deadlock regression epic", "--topic", "deadlock"}, suiteenv.StallBound)
 	if err != nil {
 		t.Fatalf("Run(new --type epic) error = %v", err)
 	}
 	epicID := extractTicketID(t, epicOut.String())
 
-	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--topic", "deadlock", "--type", "task", "--priority", "1", "--parent", epicID}, suiteStallDeadline)
+	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--topic", "deadlock", "--type", "task", "--priority", "1", "--parent", epicID}, suiteenv.StallBound)
 	if err != nil {
 		t.Fatalf("Run(new) error = %v", err)
 	}
 	issueID := extractTicketID(t, newOut.String())
 
-	if _, err := runWithTimeout([]string{"comment", "add", issueID, "--body", "deadlock regression probe"}, suiteStallDeadline); err != nil {
+	if _, err := runWithTimeout([]string{"comment", "add", issueID, "--body", "deadlock regression probe"}, suiteenv.StallBound); err != nil {
 		t.Fatalf("Run(comment add) error = %v", err)
 	}
-	if _, err := runWithTimeout([]string{"start", issueID, "--by", "tester"}, suiteStallDeadline); err != nil {
+	if _, err := runWithTimeout([]string{"start", issueID, "--by", "tester"}, suiteenv.StallBound); err != nil {
 		t.Fatalf("Run(start --by tester) error = %v", err)
 	}
-	if _, err := runWithTimeout([]string{"close", issueID, "--resolution", "wontfix", "--reason", "deadlock regression probe cleanup"}, suiteStallDeadline); err != nil {
+	if _, err := runWithTimeout([]string{"close", issueID, "--resolution", "wontfix", "--reason", "deadlock regression probe cleanup"}, suiteenv.StallBound); err != nil {
 		t.Fatalf("Run(close) error = %v", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
@@ -24,7 +25,7 @@ func TestASkippedReceiveRecordsItsSkip(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	target := syncTarget{remote: remoteName(t, "origin"), skip: syncTargetRemoteEmpty}
-	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), suiteDeadlines().Receive, ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
+	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), ws, liveClone{}, receiveFetch{target: target}, leaveUnsettledRun(filepath.Join(t.TempDir(), "dolt")))
 	if outcome.skip != syncTargetRemoteEmpty {
 		t.Fatalf("performSyncReceive() = %+v; want the skip", outcome)
 	}
@@ -191,7 +192,7 @@ func TestTheReceiveWaitsForALiveMirror(t *testing.T) {
 	}
 	clearMirrorPending(testStderr(t), ws)
 
-	release, err := store.HoldMirrorBeacon(context.Background(), testStderr(t), ws.DatabasePath)
+	release, err := store.HoldMirrorBeacon(context.Background(), testStderr(t), suiteenv.Deadlines(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("hold the mirror beacon: %v", err)
 	}

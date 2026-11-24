@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/cli"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 )
 
 // The run this process is starts its detached workers as this very program,
@@ -16,10 +16,14 @@ func TestTheProcessRunStartsItsWorkersAsItself(t *testing.T) {
 	if err != nil {
 		t.Fatalf("processInvocation() error = %v", err)
 	}
-	if want := cli.LaunchWorkersAs(os.Executable()); inv.Workers != want {
+	program, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable() error = %v", err)
+	}
+	if want := cli.LaunchWorkersAs(program); inv.Workers != want {
 		t.Errorf("processInvocation().Workers = %#v; want %#v, this program", inv.Workers, want)
 	}
-	if want := store.ShippedDeadlines(); inv.Deadlines != want {
-		t.Errorf("processInvocation().Deadlines = %+v; want the shipped %+v", inv.Deadlines, want)
+	if got, want := inv.Env.Deadlines(), deadline.Shipped(); got != want {
+		t.Errorf("processInvocation()'s deadlines = %+v; want the shipped %+v", got.Figures(), want.Figures())
 	}
 }

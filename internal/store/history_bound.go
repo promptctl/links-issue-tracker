@@ -71,14 +71,15 @@ func (s *Store) boundHistory(ctx context.Context, remote storage.RemoteName, bra
 }
 
 // keepHistoryBoundAfter is every push verb's last step: once the push landed,
-// it runs boundHistory under boundDeadline (Deadlines.HistoryBound) taken
-// from boundLifetime,
+// it runs boundHistory under the run's history bound
+// (deadline.Deadlines.HistoryBound, read off the store's Env) taken from
+// boundLifetime,
 // carries the bound on the push's result, and joins its account to the
 // push's maintenance. A push that failed landed nothing to bound. A window
 // config left unread keeps no bound, and the maintenance says why. The verbs
 // end here rather than leaving it to their caller, so a push through
 // storage.Syncer cannot land without the bound. [LAW:no-ambient-temporal-coupling]
-func (s *Store) keepHistoryBoundAfter(boundLifetime context.Context, boundDeadline time.Duration, remote storage.RemoteName, branch string, window storage.BoundWindow, pushed storage.SyncPushResult, pushErr error) (storage.SyncPushResult, error) {
+func (s *Store) keepHistoryBoundAfter(boundLifetime context.Context, remote storage.RemoteName, branch string, window storage.BoundWindow, pushed storage.SyncPushResult, pushErr error) (storage.SyncPushResult, error) {
 	if pushErr != nil {
 		return pushed, pushErr
 	}
@@ -87,7 +88,7 @@ func (s *Store) keepHistoryBoundAfter(boundLifetime context.Context, boundDeadli
 		pushed.Maintenance = joinMaintenance(pushed.Maintenance, "history bound not kept: "+unread.Error())
 		return pushed, nil
 	}
-	ctx, cancel := context.WithTimeout(boundLifetime, boundDeadline)
+	ctx, cancel := context.WithTimeout(boundLifetime, s.env.Deadlines().HistoryBound())
 	defer cancel()
 	pushed.Bound = s.boundHistory(ctx, remote, strings.TrimSpace(branch), w)
 	pushed.Maintenance = joinMaintenance(pushed.Maintenance, historyBoundReport(pushed.Bound))

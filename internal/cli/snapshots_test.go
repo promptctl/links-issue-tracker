@@ -15,6 +15,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/fsperm"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -162,7 +163,7 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 	// did not acquire the lock, it would complete before the release fires.
 	repo, ws := initBootstrapTestRepo(t)
 
-	release, err := store.LockCommitPath(context.Background(), testStderr(t), ws.DatabasePath)
+	release, err := store.LockCommitPath(context.Background(), testStderr(t), suiteenv.Deadlines(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire commit lock: %v", err)
 	}
@@ -203,7 +204,7 @@ func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
 	// crash-recovery.
 	repo, ws := initBootstrapTestRepo(t)
 
-	release, err := store.LockDoltJournalExclusive(context.Background(), testStderr(t), ws.DatabasePath)
+	release, err := store.LockDoltJournalExclusive(context.Background(), testStderr(t), suiteenv.Deadlines(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire dolt journal lock: %v", err)
 	}
@@ -264,7 +265,7 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 		t.Fatalf("lock dir moved across Restore: was %q, now %q", filepath.Dir(lockPath), pathDir)
 	}
 	// And another lock acquisition succeeds at the same path afterwards.
-	release, err := store.LockCommitPath(context.Background(), testStderr(t), ws.DatabasePath)
+	release, err := store.LockCommitPath(context.Background(), testStderr(t), suiteenv.Deadlines(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire commit lock after restore: %v", err)
 	}
@@ -356,6 +357,7 @@ func countUserSnapshots(t *testing.T, ws workspace.Info) int {
 // inodes.
 func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 	t.Parallel()
+	contend(t)
 	repo, ws := initBootstrapTestRepo(t)
 
 	// Produce a snapshot to restore.
@@ -403,11 +405,13 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 // file the rotators never touch) would take a torn copy of whatever files
 // DOLT_CLONE has written so far.
 //
-// Duration: the refusal lands only after the shared acquisition's ~5s retry
-// budget elapses — the same grace every Store open extends to a transient
-// rotation — so this test intentionally takes ~5s of wall clock.
+// Duration: the refusal lands only once the exclusive holder has stood still
+// for the holder wait — the same grace every Store open extends to a
+// transient rotation — which the contention hold makes about a second and a
+// half (contend).
 func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 	t.Parallel()
+	contend(t)
 	repo, ws := initBootstrapTestRepo(t)
 
 	release, err := store.LockWorkspaceExclusive(context.Background(), testStderr(t), ws.DatabasePath)

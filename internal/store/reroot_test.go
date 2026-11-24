@@ -21,6 +21,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/telemetry"
 )
 
@@ -72,7 +73,7 @@ func TestReRootGivesTheSameHashesInEveryStore(t *testing.T) {
 
 	var results [2]storage.ReRooted
 	for i, root := range stores {
-		got, err := ReRoot(ctx, testStderr(), root, "master", cut.String())
+		got, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), root, "master", cut.String())
 		if err != nil {
 			t.Fatalf("ReRoot(store %d) error = %v", i, err)
 		}
@@ -129,7 +130,7 @@ func TestReRootGivesTheSameHashesInEveryStore(t *testing.T) {
 
 	// Re-rooting at the root rewrites every commit to itself: what a checkout
 	// that already holds the re-rooted history computes when it follows.
-	again, err := ReRoot(ctx, testStderr(), stores[0], "master", a.Root)
+	again, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), stores[0], "master", a.Root)
 	if err != nil {
 		t.Fatalf("ReRoot(at the root) error = %v", err)
 	}
@@ -208,14 +209,14 @@ func TestReRootKeepsEveryMergeAboveTheCutAndRefusesALineAroundIt(t *testing.T) {
 		}
 	})
 
-	if _, err := ReRoot(ctx, testStderr(), doltRoot, "master", c["C"].String()); !errors.Is(err, ErrSideLineAcrossCut) || !strings.Contains(err.Error(), c["t1"].String()) {
+	if _, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, "master", c["C"].String()); !errors.Is(err, ErrSideLineAcrossCut) || !strings.Contains(err.Error(), c["t1"].String()) {
 		t.Fatalf("ReRoot(C) with m2 at the head error = %v, want %v naming t1 %s", err, ErrSideLineAcrossCut, c["t1"])
 	}
 	for cut, refusal := range map[string]string{
 		"s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue": "read commit s9fpkfkdq4pb0nk2nq8r6n0e4u2hb4ue: ",
 		"not-a-hash":                       `"not-a-hash" is not a Dolt commit hash`,
 	} {
-		if _, err := ReRoot(ctx, testStderr(), doltRoot, "master", cut); err == nil || !strings.Contains(err.Error(), refusal) {
+		if _, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, "master", cut); err == nil || !strings.Contains(err.Error(), refusal) {
 			t.Fatalf("ReRoot(%s) error = %v, want the refusal %q", cut, err, refusal)
 		}
 	}
@@ -232,12 +233,12 @@ func TestReRootKeepsEveryMergeAboveTheCutAndRefusesALineAroundIt(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if _, err := ReRoot(ctx, testStderr(), doltRoot, "master", c["t1"].String()); err == nil || !strings.Contains(err.Error(), "the cut is not an ancestor of the branch head "+c["m"].String()) {
+	if _, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, "master", c["t1"].String()); err == nil || !strings.Contains(err.Error(), "the cut is not an ancestor of the branch head "+c["m"].String()) {
 		t.Fatalf("ReRoot(t1) with m at the head error = %v, want the cut named as off the branch head m %s", err, c["m"])
 	}
 
 	wantDropped := logLength(t, ctx, doltRoot, c["C"].String()) - 1
-	got, err := ReRoot(ctx, testStderr(), doltRoot, "master", c["C"].String())
+	got, err := ReRoot(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, "master", c["C"].String())
 	if err != nil {
 		t.Fatalf("ReRoot(C) with m at the head error = %v", err)
 	}

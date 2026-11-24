@@ -5,6 +5,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 func TestCommentRemove(t *testing.T) {
@@ -16,7 +18,7 @@ func TestCommentRemove(t *testing.T) {
 
 	run := func(args ...string) (bytes.Buffer, error) {
 		var stdout bytes.Buffer
-		ctx, cancel := context.WithTimeout(context.Background(), suiteStallDeadline)
+		ctx, cancel := context.WithTimeout(context.Background(), suiteenv.StallBound)
 		defer cancel()
 		errCh := make(chan error, 1)
 		go func() { errCh <- Run(ctx, dirInvocation(t, repo, &stdout, &stdout, args)) }()

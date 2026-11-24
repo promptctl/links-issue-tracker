@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/environ"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -151,11 +150,6 @@ func (a remoteAdvertisement) commits() []string {
 	}
 	return ids
 }
-
-// pushProofDeadline bounds a push's proof: one `git ls-remote` (1.2-1.7s
-// measured over ssh, 2026-09-27) and one local `git cat-file`. The push has
-// already landed, so a proof cut short costs only the next receive one fetch.
-const pushProofDeadline = 10 * time.Second
 
 // provePushedAdvertisement asks the remote, right after a push from this
 // session's store landed without being superseded, what it now advertises,

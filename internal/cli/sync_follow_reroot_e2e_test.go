@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 	"github.com/promptctl/links-issue-tracker/internal/workspace/workspacetest"
 )
 
@@ -77,7 +78,7 @@ func reRootAlphaAndForcePush(t *testing.T, r reRootedCheckouts, cut string) stri
 	t.Helper()
 	alphaWS := workspacetest.Resolved(t, runEnv(t), r.alpha)
 	_, branch := syncHeadAndBranch(t, r.alpha)
-	reRooted, err := store.ReRoot(context.Background(), testStderr(t), alphaWS.DatabasePath, branch, cut)
+	reRooted, err := store.ReRoot(context.Background(), testStderr(t), suiteenv.Deadlines(), alphaWS.DatabasePath, branch, cut)
 	if err != nil {
 		t.Fatalf("ReRoot(alpha) error = %v", err)
 	}

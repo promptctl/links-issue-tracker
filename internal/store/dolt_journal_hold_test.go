@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dolthub/dolt/go/store/chunks"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestLockDoltJournalExclusiveRefusesUninitializedWorkspace pins the refusal
@@ -25,7 +25,7 @@ func TestLockDoltJournalExclusiveRefusesUninitializedWorkspace(t *testing.T) {
 	t.Parallel()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	release, err := LockDoltJournalExclusive(context.Background(), testStderr(), doltRoot)
+	release, err := LockDoltJournalExclusive(context.Background(), testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err == nil {
 		_ = release()
 		t.Fatal("LockDoltJournalExclusive() succeeded on an uninitialized workspace; want a not-initialized refusal")
@@ -49,28 +49,27 @@ func chunkJournalPath(doltRoot string) string {
 // TestOpenForReadPendingMigrationUnderJournalHolder pins what a read open
 // does when it must bring the schema forward while the copy's journal hold
 // is live: it hands off to the write open, whose engine refuses Dolt's
-// read-only fallback and waits out the holder for the bounded
-// coResidentHolderWait — never applying DDL through a read engine, which is
-// read-only. A holder that outlasts the budget
-// surfaces as the write open's contention refusal, and the same open
-// succeeds — applying the migration — once the holder releases. The budget
-// is shrunk because exhaustion is this premise's certain outcome; the
-// assertions are about the exhausted error's shape, not the budget's size.
+// read-only fallback and waits out the holder for the run's bounded holder
+// wait — never applying DDL through a read engine, which is read-only. A
+// holder that outlasts the wait surfaces as the write open's contention
+// refusal, and the same open succeeds — applying the migration — once the
+// holder releases. The run is handed a short hold, so its wait is short,
+// because exhaustion is this premise's certain outcome; the assertions are
+// about the exhausted error's shape, not the wait's size.
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
-	// serial: no t.Parallel — rewrites the package-level
-	// coResidentHolderWait budget.
-	shrinkWait(t, 700*time.Millisecond)
+	t.Parallel()
+	env := envWithHold(suiteenv.ContentionHold)
 
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
 	openOneVersionBehind(t, ctx, doltRoot)
 
-	release, err := LockDoltJournalExclusive(ctx, testStderr(), doltRoot)
+	release, err := LockDoltJournalExclusive(ctx, testStderr(), env.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}
-	reader, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	reader, err := OpenForRead(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err == nil {
 		_ = reader.Close()
 		_ = release()
@@ -88,7 +87,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 		t.Fatalf("release journal lock: %v", err)
 	}
 
-	healed, err := OpenForRead(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	healed, err := OpenForRead(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenForRead() after release error = %v; want the retried open to apply the migration", err)
 	}
@@ -150,7 +149,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 		t.Fatalf("read dirtied journal: %v", err)
 	}
 
-	release, err := LockDoltJournalExclusive(ctx, testStderr(), doltRoot)
+	release, err := LockDoltJournalExclusive(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
 	}

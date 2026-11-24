@@ -68,7 +68,7 @@ func TestPanicDuringMutationReleasesLock(t *testing.T) {
 func TestPanicDuringWithCommitLockReleasesLock(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
+	s := &Store{env: testEnv(), commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
 	func() {
 		defer func() {
@@ -138,7 +138,7 @@ func TestWithMutationCommitWorkingSetReentrantPath(t *testing.T) {
 func TestReentrantWithCommitLockShortCircuits(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
+	s := &Store{env: testEnv(), commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
 	err := s.withCommitLock(context.Background(), func(ctx context.Context) error {
 		// Nested call should short-circuit: no deadlock, no second acquisition.
@@ -164,7 +164,7 @@ func TestReentrantWithCommitLockShortCircuits(t *testing.T) {
 func TestAcquireCommitLockContextCancellation(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
+	s := &Store{env: testEnv(), commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
 	// Hold the lock with a live in-test holder.
 	release, err := acquireStoreLock(context.Background(), testStderr(), storageDirOf(lockPath), lockPath, true, 0)

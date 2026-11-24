@@ -77,7 +77,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 		t.Helper()
 		recorder := telemetry.Begin(telemetry.Event{})
 		ctx := telemetry.With(context.Background(), recorder)
-		clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), suiteDeadlines().MirrorHold, ws)
+		clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), ws)
 		if err != nil {
 			t.Fatalf("takeReceiveClone() error = %v", err)
 		}
@@ -87,7 +87,7 @@ func TestAReceiveThatFetchedAndKeepsStoppingReachesTheFailureSurface(t *testing.
 			t.Fatalf("fetchIntoClone() = %+v, %v; want a fetch that worked", fetch, err)
 		}
 		unblock := blockTheLanding(t, ws)
-		outcome := landAndRecord(ctx, testStderr(t), runEnv(t), suiteDeadlines().Receive, ws, clone, fetch, remoteAdvertisement{})
+		outcome := landAndRecord(ctx, testStderr(t), runEnv(t), ws, clone, fetch, remoteAdvertisement{})
 		unblock()
 		surfaceReceiveOutcome(ctx, testStderr(t), runEnv(t), ws, outcome, time.Now())
 		return oneOutcome(writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil))).Occurrences["receive.outcomes"])
@@ -273,7 +273,7 @@ func unsettlingCheckout(t *testing.T) (context.Context, workspace.Info, liveClon
 	runCLIInDir(t, dir, "sync", "push", "--set-upstream")
 	ws := workspacetest.Resolved(t, runEnv(t), dir)
 	ctx := telemetry.With(context.Background(), telemetry.Begin(telemetry.Event{}))
-	clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), suiteDeadlines().MirrorHold, ws)
+	clone, err := takeReceiveClone(ctx, testStderr(t), testEnv(), ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
@@ -292,7 +292,7 @@ func TestTheMirrorsReceiveStartsNoRun(t *testing.T) {
 	t.Parallel()
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	blockTheLanding(t, ws)
-	err := receivePushedReRoot(ctx, testStderr(t), runEnv(t), suiteDeadlines().Receive, ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
+	err := receivePushedReRoot(ctx, testStderr(t), runEnv(t), ws, clone, pushedHead{remote: fetch.target.remote, branch: fetch.target.branch})
 	if err == nil || !strings.Contains(err.Error(), "stopped at land") {
 		t.Fatalf("receivePushedReRoot() error = %v; want the landing's stop", err)
 	}
@@ -313,7 +313,7 @@ func TestAMirrorWhoseLiveStoreReceiveFailsSaysWhere(t *testing.T) {
 	recorder := telemetry.Begin(telemetry.Event{})
 	ctx := telemetry.With(context.Background(), recorder)
 	landed := pushedHead{remote: fetch.target.remote, branch: fetch.target.branch, head: "pushed", followedReRoot: true}
-	liveStoreLearns(ctx, testStderr(t), runEnv(t), io.Discard, suiteDeadlines(), ws, clone, landed)
+	liveStoreLearns(ctx, testStderr(t), runEnv(t), io.Discard, ws, clone, landed)
 	ev := writtenEvent(t, recorder.Finish(invocationEnd(time.Now(), nil, nil)))
 	outcomes := ev.Occurrences["receive.outcomes"]
 	if len(outcomes) != 1 {
@@ -339,7 +339,7 @@ func TestAReceiveWhoseOpenFailsHasNothingToClose(t *testing.T) {
 	t.Parallel()
 	ctx, ws, clone, fetch := unsettlingCheckout(t)
 	ws.WorkspaceID = "" // the open refuses a store with no workspace identity; the land never reads it
-	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), suiteDeadlines().Receive, ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
+	outcome, closeLive := performSyncReceive(ctx, testStderr(t), runEnv(t), ws, clone, fetch, leaveUnsettledRun(ws.DatabasePath))
 	if outcome.stopped != receiveStepOpen {
 		t.Fatalf("receive stopped at %q (err %v); want the open", outcome.stopped, outcome.err)
 	}

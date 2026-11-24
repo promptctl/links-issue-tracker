@@ -60,7 +60,7 @@ func compactPush(t *testing.T, ctx context.Context, root string, epic model.ID, 
 	}
 	sync := openSyncOrFatal(t, ctx, root)
 	defer func() { _ = sync.Close() }()
-	kept, err := sync.SyncCompactAndPush(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", storage.BoundWindowRead(bound, nil), false, false)
+	kept, err := sync.SyncCompactAndPush(ctx, ctx, remoteName(t, "origin"), "master", storage.BoundWindowRead(bound, nil), false, false)
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush(%s) error = %v", title, err)
 	}
@@ -281,7 +281,7 @@ func TestABoundKeptOnTheMirrorsCloneCollectsNothing(t *testing.T) {
 		t.Fatalf("the clone holds no %s checkpoint, so the test cannot show it left standing", migrationCheckpointPrefix)
 	}
 	bound := windowOf(t, seeded, 3)
-	pushed, err := sync.SyncPushFromClone(ctx, ctx, testDeadlines().HistoryBound(), remoteName(t, "origin"), "master", storage.BoundWindowRead(bound, nil), false, false)
+	pushed, err := sync.SyncPushFromClone(ctx, ctx, remoteName(t, "origin"), "master", storage.BoundWindowRead(bound, nil), false, false)
 	if err != nil {
 		t.Fatalf("SyncPushFromClone error = %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork drives the
@@ -113,7 +114,7 @@ func TestRecordPushedHeadMovesTheTrackingRefWithoutTheNetwork(t *testing.T) {
 	// The mirror's situation: no engine of its own on the live store. The
 	// received-refs record the push proved rides along and lands with the ref.
 	proven := []byte("origin " + remoteURL + "\nproven-head\trefs/dolt/data\n")
-	record, err := RecordPushedHead(ctx, testStderr(), doltRoot, testDeadlines().MirrorHold, remoteName(t, "origin"), "master", pushedHead, proven)
+	record, err := RecordPushedHead(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, remoteName(t, "origin"), "master", pushedHead, proven)
 	if err != nil {
 		t.Fatalf("RecordPushedHead() error = %v", err)
 	}
@@ -173,12 +174,12 @@ func TestRecordPushedHeadRefusesAHeadTheStoreDoesNotHold(t *testing.T) {
 		t.Fatalf("WriteReceivedRefs() error = %v", err)
 	}
 	proven := []byte("proven\n")
-	if _, err := RecordPushedHead(ctx, testStderr(), doltRoot, testDeadlines().MirrorHold, remoteName(t, "origin"), "master", "not-a-hash", proven); err == nil {
+	if _, err := RecordPushedHead(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, remoteName(t, "origin"), "master", "not-a-hash", proven); err == nil {
 		t.Fatal("RecordPushedHead accepted a value that is not a Dolt commit hash")
 	}
 	// Well-formed, absent: 32 chars of the Dolt hash alphabet naming nothing.
 	absent := "00000000000000000000000000000000"
-	if _, err := RecordPushedHead(ctx, testStderr(), doltRoot, testDeadlines().MirrorHold, remoteName(t, "origin"), "master", absent, proven); err == nil {
+	if _, err := RecordPushedHead(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, remoteName(t, "origin"), "master", absent, proven); err == nil {
 		t.Fatal("RecordPushedHead set a tracking ref to a commit the store does not hold")
 	}
 	if got, err := ReadReceivedRefs(doltRoot); err != nil || string(got) != string(standing) {
@@ -192,8 +193,7 @@ func TestRecordPushedHeadRefusesAHeadTheStoreDoesNotHold(t *testing.T) {
 // retry — and lands once that engine closes, rather than failing at once or
 // writing under the holder.
 func TestRecordPushedHeadWaitsOutALiveWriteEngine(t *testing.T) {
-	// serial: no t.Parallel — coResidentHolderWait governs the wait and
-	// a sibling test rewrites it.
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 	st, err := Open(ctx, testEnv(), testStderr(), doltRoot, "ws")
@@ -210,7 +210,7 @@ func TestRecordPushedHeadWaitsOutALiveWriteEngine(t *testing.T) {
 		_ = st.Close()
 		close(closed)
 	}()
-	if _, err := RecordPushedHead(ctx, testStderr(), doltRoot, testDeadlines().MirrorHold, remoteName(t, "origin"), "master", head, nil); err != nil {
+	if _, err := RecordPushedHead(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, remoteName(t, "origin"), "master", head, nil); err != nil {
 		t.Fatalf("RecordPushedHead() against a write engine that closes mid-wait error = %v", err)
 	}
 	select {
@@ -304,7 +304,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	if err := WriteReceivedRefs(doltRoot, newer); err != nil {
 		t.Fatalf("WriteReceivedRefs() error = %v", err)
 	}
-	record, err := RecordPushedHead(ctx, testStderr(), doltRoot, testDeadlines().MirrorHold, remoteName(t, "origin"), "master", c2, []byte("late-c2\n"))
+	record, err := RecordPushedHead(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, remoteName(t, "origin"), "master", c2, []byte("late-c2\n"))
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c2) error = %v", err)
 	}
@@ -320,7 +320,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	// And for exactly where the ref is: nothing to do to the ref, still not an
 	// error, and the ref ends at the pushed head, so the proof is recorded.
 	atC3 := []byte("at-c3\n")
-	record, err = RecordPushedHead(ctx, testStderr(), doltRoot, testDeadlines().MirrorHold, remoteName(t, "origin"), "master", c3, atC3)
+	record, err = RecordPushedHead(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, remoteName(t, "origin"), "master", c3, atC3)
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c3) error = %v", err)
 	}
@@ -332,7 +332,7 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 	}
 	// The forward move still works from this state: a later head moves it.
 	c4 := commit("c4")
-	record, err = RecordPushedHead(ctx, testStderr(), doltRoot, testDeadlines().MirrorHold, remoteName(t, "origin"), "master", c4, nil)
+	record, err = RecordPushedHead(ctx, testStderr(), suiteenv.Deadlines(), doltRoot, remoteName(t, "origin"), "master", c4, nil)
 	if err != nil {
 		t.Fatalf("RecordPushedHead(c4) error = %v", err)
 	}
@@ -346,14 +346,14 @@ func TestRecordPushedHeadNeverMovesTheTrackingRefBackwards(t *testing.T) {
 }
 
 // TestRecordPushedHeadCutsAtTheHoldBudget pins that the record's hold on the
-// live store runs under the hold budget it is handed and that a cut is stamped with
-// ErrHoldCut — the discriminator the mirror's trail reads. The budget is
-// shrunk to nothing so the hold is cut the instant it starts; the lock waits
-// before it are not under the budget, so the open itself still succeeds.
-// Zero, not a nanosecond: a zero budget cancels the hold's context before the
-// commit lock is tried, and a done context is refused on every platform; a
-// positive one arms a timer the write can outrun where the clock is coarse
-// (Windows).
+// live store runs under the run's mirror hold and that a cut is stamped with
+// ErrHoldCut — the discriminator the mirror's trail reads. The hold is a
+// nanosecond, and the commit lock the hold takes is held here, so the hold
+// cannot finish before its deadline whatever the clock's resolution: a
+// nanosecond's timer can fire after a short write where the clock is coarse
+// (Windows), and a hold of zero is not a deadline a run can be handed. The
+// lock waits before the hold are not under it, so the open itself still
+// succeeds.
 func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -369,9 +369,18 @@ func TestRecordPushedHeadCutsAtTheHoldBudget(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	_, err = RecordPushedHead(ctx, testStderr(), doltRoot, 0, remoteName(t, "origin"), "master", head, nil)
+	release, err := LockCommitPath(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
+	if err != nil {
+		t.Fatalf("LockCommitPath() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := release(); err != nil {
+			t.Errorf("release commit lock: %v", err)
+		}
+	})
+	_, err = RecordPushedHead(ctx, testStderr(), suiteenv.WithHold(time.Nanosecond), doltRoot, remoteName(t, "origin"), "master", head, nil)
 	if !errors.Is(err, ErrHoldCut) {
-		t.Fatalf("RecordPushedHead() under a zero hold budget error = %v, want ErrHoldCut", err)
+		t.Fatalf("RecordPushedHead() under a nanosecond's hold error = %v, want ErrHoldCut", err)
 	}
 }
 
@@ -395,7 +404,7 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	release, err := LockCommitPath(ctx, testStderr(), doltRoot)
+	release, err := LockCommitPath(ctx, testStderr(), suiteenv.Deadlines(), doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}
@@ -404,7 +413,7 @@ func TestRecordPushedHeadCutInTheCommitLockWaitNamesTheHolder(t *testing.T) {
 			t.Errorf("release commit lock: %v", err)
 		}
 	})
-	_, err = RecordPushedHead(ctx, testStderr(), doltRoot, 300*time.Millisecond, remoteName(t, "origin"), "master", head, nil)
+	_, err = RecordPushedHead(ctx, testStderr(), suiteenv.WithHold(300*time.Millisecond), doltRoot, remoteName(t, "origin"), "master", head, nil)
 	if !errors.Is(err, ErrHoldCut) {
 		t.Fatalf("RecordPushedHead() against a held commit lock error = %v, want ErrHoldCut", err)
 	}

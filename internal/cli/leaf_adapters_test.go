@@ -157,9 +157,10 @@ func runLifeboatRecover(t testing.TB, ctx context.Context, stdout io.Writer, ws 
 // runBackgroundMirror runs the mirror against ws's store with no handoff on
 // stdin, so its workspace build fails: what it reaches is whichever of the
 // mirror's endings precedes that failure's (the beacon's, a teardown's). It
-// is handed no spawner, as a mirror this test process spawned would be.
+// is handed a spawner that has exited, as a mirror this test process spawned
+// would see once its spawner had.
 func runBackgroundMirror(t testing.TB, ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	return runLeaf(t, backgroundMirrorLeaf(), ctx, stdout, struct{}{}, append([]string{"--store", ws.StorageDir, "--parent-pid", noSpawnerFlag}, args...))
+	return runLeaf(t, backgroundMirrorLeaf(), ctx, stdout, struct{}{}, append([]string{"--store", ws.StorageDir, "--parent-pid", exitedSpawner(t).flag()}, args...))
 }
 
 // runHooksInstall never took a context: installing hooks is filesystem work

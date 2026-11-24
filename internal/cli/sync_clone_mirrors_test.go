@@ -83,7 +83,7 @@ func TestAReceiveCloneStartsWithTheLiveMirrorsAndTakesItsOwnAwayWithIt(t *testin
 		t.Fatal("the consumer's pull left no live mirror")
 	}
 
-	clone, err := takeReceiveClone(context.Background(), testStderr(t), testEnv(), suiteDeadlines().MirrorHold, ws)
+	clone, err := takeReceiveClone(context.Background(), testStderr(t), testEnv(), ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone() error = %v", err)
 	}
@@ -116,7 +116,7 @@ func TestTheNextTakeCollectsAKilledReceivesCloneAndItsMirrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The first take's clone is never removed, as a SIGKILL leaves it.
-	dead, err := takeReceiveClone(context.Background(), testStderr(t), testEnv(), suiteDeadlines().MirrorHold, ws)
+	dead, err := takeReceiveClone(context.Background(), testStderr(t), testEnv(), ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone(first) error = %v", err)
 	}
@@ -125,7 +125,7 @@ func TestTheNextTakeCollectsAKilledReceivesCloneAndItsMirrors(t *testing.T) {
 		t.Fatalf("the first clone has no mirror base to leave behind: %v", err)
 	}
 
-	next, err := takeReceiveClone(context.Background(), testStderr(t), testEnv(), suiteDeadlines().MirrorHold, ws)
+	next, err := takeReceiveClone(context.Background(), testStderr(t), testEnv(), ws)
 	if err != nil {
 		t.Fatalf("takeReceiveClone(next) error = %v", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/dolthub/dolt/go/libraries/doltcore/ref"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 func remoteName(t *testing.T, raw string) storage.RemoteName {
@@ -143,7 +144,7 @@ func cloneHeldRemote(t *testing.T, ctx context.Context, name, url string) (*Stor
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("create the clone's root: %v", err)
 	}
-	db, err := openDoltPool(testEnv(), root, "ws", "", newLockHold(context.Background(), testStderr(), root, engineWrite, &longPhase{}))
+	db, err := openDoltPool(testEnv(), root, "ws", "", newLockHold(context.Background(), testStderr(), suiteenv.Deadlines(), root, engineWrite, &longPhase{}))
 	if err != nil {
 		t.Fatalf("open dolt for the clone: %v", err)
 	}

@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/deadline"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -111,7 +112,7 @@ func mirrorPendingMarkerPath(ws workspace.Info) string {
 // alone. releaseAnswer is always non-nil; on non-claimed returns (and on a
 // hold that could not be taken, which is loud) it is a no-op.
 // [LAW:one-source-of-truth]
-func claimMirrorPending(ctx context.Context, stderr io.Writer, ws workspace.Info, now time.Time) (claim mirrorPendingClaim, releaseAnswer func(), err error) {
+func claimMirrorPending(ctx context.Context, stderr io.Writer, d deadline.Deadlines, ws workspace.Info, now time.Time) (claim mirrorPendingClaim, releaseAnswer func(), err error) {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return pendingClaimed, func() {}, fmt.Errorf("ensure storage dir for mirror-pending marker: %w", err)
 	}
@@ -130,7 +131,7 @@ func claimMirrorPending(ctx context.Context, stderr io.Writer, ws workspace.Info
 			_ = os.Remove(path)
 			return pendingClaimed, func() {}, fmt.Errorf("close mirror-pending marker: %w", closeErr)
 		}
-		return pendingClaimed, answerForClaim(ctx, stderr, ws), nil
+		return pendingClaimed, answerForClaim(ctx, stderr, d, ws), nil
 	}
 	if !errors.Is(err, os.ErrExist) {
 		return pendingClaimed, func() {}, fmt.Errorf("claim mirror-pending marker: %w", err)
@@ -177,7 +178,7 @@ func claimMirrorPending(ctx context.Context, stderr io.Writer, ws workspace.Info
 		}
 		return pendingClaimed, func() {}, fmt.Errorf("refresh reclaimed mirror-pending marker: %w", chErr)
 	}
-	return pendingClaimed, answerForClaim(ctx, stderr, ws), nil
+	return pendingClaimed, answerForClaim(ctx, stderr, d, ws), nil
 }
 
 // answeringHoldPins keeps every minted answering hold's release closure —
@@ -204,8 +205,8 @@ var (
 // is loud. [LAW:no-silent-failure] The returned release reports its own
 // failure to stderr rather than silently stranding a hold whose presence
 // falsifies later probes.
-func answerForClaim(ctx context.Context, stderr io.Writer, ws workspace.Info) func() {
-	release, err := store.HoldMirrorBeacon(ctx, stderr, ws.DatabasePath)
+func answerForClaim(ctx context.Context, stderr io.Writer, d deadline.Deadlines, ws workspace.Info) func() {
+	release, err := store.HoldMirrorBeacon(ctx, stderr, d, ws.DatabasePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "lit: mirror beacon not held by claimant (%v); racing claims may spawn redundant mirrors\n", err)
 		return func() {}

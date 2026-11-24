@@ -13,7 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/dirtemplate"
+	"github.com/promptctl/links-issue-tracker/internal/environ"
+	"github.com/promptctl/links-issue-tracker/internal/suiteenv"
 )
 
 // heldReports collects what a hold reports when it ends.
@@ -44,12 +45,10 @@ func (r *heldReports) snapshot() ([]LockHold, []LockWait) {
 	return append([]LockHold(nil), r.holds...), append([]LockWait(nil), r.waits...)
 }
 
-// liftWaitOutOfPlay sets coResidentHolderWait so long that a hold's own
-// heartbeat ticker never fires inside a test, which then drives tick by hand.
-func liftWaitOutOfPlay(t *testing.T) {
-	t.Helper()
-	shrinkWait(t, time.Hour)
-}
+// handTickedHold is the mirror hold of a test that drives a hold's heartbeat
+// by hand: so long that the holder wait it derives, and the heartbeat a
+// quarter of that, never fire inside the test.
+const handTickedHold = time.Hour
 
 // takenHold is a hold of kind access on a fresh store root, told by hand that
 // Dolt took LOCK, with what it reports going to reports and what it prints to
@@ -57,7 +56,7 @@ func liftWaitOutOfPlay(t *testing.T) {
 func takenHold(t *testing.T, stderr io.Writer, access engineAccess, reports *heldReports) (*lockHold, func() string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "dolt")
-	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), stderr, root, access, &longPhase{})
+	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), stderr, suiteenv.WithHold(handTickedHold), root, access, &longPhase{})
 	hold.taken()
 	t.Cleanup(hold.end)
 	arrival := func() string {
@@ -80,7 +79,6 @@ func takenHold(t *testing.T, stderr io.Writer, access engineAccess, reports *hel
 // tick with no engine work. [LAW:no-ambient-temporal-coupling] the latch, not
 // the tick's instant, decides.
 func TestARoutineHoldHeartbeatsOnEveryTickItsEngineWorked(t *testing.T) {
-	liftWaitOutOfPlay(t)
 	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 	name := arrival()
 	if isHeartbeat(name) {
@@ -118,7 +116,6 @@ func TestARoutineHoldHeartbeatsOnEveryTickItsEngineWorked(t *testing.T) {
 // announced and heartbeats under, so one acquisition is one name wherever it
 // is read.
 func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
-	liftWaitOutOfPlay(t)
 	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 	release := hold.record(context.Background())
 	t.Cleanup(func() {
@@ -145,8 +142,8 @@ func TestAHoldsRecordCarriesTheNameItAnnounced(t *testing.T) {
 // it (a GC-contention reconnect in a migration's commit) opens into the phase
 // and sends no heartbeat until the phase ends.
 func TestALongPhaseOutlivesAConnectionRotation(t *testing.T) {
-	liftWaitOutOfPlay(t)
-	s, err := OpenRoutine(context.Background(), testEnv(), testStderr(), migratedDoltDir(t), "test-workspace-id")
+	env := envWithHold(handTickedHold)
+	s, err := OpenRoutine(context.Background(), env, testStderr(), migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("OpenRoutine() error = %v", err)
 	}
@@ -220,7 +217,6 @@ func TestAReconnectRotatesTheHolderRecordWithTheEngine(t *testing.T) {
 // A hold has one life, so a second Taken is said aloud, never dropped.
 func TestASecondTakenOnOneHoldIsReported(t *testing.T) {
 	notices := captureLockNotices(t, time.Hour, time.Hour)
-	liftWaitOutOfPlay(t)
 	hold, _ := takenHold(t, notices, engineWriteRoutine, &heldReports{})
 	hold.taken()
 	if printed := notices.String(); !strings.Contains(printed, "again under a hold that already took it") {
@@ -231,7 +227,6 @@ func TestASecondTakenOnOneHoldIsReported(t *testing.T) {
 // A long hold says nothing after its arrival, however its engine works: its
 // waiters judge it by stand-still and fail naming it, as they always have.
 func TestALongHoldNeverHeartbeats(t *testing.T) {
-	liftWaitOutOfPlay(t)
 	reports := &heldReports{}
 	hold, arrival := takenHold(t, testStderr(), engineWrite, reports)
 	name := arrival()
@@ -252,7 +247,6 @@ func TestALongHoldNeverHeartbeats(t *testing.T) {
 // A schema-changing migration inside a routine hold is a long phase: no
 // heartbeat while it runs, and they resume when it is done.
 func TestASuspendedRoutineHoldSendsNoHeartbeat(t *testing.T) {
-	liftWaitOutOfPlay(t)
 	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 	resume := hold.phase.enter()
 	before := arrival()
@@ -274,7 +268,6 @@ func TestASuspendedRoutineHoldSendsNoHeartbeat(t *testing.T) {
 // A hold ends once, reports once, and writes nothing after: no heartbeat
 // stands for a lock nobody holds.
 func TestAnEndedHoldReportsOnceAndWritesNothingMore(t *testing.T) {
-	liftWaitOutOfPlay(t)
 	reports := &heldReports{}
 	hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, reports)
 	hold.enter()
@@ -302,7 +295,7 @@ func TestAnEndedHoldReportsOnceAndWritesNothingMore(t *testing.T) {
 // engine's, or an open that lost the race.
 func TestAHoldThatNeverTookTheLockReportsNothing(t *testing.T) {
 	reports := &heldReports{}
-	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), testStderr(), filepath.Join(t.TempDir(), "dolt"), engineWriteRoutine, &longPhase{})
+	hold := newLockHold(WithLockObserver(context.Background(), reports.observer()), testStderr(), suiteenv.Deadlines(), filepath.Join(t.TempDir(), "dolt"), engineWriteRoutine, &longPhase{})
 	hold.enter()
 	hold.exit()
 	hold.end()
@@ -314,7 +307,10 @@ func TestAHoldThatNeverTookTheLockReportsNothing(t *testing.T) {
 // contend runs work on a store opened by open while a write open contends for
 // LOCK, and returns the contender's open error and how long it took. The
 // holder's open runs under reports' observer.
-func contend(t *testing.T, open func(context.Context, string) (*Store, error), work func(*Store) error, reports *heldReports) (error, time.Duration) {
+//
+// The contender opens under env, so its wait is the one env's deadlines
+// derive.
+func contend(t *testing.T, env environ.Env, open func(context.Context, string) (*Store, error), work func(*Store) error, reports *heldReports) (error, time.Duration) {
 	t.Helper()
 	ctx := WithLockObserver(context.Background(), reports.observer())
 	doltRoot := migratedDoltDir(t)
@@ -326,7 +322,7 @@ func contend(t *testing.T, open func(context.Context, string) (*Store, error), w
 	go func() { holderDone <- errors.Join(work(holder), holder.Close()) }()
 
 	start := time.Now()
-	contender, err := Open(ctx, testEnv(), testStderr(), doltRoot, "test-workspace-id")
+	contender, err := Open(ctx, env, testStderr(), doltRoot, "test-workspace-id")
 	elapsed := time.Since(start)
 	if err == nil {
 		err = contender.Close()
@@ -337,39 +333,30 @@ func contend(t *testing.T, open func(context.Context, string) (*Store, error), w
 	return err, elapsed
 }
 
-// shrinkWait sets coResidentHolderWait for a contention test.
-//
-// It builds the store templates first, so the template every later test
-// copies is never built under a test's wait. [LAW:no-ambient-temporal-coupling]
-func shrinkWait(t *testing.T, wait time.Duration) {
-	t.Helper()
-	for _, tp := range []*dirtemplate.Template{storeTemplate, unrelatedStoreTemplate} {
-		if _, err := tp.Dir(); err != nil {
-			t.Fatalf("build a store template: %v", err)
-		}
-	}
-	prev := coResidentHolderWait
-	coResidentHolderWait = wait
-	t.Cleanup(func() { coResidentHolderWait = prev })
+// envWithHold is the suite's environment under suiteenv.WithHold.
+func envWithHold(hold time.Duration) environ.Env {
+	return testEnv().WithDeadlines(suiteenv.WithHold(hold))
 }
 
 // The ticket's bar: a routine holder whose engine work outlasts the wait many
 // times over is waited out, and the writer behind it lands. On master the
 // writer failed workspace_busy one wait into the holder's statement.
 func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
-	// serial: rewrites the package-level coResidentHolderWait.
-	shrinkWait(t, 400*time.Millisecond)
+	// serial: no t.Parallel — asserts a wall-clock bound against the holder
+	// wait, which parallel load would move.
+	env := envWithHold(suiteenv.ContentionHold)
+	statement := 5 * env.Deadlines().HolderWait()
 	reports := &heldReports{}
-	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
-		return OpenRoutine(ctx, testEnv(), testStderr(), root, "test-workspace-id")
+	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+		return OpenRoutine(ctx, env, testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
-		return s.ExecRawForTest(context.Background(), "SELECT SLEEP(2)")
+		return s.ExecRawForTest(context.Background(), sqlSleep(statement))
 	}, reports)
 	if err != nil {
 		t.Fatalf("a writer behind a working routine holder failed after %s: %v", elapsed, err)
 	}
-	if elapsed < 4*coResidentHolderWait {
-		t.Fatalf("the writer opened after %s, before the holder's 2s statement could have ended; it never waited", elapsed)
+	if elapsed < 4*env.Deadlines().HolderWait() {
+		t.Fatalf("the writer opened after %s, before the holder's %s statement could have ended; it never waited", elapsed, statement)
 	}
 	holds, waits := reports.snapshot()
 	var routine *LockHold
@@ -379,7 +366,7 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 		}
 	}
 	if routine == nil || routine.Heartbeats < 4 || routine.Executing < time.Second {
-		t.Fatalf("holds reported %+v, want the routine holder's, heartbeating through its 2s statement", holds)
+		t.Fatalf("holds reported %+v, want the routine holder's, heartbeating through its %s statement", holds, statement)
 	}
 	if lockWait := lockWaitOn(reports, "LOCK"); lockWait == nil || lockWait.Outcome != LockWaitAcquired || lockWait.ProgressSeen < 2 {
 		t.Fatalf("waits reported %+v, want the writer's LOCK wait acquired after seeing the holder's heartbeats", waits)
@@ -390,13 +377,14 @@ func TestAWriterWaitsOutARoutineHolderWhoseEngineIsWorking(t *testing.T) {
 // writer behind a pass that outlasts the wait lands rather than failing behind
 // housekeeping it never asked for.
 func TestAWriterWaitsOutAMaintenanceHold(t *testing.T) {
-	// serial: rewrites the package-level coResidentHolderWait.
-	shrinkWait(t, 400*time.Millisecond)
+	// serial: no t.Parallel — its holder must outlast the holder wait by a
+	// wall-clock margin, which parallel load would eat.
+	env := envWithHold(suiteenv.ContentionHold)
 	reports := &heldReports{}
-	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
-		return OpenMaintenance(ctx, testEnv(), testStderr(), root, "test-workspace-id")
+	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+		return OpenMaintenance(ctx, env, testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
-		return s.ExecRawForTest(context.Background(), "SELECT SLEEP(2)")
+		return s.ExecRawForTest(context.Background(), sqlSleep(5*env.Deadlines().HolderWait()))
 	}, reports)
 	if err != nil {
 		t.Fatalf("a writer behind a working maintenance hold failed after %s: %v", elapsed, err)
@@ -409,13 +397,15 @@ func TestAWriterWaitsOutAMaintenanceHold(t *testing.T) {
 // The same engine work under a long hold fails the writer one wait in, naming
 // the holder: long holds keep the contract they always had.
 func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
-	// serial: rewrites the package-level coResidentHolderWait.
-	shrinkWait(t, 400*time.Millisecond)
+	// serial: no t.Parallel — asserts a wall-clock bound against the holder
+	// wait, which parallel load would move.
+	env := envWithHold(suiteenv.ContentionHold)
+	wait := env.Deadlines().HolderWait()
 	reports := &heldReports{}
-	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
-		return Open(WithHolderCommand(ctx, "lit import"), testEnv(), testStderr(), root, "test-workspace-id")
+	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+		return Open(WithHolderCommand(ctx, "lit import"), env, testStderr(), root, "test-workspace-id")
 	}, func(s *Store) error {
-		return s.ExecRawForTest(context.Background(), "SELECT SLEEP(2)")
+		return s.ExecRawForTest(context.Background(), sqlSleep(3*wait))
 	}, reports)
 	if !errors.Is(err, ErrWorkspaceBusy) {
 		t.Fatalf("a writer behind a long holder got %v after %s, want ErrWorkspaceBusy", err, elapsed)
@@ -423,12 +413,17 @@ func TestAWriterBehindALongHolderStillFailsNamingIt(t *testing.T) {
 	if !strings.Contains(err.Error(), "(lit import)") {
 		t.Fatalf("refusal %q does not name the long holder", err)
 	}
-	if elapsed > 1500*time.Millisecond {
-		t.Fatalf("the writer failed after %s; a long holder must fail it about one wait in", elapsed)
+	if elapsed > 2*wait {
+		t.Fatalf("the writer failed after %s; a long holder must fail it about one %s wait in", elapsed, wait)
 	}
 	if wait := lockWaitOn(reports, "LOCK"); wait == nil || wait.Outcome != LockWaitStoodStill {
 		t.Fatalf("the writer's LOCK wait was reported as %+v, want stood_still", wait)
 	}
+}
+
+// sqlSleep is a statement that keeps its engine working for d.
+func sqlSleep(d time.Duration) string {
+	return fmt.Sprintf("SELECT SLEEP(%.3f)", d.Seconds())
 }
 
 // lockWaitOn is the last wait reports recorded on the lock named lock.
@@ -447,8 +442,9 @@ func lockWaitOn(reports *heldReports, lock string) *LockWait {
 // refused: Dolt's open hands back its lock error either way, and the wait
 // still says which it was.
 func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
-	// serial: rewrites the package-level coResidentHolderWait.
-	shrinkWait(t, time.Minute)
+	// The suite's holder wait is far past the 500ms the writer's context
+	// lives, so the context, not the wait, ends it.
+	t.Parallel()
 	doltRoot := migratedDoltDir(t)
 	holder, err := Open(context.Background(), testEnv(), testStderr(), doltRoot, "test-workspace-id")
 	if err != nil {
@@ -475,7 +471,7 @@ func TestAWriterCancelledBehindAHolderReportsItsWaitCancelled(t *testing.T) {
 // acquisition failed, failed: neither refused nor cancelled.
 func TestAWaitWhoseAttemptFailedReportsFailed(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
-	w := newHoldWait(testStderr(), storageDirOf(lockPath), lockPath, func() time.Duration { return time.Hour }, time.Now)
+	w := newHoldWait(testStderr(), storageDirOf(lockPath), lockPath, time.Hour, time.Now)
 	w.Reset()
 	w.NextBackOff()
 	if wait, waited := w.report(context.Background(), errors.New("disk on fire")); !waited || wait.Outcome != LockWaitFailed {
@@ -500,13 +496,14 @@ func TestABootstrapEnginesHoldIsReported(t *testing.T) {
 // on a lock, doing CLI work) is not working, and its writers fail one wait
 // after its last engine work, naming it.
 func TestAWriterBehindARoutineHolderOutsideItsEngineFails(t *testing.T) {
-	// serial: rewrites the package-level coResidentHolderWait.
-	shrinkWait(t, 400*time.Millisecond)
+	// serial: no t.Parallel — its holder must outlast the holder wait by a
+	// wall-clock margin, which parallel load would eat.
+	env := envWithHold(suiteenv.ContentionHold)
 	reports := &heldReports{}
-	err, elapsed := contend(t, func(ctx context.Context, root string) (*Store, error) {
-		return OpenRoutine(WithHolderCommand(ctx, "lit purge"), testEnv(), testStderr(), root, "test-workspace-id")
+	err, elapsed := contend(t, env, func(ctx context.Context, root string) (*Store, error) {
+		return OpenRoutine(WithHolderCommand(ctx, "lit purge"), env, testStderr(), root, "test-workspace-id")
 	}, func(*Store) error {
-		time.Sleep(2 * time.Second)
+		time.Sleep(3 * env.Deadlines().HolderWait())
 		return nil
 	}, reports)
 	if !errors.Is(err, ErrWorkspaceBusy) {
@@ -620,7 +617,6 @@ func (fakeTx) Rollback() error { return nil }
 // smoothing, measured at 1.9s under load) is the hold working. Once the
 // transaction commits or rolls back, a tick with no work writes nothing.
 func TestARoutineHoldHeartbeatsWhileATransactionIsOpen(t *testing.T) {
-	liftWaitOutOfPlay(t)
 	for _, end := range []string{"commit", "rollback"} {
 		hold, arrival := takenHold(t, testStderr(), engineWriteRoutine, &heldReports{})
 		conn := executingConn{inner: fakeConn{}, hold: hold}

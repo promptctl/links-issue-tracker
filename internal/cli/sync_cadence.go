@@ -179,7 +179,7 @@ func ensureMirrorCoverage(ctx context.Context, inv Invocation, ws workspace.Info
 		return
 	}
 	ownsClaim := false
-	claim, releaseAnswer, claimErr := claimMirrorPending(ctx, stderr, ws, time.Now())
+	claim, releaseAnswer, claimErr := claimMirrorPending(ctx, stderr, env.Deadlines(), ws, time.Now())
 	switch {
 	case claimErr != nil:
 		// Coverage state unreadable: spawning is the safe side (a redundant
@@ -244,7 +244,7 @@ func ensureMirrorCoverage(ctx context.Context, inv Invocation, ws workspace.Info
 	if err := os.Remove(remoteAbsentMarkerPath(ws)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(stderr, "lit: remote-absent marker not cleared: %v\n", err)
 	}
-	if err := spawnBackgroundMirror(ctx, inv, ws, spawnedBy(os.Getpid())); err != nil {
+	if err := spawnBackgroundMirror(ctx, inv, ws, spawningProcess()); err != nil {
 		releaseClaim()
 		fmt.Fprintf(stderr, "lit: on-change background push not started: %v\n", err)
 		completePushAttempt(ctx, stderr, env, ws, syncPushOutcome{}, fmt.Errorf("spawn on-change mirror: %w", err))
